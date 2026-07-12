@@ -1,3 +1,4 @@
+// Mattermost plugin module implements monitor websocket behavior.
 import { randomUUID } from "node:crypto";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -5,8 +6,8 @@ import {
   createDebugProxyWebSocketAgent,
   resolveDebugProxySettings,
 } from "openclaw/plugin-sdk/proxy-capture";
-import { z } from "openclaw/plugin-sdk/zod";
 import WebSocket from "ws";
+import { z } from "zod";
 import { MattermostPostSchema, type MattermostPost } from "./client.js";
 import { rawDataToString } from "./monitor-helpers.js";
 import type { ChannelAccountSnapshot, RuntimeEnv } from "./runtime-api.js";
@@ -43,6 +44,9 @@ export type MattermostWebSocketLike = {
 };
 
 export type MattermostWebSocketFactory = (url: string) => MattermostWebSocketLike;
+// Mattermost events can include double-encoded post props plus server/plugin metadata.
+// Keep channel-compatible headroom while bounding ws's 100 MiB default before parsing.
+export const MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const MattermostEventPayloadSchema = z.object({
   event: z.string().optional(),
   data: z
@@ -110,12 +114,15 @@ type CreateMattermostConnectOnceOpts = {
   pongTimeoutMs?: number;
 };
 
-export const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
+const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url) => {
   const agent = createDebugProxyWebSocketAgent(resolveDebugProxySettings());
-  return new WebSocket(url, agent ? { agent } : undefined) as MattermostWebSocketLike;
+  return new WebSocket(url, {
+    ...(agent ? { agent } : {}),
+    maxPayload: MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
+  }) as MattermostWebSocketLike;
 };
 
-export function parsePostedPayload(
+function parsePostedPayload(
   payload: MattermostEventPayload,
 ): { payload: MattermostEventPayload; post: MattermostPost } | null {
   if (payload.event !== "posted") {
@@ -130,17 +137,6 @@ export function parsePostedPayload(
     return null;
   }
   return { payload, post };
-}
-
-export function parsePostedEvent(
-  data: WebSocket.RawData,
-): { payload: MattermostEventPayload; post: MattermostPost } | null {
-  const raw = rawDataToString(data);
-  const payload = parseMattermostEventPayload(raw);
-  if (!payload) {
-    return null;
-  }
-  return parsePostedPayload(payload);
 }
 
 export function createMattermostConnectOnce(

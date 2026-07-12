@@ -1,24 +1,25 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { createAssistantMessageEventStream, streamSimple } from "@mariozechner/pi-ai";
+// Lmstudio plugin module implements stream behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createOpenAICompatibleCompletionsThinkingOffWrapper,
+  createPlainTextToolCallCompatWrapper,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
-import {
-  createLmstudioSyntheticToolCallId,
-  parseLmstudioPlainTextToolCalls,
-} from "./plain-text-tool-calls.js";
 import { resolveLmstudioProviderHeaders, resolveLmstudioRuntimeApiKey } from "./runtime.js";
 
 const log = createSubsystemLogger("extensions/lmstudio/stream");
 
 type StreamOptions = Parameters<StreamFn>[2];
 type StreamModel = Parameters<StreamFn>[0];
-type StreamContext = Parameters<StreamFn>[1];
 
-const preloadInFlight = new Map<string, Promise<void>>();
+const preloadInFlight = new Map<string, Promise<string | undefined>>();
 
 /**
  * Cooldown state for the LM Studio preload endpoint.
@@ -36,6 +37,7 @@ const preloadInFlight = new Map<string, Promise<void>>();
 type PreloadCooldownEntry = {
   untilMs: number;
   consecutiveFailures: number;
+  resolvedModelKey?: string;
 };
 
 const preloadCooldown = new Map<string, PreloadCooldownEntry>();
@@ -53,12 +55,18 @@ function recordPreloadSuccess(preloadKey: string): void {
   preloadCooldown.delete(preloadKey);
 }
 
-function recordPreloadFailure(preloadKey: string, now: number): PreloadCooldownEntry {
+function recordPreloadFailure(
+  preloadKey: string,
+  now: number,
+  resolvedModelKey?: string,
+): PreloadCooldownEntry {
   const existing = preloadCooldown.get(preloadKey);
   const consecutiveFailures = (existing?.consecutiveFailures ?? 0) + 1;
+  const persistedResolvedModelKey = resolvedModelKey ?? existing?.resolvedModelKey;
   const entry: PreloadCooldownEntry = {
     consecutiveFailures,
     untilMs: now + computePreloadBackoffMs(consecutiveFailures),
+    ...(persistedResolvedModelKey ? { resolvedModelKey: persistedResolvedModelKey } : {}),
   };
   preloadCooldown.set(preloadKey, entry);
   return entry;
@@ -77,7 +85,7 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
 }
 
 /** Test-only hook for clearing preload cooldown state between cases. */
-export function __resetLmstudioPreloadCooldownForTest(): void {
+export function resetLmstudioPreloadCooldownForTest(): void {
   preloadCooldown.clear();
   preloadInFlight.clear();
 }
@@ -92,19 +100,12 @@ function normalizeLmstudioModelKey(modelId: string): string {
 
 function resolveRequestedContextLength(model: StreamModel): number | undefined {
   const withContextTokens = model as StreamModel & { contextTokens?: unknown };
-  const contextTokens =
-    typeof withContextTokens.contextTokens === "number" &&
-    Number.isFinite(withContextTokens.contextTokens)
-      ? Math.floor(withContextTokens.contextTokens)
-      : undefined;
-  if (contextTokens && contextTokens > 0) {
+  const contextTokens = asPositiveSafeInteger(withContextTokens.contextTokens);
+  if (contextTokens !== undefined) {
     return contextTokens;
   }
-  const contextWindow =
-    typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
-      ? Math.floor(model.contextWindow)
-      : undefined;
-  if (contextWindow && contextWindow > 0) {
+  const contextWindow = asPositiveSafeInteger(model.contextWindow);
+  if (contextWindow !== undefined) {
     return contextWindow;
   }
   return undefined;
@@ -121,209 +122,49 @@ function toRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
-function resolveContextToolNames(context: StreamContext): Set<string> {
-  const tools = (context as { tools?: unknown }).tools;
-  if (!Array.isArray(tools)) {
-    return new Set();
-  }
-  const names = tools
-    .map((tool) => {
-      const record = toRecord(tool);
-      return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
-    })
-    .filter((name): name is string => Boolean(name));
-  return new Set(names);
+function shouldPreloadLmstudioModels(value: unknown): boolean {
+  const providerConfig = toRecord(value);
+  const params = toRecord(providerConfig?.params);
+  return params?.preload !== false;
 }
 
-function couldStillBePlainTextToolCall(text: string): boolean {
-  if (text.length > 256_000) {
-    return false;
-  }
-  const trimmed = text.trimStart();
-  return trimmed.length === 0 || trimmed.startsWith("[");
-}
-
-function createLmstudioToolCallBlock(parsed: {
-  arguments: Record<string, unknown>;
-  name: string;
-}): Record<string, unknown> {
+function withLmstudioUsageCompat(model: StreamModel): StreamModel {
   return {
-    type: "toolCall",
-    id: createLmstudioSyntheticToolCallId(),
-    name: parsed.name,
-    arguments: parsed.arguments,
-    partialArgs: JSON.stringify(parsed.arguments),
+    ...model,
+    compat: {
+      ...(model.compat && typeof model.compat === "object" ? model.compat : {}),
+      supportsUsageInStreaming: true,
+    },
   };
 }
 
-function promoteLmstudioPlainTextToolCalls(
-  message: unknown,
-  toolNames: Set<string>,
-): Record<string, unknown> | undefined {
-  const messageRecord = toRecord(message);
-  if (!messageRecord) {
-    return undefined;
-  }
-  if (!Array.isArray(messageRecord.content)) {
-    if (typeof messageRecord.content !== "string" || !messageRecord.content.trim()) {
-      return undefined;
-    }
-    const parsed = parseLmstudioPlainTextToolCalls(messageRecord.content, toolNames);
-    if (!parsed) {
-      return undefined;
-    }
-    return {
-      ...messageRecord,
-      content: parsed.map(createLmstudioToolCallBlock),
-      stopReason: "toolUse",
-    };
-  }
-  if (
-    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall") ||
-    messageRecord.content.length === 0
-  ) {
-    return undefined;
-  }
-
-  let promoted = false;
-  const nextContent: Array<Record<string, unknown>> = [];
-  for (const block of messageRecord.content) {
-    const blockRecord = toRecord(block);
-    if (!blockRecord) {
-      return undefined;
-    }
-    if (blockRecord.type !== "text") {
-      nextContent.push(blockRecord);
-      continue;
-    }
-    const text = typeof blockRecord.text === "string" ? blockRecord.text : "";
-    if (!text.trim()) {
-      continue;
-    }
-    const parsed = parseLmstudioPlainTextToolCalls(text, toolNames);
-    if (!parsed) {
-      return undefined;
-    }
-    nextContent.push(...parsed.map(createLmstudioToolCallBlock));
-    promoted = true;
-  }
-
-  if (!promoted) {
-    return undefined;
+function withLmstudioResolvedModelKey(
+  model: StreamModel,
+  resolvedModelKey: string | undefined,
+): StreamModel {
+  if (!resolvedModelKey || model.id === resolvedModelKey) {
+    return model;
   }
   return {
-    ...messageRecord,
-    content: nextContent,
-    stopReason: "toolUse",
+    ...model,
+    id: resolvedModelKey,
   };
 }
 
-function emitPromotedToolCallEvents(
-  stream: { push(event: unknown): void },
-  message: Record<string, unknown>,
-): void {
-  const content = Array.isArray(message.content) ? message.content : [];
-  content.forEach((block, contentIndex) => {
-    const record = toRecord(block);
-    if (record?.type !== "toolCall") {
-      return;
+function resolveLmstudioModelKeyFromError(error: unknown): string | undefined {
+  let current = error;
+  const seen = new Set<object>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const record = current as { cause?: unknown; resolvedModelKey?: unknown };
+    const resolvedModelKey =
+      typeof record.resolvedModelKey === "string" ? record.resolvedModelKey.trim() : "";
+    if (resolvedModelKey) {
+      return resolvedModelKey;
     }
-    stream.push({ type: "toolcall_start", contentIndex, partial: message });
-    stream.push({
-      type: "toolcall_delta",
-      contentIndex,
-      delta: typeof record.partialArgs === "string" ? record.partialArgs : "{}",
-      partial: message,
-    });
-  });
-}
-
-function wrapLmstudioPlainTextToolCalls(
-  source: ReturnType<StreamFn>,
-  context: StreamContext,
-): ReturnType<StreamFn> {
-  const toolNames = resolveContextToolNames(context);
-  if (toolNames.size === 0) {
-    return source;
+    current = record.cause;
   }
-  const output = createAssistantMessageEventStream();
-  const stream = output as unknown as { push(event: unknown): void; end(): void };
-
-  void (async () => {
-    const bufferedTextEvents: unknown[] = [];
-    let bufferedText = "";
-    let ended = false;
-    const endStream = () => {
-      if (!ended) {
-        ended = true;
-        stream.end();
-      }
-    };
-    const flushBufferedTextEvents = () => {
-      for (const event of bufferedTextEvents.splice(0)) {
-        stream.push(event);
-      }
-      bufferedText = "";
-    };
-
-    try {
-      for await (const event of source as AsyncIterable<unknown>) {
-        const record = toRecord(event);
-        const type = typeof record?.type === "string" ? record.type : "";
-
-        if (type === "text_start" || type === "text_delta" || type === "text_end") {
-          bufferedTextEvents.push(event);
-          if (typeof record?.delta === "string") {
-            bufferedText += record.delta;
-          } else if (typeof record?.content === "string" && !bufferedText) {
-            bufferedText = record.content;
-          }
-          if (!couldStillBePlainTextToolCall(bufferedText)) {
-            flushBufferedTextEvents();
-          }
-          continue;
-        }
-
-        if (type === "done") {
-          const promotedMessage = promoteLmstudioPlainTextToolCalls(record?.message, toolNames);
-          if (promotedMessage) {
-            bufferedTextEvents.splice(0);
-            bufferedText = "";
-            emitPromotedToolCallEvents(stream, promotedMessage);
-            stream.push({ ...record, reason: "toolUse", message: promotedMessage });
-          } else {
-            flushBufferedTextEvents();
-            stream.push(event);
-          }
-          endStream();
-          return;
-        }
-
-        flushBufferedTextEvents();
-        stream.push(event);
-        if (type === "error") {
-          endStream();
-          return;
-        }
-      }
-      flushBufferedTextEvents();
-    } catch (error) {
-      stream.push({
-        type: "error",
-        reason: "error",
-        error: {
-          role: "assistant",
-          content: [],
-          stopReason: "error",
-          errorMessage: error instanceof Error ? error.message : String(error),
-        },
-      });
-    } finally {
-      endStream();
-    }
-  })();
-
-  return output as ReturnType<StreamFn>;
+  return undefined;
 }
 
 function createPreloadKey(params: {
@@ -341,7 +182,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
   options: StreamOptions;
   ctx: ProviderWrapStreamFnContext;
   modelHeaders?: Record<string, string>;
-}): Promise<void> {
+}): Promise<string> {
   const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
   const providerHeaders = { ...providerConfig?.headers, ...params.modelHeaders };
   const runtimeApiKey =
@@ -361,7 +202,7 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
           headers: providerHeaders,
         });
 
-  await ensureLmstudioModelLoaded({
+  return await ensureLmstudioModelLoaded({
     baseUrl: params.baseUrl,
     apiKey: runtimeApiKey ?? configuredApiKey,
     headers,
@@ -373,6 +214,14 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
 
 export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): StreamFn {
   const underlying = ctx.streamFn ?? streamSimple;
+  // LM Studio does not ride the shared OpenAI provider hook stack, so the
+  // thinking-level payload rewrite must be composed here: without it, thinking
+  // "off" leaves the transport's defaulted reasoning_effort (an enabled level)
+  // in requests to binary-thinking servers.
+  const streamWithThinkingLevel = createOpenAICompatibleCompletionsThinkingOffWrapper(
+    createPlainTextToolCallCompatWrapper(underlying),
+    ctx.thinkingLevel,
+  );
   return (model, context, options) => {
     if (model.provider !== LMSTUDIO_PROVIDER_ID) {
       return underlying(model, context, options);
@@ -381,7 +230,11 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
     if (!modelKey) {
       return underlying(model, context, options);
     }
-    const providerBaseUrl = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID]?.baseUrl;
+    const providerConfig = ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
+    if (!shouldPreloadLmstudioModels(providerConfig)) {
+      return streamWithThinkingLevel(withLmstudioUsageCompat(model), context, options);
+    }
+    const providerBaseUrl = providerConfig?.baseUrl;
     const resolvedBaseUrl = resolveLmstudioInferenceBase(
       typeof model.baseUrl === "string" ? model.baseUrl : providerBaseUrl,
     );
@@ -394,7 +247,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
 
     const cooldownEntry = isPreloadCoolingDown(preloadKey, Date.now());
     const existing = preloadInFlight.get(preloadKey);
-    const preloadPromise: Promise<void> | undefined =
+    const preloadPromise: Promise<string | undefined> | undefined =
       existing ??
       (cooldownEntry
         ? undefined
@@ -408,15 +261,18 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
               modelHeaders: resolveModelHeaders(model),
             })
               .then(
-                () => {
+                (resolvedModelKey) => {
                   recordPreloadSuccess(preloadKey);
+                  return resolvedModelKey;
                 },
-                (error) => {
-                  const entry = recordPreloadFailure(preloadKey, Date.now());
+                (error: unknown) => {
+                  const resolvedModelKey = resolveLmstudioModelKeyFromError(error);
+                  const entry = recordPreloadFailure(preloadKey, Date.now(), resolvedModelKey);
                   throw Object.assign(new Error("preload-failed"), {
                     cause: error,
                     consecutiveFailures: entry.consecutiveFailures,
                     cooldownMs: entry.untilMs - Date.now(),
+                    resolvedModelKey,
                   });
                 },
               )
@@ -428,15 +284,17 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
           })());
 
     return (async () => {
+      let resolvedModelKey: string | undefined;
       if (preloadPromise) {
         try {
-          await preloadPromise;
+          resolvedModelKey = await preloadPromise;
         } catch (error) {
           const annotated = error as {
             cause?: unknown;
             consecutiveFailures?: number;
             cooldownMs?: number;
           };
+          resolvedModelKey = resolveLmstudioModelKeyFromError(error);
           const cause = annotated.cause ?? error;
           const failures = annotated.consecutiveFailures ?? 1;
           const cooldownSec = Math.max(0, Math.round((annotated.cooldownMs ?? 0) / 1000));
@@ -447,6 +305,7 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
           );
         }
       } else if (cooldownEntry) {
+        resolvedModelKey = cooldownEntry.resolvedModelKey;
         log.debug(
           `LM Studio inference preload for "${modelKey}" skipped while backoff active (${cooldownEntry.consecutiveFailures} prior failures)`,
         );
@@ -454,16 +313,14 @@ export function wrapLmstudioInferencePreload(ctx: ProviderWrapStreamFnContext): 
       // LM Studio uses OpenAI-compatible streaming usage payloads when requested via
       // `stream_options.include_usage`. Force this compat flag at call time so usage
       // reporting remains enabled even when catalog entries omitted compat metadata.
-      const modelWithUsageCompat = {
-        ...model,
-        compat: {
-          ...(model.compat && typeof model.compat === "object" ? model.compat : {}),
-          supportsUsageInStreaming: true,
-        },
-      };
-      const stream = underlying(modelWithUsageCompat, context, options);
+      const streamModel = withLmstudioResolvedModelKey(model, resolvedModelKey);
+      const stream = streamWithThinkingLevel(
+        withLmstudioUsageCompat(streamModel),
+        context,
+        options,
+      );
       const resolvedStream = stream instanceof Promise ? await stream : stream;
-      return wrapLmstudioPlainTextToolCalls(resolvedStream, context);
+      return resolvedStream;
     })();
   };
 }

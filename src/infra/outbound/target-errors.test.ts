@@ -1,9 +1,12 @@
+// Covers user-facing target error messages and hint formatting.
 import { describe, expect, it } from "vitest";
 import {
   ambiguousTargetError,
   ambiguousTargetMessage,
+  isReservedTargetLiteralError,
   missingTargetError,
   missingTargetMessage,
+  reservedTargetLiteralError,
   unknownTargetError,
   unknownTargetMessage,
 } from "./target-errors.js";
@@ -66,6 +69,15 @@ describe("target error helpers", () => {
   it("includes the hint in ambiguous target errors", () => {
     expect(ambiguousTargetError("Discord", "general", "Use channel:123").message).toContain(
       "Hint: Use channel:123",
+    );
+  });
+
+  it("identifies reserved target literal errors", () => {
+    expect(isReservedTargetLiteralError(reservedTargetLiteralError("Telegram", "current"))).toBe(
+      true,
+    );
+    expect(isReservedTargetLiteralError(new Error('Unknown target "current" for Telegram.'))).toBe(
+      false,
     );
   });
 });

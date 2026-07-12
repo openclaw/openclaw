@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Runs duplicate-code detection with repo-specific excludes.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +10,7 @@ const jscpdBin = path.join(repoRoot, "node_modules", "jscpd", "bin", "jscpd");
 const targets = [
   "src",
   "extensions",
+  "examples",
   "scripts",
   "packages",
   "ui",
@@ -17,8 +19,10 @@ const targets = [
   "qa",
   "security",
   "test",
+  "skills",
   "openclaw.mjs",
-  "knip.config.ts",
+  "config/knip.config.ts",
+  "tsdown.ai.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",
 ];
@@ -27,12 +31,10 @@ const sourceExtensions = new Set([".ts", ".tsx", ".js", ".mjs", ".cjs"]);
 const sourcePattern = "**/*.{ts,tsx,js,mjs,cjs}";
 const testPattern = "**/*.{test,e2e.test,live.test}.{ts,tsx,js,mjs,cjs}";
 // Keep local agent support trees and vendored snapshots classified but outside jscpd.
-const intentionallyUnscannedPrefixes = [".agents/", ".pi/", "vendor/"];
+const intentionallyUnscannedPrefixes = [".agents/", "vendor/"];
 
 const generatedIgnores = [
   "extensions/qa-matrix/src/shared/**",
-  "extensions/qa-matrix/src/report.ts",
-  "extensions/qa-matrix/src/docker-runtime.ts",
   "extensions/qa-matrix/src/cli-paths.ts",
   "**/node_modules/**",
   "**/dist/**",

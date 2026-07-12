@@ -1,26 +1,17 @@
+import { spawnSync } from "node:child_process";
+// Check Codex App Server Protocol script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  generateExperimentalCodexAppServerProtocolSource,
+  normalizeCodexAppServerProtocolJsonText,
+  selectedCodexAppServerJsonSchemas,
+} from "./lib/codex-app-server-protocol-source.js";
 
-const codexRepo = process.env.OPENCLAW_CODEX_REPO
-  ? path.resolve(process.env.OPENCLAW_CODEX_REPO)
-  : path.resolve(process.cwd(), "../codex");
-const schemaRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema/typescript");
-const sourceSchemaRoot = path.join(codexRepo, "codex-rs/app-server-protocol/schema");
 const generatedRoot = path.resolve(
   process.cwd(),
   "extensions/codex/src/app-server/protocol-generated",
 );
-
-const selectedJsonSchemas = [
-  "DynamicToolCallParams.json",
-  "v2/ErrorNotification.json",
-  "v2/GetAccountResponse.json",
-  "v2/ModelListResponse.json",
-  "v2/ThreadResumeResponse.json",
-  "v2/ThreadStartResponse.json",
-  "v2/TurnCompletedNotification.json",
-  "v2/TurnStartResponse.json",
-] as const;
 
 const checks: Array<{ file: string; snippets: string[] }> = [
   {
@@ -35,15 +26,28 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/ThreadItem.ts",
     snippets: [
-      '"type": "contextCompaction"',
-      '"type": "dynamicToolCall"',
-      '"type": "commandExecution"',
-      '"type": "mcpToolCall"',
+      'type: "contextCompaction"',
+      'type: "dynamicToolCall"',
+      'type: "commandExecution"',
+      'type: "mcpToolCall"',
     ],
   },
   {
     file: "v2/DynamicToolSpec.ts",
+    snippets: [
+      '"function"',
+      "& DynamicToolFunctionSpec",
+      '"namespace"',
+      "& DynamicToolNamespaceSpec",
+    ],
+  },
+  {
+    file: "v2/DynamicToolFunctionSpec.ts",
     snippets: ["name: string", "description: string", "inputSchema: JsonValue"],
+  },
+  {
+    file: "v2/DynamicToolNamespaceSpec.ts",
+    snippets: ["name: string", "description: string", "tools: Array<DynamicToolNamespaceTool>"],
   },
   {
     file: "v2/CommandExecutionApprovalDecision.ts",
@@ -51,19 +55,19 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "v2/Account.ts",
-    snippets: ['"type": "apiKey"', '"type": "chatgpt"', '"type": "amazonBedrock"'],
+    snippets: ['type: "apiKey"', 'type: "chatgpt"', 'type: "amazonBedrock"'],
   },
   {
     file: "v2/ThreadStartParams.ts",
     snippets: [
-      "permissionProfile?: PermissionProfile | null",
-      "experimentalRawEvents: boolean",
-      "persistExtendedHistory: boolean",
+      "permissions?: string | null",
+      "dynamicTools?: Array<DynamicToolSpec> | null",
+      "experimentalRawEvents",
     ],
   },
   {
     file: "v2/TurnStartParams.ts",
-    snippets: ["permissionProfile?: PermissionProfile | null", "serviceTier?: ServiceTier | null"],
+    snippets: ["permissions?: string | null", "serviceTier?: string | null"],
   },
   {
     file: "ReviewDecision.ts",
@@ -80,74 +84,169 @@ const checks: Array<{ file: string; snippets: string[] }> = [
 ];
 
 const failures: string[] = [];
-
-await compareGeneratedProtocolMirror();
-
-for (const check of checks) {
-  const filePath = path.join(schemaRoot, check.file);
-  let text: string;
-  try {
-    text = await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    failures.push(`${check.file}: missing (${String(error)})`);
-    continue;
-  }
-  for (const snippet of check.snippets) {
-    if (!text.includes(snippet)) {
-      failures.push(`${check.file}: missing ${snippet}`);
-    }
-  }
-}
-
-if (failures.length > 0) {
-  console.error("Codex app-server generated protocol drift:");
-  for (const failure of failures) {
-    console.error(`- ${failure}`);
-  }
-  console.error("Run `pnpm codex-app-server:protocol:sync` after refreshing ../codex.");
+await main().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.message : String(error));
   process.exit(1);
+});
+
+async function main(): Promise<void> {
+  const source = await generateExperimentalCodexAppServerProtocolSource();
+
+  try {
+    await compareGeneratedProtocolMirror(source.jsonRoot);
+    await checkMaintainedProtocolTypes(source.typescriptRoot);
+
+    for (const check of checks) {
+      const filePath = path.join(source.typescriptRoot, check.file);
+      let text: string;
+      try {
+        text = await fs.readFile(filePath, "utf8");
+      } catch (error) {
+        failures.push(`${check.file}: missing (${String(error)})`);
+        continue;
+      }
+      for (const snippet of check.snippets) {
+        if (!text.includes(snippet)) {
+          failures.push(`${check.file}: missing ${snippet}`);
+        }
+      }
+    }
+  } finally {
+    await source.cleanup();
+  }
+
+  if (failures.length > 0) {
+    console.error("Codex app-server generated protocol drift:");
+    for (const failure of failures) {
+      console.error(`- ${failure}`);
+    }
+    console.error(
+      `Run \`pnpm codex-app-server:protocol:sync\` after refreshing the Codex checkout at ${source.codexRepo}.`,
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${source.codexRepo}`,
+  );
 }
 
-console.log(
-  `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${schemaRoot}`,
-);
+async function checkMaintainedProtocolTypes(sourceRoot: string): Promise<void> {
+  // Raw requests go to Codex; raw responses flow into OpenClaw. Keep the
+  // assignability direction explicit so the probe permits deliberate projections.
+  const probePath = path.join(sourceRoot, "openclaw-protocol-compatibility.ts");
+  const protocolPath = path.resolve(process.cwd(), "extensions/codex/src/app-server/protocol.ts");
+  const protocolImport = relativeTypeScriptImport(probePath, protocolPath);
+  const generatedImport = (file: string) =>
+    relativeTypeScriptImport(probePath, path.join(sourceRoot, file));
+  const probe = `
+import type {
+  CodexDynamicToolSpec,
+  CodexDynamicToolCallParams,
+  CodexErrorNotification,
+  CodexModelListResponse,
+  CodexThreadForkParams,
+  CodexThreadForkResponse,
+  CodexThreadResumeParams,
+  CodexThreadResumeResponse,
+  CodexThreadStartParams,
+  CodexThreadStartResponse,
+  CodexTurnEnvironmentParams,
+  CodexTurnInterruptParams,
+  CodexTurnStartParams,
+} from ${JSON.stringify(protocolImport)};
+import type { DynamicToolCallParams } from ${JSON.stringify(generatedImport("v2/DynamicToolCallParams.ts"))};
+import type { DynamicToolSpec } from ${JSON.stringify(generatedImport("v2/DynamicToolSpec.ts"))};
+import type { ErrorNotification } from ${JSON.stringify(generatedImport("v2/ErrorNotification.ts"))};
+import type { ModelListResponse } from ${JSON.stringify(generatedImport("v2/ModelListResponse.ts"))};
+import type { ThreadForkParams } from ${JSON.stringify(generatedImport("v2/ThreadForkParams.ts"))};
+import type { ThreadForkResponse } from ${JSON.stringify(generatedImport("v2/ThreadForkResponse.ts"))};
+import type { ThreadResumeParams } from ${JSON.stringify(generatedImport("v2/ThreadResumeParams.ts"))};
+import type { ThreadResumeResponse } from ${JSON.stringify(generatedImport("v2/ThreadResumeResponse.ts"))};
+import type { ThreadStartParams } from ${JSON.stringify(generatedImport("v2/ThreadStartParams.ts"))};
+import type { ThreadStartResponse } from ${JSON.stringify(generatedImport("v2/ThreadStartResponse.ts"))};
+import type { TurnEnvironmentParams } from ${JSON.stringify(generatedImport("v2/TurnEnvironmentParams.ts"))};
+import type { TurnInterruptParams } from ${JSON.stringify(generatedImport("v2/TurnInterruptParams.ts"))};
+import type { TurnStartParams } from ${JSON.stringify(generatedImport("v2/TurnStartParams.ts"))};
 
-async function compareGeneratedProtocolMirror(): Promise<void> {
-  const sourceTsRoot = path.join(sourceSchemaRoot, "typescript");
-  const targetTsRoot = path.join(generatedRoot, "typescript");
-  const sourceFiles = await listFiles(sourceTsRoot, ".ts");
-  const targetFiles = await listFiles(targetTsRoot, ".ts");
-  const sourceSet = new Set(sourceFiles);
-  const targetSet = new Set(targetFiles);
+declare const openClawDynamicToolSpec: CodexDynamicToolSpec;
+const generatedDynamicToolSpec: DynamicToolSpec = openClawDynamicToolSpec;
+declare const openClawTurnEnvironmentParams: CodexTurnEnvironmentParams;
+const generatedTurnEnvironmentParams: TurnEnvironmentParams = openClawTurnEnvironmentParams;
+declare const openClawThreadStartParams: CodexThreadStartParams;
+const generatedThreadStartParams: ThreadStartParams = openClawThreadStartParams;
+declare const openClawThreadResumeParams: CodexThreadResumeParams;
+const generatedThreadResumeParams: ThreadResumeParams = openClawThreadResumeParams;
+declare const openClawThreadForkParams: CodexThreadForkParams;
+const generatedThreadForkParams: ThreadForkParams = openClawThreadForkParams;
+declare const openClawTurnInterruptParams: CodexTurnInterruptParams;
+const generatedTurnInterruptParams: TurnInterruptParams = openClawTurnInterruptParams;
+declare const openClawTurnStartParams: CodexTurnStartParams;
+const generatedTurnStartParams: TurnStartParams = openClawTurnStartParams;
 
-  for (const file of sourceFiles) {
-    if (!targetSet.has(file)) {
-      failures.push(`protocol-generated/typescript/${file}: missing local mirror`);
-      continue;
-    }
-    const source = normalizeGeneratedTypeScript(
-      await fs.readFile(path.join(sourceTsRoot, file), "utf8"),
-    );
-    const target = await fs.readFile(path.join(targetTsRoot, file), "utf8");
-    if (source !== target) {
-      failures.push(
-        `protocol-generated/typescript/${file}: differs from normalized ../codex schema`,
-      );
-    }
+declare const generatedDynamicToolCallParams: Omit<DynamicToolCallParams, "arguments">;
+const openClawDynamicToolCallParams: Omit<CodexDynamicToolCallParams, "arguments"> =
+  generatedDynamicToolCallParams;
+declare const generatedErrorNotification: ErrorNotification;
+const openClawErrorNotification: CodexErrorNotification = generatedErrorNotification;
+declare const generatedModelListResponse: ModelListResponse;
+const openClawModelListResponse: CodexModelListResponse = generatedModelListResponse;
+
+// Thread and turn bodies are normalized behind checked-in JSON schemas. Their
+// raw generated shapes must not be confused with the projector-facing types.
+declare const generatedThreadForkResponse: Omit<ThreadForkResponse, "thread">;
+const openClawThreadForkResponse: Omit<CodexThreadForkResponse, "thread"> =
+  generatedThreadForkResponse;
+declare const generatedThreadResumeResponse: Omit<ThreadResumeResponse, "thread">;
+const openClawThreadResumeResponse: Omit<CodexThreadResumeResponse, "thread"> =
+  generatedThreadResumeResponse;
+declare const generatedThreadStartResponse: Omit<ThreadStartResponse, "thread">;
+const openClawThreadStartResponse: Omit<CodexThreadStartResponse, "thread"> =
+  generatedThreadStartResponse;
+
+export {};
+`;
+  await fs.writeFile(probePath, probe);
+  const result = spawnSync(
+    process.execPath,
+    [
+      "scripts/run-tsgo.mjs",
+      "--ignoreConfig",
+      "--noEmit",
+      "--allowImportingTsExtensions",
+      "--strict",
+      "--skipLibCheck",
+      "--module",
+      "nodenext",
+      "--moduleResolution",
+      "nodenext",
+      probePath,
+    ],
+    { cwd: process.cwd(), encoding: "utf8" },
+  );
+  if (result.error) {
+    failures.push(`maintained protocol types: failed to start tsgo (${result.error.message})`);
+    return;
   }
-  for (const file of targetFiles) {
-    if (!sourceSet.has(file)) {
-      failures.push(`protocol-generated/typescript/${file}: no longer present in ../codex schema`);
-    }
+  if (result.status !== 0) {
+    const output = `${result.stdout}${result.stderr}`.trim();
+    failures.push(`maintained protocol types differ from generated Codex types\n${output}`);
   }
+}
 
-  for (const schema of selectedJsonSchemas) {
-    const sourcePath = path.join(sourceSchemaRoot, "json", schema);
+function relativeTypeScriptImport(fromFile: string, toFile: string): string {
+  const relative = path.relative(path.dirname(fromFile), toFile).replaceAll(path.sep, "/");
+  return relative.startsWith(".") ? relative : `./${relative}`;
+}
+
+async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<void> {
+  for (const schema of selectedCodexAppServerJsonSchemas) {
+    const sourcePath = path.join(sourceJsonRoot, schema);
     const targetPath = path.join(generatedRoot, "json", schema);
-    let source: string;
+    let sourceValue: string;
     let target: string;
     try {
-      source = await fs.readFile(sourcePath, "utf8");
+      sourceValue = await fs.readFile(sourcePath, "utf8");
     } catch (error) {
       failures.push(
         `protocol-generated/json/${schema}: missing upstream schema (${String(error)})`,
@@ -160,32 +259,12 @@ async function compareGeneratedProtocolMirror(): Promise<void> {
       failures.push(`protocol-generated/json/${schema}: missing local schema (${String(error)})`);
       continue;
     }
-    if (source !== target) {
-      failures.push(`protocol-generated/json/${schema}: differs from ../codex schema`);
+    if (normalizeJsonSchema(sourceValue) !== normalizeJsonSchema(target)) {
+      failures.push(`protocol-generated/json/${schema}: differs from source schema`);
     }
   }
 }
 
-async function listFiles(root: string, suffix: string): Promise<string[]> {
-  const files: string[] = [];
-  async function visit(dir: string): Promise<void> {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await visit(fullPath);
-      } else if (entry.isFile() && entry.name.endsWith(suffix)) {
-        files.push(path.relative(root, fullPath));
-      }
-    }
-  }
-  await visit(root);
-  return files.toSorted();
-}
-
-function normalizeGeneratedTypeScript(text: string): string {
-  return text
-    .replace(/(from\s+["'])(\.{1,2}\/[^"']+?)(\.js)?(["'])/g, "$1$2.js$4")
-    .replace('export * as v2 from "./v2.js";', 'export * as v2 from "./v2/index.js";')
-    .replaceAll("| null | null", "| null");
+function normalizeJsonSchema(sourceLocal: string): string {
+  return normalizeCodexAppServerProtocolJsonText(sourceLocal);
 }

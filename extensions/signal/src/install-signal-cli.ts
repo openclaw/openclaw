@@ -1,15 +1,18 @@
+// Signal plugin module implements install signal cli behavior.
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTempDownloadPath } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export type ReleaseAsset = {
   name?: string;
@@ -27,6 +30,11 @@ type ReleaseResponse = {
 };
 
 const MAX_SIGNAL_CLI_ARCHIVE_BYTES = 256 * 1024 * 1024;
+/** @internal Exported for testing. */
+export const MAX_SIGNAL_CLI_EXTRACTED_BYTES = 384 * 1024 * 1024;
+const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
+const SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS = 30_000;
+const CONTENT_LENGTH_RE = /^\d+$/;
 
 export type SignalInstallResult = {
   ok: boolean;
@@ -41,7 +49,19 @@ export async function extractSignalCliArchive(
   installRoot: string,
   timeoutMs: number,
 ): Promise<void> {
-  await extractArchive({ archivePath, destDir: installRoot, timeoutMs });
+  // v0.14.5 is a 105,553,779-byte archive containing one 354,813,880-byte
+  // native binary. Keep 13% extraction headroom without relaxing global limits.
+  await extractArchive({
+    archivePath,
+    destDir: installRoot,
+    timeoutMs,
+    limits: {
+      maxArchiveBytes: MAX_SIGNAL_CLI_ARCHIVE_BYTES,
+      maxEntries: 32,
+      maxEntryBytes: MAX_SIGNAL_CLI_EXTRACTED_BYTES,
+      maxExtractedBytes: MAX_SIGNAL_CLI_EXTRACTED_BYTES,
+    },
+  });
 }
 
 /** @internal Exported for testing. */
@@ -101,7 +121,7 @@ export function pickAsset(
   }
 
   if (platform === "darwin") {
-    return byName(/macos|osx|darwin/) || archives[0];
+    return byName(/macos|osx|darwin/);
   }
 
   if (platform === "win32") {
@@ -111,11 +131,19 @@ export function pickAsset(
   return archives[0];
 }
 
-async function downloadToFile(url: string, dest: string, maxRedirects = 5): Promise<void> {
+/** @internal Exported for testing. */
+export async function downloadToFile(
+  url: string,
+  dest: string,
+  maxRedirects = 5,
+  maxBytes = MAX_SIGNAL_CLI_ARCHIVE_BYTES,
+): Promise<void> {
+  let completed = false;
   const { response, release } = await fetchWithSsrFGuard({
     url,
     maxRedirects,
     requireHttps: true,
+    timeoutMs: SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS,
     capture: false,
     auditContext: "signal-cli-install-archive",
   });
@@ -124,14 +152,27 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
       throw new Error(`HTTP ${response.status || "?"} downloading file`);
     }
 
+    const rawLength = response.headers.get("content-length");
+    if (rawLength !== null) {
+      const trimmedLength = rawLength.trim();
+      const declaredLength = CONTENT_LENGTH_RE.test(trimmedLength)
+        ? Number(trimmedLength)
+        : Number.NaN;
+      if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+        throw new Error(
+          `signal-cli archive exceeds the ${maxBytes}-byte download cap (declared ${declaredLength}).`,
+        );
+      }
+    }
+
     let totalBytes = 0;
     const body = response.body;
     const readable = isNodeReadableStream(body) ? body : Readable.fromWeb(body as never);
     const limiter = new Transform({
       transform(chunk: unknown, _encoding, callback) {
         totalBytes += chunkByteLength(chunk);
-        if (totalBytes > MAX_SIGNAL_CLI_ARCHIVE_BYTES) {
-          callback(new Error("signal-cli archive exceeds 256 MiB limit"));
+        if (totalBytes > maxBytes) {
+          callback(new Error(`signal-cli archive exceeded the ${maxBytes}-byte download cap.`));
           return;
         }
         callback(null, chunk);
@@ -140,8 +181,12 @@ async function downloadToFile(url: string, dest: string, maxRedirects = 5): Prom
 
     const out = createWriteStream(dest);
     await pipeline(readable, limiter, out);
+    completed = true;
   } finally {
     await release();
+    if (!completed) {
+      await fs.rm(dest, { force: true }).catch(() => undefined);
+    }
   }
 }
 
@@ -199,7 +244,7 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
     return {
       ok: false,
       error:
-        `No native signal-cli build is available for ${process.arch}. ` +
+        `No native signal-cli build is available for ${process.platform}/${process.arch}. ` +
         "Install Homebrew (https://brew.sh) and try again, or install signal-cli manually.",
     };
   }
@@ -213,7 +258,7 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
   if (result.code !== 0) {
     return {
       ok: false,
-      error: `brew install signal-cli failed (exit ${result.code}): ${result.stderr.trim().slice(0, 200)}`,
+      error: `brew install signal-cli failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
     };
   }
 
@@ -245,12 +290,16 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
 // Direct download install (used when an official native asset is available)
 // ---------------------------------------------------------------------------
 
-async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalInstallResult> {
+/** @internal Exported for testing. */
+export async function installSignalCliFromRelease(
+  runtime: RuntimeEnv,
+): Promise<SignalInstallResult> {
   const apiUrl = "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
   const { response, release } = await fetchWithSsrFGuard({
     url: apiUrl,
     maxRedirects: 5,
     requireHttps: true,
+    timeoutMs: SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS,
     capture: false,
     auditContext: "signal-cli-release-info",
     init: {
@@ -269,7 +318,14 @@ async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalI
         error: `Failed to fetch release info (${response.status})`,
       };
     }
-    payload = (await response.json()) as ReleaseResponse;
+    try {
+      payload = await readProviderJsonResponse<ReleaseResponse>(response, "signal.release-info");
+    } catch {
+      return {
+        ok: false,
+        error: "Failed to parse signal-cli release info.",
+      };
+    }
   } finally {
     await release();
   }
@@ -284,39 +340,47 @@ async function installSignalCliFromRelease(runtime: RuntimeEnv): Promise<SignalI
     };
   }
 
-  const tmpDir = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-signal-"));
-  const archivePath = path.join(tmpDir, asset.name);
+  // Keep the large release archive in an owned workspace so every callback exit
+  // cleans it without touching the installed tree under CONFIG_DIR.
+  return await withTempDownloadPath(
+    { prefix: "openclaw-signal", fileName: asset.name },
+    async (archivePath) => {
+      runtime.log(`Downloading signal-cli ${version} (${asset.name})…`);
+      await downloadToFile(asset.browser_download_url, archivePath);
 
-  runtime.log(`Downloading signal-cli ${version} (${asset.name})…`);
-  await downloadToFile(asset.browser_download_url, archivePath);
+      const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
+      await fs.mkdir(installRoot, { recursive: true });
 
-  const installRoot = path.join(CONFIG_DIR, "tools", "signal-cli", version);
-  await fs.mkdir(installRoot, { recursive: true });
+      if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
+        return { ok: false, error: `Unsupported archive type: ${asset.name}` };
+      }
+      try {
+        await extractSignalCliArchive(archivePath, installRoot, 60_000);
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        return {
+          ok: false,
+          error: `Failed to extract ${asset.name}: ${message}`,
+        };
+      }
 
-  if (!looksLikeArchive(normalizeLowercaseStringOrEmpty(asset.name))) {
-    return { ok: false, error: `Unsupported archive type: ${asset.name}` };
-  }
-  try {
-    await extractSignalCliArchive(archivePath, installRoot, 60_000);
-  } catch (err) {
-    const message = formatErrorMessage(err);
-    return {
-      ok: false,
-      error: `Failed to extract ${asset.name}: ${message}`,
-    };
-  }
+      const cliPath = await findSignalCliBinary(installRoot);
+      if (!cliPath) {
+        return {
+          ok: false,
+          error: `signal-cli binary not found after extracting ${asset.name}`,
+        };
+      }
 
-  const cliPath = await findSignalCliBinary(installRoot);
-  if (!cliPath) {
-    return {
-      ok: false,
-      error: `signal-cli binary not found after extracting ${asset.name}`,
-    };
-  }
+      await fs.chmod(cliPath, 0o755).catch(() => {});
 
-  await fs.chmod(cliPath, 0o755).catch(() => {});
-
-  return { ok: true, cliPath, version };
+      return {
+        ok: true,
+        cliPath,
+        version,
+      };
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -332,9 +396,9 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   }
 
   // The official signal-cli GitHub releases only ship a native binary for
-  // x86-64 Linux.  On other architectures (arm64, armv7, etc.) we delegate
-  // to Homebrew which builds from source and bundles the JRE automatically.
-  const hasNativeRelease = process.platform !== "linux" || process.arch === "x64";
+  // x86-64 Linux.  Other platforms use Homebrew instead of guessing from
+  // unrelated release archives.
+  const hasNativeRelease = process.platform === "linux" && process.arch === "x64";
 
   if (hasNativeRelease) {
     return installSignalCliFromRelease(runtime);

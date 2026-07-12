@@ -1,3 +1,8 @@
+// Mattermost type declarations define plugin contracts.
+import type {
+  ChannelPreviewStreamingConfig,
+  StreamingMode,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { BlockStreamingCoalesceConfig, DmPolicy, GroupPolicy } from "./runtime-api.js";
 import type { SecretInput } from "./secret-input.js";
 
@@ -5,7 +10,7 @@ export type MattermostReplyToMode = "off" | "first" | "all" | "batched";
 export type MattermostChatTypeKey = "direct" | "channel" | "group";
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
-export type MattermostNetworkConfig = {
+type MattermostNetworkConfig = {
   /** Dangerous opt-in for self-hosted Mattermost on trusted private/internal hosts. */
   dangerouslyAllowPrivateNetwork?: boolean;
 };
@@ -51,6 +56,8 @@ export type MattermostAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Preview streaming mode/config. */
+  streaming?: StreamingMode | boolean | ChannelPreviewStreamingConfig;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
@@ -58,13 +65,19 @@ export type MattermostAccountConfig = {
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /**
-   * Controls whether channel and group replies are sent as thread replies.
+   * Controls whether channel and group replies are sent as thread replies when
+   * `replyToModeByChatType` does not override that chat type.
    * - "off" (default): only thread-reply when incoming message is already a thread reply
    * - "first": reply in a thread under the triggering message
    * - "all": always reply in a thread; uses existing thread root or starts a new thread under the message
-   * Direct messages always behave as "off".
+   * Direct messages default to "off" unless explicitly overridden.
    */
   replyToMode?: MattermostReplyToMode;
+  /**
+   * Per-chat-type reply threading overrides. Set `direct` to opt DMs into
+   * independent thread-scoped sessions; when omitted, DMs stay flat.
+   */
+  replyToModeByChatType?: Partial<Record<MattermostChatTypeKey, MattermostReplyToMode>>;
   /** Action toggles for this account. */
   actions?: {
     /** Enable message reaction actions. Default: true. */

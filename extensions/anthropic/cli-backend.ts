@@ -1,3 +1,7 @@
+/**
+ * Claude CLI backend descriptor. It configures Claude Code process arguments,
+ * MCP bundling, session handling, environment scrubbing, and watchdog defaults.
+ */
 import type { CliBackendPlugin } from "openclaw/plugin-sdk/cli-backend";
 import {
   CLI_FRESH_WATCHDOG_DEFAULTS,
@@ -10,11 +14,14 @@ import {
   CLAUDE_CLI_MODEL_ALIASES,
   CLAUDE_CLI_SESSION_ID_FIELDS,
   normalizeClaudeBackendConfig,
+  resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
+/** Build the Claude CLI backend plugin descriptor. */
 export function buildAnthropicCliBackend(): CliBackendPlugin {
   return {
     id: CLAUDE_CLI_BACKEND_ID,
+    modelProvider: "anthropic",
     liveTest: {
       defaultModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       defaultImageProbe: true,
@@ -24,8 +31,19 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         binaryName: "claude",
       },
     },
+    // Current native builds are self-contained; script distributions keep the
+    // complete inference implementation in this published package tree.
+    runtimeArtifact: {
+      kind: "bundled-package-tree",
+      packageName: "@anthropic-ai/claude-code",
+      entrypoint: "command",
+      nativeExecutableNames: ["claude", "claude.exe"],
+    },
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
+    nativeToolMode: "selectable",
+    sideQuestionToolMode: "disabled",
+    ownsNativeCompaction: true,
     config: {
       command: "claude",
       args: [
@@ -38,6 +56,8 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "user",
         "--allowedTools",
         "mcp__openclaw__*",
+        "--disallowedTools",
+        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
       ],
       resumeArgs: [
         "-p",
@@ -49,9 +69,12 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "user",
         "--allowedTools",
         "mcp__openclaw__*",
+        "--disallowedTools",
+        "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor",
         "--resume",
         "{sessionId}",
       ],
+      forkArg: "--fork-session",
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",
@@ -61,10 +84,11 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       imagePathScope: "workspace",
       sessionArg: "--session-id",
       sessionMode: "always",
+      reseedFromRawTranscriptWhenUncompacted: true,
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
-      systemPromptWhen: "first",
+      systemPromptWhen: "always",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       reliability: {
         watchdog: {
@@ -75,5 +99,6 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };
 }

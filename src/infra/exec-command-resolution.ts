@@ -1,6 +1,7 @@
+// Resolves command executables and wrapper policy paths for exec approvals.
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
@@ -145,8 +146,9 @@ export function resolveCommandResolutionFromArgv(
   argv: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
 ): CommandResolution | null {
-  const plan = resolveExecWrapperTrustPlan(argv);
+  const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
   const effectiveArgv = plan.argv;
   const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {
@@ -184,6 +186,18 @@ function resolveExecutableCandidatePathFromResolution(
   });
 }
 
+export function resolveExecutableTrustPath(
+  resolution: ExecutableResolution | null | undefined,
+  cwd?: string,
+): string | undefined {
+  const realPath = resolution?.resolvedRealPath?.trim();
+  if (realPath) {
+    return realPath;
+  }
+  const candidatePath = resolveExecutableCandidatePathFromResolution(resolution, cwd);
+  return tryResolveRealpath(candidatePath) ?? candidatePath;
+}
+
 export function resolveExecutionTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
@@ -212,6 +226,16 @@ export function resolveExecutionTargetCandidatePath(
   );
 }
 
+export function resolveExecutionTargetTrustPath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableTrustPath(
+    isCommandResolution(resolution) ? resolution.execution : resolution,
+    cwd,
+  );
+}
+
 export function resolvePolicyTargetCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -222,11 +246,28 @@ export function resolvePolicyTargetCandidatePath(
   );
 }
 
+export function resolvePolicyTargetTrustPath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableTrustPath(
+    isCommandResolution(resolution) ? resolution.policy : resolution,
+    cwd,
+  );
+}
+
 export function resolveApprovalAuditCandidatePath(
   resolution: CommandResolution | null,
   cwd?: string,
 ): string | undefined {
   return resolvePolicyTargetCandidatePath(resolution, cwd);
+}
+
+export function resolveApprovalAuditTrustPath(
+  resolution: CommandResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolvePolicyTargetTrustPath(resolution, cwd);
 }
 
 /** @deprecated Use resolveExecutionTargetCandidatePath. */
@@ -244,22 +285,6 @@ export function resolvePolicyAllowlistCandidatePath(
   return resolvePolicyTargetCandidatePath(resolution, cwd);
 }
 
-// Strip trailing shell redirections (e.g. `2>&1`, `2>/dev/null`) so that
-// allow-always argPatterns built without them still match commands that include
-// them.  LLMs commonly add or omit these between runs of the same cron job.
-const TRAILING_SHELL_REDIRECTIONS_RE = /\s+(?:[12]>&[12]|[12]>\/dev\/null)\s*$/;
-
-function stripTrailingRedirections(value: string): string {
-  let prev = value;
-  while (true) {
-    const next = prev.replace(TRAILING_SHELL_REDIRECTIONS_RE, "");
-    if (next === prev) {
-      return next;
-    }
-    prev = next;
-  }
-}
-
 function matchArgPattern(argPattern: string, argv: string[], platform?: string | null): boolean {
   // Patterns built by buildArgPatternFromArgv use \x00 as the argument separator and
   // always include a trailing \x00 sentinel so that every auto-generated pattern
@@ -269,6 +294,8 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
   // Legacy hand-authored patterns use a plain space and contain no \x00.
   // When \x00 style is active, a trailing \x00 is appended to the joined args string
   // to match the sentinel embedded in the pattern.
+  // Every argv token remains authorization-significant: this boundary cannot prove
+  // whether a redirect-shaped token was shell syntax or literal process data.
   //
   // Zero args use a double sentinel "\x00\x00" to distinguish [] from [""] — both
   // join to "" but must match different patterns ("^\x00\x00$" vs "^\x00$").
@@ -294,18 +321,6 @@ function matchArgPattern(argPattern: string, argv: string[], platform?: string |
     if (effectivePlatform.startsWith("win")) {
       const normalized = argsString.replace(/\//g, "\\");
       if (normalized !== argsString && regex.test(normalized)) {
-        return true;
-      }
-    }
-    // Retry after stripping trailing shell redirections (2>&1, etc.) so that
-    // patterns saved without them still match commands that include them.
-    // Only applies for space-joined (legacy hand-authored) patterns.  For
-    // \x00-joined auto-generated patterns, redirections are already blocked
-    // upstream by findWindowsUnsupportedToken, so any surviving 2>&1 token
-    // is a literal data argument and must not be stripped.
-    if (sep === " ") {
-      const stripped = stripTrailingRedirections(argsString);
-      if (stripped !== argsString && regex.test(stripped)) {
         return true;
       }
     }
@@ -358,14 +373,10 @@ export function matchAllowlist(
   if (!resolution?.resolvedPath) {
     return null;
   }
-  const resolvedPath = resolution.resolvedPath;
-  // argPattern matching is currently Windows-only.  On other platforms every
-  // path-matched entry is treated as a match regardless of argPattern, which
-  // preserves the pre-existing behaviour.
-  // Use the caller-supplied target platform rather than process.platform so that
-  // a Linux gateway evaluating a Windows node command applies argPattern correctly.
-  const effectivePlatform = platform ?? process.platform;
-  const useArgPattern = normalizeLowercaseStringOrEmpty(effectivePlatform).startsWith("win");
+  const trustPath = resolution.resolvedRealPath?.trim() || resolution.resolvedPath;
+  if (!trustPath) {
+    return null;
+  }
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
@@ -373,14 +384,10 @@ export function matchAllowlist(
       continue;
     }
     const patternMatches = hasPathSelector(pattern)
-      ? matchesExecAllowlistPattern(pattern, resolvedPath)
+      ? matchesExecAllowlistPattern(pattern, trustPath)
       : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
     if (!patternMatches) {
       continue;
-    }
-    if (!useArgPattern) {
-      // Non-Windows: first path match wins (legacy behaviour).
-      return entry;
     }
     if (!entry.argPattern) {
       if (!pathOnlyMatch) {

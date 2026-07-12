@@ -1,5 +1,7 @@
+/** Type contracts for plugin-owned CLI backend integrations. */
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
 export type PluginTextReplacement = {
   from: string | RegExp;
@@ -25,15 +27,61 @@ export type CliBackendPrepareExecutionContext = {
   provider: string;
   modelId: string;
   authProfileId?: string;
+  executionMode?: CliBackendExecutionMode;
 };
 
 export type CliBackendPreparedExecution = {
   env?: Record<string, string>;
   clearEnv?: string[];
+  /**
+   * Backend-owned staging that must run after the core CLI queue admits the turn.
+   * Use this for mutable per-profile CLI homes that the launched process also owns.
+   */
+  beforeExecution?: () => Promise<void>;
   cleanup?: () => Promise<void>;
 };
 
+export type CliBackendThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
+
+export type CliBackendExecutionMode = "agent" | "side-question";
+
+/** Host-isolated tool grant for a CLI run with every native tool disabled. */
+export type CliBackendToolAvailability = {
+  native: readonly [];
+  /** MCP tools already isolated by the host transport that may be auto-approved. */
+  mcp: readonly string[];
+};
+
+export type CliBackendResolveExecutionArgsContext = {
+  config?: OpenClawConfig;
+  workspaceDir: string;
+  provider: string;
+  modelId: string;
+  authProfileId?: string;
+  thinkingLevel?: CliBackendThinkingLevel;
+  executionMode?: CliBackendExecutionMode;
+  toolAvailability?: CliBackendToolAvailability;
+  useResume: boolean;
+  baseArgs: readonly string[];
+};
+
+export type CliBackendResolveExecutionArgs = (
+  ctx: CliBackendResolveExecutionArgsContext,
+) => readonly string[] | null | undefined;
+
 export type CliBackendAuthEpochMode = "combined" | "profile-only";
+
+export type CliBackendNativeToolMode = "none" | "always-on" | "selectable";
+
+export type CliBackendSideQuestionToolMode = "disabled";
 
 export type CliBackendNormalizeConfigContext = {
   config?: OpenClawConfig;
@@ -41,12 +89,35 @@ export type CliBackendNormalizeConfigContext = {
   agentId?: string;
 };
 
+/** Backend-owned implementation boundary for script-backed CLI executables. */
+export type CliBackendRuntimeArtifactPolicy = Readonly<{
+  kind: "bundled-package-tree";
+  /** Exact package.json name whose complete installed tree owns inference. */
+  packageName: string;
+  /** Only the command itself may be the package entrypoint. */
+  entrypoint: "command";
+  /** Canonical basenames allowed when this backend ships a self-contained native build. */
+  nativeExecutableNames?: readonly string[];
+}>;
+
 /** Plugin-owned CLI backend defaults used by the text-only CLI runner. */
 export type CliBackendPlugin = {
   /** Provider id used in model refs, for example `claude-cli/opus`. */
   id: string;
+  /** Canonical model provider whose models this CLI backend can execute. */
+  modelProvider?: string;
   /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
   config: CliBackendConfig;
+  /**
+   * Context-engine host capabilities provided by this backend when it is
+   * driven through the generic CLI runner.
+   */
+  contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
+  /**
+   * Backend-owned compaction for non-harness CLI sessions.
+   * Set only when the backend bounds its own transcript and persists resumable state.
+   */
+  ownsNativeCompaction?: boolean;
   /**
    * Optional live-smoke metadata owned by the backend plugin.
    *
@@ -62,6 +133,8 @@ export type CliBackendPlugin = {
       binaryName?: string;
     };
   };
+  /** Required whenever this backend can become a verified inference owner. */
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
   /**
    * Whether OpenClaw should inject bundle MCP config for this backend.
    *
@@ -139,4 +212,27 @@ export type CliBackendPlugin = {
     | CliBackendPreparedExecution
     | null
     | undefined;
+  /**
+   * Backend-owned per-run argv rewrite.
+   *
+   * Use this for request-scoped CLI dialect flags that should not be modeled
+   * as static config, such as mapping OpenClaw thinking levels to a backend's
+   * native effort flag.
+   */
+  resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  /**
+   * Whether this CLI backend can expose native tools outside OpenClaw's tool
+   * catalog. `selectable` backends must enforce `toolAvailability` through
+   * `resolveExecutionArgs`; `always-on` backends fail closed for restricted
+   * callers.
+   */
+  nativeToolMode?: CliBackendNativeToolMode;
+  /**
+   * Side-question native tool behavior.
+   *
+   * Set to `disabled` only when `executionMode: "side-question"` reliably
+   * launches the CLI without native tools, even if normal agent turns expose
+   * backend-owned tools.
+   */
+  sideQuestionToolMode?: CliBackendSideQuestionToolMode;
 };

@@ -1,4 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+// Verifies sync-only plugin hook execution constraints.
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner, type HookRunnerLogger } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
@@ -46,11 +47,11 @@ describe("sync-only plugin hooks", () => {
     );
 
     expect(result).toEqual({ message: originalMessage });
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "tool_result_persist handler from async-tool-result returned a Promise",
-      ),
-    );
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        "[hooks] tool_result_persist handler from async-tool-result returned a Promise; this hook is synchronous and the result was ignored.",
+      ],
+    ]);
     expect(logger.error).not.toHaveBeenCalled();
   });
 
@@ -74,11 +75,11 @@ describe("sync-only plugin hooks", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "before_message_write handler from async-before-write returned a Promise",
-      ),
-    );
+    expect(logger.warn.mock.calls).toEqual([
+      [
+        "[hooks] before_message_write handler from async-before-write returned a Promise; this hook is synchronous and the result was ignored.",
+      ],
+    ]);
     expect(logger.error).not.toHaveBeenCalled();
   });
 });

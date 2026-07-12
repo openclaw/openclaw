@@ -1,3 +1,5 @@
+// Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
+// body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   logRejectedLargePayload,
@@ -74,6 +76,20 @@ export function sendInvalidRequest(res: ServerResponse, message: string) {
   });
 }
 
+export function buildMissingScopeForbiddenBody(missingScope: string | undefined) {
+  return {
+    ok: false,
+    error: {
+      type: "forbidden",
+      message: `missing scope: ${missingScope}`,
+    },
+  };
+}
+
+export function sendMissingScopeForbidden(res: ServerResponse, missingScope: string | undefined) {
+  sendJson(res, 403, buildMissingScopeForbiddenBody(missingScope));
+}
+
 export async function readJsonBodyOrError(
   req: IncomingMessage,
   res: ServerResponse,
@@ -118,6 +134,14 @@ export function setSseHeaders(res: ServerResponse) {
   res.flushHeaders?.();
 }
 
+/** Abort reason used when the HTTP client disconnects before delivery. */
+export class ClientDisconnectError extends Error {
+  constructor(message = "HTTP client disconnected") {
+    super(message);
+    this.name = "ClientDisconnectError";
+  }
+}
+
 export function watchClientDisconnect(
   req: IncomingMessage,
   res: ServerResponse,
@@ -137,7 +161,7 @@ export function watchClientDisconnect(
   const handleClose = () => {
     onDisconnect?.();
     if (!abortController.signal.aborted) {
-      abortController.abort();
+      abortController.abort(new ClientDisconnectError());
     }
   };
   for (const socket of sockets) {

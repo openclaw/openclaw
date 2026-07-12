@@ -1,5 +1,7 @@
+// Restart request parsing keeps restart sentinel payloads limited to resumable
+// session, delivery, thread, and delay fields.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type RestartDeliveryContext = {
   channel?: string;
@@ -34,20 +36,27 @@ function parseRestartDeliveryContext(params: unknown): {
   return { deliveryContext: normalizedContext, threadId };
 }
 
+// Restart sentinels can resume a channel turn after the gateway comes back.
+// Keep only routable delivery fields plus a normalized thread id so malformed
+// UI/tool payloads do not leak arbitrary data into the sentinel file.
 export function parseRestartRequestParams(params: unknown): {
   sessionKey: string | undefined;
   deliveryContext: RestartDeliveryContext | undefined;
   threadId: string | undefined;
   note: string | undefined;
+  continuationMessage: string | undefined;
   restartDelayMs: number | undefined;
 } {
   const sessionKey = normalizeOptionalString((params as { sessionKey?: unknown }).sessionKey);
   const { deliveryContext, threadId } = parseRestartDeliveryContext(params);
   const note = normalizeOptionalString((params as { note?: unknown }).note);
+  const continuationMessage = normalizeOptionalString(
+    (params as { continuationMessage?: unknown }).continuationMessage,
+  );
   const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
   const restartDelayMs =
     typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
       ? Math.max(0, Math.floor(restartDelayMsRaw))
       : undefined;
-  return { sessionKey, deliveryContext, threadId, note, restartDelayMs };
+  return { sessionKey, deliveryContext, threadId, note, continuationMessage, restartDelayMs };
 }

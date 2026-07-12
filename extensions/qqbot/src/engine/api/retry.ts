@@ -10,11 +10,13 @@
  * parameterized by `RetryPolicy` and optional `PersistentRetryPolicy`.
  */
 
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 /** Standard retry policy with exponential or fixed backoff. */
-export interface RetryPolicy {
+interface RetryPolicy {
   /** Maximum retry attempts (excluding the initial attempt). */
   maxRetries: number;
   /** Base delay in milliseconds. */
@@ -36,7 +38,7 @@ export interface RetryPolicy {
  * the standard retry loop into a tight fixed-interval loop bounded
  * only by the total timeout.
  */
-export interface PersistentRetryPolicy {
+interface PersistentRetryPolicy {
   /** Total timeout in milliseconds for the persistent retry loop. */
   timeoutMs: number;
   /** Fixed interval between retries in milliseconds. */
@@ -87,7 +89,7 @@ export async function withRetry<T>(
           policy.backoff === "exponential" ? policy.baseDelayMs * 2 ** attempt : policy.baseDelayMs;
 
         logger?.debug?.(
-          `[qqbot:retry] Attempt ${attempt + 1} failed, retrying in ${delay}ms: ${lastError.message.slice(0, 100)}`,
+          `[qqbot:retry] Attempt ${attempt + 1} failed, retrying in ${delay}ms: ${truncateUtf16Safe(lastError.message, 100)}`,
         );
         await sleep(delay);
       }
@@ -144,10 +146,6 @@ async function persistentRetryLoop<T>(
     `[qqbot:retry] Persistent retry timed out after ${policy.timeoutMs / 1000}s (${attempt} attempts)`,
   );
   throw lastError ?? new Error(`Persistent retry timed out (${policy.timeoutMs / 1000}s)`);
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ============ Pre-built Retry Policies ============
@@ -211,7 +209,7 @@ export function buildPartFinishPersistentPolicy(
 }
 
 /** Business error codes that trigger persistent part-finish retry. */
-export const PART_FINISH_RETRYABLE_CODES: Set<number> = new Set([40093001]);
+const PART_FINISH_RETRYABLE_CODES: Set<number> = new Set([40093001]);
 
 /** upload_prepare error code indicating daily limit exceeded. */
 export const UPLOAD_PREPARE_FALLBACK_CODE = 40093002;

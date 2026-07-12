@@ -1,7 +1,9 @@
+// Normalizes plugin registry identifiers from installed index records.
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 
+/** Inputs used to resolve aliases for installed plugin ids. */
 export type PluginRegistryIdNormalizerOptions = {
   manifestRegistry?: PluginManifestRegistry;
   lookUpTable?: Pick<{ manifestRegistry: PluginManifestRegistry }, "manifestRegistry">;
@@ -22,23 +24,28 @@ function collectObjectKeys(value: Record<string, unknown> | undefined): readonly
 function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): readonly string[] {
   return [
     plugin.id,
-    ...plugin.providers,
-    ...plugin.channels,
+    ...(plugin.providers ?? []),
+    ...(plugin.channels ?? []),
     ...(plugin.setup?.providers?.map((provider) => provider.id) ?? []),
-    ...plugin.cliBackends,
+    ...(plugin.cliBackends ?? []),
     ...(plugin.setup?.cliBackends ?? []),
     ...collectObjectKeys(plugin.modelCatalog?.providers),
     ...collectObjectKeys(plugin.modelCatalog?.aliases),
+    ...collectObjectKeys(plugin.providerAuthAliases),
     ...(plugin.legacyPluginIds ?? []),
   ];
 }
 
+/** Creates a normalizer that maps provider/channel/catalog aliases back to plugin ids. */
 export function createPluginRegistryIdNormalizer(
   index: InstalledPluginIndex,
   options: PluginRegistryIdNormalizerOptions = {},
 ): (pluginId: string) => string {
   const aliases = new Map<string, string>();
   for (const plugin of index.plugins) {
+    if (!plugin.pluginId) {
+      continue;
+    }
     const pluginId = normalizePluginRegistryAlias(plugin.pluginId);
     if (pluginId) {
       aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.pluginId);

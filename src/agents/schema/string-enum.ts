@@ -1,9 +1,15 @@
+/**
+ * Provider-safe TypeBox string enum helpers.
+ *
+ * Emits flat `enum` schemas instead of `anyOf` unions so provider tool-schema validators accept them.
+ */
 import { Type } from "typebox";
 
 type StringEnumOptions<T extends readonly string[]> = {
   description?: string;
   title?: string;
   default?: T[number];
+  deprecated?: boolean;
 };
 
 // Avoid Type.Union([Type.Literal(...)]) which compiles to anyOf.

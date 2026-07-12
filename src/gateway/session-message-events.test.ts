@@ -1,11 +1,22 @@
+/**
+ * Session message event indexing and broadcast tests.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import {
+  loadTranscriptEvents,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
-import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import {
+  emitInternalSessionTranscriptUpdate,
+  emitSessionTranscriptUpdate,
+} from "../sessions/transcript-events.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectOk,
@@ -15,6 +26,9 @@ import {
   rpcReq,
   writeSessionStore,
 } from "./test-helpers.server.js";
+import type { WorkerConnectionIdentity } from "./worker-environments/connection-identity.js";
+import type { WorkerTranscriptCommitStore } from "./worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -68,6 +82,7 @@ async function withOperatorSessionSubscriber<T>(
 function waitForSessionMessageEvent(
   ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>,
   sessionKey: string,
+  timeoutMs?: number,
 ) {
   return onceMessage(
     ws,
@@ -75,6 +90,7 @@ function waitForSessionMessageEvent(
       message.type === "event" &&
       message.event === "session.message" &&
       (message.payload as { sessionKey?: string } | undefined)?.sessionKey === sessionKey,
+    timeoutMs,
   );
 }
 
@@ -93,47 +109,55 @@ function waitForSessionsChangedMessagePhase(
   );
 }
 
-async function emitTranscriptUpdateAndCollectEvents(params: {
+async function emitTranscriptUpdateAndCollectMessageEvent(params: {
   ws: Awaited<ReturnType<Awaited<ReturnType<typeof createGatewaySuiteHarness>>["openWs"]>>;
   sessionKey: string;
   sessionFile: string;
   message: Record<string, unknown>;
   messageId: string;
+  agentId?: string;
+  messageSeq?: number;
 }) {
   const messageEventPromise = waitForSessionMessageEvent(params.ws, params.sessionKey);
-  const changedEventPromise = waitForSessionsChangedMessagePhase(params.ws, params.sessionKey);
 
   emitSessionTranscriptUpdate({
     sessionFile: params.sessionFile,
     sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     message: params.message,
     messageId: params.messageId,
+    ...(typeof params.messageSeq === "number" ? { messageSeq: params.messageSeq } : {}),
   });
 
-  const [messageEvent, changedEvent] = await Promise.all([
-    messageEventPromise,
-    changedEventPromise,
-  ]);
-  return { messageEvent, changedEvent };
+  const messageEvent = await messageEventPromise;
+  return { messageEvent };
 }
 
 async function expectNoMessageWithin(params: {
   action?: () => Promise<void> | void;
-  watch: () => Promise<unknown>;
+  watch: (timeoutMs: number) => Promise<unknown>;
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 300;
-  vi.useFakeTimers();
-  try {
-    const outcome = params
-      .watch()
-      .then(() => "received")
-      .catch(() => "timeout");
-    await params.action?.();
-    await vi.advanceTimersByTimeAsync(timeoutMs);
-    await expect(outcome).resolves.toBe("timeout");
-  } finally {
-    vi.useRealTimers();
+  const received = params.watch(timeoutMs).then(
+    () => true,
+    () => false,
+  );
+  await params.action?.();
+  await expect(received).resolves.toBe(false);
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
+  const record = requireRecord(value, "record");
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key]).toEqual(expectedValue);
   }
 }
 
@@ -145,8 +169,20 @@ describe("session.message websocket events", () => {
         child: {
           sessionId: "sess-child",
           updatedAt: Date.now(),
+          goal: {
+            schemaVersion: 1,
+            id: "goal-child",
+            objective: "Finish child work",
+            status: "active",
+            createdAt: 1,
+            updatedAt: 2,
+            tokenStart: 0,
+            tokensUsed: 42,
+            continuationTurns: 0,
+          },
           spawnedBy: "agent:main:parent",
           spawnedWorkspaceDir: "/tmp/subagent-workspace",
+          spawnedCwd: "/tmp/task-repo",
           forkedFromParent: true,
           spawnDepth: 2,
           subagentRole: "orchestrator",
@@ -173,16 +209,29 @@ describe("session.message websocket events", () => {
       });
 
       const event = await changedEvent;
-      expect(event.payload).toMatchObject({
+      expectRecordFields(event.payload, {
         sessionKey: "agent:main:child",
         reason: "reactivated",
         spawnedBy: "agent:main:parent",
         spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        spawnedCwd: "/tmp/task-repo",
         forkedFromParent: true,
         spawnDepth: 2,
         subagentRole: "orchestrator",
         subagentControlScope: "children",
         displayName: "Ops Child",
+        goal: {
+          schemaVersion: 1,
+          id: "goal-child",
+          objective: "Finish child work",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 2,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 42,
+          continuationTurns: 0,
+        },
       });
     });
   });
@@ -222,21 +271,25 @@ describe("session.message websocket events", () => {
         storePath,
       });
       expect(appended.ok).toBe(true);
-      await expect(subscribedEvent).resolves.toBeTruthy();
+      const event = await subscribedEvent;
+      expectRecordFields(event, {
+        type: "event",
+        event: "session.message",
+      });
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             unsubscribedWs,
             (message) => message.type === "event" && message.event === "session.message",
-            300,
+            timeoutMs,
           ),
       });
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             nodeWs,
             (message) => message.type === "event" && message.event === "session.message",
-            300,
+            timeoutMs,
           ),
       });
     } finally {
@@ -269,25 +322,267 @@ describe("session.message websocket events", () => {
       if (!appended.ok) {
         throw new Error(`append failed: ${appended.reason}`);
       }
-      expect(emitSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionFile: appended.sessionFile,
+      const emitParams = requireRecord(emitSpy.mock.calls.at(0)?.[0], "transcript update params");
+      expect(emitParams.sessionFile).toBe(appended.sessionFile);
+      expect(emitParams.sessionKey).toBe("agent:main:main");
+      expect(emitParams.messageId).toBe(appended.messageId);
+      expectRecordFields(emitParams.message, {
+        role: "assistant",
+        content: [{ type: "text", text: "live websocket message" }],
+      });
+      await expect(
+        loadTranscriptEvents({
+          agentId: "main",
+          sessionId: "sess-main",
           sessionKey: "agent:main:main",
-          messageId: appended.messageId,
+          storePath,
+        }),
+      ).resolves.toContainEqual(
+        expect.objectContaining({
           message: expect.objectContaining({
-            role: "assistant",
             content: [{ type: "text", text: "live websocket message" }],
           }),
+          type: "message",
         }),
       );
-      const transcript = await fs.readFile(appended.sessionFile, "utf-8");
-      expect(transcript).toContain('"live websocket message"');
     } finally {
       emitSpy.mockRestore();
     }
   });
 
-  test("includes live usage metadata on session.message and sessions.changed transcript events", async () => {
+  test("strips blocked original content from live session.message events", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      JSON.stringify({ type: "session", version: 1, id: "sess-main" }) + "\n",
+      "utf-8",
+    );
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
+        ws,
+        sessionKey: "agent:main:main",
+        sessionFile: transcriptPath,
+        messageId: "blocked-1",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+          __openclaw: {
+            beforeAgentRunBlocked: { blockedBy: "policy-plugin", blockedAt: 1 },
+          },
+        },
+      });
+
+      const payload = messageEvent.payload as {
+        message?: { content?: unknown; __openclaw?: { beforeAgentRunBlocked?: unknown } };
+      };
+      expect(payload.message?.content).toEqual([
+        { type: "text", text: "The agent cannot read this message." },
+      ]);
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
+    });
+  });
+
+  test("broadcasts redacted blocked user appends to live session listeners", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      emitSessionTranscriptUpdate({
+        sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
+        sessionKey: "agent:main:main",
+        messageId: "blocked-message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+          __openclaw: {
+            beforeAgentRunBlocked: {
+              blockedBy: "policy-plugin",
+              blockedAt: Date.now(),
+            },
+          },
+        },
+      });
+
+      const messageEvent = await messageEventPromise;
+      const payload = messageEvent.payload as {
+        message?: {
+          role?: unknown;
+          content?: unknown;
+          __openclaw?: { beforeAgentRunBlocked?: unknown };
+        };
+      };
+      expect(payload.message?.role).toBe("user");
+      expect(payload.message?.content).toEqual([
+        { type: "text", text: "The agent cannot read this message." },
+      ]);
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
+    });
+  });
+
+  test("does not broadcast hidden runtime-context custom messages as live chat messages", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        "hidden-runtime": {
+          sessionId: "sess-hidden-runtime",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const changedEventPromise = waitForSessionsChangedMessagePhase(
+        ws,
+        "agent:main:hidden-runtime",
+      );
+      await expectNoMessageWithin({
+        watch: (timeoutMs) =>
+          onceMessage(
+            ws,
+            (message) =>
+              message.type === "event" &&
+              message.event === "session.message" &&
+              (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+                "agent:main:hidden-runtime",
+            timeoutMs,
+          ),
+        action: () => {
+          emitSessionTranscriptUpdate({
+            sessionFile: path.join(path.dirname(storePath), "sess-hidden-runtime.jsonl"),
+            sessionKey: "agent:main:hidden-runtime",
+            messageId: "runtime-context-1",
+            messageSeq: 1,
+            message: {
+              role: "custom",
+              customType: "openclaw.runtime-context",
+              content: "secret runtime context",
+              display: false,
+            },
+          });
+        },
+      });
+
+      const changedEvent = await changedEventPromise;
+      expectRecordFields(changedEvent.payload, {
+        sessionKey: "agent:main:hidden-runtime",
+        phase: "message",
+        goal: null,
+      });
+    });
+  });
+
+  test("does not duplicate displayable transcript updates with sessions.changed", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      await expectNoMessageWithin({
+        action: () => {
+          emitSessionTranscriptUpdate({
+            sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
+            sessionKey: "agent:main:main",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "single frame" }],
+              timestamp: Date.now(),
+            },
+            messageId: "msg-single-frame",
+            messageSeq: 1,
+          });
+        },
+        watch: (timeoutMs) =>
+          onceMessage(
+            ws,
+            (message) =>
+              message.type === "event" &&
+              message.event === "sessions.changed" &&
+              (message.payload as { phase?: string; sessionKey?: string } | undefined)?.phase ===
+                "message" &&
+              (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+                "agent:main:main",
+            timeoutMs,
+          ),
+      });
+      const messageEvent = await messageEventPromise;
+      expectRecordFields(messageEvent.payload, {
+        sessionKey: "agent:main:main",
+        messageId: "msg-single-frame",
+        messageSeq: 1,
+      });
+    });
+  });
+
+  test("broadcasts identity-only transcript updates to live session listeners", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      emitInternalSessionTranscriptUpdate({
+        target: {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "agent:main:main",
+        },
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "identity frame" }],
+          timestamp: Date.now(),
+        },
+        messageId: "msg-identity-frame",
+        messageSeq: 1,
+      });
+
+      const messageEvent = await messageEventPromise;
+      expectRecordFields(messageEvent.payload, {
+        sessionKey: "agent:main:main",
+        messageId: "msg-identity-frame",
+        messageSeq: 1,
+      });
+    });
+  });
+
+  test("includes live usage metadata on session.message transcript events", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({
       entries: {
@@ -303,7 +598,6 @@ describe("session.message websocket events", () => {
       },
       storePath,
     });
-    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
     const transcriptMessage = {
       role: "assistant",
       content: [{ type: "text", text: "usage snapshot" }],
@@ -318,37 +612,29 @@ describe("session.message websocket events", () => {
       },
       timestamp: Date.now(),
     };
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
-        JSON.stringify({ id: "msg-usage", message: transcriptMessage }),
-      ].join("\n"),
-      "utf-8",
+    const turn = await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      {
+        messages: [{ message: transcriptMessage }],
+        updateMode: "none",
+      },
     );
 
     await withOperatorSessionSubscriber(async (ws) => {
-      const { messageEvent, changedEvent } = await emitTranscriptUpdateAndCollectEvents({
+      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
         ws,
         sessionKey: "agent:main:main",
-        sessionFile: transcriptPath,
+        sessionFile: turn.sessionFile,
         message: transcriptMessage,
         messageId: "msg-usage",
       });
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
-        messageId: "msg-usage",
-        messageSeq: 1,
-        totalTokens: 2_400,
-        totalTokensFresh: true,
-        contextTokens: 123_456,
-        estimatedCostUsd: 0.0042,
-        modelProvider: "openai",
-        model: "gpt-5.4",
-      });
-      expect(changedEvent.payload).toMatchObject({
-        sessionKey: "agent:main:main",
-        phase: "message",
         messageId: "msg-usage",
         messageSeq: 1,
         totalTokens: 2_400,
@@ -361,7 +647,365 @@ describe("session.message websocket events", () => {
     });
   });
 
-  test("includes spawnedBy metadata on session.message and sessions.changed transcript events", async () => {
+  test("prefers carried transcript sequence for live session events", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
+        ws,
+        sessionKey: "agent:main:main",
+        sessionFile: path.join(path.dirname(storePath), "missing-transcript.jsonl"),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "carried sequence" }],
+          timestamp: Date.now(),
+        },
+        messageId: "msg-carried-seq",
+        messageSeq: 7,
+      });
+      expectRecordFields(messageEvent.payload, {
+        sessionKey: "agent:main:main",
+        messageId: "msg-carried-seq",
+        messageSeq: 7,
+      });
+      const payload = requireRecord(messageEvent.payload, "session.message payload");
+      const message = requireRecord(payload.message, "session.message payload message");
+      expect((message["__openclaw"] as { seq?: unknown } | undefined)?.seq).toBe(7);
+    });
+  });
+
+  test("derives message sequence for selected-session transcript subscribers", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const transcriptMessage = {
+      role: "user",
+      content: [{ type: "text", text: "early selected prompt" }],
+      timestamp: Date.now(),
+    };
+    const turn = await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      {
+        messages: [{ message: transcriptMessage }],
+        updateMode: "none",
+      },
+    );
+
+    const ws = await harness.openWs();
+    try {
+      await connectOk(ws, { scopes: ["operator.read"] });
+      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", {
+        key: "main",
+      });
+      expect(subscribeRes.ok).toBe(true);
+      expect(subscribeRes.payload?.key).toBe("agent:main:main");
+
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      emitSessionTranscriptUpdate({
+        sessionFile: turn.sessionFile,
+        sessionKey: "agent:main:main",
+        message: transcriptMessage,
+        messageId: "msg-selected",
+      });
+
+      const messageEvent = await messageEventPromise;
+      expectRecordFields(messageEvent.payload, {
+        sessionKey: "agent:main:main",
+        messageId: "msg-selected",
+        messageSeq: 1,
+      });
+    } finally {
+      ws.close();
+    }
+  });
+
+  test("routes selected-agent global transcript updates to matching message subscribers", async () => {
+    const storePath = await createSessionStoreFile();
+    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    const transcriptPath = path.join(path.dirname(storePath), "global-work.jsonl");
+    await writeSessionStore({
+      entries: {
+        global: {
+          sessionId: "sess-work-global",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+          goal: {
+            schemaVersion: 1,
+            id: "goal-work-global",
+            objective: "Finish work global task",
+            status: "active",
+            createdAt: 1,
+            updatedAt: 2,
+            tokenStart: 0,
+            tokensUsed: 5,
+            continuationTurns: 0,
+          },
+        },
+      },
+      storePath,
+      agentId: "work",
+    });
+    const transcriptMessage = {
+      role: "user",
+      content: [{ type: "text", text: "work selected global prompt" }],
+      timestamp: Date.now(),
+    };
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-work-global" }),
+        JSON.stringify({ id: "msg-work-global", message: transcriptMessage }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const workWs = await harness.openWs();
+    const mainWs = await harness.openWs();
+    const bareWs = await harness.openWs();
+    try {
+      await connectOk(workWs, { scopes: ["operator.read"] });
+      await connectOk(mainWs, { scopes: ["operator.read"] });
+      await connectOk(bareWs, { scopes: ["operator.read"] });
+      await rpcReq(workWs, "sessions.messages.subscribe", {
+        key: "global",
+        agentId: "work",
+      });
+      await rpcReq(mainWs, "sessions.messages.subscribe", {
+        key: "global",
+        agentId: "main",
+      });
+      await rpcReq(bareWs, "sessions.messages.subscribe", {
+        key: "global",
+      });
+
+      const workMessagePromise = waitForSessionMessageEvent(workWs, "global");
+      const mainMessagePromise = expectNoMessageWithin({
+        watch: (timeoutMs) => waitForSessionMessageEvent(mainWs, "global", timeoutMs),
+        timeoutMs: 250,
+      });
+      const bareMessagePromise = expectNoMessageWithin({
+        watch: (timeoutMs) => waitForSessionMessageEvent(bareWs, "global", timeoutMs),
+        timeoutMs: 250,
+      });
+      emitSessionTranscriptUpdate({
+        sessionFile: transcriptPath,
+        sessionKey: "global",
+        agentId: "work",
+        message: transcriptMessage,
+        messageId: "msg-work-global",
+      });
+
+      const workMessage = await workMessagePromise;
+      await mainMessagePromise;
+      await bareMessagePromise;
+      expectRecordFields(workMessage.payload, {
+        sessionKey: "global",
+        agentId: "work",
+        messageId: "msg-work-global",
+        goal: {
+          schemaVersion: 1,
+          id: "goal-work-global",
+          objective: "Finish work global task",
+          status: "active",
+          createdAt: 1,
+          updatedAt: 2,
+          tokenStart: 0,
+          tokenStartFresh: true,
+          tokensUsed: 5,
+          continuationTurns: 0,
+        },
+      });
+    } finally {
+      workWs.close();
+      mainWs.close();
+      bareWs.close();
+      testState.agentsConfig = undefined;
+      testState.sessionStorePath = undefined;
+    }
+  });
+
+  test("routes unscoped global transcript events to default-agent global subscribers", async () => {
+    const storePath = await createSessionStoreFile();
+    const transcriptPath = path.join(path.dirname(storePath), "sess-default-global.jsonl");
+    await writeSessionStore({
+      entries: {
+        global: {
+          sessionId: "sess-default-global",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const transcriptMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "default global prompt" }],
+      timestamp: Date.now(),
+    };
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-default-global" }),
+        JSON.stringify({ id: "msg-default-global", message: transcriptMessage }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const workWs = await harness.openWs();
+    const mainWs = await harness.openWs();
+    const bareWs = await harness.openWs();
+    try {
+      await connectOk(workWs, { scopes: ["operator.read"] });
+      await connectOk(mainWs, { scopes: ["operator.read"] });
+      await connectOk(bareWs, { scopes: ["operator.read"] });
+      await rpcReq(workWs, "sessions.messages.subscribe", {
+        key: "global",
+        agentId: "work",
+      });
+      await rpcReq(mainWs, "sessions.messages.subscribe", {
+        key: "global",
+        agentId: "main",
+      });
+      await rpcReq(bareWs, "sessions.messages.subscribe", {
+        key: "global",
+      });
+
+      const mainMessagePromise = waitForSessionMessageEvent(mainWs, "global");
+      const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
+      const workMessagePromise = expectNoMessageWithin({
+        watch: (timeoutMs) => waitForSessionMessageEvent(workWs, "global", timeoutMs),
+        timeoutMs: 250,
+      });
+      emitSessionTranscriptUpdate({
+        sessionFile: transcriptPath,
+        sessionKey: "global",
+        message: transcriptMessage,
+        messageId: "msg-default-global",
+      });
+
+      const mainMessage = await mainMessagePromise;
+      const bareMessage = await bareMessagePromise;
+      await workMessagePromise;
+      expectRecordFields(mainMessage.payload, {
+        sessionKey: "global",
+        messageId: "msg-default-global",
+      });
+      expectRecordFields(bareMessage.payload, {
+        sessionKey: "global",
+        messageId: "msg-default-global",
+      });
+      expect((mainMessage.payload as { agentId?: unknown }).agentId).toBeUndefined();
+      expect((bareMessage.payload as { agentId?: unknown }).agentId).toBeUndefined();
+    } finally {
+      workWs.close();
+      mainWs.close();
+      bareWs.close();
+    }
+  });
+
+  test("routes default-agent scoped global transcript events to legacy global subscribers", async () => {
+    const storePath = await createSessionStoreFile();
+    const transcriptPath = path.join(path.dirname(storePath), "sess-default-scoped-global.jsonl");
+    await writeSessionStore({
+      entries: {
+        global: {
+          sessionId: "sess-default-scoped-global",
+          sessionFile: transcriptPath,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+      agentId: "main",
+    });
+    const transcriptMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "default scoped global prompt" }],
+      timestamp: Date.now(),
+    };
+    await fs.writeFile(
+      transcriptPath,
+      [
+        JSON.stringify({ type: "session", version: 1, id: "sess-default-scoped-global" }),
+        JSON.stringify({ id: "msg-default-scoped-global", message: transcriptMessage }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const workWs = await harness.openWs();
+    const mainWs = await harness.openWs();
+    const bareWs = await harness.openWs();
+    try {
+      await connectOk(workWs, { scopes: ["operator.read"] });
+      await connectOk(mainWs, { scopes: ["operator.read"] });
+      await connectOk(bareWs, { scopes: ["operator.read"] });
+      await rpcReq(workWs, "sessions.messages.subscribe", {
+        key: "global",
+        agentId: "work",
+      });
+      await rpcReq(mainWs, "sessions.messages.subscribe", {
+        key: "global",
+        agentId: "main",
+      });
+      await rpcReq(bareWs, "sessions.messages.subscribe", {
+        key: "global",
+      });
+
+      const mainMessagePromise = waitForSessionMessageEvent(mainWs, "global");
+      const bareMessagePromise = waitForSessionMessageEvent(bareWs, "global");
+      const workMessagePromise = expectNoMessageWithin({
+        watch: (timeoutMs) => waitForSessionMessageEvent(workWs, "global", timeoutMs),
+        timeoutMs: 250,
+      });
+      emitSessionTranscriptUpdate({
+        sessionFile: transcriptPath,
+        sessionKey: "global",
+        agentId: "main",
+        message: transcriptMessage,
+        messageId: "msg-default-scoped-global",
+      });
+
+      const mainMessage = await mainMessagePromise;
+      const bareMessage = await bareMessagePromise;
+      await workMessagePromise;
+      expectRecordFields(mainMessage.payload, {
+        sessionKey: "global",
+        agentId: "main",
+        messageId: "msg-default-scoped-global",
+      });
+      expectRecordFields(bareMessage.payload, {
+        sessionKey: "global",
+        agentId: "main",
+        messageId: "msg-default-scoped-global",
+      });
+    } finally {
+      workWs.close();
+      mainWs.close();
+      bareWs.close();
+    }
+  });
+
+  test("includes spawnedBy metadata on session.message transcript events", async () => {
     const storePath = await createSessionStoreFile();
     const transcriptPath = path.join(path.dirname(storePath), "sess-child.jsonl");
     await writeSessionStore({
@@ -408,16 +1052,6 @@ describe("session.message websocket events", () => {
           (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
             "agent:main:child",
       );
-      const changedEventPromise = onceMessage(
-        ws,
-        (message) =>
-          message.type === "event" &&
-          message.event === "sessions.changed" &&
-          (message.payload as { phase?: string; sessionKey?: string } | undefined)?.phase ===
-            "message" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:child",
-      );
 
       emitSessionTranscriptUpdate({
         sessionFile: transcriptPath,
@@ -426,23 +1060,9 @@ describe("session.message websocket events", () => {
         messageId: "msg-spawn",
       });
 
-      const [messageEvent, changedEvent] = await Promise.all([
-        messageEventPromise,
-        changedEventPromise,
-      ]);
-      expect(messageEvent.payload).toMatchObject({
+      const messageEvent = await messageEventPromise;
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:child",
-        spawnedBy: "agent:main:main",
-        spawnedWorkspaceDir: "/tmp/subagent-workspace",
-        forkedFromParent: true,
-        spawnDepth: 2,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        parentSessionKey: "agent:main:main",
-      });
-      expect(changedEvent.payload).toMatchObject({
-        sessionKey: "agent:main:child",
-        phase: "message",
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: "/tmp/subagent-workspace",
         forkedFromParent: true,
@@ -456,7 +1076,7 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("includes route thread metadata on session.message and sessions.changed transcript events", async () => {
+  test("includes route thread metadata on session.message transcript events", async () => {
     const storePath = await createSessionStoreFile();
     const transcriptPath = path.join(path.dirname(storePath), "sess-thread.jsonl");
     await writeSessionStore({
@@ -488,23 +1108,15 @@ describe("session.message websocket events", () => {
     );
 
     await withOperatorSessionSubscriber(async (ws) => {
-      const { messageEvent, changedEvent } = await emitTranscriptUpdateAndCollectEvents({
+      const { messageEvent } = await emitTranscriptUpdateAndCollectMessageEvent({
         ws,
         sessionKey: "agent:main:main",
         sessionFile: transcriptPath,
         message: transcriptMessage,
         messageId: "msg-thread",
       });
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
-        lastChannel: "telegram",
-        lastTo: "-100123",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
-      });
-      expect(changedEvent.payload).toMatchObject({
-        sessionKey: "agent:main:main",
-        phase: "message",
         lastChannel: "telegram",
         lastTo: "-100123",
         lastAccountId: "acct-1",
@@ -551,7 +1163,7 @@ describe("session.message websocket events", () => {
       expect(mainAppend.ok).toBe(true);
 
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             ws,
             (message) =>
@@ -559,7 +1171,7 @@ describe("session.message websocket events", () => {
               message.event === "session.message" &&
               (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
                 "agent:main:worker",
-            300,
+            timeoutMs,
           ),
         action: async () => {
           const workerAppend = await appendAssistantMessageToSessionTranscript({
@@ -578,7 +1190,7 @@ describe("session.message websocket events", () => {
       expect(unsubscribeRes.payload?.subscribed).toBe(false);
 
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             ws,
             (message) =>
@@ -586,7 +1198,7 @@ describe("session.message websocket events", () => {
               message.event === "session.message" &&
               (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
                 "agent:main:main",
-            300,
+            timeoutMs,
           ),
         action: async () => {
           const hiddenAppend = await appendAssistantMessageToSessionTranscript({
@@ -602,55 +1214,141 @@ describe("session.message websocket events", () => {
     }
   });
 
-  test("routes transcript-only updates to the freshest session owner when different sessionIds share a transcript path", async () => {
+  test("streams every worker transcript commit entry to the selected session subscriber", async () => {
     const storePath = await createSessionStoreFile();
-    const transcriptPath = path.join(path.dirname(storePath), "shared.jsonl");
+    const sessionId = "sess-worker-commit-fanout";
+    const sessionKey = "agent:main:worker";
+    await writeSessionStore({
+      entries: {
+        worker: {
+          sessionId,
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const config: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }] },
+      session: { mainKey: "main", store: storePath },
+    };
+    const ledger: WorkerTranscriptCommitStore = {
+      begin: () => ({ kind: "claimed" }),
+      complete: ({ outcome }) => outcome,
+    };
+    const committer = createWorkerTranscriptCommitter({ getConfig: () => config, store: ledger });
+    const identity: WorkerConnectionIdentity = {
+      environmentId: "environment-fanout",
+      credentialHash: ["fanout", "credential", "hash"].join("-"),
+      bundleHash: "f".repeat(64),
+      sessionId,
+      ownerEpoch: 4,
+      rpcSetVersion: 1,
+      protocolFeatures: ["worker-transcript-commit-v1"],
+      credentialExpiresAtMs: Date.now() + 10_000,
+    };
+
+    const ws = await harness.openWs();
+    try {
+      await connectOk(ws, { scopes: ["operator.read"] });
+      const subscribeRes = await rpcReq(ws, "sessions.messages.subscribe", { key: sessionKey });
+      expect(subscribeRes.ok).toBe(true);
+      expect(subscribeRes.payload?.subscribed).toBe(true);
+      expect(subscribeRes.payload?.key).toBe(sessionKey);
+
+      const eventPromises = [1, 2, 3].map((messageSeq) =>
+        onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "session.message" &&
+            (message.payload as { sessionKey?: unknown } | undefined)?.sessionKey === sessionKey &&
+            (message.payload as { messageSeq?: unknown } | undefined)?.messageSeq === messageSeq,
+        ),
+      );
+      const outcome = await committer.commit({
+        identity,
+        request: {
+          runEpoch: identity.ownerEpoch,
+          seq: 1,
+          baseLeafId: null,
+          messages: ["first", "second", "third"].map((text, index) => ({
+            role: "user" as const,
+            content: [{ type: "text" as const, text }],
+            timestamp: 100 + index,
+          })),
+        },
+      });
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) {
+        throw new Error(`expected worker transcript commit, received ${outcome.reason}`);
+      }
+      const events = await Promise.all(eventPromises);
+      const payloads = events.map((event) =>
+        requireRecord(event.payload, "session.message payload"),
+      );
+      expect(payloads.map((payload) => payload.messageId)).toEqual(outcome.result.entryIds);
+      expect(payloads.map((payload) => payload.messageSeq)).toEqual([1, 2, 3]);
+      expect(
+        payloads.map((payload) => {
+          const message = requireRecord(payload.message, "session.message payload message");
+          return requireRecord(message["__openclaw"], "session.message metadata").id;
+        }),
+      ).toEqual(outcome.result.entryIds);
+      expect(
+        payloads.map((payload) => {
+          const message = requireRecord(payload.message, "session.message payload message");
+          return requireRecord(message["__openclaw"], "session.message metadata").seq;
+        }),
+      ).toEqual([1, 2, 3]);
+    } finally {
+      ws.close();
+    }
+  });
+
+  test("routes transcript-only SQLite marker updates to the matching session owner", async () => {
+    const storePath = await createSessionStoreFile();
     await writeSessionStore({
       entries: {
         older: {
           sessionId: "sess-old",
-          sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
         newer: {
           sessionId: "sess-new",
-          sessionFile: transcriptPath,
           updatedAt: Date.now() + 10,
         },
       },
       storePath,
     });
-    await fs.writeFile(
-      transcriptPath,
-      [
-        JSON.stringify({ type: "session", version: 1, id: "sess-new" }),
-        JSON.stringify({
-          id: "msg-shared",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "shared transcript update" }],
-            timestamp: Date.now(),
-          },
-        }),
-      ].join("\n"),
-      "utf-8",
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "shared transcript update" }],
+      timestamp: Date.now(),
+    };
+    const turn = await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId: "sess-new",
+        sessionKey: "agent:main:newer",
+        storePath,
+      },
+      {
+        messages: [{ message }],
+        updateMode: "none",
+      },
     );
 
     await withOperatorSessionSubscriber(async (ws) => {
       const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:newer");
 
       emitSessionTranscriptUpdate({
-        sessionFile: transcriptPath,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "shared transcript update" }],
-          timestamp: Date.now(),
-        },
+        sessionFile: turn.sessionFile,
+        message,
         messageId: "msg-shared",
       });
 
       const messageEvent = await messageEventPromise;
-      expect(messageEvent.payload).toMatchObject({
+      expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:newer",
         messageId: "msg-shared",
         messageSeq: 1,

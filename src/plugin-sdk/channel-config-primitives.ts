@@ -1,16 +1,21 @@
-/** Narrow channel config-schema primitives without provider-schema re-exports. */
+/**
+ * Narrow channel config-schema primitives without provider-schema re-exports.
+ *
+ * Re-export shell over openclaw/plugin-sdk/channel-config-schema, kept for
+ * third-party plugins until the next SDK break train. Internal and bundled
+ * code imports openclaw/plugin-sdk/channel-config-schema directly.
+ */
 export {
   AllowFromListSchema,
-  buildChannelConfigSchema,
-  buildCatchallMultiAccountChannelSchema,
-  buildNestedDmConfigSchema,
-} from "../channels/plugins/config-schema.js";
-export {
   BlockStreamingCoalesceSchema,
+  buildCatchallMultiAccountChannelSchema,
+  buildChannelConfigSchema,
+  buildNestedDmConfigSchema,
   DmConfigSchema,
   DmPolicySchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   ReplyRuntimeConfigSchemaShape,
+  requireAllowlistAllowFrom,
   requireOpenAllowFrom,
-} from "../config/zod-schema.core.js";
+} from "./channel-config-schema.js";

@@ -1,3 +1,5 @@
+// Plugin runtime entrypoint assembles runtime helpers available to activated plugins.
+import { getRuntimeConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   generateImage as generateRuntimeImage,
@@ -12,6 +14,7 @@ import {
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
+  createLazyRuntimeSurface,
 } from "../../shared/lazy-runtime.js";
 import { VERSION } from "../../version.js";
 import {
@@ -19,12 +22,7 @@ import {
   listRuntimeVideoGenerationProviders,
 } from "../../video-generation/runtime.js";
 import { listWebSearchProviders, runWebSearch } from "../../web-search/runtime.js";
-import {
-  gatewaySubagentState,
-  setGatewayNodesRuntime,
-  setGatewaySubagentRuntime,
-  clearGatewaySubagentRuntime,
-} from "./gateway-bindings.js";
+import { gatewaySubagentState } from "./gateway-bindings.js";
 import { createRuntimeAgent } from "./runtime-agent.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
@@ -51,11 +49,28 @@ const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
 const loadModelAuthRuntime = createLazyRuntimeModule(
   () => import("./runtime-model-auth.runtime.js"),
 );
+const loadGatewayPluginRuntime = createLazyRuntimeModule(
+  () => import("../../gateway/server-plugins.js"),
+);
+
+function createRuntimeGateway(): PluginRuntime["gateway"] {
+  return {
+    isAvailable: async () => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.hasInProcessGatewayContext();
+    },
+    request: async (method, params, options) => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
+    },
+  };
+}
 
 function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
   return {
     textToSpeech: bindTtsRuntime((runtime) => runtime.textToSpeech),
+    textToSpeechStream: bindTtsRuntime((runtime) => runtime.textToSpeechStream),
     textToSpeechTelephony: bindTtsRuntime((runtime) => runtime.textToSpeechTelephony),
     listVoices: bindTtsRuntime((runtime) => runtime.listSpeechVoices),
   };
@@ -70,6 +85,9 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
     describeImageFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeImageFile),
     describeImageFileWithModel: bindMediaUnderstandingRuntime(
       (runtime) => runtime.describeImageFileWithModel,
+    ),
+    extractStructuredWithModel: bindMediaUnderstandingRuntime(
+      (runtime) => runtime.extractStructuredWithModel,
     ),
     describeVideoFile: bindMediaUnderstandingRuntime((runtime) => runtime.describeVideoFile),
     transcribeAudioFile: bindMediaUnderstandingRuntime((runtime) => runtime.transcribeAudioFile),
@@ -94,6 +112,30 @@ function createRuntimeMusicGeneration(): PluginRuntime["musicGeneration"] {
   return {
     generate: (params) => generateRuntimeMusic(params),
     listProviders: (params) => listRuntimeMusicGenerationProviders(params),
+  };
+}
+
+function createRuntimeLlmFacade(): PluginRuntime["llm"] {
+  const loadAcquireLocalService = createLazyRuntimeMethod(
+    () => import("../../agents/provider-local-service.js"),
+    (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
+  );
+  const loadLlm = createLazyRuntimeSurface(
+    () => import("./runtime-llm.runtime.js"),
+    (m) =>
+      m.createRuntimeLlm({
+        getConfig: getRuntimeConfig,
+        authority: {
+          allowComplete: true,
+        },
+      }),
+  );
+  return {
+    acquireLocalService: (...args) => loadAcquireLocalService(...args),
+    complete: async (params) => {
+      const llm = await loadLlm();
+      return llm.complete(params);
+    },
   };
 }
 
@@ -202,6 +244,26 @@ function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nod
   });
 }
 
+function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
+  const loadService = () => import("../../agents/worktrees/service.js");
+  return {
+    async create(params) {
+      const { managedWorktrees } = await loadService();
+      const record = await managedWorktrees.create(params);
+      await managedWorktrees.acquire(record.id);
+      return { id: record.id, path: record.path, branch: record.branch };
+    },
+    async release(params) {
+      const { managedWorktrees } = await loadService();
+      await managedWorktrees.releaseByPath(params.path);
+    },
+    async removeIfLossless(params) {
+      const { managedWorktrees } = await loadService();
+      return managedWorktrees.removeIfLosslessByPath(params.path);
+    },
+  };
+}
+
 export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   const mediaUnderstanding = createRuntimeMediaUnderstandingFacade();
   const taskFlow = createRuntimeTaskFlow();
@@ -212,6 +274,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
+    gateway: createRuntimeGateway(),
     config: createRuntimeConfig(),
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(
@@ -219,6 +282,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       _options.allowGatewaySubagentBinding === true,
     ),
     nodes: _options.nodes ?? createLateBindingNodes(_options.allowGatewaySubagentBinding === true),
+    worktrees: createRuntimeWorktrees(),
     system: createRuntimeSystem(),
     media: createRuntimeMedia(),
     webSearch: {
@@ -233,6 +297,14 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       openKeyedStore: () => {
         throw new Error("openKeyedStore is only available through the plugin runtime proxy.");
       },
+      openSyncKeyedStore: () => {
+        throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy.");
+      },
+      openChannelIngressQueue: () => {
+        throw new Error(
+          "openChannelIngressQueue is only available through the plugin runtime proxy.",
+        );
+      },
     },
     tasks,
     taskFlow,
@@ -245,6 +317,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     | "imageGeneration"
     | "videoGeneration"
     | "musicGeneration"
+    | "llm"
   > &
     Partial<
       Pick<
@@ -256,6 +329,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
         | "imageGeneration"
         | "videoGeneration"
         | "musicGeneration"
+        | "llm"
       >
     >;
 
@@ -268,6 +342,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
   defineCachedValue(runtime, "imageGeneration", createRuntimeImageGeneration);
   defineCachedValue(runtime, "videoGeneration", createRuntimeVideoGeneration);
   defineCachedValue(runtime, "musicGeneration", createRuntimeMusicGeneration);
+  defineCachedValue(runtime, "llm", createRuntimeLlmFacade);
 
   return runtime as unknown as PluginRuntime;
 }

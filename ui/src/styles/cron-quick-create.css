@@ -1,9 +1,25 @@
 /* ── Cron Quick Create Wizard ── */
 
 .cqc-container {
-  max-width: 600px;
-  margin: 0 auto;
-  padding: 32px 20px 56px;
+  width: min(680px, calc(100vw - 40px));
+  max-height: min(760px, calc(100vh - 56px));
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-xl);
+  padding: 28px;
+}
+
+.cqc-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: color-mix(in srgb, #000 58%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .cqc-header {
@@ -28,6 +44,11 @@
   width: 20px;
   height: 20px;
   color: var(--accent);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .cqc-header__close {
@@ -40,7 +61,6 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
   transition:
     background var(--duration-fast) var(--ease-out),
     border-color var(--duration-fast) var(--ease-out),
@@ -56,6 +76,11 @@
 .cqc-header__close svg {
   width: 14px;
   height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* ── Step Indicator ── */
@@ -176,7 +201,7 @@
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
-.cqc-textarea:focus {
+.cqc-textarea:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-subtle);
@@ -215,7 +240,7 @@
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
-.cqc-input:focus {
+.cqc-input:focus-visible {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-subtle);
@@ -243,7 +268,6 @@
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-md);
   background: var(--card);
-  cursor: pointer;
   transition:
     border-color var(--duration-normal) var(--ease-out),
     background var(--duration-normal) var(--ease-out),
@@ -303,7 +327,6 @@
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-md);
   background: var(--card);
-  cursor: pointer;
   transition:
     border-color var(--duration-normal) var(--ease-out),
     background var(--duration-normal) var(--ease-out);
@@ -343,10 +366,30 @@
 
 .cqc-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
   padding-top: 20px;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.cqc-actions__secondary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cqc-actions__primary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cqc-advanced-button {
+  color: var(--muted);
 }
 
 .cqc-actions .btn.primary {
@@ -364,7 +407,13 @@
 
 @media (max-width: 480px) {
   .cqc-container {
-    padding: 20px 14px 40px;
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+    padding: 20px 14px 28px;
+  }
+
+  .cqc-backdrop {
+    padding: 10px;
   }
 
   .cqc-preset-grid {
@@ -374,5 +423,167 @@
   .cqc-step__line {
     width: 32px;
     margin: 0 6px;
+  }
+
+  .cqc-actions {
+    align-items: stretch;
+  }
+
+  .cqc-actions__secondary {
+    flex: 1 1 100%;
+  }
+}
+
+/* ── Automation ideas gallery ── */
+
+.cron-ideas {
+  padding: 0;
+  overflow: hidden;
+}
+
+.cron-ideas__summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.cron-ideas__summary::-webkit-details-marker {
+  display: none;
+}
+
+.cron-ideas__summary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+
+.cron-ideas[open] .cron-ideas__summary::after {
+  transform: rotate(-135deg);
+}
+
+.cron-ideas__spark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  background: linear-gradient(
+    135deg,
+    var(--accent-subtle),
+    color-mix(in srgb, var(--accent-2) 14%, transparent)
+  );
+  font-size: 0.95rem;
+}
+
+.cron-ideas__copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.cron-ideas__title {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.cron-ideas__hint {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.cron-ideas__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+  padding: 0 18px 18px;
+}
+
+.cron-idea {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.cron-idea:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  transform: translateY(-1px);
+}
+
+.cron-idea:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.cron-idea__emoji {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-subtle) 70%, transparent);
+  font-size: 1.05rem;
+}
+
+.cron-idea__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cron-idea__name {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.cron-idea__tagline {
+  font-size: 0.8rem;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.cron-idea__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.cron-idea__cta {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.cron-idea:hover:not(:disabled) .cron-idea__cta,
+.cron-idea:focus-visible .cron-idea__cta {
+  opacity: 1;
+}
+
+@media (max-width: 480px) {
+  .cron-ideas__grid {
+    grid-template-columns: 1fr;
   }
 }

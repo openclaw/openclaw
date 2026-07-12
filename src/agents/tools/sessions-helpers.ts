@@ -1,25 +1,17 @@
-export type {
-  AgentToAgentPolicy,
-  SessionAccessAction,
-  SessionAccessResult,
-  SessionToolsVisibility,
-} from "./sessions-access.js";
+/**
+ * Shared session-tool data shapes and classification helpers.
+ *
+ * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
+ */
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
-  resolveSandboxSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
-  resolveSessionToolsVisibility,
 } from "./sessions-access.js";
 import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
-export type { SessionReferenceResolution } from "./sessions-resolution.js";
 export {
-  isRequesterSpawnedSessionVisible,
-  isResolvedSessionVisibleToRequester,
-  listSpawnedSessionKeys,
-  looksLikeSessionId,
-  looksLikeSessionKey,
   resolveCurrentSessionClientAlias,
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
@@ -27,28 +19,27 @@ export {
   resolveSessionReference,
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
-  shouldVerifyRequesterSpawnedSessionVisibility,
 } from "./sessions-resolution.js";
-export {
-  extractAssistantText,
-  sanitizeTextContent,
-  stripToolMessages,
-} from "./chat-history-text.js";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { FastModeSource } from "../../shared/fast-mode.js";
 
-export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+/** Coarse session category used by session list/status tools. */
+type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
-export type SessionListDeliveryContext = {
+/** Delivery target metadata attached to session rows. */
+type SessionListDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;
 };
 
+/** Compact run status shown by session tools. */
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
+/** Normalized session row returned by session list-style tools. */
 export type SessionListRow = {
   key: string;
   agentId?: string;
@@ -66,7 +57,12 @@ export type SessionListRow = {
   parentSessionKey?: string;
   deliveryContext?: SessionListDeliveryContext;
   updatedAt?: number | null;
+  archived?: boolean;
+  archivedAt?: number;
+  pinned?: boolean;
+  pinnedAt?: number;
   sessionId?: string;
+  stateVersion?: number;
   model?: string;
   contextTokens?: number | null;
   totalTokens?: number | null;
@@ -77,7 +73,10 @@ export type SessionListRow = {
   runtimeMs?: number;
   childSessions?: string[];
   thinkingLevel?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  effectiveFastMode?: FastMode;
+  effectiveFastModeSource?: FastModeSource;
+  fastAutoOnSeconds?: number;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -93,6 +92,7 @@ export type SessionListRow = {
   messages?: unknown[];
 };
 
+/** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -109,6 +109,7 @@ export function resolveSessionToolContext(opts?: {
   };
 }
 
+/** Classifies a session key/gateway kind into the row category used by tools. */
 export function classifySessionKind(params: {
   key: string;
   gatewayKind?: string | null;
@@ -132,11 +133,13 @@ export function classifySessionKind(params: {
     return "group";
   }
   if (key.includes(":group:") || key.includes(":channel:")) {
+    // Gateway-less archived rows still encode group/channel shape in the session key.
     return "group";
   }
   return "other";
 }
 
+/** Derives the best channel label for a session row. */
 export function deriveChannel(params: {
   key: string;
   kind: SessionKind;
@@ -155,8 +158,10 @@ export function deriveChannel(params: {
     return lastChannel;
   }
   const parts = params.key.split(":").filter(Boolean);
-  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
-    return parts[0];
+  const scope = parts.at(1);
+  const keyChannel = parts.at(0);
+  if (parts.length >= 3 && keyChannel && (scope === "group" || scope === "channel")) {
+    return keyChannel;
   }
   return "unknown";
 }

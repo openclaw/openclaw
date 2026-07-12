@@ -1,3 +1,4 @@
+// Plugin compatibility registry exposes known plugin compatibility metadata to doctor/update flows.
 import type { PluginCompatRecord } from "./types.js";
 
 const CHANNEL_RUNTIME_SDK_SURFACE = ["openclaw/plugin-sdk/channel", "runtime"].join("-");
@@ -24,6 +25,44 @@ export const PLUGIN_COMPAT_RECORDS = [
       "Legacy `before_agent_start` hook compatibility remains wired while plugins migrate to modern hook stages.",
   },
   {
+    code: "legacy-deactivate-hook-alias",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-16",
+    deprecated: "2026-05-16",
+    warningStarts: "2026-05-16",
+    removeAfter: "2026-08-16",
+    replacement: "`gateway_stop` hook",
+    docsPath: "/plugins/hooks#upcoming-deprecations",
+    surfaces: ['api.on("deactivate", ...)', "plugin typed hook registration"],
+    diagnostics: ["plugin runtime compatibility warning"],
+    tests: ["src/plugins/loader.test.ts"],
+    releaseNote:
+      '`api.on("deactivate", ...)` remains wired as a deprecated compatibility alias while plugins migrate to `gateway_stop`.',
+  },
+  {
+    code: "legacy-subagent-spawning-hook",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-30",
+    deprecated: "2026-05-30",
+    warningStarts: "2026-05-30",
+    removeAfter: "2026-08-30",
+    replacement:
+      "`subagent_spawned` for post-launch observation; core session-binding adapters for thread routing",
+    docsPath: "/plugins/hooks#upcoming-deprecations",
+    surfaces: [
+      'api.on("subagent_spawning", ...)',
+      "PluginHookSubagentSpawningEvent",
+      "PluginHookSubagentSpawningResult",
+      "SubagentLifecycleHookRunner.runSubagentSpawning",
+    ],
+    diagnostics: ["plugin runtime compatibility warning"],
+    tests: ["src/plugins/loader.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      '`api.on("subagent_spawning", ...)` remains wired only for older plugins; core now owns thread-bound subagent routing.',
+  },
+  {
     code: "hook-only-plugin-shape",
     status: "active",
     owner: "sdk",
@@ -33,6 +72,58 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["plugin shape inspection", "plugins inspect", "status diagnostics"],
     diagnostics: ["plugin compatibility notice"],
     tests: ["src/plugins/status.test.ts", "src/plugins/contracts/shape.contract.test.ts"],
+  },
+  {
+    code: "deprecated-memory-embedding-provider-api",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-21",
+    deprecated: "2026-05-21",
+    warningStarts: "2026-05-21",
+    removeAfter: "2026-08-21",
+    replacement: "`api.registerEmbeddingProvider(...)` and `contracts.embeddingProviders`",
+    docsPath: "/plugins/sdk-migration#memory-embedding-provider-api",
+    surfaces: [
+      "api.registerMemoryEmbeddingProvider(...)",
+      "contracts.memoryEmbeddingProviders",
+      "openclaw/plugin-sdk/memory-core-host-engine-embeddings registerMemoryEmbeddingProvider",
+      "plugins inspect compatibility notices",
+    ],
+    diagnostics: ["plugin compatibility notice", "plugin SDK package guardrail"],
+    tests: [
+      "src/plugins/status.test.ts",
+      "src/plugins/compat/registry.test.ts",
+      "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+    ],
+    releaseNote:
+      "Memory-specific embedding provider registration remains wired as a deprecated compatibility path while providers migrate to the generic embedding provider contract.",
+  },
+  {
+    code: "removed-session-transcript-file-api",
+    status: "removed",
+    owner: "sdk",
+    introduced: "2026-07-01",
+    replacement:
+      "session identity (`sessionKey`/`sessionId`), `SessionTranscriptUpdate.target`, and Gateway/runtime session helpers",
+    docsPath: "/plugins/sdk-migration#removed-session-and-transcript-file-apis",
+    surfaces: [
+      "loadSessionStore",
+      "saveSessionStore",
+      "updateSessionStore",
+      "resolveSessionFilePath",
+      "resolveSessionTranscriptPathInDir",
+      "resolveAndPersistSessionFile",
+      "readLatestAssistantTextFromSessionTranscript",
+      "SessionTranscriptUpdate.sessionFile",
+      "sessionFiles",
+      "transcriptPath",
+      "sessionFile",
+      "plugins inspect compatibility notices",
+    ],
+    diagnostics: ["plugin compatibility notice"],
+    tests: ["src/plugins/status.test.ts", "src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "Session/transcript file APIs were removed with the SQLite session storage flip; plugins now use session identity and Gateway/runtime session helpers.",
   },
   {
     code: "legacy-root-sdk-import",
@@ -48,6 +139,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["OPENCLAW_PLUGIN_SDK_COMPAT_DEPRECATED"],
     tests: [
       "src/plugins/contracts/plugin-sdk-index.test.ts",
+      "src/plugins/contracts/plugin-sdk-root-alias.test.ts",
       "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
     ],
   },
@@ -61,7 +153,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["hook runner contract probe"],
     tests: [
       "src/plugins/hooks.security.test.ts",
-      "src/agents/pi-tools.before-tool-call.e2e.test.ts",
+      "src/agents/agent-tools.before-tool-call.e2e.test.ts",
     ],
   },
   {
@@ -100,6 +192,48 @@ export const PLUGIN_COMPAT_RECORDS = [
       "src/plugin-sdk/channel-entry-contract.test.ts",
       "src/plugins/captured-registration.test.ts",
     ],
+  },
+  {
+    code: "whatsapp-web-inbound-flat-message-aliases",
+    status: "deprecated",
+    owner: "channel",
+    introduced: "2026-05-30",
+    deprecated: "2026-05-30",
+    warningStarts: "2026-05-30",
+    removeAfter: "2026-08-30",
+    replacement:
+      "WhatsApp `WebInboundCallbackMessage` nested contexts: `event`, `payload`, `quote`, `group`, and `platform`",
+    docsPath: "/plugins/compatibility",
+    surfaces: [
+      "@openclaw/whatsapp WebInboundMessage flat fields",
+      "WhatsApp monitorWebInbox onMessage callback",
+      "WhatsApp monitorWebChannel listenerFactory injected messages",
+    ],
+    diagnostics: ["TypeScript @deprecated WebInboundMessage flat field annotations"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "WhatsApp WebInboundMessage flat fields remain wired as deprecated aliases while callbacks migrate to nested inbound contexts.",
+  },
+  {
+    code: "whatsapp-web-inbound-admission-top-level-fields",
+    status: "deprecated",
+    owner: "channel",
+    introduced: "2026-06-14",
+    deprecated: "2026-06-14",
+    warningStarts: "2026-06-14",
+    removeAfter: "2026-08-30",
+    replacement:
+      "WhatsApp `WebInboundMessage.admission` fields: `conversation.id`, `accountId`, `ingress.decision`, and `conversation.kind`",
+    docsPath: "/plugins/compatibility",
+    surfaces: [
+      "@openclaw/whatsapp WebInboundMessage top-level admission fields",
+      "WhatsApp monitorWebInbox onMessage callback",
+      "WhatsApp monitorWebChannel listenerFactory injected messages",
+    ],
+    diagnostics: ["TypeScript @deprecated WebInboundMessage admission field annotations"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "WhatsApp WebInboundMessage top-level admission fields remain available while callbacks migrate to the admission envelope.",
   },
   {
     code: "bundled-channel-sdk-compat-facades",
@@ -186,17 +320,60 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-04-28",
     removeAfter: "2026-07-28",
     replacement:
-      "`resolveRouteTargetForChannel`, `ChannelRouteParsedTarget`, `channelRouteTargetsMatchExact`, and `channelRouteTargetsShareConversation`",
+      "`ChannelRouteParsedTarget`, `channelRouteTargetsMatchExact`, `channelRouteTargetsShareConversation`, and `messaging.resolveOutboundSessionRoute` for provider-specific target grammar",
     docsPath: "/plugins/sdk-migration",
     surfaces: [
-      "src/channels/plugins/target-parsing ComparableChannelTarget",
-      "src/channels/plugins/target-parsing resolveComparableTargetForChannel",
-      "src/channels/plugins/target-parsing comparableChannelTargetsMatch",
-      "src/channels/plugins/target-parsing comparableChannelTargetsShareRoute",
+      "src/channels/plugins/target-parsing-loaded ComparableChannelTarget",
+      "src/channels/plugins/target-parsing-loaded resolveComparableTargetForLoadedChannel",
+      "src/channels/plugins/target-parsing-loaded comparableChannelTargetsMatch",
+      "src/channels/plugins/target-parsing-loaded comparableChannelTargetsShareRoute",
     ],
     diagnostics: ["plugin SDK compatibility warning"],
     tests: [
       "src/channels/plugins/target-parsing.test.ts",
+      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+    ],
+  },
+  {
+    code: "channel-explicit-target-parser",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-04-28",
+    deprecated: "2026-05-23",
+    warningStarts: "2026-05-23",
+    removeAfter: "2026-08-23",
+    replacement:
+      "`messaging.targetResolver` for target normalization and `messaging.resolveOutboundSessionRoute` for session/thread identity",
+    docsPath: "/plugins/sdk-migration",
+    surfaces: [
+      "ChannelMessagingAdapter.parseExplicitTarget",
+      "openclaw/plugin-sdk/channel-route ChannelRouteExplicitTarget",
+      "openclaw/plugin-sdk/channel-route ChannelRouteExplicitTargetParser",
+      "openclaw/plugin-sdk/channel-route resolveChannelRouteTargetWithParser",
+      "src/channels/plugins/target-parsing-loaded ParsedChannelExplicitTarget",
+      "src/channels/plugins/target-parsing-loaded parseExplicitTargetForLoadedChannel",
+      "src/channels/plugins/target-parsing-loaded resolveRouteTargetForLoadedChannel",
+    ],
+    diagnostics: ["plugin SDK compatibility warning"],
+    tests: [
+      "src/channels/plugins/contracts/test-helpers/surface-contract-suite.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+  },
+  {
+    code: "channel-messaging-targets-subpath",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-04-28",
+    deprecated: "2026-05-23",
+    warningStarts: "2026-05-23",
+    removeAfter: "2026-08-23",
+    replacement: "`openclaw/plugin-sdk/channel-targets`",
+    docsPath: "/plugins/sdk-migration",
+    surfaces: ["openclaw/plugin-sdk/messaging-targets"],
+    diagnostics: ["plugin SDK compatibility warning"],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
       "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
     ],
   },
@@ -275,21 +452,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["activation.onAgentHarnesses", "activation planner"],
     diagnostics: ["activation plan compat reason"],
     tests: ["src/plugins/activation-planner.test.ts"],
-  },
-  {
-    code: "legacy-implicit-startup-sidecar",
-    status: "deprecated",
-    owner: "plugin-execution",
-    introduced: "2026-04-28",
-    deprecated: "2026-04-28",
-    warningStarts: "2026-04-28",
-    removeAfter: "2026-07-28",
-    replacement:
-      "`activation.onStartup: true` for startup work or `activation.onStartup: false` for inert plugins",
-    docsPath: "/plugins/manifest",
-    surfaces: ["Gateway startup plugin planning", "openclaw.plugin.json activation"],
-    diagnostics: ["plugin compatibility notice"],
-    tests: ["src/plugins/channel-plugin-ids.test.ts", "src/plugins/installed-plugin-index.test.ts"],
   },
   {
     code: "activation-provider-hint",
@@ -386,6 +548,29 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
   },
   {
+    code: "embedded-pi-agent-sdk-aliases",
+    status: "deprecated",
+    owner: "agent-runtime",
+    introduced: "2026-05-21",
+    deprecated: "2026-05-21",
+    warningStarts: "2026-05-21",
+    removeAfter: "2026-08-21",
+    replacement: "`runEmbeddedAgent` and `EmbeddedAgent*` SDK/runtime names",
+    docsPath: "/plugins/sdk-runtime",
+    surfaces: [
+      "api.runtime.agent.runEmbeddedPiAgent",
+      "openclaw/extension-api runEmbeddedPiAgent",
+      "openclaw/plugin-sdk/agent-harness-runtime EmbeddedPi* aliases",
+    ],
+    diagnostics: ["plugin SDK compatibility registry"],
+    tests: [
+      "src/plugins/runtime/index.test.ts",
+      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+    ],
+    releaseNote:
+      "Legacy `runEmbeddedPiAgent` and `EmbeddedPi*` plugin aliases remain as deprecated SDK compatibility only.",
+  },
+  {
     code: "agent-harness-id-alias",
     status: "deprecated",
     owner: "agent-runtime",
@@ -397,7 +582,10 @@ export const PLUGIN_COMPAT_RECORDS = [
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["manifest/catalog execution policy", "runtime selection"],
     diagnostics: ["agent runtime compatibility warning"],
-    tests: ["src/plugins/provider-runtime.test.ts", "src/web/provider-runtime-shared.test.ts"],
+    tests: [
+      "src/plugins/provider-runtime.test.ts",
+      "packages/web-content-core/src/provider-runtime-shared.test.ts",
+    ],
   },
   {
     code: "generated-bundled-channel-config-fallback",
@@ -450,7 +638,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     deprecated: "2026-04-26",
     warningStarts: "2026-04-26",
     removeAfter: "2026-07-26",
-    replacement: "state-managed `plugins/installs.json` install ledger",
+    replacement: "shared SQLite `installed_plugin_index` install ledger",
     docsPath: "/cli/plugins#registry",
     surfaces: ["plugins.installs authored config", "plugin install/update migration"],
     diagnostics: ["config write migration warning", "doctor registry migration"],
@@ -772,7 +960,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["api.runtime.config.loadConfig", "api.runtime.config.writeConfigFile"],
     diagnostics: [
       "plugin runtime compatibility warning",
-      "deprecated internal config API guard",
+      "deprecated API usage guard",
       "runtime channel config boundary guard",
     ],
     tests: [

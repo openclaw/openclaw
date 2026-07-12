@@ -5,6 +5,8 @@
  * Handles urgent commands, normal slash commands, and file delivery.
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveGroupCommandLevelFromAccountConfig } from "../config/group.js";
 import type { QueuedMessage } from "../gateway/message-queue.js";
 import type { GatewayAccount, EngineLogger } from "../gateway/types.js";
 import { sendDocument } from "../messaging/outbound.js";
@@ -13,6 +15,7 @@ import {
   buildDeliveryTarget,
   accountToCreds,
 } from "../messaging/sender.js";
+import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
 import { matchSlashCommand } from "./slash-commands-impl.js";
 import type { SlashCommandContext, QueueSnapshot } from "./slash-commands.js";
 
@@ -20,9 +23,18 @@ import type { SlashCommandContext, QueueSnapshot } from "./slash-commands.js";
 
 export interface SlashCommandHandlerContext {
   account: GatewayAccount;
+  cfg?: unknown;
   log?: EngineLogger;
   getMessagePeerId: (msg: QueuedMessage) => string;
   getQueueSnapshot: (peerId: string) => QueueSnapshot;
+  resolveCommandAuthorized?: (params: {
+    isGroup: boolean;
+    senderId: string;
+    conversationId: string;
+    allowFrom?: Array<string | number>;
+    groupAllowFrom?: Array<string | number>;
+    commandsAllowFrom?: Array<string | number>;
+  }) => boolean | Promise<boolean>;
 }
 
 // ============ Constants ============
@@ -48,13 +60,41 @@ export async function trySlashCommand(
     return "enqueue";
   }
 
+  const isGroup = msg.type === "group" || msg.type === "guild";
+  const groupCommandLevel = isGroup
+    ? resolveGroupCommandLevelFromAccountConfig(
+        account.config,
+        msg.groupOpenid ?? msg.channelId ?? null,
+      )
+    : undefined;
+  const commandsAllowFrom = resolveQQBotCommandsAllowFrom(ctx.cfg);
+  const commandAuthorized = ctx.resolveCommandAuthorized
+    ? await ctx.resolveCommandAuthorized({
+        isGroup,
+        senderId: msg.senderId,
+        conversationId: msg.groupOpenid ?? msg.channelId ?? msg.senderId,
+        allowFrom: account.config?.allowFrom,
+        groupAllowFrom: account.config?.groupAllowFrom,
+        commandsAllowFrom,
+      })
+    : resolveSlashCommandAuth({
+        senderId: msg.senderId,
+        isGroup,
+        allowFrom: account.config?.allowFrom,
+        groupAllowFrom: account.config?.groupAllowFrom,
+        commandsAllowFrom,
+      });
+
   // Urgent command detection — bypass queue and execute immediately.
   const contentLower = content.toLowerCase();
   const isUrgentCommand = URGENT_COMMANDS.some(
     (cmd) => contentLower === cmd.toLowerCase() || contentLower.startsWith(cmd.toLowerCase() + " "),
   );
   if (isUrgentCommand) {
-    log?.info(`Urgent command detected: ${content.slice(0, 20)}`);
+    if (isGroup && !commandAuthorized) {
+      return "enqueue";
+    }
+    log?.info(`Urgent command detected: ${truncateUtf16Safe(content, 20)}`);
     return "urgent";
   }
 
@@ -75,7 +115,8 @@ export async function trySlashCommand(
     accountId: account.accountId,
     appId: account.appId,
     accountConfig: account.config,
-    commandAuthorized: true,
+    commandAuthorized,
+    groupCommandLevel,
     queueSnapshot: ctx.getQueueSnapshot(peerId),
   };
 
@@ -125,6 +166,7 @@ export async function trySlashCommand(
             replyToId: msg.messageId,
           },
           replyFile,
+          { allowQQBotDataDownloads: true },
         );
       } catch (fileErr) {
         log?.error(`Failed to send slash command file: ${String(fileErr)}`);

@@ -1,3 +1,4 @@
+// Qa Lab tests cover multipass plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -83,7 +84,7 @@ describe("qa multipass runtime", () => {
     });
 
     expect(plan.outputDir).toBe(outputDir);
-    expect(plan.scenarioIds).toEqual([]);
+    expect(plan.scenarioIds).toStrictEqual([]);
     expect(plan.qaCommand).not.toContain("--scenario");
     expect(plan.guestOutputDir).toBe("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-test");
     expect(plan.reportPath).toBe(path.join(outputDir, "qa-suite-report.md"));
@@ -115,25 +116,20 @@ describe("qa multipass runtime", () => {
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.5",
-      alternateModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
+      alternateModel: "openai/gpt-5.6-luna",
       fastMode: true,
       scenarioIds: ["channel-chat-baseline"],
     });
 
     const script = renderQaMultipassGuestScript(plan);
 
-    expect(plan.qaCommand).toEqual(
-      expect.arrayContaining([
-        "--provider-mode",
-        "live-frontier",
-        "--model",
-        "openai/gpt-5.5",
-        "--alt-model",
-        "openai/gpt-5.5",
-        "--fast",
-      ]),
-    );
+    expect(plan.qaCommand).toContain("--provider-mode");
+    expect(plan.qaCommand).toContain("live-frontier");
+    expect(plan.qaCommand).toContain("--model");
+    expect(plan.qaCommand).toContain("openai/gpt-5.6-luna");
+    expect(plan.qaCommand).toContain("--alt-model");
+    expect(plan.qaCommand).toContain("--fast");
     expect(plan.forwardedEnv.OPENAI_API_KEY).toBe("test-openai-key");
     expect(script).toContain("OPENAI_API_KEY='test-openai-key'");
     expect(script).toContain("'pnpm' 'openclaw' 'qa' 'suite' '--transport' 'qa-channel'");
@@ -148,7 +144,49 @@ describe("qa multipass runtime", () => {
       scenarioIds: ["channel-chat-baseline"],
     });
 
-    expect(plan.qaCommand).toEqual(expect.arrayContaining(["--allow-failures"]));
+    expect(plan.qaCommand).toContain("--allow-failures");
+  });
+
+  it("forwards --runtime-pair into the guest qa suite command when requested", () => {
+    const plan = createQaMultipassPlan({
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-runtime-pair-test"),
+      runtimePair: ["openclaw", "codex"],
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(plan.qaCommand).toEqual(expect.arrayContaining(["--runtime-pair", "openclaw,codex"]));
+  });
+
+  it("forwards channel-driver suite selection into the guest qa suite command", () => {
+    const plan = createQaMultipassPlan({
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "crabline-channel-driver-test"),
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      },
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(plan.qaCommand).toEqual(
+      expect.arrayContaining(["--channel-driver", "crabline", "--channel", "telegram"]),
+    );
+  });
+
+  it("forwards suite plugin enablements into the guest qa suite command", () => {
+    const plan = createQaMultipassPlan({
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-enable-plugin-test"),
+      enabledPluginIds: ["browser", "memory-core", "browser"],
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(plan.qaCommand).toEqual(
+      expect.arrayContaining(["--enable-plugin", "browser", "--enable-plugin", "memory-core"]),
+    );
   });
 
   it("redacts forwarded live secrets in the persisted artifact script", () => {
@@ -168,6 +206,8 @@ describe("qa multipass runtime", () => {
 
   it("forwards live key list and numbered key env shapes", () => {
     vi.stubEnv("OPENCLAW_LIVE_ANTHROPIC_KEYS", "anthropic-a anthropic-b");
+    vi.stubEnv("OPENCLAW_LIVE_CODEX_API_KEY", "codex-live");
+    vi.stubEnv("CODEX_API_KEY", "codex-direct");
     vi.stubEnv("OPENAI_API_KEY_1", "openai-one");
     vi.stubEnv("GEMINI_API_KEY_2", "gemini-two");
     const plan = createQaMultipassPlan({
@@ -178,6 +218,8 @@ describe("qa multipass runtime", () => {
     });
 
     expect(plan.forwardedEnv.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBe("anthropic-a anthropic-b");
+    expect(plan.forwardedEnv.OPENCLAW_LIVE_CODEX_API_KEY).toBe("codex-live");
+    expect(plan.forwardedEnv.CODEX_API_KEY).toBe("codex-direct");
     expect(plan.forwardedEnv.OPENAI_API_KEY_1).toBe("openai-one");
     expect(plan.forwardedEnv.GEMINI_API_KEY_2).toBe("gemini-two");
   });
@@ -251,7 +293,7 @@ describe("qa multipass runtime", () => {
     const tempEntries = fs
       .readdirSync(resolvePreferredOpenClawTmpDir())
       .filter((entry) => entry.startsWith(path.basename(expectedTransferDir)));
-    expect(tempEntries).toEqual([]);
+    expect(tempEntries).toStrictEqual([]);
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
 

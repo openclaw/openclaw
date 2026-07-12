@@ -1,15 +1,17 @@
+// Qa Channel plugin module implements bus client behavior.
 import http from "node:http";
 import https from "node:https";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
-  QaBusConversation,
-  QaBusEvent,
   QaBusInboundMessageInput,
   QaBusMessage,
   QaBusPollResult,
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
 } from "./protocol.js";
 
 export type {
@@ -30,14 +32,35 @@ export type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
   QaBusWaitForInput,
 } from "./protocol.js";
 
 type JsonResult<T> = Promise<T>;
+const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 function buildQaBusUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
   return new URL(path.replace(/^\/+/, ""), normalizedBaseUrl);
+}
+
+async function readQaBusNodeJsonResponse<T>(
+  response: http.IncomingMessage,
+  label: string,
+): Promise<T> {
+  const bytes = await readByteStreamWithLimit(response, {
+    maxBytes: QA_BUS_JSON_RESPONSE_MAX_BYTES,
+    onOverflow: ({ maxBytes }) => new Error(`${label}: JSON response exceeds ${maxBytes} bytes`),
+  });
+  const text = bytes.toString("utf8");
+  if (!text) {
+    return {} as T;
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
 }
 
 async function postJson<T>(
@@ -69,33 +92,31 @@ async function postJson<T>(
         },
       },
       (response) => {
-        const chunks: Buffer[] = [];
-        response.on("data", (chunk) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        });
-        response.on("end", () => {
-          const text = Buffer.concat(chunks).toString("utf8");
-          let parsed: T | { error?: string };
-          try {
-            parsed = text ? (JSON.parse(text) as T | { error?: string }) : ({} as T);
-          } catch (error) {
-            reject(error);
-            return;
-          }
-          if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
-            const error =
-              typeof parsed === "object" && parsed && "error" in parsed ? parsed.error : undefined;
-            reject(new Error(error || `qa-bus request failed: ${response.statusCode ?? 500}`));
-            return;
-          }
-          resolve(parsed as T);
-        });
+        const label = `qa-bus ${path}`;
+        void readQaBusNodeJsonResponse<T | { error?: string }>(response, label).then(
+          (parsed) => {
+            if ((response.statusCode ?? 500) < 200 || (response.statusCode ?? 500) >= 300) {
+              const error =
+                typeof parsed === "object" && parsed && "error" in parsed
+                  ? parsed.error
+                  : undefined;
+              reject(new Error(error || `qa-bus request failed: ${response.statusCode ?? 500}`));
+              return;
+            }
+            resolve(parsed as T);
+          },
+          (error: unknown) => {
+            reject(toLintErrorObject(error, "Non-Error rejection"));
+          },
+        );
         response.on("error", reject);
       },
     );
 
     const onAbort = () => {
-      request.destroy(abortError());
+      const error = abortError();
+      request.destroy(error);
+      reject(error);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     request.on("error", (error) => {
@@ -118,7 +139,7 @@ export function normalizeQaTarget(raw: string): string | undefined {
 }
 
 export function parseQaTarget(raw: string): {
-  chatType: "direct" | "channel";
+  chatType: "direct" | "channel" | "group";
   conversationId: string;
   threadId?: string;
 } {
@@ -144,6 +165,12 @@ export function parseQaTarget(raw: string): {
       conversationId: normalized.slice("channel:".length),
     };
   }
+  if (normalized.startsWith("group:")) {
+    return {
+      chatType: "group",
+      conversationId: normalized.slice("group:".length),
+    };
+  }
   if (normalized.startsWith("dm:")) {
     return {
       chatType: "direct",
@@ -157,14 +184,14 @@ export function parseQaTarget(raw: string): {
 }
 
 export function buildQaTarget(params: {
-  chatType: "direct" | "channel";
+  chatType: "direct" | "channel" | "group";
   conversationId: string;
   threadId?: string | null;
 }) {
   if (params.threadId) {
     return `thread:${params.conversationId}/${params.threadId}`;
   }
-  return `${params.chatType === "direct" ? "dm" : "channel"}:${params.conversationId}`;
+  return `${params.chatType === "direct" ? "dm" : params.chatType}:${params.conversationId}`;
 }
 
 export async function pollQaBus(params: {
@@ -196,6 +223,7 @@ export async function sendQaBusMessage(params: {
   threadId?: string;
   replyToId?: string;
   attachments?: import("./protocol.js").QaBusAttachment[];
+  toolCalls?: QaBusToolCall[];
 }) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params);
 }
@@ -281,8 +309,22 @@ export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot
     if (!response.ok) {
       throw new Error(`qa-bus request failed: ${response.status}`);
     }
-    return (await response.json()) as QaBusStateSnapshot;
+    return await readProviderJsonResponse<QaBusStateSnapshot>(response, "qa-channel.bus-state");
   } finally {
     await release();
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

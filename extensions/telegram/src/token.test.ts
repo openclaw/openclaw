@@ -1,11 +1,23 @@
+// Telegram tests cover token plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveTelegramToken } from "./token.js";
-import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
+import { resolveTelegramBotUserIdFromToken, resolveTelegramToken } from "./token.js";
+
+describe("resolveTelegramBotUserIdFromToken", () => {
+  it.each([
+    ["123456:secret", 123456],
+    ["not-a-bot:secret", undefined],
+    ["0:secret", undefined],
+    ["9007199254740992:secret", undefined],
+    ["+123:secret", undefined],
+    ["123 :secret", undefined],
+  ])("parses %j as %j", (token, expected) => {
+    expect(resolveTelegramBotUserIdFromToken(token)).toBe(expected);
+  });
+});
 
 describe("resolveTelegramToken", () => {
   const tempDirs: string[] = [];
@@ -92,6 +104,37 @@ describe("resolveTelegramToken", () => {
     expect(res).toEqual(expected);
   });
 
+  it("resolves the configured defaultAccount token when accountId is omitted (#61012)", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        telegram: {
+          defaultAccount: "kitt",
+          accounts: {
+            kitt: { botToken: "kitt-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res).toEqual({ token: "kitt-token", source: "config" });
+  });
+
+  it("keeps the env token for omitted accountId when no defaultAccount is configured", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            kitt: { botToken: "kitt-token" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const res = resolveTelegramToken(cfg);
+    expect(res).toEqual({ token: "env-token", source: "env" });
+  });
+
   it.runIf(process.platform !== "win32")("rejects symlinked tokenFile paths", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const dir = createTempDir();
@@ -101,9 +144,31 @@ describe("resolveTelegramToken", () => {
     fs.symlinkSync(tokenFile, tokenLink);
 
     const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
-    const res = resolveTelegramToken(cfg);
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
+    expect(() => resolveTelegramToken(cfg)).toThrow(
+      /channels\.telegram\.tokenFile.*must not be a symlink/,
+    );
+  });
+
+  it.runIf(process.platform !== "win32")("rejects symlinked account-level tokenFile paths", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    const dir = createTempDir();
+    const tokenFile = path.join(dir, "token.txt");
+    const tokenLink = path.join(dir, "token-link.txt");
+    fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
+    fs.symlinkSync(tokenFile, tokenLink);
+
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            work: { tokenFile: tokenLink },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(() => resolveTelegramToken(cfg, { accountId: "work" })).toThrow(
+      /channels\.telegram\.accounts\.work\.tokenFile.*must not be a symlink/,
+    );
   });
 
   it("does not fall back to config when tokenFile is missing", () => {
@@ -407,20 +472,5 @@ describe("resolveTelegramToken", () => {
   it("still blocks fallthrough for unknown accountId when accounts section exists", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     expectNoTokenForUnknownAccount(createUnknownAccountConfig());
-  });
-});
-
-describe("telegram update offset store", () => {
-  it("persists and reloads the last update id", async () => {
-    await withStateDirEnv("openclaw-telegram-", async () => {
-      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
-
-      await writeTelegramUpdateOffset({
-        accountId: "primary",
-        updateId: 421,
-      });
-
-      expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBe(421);
-    });
   });
 });

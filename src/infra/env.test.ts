@@ -1,5 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+// Tests infra environment loading and variable normalization.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnv } from "../test-utils/env.js";
+import { isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } from "./env.js";
 
 const loggerMocks = vi.hoisted(() => ({
   info: vi.fn(),
@@ -10,19 +12,6 @@ vi.mock("../logging/subsystem.js", () => ({
     info: loggerMocks.info,
   }),
 }));
-
-type EnvModule = typeof import("./env.js");
-
-let isTruthyEnvValue: EnvModule["isTruthyEnvValue"];
-let logAcceptedEnvOption: EnvModule["logAcceptedEnvOption"];
-let normalizeEnv: EnvModule["normalizeEnv"];
-let normalizeZaiEnv: EnvModule["normalizeZaiEnv"];
-
-beforeAll(async () => {
-  vi.resetModules();
-  ({ isTruthyEnvValue, logAcceptedEnvOption, normalizeEnv, normalizeZaiEnv } =
-    await import("./env.js"));
-});
 
 beforeEach(() => {
   loggerMocks.info.mockClear();
@@ -138,6 +127,27 @@ describe("logAcceptedEnvOption", () => {
     );
 
     expect(loggerMocks.info).not.toHaveBeenCalled();
+  });
+
+  it("keeps bounded non-secret values UTF-16 well-formed", async () => {
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+        OPENCLAW_UTF16_TEST_ENV: `${"x".repeat(159)}🚀tail`,
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_UTF16_TEST_ENV",
+          description: "UTF-16 test",
+        });
+      },
+    );
+
+    await vi.waitFor(() => expect(loggerMocks.info).toHaveBeenCalledTimes(1));
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      `env: OPENCLAW_UTF16_TEST_ENV=${"x".repeat(159)}… (UTF-16 test)`,
+    );
   });
 });
 

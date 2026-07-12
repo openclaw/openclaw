@@ -1,13 +1,18 @@
+/**
+ * Owner display settings for prompt rendering.
+ *
+ * Hash mode uses a dedicated prompt-display secret so auth material is never reused for owner redaction.
+ */
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type OwnerDisplaySetting = {
+type OwnerDisplaySetting = {
   ownerDisplay?: "raw" | "hash";
   ownerDisplaySecret?: string;
 };
 
-export type OwnerDisplaySecretResolution = {
+type OwnerDisplaySecretResolution = {
   config: OpenClawConfig;
   generatedSecret?: string;
 };

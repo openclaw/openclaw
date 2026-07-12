@@ -1,4 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+// Legacy context engine wraps pre-plugin context behavior behind the pluggable interface.
+import type { AgentMessage } from "../agents/runtime/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { delegateCompactionToRuntime } from "./delegate.js";
 import type {
@@ -7,6 +8,7 @@ import type {
   AssembleResult,
   CompactResult,
   ContextEngineRuntimeContext,
+  ContextEngineSessionTarget,
   IngestResult,
 } from "./types.js";
 
@@ -16,7 +18,7 @@ import type {
  *
  * - ingest: no-op (SessionManager handles message persistence)
  * - assemble: pass-through (existing sanitize/validate/limit pipeline in attempt.ts handles this)
- * - compact: delegates to compactEmbeddedPiSessionDirect
+ * - compact: delegates to compactEmbeddedAgentSessionDirect
  */
 export class LegacyContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
@@ -69,8 +71,9 @@ export class LegacyContextEngine implements ContextEngine {
 
   async compact(params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     force?: boolean;
     currentTokenCount?: number;

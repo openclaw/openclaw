@@ -1,4 +1,5 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Signal tests cover message actions plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendReactionsModule = await import("./send-reactions.js");
@@ -33,7 +34,7 @@ describe("signalMessageActions", () => {
   it("lists actions based on configured accounts and reaction gates", () => {
     expect(
       signalMessageActions.describeMessageTool?.({ cfg: {} as OpenClawConfig })?.actions ?? [],
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       signalMessageActions.describeMessageTool?.({
@@ -60,9 +61,11 @@ describe("signalMessageActions", () => {
     );
   });
 
-  it("skips send for plugin dispatch", () => {
+  it("supports only reactions for plugin dispatch", () => {
     expect(signalMessageActions.supportsAction?.({ action: "send" })).toBe(false);
     expect(signalMessageActions.supportsAction?.({ action: "react" })).toBe(true);
+    expect(signalMessageActions.supportsAction?.({ action: "delete" })).toBe(false);
+    expect(signalMessageActions.supportsAction?.({ action: "pin" })).toBe(false);
   });
 
   it("blocks reactions when the action gate is disabled", async () => {
@@ -136,6 +139,12 @@ describe("signalMessageActions", () => {
 
     for (const testCase of cases) {
       sendReactionSignalMock.mockClear();
+      const expectedOptions = testCase.expectedOptions as {
+        accountId?: string;
+        groupId?: string;
+        targetAuthor?: string;
+        targetAuthorUuid?: string;
+      };
       await signalMessageActions.handleAction?.({
         channel: "signal",
         action: "react",
@@ -149,10 +158,13 @@ describe("signalMessageActions", () => {
         testCase.expectedRecipient,
         testCase.expectedTimestamp,
         testCase.expectedEmoji,
-        expect.objectContaining({
+        {
           cfg: testCase.cfg,
-          ...testCase.expectedOptions,
-        }),
+          accountId: expectedOptions.accountId,
+          groupId: expectedOptions.groupId,
+          targetAuthor: expectedOptions.targetAuthor,
+          targetAuthorUuid: expectedOptions.targetAuthorUuid,
+        },
       );
     }
   });
@@ -170,6 +182,16 @@ describe("signalMessageActions", () => {
         cfg,
       }),
     ).rejects.toThrow(/messageId.*required/);
+
+    await expect(
+      signalMessageActions.handleAction?.({
+        channel: "signal",
+        action: "react",
+        params: { to: "+15559999999", messageId: "123abc", emoji: "✅" },
+        cfg,
+      }),
+    ).rejects.toThrow(/Invalid messageId/);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
 
     await expect(
       signalMessageActions.handleAction?.({

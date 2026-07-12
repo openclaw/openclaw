@@ -1,12 +1,13 @@
-import { existsSync } from "node:fs";
+// Qa Lab plugin module implements bundled plugin staging behavior.
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS = Object.freeze([
   "image-generation-core",
   "media-understanding-core",
-  "speech-core",
 ]);
 const QA_OPENAI_PLUGIN_ID = "openai";
 const QA_BUNDLED_PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -15,10 +16,6 @@ const QA_CLI_METADATA_ENTRY_BASENAMES = Object.freeze([
   "cli-metadata.js",
   "cli-metadata.mjs",
   "cli-metadata.cjs",
-]);
-const QA_RUNTIME_DEPS_ARTIFACT_BASENAMES = new Set([
-  ".openclaw-runtime-deps.json",
-  ".openclaw-runtime-deps-stamp.json",
 ]);
 
 function assertSafeQaBundledPluginId(pluginId: string) {
@@ -80,24 +77,58 @@ export function resolveQaBundledPluginSourceDir(params: { repoRoot: string; plug
     path.join(params.repoRoot, "extensions", params.pluginId),
   ];
   const existingCandidates = candidates.filter((candidate) => existsSync(candidate));
-  if (existingCandidates.length === 0) {
+  const manifestCandidates = findQaBundledPluginDirsByManifestId(params);
+  const allCandidates = uniqueStrings([...existingCandidates, ...manifestCandidates]);
+  if (allCandidates.length === 0) {
     return null;
   }
-  const cliMetadataCandidate = existingCandidates.find((candidate) =>
+  const cliMetadataCandidate = allCandidates.find((candidate) =>
     QA_CLI_METADATA_ENTRY_BASENAMES.some((basename) => existsSync(path.join(candidate, basename))),
   );
   if (cliMetadataCandidate) {
     return cliMetadataCandidate;
   }
-  return existingCandidates[0] ?? null;
+  return allCandidates[0] ?? null;
 }
 
 function resolveQaBundledPluginScanRoots(repoRoot: string) {
-  return [
+  const candidates = [
     path.join(repoRoot, "dist", "extensions"),
     path.join(repoRoot, "dist-runtime", "extensions"),
     path.join(repoRoot, "extensions"),
-  ].filter((candidate, index, all) => existsSync(candidate) && all.indexOf(candidate) === index);
+  ];
+  return uniqueStrings(candidates.filter((candidate) => existsSync(candidate)));
+}
+
+function readQaBundledManifestId(manifestPath: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as { id?: unknown };
+    return typeof parsed.id === "string" ? parsed.id.trim() || null : null;
+  } catch {
+    return null;
+  }
+}
+
+function findQaBundledPluginDirsByManifestId(params: {
+  repoRoot: string;
+  pluginId: string;
+}): string[] {
+  const candidates: string[] = [];
+  for (const sourceRoot of resolveQaBundledPluginScanRoots(params.repoRoot)) {
+    for (const entry of readdirSync(sourceRoot, { withFileTypes: true }).toSorted((left, right) =>
+      left.name.localeCompare(right.name),
+    )) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const candidate = path.join(sourceRoot, entry.name);
+      const manifestId = readQaBundledManifestId(path.join(candidate, "openclaw.plugin.json"));
+      if (manifestId === params.pluginId) {
+        candidates.push(candidate);
+      }
+    }
+  }
+  return candidates;
 }
 
 export async function resolveQaOwnerPluginIdsForProviderIds(params: {
@@ -105,9 +136,7 @@ export async function resolveQaOwnerPluginIdsForProviderIds(params: {
   providerIds: readonly string[];
   providerConfigs?: Record<string, ModelProviderConfig>;
 }) {
-  const providerIds = [
-    ...new Set(params.providerIds.map((providerId) => providerId.trim())),
-  ].filter((providerId) => providerId.length > 0);
+  const providerIds = uniqueStrings(normalizeStringEntries(params.providerIds));
   if (providerIds.length === 0) {
     return [];
   }
@@ -164,12 +193,13 @@ function collectQaBundledPluginIds(params: {
   repoRoot: string;
   allowedPluginIds: readonly string[];
 }) {
-  const pluginIds = new Set(
-    params.allowedPluginIds.map((pluginId) => {
-      assertSafeQaBundledPluginId(pluginId);
-      return pluginId;
-    }),
-  );
+  const pluginIds = new Set<string>();
+  for (const pluginId of params.allowedPluginIds) {
+    assertSafeQaBundledPluginId(pluginId);
+    if (resolveQaBundledPluginSourceDir({ repoRoot: params.repoRoot, pluginId })) {
+      pluginIds.add(pluginId);
+    }
+  }
   for (const pluginId of QA_ALWAYS_STAGE_RUNTIME_PLUGIN_IDS) {
     if (
       resolveQaBundledPluginSourceDir({
@@ -316,14 +346,6 @@ async function seedQaStagedBuiltTreeRoots(params: {
   }
 }
 
-function shouldStageQaBundledPluginPath(sourcePath: string) {
-  const basename = path.basename(sourcePath);
-  return (
-    !QA_RUNTIME_DEPS_ARTIFACT_BASENAMES.has(basename) &&
-    !basename.startsWith(".openclaw-runtime-deps-copy-")
-  );
-}
-
 export async function resolveQaRuntimeHostVersion(params: {
   repoRoot: string;
   allowedPluginIds: readonly string[];
@@ -426,10 +448,7 @@ export async function createQaBundledPluginsDir(params: {
     if (!sourceDir) {
       throw new Error(`qa bundled plugin not found: ${pluginId}`);
     }
-    await fs.cp(sourceDir, path.join(bundledPluginsDir, pluginId), {
-      recursive: true,
-      filter: shouldStageQaBundledPluginPath,
-    });
+    await fs.cp(sourceDir, path.join(bundledPluginsDir, pluginId), { recursive: true });
   }
   await symlinkQaStagedDirEntry({
     sourcePath: path.join(stagedRoot, "dist"),

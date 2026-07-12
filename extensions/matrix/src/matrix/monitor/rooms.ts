@@ -1,7 +1,8 @@
+// Matrix plugin module implements rooms behavior.
 import type { MatrixRoomConfig } from "../../types.js";
 import { buildChannelKeyCandidates, resolveChannelEntryMatch } from "./runtime-api.js";
 
-export type MatrixRoomConfigResolved = {
+type MatrixRoomConfigResolved = {
   allowed: boolean;
   allowlistConfigured: boolean;
   config?: MatrixRoomConfig;

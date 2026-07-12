@@ -1,3 +1,4 @@
+// Tests effective reply route selection from context, session, and fallback state.
 import { describe, expect, it } from "vitest";
 import {
   isSystemEventProvider,
@@ -18,6 +19,7 @@ describe("resolveEffectiveReplyRoute", () => {
           OriginatingChannel: "discord",
           OriginatingTo: "channel:live",
           AccountId: "live-account",
+          ChatType: "channel",
         }),
         entry: entry({
           deliveryContext: {
@@ -34,6 +36,7 @@ describe("resolveEffectiveReplyRoute", () => {
       channel: "discord",
       to: "channel:live",
       accountId: "live-account",
+      chatType: "channel",
     });
   });
 
@@ -55,6 +58,227 @@ describe("resolveEffectiveReplyRoute", () => {
     ).toEqual({
       channel: undefined,
       to: undefined,
+      accountId: undefined,
+    });
+  });
+
+  it("uses established external route for sessions_send internal webchat handoffs", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+          AccountId: "webchat-account",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceChannel: "webchat",
+          },
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_123",
+            accountId: "work",
+            threadId: "thread:om_123",
+          },
+          lastChannel: "webchat",
+          lastTo: "session:dashboard",
+          lastAccountId: "webchat-account",
+        }),
+      }),
+    ).toEqual({
+      channel: "feishu",
+      to: "user:ou_123",
+      accountId: "work",
+      inheritedExternalRoute: true,
+    });
+  });
+
+  it("keeps trusted inherited thread ids from explicit route metadata", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+        entry: entry({
+          route: {
+            channel: "feishu",
+            accountId: "work",
+            target: { to: "user:ou_123", chatType: "channel" },
+            thread: { id: "thread:om_123", source: "explicit" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_123",
+            accountId: "work",
+            threadId: "thread:om_123",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "feishu",
+      to: "user:ou_123",
+      accountId: "work",
+      threadId: "thread:om_123",
+      chatType: "channel",
+      inheritedExternalRoute: true,
+    });
+  });
+
+  it("drops inherited thread ids from session-normalized route metadata", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+        entry: entry({
+          route: {
+            channel: "feishu",
+            accountId: "work",
+            target: { to: "user:ou_123" },
+            thread: { id: "thread:stale", source: "session" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_123",
+            accountId: "work",
+            threadId: "thread:stale",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "feishu",
+      to: "user:ou_123",
+      accountId: "work",
+      inheritedExternalRoute: true,
+    });
+  });
+
+  it("drops inherited thread ids from unmarked normalized route metadata", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+        entry: entry({
+          route: {
+            channel: "feishu",
+            accountId: "work",
+            target: { to: "user:ou_123" },
+            thread: { id: "thread:stale" },
+          },
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_123",
+            accountId: "work",
+            threadId: "thread:stale",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "feishu",
+      to: "user:ou_123",
+      accountId: "work",
+      inheritedExternalRoute: true,
+    });
+  });
+
+  it("keeps plugin-owned external routes for runtime routability checks", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "customer-chat",
+            to: "conversation:123",
+            accountId: "workspace-a",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "customer-chat",
+      to: "conversation:123",
+      accountId: "workspace-a",
+      inheritedExternalRoute: true,
+    });
+  });
+
+  it("keeps normal webchat turns on their live route", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "feishu",
+            to: "user:ou_123",
+            accountId: "work",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "webchat",
+      to: "session:dashboard",
+      accountId: undefined,
+    });
+  });
+
+  it("ignores persisted webchat routes for sessions_send handoffs", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:dashboard",
+          InputProvenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+          },
+        }),
+        entry: entry({
+          deliveryContext: {
+            channel: "webchat",
+            to: "session:old-dashboard",
+          },
+          lastChannel: "webchat",
+          lastTo: "session:old-dashboard",
+        }),
+      }),
+    ).toEqual({
+      channel: "webchat",
+      to: "session:dashboard",
       accountId: undefined,
     });
   });
@@ -125,7 +349,7 @@ describe("resolveEffectiveReplyRoute", () => {
     });
   });
 
-  it("fills partial exec-event route from persisted context", () => {
+  it("does not inherit an account from a different persisted channel", () => {
     expect(
       resolveEffectiveReplyRoute({
         ctx: ctx({
@@ -144,7 +368,32 @@ describe("resolveEffectiveReplyRoute", () => {
     ).toEqual({
       channel: "telegram",
       to: "chat:live",
+      accountId: undefined,
+    });
+  });
+
+  it("fills a partial exec-event route from the same persisted channel", () => {
+    expect(
+      resolveEffectiveReplyRoute({
+        ctx: ctx({
+          Provider: "exec-event",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "chat:live",
+        }),
+        entry: entry({
+          chatType: "direct",
+          deliveryContext: {
+            channel: "telegram",
+            to: "chat:persisted",
+            accountId: "persisted-account",
+          },
+        }),
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "chat:live",
       accountId: "persisted-account",
+      chatType: "direct",
     });
   });
 });

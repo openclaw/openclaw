@@ -29,7 +29,7 @@ ZIP_NAME=$(basename "$ZIP")
 ZIP_BASE="${ZIP_NAME%.zip}"
 VERSION=${SPARKLE_RELEASE_VERSION:-}
 if [[ -z "$VERSION" ]]; then
-  # Accept legacy calver suffixes like -1 and prerelease forms like -beta.1 / .beta.1.
+  # Accept legacy calver suffixes like -1 and prerelease forms like -alpha.1 / -beta.1 / .beta.1.
   if [[ "$ZIP_NAME" =~ ^OpenClaw-([0-9]+(\.[0-9]+){1,2}([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?)\.zip$ ]]; then
     VERSION="${BASH_REMATCH[1]}"
   else
@@ -38,10 +38,20 @@ if [[ -z "$VERSION" ]]; then
   fi
 fi
 
+CHANNEL_ARGS=()
+if [[ "$VERSION" == *-alpha.* || "$VERSION" == *.alpha.* ]]; then
+  echo "Alpha releases do not ship via Sparkle: $VERSION" >&2
+  exit 1
+fi
+if [[ "$VERSION" == *-beta.* || "$VERSION" == *.beta.* ]]; then
+  CHANNEL_ARGS=(--channel beta)
+fi
+
 TMP_DIR="$(mktemp -d)"
+NOTES_HTML=""
 cleanup() {
   rm -rf "$TMP_DIR"
-  if [[ "${KEEP_SPARKLE_NOTES:-0}" != "1" ]]; then
+  if [[ -n "$NOTES_HTML" && "${KEEP_SPARKLE_NOTES:-0}" != "1" ]]; then
     rm -f "$NOTES_HTML"
   fi
 }
@@ -73,6 +83,7 @@ fi
   --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
   --embed-release-notes \
   --link "$FEED_URL" \
+  "${CHANNEL_ARGS[@]}" \
   "$TMP_DIR"
 
 cp -f "$TMP_DIR/appcast.xml" "$ROOT/appcast.xml"

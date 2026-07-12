@@ -1,11 +1,23 @@
-import { assertOkOrThrowProviderError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
-import { trimToUndefined } from "openclaw/plugin-sdk/speech";
+// Xai plugin module implements tts behavior.
+import {
+  assertOkOrThrowProviderError,
+  postJsonRequest,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { asObject, trimToUndefined, type SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 import { XAI_BASE_URL } from "./api.js";
+import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 export { XAI_BASE_URL };
 
-export const XAI_TTS_VOICES = ["eve", "ara", "rex", "sal", "leo", "una"] as const;
-
-type XaiTtsVoice = (typeof XAI_TTS_VOICES)[number];
+const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
+const XAI_TTS_VOICE_LIST_TIMEOUT_MS = 30_000;
+const XAI_TTS_VOICE_LIST_MAX_BYTES = 1024 * 1024;
+export const XAI_TTS_FALLBACK_VOICES = ["ara", "eve", "leo", "rex", "sal"] as const;
 
 export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
@@ -15,14 +27,55 @@ export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
-export function isValidXaiTtsVoice(voice: string, baseUrl?: string): voice is XaiTtsVoice {
-  const normalizedBase = normalizeXaiTtsBaseUrl(baseUrl ?? process.env.XAI_BASE_URL);
-  const host = normalizedBase.includes("://") ? new URL(normalizedBase).hostname : normalizedBase;
-  const isNative = host === "api.x.ai" || host === "api.grok.x.ai";
-  if (!isNative) {
-    return true;
+export function isValidXaiTtsVoice(voice: string): boolean {
+  return trimToUndefined(voice) !== undefined;
+}
+
+export async function listXaiTtsVoices(params: {
+  apiKey: string;
+  baseUrl?: string;
+}): Promise<SpeechVoiceOption[]> {
+  const baseUrl = normalizeXaiTtsBaseUrl(params.baseUrl);
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${baseUrl}/tts/voices`,
+    init: {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${params.apiKey}`,
+        ...xaiUserAgentHeaderFor(baseUrl),
+      },
+    },
+    timeoutMs: XAI_TTS_VOICE_LIST_TIMEOUT_MS,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    auditContext: "xai tts voices",
+  });
+  try {
+    await assertOkOrThrowProviderError(response, "xAI TTS voices API error");
+    const payload = await readProviderJsonResponse<unknown>(response, "xAI TTS voices", {
+      maxBytes: XAI_TTS_VOICE_LIST_MAX_BYTES,
+    });
+    const voices = asObject(payload)?.voices;
+    if (!Array.isArray(voices)) {
+      throw new Error("xAI TTS voices: malformed JSON response");
+    }
+    return voices.flatMap((value) => {
+      const voice = asObject(value);
+      const id = trimToUndefined(voice?.voice_id);
+      if (!id) {
+        return [];
+      }
+      return [
+        {
+          id,
+          name: trimToUndefined(voice?.name),
+          locale: trimToUndefined(voice?.language),
+          gender: trimToUndefined(voice?.gender),
+        },
+      ];
+    });
+  } finally {
+    await release();
   }
-  return XAI_TTS_VOICES.includes(voice as XaiTtsVoice);
 }
 
 export function normalizeXaiLanguageCode(value: unknown): string | undefined {
@@ -48,6 +101,7 @@ export async function xaiTTS(params: {
   speed?: number;
   responseFormat?: "mp3" | "wav" | "pcm" | "mulaw" | "alaw";
   timeoutMs: number;
+  maxBytes?: number;
 }): Promise<Buffer> {
   const {
     text,
@@ -58,18 +112,21 @@ export async function xaiTTS(params: {
     speed,
     responseFormat = "mp3",
     timeoutMs,
+    maxBytes = DEFAULT_TTS_MAX_BYTES,
   } = params;
   const language = normalizeXaiLanguageCode(rawLanguage) ?? "en";
 
-  if (!isValidXaiTtsVoice(voiceId, baseUrl)) {
+  if (!isValidXaiTtsVoice(voiceId)) {
     throw new Error(`Invalid voice: ${voiceId}`);
   }
 
+  const ttsBaseUrl = normalizeXaiTtsBaseUrl(baseUrl);
   const { response, release } = await postJsonRequest({
-    url: `${normalizeXaiTtsBaseUrl(baseUrl)}/tts`,
+    url: `${ttsBaseUrl}/tts`,
     headers: new Headers({
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
+      ...xaiUserAgentHeaderFor(ttsBaseUrl),
     }),
     body: {
       text,
@@ -87,7 +144,10 @@ export async function xaiTTS(params: {
   try {
     await assertOkOrThrowProviderError(response, "xAI TTS API error");
 
-    return Buffer.from(await response.arrayBuffer());
+    return await readResponseWithLimit(response, maxBytes, {
+      onOverflow: ({ maxBytes: maxBytesLocal }) =>
+        new Error(`xAI TTS audio response exceeds ${maxBytesLocal} bytes`),
+    });
   } finally {
     await release();
   }

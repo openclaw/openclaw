@@ -1,3 +1,4 @@
+// Volcengine tests cover tts plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildVolcengineSpeechProvider } from "./speech-provider.js";
 import { volcengineTTS } from "./tts.js";
@@ -6,9 +7,19 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
+const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
+
+function requireFirstGuardedFetchCall(): unknown {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected Volcengine guarded fetch call");
+  }
+  return call[0];
+}
 
 function makeProviderConfig(overrides?: Record<string, unknown>) {
   return {
@@ -34,6 +45,26 @@ function clearTtsEnv() {
   delete process.env.VOLCENGINE_TTS_API_KEY;
   delete process.env.VOLCENGINE_TTS_APPID;
   delete process.env.VOLCENGINE_TTS_TOKEN;
+}
+
+function makeOversizedStreamResponse(): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(PROVIDER_RESPONSE_MAX_BYTES));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    }),
+  );
+}
+
+function restoreOptionalEnv(key: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
 }
 
 describe("Volcengine speech provider", () => {
@@ -72,21 +103,11 @@ describe("Volcengine speech provider", () => {
     try {
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(false);
     } finally {
-      if (oldBytePlusKey) {
-        process.env.BYTEPLUS_API_KEY = oldBytePlusKey;
-      }
-      if (oldSeedKey) {
-        process.env.BYTEPLUS_SEED_SPEECH_API_KEY = oldSeedKey;
-      }
-      if (oldApiKey) {
-        process.env.VOLCENGINE_TTS_API_KEY = oldApiKey;
-      }
-      if (oldAppId) {
-        process.env.VOLCENGINE_TTS_APPID = oldAppId;
-      }
-      if (oldToken) {
-        process.env.VOLCENGINE_TTS_TOKEN = oldToken;
-      }
+      restoreOptionalEnv("BYTEPLUS_API_KEY", oldBytePlusKey);
+      restoreOptionalEnv("BYTEPLUS_SEED_SPEECH_API_KEY", oldSeedKey);
+      restoreOptionalEnv("VOLCENGINE_TTS_API_KEY", oldApiKey);
+      restoreOptionalEnv("VOLCENGINE_TTS_APPID", oldAppId);
+      restoreOptionalEnv("VOLCENGINE_TTS_TOKEN", oldToken);
     }
   });
 
@@ -101,35 +122,49 @@ describe("Volcengine speech provider", () => {
     try {
       expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
     } finally {
-      if (oldBytePlusKey) {
-        process.env.BYTEPLUS_API_KEY = oldBytePlusKey;
-      }
-      if (oldSeedKey) {
-        process.env.BYTEPLUS_SEED_SPEECH_API_KEY = oldSeedKey;
-      } else {
-        delete process.env.BYTEPLUS_SEED_SPEECH_API_KEY;
-      }
-      if (oldApiKey) {
-        process.env.VOLCENGINE_TTS_API_KEY = oldApiKey;
-      }
-      if (oldAppId) {
-        process.env.VOLCENGINE_TTS_APPID = oldAppId;
-      } else {
-        delete process.env.VOLCENGINE_TTS_APPID;
-      }
-      if (oldToken) {
-        process.env.VOLCENGINE_TTS_TOKEN = oldToken;
-      } else {
-        delete process.env.VOLCENGINE_TTS_TOKEN;
-      }
+      restoreOptionalEnv("BYTEPLUS_API_KEY", oldBytePlusKey);
+      restoreOptionalEnv("BYTEPLUS_SEED_SPEECH_API_KEY", oldSeedKey);
+      restoreOptionalEnv("VOLCENGINE_TTS_API_KEY", oldApiKey);
+      restoreOptionalEnv("VOLCENGINE_TTS_APPID", oldAppId);
+      restoreOptionalEnv("VOLCENGINE_TTS_TOKEN", oldToken);
     }
   });
 
   it("lists voices with locale and gender", async () => {
-    const voices = await provider.listVoices!({});
+    const listVoices = provider.listVoices;
+    if (!listVoices) {
+      throw new Error("Expected Volcengine provider listVoices");
+    }
+    const voices = await listVoices({});
     expect(voices.length).toBeGreaterThan(0);
-    expect(voices[0]).toMatchObject({ locale: "en-US" });
-    expect(voices[0].gender).toBeDefined();
+    expect(voices[0]).toEqual({
+      id: "en_female_anna_mars_bigtts",
+      name: "anna",
+      locale: "en-US",
+      gender: "female",
+    });
+  });
+
+  it("rejects non-decimal speedRatio directive values", () => {
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "0x1",
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid Volcengine speedRatio "0x1"'],
+    });
   });
 
   it("sends the documented Seed Speech API key payload and returns voice-note Opus metadata", async () => {
@@ -158,28 +193,65 @@ describe("Volcengine speech provider", () => {
     expect(result.fileExtension).toBe(".opus");
     expect(result.voiceCompatible).toBe(true);
 
-    const call = fetchWithSsrFGuardMock.mock.calls[0]?.[0];
-    expect(call).toMatchObject({
+    const call = requireFirstGuardedFetchCall();
+    expect(call).toEqual({
       url: "https://voice.ap-southeast-1.bytepluses.com/api/v3/tts/unidirectional",
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Connection: "keep-alive",
+          "X-Api-Key": "test-api-key",
+          "X-Api-Resource-Id": "seed-tts-1.0",
+          "X-Api-App-Key": "aGjiRDfUWi",
+        },
+        body: JSON.stringify({
+          user: { uid: "openclaw" },
+          req_params: {
+            text: "hello",
+            speaker: "zh_male_aojiao_mars_bigtts",
+            audio_params: {
+              format: "ogg_opus",
+              sample_rate: 24000,
+            },
+            speed_ratio: 0.9,
+            emotion: "happy",
+          },
+        }),
+      },
       timeoutMs: 1234,
       policy: { hostnameAllowlist: ["voice.ap-southeast-1.bytepluses.com"] },
       auditContext: "volcengine.tts",
     });
-    expect(call.init.headers["X-Api-Key"]).toBe("test-api-key");
-    expect(call.init.headers["X-Api-Resource-Id"]).toBe("seed-tts-1.0");
-    expect(call.init.headers["X-Api-App-Key"]).toBe("aGjiRDfUWi");
-    const body = JSON.parse(call.init.body);
-    expect(body.req_params).toMatchObject({
-      text: "hello",
-      speaker: "zh_male_aojiao_mars_bigtts",
-      speed_ratio: 0.9,
-      emotion: "happy",
-      audio_params: {
-        format: "ogg_opus",
-        sample_rate: 24000,
-      },
-    });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops malformed speed ratios before synthesis", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          code: 0,
+          data: Buffer.from("voice-audio").toString("base64"),
+        }),
+      ),
+      release,
+    });
+
+    await provider.synthesize({
+      text: "hello",
+      cfg: {},
+      providerConfig: makeProviderConfig({ speedRatio: 4 }),
+      target: "audio-file",
+      providerOverrides: { speedRatio: -1 },
+      timeoutMs: 1234,
+    });
+
+    const call = requireFirstGuardedFetchCall() as { init: { body: string } };
+    const body = JSON.parse(call.init.body) as {
+      req_params?: { speed_ratio?: number };
+    };
+    expect(body.req_params).not.toHaveProperty("speed_ratio");
   });
 });
 
@@ -243,6 +315,23 @@ describe("volcengineTTS", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds Seed Speech success response reads", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: makeOversizedStreamResponse(),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        apiKey: "secret-api-key",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("BytePlus Seed Speech TTS response exceeds 16777216 bytes");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("reports provider errors without exposing credentials", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -267,6 +356,24 @@ describe("volcengineTTS", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("Volcengine TTS error 3001: load grant failed");
     expect((error as Error).message).not.toContain("secret-token");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds legacy Volcengine success response reads", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: makeOversizedStreamResponse(),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        appId: "app-id",
+        token: "secret-token",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Volcengine TTS response exceeds 16777216 bytes");
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

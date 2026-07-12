@@ -1,4 +1,21 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Handles TUI input submission and command dispatch.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+
+export type TuiSubmitAction = "local shell" | "command" | "message";
+
+function runSubmitAction(
+  action: TuiSubmitAction,
+  run: () => Promise<void> | void,
+  onError: (action: TuiSubmitAction, error: unknown) => void,
+): void {
+  try {
+    void Promise.resolve(run()).catch((error: unknown) => {
+      onError(action, error);
+    });
+  } catch (error) {
+    onError(action, error);
+  }
+}
 
 export function createEditorSubmitHandler(params: {
   editor: {
@@ -8,14 +25,17 @@ export function createEditorSubmitHandler(params: {
   handleCommand: (value: string) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
+  onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
+  canSubmitMessage?: (value: string) => boolean;
+  onBlockedMessageSubmit?: (value: string) => void;
 }) {
   return (text: string) => {
     const raw = text;
     const value = raw.trim();
-    params.editor.setText("");
 
     // Keep previous behavior: ignore empty/whitespace-only submissions.
     if (!value) {
+      params.editor.setText("");
       return;
     }
 
@@ -23,20 +43,30 @@ export function createEditorSubmitHandler(params: {
     // IMPORTANT: use the raw (untrimmed) text so leading spaces do NOT trigger.
     // Per requirement: a lone '!' should be treated as a normal message.
     if (raw.startsWith("!") && raw !== "!") {
+      params.editor.setText("");
       params.editor.addToHistory(raw);
-      void params.handleBangLine(raw);
+      runSubmitAction("local shell", () => params.handleBangLine(raw), params.onSubmitError);
       return;
     }
-
-    // Enable built-in editor prompt history navigation (up/down).
-    params.editor.addToHistory(value);
 
     if (value.startsWith("/")) {
-      void params.handleCommand(value);
+      params.editor.setText("");
+      // Enable built-in editor prompt history navigation (up/down).
+      params.editor.addToHistory(value);
+      runSubmitAction("command", () => params.handleCommand(value), params.onSubmitError);
       return;
     }
 
-    void params.sendMessage(value);
+    if (params.canSubmitMessage && !params.canSubmitMessage(value)) {
+      params.editor.setText(value);
+      params.onBlockedMessageSubmit?.(value);
+      return;
+    }
+
+    params.editor.setText("");
+    // Enable built-in editor prompt history navigation (up/down).
+    params.editor.addToHistory(value);
+    runSubmitAction("message", () => params.sendMessage(value), params.onSubmitError);
   };
 }
 

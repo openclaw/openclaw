@@ -1,3 +1,4 @@
+// Doctor contract API fast-path tests cover lightweight channel doctor contract loading.
 import { describe, expect, it, vi } from "vitest";
 
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
@@ -54,23 +55,20 @@ describe("channel doctor contract api fast path", () => {
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "discord",
       artifactBasename: "doctor-contract-api.js",
-      installRuntimeDeps: false,
     });
   });
 
   it("treats empty explicit doctor contract rules as authoritative", () => {
     const api = loadBundledChannelDoctorContractApi("whatsapp");
 
-    expect(api?.legacyConfigRules).toEqual([]);
+    expect(api?.legacyConfigRules).toStrictEqual([]);
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "whatsapp",
       artifactBasename: "doctor-contract-api.js",
-      installRuntimeDeps: false,
     });
     expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
       dirName: "whatsapp",
       artifactBasename: "contract-api.js",
-      installRuntimeDeps: false,
     });
   });
 
@@ -86,12 +84,24 @@ describe("channel doctor contract api fast path", () => {
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "telegram",
       artifactBasename: "doctor-contract-api.js",
-      installRuntimeDeps: false,
     });
     expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
       dirName: "telegram",
       artifactBasename: "contract-api.js",
-      installRuntimeDeps: false,
+    });
+  });
+
+  it("does not fall back to the broad contract-api artifact when the doctor artifact is missing", () => {
+    const api = loadBundledChannelDoctorContractApi("missing");
+
+    expect(api).toBeUndefined();
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "missing",
+      artifactBasename: "doctor-contract-api.js",
+    });
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: "missing",
+      artifactBasename: "contract-api.js",
     });
   });
 });

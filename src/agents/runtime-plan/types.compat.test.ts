@@ -1,7 +1,9 @@
+// Runtime plan type-compat tests keep copied structural aliases aligned with
+// their source runtime contracts without importing those sources in production.
 import { describe, expectTypeOf, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { FailoverReason } from "../pi-embedded-helpers/types.js";
+import type { FailoverReason } from "../embedded-agent-helpers/types.js";
 import type { PromptMode } from "../system-prompt.types.js";
 import type { buildAgentRuntimeDeliveryPlan, buildAgentRuntimePlan } from "./build.js";
 import type {
@@ -19,7 +21,7 @@ type Assert<T extends true> = T;
 
 describe("AgentRuntimePlan structural type compatibility", () => {
   it("keeps copied scalar unions aligned with their source contracts", () => {
-    expectTypeOf<AgentRuntimeThinkLevel>().toEqualTypeOf<ThinkLevel>();
+    expectTypeOf<AgentRuntimeThinkLevel>().toEqualTypeOf<Exclude<ThinkLevel, "ultra">>();
     expectTypeOf<AgentRuntimeFailoverReason>().toEqualTypeOf<FailoverReason>();
     expectTypeOf<AgentRuntimePromptMode>().toEqualTypeOf<PromptMode>();
   });

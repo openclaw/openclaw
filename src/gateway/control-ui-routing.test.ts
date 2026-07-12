@@ -1,5 +1,48 @@
+/**
+ * Control UI gateway routing tests.
+ */
 import { describe, expect, it } from "vitest";
-import { classifyControlUiRequest } from "./control-ui-routing.js";
+import {
+  classifyControlUiRequest,
+  isControlUiApprovalDocumentPath,
+  isControlUiPluginManagerRequest,
+} from "./control-ui-routing.js";
+
+describe("isControlUiPluginManagerRequest", () => {
+  it.each([
+    { basePath: "", pathname: "/settings/plugins", method: "GET", expected: true },
+    { basePath: "", pathname: "/settings/plugins/", method: "HEAD", expected: true },
+    {
+      basePath: "/openclaw",
+      pathname: "/openclaw/settings/plugins",
+      method: "GET",
+      expected: true,
+    },
+    { basePath: "", pathname: "/settings/plugins", method: "POST", expected: false },
+    { basePath: "", pathname: "/plugins", method: "GET", expected: false },
+  ])("classifies $method $pathname", ({ basePath, pathname, method, expected }) => {
+    expect(isControlUiPluginManagerRequest({ basePath, pathname, method })).toBe(expected);
+  });
+});
+
+describe("isControlUiApprovalDocumentPath", () => {
+  it.each([
+    { basePath: "", pathname: "/approve" },
+    { basePath: "", pathname: "/approve/" },
+    { basePath: "", pathname: "/approve/plugin%3Arequest.json" },
+    { basePath: "/openclaw", pathname: "/openclaw/approve/exec%3Aa%2Fb" },
+  ])("reserves $pathname", ({ basePath, pathname }) => {
+    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(true);
+  });
+
+  it.each([
+    { basePath: "", pathname: "/approvals/id" },
+    { basePath: "", pathname: "/approve/id/extra" },
+    { basePath: "/openclaw", pathname: "/approve/id" },
+  ])("does not reserve $pathname", ({ basePath, pathname }) => {
+    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(false);
+  });
+});
 
 describe("classifyControlUiRequest", () => {
   describe("root-mounted control ui", () => {
@@ -14,6 +57,12 @@ describe("classifyControlUiRequest", () => {
         name: "serves other read-only SPA routes",
         pathname: "/chat",
         method: "HEAD",
+        expected: { kind: "serve" as const },
+      },
+      {
+        name: "serves the plugin manager without claiming plugin HTTP routes",
+        pathname: "/settings/plugins",
+        method: "GET",
         expected: { kind: "serve" as const },
       },
       {
@@ -35,6 +84,12 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "not-control-ui" as const },
       },
       {
+        name: "keeps the plugin HTTP root outside the SPA catch-all",
+        pathname: "/plugins",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
         name: "keeps API routes outside the SPA catch-all",
         pathname: "/api/sessions",
         method: "GET",
@@ -48,7 +103,7 @@ describe("classifyControlUiRequest", () => {
       },
       {
         name: "falls through non-read requests",
-        pathname: "/bluebubbles-webhook",
+        pathname: "/imessage-webhook",
         method: "POST",
         expected: { kind: "not-control-ui" as const },
       },

@@ -17,14 +17,20 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "kilocode": ["KILOCODE_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "kilocode",
+        "envVars": ["KILOCODE_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
       "provider": "kilocode",
       "method": "api-key",
       "choiceId": "kilocode-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Kilo Gateway API key",
       "choiceHint": "API key (OpenRouter-compatible)",
       "groupId": "kilocode",

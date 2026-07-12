@@ -1,3 +1,6 @@
+// Extracts channel metadata used by security audit findings.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { wrapExternalContent } from "./external-content.js";
 
 const DEFAULT_MAX_CHARS = 800;
@@ -14,10 +17,14 @@ function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
-  const trimmed = value.slice(0, Math.max(0, maxChars - 3)).trimEnd();
+  const trimmed = truncateUtf16Safe(value, Math.max(0, maxChars - 3)).trimEnd();
   return `${trimmed}...`;
 }
 
+/**
+ * Build bounded, externally wrapped channel metadata for prompt context.
+ * Channel-provided labels can be user-controlled, so callers must treat this as untrusted content.
+ */
 export function buildUntrustedChannelMetadata(params: {
   source: string;
   label: string;
@@ -27,8 +34,9 @@ export function buildUntrustedChannelMetadata(params: {
   const cleaned = params.entries
     .map((entry) => (typeof entry === "string" ? normalizeEntry(entry) : ""))
     .filter((entry) => Boolean(entry))
+    // Bound each entry before dedupe so one oversized metadata value cannot crowd out others.
     .map((entry) => truncateText(entry, DEFAULT_MAX_ENTRY_CHARS));
-  const deduped = cleaned.filter((entry, index, list) => list.indexOf(entry) === index);
+  const deduped = uniqueStrings(cleaned);
   if (deduped.length === 0) {
     return undefined;
   }

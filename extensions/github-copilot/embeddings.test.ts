@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Github Copilot tests cover embeddings plugin behavior.
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
 const resolveCopilotApiTokenMock = vi.hoisted(() => vi.fn());
@@ -24,10 +25,48 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
 
+afterAll(() => {
+  vi.doUnmock("./auth.js");
+  vi.doUnmock("openclaw/plugin-sdk/secret-input-runtime");
+  vi.doUnmock("./token.js");
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
+
 const TEST_BASE_URL = "https://api.githubcopilot.test";
+
+function shouldContinueAutoSelection(error: Error): boolean {
+  const shouldContinue = githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection;
+  if (!shouldContinue) {
+    throw new Error("GitHub Copilot embedding adapter did not expose auto-selection fallback");
+  }
+  return shouldContinue(error);
+}
 
 function buildModelsResponse(models: Array<{ id: string; supported_endpoints?: unknown }>) {
   return { data: models };
+}
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
 }
 
 function mockDiscoveryResponse(spec: {
@@ -36,13 +75,16 @@ function mockDiscoveryResponse(spec: {
   json?: unknown;
   text?: string;
 }) {
+  const status = spec.status ?? (spec.ok ? 200 : 500);
+  const response =
+    spec.json !== undefined
+      ? new Response(JSON.stringify(spec.json), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        })
+      : new Response(spec.text ?? "", { status });
   fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
-    response: {
-      ok: spec.ok,
-      status: spec.status ?? (spec.ok ? 200 : 500),
-      json: async () => spec.json,
-      text: async () => spec.text ?? "",
-    },
+    response,
     release: vi.fn(async () => {}),
   }));
 }
@@ -52,6 +94,33 @@ function defaultCreateOptions() {
     config: {} as Record<string, unknown>,
     agentDir: "/tmp/test-agent",
     model: "",
+  };
+}
+
+function firstCopilotApiTokenRequest() {
+  const [call] = resolveCopilotApiTokenMock.mock.calls;
+  if (!call) {
+    throw new Error("expected resolveCopilotApiToken call");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object") {
+    throw new Error("expected resolveCopilotApiToken request");
+  }
+  return request as { env?: typeof process.env; githubToken?: string };
+}
+
+function firstDiscoveryRequest() {
+  const [call] = fetchWithSsrFGuardMock.mock.calls;
+  if (!call) {
+    throw new Error("expected GitHub Copilot discovery request");
+  }
+  const [request] = call;
+  if (!request || typeof request !== "object") {
+    throw new Error("expected GitHub Copilot discovery request options");
+  }
+  return request as {
+    init: { headers: Record<string, string> };
+    url: string;
   };
 }
 
@@ -72,6 +141,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     resolveConfiguredSecretInputStringMock.mockReset();
     resolveFirstGithubTokenMock.mockReset();
     resolveCopilotApiTokenMock.mockReset();
@@ -98,9 +168,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
 
     expect(result.provider?.model).toBe("text-embedding-3-small");
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith(
-      expect.objectContaining({ githubToken: "gh_test_token_123" }),
-    );
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_test_token_123");
   });
 
   it("matches embedding-capable models when supported_endpoints is missing or malformed", async () => {
@@ -163,20 +231,73 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
   it("wraps invalid discovery JSON as a setup error", async () => {
     fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
-      response: {
-        ok: true,
+      response: new Response("not-valid-json{{{", {
         status: 200,
-        json: async () => {
-          throw new SyntaxError("bad json");
-        },
-        text: async () => "",
-      },
+        headers: { "Content-Type": "application/json" },
+      }),
       release: vi.fn(async () => {}),
     }));
 
     await expect(
       githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
-    ).rejects.toThrow("GitHub Copilot model discovery returned invalid JSON");
+    ).rejects.toThrow("github-copilot.model-discovery: malformed JSON response");
+  });
+
+  it("bounds model discovery error bodies", async () => {
+    const tracked = cancelTrackedResponse(`${"discovery denied ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
+      response: tracked.response,
+      release: vi.fn(async () => {}),
+    }));
+
+    let caught: Error | undefined;
+    try {
+      await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("GitHub Copilot model discovery HTTP 503");
+    expect(caught?.message).toContain("discovery denied");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds embeddings error bodies", async () => {
+    mockDiscoveryResponse({
+      ok: true,
+      json: buildModelsResponse([
+        { id: "text-embedding-3-small", supported_endpoints: ["/v1/embeddings"] },
+      ]),
+    });
+    const tracked = cancelTrackedResponse(`${"embedding denied ".repeat(1024)}tail`, {
+      status: 429,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchImpl = vi.fn(async () => tracked.response);
+    vi.stubGlobal("fetch", fetchImpl);
+    const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+    let caught: Error | undefined;
+    try {
+      await result.provider?.embedQuery("hello");
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("GitHub Copilot embeddings HTTP 429");
+    expect(caught?.message).toContain("embedding denied");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("honors remote overrides when creating the provider", async () => {
@@ -198,18 +319,12 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     } as never);
 
     expect(resolveFirstGithubTokenMock).toHaveBeenCalled();
-    expect(resolveCopilotApiTokenMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env: process.env,
-        githubToken: "gh_remote_token",
-      }),
-    );
+    expect(firstCopilotApiTokenRequest().env).toBe(process.env);
+    expect(firstCopilotApiTokenRequest().githubToken).toBe("gh_remote_token");
 
-    const discoveryCall = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as {
-      init: { headers: Record<string, string> };
-      url: string;
-    };
+    const discoveryCall = firstDiscoveryRequest();
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
+    expect(discoveryCall.init.headers["Accept-Encoding"]).toBe("identity");
     expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("proxy");
   });
 
@@ -234,25 +349,19 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
   });
 
   it("treats token parsing and discovery failures as auto-fallback errors", () => {
+    expect(shouldContinueAutoSelection(new Error("Copilot token response missing token"))).toBe(
+      true,
+    );
     expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
-        new Error("Copilot token response missing token"),
-      ),
-    ).toBe(true);
-    expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
+      shouldContinueAutoSelection(
         new Error("Unexpected response from GitHub Copilot token endpoint"),
       ),
     ).toBe(true);
     expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
-        new Error("GitHub Copilot model discovery returned invalid JSON"),
+      shouldContinueAutoSelection(
+        new Error("github-copilot.model-discovery: malformed JSON response"),
       ),
     ).toBe(true);
-    expect(
-      githubCopilotMemoryEmbeddingProviderAdapter.shouldContinueAutoSelection!(
-        new Error("Network timeout"),
-      ),
-    ).toBe(false);
+    expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);
   });
 });

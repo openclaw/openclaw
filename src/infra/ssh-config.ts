@@ -1,5 +1,9 @@
+// Reads effective SSH target config from the local ssh client.
 import { spawn } from "node:child_process";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import type { SshParsedTarget } from "./ssh-tunnel.js";
+
+export const SSH_CONFIG_OUTPUT_MAX_CHARS = 64 * 1024;
 
 export type SshResolvedConfig = {
   user?: string;
@@ -8,12 +12,14 @@ export type SshResolvedConfig = {
   identityFiles: string[];
 };
 
+type AppendSshConfigOutputResult = { ok: true; value: string } | { ok: false; reason: "too-large" };
+
 function parsePort(value: string | undefined): number | undefined {
   if (!value) {
     return undefined;
   }
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined || parsed > 65535) {
     return undefined;
   }
   return parsed;
@@ -54,6 +60,18 @@ export function parseSshConfigOutput(output: string): SshResolvedConfig {
   return result;
 }
 
+export function appendSshConfigOutput(
+  current: string,
+  chunk: unknown,
+  maxChars = SSH_CONFIG_OUTPUT_MAX_CHARS,
+): AppendSshConfigOutputResult {
+  const next = current + String(chunk);
+  if (next.length > maxChars) {
+    return { ok: false, reason: "too-large" };
+  }
+  return { ok: true, value: next };
+}
+
 export async function resolveSshConfig(
   target: SshParsedTarget,
   opts: { identity?: string; timeoutMs?: number } = {},
@@ -75,31 +93,43 @@ export async function resolveSshConfig(
       stdio: ["ignore", "pipe", "ignore"],
     });
     let stdout = "";
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-
-    const timeoutMs = Math.max(200, opts.timeoutMs ?? 800);
-    const timer = setTimeout(() => {
-      try {
-        child.kill("SIGKILL");
-      } finally {
-        resolve(null);
-      }
-    }, timeoutMs);
-
-    child.once("error", () => {
-      clearTimeout(timer);
-      resolve(null);
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      if (code !== 0 || !stdout.trim()) {
-        resolve(null);
+    let settled = false;
+    const settle = (result: SshResolvedConfig | null, options?: { terminate?: boolean }) => {
+      if (settled) {
         return;
       }
-      resolve(parseSshConfigOutput(stdout));
+      settled = true;
+      clearTimeout(timer);
+      if (options?.terminate) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // A failed best-effort kill must not strand gateway discovery.
+        }
+      }
+      resolve(result);
+    };
+
+    const timeoutMs = Math.max(200, opts.timeoutMs ?? 800);
+    const timer = setTimeout(() => settle(null, { terminate: true }), timeoutMs);
+
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk) => {
+      const appended = appendSshConfigOutput(stdout, chunk);
+      if (!appended.ok) {
+        settle(null, { terminate: true });
+        return;
+      }
+      stdout = appended.value;
+    });
+    child.stdout?.on("error", () => settle(null, { terminate: true }));
+    child.once("error", () => settle(null));
+    child.once("exit", (code) => {
+      if (code !== 0 || !stdout.trim()) {
+        settle(null);
+        return;
+      }
+      settle(parseSshConfigOutput(stdout));
     });
   });
 }

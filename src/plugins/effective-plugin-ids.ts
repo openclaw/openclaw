@@ -1,21 +1,21 @@
-import fs from "node:fs";
-import path from "node:path";
+/** Resolves effective plugin ids from config, installed records, and activation metadata. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
 } from "../channels/config-presence.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
+  loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPluginIds,
-  resolveGatewayStartupPluginIds,
 } from "./channel-plugin-ids.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
-import { loadPluginManifest } from "./manifest.js";
+import { defaultSlotIdForKey } from "./slots.js";
 
 function collectConfiguredChannelIds(
   config: OpenClawConfig,
@@ -45,6 +45,7 @@ function collectBundledChannelOwnerPluginIds(params: {
   config: OpenClawConfig;
   channelIds: readonly string[];
   env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   bundledPluginsDir?: string;
 }): string[] {
   const plugins = normalizePluginsConfig(params.config.plugins);
@@ -56,32 +57,31 @@ function collectBundledChannelOwnerPluginIds(params: {
   if (channelIds.size === 0) {
     return [];
   }
-  const bundledDir = params.bundledPluginsDir ?? resolveBundledPluginsDir(params.env);
-  if (!bundledDir) {
-    return [];
-  }
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(bundledDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
+  const env = params.bundledPluginsDir
+    ? {
+        ...params.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: params.bundledPluginsDir,
+        ...(params.env.VITEST || process.env.VITEST
+          ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
+          : {}),
+      }
+    : params.env;
+  const snapshot = loadManifestMetadataSnapshot({
+    config: params.config,
+    env,
+    workspaceDir: params.workspaceDir,
+  });
   const pluginIds = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const pluginDir = path.join(bundledDir, entry.name);
-    const manifest = loadPluginManifest(pluginDir, false);
-    if (!manifest.ok) {
+  for (const plugin of snapshot.plugins) {
+    if (plugin.origin !== "bundled") {
       continue;
     }
     if (
-      (manifest.manifest.channels ?? []).some((channelId) =>
+      plugin.channels.some((channelId) =>
         channelIds.has(normalizeOptionalLowercaseString(channelId) ?? ""),
       )
     ) {
-      const pluginId = normalizeOptionalLowercaseString(manifest.manifest.id);
+      const pluginId = normalizeOptionalLowercaseString(plugin.id);
       if (
         pluginId &&
         passesManifestOwnerBasePolicy({
@@ -94,7 +94,7 @@ function collectBundledChannelOwnerPluginIds(params: {
       }
     }
   }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(pluginIds);
 }
 
 function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
@@ -120,9 +120,28 @@ function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
       ids.delete(pluginId);
     }
   }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(ids);
 }
 
+function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[] {
+  const plugins = normalizePluginsConfig(config.plugins);
+  if (!plugins.enabled) {
+    return [];
+  }
+  const pluginId = plugins.slots.contextEngine;
+  if (!pluginId || pluginId === defaultSlotIdForKey("contextEngine")) {
+    return [];
+  }
+  if (plugins.deny.includes(pluginId)) {
+    return [];
+  }
+  if (plugins.entries[pluginId]?.enabled === false) {
+    return [];
+  }
+  return [pluginId];
+}
+
+/** Lists plugin ids that are effectively enabled for a config/discovery context. */
 export function resolveEffectivePluginIds(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -135,6 +154,9 @@ export function resolveEffectivePluginIds(params: {
   });
   const effectiveConfig = autoEnabled.config;
   const ids = new Set(collectExplicitEffectivePluginIds(effectiveConfig));
+  for (const pluginId of collectSelectedContextEnginePluginIds(effectiveConfig)) {
+    ids.add(pluginId);
+  }
   const configuredChannelIds = collectConfiguredChannelIds(
     effectiveConfig,
     params.config,
@@ -152,17 +174,18 @@ export function resolveEffectivePluginIds(params: {
     config: effectiveConfig,
     channelIds: configuredChannelIds,
     env: params.env,
+    workspaceDir: params.workspaceDir,
     ...(params.bundledPluginsDir ? { bundledPluginsDir: params.bundledPluginsDir } : {}),
   })) {
     ids.add(pluginId);
   }
-  for (const pluginId of resolveGatewayStartupPluginIds({
+  for (const pluginId of loadGatewayStartupPluginPlan({
     config: effectiveConfig,
     activationSourceConfig: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  })) {
+  }).pluginIds) {
     ids.add(pluginId);
   }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(ids);
 }

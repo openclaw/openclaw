@@ -1,3 +1,4 @@
+// Route resolution tests cover resolving channel route targets from input.
 import { describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";
@@ -113,6 +114,24 @@ describe("resolveAgentRoute", () => {
       lastRoutePolicy: "main",
       matchedBy: "default",
     });
+  });
+
+  test("uses the configured main session key for shared direct routes", () => {
+    const route = resolveRoute({
+      cfg: { session: { dmScope: "main", mainKey: "work" } },
+      channel: "whatsapp",
+      accountId: null,
+      peer: { kind: "direct", id: "+15551234567" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      accountId: "default",
+      sessionKey: "agent:main:work",
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    });
+    expect(route.mainSessionKey).toBe("agent:main:work");
   });
 
   test.each([
@@ -420,6 +439,18 @@ describe("resolveAgentRoute", () => {
       peer: { kind: "channel", id: 1468834856187203680n as unknown as string },
     });
     expect(route.sessionKey).toBe("agent:main:discord:channel:1468834856187203680");
+  });
+
+  test("preserves mixed-case Signal group ids in route session keys", () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    const route = resolveAgentRoute({
+      cfg: {},
+      channel: "signal",
+      accountId: null,
+      peer: { kind: "group", id: mixedGroupId },
+    });
+    expect(route.sessionKey).toBe(`agent:main:signal:group:${mixedGroupId}`);
+    expect(route.lastRoutePolicy).toBe("session");
   });
 
   test.each([

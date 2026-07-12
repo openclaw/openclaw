@@ -1,3 +1,4 @@
+// Memory Core helper module supports tools helpers behavior.
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { createMemoryGetTool, createMemorySearchTool } from "./tools.js";
@@ -12,11 +13,15 @@ export function createDefaultMemoryToolConfig(): OpenClawConfig {
 
 export function createMemorySearchToolOrThrow(params?: {
   config?: OpenClawConfig;
+  agentId?: string;
   agentSessionKey?: string;
+  oneShotCliRun?: boolean;
 }) {
   const tool = createMemorySearchTool({
     config: params?.config ?? createDefaultMemoryToolConfig(),
+    ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
+    ...(params?.oneShotCliRun ? { oneShotCliRun: params.oneShotCliRun } : {}),
   });
   if (!tool) {
     throw new Error("tool missing");

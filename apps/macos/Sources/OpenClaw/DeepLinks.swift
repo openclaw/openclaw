@@ -59,16 +59,21 @@ final class DeepLinkHandler {
             deepLinkLogger.debug("ignored url \(url.absoluteString, privacy: .public)")
             return
         }
-        guard !AppStateStore.shared.isPaused else {
-            self.presentAlert(title: "OpenClaw is paused", message: "Unpause OpenClaw to run agent actions.")
-            return
-        }
-
         switch route {
+        case .dashboard:
+            await self.openDashboard()
+            return
         case let .agent(link):
+            guard !AppStateStore.shared.isPaused else {
+                self.presentAlert(title: "OpenClaw is paused", message: "Unpause OpenClaw to run agent actions.")
+                return
+            }
             await self.handleAgent(link: link, originalURL: url)
         case .gateway:
-            break
+            guard !AppStateStore.shared.isPaused else {
+                self.presentAlert(title: "OpenClaw is paused", message: "Unpause OpenClaw to run agent actions.")
+                return
+            }
         }
     }
 
@@ -177,6 +182,14 @@ final class DeepLinkHandler {
     }
 
     // MARK: - UI
+
+    private func openDashboard() async {
+        do {
+            try await DashboardManager.shared.show()
+        } catch {
+            DashboardManager.shared.showFailure(error)
+        }
+    }
 
     private func confirm(title: String, message: String) -> Bool {
         let alert = NSAlert()

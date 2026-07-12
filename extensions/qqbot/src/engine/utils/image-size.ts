@@ -5,18 +5,19 @@
  */
 
 import { Buffer } from "node:buffer";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getPlatformAdapter } from "../adapter/index.js";
 import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { formatErrorMessage } from "./format.js";
 import { debugLog } from "./log.js";
 
-export interface ImageSize {
+interface ImageSize {
   width: number;
   height: number;
 }
 
 /** Default dimensions used when probing fails. */
-export const DEFAULT_IMAGE_SIZE: ImageSize = { width: 512, height: 512 };
+const DEFAULT_IMAGE_SIZE: ImageSize = { width: 512, height: 512 };
 
 /**
  * Parse image dimensions from the PNG header.
@@ -156,7 +157,7 @@ const IMAGE_PROBE_SSRF_POLICY: SsrfPolicyConfig = {};
 /**
  * Fetch image dimensions from a public URL using only the first 64 KB.
  *
- * Uses {@link fetchRemoteMedia} with SSRF guard to block probes against
+ * Uses {@link readRemoteMediaBuffer} with SSRF guard to block probes against
  * private/reserved/loopback/link-local/metadata destinations.
  */
 export async function getImageSizeFromUrl(
@@ -185,7 +186,7 @@ export async function getImageSizeFromUrl(
       const size = parseImageSize(buffer);
       if (size) {
         debugLog(
-          `[image-size] Got size from URL: ${size.width}x${size.height} - ${url.slice(0, 60)}...`,
+          `[image-size] Got size from URL: ${size.width}x${size.height} - ${truncateUtf16Safe(url, 60)}...`,
         );
       }
       return size;
@@ -193,13 +194,15 @@ export async function getImageSizeFromUrl(
       clearTimeout(timeoutId);
     }
   } catch (err) {
-    debugLog(`[image-size] Error fetching ${url.slice(0, 60)}...: ${formatErrorMessage(err)}`);
+    debugLog(
+      `[image-size] Error fetching ${truncateUtf16Safe(url, 60)}...: ${formatErrorMessage(err)}`,
+    );
     return null;
   }
 }
 
 /** Parse image dimensions from a Base64 data URL. */
-export function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
+function getImageSizeFromDataUrl(dataUrl: string): ImageSize | null {
   try {
     // Format: data:image/png;base64,xxxxx
     const matches = dataUrl.match(/^data:image\/[^;]+;base64,(.+)$/);
@@ -246,13 +249,4 @@ export function formatQQBotMarkdownImage(url: string, size: ImageSize | null): s
 /** Return true when markdown already contains QQ Bot size annotations. */
 export function hasQQBotImageSize(markdownImage: string): boolean {
   return /!\[#\d+px\s+#\d+px\]/.test(markdownImage);
-}
-
-/** Extract width and height from QQBot markdown image syntax: `![#Wpx #Hpx](url)`. */
-export function extractQQBotImageSize(markdownImage: string): ImageSize | null {
-  const match = markdownImage.match(/!\[#(\d+)px\s+#(\d+)px\]/);
-  if (match) {
-    return { width: Number.parseInt(match[1], 10), height: Number.parseInt(match[2], 10) };
-  }
-  return null;
 }

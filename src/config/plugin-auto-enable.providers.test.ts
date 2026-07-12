@@ -1,3 +1,4 @@
+// Covers provider-driven plugin auto-enable decisions.
 import { afterAll, describe, expect, it } from "vitest";
 import {
   applyPluginAutoEnable,
@@ -71,6 +72,136 @@ describe("applyPluginAutoEnable providers", () => {
 
     expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
     expect(result.changes).toContain("xai web search configured, enabled automatically.");
+  });
+
+  it("auto-enables selected web search provider plugins under restrictive allowlists", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "brave",
+          channels: [],
+          contracts: {
+            webSearchProviders: ["brave"],
+          },
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.brave?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "brave"]);
+    expect(result.changes).toContain("brave web search provider selected, enabled automatically.");
+  });
+
+  it("auto-enables a bundled worker provider selected by a cloud worker profile", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        cloudWorkers: {
+          profiles: {
+            development: {
+              provider: " STATIC-SSH ",
+              settings: { host: "worker.example.test" },
+            },
+          },
+        },
+        plugins: { allow: ["telegram"] },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "qa-lab",
+          channels: [],
+          contracts: { workerProviders: ["static-ssh"] },
+          origin: "bundled",
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["qa-lab"]?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "qa-lab"]);
+    expect(result.autoEnabledReasons).toEqual({
+      "qa-lab": ["static-ssh worker provider selected"],
+    });
+  });
+
+  it("requires explicit enablement for external worker providers", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        cloudWorkers: {
+          profiles: { production: { provider: "cloud-vendor" } },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "cloud-vendor-plugin",
+          channels: [],
+          contracts: { workerProviders: ["cloud-vendor"] },
+          origin: "global",
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.["cloud-vendor-plugin"]).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
+  it("does not auto-enable selected web search provider plugins when web search is disabled", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["telegram"],
+        },
+        agents: {
+          defaults: {
+            model: "codex/gpt-5.4",
+          },
+        },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "brave",
+          channels: [],
+          contracts: {
+            webSearchProviders: ["brave"],
+          },
+        },
+        {
+          id: "codex",
+          channels: [],
+          providers: ["codex"],
+        },
+      ]),
+    });
+
+    expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.brave).toBeUndefined();
+    expect(result.config.plugins?.allow).toEqual(["telegram", "codex"]);
+    expect(result.changes).toContain("codex/gpt-5.4 model configured, enabled automatically.");
+    expect(result.changes).not.toContain(
+      "brave web search provider selected, enabled automatically.",
+    );
   });
 
   it("materializes xai setup auto-enable when the plugin-owned x_search tool is configured", () => {
@@ -202,7 +333,7 @@ describe("applyPluginAutoEnable providers", () => {
     });
 
     expect(result.config.plugins?.entries?.openai).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 
   it("uses manifest-owned provider auto-enable metadata for third-party plugins", () => {
@@ -338,6 +469,6 @@ describe("applyPluginAutoEnable providers", () => {
     });
 
     expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
   });
 });

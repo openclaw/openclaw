@@ -1,3 +1,4 @@
+// Browser tests cover chromeefault browser plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async () => {
@@ -64,11 +65,14 @@ describe("browser default executable detection", () => {
   }
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.mocked(execFileSync).mockReset();
+    vi.mocked(fs.existsSync).mockReset();
+    vi.mocked(fs.readFileSync).mockReset();
+    vi.mocked(os.homedir).mockReset();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
   });
 
-  it("prefers default Chromium browser on macOS", async () => {
+  it("prefers default Chromium browser on macOS", () => {
     mockMacDefaultBrowser("com.google.Chrome", "/Applications/Google Chrome.app");
     mockChromeExecutableExists();
 
@@ -81,7 +85,7 @@ describe("browser default executable detection", () => {
     expect(exe?.kind).toBe("chrome");
   });
 
-  it("detects Edge via LaunchServices bundle ID (com.microsoft.edgemac)", async () => {
+  it("detects Edge via LaunchServices bundle ID (com.microsoft.edgemac)", () => {
     const edgeExecutablePath = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
     // macOS LaunchServices registers Edge as "com.microsoft.edgemac", which
     // differs from the CFBundleIdentifier "com.microsoft.Edge" in the app's
@@ -127,7 +131,7 @@ describe("browser default executable detection", () => {
     expect(exe?.kind).toBe("edge");
   });
 
-  it("falls back to Chrome when Edge LaunchServices lookup has no app path", async () => {
+  it("falls back to Chrome when Edge LaunchServices lookup has no app path", () => {
     vi.mocked(execFileSync).mockImplementation((cmd, args) => {
       const argsStr = Array.isArray(args) ? args.join(" ") : "";
       if (cmd === "/usr/bin/plutil" && argsStr.includes("LSHandlers")) {
@@ -150,7 +154,7 @@ describe("browser default executable detection", () => {
     expect(exe?.kind).toBe("chrome");
   });
 
-  it("falls back when default browser is non-Chromium on macOS", async () => {
+  it("falls back when default browser is non-Chromium on macOS", () => {
     mockMacDefaultBrowser("com.apple.Safari");
     mockChromeExecutableExists();
 
@@ -160,5 +164,71 @@ describe("browser default executable detection", () => {
     );
 
     expect(exe?.path).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
+  });
+
+  it("resolves an Opera default-browser launcher to the directly owned binary on Windows", () => {
+    const installDir = "C:\\Users\\test\\AppData\\Local\\Programs\\Opera";
+    const launcher = `${installDir}\\launcher.exe`;
+    const opera = `${installDir}\\100.0.4815.76\\opera.exe`;
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce("ProgId    REG_SZ    OperaStable")
+      .mockReturnValueOnce(`(Default)    REG_SZ    "${launcher}" "%1"`);
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => {
+      const value = String(candidate);
+      return value === launcher || value === opera;
+    });
+    vi.mocked(fs.readFileSync).mockImplementation((candidate) => {
+      if (String(candidate).endsWith("installation_status.json")) {
+        return JSON.stringify({ _subfolder: "100.0.4815.76" });
+      }
+      throw new Error(`unexpected file: ${String(candidate)}`);
+    });
+
+    const exe = resolveBrowserExecutableForPlatform(
+      {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "win32",
+    );
+
+    expect(exe).toEqual({ kind: "chromium", path: opera });
+  });
+
+  it("rejects an unsafe Opera launcher target and falls back to a direct browser", () => {
+    const launcher = "C:\\Users\\test\\AppData\\Local\\Programs\\Opera\\launcher.exe";
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce("ProgId    REG_SZ    OperaStable")
+      .mockReturnValueOnce(`(Default)    REG_SZ    "${launcher}" "%1"`);
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ _subfolder: "..\\escape" }));
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => {
+      const value = String(candidate).toLowerCase();
+      return (
+        value === launcher.toLowerCase() ||
+        value.endsWith("\\google\\chrome\\application\\chrome.exe")
+      );
+    });
+
+    const exe = resolveBrowserExecutableForPlatform(
+      {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "win32",
+    );
+
+    expect(exe?.path.toLowerCase()).toMatch(/\\google\\chrome\\application\\chrome\.exe$/);
+  });
+
+  it("canonicalizes an explicitly configured Opera launcher", () => {
+    const installDir = "C:\\Users\\test\\AppData\\Local\\Programs\\Opera";
+    const launcher = `${installDir}\\launcher.exe`;
+    const opera = `${installDir}\\101.0.4843.33\\opera.exe`;
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => {
+      const value = String(candidate);
+      return value === launcher || value === opera;
+    });
+    vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({ _subfolder: "101.0.4843.33" }));
+
+    const exe = resolveBrowserExecutableForPlatform(
+      { executablePath: launcher } as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "win32",
+    );
+
+    expect(exe).toEqual({ kind: "custom", path: opera });
   });
 });

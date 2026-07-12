@@ -11,7 +11,7 @@ OpenClaw supports three migration paths: importing from another agent system, mo
 
 ## Import from another agent system
 
-Use the bundled migration providers to bring instructions, MCP servers, skills, model config, and (opt-in) API keys into OpenClaw. Plans are previewed before any change, secrets are redacted in reports, and apply is backed by a verified backup.
+Bundled migration providers bring instructions, MCP servers, skills, model config, and (opt-in) API keys into OpenClaw. Plans are previewed before any change, secrets are redacted in reports, and apply is backed by a verified backup.
 
 <CardGroup cols={2}>
   <Card title="Migrating from Claude" href="/install/migrating-claude" icon="brain">
@@ -55,7 +55,7 @@ Run `openclaw status` on the old machine to confirm your state directory path. C
   </Step>
 
   <Step title="Install OpenClaw on the new machine">
-    [Install](/install) the CLI (and Node if needed) on the new machine. It is fine if onboarding creates a fresh `~/.openclaw/`. You will overwrite it next.
+    [Install](/install) the CLI (and Node if needed) on the new machine. It is fine if onboarding creates a fresh `~/.openclaw/` — you overwrite it next.
   </Step>
 
   <Step title="Copy state directory and workspace">
@@ -66,7 +66,7 @@ Run `openclaw status` on the old machine to confirm your state directory path. C
     tar -xzf openclaw-state.tgz
     ```
 
-    Ensure hidden directories were included and file ownership matches the user that will run the gateway.
+    Confirm hidden directories were included and file ownership matches the user that will run the gateway.
 
   </Step>
 
@@ -81,6 +81,14 @@ Run `openclaw status` on the old machine to confirm your state directory path. C
 
   </Step>
 </Steps>
+
+If Telegram or Discord uses the default env fallback (`TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN`), verify the migrated state-dir `.env` contains those keys without printing the secret values:
+
+```bash
+awk -F= '/^(TELEGRAM_BOT_TOKEN|DISCORD_BOT_TOKEN)=/ { print $1 "=present" }' ~/.openclaw/.env
+```
+
+`openclaw doctor` also warns when an enabled default Telegram or Discord account has no configured token and the matching env variable is unavailable to the doctor process.
 
 ### Common pitfalls
 

@@ -52,9 +52,9 @@ import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
 export type FilePolicyKind = "read" | "write";
-export type FilePolicyAskMode = "off" | "on-miss" | "always";
+type FilePolicyAskMode = "off" | "on-miss" | "always";
 
-export type FilePolicyDecision =
+type FilePolicyDecision =
   | { ok: true; reason: "matched-allow"; maxBytes?: number; followSymlinks: boolean }
   | {
       ok: true;
@@ -367,7 +367,7 @@ export async function persistAllowAlways(input: {
       );
       // Use hasOwnProperty so a node with displayName "constructor" doesn't
       // accidentally hit Object.prototype.constructor and pretend to match.
-      let key = candidates.find((c) => Object.prototype.hasOwnProperty.call(fileTransfer, c));
+      let key = candidates.find((c) => Object.hasOwn(fileTransfer, c));
       if (!key) {
         key = assertSafeConfigKey(input.nodeDisplayName ?? input.nodeId);
         fileTransfer[key] = {};

@@ -1,9 +1,20 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+/**
+ * Regression coverage for per-session workspace bootstrap caching.
+ * Verifies reuse, refresh, pruning, and explicit cache clears.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 vi.mock("./workspace.js", () => ({
   loadWorkspaceBootstrapFiles: vi.fn(),
 }));
+
+import {
+  clearAllBootstrapSnapshots,
+  clearBootstrapSnapshot,
+  getOrLoadBootstrapFiles,
+} from "./bootstrap-cache.js";
+import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 function makeFile(name: string, content: string): WorkspaceBootstrapFile {
   return {
@@ -16,17 +27,7 @@ function makeFile(name: string, content: string): WorkspaceBootstrapFile {
 
 describe("getOrLoadBootstrapFiles", () => {
   const files = [makeFile("AGENTS.md", "# Agent"), makeFile("SOUL.md", "# Soul")];
-  let clearAllBootstrapSnapshots: typeof import("./bootstrap-cache.js").clearAllBootstrapSnapshots;
-  let getOrLoadBootstrapFiles: typeof import("./bootstrap-cache.js").getOrLoadBootstrapFiles;
-  let workspaceModule: typeof import("./workspace.js");
-
-  const mockLoad = () => vi.mocked(workspaceModule.loadWorkspaceBootstrapFiles);
-
-  beforeAll(async () => {
-    ({ clearAllBootstrapSnapshots, getOrLoadBootstrapFiles } =
-      await import("./bootstrap-cache.js"));
-    workspaceModule = await import("./workspace.js");
-  });
+  const mockLoad = () => vi.mocked(loadWorkspaceBootstrapFiles);
 
   beforeEach(() => {
     clearAllBootstrapSnapshots();
@@ -84,21 +85,28 @@ describe("getOrLoadBootstrapFiles", () => {
     expect(r2).toBe(files2);
     expect(mockLoad()).toHaveBeenCalledTimes(2);
   });
+
+  it("evicts the oldest snapshot once the cache exceeds its cap", async () => {
+    for (let index = 0; index <= 64; index += 1) {
+      await getOrLoadBootstrapFiles({
+        workspaceDir: "/ws",
+        sessionKey: `session-${index}`,
+      });
+    }
+
+    expect(mockLoad()).toHaveBeenCalledTimes(65);
+
+    await getOrLoadBootstrapFiles({
+      workspaceDir: "/ws",
+      sessionKey: "session-0",
+    });
+
+    expect(mockLoad()).toHaveBeenCalledTimes(66);
+  });
 });
 
 describe("clearBootstrapSnapshot", () => {
-  let clearAllBootstrapSnapshots: typeof import("./bootstrap-cache.js").clearAllBootstrapSnapshots;
-  let clearBootstrapSnapshot: typeof import("./bootstrap-cache.js").clearBootstrapSnapshot;
-  let getOrLoadBootstrapFiles: typeof import("./bootstrap-cache.js").getOrLoadBootstrapFiles;
-  let workspaceModule: typeof import("./workspace.js");
-
-  const mockLoad = () => vi.mocked(workspaceModule.loadWorkspaceBootstrapFiles);
-
-  beforeAll(async () => {
-    ({ clearAllBootstrapSnapshots, clearBootstrapSnapshot, getOrLoadBootstrapFiles } =
-      await import("./bootstrap-cache.js"));
-    workspaceModule = await import("./workspace.js");
-  });
+  const mockLoad = () => vi.mocked(loadWorkspaceBootstrapFiles);
 
   beforeEach(() => {
     clearAllBootstrapSnapshots();

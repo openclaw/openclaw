@@ -1,3 +1,4 @@
+// Wraps external content with source tags and random boundary tokens.
 import { randomBytes } from "node:crypto";
 export {
   isExternalHookSession,
@@ -224,7 +225,7 @@ function foldMarkerTextWithIndexMap(input: string): FoldedMarkerMatch {
   const originalEndByFoldedIndex: number[] = [];
 
   for (let index = 0; index < input.length; index += 1) {
-    const char = input[index];
+    const char = input.charAt(index);
     if (isMarkerIgnorableChar(char)) {
       continue;
     }
@@ -294,7 +295,7 @@ function replaceMarkers(content: string): string {
   return output;
 }
 
-function replaceLlmSpecialTokenLiterals(content: string): string {
+export function sanitizeModelSpecialTokens(content: string): string {
   let output = content;
   for (const literal of LLM_SPECIAL_TOKEN_LITERALS) {
     output = output.split(literal).join(SPECIAL_TOKEN_REPLACEMENT);
@@ -306,7 +307,7 @@ function replaceLlmSpecialTokenLiterals(content: string): string {
 }
 
 function sanitizeExternalContentText(content: string): string {
-  return replaceLlmSpecialTokenLiterals(replaceMarkers(content));
+  return sanitizeModelSpecialTokens(replaceMarkers(content));
 }
 
 export type WrapExternalContentOptions = {

@@ -1,3 +1,4 @@
+// Memory Core tests cover concept vocabulary plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   classifyConceptTagScript,
@@ -13,21 +14,43 @@ describe("concept vocabulary", () => {
         "Configuración de gateway, configuration du routeur, Sicherung und Überwachung Glacier.",
     });
 
-    expect(tags).toEqual(
-      expect.arrayContaining([
-        "gateway",
-        "configuración",
-        "configuration",
-        "routeur",
-        "sicherung",
-        "überwachung",
-        "glacier",
-      ]),
-    );
+    expect(tags).toStrictEqual([
+      "gateway",
+      "glacier",
+      "routeur",
+      "sicherung",
+      "überwachung",
+      "configuración",
+      "configuration",
+    ]);
     expect(tags).not.toContain("de");
     expect(tags).not.toContain("du");
     expect(tags).not.toContain("und");
     expect(tags).not.toContain("2026-04-04.md");
+  });
+
+  it("preserves short protected-glossary terms past the latin minimum-length gate", () => {
+    const tags = deriveConceptTags({
+      path: "memory/2026-04-04.md",
+      snippet: "Store the session in kv and back up to s3 nightly.",
+    });
+
+    // "kv" and "s3" are 2-char latin glossary entries that the generic min-length-3 gate would drop.
+    expect(tags).toContain("kv");
+    expect(tags).toContain("s3");
+  });
+
+  it("does not surface short glossary terms that only appear inside longer words", () => {
+    const tags = deriveConceptTags({
+      path: "memory/2026-04-04.md",
+      snippet: "Played the mkv recording and tuned the css3 layout.",
+    });
+
+    // "kv"/"s3" are substrings of "mkv"/"css3"; whole-word matching must not emit them as tags.
+    expect(tags).not.toContain("kv");
+    expect(tags).not.toContain("s3");
+    expect(tags).toContain("mkv");
+    expect(tags).toContain("css3");
   });
 
   it("extracts protected and segmented CJK concept tags", () => {
@@ -37,18 +60,16 @@ describe("concept vocabulary", () => {
         "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。라우터 백업 페일오버 점검.",
     });
 
-    expect(tags).toEqual(
-      expect.arrayContaining([
-        "障害対応",
-        "ルーター",
-        "バックアップ",
-        "路由器",
-        "备份",
-        "网关",
-        "라우터",
-        "백업",
-      ]),
-    );
+    expect(tags).toStrictEqual([
+      "バックアップ",
+      "ルーター",
+      "障害対応",
+      "路由器",
+      "备份",
+      "网关",
+      "라우터",
+      "백업",
+    ]);
     expect(tags).not.toContain("ルー");
     expect(tags).not.toContain("ター");
   });

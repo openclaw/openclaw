@@ -1,22 +1,36 @@
+// Resolves model suppression metadata declared by plugin manifests.
+import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  buildModelCatalogMergeKey,
   planManifestModelCatalogSuppressions,
   type ManifestModelCatalogSuppressionEntry,
 } from "../model-catalog/index.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestMetadataSnapshot,
+} from "./manifest-contract-eligibility.js";
 
 function listManifestModelCatalogSuppressions(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly ManifestModelCatalogSuppressionEntry[] {
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const snapshot = loadManifestMetadataSnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  const registry = {
+    diagnostics: snapshot.diagnostics,
+    plugins: snapshot.plugins.filter((plugin) =>
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: params.config,
+      }),
+    ),
+  };
   const planned = planManifestModelCatalogSuppressions({ registry });
   return planned.suppressions;
 }
@@ -80,14 +94,20 @@ function manifestSuppressionMatchesConditions(params: {
     provider: params.provider,
     config: params.config,
   });
-  if (when.providerConfigApiIn?.length && configuredProvider?.api) {
+  if (when.providerConfigApiIn?.length) {
     const allowedApis = new Set(when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty));
-    if (!allowedApis.has(configuredProvider.api)) {
+    const effectiveApi = configuredProvider
+      ? normalizeLowercaseStringOrEmpty(configuredProvider.api)
+      : params.provider;
+    if (!effectiveApi || !allowedApis.has(effectiveApi)) {
       return false;
     }
   }
   if (when.baseUrlHosts?.length) {
     const baseUrlHost = normalizeBaseUrlHost(params.baseUrl ?? configuredProvider?.baseUrl);
+    if (!baseUrlHost && !params.baseUrl && !configuredProvider?.baseUrl) {
+      return true;
+    }
     if (!baseUrlHost) {
       return false;
     }
@@ -97,10 +117,6 @@ function manifestSuppressionMatchesConditions(params: {
     }
   }
   return true;
-}
-
-export function clearManifestModelSuppressionCacheForTest(): void {
-  // Manifest suppressions are read fresh. Keep the test hook as a no-op.
 }
 
 export function buildManifestBuiltInModelSuppressionResolver(params: {

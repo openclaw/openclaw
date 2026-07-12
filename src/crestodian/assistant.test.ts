@@ -1,11 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
-import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
-import type { EmbeddedPiRunResult } from "../agents/pi-embedded.js";
-import { selectCrestodianLocalPlannerBackends } from "./assistant-backends.js";
+// Crestodian assistant tests cover plan parsing and inference prompt construction.
+import { describe, expect, it } from "vitest";
 import {
   buildCrestodianAssistantUserPrompt,
-  planCrestodianCommandWithLocalRuntime,
   parseCrestodianAssistantPlanText,
 } from "./assistant.js";
 import type { CrestodianOverview } from "./overview.js";
@@ -24,6 +20,7 @@ function overview(overrides: Partial<CrestodianOverview["tools"]> = {}): Crestod
     tools: {
       codex: { command: "codex", found: false },
       claude: { command: "claude", found: false },
+      gemini: { command: "gemini", found: false },
       apiKeys: { openai: false, anthropic: false },
       ...overrides,
     },
@@ -51,9 +48,12 @@ describe("Crestodian assistant", () => {
     });
   });
 
-  it("rejects non-command output", () => {
+  it("rejects non-JSON and empty plans but accepts chat-only replies", () => {
     expect(parseCrestodianAssistantPlanText("I would edit config directly.")).toBeNull();
-    expect(parseCrestodianAssistantPlanText('{"reply":"missing command"}')).toBeNull();
+    expect(parseCrestodianAssistantPlanText("{}")).toBeNull();
+    expect(parseCrestodianAssistantPlanText('{"reply":"just chatting"}')).toEqual({
+      reply: "just chatting",
+    });
   });
 
   it("includes only operational summary context in planner prompts", () => {
@@ -99,174 +99,16 @@ describe("Crestodian assistant", () => {
     expect(prompt).toContain("OpenClaw source: /tmp/openclaw");
   });
 
-  it("uses Claude CLI first for configless planning", async () => {
-    const runCliAgent = vi.fn(
-      async (_params: RunCliAgentParams): Promise<EmbeddedPiRunResult> => ({
-        payloads: [{ text: '{"reply":"Checking the shell.","command":"status"}' }],
-        meta: { durationMs: 0 },
-      }),
+  it("keeps truncated conversation history valid at a UTF-16 boundary", () => {
+    const prefix = "a".repeat(499);
+    const prompt = buildCrestodianAssistantUserPrompt({
+      input: "continue",
+      overview: overview(),
+      history: [{ role: "user", text: `${prefix}🎉tail` }],
+    });
+
+    expect(prompt.slice(0, prompt.indexOf("User request:"))).toBe(
+      `Conversation so far:\nUser: ${prefix}…\n\n`,
     );
-    const runEmbeddedPiAgent = vi.fn();
-
-    await expect(
-      planCrestodianCommandWithLocalRuntime({
-        input: "what is going on",
-        overview: overview({
-          claude: { command: "claude", found: true },
-          codex: { command: "codex", found: true },
-        }),
-        deps: {
-          runCliAgent,
-          runEmbeddedPiAgent,
-          createTempDir: async () => "/tmp/crestodian-planner",
-          removeTempDir: async () => {},
-        },
-      }),
-    ).resolves.toMatchObject({
-      command: "status",
-      reply: "Checking the shell.",
-      modelLabel: "claude-cli/claude-opus-4-7",
-    });
-
-    expect(runCliAgent).toHaveBeenCalledTimes(1);
-    const firstCliCall = runCliAgent.mock.calls[0][0];
-    expect(firstCliCall).toMatchObject({
-      provider: "claude-cli",
-      model: "claude-opus-4-7",
-      cleanupCliLiveSessionOnRunEnd: true,
-    });
-    expect(firstCliCall.config?.agents?.defaults?.cliBackends).toBeUndefined();
-    expect(firstCliCall.extraSystemPrompt).toContain("Do not use tools, shell commands");
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-  });
-
-  it("selects local planner backends without execution state", () => {
-    expect(
-      selectCrestodianLocalPlannerBackends(
-        overview({
-          claude: { command: "claude", found: true },
-          codex: { command: "codex", found: true },
-        }),
-      ).map((backend) => backend.kind),
-    ).toEqual(["claude-cli", "codex-app-server", "codex-cli"]);
-
-    const [codexAppServer, codexCli] = selectCrestodianLocalPlannerBackends(
-      overview({
-        codex: { command: "codex", found: true },
-      }),
-    );
-    expect(codexAppServer?.buildConfig("/tmp/workspace")).toMatchObject({
-      agents: {
-        defaults: {
-          workspace: "/tmp/workspace",
-          agentRuntime: { id: "codex", fallback: "none" },
-          model: { primary: "openai/gpt-5.5" },
-        },
-      },
-      plugins: { entries: { codex: { enabled: true } } },
-    });
-    expect(codexCli?.buildConfig("/tmp/workspace")).toMatchObject({
-      agents: {
-        defaults: {
-          workspace: "/tmp/workspace",
-          model: { primary: "codex-cli/gpt-5.5" },
-        },
-      },
-    });
-  });
-
-  it("falls back to Codex app-server when Claude CLI planning fails", async () => {
-    const runCliAgent = vi.fn(async () => {
-      throw new Error("claude unavailable");
-    });
-    const runEmbeddedPiAgent = vi.fn(
-      async (_params: RunEmbeddedPiAgentParams): Promise<EmbeddedPiRunResult> => ({
-        meta: {
-          durationMs: 0,
-          finalAssistantVisibleText: '{"reply":"Codex planner online.","command":"gateway status"}',
-        },
-      }),
-    );
-
-    await expect(
-      planCrestodianCommandWithLocalRuntime({
-        input: "is gateway alive",
-        overview: overview({
-          claude: { command: "claude", found: true },
-          codex: { command: "codex", found: true },
-        }),
-        deps: {
-          runCliAgent,
-          runEmbeddedPiAgent,
-          createTempDir: async () => "/tmp/crestodian-planner",
-          removeTempDir: async () => {},
-        },
-      }),
-    ).resolves.toMatchObject({
-      command: "gateway status",
-      reply: "Codex planner online.",
-      modelLabel: "openai/gpt-5.5 via codex",
-    });
-
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    const firstEmbeddedCall = runEmbeddedPiAgent.mock.calls[0][0];
-    expect(firstEmbeddedCall).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.5",
-      agentHarnessId: "codex",
-      disableTools: true,
-      toolsAllow: [],
-    });
-    expect(firstEmbeddedCall.config).toMatchObject({
-      agents: {
-        defaults: {
-          agentRuntime: { id: "codex", fallback: "none" },
-          model: { primary: "openai/gpt-5.5" },
-        },
-      },
-      plugins: { entries: { codex: { enabled: true } } },
-    });
-  });
-
-  it("uses Codex CLI if the app-server planner is not usable", async () => {
-    const runCliAgent = vi.fn(async (params: RunCliAgentParams): Promise<EmbeddedPiRunResult> => {
-      if (params.provider === "codex-cli") {
-        return {
-          payloads: [{ text: '{"reply":"CLI fallback.","command":"models"}' }],
-          meta: { durationMs: 0 },
-        };
-      }
-      throw new Error("unexpected cli provider");
-    });
-    const runEmbeddedPiAgent = vi.fn(async () => {
-      throw new Error("codex app-server unavailable");
-    });
-
-    await expect(
-      planCrestodianCommandWithLocalRuntime({
-        input: "show models",
-        overview: overview({
-          codex: { command: "codex", found: true },
-        }),
-        deps: {
-          runCliAgent,
-          runEmbeddedPiAgent,
-          createTempDir: async () => "/tmp/crestodian-planner",
-          removeTempDir: async () => {},
-        },
-      }),
-    ).resolves.toMatchObject({
-      command: "models",
-      reply: "CLI fallback.",
-      modelLabel: "codex-cli/gpt-5.5",
-    });
-
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    expect(runCliAgent).toHaveBeenCalledTimes(1);
-    expect(runCliAgent.mock.calls[0][0]).toMatchObject({
-      provider: "codex-cli",
-      model: "gpt-5.5",
-      cleanupCliLiveSessionOnRunEnd: true,
-    });
   });
 });

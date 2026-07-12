@@ -1,30 +1,35 @@
-import type { Command } from "commander";
+// Shared Commander registration helpers for repeated options, positive ints, and lazy reparse args.
+import { InvalidArgumentError, type Command } from "commander";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 
+/** Commander option collector for repeatable string flags. */
 export function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
 }
 
+/** Parse an optional positive integer, treating empty values as unset. */
 export function parsePositiveIntOrUndefined(value: unknown): number | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
   }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      return undefined;
-    }
-    const parsed = Math.trunc(value);
-    return parsed > 0 ? parsed : undefined;
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isNaN(parsed) || parsed <= 0) {
-      return undefined;
-    }
-    return parsed;
-  }
-  return undefined;
+  return parseStrictPositiveInteger(value);
 }
 
+/** Parse a positive integer without treating empty values specially. */
+export function parseStrictPositiveIntOrUndefined(value: unknown): number | undefined {
+  return parseStrictPositiveInteger(value);
+}
+
+/** Commander argument parser for required positive integer options. */
+export function parseStrictPositiveIntOption(value: string, flag: string): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new InvalidArgumentError(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+/** Return positional args captured by a Commander action command. */
 export function resolveActionArgs(actionCommand?: Command): string[] {
   if (!actionCommand) {
     return [];
@@ -73,6 +78,7 @@ function stringifyOptionValue(value: unknown): string | undefined {
   return undefined;
 }
 
+/** Reconstruct explicit option tokens from a Commander command for lazy reparsing. */
 export function resolveCommandOptionArgs(command?: Command): string[] {
   if (!command) {
     return [];

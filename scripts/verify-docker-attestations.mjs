@@ -1,11 +1,16 @@
 #!/usr/bin/env node
 
+// Verifies Docker image attestations cover required platforms and predicates.
 import { execFileSync } from "node:child_process";
 import process from "node:process";
 
 const ATTESTATION_REFERENCE_TYPE = "attestation-manifest";
+const EXPECTED_ATTESTATION_ARTIFACT_TYPE = "application/vnd.docker.attestation.manifest.v1+json";
 const REQUIRED_PREDICATES = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"];
 
+/**
+ * Rewrites an image reference to use the provided digest.
+ */
 export function imageRefForDigest(imageRef, digest) {
   const atIndex = imageRef.indexOf("@");
   if (atIndex >= 0) {
@@ -17,6 +22,9 @@ export function imageRefForDigest(imageRef, digest) {
   return `${base}@${digest}`;
 }
 
+/**
+ * Parses os/architecture[/variant] platform strings.
+ */
 export function parsePlatform(value) {
   const [os, architecture, variant] = value.split("/");
   if (!os || !architecture || value.split("/").length > 3) {
@@ -48,6 +56,9 @@ function parseJson(raw, label) {
   }
 }
 
+/**
+ * Collects missing/mismatched attestation errors for required image platforms.
+ */
 export function collectDockerAttestationErrors(params) {
   const {
     imageRef,
@@ -85,7 +96,10 @@ export function collectDockerAttestationErrors(params) {
     const predicates = new Set();
     for (const descriptor of attestationDescriptors) {
       const attestation = inspectAttestation(descriptor.digest);
-      if (attestation?.artifactType !== "application/vnd.docker.attestation.manifest.v1+json") {
+      if (
+        attestation?.artifactType !== undefined &&
+        attestation.artifactType !== EXPECTED_ATTESTATION_ARTIFACT_TYPE
+      ) {
         errors.push(
           `${imageRef}: ${platformLabel} attestation ${descriptor.digest} has unexpected artifactType ${JSON.stringify(
             attestation?.artifactType,
@@ -118,17 +132,21 @@ function inspectRaw(imageRef) {
   });
 }
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const imageRefs = [];
   const requiredPlatforms = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--platform") {
-      const value = argv[i + 1];
-      if (!value) {
-        throw new Error("--platform requires a value");
-      }
-      requiredPlatforms.push(parsePlatform(value));
+      requiredPlatforms.push(parsePlatform(readOptionValue(argv, i, arg)));
       i += 1;
       continue;
     }
@@ -195,8 +213,10 @@ async function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

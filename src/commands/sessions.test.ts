@@ -1,9 +1,12 @@
-import fs from "node:fs";
+// Sessions command tests cover listing, details, filtering, and transcript display behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  cleanupStore,
   makeRuntime,
   mockSessionsConfig,
+  resetMockSessionsConfig,
   runSessionsJson,
+  setMockSessionsConfig,
   writeStore,
 } from "./sessions.test-helpers.js";
 
@@ -12,7 +15,7 @@ process.env.FORCE_COLOR = "0";
 
 mockSessionsConfig();
 
-import { sessionsCommand } from "./sessions.js";
+import { sessionsCommand, testing } from "./sessions.js";
 
 describe("sessionsCommand", () => {
   beforeEach(() => {
@@ -21,11 +24,12 @@ describe("sessionsCommand", () => {
   });
 
   afterEach(() => {
+    resetMockSessionsConfig();
     vi.useRealTimers();
   });
 
   it("renders a tabular view with token percentages", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       "+15555550123": {
         sessionId: "abc123",
         updatedAt: Date.now() - 45 * 60_000,
@@ -33,26 +37,97 @@ describe("sessionsCommand", () => {
         outputTokens: 800,
         totalTokens: 2000,
         totalTokensFresh: true,
-        model: "pi:opus",
+        model: "test:opus",
       },
     });
 
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    cleanupStore(store);
 
-    const tableHeader = logs.find((line) => line.includes("Tokens (ctx %"));
-    expect(tableHeader).toBeTruthy();
+    expect(logs.join("\n")).toContain("Tokens (ctx %");
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
-    expect(row).toContain("2.0k/32k (6%)");
-    expect(row).toContain("45m ago");
-    expect(row).toContain("pi:opus");
+    expect(row).toBe(
+      "direct      +15555550123               45m ago   test:opus      OpenAI Codex       2.0k/32k (6%)        id:abc123",
+    );
+  });
+
+  it("renders the agent runtime in the tabular view", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const store = await writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "claude-cli",
+          model: "claude-opus-4-7",
+        },
+      },
+      "sessions-runtime-table",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    cleanupStore(store);
+
+    expect(logs.join("\n")).toContain("Runtime");
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toBe(
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+    );
+  });
+
+  it("renders configured CLI runtime when the session stores a canonical provider", async () => {
+    setMockSessionsConfig(() => ({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+          contextTokens: 200_000,
+        },
+      },
+    }));
+    const store = await writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "main-session",
+          updatedAt: Date.now() - 60_000,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      },
+      "sessions-runtime-canonical-provider",
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCommand({ store }, runtime);
+
+    cleanupStore(store);
+
+    const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
+    expect(row).toBe(
+      "direct      agent:main:main            1m ago    claude-opus-4-7 Claude CLI         unknown/200k (?%)    id:main-session",
+    );
   });
 
   it("shows placeholder rows when tokens are missing", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       "quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
@@ -63,16 +138,16 @@ describe("sessionsCommand", () => {
     const { runtime, logs } = makeRuntime();
     await sessionsCommand({ store }, runtime);
 
-    fs.rmSync(store);
+    cleanupStore(store);
 
     const row = logs.find((line) => line.includes("quietchat:group:demo")) ?? "";
-    expect(row).toContain("unknown/32k (?%)");
-    expect(row).toContain("think:high");
-    expect(row).toContain("5m ago");
+    expect(row).toBe(
+      "group       quietchat:group:demo       5m ago    test:opus      OpenAI Codex       unknown/32k (?%)     think:high id:xyz",
+    );
   });
 
   it("exports freshness metadata in JSON output", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       main: {
         sessionId: "abc123",
         updatedAt: Date.now() - 10 * 60_000,
@@ -80,14 +155,14 @@ describe("sessionsCommand", () => {
         outputTokens: 800,
         totalTokens: 2000,
         totalTokensFresh: true,
-        model: "pi:opus",
+        model: "test:opus",
       },
       "quietchat:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
         inputTokens: 20,
         outputTokens: 10,
-        model: "pi:opus",
+        model: "test:opus",
       },
     });
 
@@ -106,14 +181,73 @@ describe("sessionsCommand", () => {
     expect(group?.totalTokensFresh).toBe(false);
   });
 
+  it("exports subagent lineage metadata in JSON output", async () => {
+    const store = await writeStore({
+      "agent:child:main": {
+        sessionId: "child-session",
+        updatedAt: Date.now() - 10 * 60_000,
+        sessionFile: "/tmp/openclaw/child-session.jsonl",
+        spawnedBy: "agent:main:main",
+        spawnedWorkspaceDir: "/workspace/project",
+        spawnedCwd: "/workspace/project/tasks",
+        parentSessionKey: "agent:main:main",
+        forkedFromParent: true,
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+        sessionStartedAt: Date.now() - 20 * 60_000,
+        lastInteractionAt: Date.now() - 5 * 60_000,
+        label: "research helper",
+        status: "done",
+        model: "test:opus",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        sessionFile?: string;
+        spawnedBy?: string;
+        spawnedWorkspaceDir?: string;
+        spawnedCwd?: string;
+        parentSessionKey?: string;
+        forkedFromParent?: boolean;
+        spawnDepth?: number;
+        subagentRole?: string;
+        subagentControlScope?: string;
+        sessionStartedAt?: number;
+        lastInteractionAt?: number;
+        label?: string;
+        status?: string;
+      }>;
+    }>(sessionsCommand, store);
+
+    const child = payload.sessions?.find((row) => row.key === "agent:child:main");
+    expect(child).toMatchObject({
+      sessionFile: "/tmp/openclaw/child-session.jsonl",
+      spawnedBy: "agent:main:main",
+      spawnedWorkspaceDir: "/workspace/project",
+      spawnedCwd: "/workspace/project/tasks",
+      parentSessionKey: "agent:main:main",
+      forkedFromParent: true,
+      spawnDepth: 1,
+      subagentRole: "leaf",
+      subagentControlScope: "none",
+      sessionStartedAt: Date.now() - 20 * 60_000,
+      lastInteractionAt: Date.now() - 5 * 60_000,
+      label: "research helper",
+      status: "done",
+    });
+  });
+
   it("shows preserved stale totals in JSON output", async () => {
-    const store = writeStore({
+    const store = await writeStore({
       main: {
         sessionId: "abc123",
         updatedAt: Date.now() - 10 * 60_000,
         totalTokens: 2000,
         totalTokensFresh: false,
-        model: "pi:opus",
+        model: "test:opus",
       },
     });
 
@@ -130,17 +264,17 @@ describe("sessionsCommand", () => {
   });
 
   it("applies --active filtering in JSON output", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         recent: {
           sessionId: "recent",
           updatedAt: Date.now() - 5 * 60_000,
-          model: "pi:opus",
+          model: "test:opus",
         },
         stale: {
           sessionId: "stale",
           updatedAt: Date.now() - 45 * 60_000,
-          model: "pi:opus",
+          model: "test:opus",
         },
       },
       "sessions-active",
@@ -154,8 +288,113 @@ describe("sessionsCommand", () => {
     expect(payload.sessions?.map((row) => row.key)).toEqual(["recent"]);
   });
 
+  it("exports runtime policy aliases for collapsed external direct sessions", async () => {
+    const store = await writeStore(
+      {
+        "agent:main:main": {
+          sessionId: "telegram-main",
+          updatedAt: Date.now() - 60_000,
+          origin: {
+            provider: "telegram",
+            chatType: "direct",
+            to: "telegram:42",
+            accountId: "default",
+          },
+        },
+      },
+      "sessions-runtime-policy-alias",
+    );
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        runtimePolicySessionKey?: string;
+      }>;
+    }>(sessionsCommand, store, { active: "10" });
+
+    const main = payload.sessions?.find((row) => row.key === "agent:main:main");
+    expect(main?.runtimePolicySessionKey).toBe("agent:main:telegram:default:direct:42");
+  });
+
+  it("uses a default JSON output limit of 100 sessions", () => {
+    expect(testing.parseSessionsLimit(undefined)).toBe(100);
+  });
+
+  it("honors explicit JSON output limits", async () => {
+    const store = await writeStore(
+      {
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
+        middle: { sessionId: "middle", updatedAt: Date.now() - 60_000, model: "test:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
+      },
+      "sessions-explicit-limit",
+    );
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store, { limit: "2" });
+
+    expect(payload.count).toBe(2);
+    expect(payload.totalCount).toBe(3);
+    expect(payload.limitApplied).toBe(2);
+    expect(payload.hasMore).toBe(true);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "middle"]);
+  });
+
+  it("allows full JSON output with --limit all", async () => {
+    const store = await writeStore(
+      {
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
+      },
+      "sessions-limit-all",
+    );
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store, { limit: "all" });
+
+    expect(payload.count).toBe(2);
+    expect(payload.totalCount).toBe(2);
+    expect(payload.limitApplied).toBeNull();
+    expect(payload.hasMore).toBe(false);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
+  });
+
+  it("sorts and slices large explicit limits instead of using top-N insertion", async () => {
+    const store = await writeStore(
+      {
+        newest: { sessionId: "newest", updatedAt: Date.now(), model: "test:opus" },
+        oldest: { sessionId: "oldest", updatedAt: Date.now() - 120_000, model: "test:opus" },
+      },
+      "sessions-large-limit",
+    );
+
+    const payload = await runSessionsJson<{
+      count?: number;
+      totalCount?: number;
+      limitApplied?: number | null;
+      hasMore?: boolean;
+      sessions?: Array<{ key: string }>;
+    }>(sessionsCommand, store, { limit: "100000" });
+
+    expect(payload.count).toBe(2);
+    expect(payload.totalCount).toBe(2);
+    expect(payload.limitApplied).toBe(100000);
+    expect(payload.hasMore).toBe(false);
+    expect(payload.sessions?.map((row) => row.key)).toEqual(["newest", "oldest"]);
+  });
+
   it("rejects invalid --active values", async () => {
-    const store = writeStore(
+    const store = await writeStore(
       {
         demo: {
           sessionId: "demo",
@@ -167,8 +406,50 @@ describe("sessionsCommand", () => {
     const { runtime, errors } = makeRuntime();
 
     await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors[0]).toContain("--active must be a positive integer");
+    expect(errors).toStrictEqual([
+      "--active must be a positive number of minutes, for example --active 30.",
+    ]);
 
-    fs.rmSync(store);
+    cleanupStore(store);
+  });
+
+  it("rejects partial --active values", async () => {
+    const store = await writeStore(
+      {
+        demo: {
+          sessionId: "demo",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-active-partial",
+    );
+    const { runtime, errors } = makeRuntime();
+
+    await expect(sessionsCommand({ store, active: "10m" }, runtime)).rejects.toThrow("exit 1");
+    expect(errors).toStrictEqual([
+      "--active must be a positive number of minutes, for example --active 30.",
+    ]);
+
+    cleanupStore(store);
+  });
+
+  it("rejects invalid --limit values", async () => {
+    const store = await writeStore(
+      {
+        demo: {
+          sessionId: "demo",
+          updatedAt: Date.now() - 5 * 60_000,
+        },
+      },
+      "sessions-limit-invalid",
+    );
+    const { runtime, errors } = makeRuntime();
+
+    await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
+    expect(errors).toStrictEqual([
+      '--limit must be a positive integer or "all", for example --limit 25.',
+    ]);
+
+    cleanupStore(store);
   });
 });

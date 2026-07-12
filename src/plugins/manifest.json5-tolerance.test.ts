@@ -1,3 +1,4 @@
+// Covers JSON5 tolerance in plugin manifest parsing.
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
@@ -147,13 +148,33 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes catalog curation metadata from the manifest", () => {
+    const dir = makeTempDir();
+    const json5Content = `{
+  id: "catalog-plugin",
+  catalog: {
+    featured: false,
+    order: 0,
+  },
+  configSchema: { type: "object" }
+}`;
+    fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), json5Content, "utf-8");
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.catalog).toEqual({ featured: false, order: 0 });
+    }
+  });
+
   it("normalizes activation and setup descriptor metadata from the manifest", () => {
     const dir = makeTempDir();
     const json5Content = `{
   id: "openai",
   activation: {
     onStartup: false,
-    onProviders: ["openai", "", "openai-codex"],
+    onProviders: ["openai", "", "openai"],
     onCommands: ["models", ""],
     onChannels: ["web", ""],
     onRoutes: ["gateway-webhook", ""],
@@ -177,7 +198,7 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     if (result.ok) {
       expect(result.manifest.activation).toEqual({
         onStartup: false,
-        onProviders: ["openai", "openai-codex"],
+        onProviders: ["openai", "openai"],
         onCommands: ["models"],
         onChannels: ["web"],
         onRoutes: ["gateway-webhook"],

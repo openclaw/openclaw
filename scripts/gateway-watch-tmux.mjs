@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Starts gateway watch in tmux while preserving useful dev environment state.
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -7,17 +8,34 @@ const TMUX_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const TMUX_ATTACH_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const TMUX_ATTACH_FORCE_VALUES = new Set(["1", "true", "yes", "on"]);
 const DEFAULT_PROFILE_NAME = "main";
+const DEFAULT_BENCHMARK_PROFILE_DIR = ".artifacts/gateway-watch-profiles";
+const DEFAULT_BENCHMARK_PROFILE_MAX_FILES = "40";
+const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
+const RUN_NODE_CPU_PROF_MAX_FILES_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES";
+const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
+const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RAW_WATCH_SCRIPT = "scripts/watch-node.mjs";
 const TMUX_CWD_ENV_KEY = "OPENCLAW_GATEWAY_WATCH_CWD";
 const TMUX_CWD_OPTION_KEY = "@openclaw.gateway_watch.cwd";
 const TMUX_CHILD_ENV_KEYS = [
   "NODE_OPTIONS",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_DIAGNOSTICS",
+  "OPENCLAW_DIAGNOSTICS_EVENT_LOOP",
+  "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH",
   "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_GATEWAY_RESTART_TRACE",
+  "OPENCLAW_GATEWAY_STARTUP_TRACE",
+  "OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR",
   "OPENCLAW_HOME",
   "OPENCLAW_PROFILE",
+  RUN_NODE_CPU_PROF_DIR_ENV,
+  RUN_NODE_CPU_PROF_MAX_FILES_ENV,
+  RUN_NODE_FILTER_SYNC_IO_STDERR_ENV,
+  RUN_NODE_OUTPUT_LOG_ENV,
   "OPENCLAW_SKIP_CHANNELS",
   "OPENCLAW_STATE_DIR",
+  "OPENCLAW_TRACE_SYNC_IO",
 ];
 
 const sanitizeSessionPart = (value) => {
@@ -46,6 +64,85 @@ const readArgValue = (args, flag) => {
   return null;
 };
 
+const joinArtifactPath = (dir, basename) => {
+  const normalizedDir = String(dir || DEFAULT_BENCHMARK_PROFILE_DIR).replace(/[\\/]+$/g, "");
+  return `${normalizedDir || "."}/${basename}`;
+};
+
+const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {}) => {
+  const passthroughArgs = [];
+  let benchmarkDir = null;
+  let benchmarkFlagSeen = false;
+  let benchmarkNoForceSeen = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === "--benchmark") {
+      benchmarkFlagSeen = true;
+      benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
+      continue;
+    }
+    if (arg === "--benchmark-no-force") {
+      benchmarkFlagSeen = true;
+      benchmarkNoForceSeen = true;
+      benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
+      continue;
+    }
+    if (typeof arg === "string" && arg.startsWith("--benchmark=")) {
+      benchmarkFlagSeen = true;
+      benchmarkDir = arg.slice("--benchmark=".length) || DEFAULT_BENCHMARK_PROFILE_DIR;
+      continue;
+    }
+    if (arg === "--benchmark-dir") {
+      benchmarkFlagSeen = true;
+      const next = args[index + 1];
+      if (typeof next === "string" && !next.startsWith("-")) {
+        benchmarkDir = next;
+        index += 1;
+      } else {
+        benchmarkDir ??= DEFAULT_BENCHMARK_PROFILE_DIR;
+      }
+      continue;
+    }
+    if (typeof arg === "string" && arg.startsWith("--benchmark-dir=")) {
+      benchmarkFlagSeen = true;
+      benchmarkDir = arg.slice("--benchmark-dir=".length) || DEFAULT_BENCHMARK_PROFILE_DIR;
+      continue;
+    }
+    passthroughArgs.push(arg);
+  }
+
+  const nextEnv = { ...env };
+  if (benchmarkFlagSeen) {
+    nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] =
+      benchmarkDir || nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || DEFAULT_BENCHMARK_PROFILE_DIR;
+    nextEnv[RUN_NODE_CPU_PROF_MAX_FILES_ENV] ??= DEFAULT_BENCHMARK_PROFILE_MAX_FILES;
+    nextEnv.OPENCLAW_TRACE_SYNC_IO ??= "0";
+    if (nextEnv.OPENCLAW_TRACE_SYNC_IO === "1") {
+      nextEnv[RUN_NODE_OUTPUT_LOG_ENV] ??= joinArtifactPath(
+        nextEnv[RUN_NODE_CPU_PROF_DIR_ENV],
+        "gateway-watch-output.log",
+      );
+      nextEnv[RUN_NODE_FILTER_SYNC_IO_STDERR_ENV] ??= "1";
+    }
+  }
+  return {
+    args: benchmarkNoForceSeen
+      ? passthroughArgs.filter((arg) => arg !== "--force")
+      : passthroughArgs,
+    benchmarkNoForce: benchmarkNoForceSeen,
+    benchmarkProfileDir: nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || null,
+    benchmarkTraceOutputLog:
+      nextEnv[RUN_NODE_FILTER_SYNC_IO_STDERR_ENV] === "1"
+        ? nextEnv[RUN_NODE_OUTPUT_LOG_ENV] || null
+        : null,
+    env: nextEnv,
+  };
+};
+
+/**
+ * Resolves the tmux session name for gateway watch arguments/environment.
+ */
 export const resolveGatewayWatchTmuxSessionName = ({ args = [], env = process.env } = {}) => {
   const profile =
     env.OPENCLAW_PROFILE ||
@@ -66,6 +163,20 @@ export const resolveGatewayWatchTmuxSessionName = ({ args = [], env = process.en
 
 const resolveShell = (env) => env.SHELL || "/bin/sh";
 
+const resolveColorEnv = (env) => {
+  const forceColor = env.FORCE_COLOR;
+  if (forceColor == null || forceColor === "") {
+    return { assignments: ["FORCE_COLOR=1"], options: ["-u", "NO_COLOR"] };
+  }
+  if (String(forceColor).trim() !== "0") {
+    return { assignments: [`FORCE_COLOR=${forceColor}`], options: ["-u", "NO_COLOR"] };
+  }
+  return { assignments: [`FORCE_COLOR=${forceColor}`], options: [] };
+};
+
+/**
+ * Builds the shell command executed inside the tmux gateway watch session.
+ */
 export const buildGatewayWatchTmuxCommand = ({
   args = [],
   cwd = process.cwd(),
@@ -74,10 +185,16 @@ export const buildGatewayWatchTmuxCommand = ({
   sessionName,
 } = {}) => {
   const shell = resolveShell(env);
+  const colorEnv = resolveColorEnv(env);
+  // tmux sessions retain their own environment across respawns. Clear supported
+  // selectors before applying the invoking process's current values.
   const childEnv = [
     "env",
+    ...colorEnv.options,
+    ...TMUX_CHILD_ENV_KEYS.flatMap((key) => ["-u", key]),
     `OPENCLAW_GATEWAY_WATCH_TMUX_CHILD=1`,
     `OPENCLAW_GATEWAY_WATCH_SESSION=${sessionName}`,
+    ...colorEnv.assignments,
     ...TMUX_CHILD_ENV_KEYS.flatMap((key) =>
       env[key] == null || env[key] === "" ? [] : [`${key}=${env[key]}`],
     ),
@@ -129,7 +246,16 @@ const shouldAttachTmux = ({ env, stdinIsTTY, stdoutIsTTY }) => {
   if (TMUX_ATTACH_DISABLE_VALUES.has(raw)) {
     return false;
   }
-  return !env.CI && stdinIsTTY === true && stdoutIsTTY === true;
+  // TERM=dumb pseudo-TTYs cannot satisfy tmux's clear/cursor requirements.
+  const term = String(env.TERM ?? "")
+    .trim()
+    .toLowerCase();
+  return (
+    !env.CI &&
+    stdinIsTTY === true &&
+    stdoutIsTTY === true &&
+    (Boolean(env.TMUX) || (term !== "" && term !== "dumb"))
+  );
 };
 
 const attachTmux = ({ env, sessionName, spawnSyncImpl }) => {
@@ -153,11 +279,18 @@ const setTmuxSessionMetadata = ({ cwd, sessionName, spawnSyncImpl, stderr }) => 
   }
 };
 
+/**
+ * Runs the gateway-watch tmux wrapper main flow.
+ */
 export const runGatewayWatchTmuxMain = (params = {}) => {
-  const deps = {
+  const resolvedArgs = resolveGatewayWatchBenchmarkArgs({
     args: params.args ?? process.argv.slice(2),
-    cwd: params.cwd ?? process.cwd(),
     env: params.env ? { ...params.env } : { ...process.env },
+  });
+  const deps = {
+    args: resolvedArgs.args,
+    cwd: params.cwd ?? process.cwd(),
+    env: resolvedArgs.env,
     nodePath: params.nodePath ?? process.execPath,
     spawnSync: params.spawnSync ?? spawnSync,
     stderr: params.stderr ?? process.stderr,
@@ -166,7 +299,20 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
     stdoutIsTTY: params.stdoutIsTTY ?? process.stdout.isTTY,
   };
 
-  if (TMUX_DISABLE_VALUES.has(String(deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase())) {
+  if (resolvedArgs.benchmarkProfileDir) {
+    log(deps.stderr, `gateway:watch benchmark CPU profiles: ${resolvedArgs.benchmarkProfileDir}`);
+  }
+  if (resolvedArgs.benchmarkTraceOutputLog) {
+    log(
+      deps.stderr,
+      `gateway:watch benchmark trace output: ${resolvedArgs.benchmarkTraceOutputLog}`,
+    );
+  }
+  if (resolvedArgs.benchmarkNoForce) {
+    log(deps.stderr, "gateway:watch benchmark running without --force");
+  }
+
+  if (TMUX_DISABLE_VALUES.has((deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase())) {
     return runForegroundWatcher({
       args: deps.args,
       cwd: deps.cwd,

@@ -1,8 +1,10 @@
+// Maps CLI send dependency sources into outbound send dependencies with legacy aliases.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeChannelId } from "../channels/registry.js";
 import {
   resolveLegacyOutboundSendDepKeys,
   type OutboundSendDeps,
 } from "../infra/outbound/send-deps.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 /**
  * CLI-internal send function sources, keyed by channel ID.
@@ -12,7 +14,7 @@ export const CLI_OUTBOUND_SEND_FACTORY: unique symbol = Symbol.for(
   "openclaw.cliOutboundSendFactory",
 ) as never;
 
-export type CliOutboundSendFactory = (channelId: string) => unknown;
+type CliOutboundSendFactory = (channelId: string) => unknown;
 export type CliOutboundSendSource = {
   [channelId: string]: unknown;
   [CLI_OUTBOUND_SEND_FACTORY]?: CliOutboundSendFactory;
@@ -44,6 +46,10 @@ function resolveChannelIdFromLegacyOutboundKey(key: string): string | undefined 
   }
   const normalizedStem = normalizeLegacyChannelStem(match[1] ?? "");
   return normalizedStem || undefined;
+}
+
+function resolveKnownChannelId(raw: string): string | undefined {
+  return normalizeChannelId(raw) ?? undefined;
 }
 
 /**
@@ -82,8 +88,10 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
   }
 
   const resolveFactoryValue = (key: string): unknown => {
-    const channelId =
+    // Proxy reads can come from legacy sendX keys or canonical channel ids.
+    const candidate =
       outbound[key] === undefined ? (resolveChannelIdFromLegacyOutboundKey(key) ?? key) : key;
+    const channelId = resolveKnownChannelId(candidate);
     if (!channelId || channelId === "then" || channelId === "toJSON") {
       return undefined;
     }

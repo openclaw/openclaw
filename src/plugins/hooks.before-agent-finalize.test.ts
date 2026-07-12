@@ -1,3 +1,4 @@
+// Covers plugin hooks that run before agent finalization.
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
@@ -14,6 +15,7 @@ const EVENT = {
   stopHookActive: false,
   lastAssistantMessage: "done",
 };
+const DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS = 15_000;
 
 describe("before_agent_finalize hook runner", () => {
   it("returns undefined when no hooks are registered", async () => {
@@ -60,6 +62,127 @@ describe("before_agent_finalize hook runner", () => {
     });
   });
 
+  it("skips empty retry instructions when merging revise decisions", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "needs a retry but forgot the instruction",
+            retry: { instruction: "   ", idempotencyKey: "empty-retry" },
+          }),
+        },
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "rerun the focused tests",
+            retry: {
+              instruction: " rerun the focused tests ",
+              idempotencyKey: "valid-retry",
+              maxAttempts: 1,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
+      action: "revise",
+      reason: "needs a retry but forgot the instruction\n\nrerun the focused tests",
+      retry: {
+        instruction: "rerun the focused tests",
+        idempotencyKey: "valid-retry",
+        maxAttempts: 1,
+      },
+    });
+  });
+
+  it("skips malformed retry instructions when merging revise decisions", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "malformed retry payload should not crash",
+            retry: { instruction: 123, idempotencyKey: "bad-retry" } as never,
+          }),
+        },
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "valid retry still applies",
+            retry: {
+              instruction: " rerun the focused tests ",
+              idempotencyKey: "valid-retry",
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
+      action: "revise",
+      reason: "malformed retry payload should not crash\n\nvalid retry still applies",
+      retry: {
+        instruction: "rerun the focused tests",
+        idempotencyKey: "valid-retry",
+      },
+    });
+  });
+
+  it("preserves multiple valid retry candidates for budget evaluation", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "retry generated artifacts",
+            retry: {
+              instruction: "regenerate artifacts",
+              idempotencyKey: "artifacts",
+              maxAttempts: 1,
+            },
+          }),
+        },
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "retry focused tests",
+            retry: {
+              instruction: "rerun focused tests",
+              idempotencyKey: "tests",
+              maxAttempts: 1,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX);
+
+    expect(result).toEqual({
+      action: "revise",
+      reason: "retry generated artifacts\n\nretry focused tests",
+      retry: {
+        instruction: "regenerate artifacts",
+        idempotencyKey: "artifacts",
+        maxAttempts: 1,
+      },
+    });
+    expect(Object.getOwnPropertyDescriptor(result, "retryCandidates")?.enumerable).toBe(false);
+    expect(
+      (Object.getOwnPropertyDescriptor(result, "retryCandidates")?.value as unknown[])?.map(
+        (retry) => (retry as { idempotencyKey?: string }).idempotencyKey,
+      ),
+    ).toEqual(["artifacts", "tests"]);
+  });
+
   it("lets finalize override earlier revise decisions", async () => {
     const runner = createHookRunner(
       createMockPluginRegistry([
@@ -78,6 +201,28 @@ describe("before_agent_finalize hook runner", () => {
       action: "finalize",
       reason: "enough",
     });
+  });
+
+  it("times out hung handlers and continues with the original final answer", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = vi.fn(() => new Promise(() => {}));
+      const logger = { error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+      const runner = createHookRunner(
+        createMockPluginRegistry([{ hookName: "before_agent_finalize", handler }]),
+        { logger },
+      );
+
+      const run = runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX);
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_BEFORE_AGENT_FINALIZE_TIMEOUT_MS);
+      await expect(run).resolves.toBeUndefined();
+      expect(logger.error).toHaveBeenCalledWith(
+        "[hooks] before_agent_finalize handler from test-plugin failed: timed out after 15000ms",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("hasHooks reports correctly", () => {

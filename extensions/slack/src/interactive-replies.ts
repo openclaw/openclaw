@@ -1,6 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Slack plugin module implements interactive replies behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 
 const SLACK_BUTTON_MAX_ITEMS = 5;
@@ -16,12 +21,36 @@ type SlackChoice = {
   style?: "primary" | "secondary" | "success" | "danger";
 };
 
+function resolveChoiceDelimiter(value: string): number {
+  const firstDelimiter = value.indexOf(":");
+  if (firstDelimiter === -1) {
+    return -1;
+  }
+  const prefix = value.slice(0, firstDelimiter);
+  const suffix = value.slice(firstDelimiter + 1);
+  const startsWithClockLabel = /\b(?:[01]?\d|2[0-3])$/.test(prefix) && /^[0-5]\d/.test(suffix);
+  if (!startsWithClockLabel) {
+    return firstDelimiter;
+  }
+
+  // Legacy syntax makes label and callback colons ambiguous. Recognize only a
+  // complete clock or dash-separated range followed by the real separator/end.
+  const clockEnd = firstDelimiter + 3;
+  const labelSuffix =
+    value.slice(clockEnd).match(/^(?:\s*[-–—]\s*(?:[01]?\d|2[0-3]):[0-5]\d)*\s*/)?.[0] ?? "";
+  const delimiter = clockEnd + labelSuffix.length;
+  if (value[delimiter] === ":") {
+    return delimiter;
+  }
+  return delimiter === value.length ? -1 : firstDelimiter;
+}
+
 function parseChoice(raw: string, options?: { allowStyle?: boolean }): SlackChoice | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
-  const delimiter = trimmed.indexOf(":");
+  const delimiter = resolveChoiceDelimiter(trimmed);
   if (delimiter === -1) {
     return {
       label: trimmed,
@@ -98,10 +127,7 @@ function buildButtonsBlock(
 function buildSelectBlock(
   raw: string,
 ): NonNullable<ReplyPayload["interactive"]>["blocks"][number] | null {
-  const parts = raw
-    .split("|")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const parts = normalizeStringEntries(raw.split("|"));
   if (parts.length === 0) {
     return null;
   }
@@ -127,17 +153,14 @@ function hasSlackBlocks(payload: ReplyPayload): boolean {
 }
 
 function parseSimpleSlackOptions(raw: string): SlackChoice[] | null {
-  const entries = raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const entries = normalizeStringEntries(raw.split(","));
   if (entries.length < 2 || entries.length > SLACK_AUTO_SELECT_MAX_ITEMS) {
     return null;
   }
   if (!entries.every((entry) => SLACK_SIMPLE_OPTION_RE.test(entry))) {
     return null;
   }
-  const deduped = new Set(entries.map((entry) => normalizeLowercaseStringOrEmpty(entry)));
+  const deduped = new Set(normalizeStringEntriesLower(entries));
   if (deduped.size !== entries.length) {
     return null;
   }
@@ -162,6 +185,9 @@ function resolveInteractiveRepliesFromCapabilities(capabilities: unknown): boole
   return false;
 }
 
+/**
+ * @deprecated Only needed for legacy Slack reply directives. New producers should emit presentation payloads.
+ */
 export function isSlackInteractiveRepliesEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -173,6 +199,9 @@ export function isSlackInteractiveRepliesEnabled(params: {
   return resolveInteractiveRepliesFromCapabilities(account.config.capabilities);
 }
 
+/**
+ * @deprecated Slack reply directives are legacy. New producers should emit presentation payloads.
+ */
 export function compileSlackInteractiveReplies(payload: ReplyPayload): ReplyPayload {
   const text = payload.text;
   if (!text) {
@@ -230,6 +259,9 @@ export function compileSlackInteractiveReplies(payload: ReplyPayload): ReplyPayl
   };
 }
 
+/**
+ * @deprecated Legacy Slack directive fallback. New producers should emit presentation payloads.
+ */
 export function parseSlackOptionsLine(payload: ReplyPayload): ReplyPayload {
   const text = payload.text;
   if (!text || payload.interactive?.blocks?.length || hasSlackBlocks(payload)) {

@@ -1,21 +1,46 @@
+/**
+ * Registers the `/codex` plugin command and lazy-loads the app-server command
+ * handler implementation.
+ */
 import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
   PluginCommandResult,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { CodexCommandDeps } from "./command-handlers.js";
+import { describeControlFailure } from "./app-server/capabilities.js";
+import { formatCodexDisplayText } from "./command-formatters.js";
+import type { CodexCommandDepsOverride } from "./command-handlers.js";
 
-export function createCodexCommand(options: {
+type CodexCommandOptions = {
   pluginConfig?: unknown;
-  deps?: Partial<CodexCommandDeps>;
-}): OpenClawPluginCommandDefinition {
+  resolvePluginConfig?: () => unknown;
+  deps: CodexCommandDepsOverride;
+};
+
+type CodexSubcommandHandler = (
+  ctx: PluginCommandContext,
+  options: CodexCommandOptions,
+) => Promise<PluginCommandResult>;
+
+type CodexCommandInternalOptions = CodexCommandOptions & {
+  loadSubcommandHandler?: () => Promise<CodexSubcommandHandler>;
+};
+
+/** Creates the reserved `/codex` command definition exposed by the plugin. */
+export function createCodexCommand(options: CodexCommandOptions): OpenClawPluginCommandDefinition {
   return {
     name: "codex",
     description: "Inspect and control the Codex app-server harness",
     ownership: "reserved",
     agentPromptGuidance: [
-      "Native Codex app-server plugin is available (`/codex ...`). For Codex bind/control/thread/resume/steer/stop requests, prefer `/codex bind`, `/codex threads`, `/codex resume`, `/codex steer`, and `/codex stop` over ACP.",
-      "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
+      {
+        text: "Native Codex app-server plugin is available (`/codex ...`). For Codex bind/control/thread/resume/steer/stop requests, prefer `/codex bind`, `/codex threads`, `/codex resume`, `/codex steer`, and `/codex stop` over ACP. When OpenClaw sandboxing is active, native Codex execution modes are unavailable; use normal Codex harness turns.",
+        surfaces: ["openclaw_main"],
+      },
+      {
+        text: "Use ACP for Codex only when the user explicitly asks for ACP/acpx or wants to test the ACP path.",
+        surfaces: ["openclaw_main"],
+      },
     ],
     acceptsArgs: true,
     requireAuth: true,
@@ -23,10 +48,28 @@ export function createCodexCommand(options: {
   };
 }
 
+/** Dispatches a `/codex` command to the subcommand handler and formats failures for chat. */
 export async function handleCodexCommand(
   ctx: PluginCommandContext,
-  options: { pluginConfig?: unknown; deps?: Partial<CodexCommandDeps> } = {},
+  options: CodexCommandInternalOptions,
 ): Promise<PluginCommandResult> {
+  const { loadSubcommandHandler, resolvePluginConfig, ...subcommandOptions } = options;
+  try {
+    const handleCodexSubcommand = loadSubcommandHandler
+      ? await loadSubcommandHandler()
+      : await loadDefaultCodexSubcommandHandler();
+    return await handleCodexSubcommand(ctx, {
+      ...subcommandOptions,
+      pluginConfig: resolvePluginConfig?.() ?? subcommandOptions.pluginConfig,
+    });
+  } catch (error) {
+    return {
+      text: `Codex command failed: ${formatCodexDisplayText(describeControlFailure(error))}`,
+    };
+  }
+}
+
+async function loadDefaultCodexSubcommandHandler(): Promise<CodexSubcommandHandler> {
   const { handleCodexSubcommand } = await import("./command-handlers.js");
-  return await handleCodexSubcommand(ctx, options);
+  return handleCodexSubcommand;
 }

@@ -1,5 +1,6 @@
+// Zalo tests cover monitor.pairing.lifecycle plugin behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLifecycleMonitorSetup,
   createTextUpdate,
@@ -7,6 +8,7 @@ import {
   settleAsyncWork,
 } from "./test-support/lifecycle-test-support.js";
 import {
+  loadCachedLifecycleMonitorModule,
   resetLifecycleTestState,
   sendMessageMock,
   setLifecycleRuntimeCore,
@@ -16,6 +18,10 @@ import {
 describe("Zalo pairing lifecycle", () => {
   const readAllowFromStoreMock = vi.fn(async () => [] as string[]);
   const upsertPairingRequestMock = vi.fn(async () => ({ code: "PAIRCODE", created: true }));
+
+  beforeAll(async () => {
+    await loadCachedLifecycleMonitorModule("zalo-pairing-lifecycle");
+  });
 
   beforeEach(async () => {
     await resetLifecycleTestState();
@@ -51,7 +57,9 @@ describe("Zalo pairing lifecycle", () => {
 
     try {
       await withServer(
-        (req, res) => monitor.route.handler(req, res),
+        (req, res) => {
+          void monitor.route.handler(req, res);
+        },
         async (baseUrl) => {
           const { first, replay } = await postWebhookReplay({
             baseUrl,
@@ -72,29 +80,27 @@ describe("Zalo pairing lifecycle", () => {
       );
 
       expect(readAllowFromStoreMock).toHaveBeenCalledTimes(1);
-      expect(readAllowFromStoreMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "zalo",
-          accountId: "acct-zalo-pairing",
-        }),
-      );
+      expect(readAllowFromStoreMock).toHaveBeenCalledWith({
+        channel: "zalo",
+        accountId: "acct-zalo-pairing",
+      });
       expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
-      expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "zalo",
-          accountId: "acct-zalo-pairing",
-          id: "user-unauthorized",
-        }),
-      );
+      expect(upsertPairingRequestMock).toHaveBeenCalledWith({
+        channel: "zalo",
+        accountId: "acct-zalo-pairing",
+        id: "user-unauthorized",
+        meta: { name: "Unauthorized User" },
+      });
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(sendMessageMock).toHaveBeenCalledWith(
-        "zalo-token",
-        expect.objectContaining({
-          chat_id: "dm-pairing-1",
-          text: expect.stringContaining("PAIRCODE"),
-        }),
-        undefined,
-      );
+      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
+        string,
+        { chat_id?: string; text?: string },
+        unknown,
+      ];
+      expect(sendToken).toBe("zalo-token");
+      expect(sendPayload.chat_id).toBe("dm-pairing-1");
+      expect(sendPayload.text).toContain("PAIRCODE");
+      expect(sendOptions).toBeUndefined();
     } finally {
       await monitor.stop();
     }
@@ -110,7 +116,9 @@ describe("Zalo pairing lifecycle", () => {
 
     try {
       await withServer(
-        (req, res) => monitor.route.handler(req, res),
+        (req, res) => {
+          void monitor.route.handler(req, res);
+        },
         async (baseUrl) => {
           const { first, replay } = await postWebhookReplay({
             baseUrl,

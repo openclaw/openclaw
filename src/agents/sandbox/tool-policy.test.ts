@@ -1,3 +1,5 @@
+// Sandbox tool policy tests cover effective allow/deny merging and blocked-tool
+// guidance for sandboxed agent sessions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -69,6 +71,8 @@ describe("sandbox/tool-policy", () => {
   });
 
   it("preserves allow-all semantics for allow: [] plus alsoAllow", () => {
+    // An empty allowlist means allow all except denies; alsoAllow should only
+    // remove matching default denies, not turn allow-all into allow-some.
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -86,7 +90,7 @@ describe("sandbox/tool-policy", () => {
     };
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, "main");
-    expect(resolved.allow).toEqual([]);
+    expect(resolved.allow).toStrictEqual([]);
     expect(resolved.deny).not.toContain("browser");
     expect(
       isToolAllowed(
@@ -106,6 +110,16 @@ describe("sandbox/tool-policy", () => {
         "browser",
       ),
     ).toBe(true);
+    expect(resolved.deny).toContain("computer");
+    expect(
+      isToolAllowed(
+        {
+          allow: resolved.allow,
+          deny: resolved.deny,
+        },
+        "computer",
+      ),
+    ).toBe(false);
   });
 
   it("keeps canonical sandbox config and runtime status aligned with the effective resolver", () => {
@@ -137,14 +151,18 @@ describe("sandbox/tool-policy", () => {
     };
 
     const sandbox = resolveSandboxConfigForAgent(cfg, "tavern");
-    expect(sandbox.tools.allow).toEqual(expect.arrayContaining(["browser", "message", "tts"]));
+    expect(sandbox.tools.allow).toContain("browser");
+    expect(sandbox.tools.allow).toContain("message");
+    expect(sandbox.tools.allow).toContain("tts");
     expect(sandbox.tools.deny).not.toContain("browser");
 
     const runtime = resolveSandboxRuntimeStatus({
       cfg,
       sessionKey: "agent:tavern:main",
     });
-    expect(runtime.toolPolicy.allow).toEqual(expect.arrayContaining(["browser", "message", "tts"]));
+    expect(runtime.toolPolicy.allow).toContain("browser");
+    expect(runtime.toolPolicy.allow).toContain("message");
+    expect(runtime.toolPolicy.allow).toContain("tts");
     expect(runtime.toolPolicy.deny).not.toContain("browser");
   });
 
@@ -264,6 +282,8 @@ describe("sandbox/tool-policy", () => {
   });
 
   it("keeps blocked-tool guidance glob-aware and shell-safe", () => {
+    // The guidance embeds a copy-paste command; quote the real session key while
+    // keeping the displayed session line compact and terminal-safe.
     const sessionKey = "agent:main:weird session;rm -rf /";
     const cfg: OpenClawConfig = {
       agents: {
@@ -295,6 +315,57 @@ describe("sandbox/tool-policy", () => {
     );
   });
 
+  it.each([
+    {
+      boundary: "prefix",
+      sessionKey: `abcde\u{1f600}middle123456`,
+      expectedLabel: "abcde…123456",
+    },
+    {
+      boundary: "suffix",
+      sessionKey: `abcdefmiddle\u{1f600}12345`,
+      expectedLabel: "abcdef…12345",
+    },
+    {
+      boundary: "both",
+      sessionKey: `abcde\u{1f600}middle\u{1f600}12345`,
+      expectedLabel: "abcde…12345",
+    },
+  ])(
+    "keeps redacted session keys UTF-16 safe at the $boundary boundary",
+    ({ sessionKey, expectedLabel }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            sandbox: { mode: "all", scope: "agent" },
+          },
+        },
+        tools: {
+          sandbox: {
+            tools: {
+              deny: ["browser"],
+            },
+          },
+        },
+      };
+
+      const message = formatSandboxToolPolicyBlockedMessage({
+        cfg,
+        sessionKey,
+        toolName: "browser",
+      });
+
+      const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
+      const sessionLabel = sessionLine?.slice("Session: ".length);
+      expect(sessionLabel).toBe(expectedLabel);
+      expect(sessionLabel?.length).toBeLessThanOrEqual(13);
+      expect(sessionLabel).not.toMatch(
+        /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+      );
+      expect(message).toContain(`openclaw sandbox explain --session '${sessionKey}'`);
+    },
+  );
+
   it("avoids terminal injection for control-character session keys", () => {
     const sessionKey = "agent:main:abcde\n12345";
     const cfg: OpenClawConfig = {
@@ -319,7 +390,7 @@ describe("sandbox/tool-policy", () => {
     });
 
     const sessionLine = message?.split("\n").find((line) => line.startsWith("Session: "));
-    expect(sessionLine).toBeDefined();
+    expect(sessionLine).toBe("Session: agent:…\\n12345");
     expect(sessionLine).not.toContain(sessionKey);
     expect(sessionLine).toContain("\\n");
     expect(message).toContain("openclaw sandbox explain --agent main");

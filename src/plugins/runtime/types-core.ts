@@ -1,14 +1,26 @@
+// Core runtime types define system, config, and task helper contracts for plugins.
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type {
   ListSpeechVoices,
   TextToSpeech,
+  TextToSpeechStream,
   TextToSpeechTelephony,
 } from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
 export type { HeartbeatRunResult };
+
+export type RuntimeRequestHeartbeatOptions = Parameters<
+  typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
+>[0];
+
+export type RuntimeRequestHeartbeatNowOptions = Omit<
+  RuntimeRequestHeartbeatOptions,
+  "source" | "intent"
+> &
+  Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
   envSnapshotForRestore?: Record<string, string | undefined>;
@@ -47,10 +59,100 @@ type RuntimeReplaceConfigFileParams = {
   afterWrite: RuntimeConfigAfterWrite;
   writeOptions?: RuntimeWriteConfigOptions;
 };
+type RuntimeSessionEntry = import("../../config/sessions/types.js").SessionEntry;
+type RuntimeSessionStoreReadParams = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  hydrateSkillPromptRefs?: boolean;
+  sessionKey: string;
+  readConsistency?: "latest";
+  storePath?: string;
+};
+type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
+type RuntimeSessionStoreEntrySummary = {
+  sessionKey: string;
+  entry: RuntimeSessionEntry;
+};
+type RuntimeCreateSessionEntryResult = {
+  key: string;
+  agentId: string;
+  sessionId: string;
+  entry: RuntimeSessionEntry;
+};
+type RuntimeCreateSessionEntryFinalPatch = {
+  pluginExtensions: RuntimeSessionEntry["pluginExtensions"];
+};
+type RuntimeCreateSessionEntryBaseParams = {
+  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+  key: string;
+  agentId?: string;
+  label?: string;
+  spawnedCwd?: string;
+  initialEntry:
+    | {
+        agentHarnessId: string;
+        modelSelectionLocked?: true;
+        pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
+      }
+    | {
+        cliBackendId: string;
+        model: string;
+        cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
+        modelSelectionLocked: true;
+        pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
+        /** Registry-injected owner; plugin callers cannot select another owner. */
+        pluginOwnerId?: string;
+      };
+};
+type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
+  (
+    | {
+        /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
+        recoverMatchingInitialEntry: true;
+        afterCreate: (
+          created: RuntimeCreateSessionEntryResult,
+        ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
+      }
+    | {
+        recoverMatchingInitialEntry?: never;
+        afterCreate?: (
+          created: RuntimeCreateSessionEntryResult,
+        ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
+      }
+  );
+type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
+  fallbackEntry?: RuntimeSessionEntry;
+  maintenanceConfig?: import("../../config/sessions/store.js").ResolvedSessionMaintenanceConfigInput;
+  preserveActivity?: boolean;
+  replaceEntry?: boolean;
+  update: (
+    entry: RuntimeSessionEntry,
+    context: { existingEntry?: RuntimeSessionEntry },
+  ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+};
+type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
+  entry: RuntimeSessionEntry;
+};
+type RuntimeSessionWorkAdmissionParams = {
+  storePath: string;
+  sessionKey: string;
+  signal?: AbortSignal;
+};
+type RuntimeSessionStoreEntryUpdateParams = {
+  storePath: string;
+  sessionKey: string;
+  update: (
+    entry: RuntimeSessionEntry,
+  ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+  requireWriteSuccess?: boolean;
+};
 export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
   model?: string | null;
   catalog?: import("../../auto-reply/thinking.js").ThinkingCatalogEntry[];
+  agentRuntime?: string | null;
 };
 export type PluginRuntimeThinkingPolicyLevel = {
   id: import("../../auto-reply/thinking.js").ThinkLevel;
@@ -76,6 +178,57 @@ export type RunHeartbeatOnceOptions = {
   /** Override heartbeat config (e.g. `{ target: "last" }` to deliver to the last active channel). */
   heartbeat?: { target?: string };
 };
+
+export type LlmCompleteMessage = {
+  role: "system" | "user" | "assistant";
+  content: string;
+};
+
+export type LlmCompleteCaller = {
+  kind: "plugin" | "context-engine" | "host" | "unknown";
+  id?: string;
+  name?: string;
+};
+
+export type LlmCompleteUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+};
+
+export type LlmCompleteParams = {
+  messages: LlmCompleteMessage[];
+  /** Model ref (e.g. "anthropic/claude-sonnet-4-6"); defaults to the target agent's configured model. */
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+  systemPrompt?: string;
+  signal?: AbortSignal;
+  /** Human-readable reason for audit/debug output. */
+  purpose?: string;
+  /** Agent whose model/credentials to use. Session-bound capabilities may disallow overrides. */
+  agentId?: string;
+};
+
+export type LlmCompleteResult = {
+  text: string;
+  provider: string;
+  model: string;
+  agentId: string;
+  usage: LlmCompleteUsage;
+  audit: {
+    caller: LlmCompleteCaller;
+    purpose?: string;
+    sessionKey?: string;
+  };
+};
+
+type RuntimeRunEmbeddedAgent = (
+  params: import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
@@ -135,20 +288,41 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    runEmbeddedAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedAgentFn;
-    runEmbeddedPiAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedPiAgentFn;
+    runEmbeddedAgent: RuntimeRunEmbeddedAgent;
+    /** @deprecated Use runEmbeddedAgent. */
+    runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
-      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
-      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
-      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
+      createSessionEntry: (
+        params: RuntimeCreateSessionEntryParams,
+      ) => Promise<RuntimeCreateSessionEntryResult>;
+      getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      listSessionEntries: (
+        params?: RuntimeSessionStoreListParams,
+      ) => RuntimeSessionStoreEntrySummary[];
+      patchSessionEntry: (
+        params: RuntimeSessionStoreEntryPatchParams,
+      ) => Promise<RuntimeSessionEntry | null>;
+      upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
+      runWithWorkAdmission: <T>(
+        params: RuntimeSessionWorkAdmissionParams,
+        run: (signal: AbortSignal) => Promise<T>,
+      ) => Promise<T>;
+      updateSessionStoreEntry: (
+        params: RuntimeSessionStoreEntryUpdateParams,
+      ) => Promise<RuntimeSessionEntry | null>;
     };
   };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
-    requestHeartbeatNow: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
+    requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;
+    /**
+     * @deprecated Use `requestHeartbeat({ source, intent, reason })` so wake producers declare
+     * scheduler intent explicitly.
+     */
+    requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
     /**
      * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
      * Accepts an optional `heartbeat` config override so callers can force
@@ -161,14 +335,15 @@ export type PluginRuntimeCore = {
   };
   media: {
     loadWebMedia: typeof import("../../media/web-media.js").loadWebMedia;
-    detectMime: typeof import("../../media/mime.js").detectMime;
-    mediaKindFromMime: typeof import("../../media/constants.js").mediaKindFromMime;
+    detectMime: typeof import("@openclaw/media-core/mime").detectMime;
+    mediaKindFromMime: typeof import("@openclaw/media-core/constants").mediaKindFromMime;
     isVoiceCompatibleAudio: typeof import("../../media/audio.js").isVoiceCompatibleAudio;
-    getImageMetadata: typeof import("../../media/image-ops.js").getImageMetadata;
-    resizeToJpeg: typeof import("../../media/image-ops.js").resizeToJpeg;
+    getImageMetadata: typeof import("../../media/media-services.js").getImageMetadata;
+    resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
   };
   tts: {
     textToSpeech: TextToSpeech;
+    textToSpeechStream: TextToSpeechStream;
     textToSpeechTelephony: TextToSpeechTelephony;
     listVoices: ListSpeechVoices;
   };
@@ -176,6 +351,7 @@ export type PluginRuntimeCore = {
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
+    extractStructuredWithModel: MediaUnderstandingRuntime["extractStructuredWithModel"];
     describeVideoFile: MediaUnderstandingRuntime["describeVideoFile"];
     transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
   };
@@ -230,6 +406,19 @@ export type PluginRuntimeCore = {
     openKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
+    openSyncKeyedStore: <T>(
+      options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
+    openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+      options?: Omit<
+        import("../../channels/message/ingress-queue.js").CreateChannelIngressQueueOptions,
+        "channelId"
+      >,
+    ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+      TPayload,
+      TMetadata,
+      TCompletedMetadata
+    >;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;
@@ -240,16 +429,27 @@ export type PluginRuntimeCore = {
   };
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
+  llm: {
+    complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
+    acquireLocalService: (
+      target: {
+        providerId: string;
+        baseUrl: string;
+        headers?: HeadersInit;
+      },
+      signal?: AbortSignal | null,
+    ) => Promise<{ release: () => void } | undefined>;
+  };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
-      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
-      model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
+      model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;

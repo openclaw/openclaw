@@ -1,3 +1,5 @@
+// HTTP request trace tests ensure gateway request scope reaches logs and
+// diagnostic events for per-request debugging.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -29,9 +31,9 @@ async function listen(server: ReturnType<typeof createGatewayHttpServer>): Promi
 }
 
 async function closeServer(server: ReturnType<typeof createGatewayHttpServer>): Promise<void> {
-  await new Promise<void>((resolve, reject) =>
-    server.close((err) => (err ? reject(err) : resolve())),
-  );
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
 }
 
 afterEach(() => {
@@ -56,7 +58,6 @@ describe("gateway HTTP request trace scope", () => {
       run: async () => {
         setLoggerOverride({ level: "info", file: logPath });
         const httpServer = createGatewayHttpServer({
-          canvasHost: null,
           clients: new Set(),
           controlUiEnabled: false,
           controlUiBasePath: "/__control__",
@@ -88,12 +89,14 @@ describe("gateway HTTP request trace scope", () => {
       expect(activeTraceInHandler?.spanId).toMatch(/^[0-9a-f]{16}$/);
       expect(events).toEqual([{ trace: activeTraceInHandler, type: "message.queued" }]);
 
-      const [line] = fs.readFileSync(logPath, "utf8").trim().split("\n");
-      const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
-      expect(record).toMatchObject({
-        traceId: activeTraceInHandler?.traceId,
-        spanId: activeTraceInHandler?.spanId,
-      });
+      const traceRecord = fs
+        .readFileSync(logPath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((record) => record.message === "handled request trace");
+      expect(traceRecord?.traceId).toBe(activeTraceInHandler?.traceId);
+      expect(traceRecord?.spanId).toBe(activeTraceInHandler?.spanId);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -1,12 +1,19 @@
+// Qa Lab plugin module implements multipass behavior.
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import { access, appendFile, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawCrablineChannelDriverSelection } from "@openclaw/crabline";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
+import type { RuntimeId } from "./runtime-parity.js";
+import { shellQuote } from "./shell-quote.js";
 
 const MULTIPASS_MOUNTED_REPO_PATH = "/workspace/openclaw-host";
 const MULTIPASS_GUEST_REPO_PATH = "/workspace/openclaw";
@@ -32,7 +39,7 @@ const MULTIPASS_REPO_SYNC_EXCLUDES = [
 const MULTIPASS_EXEC_MAX_BUFFER = 64 * 1024 * 1024;
 const MULTIPASS_GUEST_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 
-export const qaMultipassDefaultResources = {
+const qaMultipassDefaultResources = {
   image: "lts",
   cpus: 2,
   memory: "4G",
@@ -52,7 +59,7 @@ type ExecFileOptions = {
   timeoutMs?: number;
 };
 
-export type QaMultipassPlan = {
+type QaMultipassPlan = {
   repoRoot: string;
   outputDir: string;
   reportPath: string;
@@ -72,6 +79,9 @@ export type QaMultipassPlan = {
   alternateModel?: string;
   fastMode?: boolean;
   thinkingDefault?: string;
+  runtimePair?: [RuntimeId, RuntimeId];
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
+  enabledPluginIds?: string[];
   scenarioIds: string[];
   forwardedEnv: Record<string, string>;
   hostCodexHomePath?: string;
@@ -86,7 +96,7 @@ export type QaMultipassPlan = {
   qaCommand: string[];
 };
 
-export type QaMultipassRunResult = {
+type QaMultipassRunResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -101,20 +111,12 @@ type RenderGuestScriptOptions = {
   redactSecrets?: boolean;
 };
 
-function shellQuote(value: string) {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
 function createOutputStamp() {
   return new Date().toISOString().replaceAll(":", "").replaceAll(".", "").replace("T", "-");
 }
 
 function createVmSuffix() {
   return `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function execFileAsync(file: string, args: string[], options: ExecFileOptions = {}) {
@@ -242,13 +244,19 @@ export function createQaMultipassPlan(params: {
   allowFailures?: boolean;
   scenarioIds?: string[];
   concurrency?: number;
+  runtimePair?: [RuntimeId, RuntimeId];
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
+  enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
   memory?: string;
   disk?: string;
 }) {
   const outputDir = params.outputDir ?? createQaMultipassOutputDir(params.repoRoot);
-  const scenarioIds = [...new Set(params.scenarioIds ?? [])];
+  const scenarioIds = uniqueStrings(params.scenarioIds ?? []);
+  const enabledPluginIds = uniqueStrings(
+    (params.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+  );
   const transportId = params.transportId?.trim() || "qa-channel";
   const providerMode = params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
   const provider = getQaProvider(providerMode);
@@ -281,6 +289,16 @@ export function createQaMultipassPlan(params: {
       ...(params.thinkingDefault ? ["--thinking", params.thinkingDefault] : []),
       ...(params.allowFailures ? ["--allow-failures"] : []),
       ...(params.concurrency ? ["--concurrency", String(params.concurrency)] : []),
+      ...(params.runtimePair ? ["--runtime-pair", params.runtimePair.join(",")] : []),
+      ...(params.channelDriverSelection
+        ? [
+            "--channel-driver",
+            params.channelDriverSelection.channelDriver,
+            "--channel",
+            params.channelDriverSelection.channel,
+          ]
+        : []),
+      ...enabledPluginIds.flatMap((pluginId) => ["--enable-plugin", pluginId]),
     ],
     scenarioIds,
   );
@@ -305,6 +323,9 @@ export function createQaMultipassPlan(params: {
     alternateModel: params.alternateModel,
     fastMode: params.fastMode,
     thinkingDefault: params.thinkingDefault,
+    runtimePair: params.runtimePair,
+    channelDriverSelection: params.channelDriverSelection,
+    enabledPluginIds,
     scenarioIds,
     forwardedEnv,
     hostCodexHomePath,
@@ -432,7 +453,7 @@ export function renderQaMultipassGuestScript(
 }
 
 async function appendMultipassLog(logPath: string, message: string) {
-  await appendFile(logPath, message, "utf8");
+  await appendRegularFile({ filePath: logPath, content: message });
 }
 
 async function runMultipassCommand(logPath: string, args: string[], options: ExecFileOptions = {}) {
@@ -553,6 +574,9 @@ export async function runQaMultipass(params: {
   allowFailures?: boolean;
   scenarioIds?: string[];
   concurrency?: number;
+  runtimePair?: [RuntimeId, RuntimeId];
+  channelDriverSelection?: OpenClawCrablineChannelDriverSelection;
+  enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
   memory?: string;

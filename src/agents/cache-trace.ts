@@ -1,16 +1,23 @@
+/**
+ * Optional JSONL diagnostics for agent cache/session/prompt tracing.
+ */
 import crypto from "node:crypto";
 import path from "node:path";
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
+import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
+import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import type { AgentMessage, StreamFn } from "./runtime/index.js";
+import { stableStringify } from "./stable-stringify.js";
 import { buildAgentTraceBase } from "./trace-base.js";
 
-export type CacheTraceStage =
+// Payloads are redacted before JSONL output while stable digests preserve
+// correlation across prompt/session/cache stages.
+type CacheTraceStage =
   | "cache:result"
   | "cache:state"
   | "session:loaded"
@@ -22,7 +29,7 @@ export type CacheTraceStage =
   | "stream:context"
   | "session:after";
 
-export type CacheTraceEvent = {
+type CacheTraceEvent = {
   ts: string;
   seq: number;
   stage: CacheTraceStage;
@@ -47,7 +54,7 @@ export type CacheTraceEvent = {
   error?: string;
 };
 
-export type CacheTrace = {
+type CacheTrace = {
   enabled: true;
   filePath: string;
   recordStage: (stage: CacheTraceStage, payload?: Partial<CacheTraceEvent>) => void;
@@ -107,68 +114,19 @@ function getWriter(filePath: string): CacheTraceWriter {
   return getQueuedFileWriter(writers, filePath);
 }
 
-function stableStringify(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
-  if (value === null || value === undefined) {
-    return String(value);
-  }
-  if (typeof value === "number" && !Number.isFinite(value)) {
-    return JSON.stringify(String(value));
-  }
-  if (typeof value === "bigint") {
-    return JSON.stringify(value.toString());
-  }
-  if (typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (seen.has(value)) {
-    return JSON.stringify("[Circular]");
-  }
-  seen.add(value);
-  if (value instanceof Error) {
-    return stableStringify(
-      {
-        name: value.name,
-        message: value.message,
-        stack: value.stack,
-      },
-      seen,
-    );
-  }
-  if (value instanceof Uint8Array) {
-    return stableStringify(
-      {
-        type: "Uint8Array",
-        data: Buffer.from(value).toString("base64"),
-      },
-      seen,
-    );
-  }
-  if (Array.isArray(value)) {
-    const serializedEntries: string[] = [];
-    for (const entry of value) {
-      serializedEntries.push(stableStringify(entry, seen));
-    }
-    return `[${serializedEntries.join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  const serializedFields: string[] = [];
-  for (const key of Object.keys(record).toSorted()) {
-    serializedFields.push(`${JSON.stringify(key)}:${stableStringify(record[key], seen)}`);
-  }
-  return `{${serializedFields.join(",")}}`;
-}
-
 function digest(value: unknown): string {
-  const serialized = stableStringify(value);
+  const serialized = stableStringify(value, sanitizeSurrogates);
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
-function summarizeMessages(messages: AgentMessage[]): {
+export function summarizeMessages(messages: AgentMessage[]): {
   messageCount: number;
   messageRoles: Array<string | undefined>;
   messageFingerprints: string[];
   messagesDigest: string;
 } {
+  // Hash each message and then the ordered fingerprint list so traces can detect
+  // prompt drift without writing full messages when disabled.
   const messageFingerprints = messages.map((msg) => digest(msg));
   return {
     messageCount: messages.length,
@@ -178,6 +136,7 @@ function summarizeMessages(messages: AgentMessage[]): {
   };
 }
 
+/** Create a cache trace recorder when diagnostics config/env enables it. */
 export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
   const cfg = resolveCacheTraceConfig(params);
   if (!cfg.enabled) {
@@ -198,17 +157,17 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     };
 
     if (payload.prompt !== undefined && cfg.includePrompt) {
-      event.prompt = payload.prompt;
+      event.prompt = redactAgentDiagnosticPayload(payload.prompt);
     }
     if (payload.system !== undefined && cfg.includeSystem) {
-      event.system = sanitizeDiagnosticPayload(payload.system);
+      event.system = redactAgentDiagnosticPayload(payload.system);
       event.systemDigest = digest(payload.system);
     }
     if (payload.options) {
-      event.options = sanitizeDiagnosticPayload(payload.options) as Record<string, unknown>;
+      event.options = redactAgentDiagnosticPayload(payload.options);
     }
     if (payload.model) {
-      event.model = sanitizeDiagnosticPayload(payload.model) as Record<string, unknown>;
+      event.model = redactAgentDiagnosticPayload(payload.model);
     }
 
     const messages = payload.messages;
@@ -219,15 +178,17 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.messageFingerprints = summary.messageFingerprints;
       event.messagesDigest = summary.messagesDigest;
       if (cfg.includeMessages) {
-        event.messages = sanitizeDiagnosticPayload(messages) as AgentMessage[];
+        // Full messages are optional; summaries/digests are always recorded when
+        // message payloads are supplied.
+        event.messages = redactAgentDiagnosticPayload(messages);
       }
     }
 
     if (payload.note) {
-      event.note = payload.note;
+      event.note = redactAgentDiagnosticPayload(payload.note);
     }
     if (payload.error) {
-      event.error = payload.error;
+      event.error = redactAgentDiagnosticPayload(payload.error);
     }
 
     const line = safeJsonStringify(event);

@@ -1,4 +1,7 @@
+// Commander registration for onboard setup flags and lazy onboard runtime execution.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
@@ -7,16 +10,15 @@ import type {
   GatewayAuthChoice,
   GatewayBind,
   NodeManagerChoice,
+  OnboardOptions,
   ResetScope,
   SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
-import { setupWizardCommand } from "../../commands/onboard.js";
-import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
-import { defaultRuntime } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatCliCommand } from "../command-format.js";
+import { parsePort } from "../shared/parse-port.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -42,6 +44,34 @@ function resolveInstallDaemonFlag(
   return undefined;
 }
 
+const MODERN_ONBOARD_OPTION_KEYS = new Set([
+  "modern",
+  "workspace",
+  "acceptRisk",
+  "nonInteractive",
+  "json",
+]);
+
+function listUnsupportedModernOptions(command: Command): string[] {
+  const optionsByKey = new Map<string, (typeof command.options)[number]>();
+  for (const option of command.options) {
+    const key = option.attributeName();
+    if (MODERN_ONBOARD_OPTION_KEYS.has(key) || command.getOptionValueSource(key) !== "cli") {
+      continue;
+    }
+    const existing = optionsByKey.get(key);
+    const valueIsNegated = command.getOptionValue(key) === false;
+    if (!existing || option.negate === valueIsNegated) {
+      // Positive and --no-* forms can share one Commander attribute. Report
+      // only the spelling whose parsed value actually won.
+      optionsByKey.set(key, option);
+    }
+  }
+  return [...optionsByKey.values()]
+    .map((option) => option.long ?? option.short ?? option.flags)
+    .toSorted();
+}
+
 const AUTH_CHOICE_HELP = formatAuthChoiceChoicesForCli({
   includeLegacyAliases: true,
   includeSkip: true,
@@ -64,9 +94,10 @@ function extractCliFlags(cliOption: string): string[] {
 }
 
 function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
+  // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
   const seenCliFlags = new Set<string>();
   const flags: OnboardAuthFlag[] = [];
-  for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveManifestProviderOnboardAuthFlags()]) {
+  for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveProviderOnboardAuthFlags()]) {
     const cliFlags = extractCliFlags(flag.cliOption);
     if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
       continue;
@@ -89,30 +120,8 @@ function pickOnboardProviderAuthOptionValues(
   );
 }
 
-export function registerOnboardCommand(program: Command) {
-  const command = program
-    .command("onboard")
-    .description("Interactive onboarding for the gateway, workspace, and skills")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
-    )
-    .option("--workspace <dir>", "Agent workspace directory (default: ~/.openclaw/workspace)")
-    .option(
-      "--reset",
-      "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
-    )
-    .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
-    .option("--non-interactive", "Run without prompts", false)
-    .option("--modern", "Use the Crestodian conversational onboarding preview", false)
-    .option(
-      "--accept-risk",
-      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
-      false,
-    )
-    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
-    .option("--mode <mode>", "Onboard mode: local|remote")
+export function registerOnboardAuthOptions(command: Command): Command {
+  command
     .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
     .option(
       "--token-provider <id>",
@@ -135,17 +144,78 @@ export function registerOnboardCommand(program: Command) {
     command.option(providerFlag.cliOption, providerFlag.description);
   }
 
-  command
+  return command
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
     .option(
       "--custom-compatibility <mode>",
-      "Custom provider API compatibility: openai|anthropic (default: openai)",
+      "Custom provider API compatibility: openai|openai-responses|anthropic (default: openai)",
     )
     .option("--custom-image-input", "Mark the custom provider model as image-capable")
-    .option("--custom-text-input", "Mark the custom provider model as text-only")
+    .option("--custom-text-input", "Mark the custom provider model as text-only");
+}
+
+export function pickOnboardAuthOptionValues(
+  opts: Record<string, unknown>,
+): Partial<OnboardOptions> {
+  const customTextInput = opts.customTextInput === true;
+  return {
+    authChoice: opts.authChoice as AuthChoice | undefined,
+    tokenProvider: opts.tokenProvider as string | undefined,
+    token: opts.token as string | undefined,
+    tokenProfileId: opts.tokenProfileId as string | undefined,
+    tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
+    secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
+    ...pickOnboardProviderAuthOptionValues(opts),
+    cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
+    cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
+    customBaseUrl: opts.customBaseUrl as string | undefined,
+    customApiKey: opts.customApiKey as string | undefined,
+    customModelId: opts.customModelId as string | undefined,
+    customProviderId: opts.customProviderId as string | undefined,
+    customCompatibility: opts.customCompatibility as
+      | "openai"
+      | "openai-responses"
+      | "anthropic"
+      | undefined,
+    customImageInput: customTextInput ? false : opts.customImageInput === true ? true : undefined,
+  };
+}
+
+export function registerOnboardCommand(program: Command): void {
+  const command = program
+    .command("onboard")
+    .description("Guided setup for auth, models, Gateway, workspace, channels, and skills")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/onboard", "docs.openclaw.ai/cli/onboard")}\n`,
+    )
+    .option(
+      "--workspace <dir>",
+      "Workspace proposal for guided setup; persisted by classic/non-interactive setup",
+    )
+    .option(
+      "--reset",
+      "Reset config + credentials + sessions before running onboard (workspace only with --reset-scope full)",
+    )
+    .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
+    .option("--non-interactive", "Run without prompts", false)
+    .option("--modern", "Open inference-gated Crestodian (kept for compatibility)", false)
+    .option("--classic", "Use the classic multi-step setup wizard", false)
+    .option(
+      "--accept-risk",
+      "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",
+      false,
+    )
+    .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
+    .option("--mode <mode>", "Onboard mode: local|remote");
+
+  registerOnboardAuthOptions(command);
+
+  command
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
@@ -169,6 +239,8 @@ export function registerOnboardCommand(program: Command) {
     .option("--skip-search", "Skip search provider setup")
     .option("--skip-health", "Skip health check")
     .option("--skip-ui", "Skip Control UI/TUI prompts")
+    .option("--suppress-gateway-token-output", "Suppress token-bearing Gateway/UI output")
+    .option("--skip-hooks", "Skip hook setup")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--import-from <provider>", "Migration provider to run during onboarding")
     .option("--import-source <path>", "Source agent home for --import-from")
@@ -176,56 +248,64 @@ export function registerOnboardCommand(program: Command) {
     .option("--json", "Output JSON summary", false);
 
   command.action(async (opts, commandRuntime) => {
+    const { defaultRuntime } = await import("../../runtime.js");
     await runCommandWithRuntime(defaultRuntime, async () => {
       if (opts.modern) {
-        const { runCrestodian } = await import("../../crestodian/crestodian.js");
-        await runCrestodian({
-          message: opts.nonInteractive ? "overview" : undefined,
-          yes: false,
-          json: Boolean(opts.json),
-          interactive: !opts.nonInteractive,
-        });
+        const unsupportedOptions = listUnsupportedModernOptions(commandRuntime);
+        if (unsupportedOptions.length > 0) {
+          defaultRuntime.error(
+            [
+              `--modern cannot be combined with: ${unsupportedOptions.join(", ")}.`,
+              "Run those setup options without --modern, or remove them to open Crestodian.",
+            ].join("\n"),
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+        if (opts.nonInteractive && opts.acceptRisk !== true) {
+          defaultRuntime.error(
+            [
+              "Non-interactive setup requires explicit risk acknowledgement.",
+              "Read: https://docs.openclaw.ai/security",
+              `Re-run with: ${formatCliCommand("openclaw onboard --modern --non-interactive --accept-risk ...")}`,
+            ].join("\n"),
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+        const { runCrestodianWithInference } =
+          await import("../../commands/crestodian-with-inference.js");
+        await runCrestodianWithInference(
+          {
+            yes: false,
+            json: Boolean(opts.json),
+            interactive: !opts.nonInteractive,
+            welcomeVariant: "onboarding",
+            ...(opts.workspace ? { setupWorkspace: opts.workspace as string } : {}),
+          },
+          defaultRuntime,
+          {
+            ...(opts.workspace ? { workspace: opts.workspace as string } : {}),
+            ...(opts.acceptRisk ? { acceptRisk: true } : {}),
+          },
+        );
         return;
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),
       });
-      const gatewayPort =
-        typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
-      const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
-        opts as Record<string, unknown>,
-      );
+      const gatewayPort = parsePort(opts.gatewayPort);
+      const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
         {
           workspace: opts.workspace as string | undefined,
           nonInteractive: Boolean(opts.nonInteractive),
           acceptRisk: Boolean(opts.acceptRisk),
+          classic: Boolean(opts.classic),
           flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
           mode: opts.mode as "local" | "remote" | undefined,
-          authChoice: opts.authChoice as AuthChoice | undefined,
-          tokenProvider: opts.tokenProvider as string | undefined,
-          token: opts.token as string | undefined,
-          tokenProfileId: opts.tokenProfileId as string | undefined,
-          tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
-          secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
-          ...providerAuthOptionValues,
-          cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
-          cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
-          customBaseUrl: opts.customBaseUrl as string | undefined,
-          customApiKey: opts.customApiKey as string | undefined,
-          customModelId: opts.customModelId as string | undefined,
-          customProviderId: opts.customProviderId as string | undefined,
-          customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
-          customImageInput:
-            opts.customTextInput === true
-              ? false
-              : opts.customImageInput === true
-                ? true
-                : undefined,
-          gatewayPort:
-            typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
-              ? gatewayPort
-              : undefined,
+          ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),
+          gatewayPort: gatewayPort ?? undefined,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,
@@ -245,6 +325,8 @@ export function registerOnboardCommand(program: Command) {
           skipSearch: Boolean(opts.skipSearch),
           skipHealth: Boolean(opts.skipHealth),
           skipUi: Boolean(opts.skipUi),
+          suppressGatewayTokenOutput: Boolean(opts.suppressGatewayTokenOutput),
+          skipHooks: Boolean(opts.skipHooks),
           nodeManager: opts.nodeManager as NodeManagerChoice | undefined,
           importFrom: opts.importFrom as string | undefined,
           importSource: opts.importSource as string | undefined,

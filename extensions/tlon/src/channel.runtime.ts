@@ -1,8 +1,10 @@
+// Tlon plugin module implements channel behavior.
 import crypto from "node:crypto";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { monitorTlonProvider } from "./monitor/index.js";
 import { tlonSetupWizard } from "./setup-surface.js";
 import {
@@ -75,7 +77,7 @@ async function createHttpPokeApi(params: {
 
       try {
         if (!response.ok && response.status !== 204) {
-          const errorText = await response.text();
+          const errorText = await readResponseTextLimited(response, 16 * 1024);
           throw new Error(`Poke failed: ${response.status} - ${errorText}`);
         }
 
@@ -138,6 +140,15 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   textChunkLimit: 10000,
   resolveTarget: ({ to }) => resolveTlonOutboundTarget(to),
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    },
+  },
   sendText: async ({ cfg, to, text, accountId, replyToId, threadId }) => {
     const { account, parsed } = resolveOutboundContext({ cfg, accountId, to });
     return withHttpPokeAccountApi(account, async (api) => {
@@ -182,6 +193,7 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
           fromShip,
           toShip: parsed.ship,
           story,
+          kind: "media",
         });
       }
       return await sendGroupMessageWithStory({
@@ -191,6 +203,7 @@ export const tlonRuntimeOutbound: ChannelOutboundAdapter = {
         channelName: parsed.channelName,
         story,
         replyToId: resolveReplyId(replyToId, threadId),
+        kind: "media",
       });
     });
   },

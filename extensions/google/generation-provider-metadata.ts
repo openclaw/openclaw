@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import type { MusicGenerationProvider } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import type {
@@ -88,7 +89,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
-        supportsAudio: true,
+        supportsAudio: false,
       },
       imageToVideo: {
         enabled: true,
@@ -101,7 +102,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
-        supportsAudio: true,
+        supportsAudio: false,
       },
       videoToVideo: {
         enabled: true,
@@ -114,7 +115,7 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
         supportsAspectRatio: true,
         supportsResolution: true,
         supportsSize: true,
-        supportsAudio: true,
+        supportsAudio: false,
       },
     },
   };

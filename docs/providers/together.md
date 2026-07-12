@@ -8,6 +8,7 @@ read_when:
 
 [Together AI](https://together.ai) provides access to leading open-source
 models including Llama, DeepSeek, Kimi, and more through a unified API.
+OpenClaw bundles it as the `together` provider.
 
 | Property | Value                         |
 | -------- | ----------------------------- |
@@ -33,7 +34,9 @@ models including Llama, DeepSeek, Kimi, and more through a unified API.
     {
       agents: {
         defaults: {
-          model: { primary: "together/moonshotai/Kimi-K2.5" },
+          model: {
+            primary: "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+          },
         },
       },
     }
@@ -51,35 +54,34 @@ openclaw onboard --non-interactive \
 ```
 
 <Note>
-The onboarding preset sets `together/moonshotai/Kimi-K2.5` as the default
-model.
+Onboarding sets `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` as the
+default model.
 </Note>
 
 ## Built-in catalog
 
-OpenClaw ships this bundled Together catalog:
+Cost is USD per million tokens.
 
-| Model ref                                                    | Name                                   | Input       | Context    | Notes                            |
-| ------------------------------------------------------------ | -------------------------------------- | ----------- | ---------- | -------------------------------- |
-| `together/moonshotai/Kimi-K2.5`                              | Kimi K2.5                              | text, image | 262,144    | Default model; reasoning enabled |
-| `together/zai-org/GLM-4.7`                                   | GLM 4.7 Fp8                            | text        | 202,752    | General-purpose text model       |
-| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo`           | Llama 3.3 70B Instruct Turbo           | text        | 131,072    | Fast instruction model           |
-| `together/meta-llama/Llama-4-Scout-17B-16E-Instruct`         | Llama 4 Scout 17B 16E Instruct         | text, image | 10,000,000 | Multimodal                       |
-| `together/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` | Llama 4 Maverick 17B 128E Instruct FP8 | text, image | 20,000,000 | Multimodal                       |
-| `together/deepseek-ai/DeepSeek-V3.1`                         | DeepSeek V3.1                          | text        | 131,072    | General text model               |
-| `together/deepseek-ai/DeepSeek-R1`                           | DeepSeek R1                            | text        | 131,072    | Reasoning model                  |
-| `together/moonshotai/Kimi-K2-Instruct-0905`                  | Kimi K2-Instruct 0905                  | text        | 262,144    | Secondary Kimi text model        |
+| Model ref                                          | Name                         | Input       | Context | Max output | Cost (in/out) | Notes               |
+| -------------------------------------------------- | ---------------------------- | ----------- | ------- | ---------- | ------------- | ------------------- |
+| `together/meta-llama/Llama-3.3-70B-Instruct-Turbo` | Llama 3.3 70B Instruct Turbo | text        | 131,072 | 8,192      | 0.88 / 0.88   | Default model       |
+| `together/moonshotai/Kimi-K2.6`                    | Kimi K2.6 FP4                | text, image | 262,144 | 32,768     | 1.20 / 4.50   | Reasoning model     |
+| `together/deepseek-ai/DeepSeek-V4-Pro`             | DeepSeek V4 Pro              | text        | 512,000 | 8,192      | 2.10 / 4.40   | Reasoning model     |
+| `together/Qwen/Qwen2.5-7B-Instruct-Turbo`          | Qwen2.5 7B Instruct Turbo    | text        | 32,768  | 8,192      | 0.30 / 0.30   | Fast, non-reasoning |
+| `together/zai-org/GLM-5.1`                         | GLM 5.1 FP4                  | text        | 202,752 | 8,192      | 1.40 / 4.40   | Reasoning model     |
 
 ## Video generation
 
 The bundled `together` plugin also registers video generation through the
 shared `video_generate` tool.
 
-| Property             | Value                                 |
-| -------------------- | ------------------------------------- |
-| Default video model  | `together/Wan-AI/Wan2.2-T2V-A14B`     |
-| Modes                | text-to-video, single-image reference |
-| Supported parameters | `aspectRatio`, `resolution`           |
+| Property             | Value                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| Default video model  | `Wan-AI/Wan2.2-T2V-A14B`                                                                  |
+| Other models         | `Wan-AI/Wan2.2-I2V-A14B`, `minimax/Hailuo-02`, `Kwai/Kling-2.1-Master`                    |
+| Modes                | text-to-video; image-to-video only with `Wan-AI/Wan2.2-I2V-A14B` (single reference image) |
+| Duration             | 1-10 seconds                                                                              |
+| Supported parameters | `size` (parsed as `<width>x<height>`); `aspectRatio`/`resolution` are not read            |
 
 To use Together as the default video provider:
 
@@ -96,7 +98,7 @@ To use Together as the default video provider:
 ```
 
 <Tip>
-See [Video Generation](/tools/video-generation) for the shared tool parameters,
+See [Video generation](/tools/video-generation) for the shared tool parameters,
 provider selection, and failover behavior.
 </Tip>
 
@@ -126,7 +128,7 @@ provider selection, and failover behavior.
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Model selection" href="/concepts/model-providers" icon="layers">
+  <Card title="Model providers" href="/concepts/model-providers" icon="layers">
     Provider rules, model refs, and failover behavior.
   </Card>
   <Card title="Video generation" href="/tools/video-generation" icon="video">

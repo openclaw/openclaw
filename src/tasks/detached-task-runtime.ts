@@ -1,7 +1,10 @@
+// Provides the runtime adapter for detached task execution.
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedTaskRecoveryAttemptParams,
   DetachedTaskRecoveryAttemptResult,
+  DetachedTaskFindParams,
+  DetachedTaskFindResult,
   DetachedTaskFinalizeParams,
   DetachedTaskLifecycleRuntime,
   DetachedTaskLifecycleRuntimeRegistration,
@@ -24,12 +27,40 @@ import {
   startTaskRunByRunId as startTaskRunByRunIdFromExecutor,
 } from "./task-executor.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { findTaskByRunIdForStatus, listTasksForSessionKeyForStatus } from "./task-status-access.js";
 
 const log = createSubsystemLogger("tasks/detached-runtime");
 const DETACHED_TASK_RECOVERY_WARN_MS = 5_000;
 
+function taskMatchesFindScope(task: TaskRecord, params: DetachedTaskFindParams): boolean {
+  return (
+    task.runtime === params.runtime &&
+    task.childSessionKey === params.sessionKey &&
+    task.createdAt >= params.createdAtOrAfter &&
+    (params.createdBefore === undefined || task.createdAt < params.createdBefore)
+  );
+}
+
+function taskMatchesFindIdentity(task: TaskRecord, params: DetachedTaskFindParams): boolean {
+  return task.runtime === params.runtime && task.childSessionKey === params.sessionKey;
+}
+
+function findCoreTaskRun(params: DetachedTaskFindParams): TaskRecord | undefined {
+  const direct = findTaskByRunIdForStatus(params.runId);
+  if (direct && taskMatchesFindIdentity(direct, params)) {
+    return direct;
+  }
+  if (params.allowSessionFallback !== true) {
+    return undefined;
+  }
+  return listTasksForSessionKeyForStatus(params.sessionKey).find((task) =>
+    taskMatchesFindScope(task, params),
+  );
+}
+
 export type { DetachedTaskLifecycleRuntime, DetachedTaskLifecycleRuntimeRegistration };
 
+// Default runtime keeps detached task APIs usable before plugins install custom lifecycle hooks.
 const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
   createQueuedTaskRun: createQueuedTaskRunFromExecutor,
   createRunningTaskRun: createRunningTaskRunFromExecutor,
@@ -39,6 +70,7 @@ const DEFAULT_DETACHED_TASK_LIFECYCLE_RUNTIME: DetachedTaskLifecycleRuntime = {
   completeTaskRunByRunId: completeTaskRunByRunIdFromExecutor,
   failTaskRunByRunId: failTaskRunByRunIdFromExecutor,
   setDetachedTaskDeliveryStatusByRunId: setDetachedTaskDeliveryStatusByRunIdFromExecutor,
+  findTaskRun: findCoreTaskRun,
   cancelDetachedTaskRunById: cancelDetachedTaskRunByIdInCore,
 };
 
@@ -123,6 +155,26 @@ export function setDetachedTaskDeliveryStatusByRunId(
   return getDetachedTaskLifecycleRuntime().setDetachedTaskDeliveryStatusByRunId(...args);
 }
 
+export function findDetachedTaskRun(params: DetachedTaskFindParams): DetachedTaskFindResult {
+  const runtime = getDetachedTaskLifecycleRuntime();
+  if (runtime.findTaskRun) {
+    try {
+      return { lookup: "available", task: runtime.findTaskRun(params) };
+    } catch (error) {
+      log.warn("Detached task lookup failed", {
+        runtime: params.runtime,
+        runId: params.runId,
+        error,
+      });
+      return { lookup: "unavailable" };
+    }
+  }
+  const coreTask = findCoreTaskRun(params);
+  // Older custom runtimes may mirror records into core. When they do not, an
+  // empty fallback cannot prove that the runtime-owned task is absent.
+  return coreTask ? { lookup: "available", task: coreTask } : { lookup: "unavailable" };
+}
+
 export function cancelDetachedTaskRunById(
   ...args: Parameters<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]>
 ): ReturnType<DetachedTaskLifecycleRuntime["cancelDetachedTaskRunById"]> {
@@ -138,6 +190,7 @@ export async function tryRecoverTaskBeforeMarkLost(
   }
   const startedAt = Date.now();
   try {
+    // Recovery hooks are best-effort; invalid/slow/failing hooks must not block mark-lost cleanup.
     const result = await hook(params);
     const elapsedMs = Date.now() - startedAt;
     if (elapsedMs >= DETACHED_TASK_RECOVERY_WARN_MS) {

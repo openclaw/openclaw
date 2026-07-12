@@ -1,11 +1,15 @@
-import { createHash, randomUUID } from "node:crypto";
+// Stores and verifies web push subscriptions and delivery payloads.
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveStateDir } from "../config/paths.js";
-import { createAsyncLock, readJsonFile, writeJsonAtomic } from "./json-files.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { sha256HexPrefix } from "./crypto-digest.js";
+import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 
 // --- Types ---
 
-export type WebPushSubscription = {
+type WebPushSubscription = {
   subscriptionId: string;
   endpoint: string;
   keys: { p256dh: string; auth: string };
@@ -13,17 +17,17 @@ export type WebPushSubscription = {
   updatedAtMs: number;
 };
 
-export type WebPushRegistrationState = {
+type WebPushRegistrationState = {
   subscriptionsByEndpointHash: Record<string, WebPushSubscription>;
 };
 
-export type VapidKeyPair = {
+type VapidKeyPair = {
   publicKey: string;
   privateKey: string;
   subject: string;
 };
 
-export type WebPushSendResult = {
+type WebPushSendResult = {
   ok: boolean;
   subscriptionId: string;
   statusCode?: number;
@@ -36,21 +40,16 @@ const WEB_PUSH_STATE_FILENAME = "push/web-push-subscriptions.json";
 const VAPID_KEYS_FILENAME = "push/vapid-keys.json";
 const MAX_ENDPOINT_LENGTH = 2048;
 const MAX_KEY_LENGTH = 512;
-const DEFAULT_VAPID_SUBJECT = "mailto:openclaw@localhost";
+const DEFAULT_VAPID_SUBJECT = "https://openclaw.ai";
 
 const withLock = createAsyncLock();
 
 type WebPushRuntime = typeof import("web-push");
 type WebPushRuntimeModule = WebPushRuntime & { default?: WebPushRuntime };
 
-let webPushRuntimePromise: Promise<WebPushRuntime> | undefined;
-
-async function loadWebPushRuntime(): Promise<WebPushRuntime> {
-  webPushRuntimePromise ??= import("web-push").then(
-    (mod: WebPushRuntimeModule) => mod.default ?? mod,
-  );
-  return await webPushRuntimePromise;
-}
+const loadWebPushRuntime = createLazyRuntimeModule(() =>
+  import("web-push").then((mod: WebPushRuntimeModule) => mod.default ?? mod),
+);
 
 // --- Helpers ---
 
@@ -65,7 +64,7 @@ function resolveVapidKeysPath(baseDir?: string): string {
 }
 
 function hashEndpoint(endpoint: string): string {
-  return createHash("sha256").update(endpoint).digest("hex").slice(0, 32);
+  return sha256HexPrefix(endpoint, 32);
 }
 
 function isValidEndpoint(endpoint: string): boolean {
@@ -88,13 +87,13 @@ function isValidKey(key: string): boolean {
 
 async function loadState(baseDir?: string): Promise<WebPushRegistrationState> {
   const filePath = resolveWebPushStatePath(baseDir);
-  const state = await readJsonFile<WebPushRegistrationState>(filePath);
+  const state = await tryReadJson<WebPushRegistrationState>(filePath);
   return state ?? { subscriptionsByEndpointHash: {} };
 }
 
 async function persistState(state: WebPushRegistrationState, baseDir?: string): Promise<void> {
   const filePath = resolveWebPushStatePath(baseDir);
-  await writeJsonAtomic(filePath, state, { trailingNewline: true });
+  await writeJson(filePath, state, { trailingNewline: true });
 }
 
 // --- VAPID keys ---
@@ -116,7 +115,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
   // prevent concurrent bootstraps from writing different keypairs.
   return await withLock(async () => {
     const filePath = resolveVapidKeysPath(baseDir);
-    const existing = await readJsonFile<VapidKeyPair>(filePath);
+    const existing = await tryReadJson<VapidKeyPair>(filePath);
     if (existing?.publicKey && existing?.privateKey) {
       return {
         publicKey: existing.publicKey,
@@ -133,7 +132,7 @@ export async function resolveVapidKeys(baseDir?: string): Promise<VapidKeyPair> 
       privateKey: keys.privateKey,
       subject: resolveVapidSubjectFromEnv(),
     };
-    await writeJsonAtomic(filePath, pair, { trailingNewline: true });
+    await writeJson(filePath, pair, { trailingNewline: true });
     return pair;
   });
 }
@@ -142,17 +141,17 @@ function resolveVapidSubjectFromEnv(): string {
   return process.env.OPENCLAW_VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT;
 }
 
-export function resolveVapidPublicKeyFromEnv(): string | undefined {
+function resolveVapidPublicKeyFromEnv(): string | undefined {
   return process.env.OPENCLAW_VAPID_PUBLIC_KEY || undefined;
 }
 
-export function resolveVapidPrivateKeyFromEnv(): string | undefined {
+function resolveVapidPrivateKeyFromEnv(): string | undefined {
   return process.env.OPENCLAW_VAPID_PRIVATE_KEY || undefined;
 }
 
 // --- Subscription CRUD ---
 
-export type RegisterWebPushParams = {
+type RegisterWebPushParams = {
   endpoint: string;
   keys: { p256dh: string; auth: string };
   baseDir?: string;
@@ -190,39 +189,9 @@ export async function registerWebPushSubscription(
   });
 }
 
-export async function loadWebPushSubscription(
-  subscriptionId: string,
-  baseDir?: string,
-): Promise<WebPushSubscription | null> {
-  const state = await loadState(baseDir);
-  for (const sub of Object.values(state.subscriptionsByEndpointHash)) {
-    if (sub.subscriptionId === subscriptionId) {
-      return sub;
-    }
-  }
-  return null;
-}
-
 export async function listWebPushSubscriptions(baseDir?: string): Promise<WebPushSubscription[]> {
   const state = await loadState(baseDir);
   return Object.values(state.subscriptionsByEndpointHash);
-}
-
-export async function clearWebPushSubscription(
-  subscriptionId: string,
-  baseDir?: string,
-): Promise<boolean> {
-  return await withLock(async () => {
-    const state = await loadState(baseDir);
-    for (const [hash, sub] of Object.entries(state.subscriptionsByEndpointHash)) {
-      if (sub.subscriptionId === subscriptionId) {
-        delete state.subscriptionsByEndpointHash[hash];
-        await persistState(state, baseDir);
-        return true;
-      }
-    }
-    return false;
-  });
 }
 
 export async function clearWebPushSubscriptionByEndpoint(
@@ -243,7 +212,7 @@ export async function clearWebPushSubscriptionByEndpoint(
 
 // --- Sending ---
 
-export type WebPushPayload = {
+type WebPushPayload = {
   title: string;
   body?: string;
   tag?: string;
@@ -252,18 +221,6 @@ export type WebPushPayload = {
 
 function applyVapidDetails(webPush: WebPushRuntime, keys: VapidKeyPair): void {
   webPush.setVapidDetails(keys.subject, keys.publicKey, keys.privateKey);
-}
-
-export async function sendWebPushNotification(
-  subscription: WebPushSubscription,
-  payload: WebPushPayload,
-  vapidKeys?: VapidKeyPair,
-): Promise<WebPushSendResult> {
-  const keys = vapidKeys ?? (await resolveVapidKeys());
-  const webPush = await loadWebPushRuntime();
-  applyVapidDetails(webPush, keys);
-
-  return sendPreparedWebPushNotification(webPush, subscription, payload);
 }
 
 async function sendPreparedWebPushNotification(
@@ -328,7 +285,8 @@ export async function broadcastWebPush(
       ? r.value
       : {
           ok: false,
-          subscriptionId: subscriptions[i].subscriptionId,
+          subscriptionId: expectDefined(subscriptions[i], "subscriptions entry at i")
+            .subscriptionId,
           error: r.reason instanceof Error ? r.reason.message : "unknown error",
         },
   );
@@ -337,7 +295,7 @@ export async function broadcastWebPush(
   const expiredEndpoints = mapped
     .map((result, i) => ({ result, sub: subscriptions[i] }))
     .filter(({ result }) => !result.ok && (result.statusCode === 410 || result.statusCode === 404))
-    .map(({ sub }) => sub.endpoint);
+    .map(({ sub }) => expectDefined(sub, "push web sub").endpoint);
 
   if (expiredEndpoints.length > 0) {
     await Promise.allSettled(

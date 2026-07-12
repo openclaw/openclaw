@@ -1,15 +1,20 @@
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+// Line plugin module implements channel behavior.
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
-import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
+import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
-import { lineOutboundAdapter } from "./outbound.js";
+import { inferLineTargetChatType, normalizeLineMessagingTarget } from "./messaging-target.js";
+import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
 import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
@@ -42,12 +47,32 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       resolveRequireMention: resolveLineGroupRequireMention,
     },
     messaging: {
-      normalizeTarget: (target) => {
-        const trimmed = target.trim();
-        if (!trimmed) {
-          return undefined;
+      targetPrefixes: ["line"],
+      normalizeTarget: normalizeLineMessagingTarget,
+      inferTargetChatType: ({ to }) => inferLineTargetChatType(to),
+      resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+        const peerId = normalizeLineMessagingTarget(target);
+        const chatType = inferLineTargetChatType(target);
+        if (!peerId || !chatType) {
+          return null;
         }
-        return trimmed.replace(/^line:(group|room|user):/i, "").replace(/^line:/i, "");
+        const isRoom = peerId.startsWith("R");
+        return buildChannelOutboundSessionRoute({
+          cfg,
+          agentId,
+          channel: "line",
+          accountId,
+          recipientSessionExact: true,
+          peer: { kind: chatType, id: peerId },
+          chatType,
+          from:
+            chatType === "direct"
+              ? `line:${peerId}`
+              : isRoom
+                ? `line:room:${peerId}`
+                : `line:group:${peerId}`,
+          to: peerId,
+        });
       },
       resolveInboundConversation: lineBindingsAdapter.resolveInboundConversation,
       transformReplyPayload: ({ payload }) => {
@@ -71,6 +96,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     setup: lineSetupAdapter,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
+    message: lineMessageAdapter,
     bindings: lineBindingsAdapter,
     conversationBindings: {
       defaultTopLevelPlacement: "current",

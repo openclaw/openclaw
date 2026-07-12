@@ -8,13 +8,19 @@
  * aliases before release.
  */
 
-import { readFileSync, existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
+import { readFileSync, existsSync, statSync } from "node:fs";
+import { resolve, dirname, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { pluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
+import {
+  MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+  MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES,
+  evaluatePluginSdkDeclarationBudget,
+  isPrivateQaPluginSdkBuild,
+} from "./lib/plugin-sdk-declaration-budget.mjs";
+import { publicPluginSdkEntrypoints, publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const distFile = resolve(__dirname, "..", "dist", "plugin-sdk", "index.js");
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const distFile = resolve(scriptDir, "..", "dist", "plugin-sdk", "index.js");
 if (!existsSync(distFile)) {
   console.error("ERROR: dist/plugin-sdk/index.js not found. Run `pnpm build` first.");
   process.exit(1);
@@ -42,6 +48,9 @@ const exportedNames = exportMatch[1]
 const exportSet = new Set(exportedNames);
 
 const requiredRuntimeShimEntries = ["compat.js", "root-alias.cjs"];
+const forbiddenPublicDeclarationSpecifiers = ["@openclaw/llm-core"];
+const FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE = /\bdeclare\s+const\s+ProtocolSchemas(?:\$\d+)?\b/u;
+const RELATIVE_DECLARATION_SPECIFIER_RE = /\b(?:from|import)\s*(?:\(\s*)?["']([^"']+)["']/gu;
 const requiredSubpathExports = {
   "secret-input-runtime": [
     "coerceSecretRef",
@@ -70,9 +79,9 @@ for (const name of requiredExports) {
   }
 }
 
-for (const entry of pluginSdkSubpaths) {
-  const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
-  const dtsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
+for (const entry of publicPluginSdkSubpaths) {
+  const jsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.js`);
+  const dtsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
   if (!existsSync(jsPath)) {
     console.error(`MISSING SUBPATH JS: dist/plugin-sdk/${entry}.js`);
     missing += 1;
@@ -84,7 +93,7 @@ for (const entry of pluginSdkSubpaths) {
 }
 
 for (const entry of requiredRuntimeShimEntries) {
-  const shimPath = resolve(__dirname, "..", "dist", "plugin-sdk", entry);
+  const shimPath = resolve(scriptDir, "..", "dist", "plugin-sdk", entry);
   if (!existsSync(shimPath)) {
     console.error(`MISSING RUNTIME SHIM: dist/plugin-sdk/${entry}`);
     missing += 1;
@@ -92,7 +101,7 @@ for (const entry of requiredRuntimeShimEntries) {
 }
 
 for (const [entry, names] of Object.entries(requiredSubpathExports)) {
-  const jsPath = resolve(__dirname, "..", "dist", "plugin-sdk", `${entry}.js`);
+  const jsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.js`);
   if (!existsSync(jsPath)) {
     continue;
   }
@@ -111,6 +120,82 @@ for (const [entry, names] of Object.entries(requiredSubpathExports)) {
       missing += 1;
     }
   }
+}
+
+const distDir = resolve(scriptDir, "..", "dist");
+const declarationPaths = new Set();
+// Publication checks always start at public roots. Private QA entries are local-only,
+// but their unified-build chunk topology can still change declarations reachable here.
+const declarationQueue = publicPluginSdkEntrypoints.map((entry) =>
+  resolve(distDir, "plugin-sdk", `${entry}.d.ts`),
+);
+while (declarationQueue.length > 0) {
+  const dtsPath = declarationQueue.pop();
+  if (!dtsPath || declarationPaths.has(dtsPath)) {
+    continue;
+  }
+  if (!existsSync(dtsPath)) {
+    console.error(`MISSING PUBLIC DTS DEPENDENCY: ${relative(resolve(scriptDir, ".."), dtsPath)}`);
+    missing += 1;
+    continue;
+  }
+  declarationPaths.add(dtsPath);
+  const dtsContent = readFileSync(dtsPath, "utf8");
+  if (FORBIDDEN_PUBLIC_PROTOCOL_REGISTRY_RE.test(dtsContent)) {
+    console.error(
+      `FORBIDDEN PUBLIC DTS REGISTRY: ${relative(resolve(scriptDir, ".."), dtsPath)} retains ProtocolSchemas`,
+    );
+    missing += 1;
+  }
+  for (const match of dtsContent.matchAll(RELATIVE_DECLARATION_SPECIFIER_RE)) {
+    const specifier = match[1];
+    if (!specifier?.startsWith(".")) {
+      continue;
+    }
+    const declarationSpecifier = specifier.endsWith(".js")
+      ? `${specifier.slice(0, -3)}.d.ts`
+      : `${specifier}.d.ts`;
+    const importedPath = resolve(dirname(dtsPath), declarationSpecifier);
+    if (importedPath.startsWith(`${distDir}${sep}`)) {
+      declarationQueue.push(importedPath);
+    }
+  }
+  for (const specifier of forbiddenPublicDeclarationSpecifiers) {
+    if (dtsContent.includes(`"${specifier}`) || dtsContent.includes(`'${specifier}`)) {
+      console.error(
+        `FORBIDDEN PUBLIC DTS SPECIFIER: ${relative(resolve(scriptDir, ".."), dtsPath)} imports ${specifier}`,
+      );
+      missing += 1;
+    }
+  }
+}
+
+const declarationBytes = Array.from(declarationPaths).reduce(
+  (total, dtsPath) => total + statSync(dtsPath).size,
+  0,
+);
+const declarationBudget = evaluatePluginSdkDeclarationBudget({
+  buildPrivateQa: isPrivateQaPluginSdkBuild(process.env),
+  declarationBytes,
+});
+if (declarationBudget.shouldFail) {
+  const budgetLabel =
+    declarationBudget.budgetKind === "private-qa-public-entry"
+      ? "PRIVATE QA PUBLIC-ENTRY PLUGIN SDK"
+      : "PLUGIN SDK";
+  console.error(
+    `${budgetLabel} DTS TOO LARGE: ${declarationBytes} bytes exceeds ${declarationBudget.budgetBytes} bytes.`,
+  );
+  console.error("Keep plugin SDK declarations in the canonical unified tsdown graph.");
+  missing += 1;
+} else if (declarationBudget.budgetKind === "private-qa-public-entry") {
+  console.log(
+    `Private QA build public-entry declaration graph: ${declarationBytes}/${MAX_PRIVATE_QA_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes; publication budget ${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes is not applied.`,
+  );
+} else {
+  console.log(
+    `Public plugin SDK declaration graph: ${declarationBytes}/${MAX_PUBLIC_PLUGIN_SDK_DECLARATION_BYTES} bytes.`,
+  );
 }
 
 if (missing > 0) {

@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+// Microsoft provider module implements model/runtime integration.
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   CHROMIUM_FULL_VERSION,
@@ -6,7 +7,10 @@ import {
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
 import { isVoiceCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
@@ -21,12 +25,13 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
 
 const DEFAULT_EDGE_VOICE = "en-US-MichelleNeural";
 const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
+const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
 type MicrosoftProviderConfig = {
   enabled: boolean;
@@ -137,7 +142,9 @@ export function isCjkDominant(text: string): boolean {
 const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
 
-export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
+export async function listMicrosoftVoices(
+  timeoutMs = DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS,
+): Promise<SpeechVoiceOption[]> {
   const url =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
     `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
@@ -149,6 +156,7 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
     },
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname("https://speech.platform.bing.com"),
     auditContext: "microsoft.speech.voices",
+    timeoutMs,
   });
   try {
     if (!isDebugProxyGlobalFetchPatchInstalled()) {
@@ -165,7 +173,10 @@ export async function listMicrosoftVoices(): Promise<SpeechVoiceOption[]> {
       });
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
-    const voices = (await response.json()) as MicrosoftVoiceListEntry[];
+    const voices = await readProviderJsonResponse<MicrosoftVoiceListEntry[]>(
+      response,
+      "microsoft.speech-voices",
+    );
     return Array.isArray(voices)
       ? voices
           .map((voice) => ({
@@ -232,13 +243,18 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
         ? {}
         : { outputFormat: trimToUndefined(params.outputFormat) }),
     }),
-    listVoices: async () => await listMicrosoftVoices(),
+    listVoices: async (req) => {
+      const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
+      return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
+    },
     isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
-      const tempRoot = resolvePreferredOpenClawTmpDir();
-      mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
-      const tempDir = mkdtempSync(path.join(tempRoot, "tts-microsoft-"));
+      const temp = await tempWorkspace({
+        rootDir: resolvePreferredOpenClawTmpDir(),
+        prefix: "tts-microsoft-",
+      });
+      const tempDir = temp.dir;
       const overrideVoice = trimToUndefined(req.providerOverrides?.voice);
       let voice = overrideVoice ?? config.voice;
       let lang = config.lang;
@@ -286,7 +302,7 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
           return await runEdge(outputFormat);
         }
       } finally {
-        rmSync(tempDir, { recursive: true, force: true });
+        await temp.cleanup();
       }
     },
   };

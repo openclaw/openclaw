@@ -1,14 +1,15 @@
+// Doctor security tests cover security audit checks, config findings, and repair output.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 
 const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
 const listReadOnlyChannelPluginsForConfigMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -20,12 +21,23 @@ vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: vi.fn(async () => null),
 }));
 
+// These doctor assertions cover core secret fields. Registry integration tests
+// own plugin-derived targets, so avoid compiling every bundled plugin here.
+vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/target-registry-data.js")>();
+  return {
+    ...actual,
+    getSecretTargetRegistry: actual.getCoreSecretTargetRegistry,
+  };
+});
+
 import { noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
+  let prevServiceKind: string | undefined;
 
   beforeEach(() => {
     note.mockClear();
@@ -35,8 +47,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     prevHome = process.env.HOME;
+    prevServiceKind = process.env.OPENCLAW_SERVICE_KIND;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_SERVICE_KIND;
   });
 
   afterEach(() => {
@@ -55,22 +69,28 @@ describe("noteSecurityWarnings gateway exposure", () => {
     } else {
       process.env.HOME = prevHome;
     }
+    if (prevServiceKind === undefined) {
+      delete process.env.OPENCLAW_SERVICE_KIND;
+    } else {
+      process.env.OPENCLAW_SERVICE_KIND = prevServiceKind;
+    }
   });
 
-  const lastMessage = () => String(note.mock.calls.at(-1)?.[0] ?? "");
+  const lastMessage = () => String(note.mock.calls[note.mock.calls.length - 1]?.[0] ?? "");
 
   async function withExecApprovalsFile(
     file: Record<string, unknown>,
     run: () => Promise<void>,
   ): Promise<void> {
-    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-security-"));
-    process.env.HOME = home;
-    await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
-    await fs.writeFile(
-      path.join(home, ".openclaw", "exec-approvals.json"),
-      JSON.stringify(file, null, 2),
-    );
-    await run();
+    await withTempDir({ prefix: "openclaw-doctor-security-" }, async (home) => {
+      process.env.HOME = home;
+      await fs.mkdir(path.join(home, ".openclaw"), { recursive: true });
+      await fs.writeFile(
+        path.join(home, ".openclaw", "exec-approvals.json"),
+        JSON.stringify(file, null, 2),
+      );
+      await run();
+    });
   }
 
   async function expectAgentExecHostPolicyWarning(agentKey: "*" | "runner") {
@@ -151,6 +171,70 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).not.toContain("CRITICAL");
   });
 
+  it("warns when OPENCLAW_GATEWAY_TOKEN env conflicts with gateway.auth.token config (#74271)", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
+    const cfg = {
+      gateway: {
+        auth: {
+          token: "config-token-456",
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("OPENCLAW_GATEWAY_TOKEN conflicts with gateway.auth.token");
+    expect(message).toContain("Direct local Gateway clients commonly prefer the env token");
+    expect(message).toContain("~/.openclaw/.env");
+  });
+
+  it("does not warn when only env token is set without config token", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-only";
+    const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+  });
+
+  it("does not warn inside the managed gateway service credential context", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    const cfg = {
+      gateway: {
+        auth: {
+          token: "config-token-456",
+        },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN conflicts");
+  });
+
+  it("does not warn when config token uses OPENCLAW_GATEWAY_TOKEN SecretRef", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
+    const cfg = {
+      gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+      secrets: { providers: { default: { source: "env" } } },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+  });
+
+  it("does not warn about local gateway auth token precedence in remote mode", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-123";
+    const cfg = {
+      gateway: {
+        mode: "remote",
+        remote: { token: "remote-token" },
+        auth: { token: "local-token" },
+      },
+    } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).not.toContain("OPENCLAW_GATEWAY_TOKEN overrides");
+  });
+
   it("treats whitespace token as missing", async () => {
     const cfg = {
       gateway: { bind: "lan", auth: { mode: "token", token: "   " } },
@@ -202,7 +286,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     await noteSecurityWarnings(cfg);
     expect(listReadOnlyChannelPluginsForConfigMock).toHaveBeenCalledWith(cfg, {
       includePersistedAuthState: true,
-      includeSetupRuntimeFallback: true,
+      includeSetupFallbackPlugins: true,
     });
     const message = lastMessage();
     expect(message).toContain('config set session.dmScope "per-channel-peer"');
@@ -221,6 +305,136 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("disables approval forwarding only");
     expect(message).toContain("exec-approvals.json");
     expect(message).toContain("openclaw approvals get --gateway");
+  });
+
+  it("warns when filesystem tools are disabled but exec remains available", async () => {
+    await noteSecurityWarnings({
+      tools: {
+        allow: ["read", "exec", "process"],
+        deny: ["write", "edit", "apply_patch"],
+      },
+    } as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).toContain("filesystem write tools are disabled, but exec is still available");
+    expect(message).toContain("Runtime tools: exec, process");
+    expect(message).toContain('sandbox.mode="off"');
+    expect(message).toContain("also deny exec/process");
+  });
+
+  it("does not warn about exec filesystem policy when sandbox access is read-only", async () => {
+    await noteSecurityWarnings({
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            workspaceAccess: "ro",
+          },
+        },
+      },
+      tools: {
+        allow: ["read", "exec", "process"],
+        deny: ["write", "edit", "apply_patch"],
+      },
+    } as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).not.toContain(
+      "filesystem write tools are disabled, but exec is still available",
+    );
+  });
+
+  it("warns when model provider API keys are stored as plaintext in config", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          openai: {
+            apiKey: "sk-openai-plaintext",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).toContain("plaintext secret-bearing config fields");
+    expect(message).toContain("models.providers.openai.apiKey");
+    expect(message).toContain("openclaw secrets audit --check");
+  });
+
+  it("warns when sensitive model provider headers are stored as plaintext in config", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              Authorization: "Bearer sk-header-plaintext",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).toContain("plaintext secret-bearing config fields");
+    expect(message).toContain("models.providers.openai.headers.Authorization");
+  });
+
+  it("does not warn when non-sensitive model provider headers are stored as plaintext in config", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              "X-Proxy-Region": "us-west",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).not.toContain("plaintext secret-bearing config fields");
+    expect(message).not.toContain("models.providers.openai.headers.X-Proxy-Region");
+  });
+
+  it("keeps request headers aligned with secrets audit plaintext checks", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          openai: {
+            request: {
+              headers: {
+                "X-Proxy-Region": "us-west",
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).toContain("plaintext secret-bearing config fields");
+    expect(message).toContain("models.providers.openai.request.headers.X-Proxy-Region");
+  });
+
+  it("does not warn when model provider API keys are stored as SecretRefs", async () => {
+    await noteSecurityWarnings({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            apiKey: "${OPENAI_API_KEY}",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).not.toContain("plaintext secret-bearing config fields");
   });
 
   it("warns when tools.exec is broader than host exec defaults", async () => {
@@ -249,6 +463,33 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('security="full"');
     expect(message).toContain('defaults.security="allowlist"');
     expect(message).toContain("stricter side wins");
+  });
+
+  it("warns when normalized tools.exec mode is broader than host exec defaults", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        defaults: {
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              mode: "full",
+            },
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("tools.exec is broader than the host exec policy");
+    expect(message).toContain('tools.exec.mode="full"');
+    expect(message).toContain('defaults.security="allowlist"');
+    expect(message).not.toContain("OpenClaw default");
   });
 
   it("attributes broader host policy warnings to wildcard agent entries", async () => {
@@ -338,7 +579,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('agents.runner.ask="always"');
   });
 
-  it("ignores malformed host policy fields when attributing doctor conflicts", async () => {
+  it("fails closed on malformed persisted host policy instead of attributing partial fields", async () => {
     await withExecApprovalsFile(
       {
         version: 1,
@@ -355,6 +596,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
+              security: "full",
               ask: "off",
             },
           },
@@ -367,7 +609,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
     const message = lastMessage();
     expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
-    expect(message).toContain('defaults.ask="always"');
+    expect(message).toContain('defaults.security="deny"');
+    expect(message).not.toContain('defaults.ask="always"');
     expect(message).not.toContain('agents.runner.ask="foo"');
   });
 
@@ -465,7 +708,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
       {},
       {
         includePersistedAuthState: true,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
     const message = lastMessage();

@@ -1,3 +1,4 @@
+// Setup group access tests cover group access setup flow decisions and outputs.
 import { describe, expect, it, vi } from "vitest";
 import {
   formatAllowlistEntries,
@@ -57,11 +58,11 @@ describe("promptChannelAllowlist", () => {
     });
 
     expect(result).toEqual(["one", "two"]);
-    expect(prompter.text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialValue: "alpha, beta",
-      }),
-    );
+    expect(prompter.text).toHaveBeenCalledWith({
+      message: "Test allowlist (comma-separated)",
+      placeholder: undefined,
+      initialValue: "alpha, beta",
+    });
   });
 });
 
@@ -81,7 +82,7 @@ describe("promptChannelAccessPolicy", () => {
   });
 });
 
-describe("promptChannelAccessConfig", () => {
+describe("promptChannelAccessConfig policy-only entries", () => {
   it("skips the allowlist text prompt when entries are policy-only", async () => {
     const prompter = createPrompter({
       confirm: async () => true,
@@ -101,7 +102,7 @@ describe("promptChannelAccessConfig", () => {
   });
 });
 
-describe("promptChannelAccessConfig", () => {
+describe("promptChannelAccessConfig skip flow", () => {
   it("returns null when user skips configuration", async () => {
     const prompter = createPrompter({
       confirm: async () => false,

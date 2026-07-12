@@ -1,3 +1,4 @@
+// Browser tests cover browser proxy mode plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   hasChromeProxyControlArg,
@@ -34,19 +35,25 @@ describe("browser proxy mode", () => {
     expect(
       resolveBrowserNavigationProxyMode({
         resolved,
-        profile: { driver: "openclaw", cdpIsLoopback: true },
+        profile: { driver: "openclaw", cdpIsLoopback: true, attachOnly: false },
       }),
     ).toBe("explicit-browser-proxy");
     expect(
       resolveBrowserNavigationProxyMode({
         resolved,
-        profile: { driver: "existing-session", cdpIsLoopback: true },
+        profile: { driver: "existing-session", cdpIsLoopback: true, attachOnly: true },
       }),
     ).toBe("direct");
     expect(
       resolveBrowserNavigationProxyMode({
         resolved,
-        profile: { driver: "openclaw", cdpIsLoopback: false },
+        profile: { driver: "openclaw", cdpIsLoopback: false, attachOnly: true },
+      }),
+    ).toBe("direct");
+    expect(
+      resolveBrowserNavigationProxyMode({
+        resolved,
+        profile: { driver: "openclaw", cdpIsLoopback: true, attachOnly: true },
       }),
     ).toBe("direct");
   });

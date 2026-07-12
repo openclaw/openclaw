@@ -1,15 +1,23 @@
+// Claude CLI session history importer.
+// Converts Claude project JSONL into OpenClaw transcript-compatible messages.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import {
   isToolCallBlock,
   isToolResultBlock,
   resolveToolUseId,
   type ToolContentBlock,
 } from "../chat/tool-content.js";
-import type { SessionEntry } from "../config/sessions.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { attachOpenClawTranscriptMeta } from "./session-utils.fs.js";
+import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import {
+  getCliSessionBinding,
+  normalizeCliSessionReseedReceipt,
+} from "../config/sessions/cli-session-binding.js";
+import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
@@ -19,6 +27,8 @@ type ClaudeCliProjectEntry = {
   timestamp?: unknown;
   uuid?: unknown;
   isSidechain?: unknown;
+  isMeta?: unknown;
+  isCompactSummary?: unknown;
   message?: {
     role?: unknown;
     content?: unknown;
@@ -37,6 +47,10 @@ type ClaudeCliMessage = NonNullable<ClaudeCliProjectEntry["message"]>;
 type ClaudeCliUsage = ClaudeCliMessage["usage"];
 type TranscriptLikeMessage = Record<string, unknown>;
 type ToolNameRegistry = Map<string, string>;
+type ReseedImportState = {
+  receipt?: CliSessionReseedReceipt;
+  inspectedFirstUser: boolean;
+};
 
 function resolveHistoryHomeDir(homeDir?: string): string {
   return normalizeOptionalString(homeDir) || process.env.HOME || os.homedir();
@@ -49,22 +63,7 @@ function resolveClaudeProjectsDir(homeDir?: string): string {
 export function resolveClaudeCliBindingSessionId(
   entry: SessionEntry | undefined,
 ): string | undefined {
-  const bindingSessionId = normalizeOptionalString(
-    entry?.cliSessionBindings?.[CLAUDE_CLI_PROVIDER]?.sessionId,
-  );
-  if (bindingSessionId) {
-    return bindingSessionId;
-  }
-  const legacyMapSessionId = normalizeOptionalString(entry?.cliSessionIds?.[CLAUDE_CLI_PROVIDER]);
-  if (legacyMapSessionId) {
-    return legacyMapSessionId;
-  }
-  const legacyClaudeSessionId = normalizeOptionalString(entry?.claudeCliSessionId);
-  return legacyClaudeSessionId || undefined;
-}
-
-function resolveFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return getCliSessionBinding(entry, CLAUDE_CLI_PROVIDER)?.sessionId;
 }
 
 function resolveTimestampMs(value: unknown): number | undefined {
@@ -79,10 +78,10 @@ function resolveClaudeCliUsage(raw: ClaudeCliUsage) {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
-  const input = resolveFiniteNumber(raw.input_tokens);
-  const output = resolveFiniteNumber(raw.output_tokens);
-  const cacheRead = resolveFiniteNumber(raw.cache_read_input_tokens);
-  const cacheWrite = resolveFiniteNumber(raw.cache_creation_input_tokens);
+  const input = asFiniteNumber(raw.input_tokens);
+  const output = asFiniteNumber(raw.output_tokens);
+  const cacheRead = asFiniteNumber(raw.cache_read_input_tokens);
+  const cacheWrite = asFiniteNumber(raw.cache_creation_input_tokens);
   if (
     input === undefined &&
     output === undefined &&
@@ -103,6 +102,12 @@ function cloneJsonValue<T>(value: T): T {
   return structuredClone(value);
 }
 
+function removeContentBlock<T>(content: T[], blockIndex: number): T[] | null {
+  const nextContent = cloneJsonValue(content);
+  nextContent.splice(blockIndex, 1);
+  return nextContent.length > 0 ? nextContent : null;
+}
+
 function normalizeClaudeCliContent(
   content: string | unknown[],
   toolNameRegistry: ToolNameRegistry,
@@ -120,6 +125,8 @@ function normalizeClaudeCliContent(
     const block = cloneJsonValue(item as ToolContentBlock);
     const type = typeof block.type === "string" ? block.type : "";
     if (type === "tool_use") {
+      // Claude stores tool calls as `tool_use` with `input`; OpenClaw history
+      // expects `toolcall` plus `arguments` so replay remains provider-neutral.
       const id = normalizeOptionalString(block.id) ?? "";
       const name = normalizeOptionalString(block.name) ?? "";
       if (id && name) {
@@ -184,7 +191,10 @@ function isUserToolResultMessage(message: unknown): boolean {
 function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): TranscriptLikeMessage[] {
   const coalesced: TranscriptLikeMessage[] = [];
   for (let index = 0; index < messages.length; index += 1) {
-    const current = messages[index];
+    const current = messages.at(index);
+    if (current === undefined) {
+      break;
+    }
     const next = messages[index + 1];
     if (!isAssistantToolCallMessage(current) || !isUserToolResultMessage(next)) {
       coalesced.push(current);
@@ -216,10 +226,49 @@ function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): Trans
   return coalesced;
 }
 
+type ClaudeCliPromptTextCandidate = {
+  text: string;
+  blockIndex?: number;
+};
+
+function resolveClaudeCliPromptTextCandidates(
+  entry: ClaudeCliProjectEntry,
+  content: string | unknown[],
+): ClaudeCliPromptTextCandidate[] {
+  if (entry.isMeta === true || entry.isCompactSummary === true) {
+    return [];
+  }
+  if (typeof content === "string") {
+    return [{ text: content }];
+  }
+  if (
+    content.some(
+      (item) =>
+        item !== null && typeof item === "object" && "type" in item && item.type === "tool_result",
+    )
+  ) {
+    return [];
+  }
+  return content.flatMap((item, blockIndex) =>
+    item !== null &&
+    typeof item === "object" &&
+    "type" in item &&
+    item.type === "text" &&
+    "text" in item &&
+    typeof item.text === "string"
+      ? [{ text: item.text, blockIndex }]
+      : [],
+  );
+}
+
 function parseClaudeCliHistoryEntry(
   entry: ClaudeCliProjectEntry,
   cliSessionId: string,
   toolNameRegistry: ToolNameRegistry,
+  options: {
+    reseedMode: "recover" | "preserve";
+    reseedState?: ReseedImportState;
+  },
 ): TranscriptLikeMessage | null {
   if (entry.isSidechain === true || !entry.message || typeof entry.message !== "object") {
     return null;
@@ -237,7 +286,7 @@ function parseClaudeCliHistoryEntry(
     ...(normalizeOptionalString(entry.uuid) ? { externalId: entry.uuid } : {}),
   };
 
-  const content =
+  let content =
     typeof entry.message.content === "string" || Array.isArray(entry.message.content)
       ? normalizeClaudeCliContent(entry.message.content, toolNameRegistry)
       : undefined;
@@ -246,6 +295,61 @@ function parseClaudeCliHistoryEntry(
   }
 
   if (type === "user") {
+    const reseedState = options.reseedState;
+    const promptTextCandidates = resolveClaudeCliPromptTextCandidates(entry, content);
+    if (
+      options.reseedMode === "recover" &&
+      reseedState &&
+      !reseedState.inspectedFirstUser &&
+      promptTextCandidates.length > 0
+    ) {
+      reseedState.inspectedFirstUser = true;
+      if (reseedState.receipt) {
+        // The binding is trusted state for this native session. Do not scan
+        // later rows or a repeated user message could be suppressed.
+        const candidate = promptTextCandidates.length === 1 ? promptTextCandidates[0] : undefined;
+        if (candidate && hashCliReseedPrompt(candidate.text) === reseedState.receipt.promptHash) {
+          if (candidate.blockIndex === undefined || !Array.isArray(content)) {
+            return null;
+          }
+          // The receipt proves only the matching text block is synthetic.
+          // Preserve sibling images or other native content that has no local duplicate proof.
+          const nextContent = removeContentBlock(content, candidate.blockIndex);
+          if (!nextContent) {
+            return null;
+          }
+          content = nextContent;
+        }
+      } else {
+        for (const candidate of promptTextCandidates) {
+          const reseedPrompt = parseCliReseedPrompt(candidate.text);
+          if (reseedPrompt.kind === "legacy") {
+            if (candidate.blockIndex === undefined) {
+              if (!reseedPrompt.userMessage) {
+                return null;
+              }
+              content = reseedPrompt.userMessage;
+            } else if (Array.isArray(content)) {
+              if (!reseedPrompt.userMessage) {
+                const contentWithoutReseed = removeContentBlock(content, candidate.blockIndex);
+                if (!contentWithoutReseed) {
+                  return null;
+                }
+                content = contentWithoutReseed;
+                break;
+              }
+              const nextContent = cloneJsonValue(content);
+              const block = nextContent[candidate.blockIndex];
+              if (block && typeof block === "object") {
+                (block as Record<string, unknown>).text = reseedPrompt.userMessage;
+              }
+              content = nextContent;
+            }
+            break;
+          }
+        }
+      }
+    }
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
@@ -279,6 +383,17 @@ export function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
+  const sessionId = params.cliSessionId.trim();
+  if (
+    !sessionId ||
+    sessionId === "." ||
+    sessionId === ".." ||
+    path.isAbsolute(sessionId) ||
+    sessionId.includes("/") ||
+    sessionId.includes("\\")
+  ) {
+    return undefined;
+  }
   const projectsDir = resolveClaudeProjectsDir(params.homeDir);
   let projectEntries: fs.Dirent[];
   try {
@@ -291,7 +406,12 @@ export function resolveClaudeCliSessionFilePath(params: {
     if (!entry.isDirectory()) {
       continue;
     }
-    const candidate = path.join(projectsDir, entry.name, `${params.cliSessionId}.jsonl`);
+    const projectDir = path.join(projectsDir, entry.name);
+    const candidate = path.resolve(projectDir, `${sessionId}.jsonl`);
+    const resolvedProjectDir = path.resolve(projectDir);
+    if (!candidate.startsWith(`${resolvedProjectDir}${path.sep}`)) {
+      continue;
+    }
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -299,9 +419,12 @@ export function resolveClaudeCliSessionFilePath(params: {
   return undefined;
 }
 
+/** Reads visible messages for a bound Claude CLI session. */
 export function readClaudeCliSessionMessages(params: {
   cliSessionId: string;
   homeDir?: string;
+  localSessionId?: string;
+  reseedReceipt?: CliSessionReseedReceipt;
 }): TranscriptLikeMessage[] {
   const filePath = resolveClaudeCliSessionFilePath(params);
   if (!filePath) {
@@ -317,13 +440,25 @@ export function readClaudeCliSessionMessages(params: {
 
   const messages: TranscriptLikeMessage[] = [];
   const toolNameRegistry: ToolNameRegistry = new Map();
+  const localSessionId = normalizeOptionalString(params.localSessionId);
+  const normalizedReceipt = normalizeCliSessionReseedReceipt(params.reseedReceipt);
+  const reseedState: ReseedImportState = {
+    receipt:
+      normalizedReceipt && normalizedReceipt.localSessionId === localSessionId
+        ? normalizedReceipt
+        : undefined,
+    inspectedFirstUser: false,
+  };
   for (const line of content.split(/\r?\n/)) {
     if (!line.trim()) {
       continue;
     }
     try {
       const parsed = JSON.parse(line) as ClaudeCliProjectEntry;
-      const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry);
+      const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry, {
+        reseedMode: "recover",
+        reseedState,
+      });
       if (message) {
         messages.push(message);
       }
@@ -418,6 +553,8 @@ export function readClaudeCliFallbackSeed(params: {
     }
 
     if (isCompactBoundary(parsed)) {
+      // Compact boundaries split Claude history into context windows. Keep the
+      // latest summary plus only post-boundary turns for fallback seeding.
       lastSummary = pendingSummary;
       pendingSummary = undefined;
       lastBoundaryFallback = extractCompactBoundaryFallbackText(parsed) ?? lastBoundaryFallback;
@@ -426,7 +563,9 @@ export function readClaudeCliFallbackSeed(params: {
       continue;
     }
 
-    const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry);
+    const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry, {
+      reseedMode: "preserve",
+    });
     if (message) {
       windowedTurns.push(message);
     }

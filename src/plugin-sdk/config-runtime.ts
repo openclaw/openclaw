@@ -1,5 +1,17 @@
-// Shared config/runtime boundary for plugins that need config loading,
-// config writes, or session-store helpers without importing src internals.
+/**
+ * @deprecated Public SDK subpath has no bundled extension production imports.
+ * Prefer narrower config subpaths such as plugin-config-runtime,
+ * config-mutation, and runtime-config-snapshot.
+ */
+
+export {
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
+  readSessionUpdatedAt,
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+} from "./session-store-runtime.js";
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
@@ -127,16 +139,13 @@ export type {
   TtsPersonaPromptConfig,
   TtsProvider,
 } from "../config/types.js";
+export { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+// SDK-facing names are a shipped plugin contract; internals route through the
+// session accessor so the storage backend can change beneath them.
 export {
-  clearSessionStoreCacheForTest,
-  loadSessionStore,
-  readSessionUpdatedAt,
-  recordSessionMetaFromInbound,
-  saveSessionStore,
-  updateLastRoute,
-  updateSessionStore,
-  resolveSessionStoreEntry,
-} from "../config/sessions/store.js";
+  recordInboundSessionMeta as recordSessionMetaFromInbound,
+  updateSessionLastRoute as updateLastRoute,
+} from "../config/sessions/session-accessor.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveStorePath } from "../config/sessions/paths.js";
 export type { SessionResetMode } from "../config/sessions/reset.js";

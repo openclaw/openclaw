@@ -1,67 +1,89 @@
-import fs from "node:fs";
-import { updateSessionStore } from "../config/sessions/store.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+/** Runs plugin cleanup callbacks and clears host-side plugin session/runtime state. */
+import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
+import { getRuntimeConfig } from "../config/config.js";
+import {
+  cleanupPluginHostSessionStore,
+  clearPluginOwnedSessionState,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import {
+  resolveAllAgentSessionStoreTargetsSync,
+  type SessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { cleanupPluginSessionSchedulerJobs, clearPluginRunContext } from "./host-hook-runtime.js";
+import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
+import {
+  cleanupPluginSessionSchedulerJobs,
+  clearPluginRunContext,
+  makePluginSessionSchedulerJobKey,
+} from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { getActivePluginRegistry } from "./runtime.js";
+import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
+export { clearPluginOwnedSessionState };
+
+/** Failure captured while running plugin cleanup hooks. */
+/** Failure captured while running one plugin cleanup callback. */
 export type PluginHostCleanupFailure = {
   pluginId: string;
   hookId: string;
   error: unknown;
 };
 
+/** Aggregate cleanup result for plugin host state. */
 export type PluginHostCleanupResult = {
   cleanupCount: number;
   failures: PluginHostCleanupFailure[];
 };
 
+type ResolveCleanupSessionStoreTargets = () => readonly SessionStoreTarget[];
+
 function shouldCleanPlugin(pluginId: string, filterPluginId?: string): boolean {
   return !filterPluginId || pluginId === filterPluginId;
 }
 
-export function clearPluginOwnedSessionState(entry: SessionEntry, pluginId?: string): void {
-  if (!pluginId) {
-    delete entry.pluginExtensions;
-    delete entry.pluginNextTurnInjections;
-    return;
-  }
-  if (entry.pluginExtensions) {
-    delete entry.pluginExtensions[pluginId];
-    if (Object.keys(entry.pluginExtensions).length === 0) {
-      delete entry.pluginExtensions;
-    }
-  }
-  if (entry.pluginNextTurnInjections) {
-    delete entry.pluginNextTurnInjections[pluginId];
-    if (Object.keys(entry.pluginNextTurnInjections).length === 0) {
-      delete entry.pluginNextTurnInjections;
-    }
-  }
+function cleanupTargetKey(target: SessionStoreTarget): string {
+  return `${target.agentId}\0${target.storePath}`;
 }
 
-function hasPluginOwnedSessionState(entry: SessionEntry, pluginId?: string): boolean {
-  if (!pluginId) {
-    return Boolean(entry.pluginExtensions || entry.pluginNextTurnInjections);
+function resolveExistingSessionStoreTargets(cfg: OpenClawConfig): SessionStoreTarget[] {
+  const targets = new Map<string, SessionStoreTarget>();
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    targets.set(cleanupTargetKey(target), target);
   }
-  return Boolean(entry.pluginExtensions?.[pluginId] || entry.pluginNextTurnInjections?.[pluginId]);
+  return [...targets.values()];
 }
 
-function matchesCleanupSession(
-  entryKey: string,
-  entry: SessionEntry,
-  sessionKey?: string,
-): boolean {
-  const normalizedSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
-  if (!normalizedSessionKey) {
-    return true;
-  }
+function createMemoizedCleanupSessionStoreTargetResolver(
+  cfg: OpenClawConfig,
+): ResolveCleanupSessionStoreTargets {
+  let targets: readonly SessionStoreTarget[] | undefined;
+  return () => {
+    targets ??= resolveExistingSessionStoreTargets(cfg);
+    return targets;
+  };
+}
+
+function pathsToCleanupTargets(storePaths: readonly string[]): SessionStoreTarget[] {
+  return storePaths.map((storePath) => {
+    const target = resolveSqliteTargetFromSessionStorePath(storePath);
+    return { agentId: target.agentId ?? "main", storePath };
+  });
+}
+
+function resolveCleanupSessionStoreTargets(params: {
+  cfg: OpenClawConfig;
+  storePaths?: readonly string[];
+  storeTargets?: readonly SessionStoreTarget[];
+  resolveStoreTargets?: ResolveCleanupSessionStoreTargets;
+}): readonly SessionStoreTarget[] {
   return (
-    normalizeLowercaseStringOrEmpty(entryKey) === normalizedSessionKey ||
-    normalizeLowercaseStringOrEmpty(entry.sessionId) === normalizedSessionKey
+    params.storeTargets ??
+    (params.storePaths ? pathsToCleanupTargets(params.storePaths) : undefined) ??
+    params.resolveStoreTargets?.() ??
+    resolveExistingSessionStoreTargets(params.cfg)
   );
 }
 
@@ -69,116 +91,272 @@ async function clearPluginOwnedSessionStores(params: {
   cfg: OpenClawConfig;
   pluginId?: string;
   sessionKey?: string;
+  sessionEntrySlotKeys?: ReadonlySet<string>;
+  storePaths?: readonly string[];
+  preserveLockedHarnessIds?: ReadonlySet<string>;
+  storeTargets?: readonly SessionStoreTarget[];
+  resolveStoreTargets?: ResolveCleanupSessionStoreTargets;
+  shouldCleanup?: () => boolean;
 }): Promise<number> {
   if (!params.pluginId && !params.sessionKey) {
     return 0;
   }
-  const storePaths = new Set(
-    resolveAllAgentSessionStoreTargetsSync(params.cfg)
-      .map((target) => target.storePath)
-      .filter((storePath) => fs.existsSync(storePath)),
-  );
+  const storeTargets = resolveCleanupSessionStoreTargets(params);
   let cleared = 0;
-  for (const storePath of storePaths) {
-    cleared += await updateSessionStore(storePath, (store) => {
-      let clearedInStore = 0;
-      const now = Date.now();
-      for (const [entryKey, entry] of Object.entries(store)) {
-        if (
-          !matchesCleanupSession(entryKey, entry, params.sessionKey) ||
-          !hasPluginOwnedSessionState(entry, params.pluginId)
-        ) {
-          continue;
-        }
-        clearPluginOwnedSessionState(entry, params.pluginId);
-        entry.updatedAt = now;
-        clearedInStore += 1;
-      }
-      return clearedInStore;
+  for (const target of storeTargets) {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
+    }
+    cleared += await cleanupPluginHostSessionStore({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      mode: "plugin-owned-state",
+      pluginId: params.pluginId,
+      sessionKey: params.sessionKey,
+      sessionEntrySlotKeys: params.sessionEntrySlotKeys,
+      preserveLockedHarnessIds: params.preserveLockedHarnessIds,
+      shouldCleanup: params.shouldCleanup,
     });
   }
   return cleared;
 }
 
-export async function runPluginHostCleanup(params: {
+async function clearPromotedSessionEntrySlotStores(params: {
   cfg: OpenClawConfig;
+  pluginId?: string;
+  sessionKey?: string;
+  sessionEntrySlotKeys: ReadonlySet<string>;
+  storePaths?: readonly string[];
+  storeTargets?: readonly SessionStoreTarget[];
+  resolveStoreTargets?: ResolveCleanupSessionStoreTargets;
+  shouldCleanup?: () => boolean;
+}): Promise<number> {
+  if ((!params.pluginId && !params.sessionKey) || params.sessionEntrySlotKeys.size === 0) {
+    return 0;
+  }
+  const storeTargets = resolveCleanupSessionStoreTargets(params);
+  let cleared = 0;
+  for (const target of storeTargets) {
+    if (params.shouldCleanup && !params.shouldCleanup()) {
+      break;
+    }
+    cleared += await cleanupPluginHostSessionStore({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      mode: "promoted-slots",
+      pluginId: params.pluginId,
+      sessionKey: params.sessionKey,
+      sessionEntrySlotKeys: params.sessionEntrySlotKeys,
+      shouldCleanup: params.shouldCleanup,
+    });
+  }
+  return cleared;
+}
+
+function collectSessionEntrySlotKeys(
+  registry: PluginRegistry | null | undefined,
+  pluginId?: string,
+): Set<string> {
+  const slotKeys = new Set<string>();
+  for (const registration of registry?.sessionExtensions ?? []) {
+    if (!shouldCleanPlugin(registration.pluginId, pluginId)) {
+      continue;
+    }
+    const slotKey = registration.extension.sessionEntrySlotKey;
+    if (slotKey === undefined) {
+      continue;
+    }
+    const normalized = normalizeSessionEntrySlotKey(slotKey);
+    if (normalized.ok) {
+      slotKeys.add(normalized.key);
+    }
+  }
+  return slotKeys;
+}
+
+function collectAgentHarnessIds(
+  registry: PluginRegistry | null | undefined,
+  pluginId?: string,
+): Set<string> {
+  const harnessIds = new Set<string>();
+  for (const registration of registry?.agentHarnesses ?? []) {
+    if (!shouldCleanPlugin(registration.pluginId, pluginId)) {
+      continue;
+    }
+    const harnessId = normalizeOptionalAgentRuntimeId(registration.harness.id);
+    if (harnessId) {
+      harnessIds.add(harnessId);
+    }
+  }
+  return harnessIds;
+}
+
+/** Runs persistent and in-memory cleanup for a plugin, session, or host lifecycle event. */
+/** Runs cleanup callbacks for one plugin and returns failures instead of throwing. */
+export async function runPluginHostCleanup(params: {
+  cfg?: OpenClawConfig;
   registry?: PluginRegistry | null;
   pluginId?: string;
   reason: PluginHostCleanupReason;
   sessionKey?: string;
   runId?: string;
   preserveSchedulerJobIds?: ReadonlySet<string>;
+  shouldCleanup?: () => boolean;
+  restartPromotedSessionEntrySlotKeys?: ReadonlySet<string>;
+  preserveSchedulerOwnerRegistry?: PluginRegistry | null;
+  sessionStorePaths?: readonly string[];
+  sessionStoreTargets?: readonly SessionStoreTarget[];
+  resolveSessionStoreTargets?: ResolveCleanupSessionStoreTargets;
+  skipPersistentSessionState?: boolean;
 }): Promise<PluginHostCleanupResult> {
-  const persistentCleanupCount =
-    params.reason === "restart"
-      ? 0
-      : await clearPluginOwnedSessionStores({
-          cfg: params.cfg,
-          pluginId: params.pluginId,
-          sessionKey: params.sessionKey,
-        });
-  const registry = params.registry;
-  if (!registry) {
-    return { cleanupCount: persistentCleanupCount, failures: [] };
-  }
   const failures: PluginHostCleanupFailure[] = [];
+  const shouldCleanup = params.shouldCleanup ?? (() => true);
+  if (!shouldCleanup()) {
+    return { cleanupCount: 0, failures };
+  }
+  const registry = params.registry;
+  const cleanupRegistry = registry ?? getActivePluginRegistry();
+  const sessionEntrySlotKeys = collectSessionEntrySlotKeys(cleanupRegistry, params.pluginId);
+  const preserveLockedHarnessIds =
+    params.reason === "disable"
+      ? collectAgentHarnessIds(cleanupRegistry, params.pluginId)
+      : undefined;
+  const restartPromotedSessionEntrySlotKeys =
+    params.restartPromotedSessionEntrySlotKeys ?? sessionEntrySlotKeys;
+  let persistentCleanupCount = 0;
+  if (!params.skipPersistentSessionState && shouldCleanup()) {
+    try {
+      persistentCleanupCount =
+        params.reason === "restart"
+          ? await clearPromotedSessionEntrySlotStores({
+              cfg: params.cfg ?? getRuntimeConfig(),
+              pluginId: params.pluginId,
+              sessionKey: params.sessionKey,
+              sessionEntrySlotKeys: restartPromotedSessionEntrySlotKeys,
+              storePaths: params.sessionStorePaths,
+              storeTargets: params.sessionStoreTargets,
+              resolveStoreTargets: params.resolveSessionStoreTargets,
+              shouldCleanup,
+            })
+          : await clearPluginOwnedSessionStores({
+              cfg: params.cfg ?? getRuntimeConfig(),
+              pluginId: params.pluginId,
+              sessionKey: params.sessionKey,
+              sessionEntrySlotKeys,
+              storePaths: params.sessionStorePaths,
+              preserveLockedHarnessIds,
+              storeTargets: params.sessionStoreTargets,
+              resolveStoreTargets: params.resolveSessionStoreTargets,
+              shouldCleanup,
+            });
+    } catch (error) {
+      failures.push({
+        pluginId: params.pluginId ?? "plugin-host",
+        hookId: "session-store",
+        error,
+      });
+    }
+  }
   let cleanupCount = persistentCleanupCount;
-  for (const registration of registry.sessionExtensions ?? []) {
-    if (!shouldCleanPlugin(registration.pluginId, params.pluginId)) {
-      continue;
+  if (registry) {
+    for (const registration of registry.sessionExtensions) {
+      if (!shouldCleanup()) {
+        return { cleanupCount, failures };
+      }
+      if (!shouldCleanPlugin(registration.pluginId, params.pluginId)) {
+        continue;
+      }
+      const cleanup = registration.extension.cleanup;
+      if (!cleanup) {
+        continue;
+      }
+      const hookId = `session:${registration.extension.namespace}`;
+      try {
+        await withPluginHostCleanupTimeout(hookId, () =>
+          cleanup({
+            reason: params.reason,
+            sessionKey: params.sessionKey,
+          }),
+        );
+        cleanupCount += 1;
+      } catch (error) {
+        failures.push({
+          pluginId: registration.pluginId,
+          hookId,
+          error,
+        });
+      }
     }
-    const cleanup = registration.extension.cleanup;
-    if (!cleanup) {
-      continue;
+    for (const registration of registry.runtimeLifecycles) {
+      if (!shouldCleanup()) {
+        return { cleanupCount, failures };
+      }
+      if (!shouldCleanPlugin(registration.pluginId, params.pluginId)) {
+        continue;
+      }
+      const cleanup = registration.lifecycle.cleanup;
+      if (!cleanup) {
+        continue;
+      }
+      const hookId = `runtime:${registration.lifecycle.id}`;
+      try {
+        await withPluginHostCleanupTimeout(hookId, () =>
+          cleanup({
+            reason: params.reason,
+            sessionKey: params.sessionKey,
+            runId: params.runId,
+          }),
+        );
+        cleanupCount += 1;
+      } catch (error) {
+        failures.push({
+          pluginId: registration.pluginId,
+          hookId,
+          error,
+        });
+      }
     }
-    try {
-      await cleanup({
-        reason: params.reason,
-        sessionKey: params.sessionKey,
-      });
-      cleanupCount += 1;
-    } catch (error) {
-      failures.push({
-        pluginId: registration.pluginId,
-        hookId: `session:${registration.extension.namespace}`,
-        error,
-      });
+    const schedulerFailures = await cleanupPluginSessionSchedulerJobs({
+      pluginId: params.pluginId,
+      reason: params.reason,
+      sessionKey: params.sessionKey,
+      records: registry.sessionSchedulerJobs,
+      preserveJobIds: params.preserveSchedulerJobIds,
+      preserveOwnerRegistry: params.preserveSchedulerOwnerRegistry,
+      shouldCleanup,
+    });
+    for (const failure of schedulerFailures) {
+      failures.push(failure);
     }
   }
-  for (const registration of registry.runtimeLifecycles ?? []) {
-    if (!shouldCleanPlugin(registration.pluginId, params.pluginId)) {
-      continue;
-    }
-    const cleanup = registration.lifecycle.cleanup;
-    if (!cleanup) {
-      continue;
-    }
-    try {
-      await cleanup({
-        reason: params.reason,
-        sessionKey: params.sessionKey,
-        runId: params.runId,
-      });
-      cleanupCount += 1;
-    } catch (error) {
-      failures.push({
-        pluginId: registration.pluginId,
-        hookId: `runtime:${registration.lifecycle.id}`,
-        error,
-      });
+  if (params.reason !== "restart" && shouldCleanup()) {
+    const registrySchedulerJobKeys = new Set(
+      (registry?.sessionSchedulerJobs ?? [])
+        .filter((record) => !params.pluginId || record.pluginId === params.pluginId)
+        .map((record) => ({
+          pluginId: record.pluginId,
+          jobId: typeof record.job.id === "string" ? record.job.id.trim() : "",
+        }))
+        .filter(({ jobId }) => jobId.length > 0)
+        .map(({ pluginId, jobId }) => makePluginSessionSchedulerJobKey(pluginId, jobId)),
+    );
+    const runtimeSchedulerFailures = await cleanupPluginSessionSchedulerJobs({
+      pluginId: params.pluginId,
+      reason: params.reason,
+      sessionKey: params.sessionKey,
+      preserveJobIds: params.preserveSchedulerJobIds,
+      excludeJobKeys: registrySchedulerJobKeys,
+      shouldCleanup,
+    });
+    for (const failure of runtimeSchedulerFailures) {
+      failures.push(failure);
     }
   }
-  const schedulerFailures = await cleanupPluginSessionSchedulerJobs({
-    pluginId: params.pluginId,
-    reason: params.reason,
-    sessionKey: params.sessionKey,
-    records: registry?.sessionSchedulerJobs,
-    preserveJobIds: params.preserveSchedulerJobIds,
-  });
-  for (const failure of schedulerFailures) {
-    failures.push(failure);
-  }
-  if (params.pluginId || params.runId) {
+  if (
+    shouldCleanup() &&
+    (params.pluginId || params.runId) &&
+    (params.reason !== "restart" || params.runId)
+  ) {
     clearPluginRunContext({ pluginId: params.pluginId, runId: params.runId });
   }
   return { cleanupCount, failures };
@@ -186,16 +364,16 @@ export async function runPluginHostCleanup(params: {
 
 function collectHostHookPluginIds(registry: PluginRegistry): Set<string> {
   const ids = new Set<string>();
-  for (const registration of registry.sessionExtensions ?? []) {
+  for (const registration of registry.sessionExtensions) {
     ids.add(registration.pluginId);
   }
-  for (const registration of registry.runtimeLifecycles ?? []) {
+  for (const registration of registry.runtimeLifecycles) {
     ids.add(registration.pluginId);
   }
-  for (const registration of registry.agentEventSubscriptions ?? []) {
+  for (const registration of registry.agentEventSubscriptions) {
     ids.add(registration.pluginId);
   }
-  for (const registration of registry.sessionSchedulerJobs ?? []) {
+  for (const registration of registry.sessionSchedulerJobs) {
     ids.add(registration.pluginId);
   }
   return ids;
@@ -221,13 +399,29 @@ function collectSchedulerJobIds(
   );
 }
 
+function collectRestartPromotedSessionEntrySlotKeys(
+  previousRegistry: PluginRegistry,
+  nextRegistry: PluginRegistry | null | undefined,
+  pluginId: string,
+): Set<string> {
+  const staleSlotKeys = collectSessionEntrySlotKeys(previousRegistry, pluginId);
+  const preservedSlotKeys = collectSessionEntrySlotKeys(nextRegistry, pluginId);
+  for (const slotKey of preservedSlotKeys) {
+    staleSlotKeys.delete(slotKey);
+  }
+  return staleSlotKeys;
+}
+
+/** Cleans up plugin host state when a registry snapshot is replaced. */
 export async function cleanupReplacedPluginHostRegistry(params: {
   cfg: OpenClawConfig;
   previousRegistry?: PluginRegistry | null;
   nextRegistry?: PluginRegistry | null;
+  shouldCleanup?: () => boolean;
 }): Promise<PluginHostCleanupResult> {
   const previousRegistry = params.previousRegistry;
-  if (!previousRegistry || previousRegistry === params.nextRegistry) {
+  const shouldCleanup = params.shouldCleanup ?? (() => true);
+  if (!previousRegistry || previousRegistry === params.nextRegistry || !shouldCleanup()) {
     return { cleanupCount: 0, failures: [] };
   }
   const nextPluginIds = params.nextRegistry
@@ -237,9 +431,13 @@ export async function cleanupReplacedPluginHostRegistry(params: {
     ...collectLoadedPluginIds(previousRegistry),
     ...collectHostHookPluginIds(previousRegistry),
   ]);
+  const resolveSessionStoreTargets = createMemoizedCleanupSessionStoreTargetResolver(params.cfg);
   const failures: PluginHostCleanupFailure[] = [];
   let cleanupCount = 0;
   for (const pluginId of previousPluginIds) {
+    if (!shouldCleanup()) {
+      break;
+    }
     const restarted = nextPluginIds.has(pluginId);
     const result = await runPluginHostCleanup({
       cfg: params.cfg,
@@ -249,6 +447,16 @@ export async function cleanupReplacedPluginHostRegistry(params: {
       preserveSchedulerJobIds: restarted
         ? collectSchedulerJobIds(params.nextRegistry, pluginId)
         : undefined,
+      shouldCleanup,
+      restartPromotedSessionEntrySlotKeys: restarted
+        ? collectRestartPromotedSessionEntrySlotKeys(
+            previousRegistry,
+            params.nextRegistry,
+            pluginId,
+          )
+        : undefined,
+      preserveSchedulerOwnerRegistry: restarted ? params.nextRegistry : undefined,
+      resolveSessionStoreTargets,
     });
     cleanupCount += result.cleanupCount;
     failures.push(...result.failures);

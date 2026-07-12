@@ -1,8 +1,9 @@
+// Gateway HTTP server listen helper with retry and lock-aware errors.
 import type { Server as HttpServer } from "node:http";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { sleep } from "../../utils.js";
 
-const EADDRINUSE_MAX_RETRIES = 4;
+const EADDRINUSE_MAX_RETRIES = 20;
 const EADDRINUSE_RETRY_INTERVAL_MS = 500;
 
 async function closeServerQuietly(httpServer: HttpServer): Promise<void> {
@@ -15,14 +16,17 @@ async function closeServerQuietly(httpServer: HttpServer): Promise<void> {
   });
 }
 
+/** Listen on the configured gateway host/port, retrying transient EADDRINUSE windows. */
 export async function listenGatewayHttpServer(params: {
   httpServer: HttpServer;
   bindHost: string;
   port: number;
+  retryEaddrinuse?: boolean;
 }) {
-  const { httpServer, bindHost, port } = params;
+  const { httpServer, bindHost, port, retryEaddrinuse = true } = params;
+  const maxRetries = retryEaddrinuse ? EADDRINUSE_MAX_RETRIES : 0;
 
-  for (let attempt = 0; ; attempt++) {
+  for (const attempt of Array.from({ length: maxRetries + 1 }, (_, index) => index)) {
     try {
       await new Promise<void>((resolve, reject) => {
         const onError = (err: NodeJS.ErrnoException) => {
@@ -40,7 +44,7 @@ export async function listenGatewayHttpServer(params: {
       return; // bound successfully
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
-      if (code === "EADDRINUSE" && attempt < EADDRINUSE_MAX_RETRIES) {
+      if (code === "EADDRINUSE" && attempt < maxRetries) {
         // Port may still be in TIME_WAIT after a recent process exit; retry.
         await closeServerQuietly(httpServer);
         await sleep(EADDRINUSE_RETRY_INTERVAL_MS);

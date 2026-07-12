@@ -1,8 +1,11 @@
+// Google Meet plugin module implements chrome create behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { GoogleMeetConfig } from "../config.js";
 import {
   asBrowserTabs,
   callBrowserProxyOnNode,
+  forceMeetEnglishUi,
   readBrowserTab,
   resolveChromeNode,
   type BrowserTab,
@@ -25,7 +28,7 @@ type BrowserCreateStepResult = {
   retryAfterMs?: number;
 };
 
-export type GoogleMeetBrowserCreateResult = {
+type GoogleMeetBrowserCreateResult = {
   meetingUri: string;
   nodeId: string;
   targetId?: string;
@@ -35,7 +38,7 @@ export type GoogleMeetBrowserCreateResult = {
   source: "browser";
 };
 
-export type GoogleMeetBrowserManualAction = {
+type GoogleMeetBrowserManualAction = {
   source: "browser";
   error: string;
   manualActionRequired: true;
@@ -50,7 +53,7 @@ export type GoogleMeetBrowserManualAction = {
   };
 };
 
-export class GoogleMeetBrowserManualActionError extends Error {
+class GoogleMeetBrowserManualActionError extends Error {
   readonly payload: GoogleMeetBrowserManualAction;
 
   constructor(payload: Omit<GoogleMeetBrowserManualAction, "source" | "error">) {
@@ -69,10 +72,6 @@ export function isGoogleMeetBrowserManualActionError(
   error: unknown,
 ): error is GoogleMeetBrowserManualActionError {
   return error instanceof GoogleMeetBrowserManualActionError;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function formatBrowserAutomationError(error: unknown): string {
@@ -201,7 +200,9 @@ export const CREATE_MEET_FROM_BROWSER_SCRIPT = `async () => {
   }
   const href = current();
   if (meetUrlPattern.test(href)) {
-    return { meetingUri: href, browserUrl: href, browserTitle: document.title, notes };
+    // The /new redirect keeps the hl=en param we open with; strip query/hash so the
+    // meeting link handed to users stays canonical instead of forcing English on them.
+    return { meetingUri: href.split(/[?#]/)[0], browserUrl: href, browserTitle: document.title, notes };
   }
   const pageText = text(document.body);
   if (clickButton(/\\buse microphone\\b/i, "Accepted Meet microphone prompt with browser automation.")) {
@@ -283,6 +284,29 @@ export async function createMeetWithBrowserProxyOnNode(params: {
       targetId: tab.targetId,
       timeoutMs: stepTimeoutMs,
     });
+    // Meet automation scripts match English UI labels; a reused tab may have
+    // been opened by the browser/profile in a non-English locale. Only force
+    // English on the /new creation page or sign-in flow; a reused tab that
+    // already has a meeting code may be an active call, and reloading it would
+    // interrupt the meeting and replace its target.
+    const reusedUrl = tab.url ?? "";
+    const isCreatePage =
+      /^https:\/\/meet\.google\.com\/new(?:$|[/?#])/i.test(reusedUrl) ||
+      reusedUrl.startsWith("https://accounts.google.com/");
+    const englishUrl = isCreatePage && reusedUrl ? forceMeetEnglishUi(reusedUrl) : undefined;
+    if (englishUrl && englishUrl !== reusedUrl) {
+      tab =
+        readBrowserTab(
+          await callBrowserProxyOnNode({
+            runtime: params.runtime,
+            nodeId,
+            method: "POST",
+            path: "/navigate",
+            body: { targetId: tab.targetId, url: englishUrl },
+            timeoutMs: stepTimeoutMs,
+          }),
+        ) ?? tab;
+    }
   } else {
     tab = readBrowserTab(
       await callBrowserProxyOnNode({
@@ -290,7 +314,7 @@ export async function createMeetWithBrowserProxyOnNode(params: {
         nodeId,
         method: "POST",
         path: "/tabs/open",
-        body: { url: GOOGLE_MEET_NEW_URL },
+        body: { url: forceMeetEnglishUi(GOOGLE_MEET_NEW_URL) },
         timeoutMs: stepTimeoutMs,
       }),
     );

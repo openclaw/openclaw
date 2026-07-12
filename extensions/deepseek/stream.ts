@@ -1,9 +1,7 @@
+// Deepseek plugin module implements stream behavior.
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
-
-function isDeepSeekV4ModelId(modelId: unknown): boolean {
-  return modelId === "deepseek-v4-flash" || modelId === "deepseek-v4-pro";
-}
+import { isDeepSeekV4ModelRef } from "./models.js";
 
 export function createDeepSeekV4ThinkingWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
@@ -12,6 +10,6 @@ export function createDeepSeekV4ThinkingWrapper(
   return createDeepSeekV4OpenAICompatibleThinkingWrapper({
     baseStreamFn,
     thinkingLevel,
-    shouldPatchModel: (model) => model.provider === "deepseek" && isDeepSeekV4ModelId(model.id),
+    shouldPatchModel: isDeepSeekV4ModelRef,
   });
 }

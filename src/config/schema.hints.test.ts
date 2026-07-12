@@ -1,16 +1,16 @@
+// Verifies schema hint metadata and sensitive path handling.
+import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
-import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
 import { FIELD_HELP } from "./schema.help.js";
-import { __test__, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
+import { testApi, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const { collectMatchingSchemaPaths, mapSensitivePaths } = __test__;
+const { collectMatchingSchemaPaths, mapSensitivePaths } = testApi;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
-  "channels.bluebubbles",
   "channels.discord",
   "channels.imessage",
   "channels.irc",
@@ -49,6 +49,8 @@ describe("isSensitiveConfigPath", () => {
     expect(isSensitiveConfigPath("channels.feishu.accounts.default.encryptKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.nostr.privateKey")).toBe(true);
     expect(isSensitiveConfigPath("channels.nostr.accounts.default.privateKey")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.local.localService.env.HF_HOME")).toBe(true);
+    expect(isSensitiveConfigPath("models.providers.local.localService.env.MAX_TOKENS")).toBe(true);
   });
 });
 
@@ -156,6 +158,26 @@ describe("mapSensitivePaths", () => {
     expect(result["env.*"]?.sensitive).toBe(undefined);
   });
 
+  it("returns a new hints map without mutating caller-owned entries", () => {
+    const schema = z.object({
+      apiKey: z.string().register(sensitive),
+    });
+    const hints = {
+      group: { label: "Group" },
+    };
+
+    const result = mapSensitivePaths(schema, "", hints);
+
+    expect(result).not.toBe(hints);
+    expect(hints).toEqual({
+      group: { label: "Group" },
+    });
+    expect(result).toEqual({
+      group: { label: "Group" },
+      apiKey: { sensitive: true },
+    });
+  });
+
   it("main schema yields correct hints (samples)", () => {
     const schema = OpenClawSchema.toJSONSchema({
       target: "draft-07",
@@ -168,9 +190,11 @@ describe("mapSensitivePaths", () => {
     expect(hints["agents.list[].memorySearch.remote.apiKey"]?.sensitive).toBe(true);
     expect(hints["gateway.auth.token"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.headers.*"]?.sensitive).toBe(true);
+    expect(hints["models.providers.*.localService.env.*"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.request.headers.*"]?.sensitive).toBe(true);
     expect(hints["models.providers.*.request.proxy.tls.cert"]?.sensitive).toBe(true);
     expect(hints["proxy.proxyUrl"]?.sensitive).toBe(true);
+    expect(hints["proxy.tls.caFile"]?.sensitive).toBeUndefined();
     expect(hints["skills.entries.*.apiKey"]?.sensitive).toBe(true);
   });
 

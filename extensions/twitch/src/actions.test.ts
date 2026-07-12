@@ -1,3 +1,4 @@
+// Twitch tests cover actions plugin behavior.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { twitchMessageActions } from "./actions.js";
 import type { ResolvedTwitchAccountContext } from "./config.js";
@@ -51,24 +52,25 @@ describe("twitchMessageActions", () => {
       messageId: "msg-1",
       timestamp: 1,
     });
+    const cfg = {
+      channels: {
+        twitch: {
+          defaultAccount: "secondary",
+        },
+      },
+    };
 
     await twitchMessageActions.handleAction!({
       action: "send",
       params: { message: "Hello!" },
-      cfg: {
-        channels: {
-          twitch: {
-            defaultAccount: "secondary",
-          },
-        },
-      },
+      cfg,
     } as never);
 
-    expect(twitchOutbound.sendText).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "secondary",
-        to: "secondary-channel",
-      }),
-    );
+    expect(twitchOutbound.sendText).toHaveBeenCalledWith({
+      cfg,
+      to: "secondary-channel",
+      text: "Hello!",
+      accountId: "secondary",
+    });
   });
 });

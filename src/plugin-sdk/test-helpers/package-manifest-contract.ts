@@ -1,3 +1,6 @@
+/**
+ * Contract suite for bundled plugin package manifests and host version floors.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -16,20 +19,19 @@ type PackageManifest = {
 type PackageManifestContractParams = {
   pluginId: string;
   pluginLocalRuntimeDeps?: string[];
-  mirroredRootRuntimeDeps?: string[];
   minHostVersionBaseline?: string;
 };
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe package manifest shape.
-function readJson<T>(relativePath: string): T {
+function readPackageManifest(relativePath: string): PackageManifest {
   const absolutePath = path.resolve(process.cwd(), relativePath);
-  return JSON.parse(fs.readFileSync(absolutePath, "utf8")) as T;
+  return JSON.parse(fs.readFileSync(absolutePath, "utf8")) as PackageManifest;
 }
 
 function bundledPluginFile(pluginId: string, relativePath: string): string {
   return `extensions/${pluginId}/${relativePath}`;
 }
 
+/** Installs manifest contract tests for one bundled plugin package. */
 export function describePackageManifestContract(params: PackageManifestContractParams) {
   const packagePath = bundledPluginFile(params.pluginId, "package.json");
 
@@ -37,8 +39,8 @@ export function describePackageManifestContract(params: PackageManifestContractP
     if (params.pluginLocalRuntimeDeps?.length) {
       for (const dependencyName of params.pluginLocalRuntimeDeps) {
         it(`keeps ${dependencyName} plugin-local`, () => {
-          const rootManifest = readJson("package.json") as PackageManifest;
-          const pluginManifest = readJson(packagePath) as PackageManifest;
+          const rootManifest = readPackageManifest("package.json");
+          const pluginManifest = readPackageManifest(packagePath);
           const pluginSpec =
             pluginManifest.dependencies?.[dependencyName] ??
             pluginManifest.optionalDependencies?.[dependencyName];
@@ -52,24 +54,6 @@ export function describePackageManifestContract(params: PackageManifestContractP
       }
     }
 
-    if (params.mirroredRootRuntimeDeps?.length) {
-      for (const dependencyName of params.mirroredRootRuntimeDeps) {
-        it(`mirrors ${dependencyName} at the root package`, () => {
-          const rootManifest = readJson<PackageManifest>("package.json");
-          const pluginManifest = readJson<PackageManifest>(packagePath);
-          const pluginSpec =
-            pluginManifest.dependencies?.[dependencyName] ??
-            pluginManifest.optionalDependencies?.[dependencyName];
-          const rootSpec =
-            rootManifest.dependencies?.[dependencyName] ??
-            rootManifest.optionalDependencies?.[dependencyName];
-
-          expect(pluginSpec).toBeTruthy();
-          expect(rootSpec).toBe(pluginSpec);
-        });
-      }
-    }
-
     const minHostVersionBaseline = params.minHostVersionBaseline;
     if (minHostVersionBaseline) {
       it("declares a parseable minHostVersion floor at or above the baseline", () => {
@@ -79,7 +63,7 @@ export function describePackageManifestContract(params: PackageManifestContractP
           return;
         }
 
-        const manifest = readJson<PackageManifest>(packagePath);
+        const manifest = readPackageManifest(packagePath);
         const requirement = parseMinHostVersionRequirement(
           manifest.openclaw?.install?.minHostVersion ?? null,
         );

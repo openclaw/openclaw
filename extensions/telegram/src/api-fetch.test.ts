@@ -1,6 +1,36 @@
+// Telegram tests cover api fetch plugin behavior.
 import { createRequire } from "node:module";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchTelegramChatId } from "./api-fetch.js";
+
+const TELEGRAM_GETCHAT_JSON_CAP_BYTES = 4 * 1024 * 1024;
+
+function getChatOkResponse(id: number | string): Response {
+  return new Response(JSON.stringify({ ok: true, result: { id } }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function oversizedTelegramGetChatJsonResponse(onCancel: () => void): Response {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(TELEGRAM_GETCHAT_JSON_CAP_BYTES + 1));
+      },
+      cancel() {
+        onCancel();
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
+  Object.defineProperty(response, "json", {
+    value: async () => {
+      throw new Error("unbounded json reader was used");
+    },
+  });
+  return response;
+}
 
 const require = createRequire(import.meta.url);
 const EnvHttpProxyAgent = require("undici/lib/dispatcher/env-http-proxy-agent.js") as {
@@ -48,31 +78,31 @@ function getOwnSymbolValue(
 }
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
 
-vi.mock("undici", () => ({
-  ProxyAgent: proxyMocks.ProxyAgent,
-  fetch: proxyMocks.undiciFetch,
-  setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    ProxyAgent: proxyMocks.ProxyAgent,
+    fetch: proxyMocks.undiciFetch,
+    setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
+  };
+});
 
 describe("fetchTelegramChatId", () => {
   const cases = [
     {
       name: "returns stringified id when Telegram getChat succeeds",
-      fetchImpl: vi.fn(async () => ({
-        ok: true,
-        json: async () => ({ ok: true, result: { id: 12345 } }),
-      })),
+      fetchImpl: vi.fn(async () => getChatOkResponse(12345)),
       expected: "12345",
     },
     {
       name: "returns null when response is not ok",
-      fetchImpl: vi.fn(async () => ({
-        ok: false,
-        json: async () => ({}),
-      })),
+      fetchImpl: vi.fn(async () => new Response("{}", { status: 404 })),
       expected: null,
     },
     {
@@ -98,24 +128,18 @@ describe("fetchTelegramChatId", () => {
   }
 
   it("calls Telegram getChat endpoint", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ ok: true, result: { id: 12345 } }),
-    }));
+    const fetchMock = vi.fn(async () => getChatOkResponse(12345));
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchTelegramChatId({ token: "abc", chatId: "@user" });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api.telegram.org/botabc/getChat?chat_id=%40user",
-      undefined,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
   it("uses caller-provided fetch impl when present", async () => {
-    const customFetch = vi.fn(async () => ({
-      ok: true,
-      json: async () => ({ ok: true, result: { id: 12345 } }),
-    }));
+    const customFetch = vi.fn(async () => getChatOkResponse(12345));
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -131,8 +155,66 @@ describe("fetchTelegramChatId", () => {
 
     expect(customFetch).toHaveBeenCalledWith(
       "https://api.telegram.org/botabc/getChat?chat_id=%40user",
-      undefined,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it("returns null for oversized getChat JSON responses and cancels the stream", async () => {
+    let cancelCount = 0;
+    const fetchImpl = vi.fn(async () =>
+      oversizedTelegramGetChatJsonResponse(() => {
+        cancelCount += 1;
+      }),
+    );
+
+    await expect(
+      fetchTelegramChatId({
+        token: "abc",
+        chatId: "@user",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).resolves.toBeNull();
+    expect(cancelCount).toBe(1);
+  });
+
+  it("keeps the getChat timeout active until the response body read settles", async () => {
+    vi.useFakeTimers();
+    let observedSignal: AbortSignal | undefined;
+    let abortReason: unknown;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            observedSignal?.addEventListener(
+              "abort",
+              () => {
+                abortReason = observedSignal?.reason;
+                controller.error(abortReason);
+              },
+              { once: true },
+            );
+          },
+        }),
+        { headers: { "content-type": "application/json" }, status: 200 },
+      );
+    });
+
+    const lookup = fetchTelegramChatId({
+      token: "abc",
+      chatId: "@user",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(lookup).resolves.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(observedSignal).toBeInstanceOf(AbortSignal);
+    expect(observedSignal?.aborted).toBe(true);
+    expect(abortReason).toBeInstanceOf(Error);
+    expect((abortReason as Error).name).toBe("TimeoutError");
+    expect((abortReason as Error).message).toBe("request timed out");
   });
 });
 
@@ -148,9 +230,11 @@ describe("undici env proxy semantics", () => {
     const noProxyAgent = withoutProxyTls[kNoProxyAgent] as Record<PropertyKey, unknown>;
     const httpsProxyAgent = withoutProxyTls[kHttpsProxyAgent] as Record<PropertyKey, unknown>;
 
-    expect(getOwnSymbolValue(noProxyAgent, "options")?.connect).toEqual(
-      expect.objectContaining(connect),
-    );
+    const noProxyConnect = getOwnSymbolValue(noProxyAgent, "options")?.connect as
+      | { autoSelectFamily?: boolean; family?: number }
+      | undefined;
+    expect(noProxyConnect?.family).toBe(connect.family);
+    expect(noProxyConnect?.autoSelectFamily).toBe(connect.autoSelectFamily);
     expect(getOwnSymbolValue(httpsProxyAgent, "proxy tls settings")).toBeUndefined();
 
     const withProxyTls = new EnvHttpProxyAgent({
@@ -162,9 +246,12 @@ describe("undici env proxy semantics", () => {
       unknown
     >;
 
-    expect(getOwnSymbolValue(httpsProxyAgentWithProxyTls, "proxy tls settings")).toEqual(
-      expect.objectContaining(connect),
-    );
+    const proxyTlsSettings = getOwnSymbolValue(
+      httpsProxyAgentWithProxyTls,
+      "proxy tls settings",
+    ) as { autoSelectFamily?: boolean; family?: number } | undefined;
+    expect(proxyTlsSettings?.family).toBe(connect.family);
+    expect(proxyTlsSettings?.autoSelectFamily).toBe(connect.autoSelectFamily);
   });
 });
 

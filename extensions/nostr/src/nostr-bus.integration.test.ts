@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+// Nostr tests cover nostr bus.integration plugin behavior.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMetrics, createNoopMetrics, type MetricEvent } from "./metrics.js";
 import { createSeenTracker } from "./seen-tracker.js";
 import { TEST_RELAY_URL } from "./test-fixtures.js";
@@ -8,6 +9,10 @@ const TEST_RELAY_URL_2 = "wss://relay2.com";
 const TEST_RELAY_URL_PRIMARY = "wss://relay.com";
 const TEST_RELAY_URL_GOOD = "wss://good-relay.com";
 const TEST_RELAY_URL_BAD = "wss://bad-relay.com";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createTracker(overrides?: Partial<Parameters<typeof createSeenTracker>[0]>) {
   return createSeenTracker({
@@ -163,10 +168,23 @@ describe("SeenTracker", () => {
 
       tracker.stop();
     });
+
+    it("keeps non-positive capacities usable", () => {
+      const tracker = createTracker({ maxEntries: 0 });
+
+      tracker.add("id1");
+      tracker.add("id2");
+
+      expect(tracker.size()).toBe(1);
+      expect(tracker.peek("id1")).toBe(false);
+      expect(tracker.peek("id2")).toBe(true);
+
+      tracker.stop();
+    });
   });
 
   describe("TTL expiration", () => {
-    it("expires entries after TTL", async () => {
+    it("expires entries after TTL", () => {
       vi.useFakeTimers();
 
       const tracker = createTracker({
@@ -188,7 +206,7 @@ describe("SeenTracker", () => {
       vi.useRealTimers();
     });
 
-    it("has() refreshes TTL", async () => {
+    it("has() refreshes TTL", () => {
       vi.useFakeTimers();
 
       const tracker = createTracker({
@@ -214,6 +232,55 @@ describe("SeenTracker", () => {
       tracker.stop();
       vi.useRealTimers();
     });
+
+    it.each([-1, 0])("falls back to default TTL for non-positive ttlMs %s", (ttlMs) => {
+      vi.useFakeTimers();
+      const tracker = createTracker({ ttlMs, pruneIntervalMs: 10 * 60 * 1000 });
+
+      try {
+        tracker.add("id1");
+        vi.advanceTimersByTime(1);
+        expect(tracker.peek("id1")).toBe(true);
+      } finally {
+        tracker.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it("falls back to default TTL for infinite ttlMs", () => {
+      vi.useFakeTimers();
+      const tracker = createTracker({
+        ttlMs: Number.POSITIVE_INFINITY,
+        pruneIntervalMs: 10 * 60 * 1000,
+      });
+
+      try {
+        tracker.add("id1");
+        vi.advanceTimersByTime(60 * 60 * 1000 + 1);
+        expect(tracker.peek("id1")).toBe(false);
+      } finally {
+        tracker.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([-1, 0, Number.POSITIVE_INFINITY])(
+      "uses the default prune interval for unsafe pruneIntervalMs %s",
+      (pruneIntervalMs) => {
+        vi.useFakeTimers();
+        const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+        const tracker = createTracker({ pruneIntervalMs });
+
+        try {
+          expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+          expect(setIntervalSpy.mock.calls[0]?.[1]).toBe(10 * 60 * 1000);
+        } finally {
+          tracker.stop();
+          setIntervalSpy.mockRestore();
+          vi.useRealTimers();
+        }
+      },
+    );
   });
 });
 
@@ -269,9 +336,12 @@ describe("Metrics", () => {
       metrics.emit("relay.error", 1, { relay: TEST_RELAY_URL_1 });
 
       const snapshot = metrics.getSnapshot();
-      expect(snapshot.relays[TEST_RELAY_URL_1]).toBeDefined();
-      expect(snapshot.relays[TEST_RELAY_URL_1].connects).toBe(1);
-      expect(snapshot.relays[TEST_RELAY_URL_1].errors).toBe(2);
+      const relayOne = snapshot.relays[TEST_RELAY_URL_1];
+      if (!relayOne) {
+        throw new Error("expected first relay metrics");
+      }
+      expect(relayOne.connects).toBe(1);
+      expect(relayOne.errors).toBe(2);
       expect(snapshot.relays[TEST_RELAY_URL_2].connects).toBe(1);
       expect(snapshot.relays[TEST_RELAY_URL_2].errors).toBe(0);
     });
@@ -379,13 +449,11 @@ describe("Metrics", () => {
   });
 
   describe("createNoopMetrics", () => {
-    it("does not throw on emit", () => {
+    it("ignores emitted metrics", () => {
       const metrics = createNoopMetrics();
 
-      expect(() => {
-        metrics.emit("event.received");
-        metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_PRIMARY });
-      }).not.toThrow();
+      expect(metrics.emit("event.received")).toBeUndefined();
+      expect(metrics.emit("relay.connect", 1, { relay: TEST_RELAY_URL_PRIMARY })).toBeUndefined();
     });
 
     it("returns empty snapshot", () => {

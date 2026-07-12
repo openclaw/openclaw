@@ -1,3 +1,4 @@
+// Slack tests cover outbound adapter plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
@@ -6,8 +7,7 @@ vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
 }));
 
-let slackOutbound: typeof import("./outbound-adapter.js").slackOutbound;
-({ slackOutbound } = await import("./outbound-adapter.js"));
+const { slackOutbound } = await import("./outbound-adapter.js");
 
 describe("slackOutbound", () => {
   const cfg = {
@@ -50,40 +50,40 @@ describe("slackOutbound", () => {
     });
 
     expect(sendMessageSlackMock).toHaveBeenCalledTimes(3);
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
-      1,
-      "C123",
-      "",
-      expect.objectContaining({
-        cfg,
-        mediaUrl: "https://example.com/1.png",
-        mediaLocalRoots: ["/tmp/workspace"],
-      }),
-    );
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
-      2,
-      "C123",
-      "",
-      expect.objectContaining({
-        cfg,
-        mediaUrl: "https://example.com/2.png",
-        mediaLocalRoots: ["/tmp/workspace"],
-      }),
-    );
-    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(
-      3,
-      "C123",
-      "final text",
-      expect.objectContaining({
-        cfg,
-        blocks: [
-          {
-            type: "section",
-            text: { type: "mrkdwn", text: "Block body" },
-          },
-        ],
-      }),
-    );
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(1, "C123", "", {
+      cfg,
+      threadTs: undefined,
+      accountId: "default",
+      mediaUrl: "https://example.com/1.png",
+      mediaAccess: undefined,
+      mediaLocalRoots: ["/tmp/workspace"],
+      mediaReadFile: undefined,
+    });
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(2, "C123", "", {
+      cfg,
+      threadTs: undefined,
+      accountId: "default",
+      mediaUrl: "https://example.com/2.png",
+      mediaAccess: undefined,
+      mediaLocalRoots: ["/tmp/workspace"],
+      mediaReadFile: undefined,
+    });
+    expect(sendMessageSlackMock).toHaveBeenNthCalledWith(3, "C123", "final text\n\nBlock body", {
+      cfg,
+      threadTs: undefined,
+      accountId: "default",
+      authoredTextPlacement: "blocks",
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "final text", verbatim: true },
+        },
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "Block body" },
+        },
+      ],
+    });
     expect(result).toEqual({ channel: "slack", messageId: "m-final" });
   });
 
@@ -105,14 +105,16 @@ describe("slackOutbound", () => {
       accountId: "default",
     });
 
-    expect(sendMessageSlackMock).toHaveBeenCalledWith(
-      "C123",
-      "fallback text",
-      expect.objectContaining({
-        cfg,
-        blocks: [{ type: "divider" }],
-      }),
-    );
+    expect(sendMessageSlackMock).toHaveBeenCalledWith("C123", "fallback text", {
+      cfg,
+      threadTs: undefined,
+      accountId: "default",
+      authoredTextPlacement: "blocks",
+      blocks: [
+        { type: "divider" },
+        { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
+      ],
+    });
     expect(result).toEqual({ channel: "slack", messageId: "m-blocks" });
   });
 
@@ -136,13 +138,16 @@ describe("slackOutbound", () => {
       accountId: "default",
     });
 
-    expect(sendMessageSlackMock).toHaveBeenCalledWith(
-      "C123",
-      "fallback text",
-      expect.objectContaining({
-        threadTs: "1712345678.123456",
-      }),
-    );
+    expect(sendMessageSlackMock).toHaveBeenCalledWith("C123", "fallback text", {
+      cfg,
+      threadTs: "1712345678.123456",
+      accountId: "default",
+      authoredTextPlacement: "blocks",
+      blocks: [
+        { type: "divider" },
+        { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
+      ],
+    });
   });
 
   it("does not thread payloads without a valid Slack thread timestamp", async () => {
@@ -165,11 +170,38 @@ describe("slackOutbound", () => {
       accountId: "default",
     });
 
+    expect(sendMessageSlackMock).toHaveBeenCalledWith("C123", "fallback text", {
+      cfg,
+      threadTs: undefined,
+      accountId: "default",
+      authoredTextPlacement: "blocks",
+      blocks: [
+        { type: "divider" },
+        { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
+      ],
+    });
+  });
+
+  it("preserves raw Unicode agent identity emoji", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+
+    await slackOutbound.sendText!({
+      cfg,
+      to: "C123",
+      text: "heartbeat alert",
+      accountId: "default",
+      identity: { name: "Pulse", emoji: "📟" },
+    });
+
     expect(sendMessageSlackMock).toHaveBeenCalledWith(
       "C123",
-      "fallback text",
+      "heartbeat alert",
       expect.objectContaining({
-        threadTs: undefined,
+        identity: {
+          username: "Pulse",
+          iconUrl: undefined,
+          iconEmoji: "📟",
+        },
       }),
     );
   });

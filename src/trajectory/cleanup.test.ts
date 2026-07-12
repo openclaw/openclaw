@@ -1,6 +1,8 @@
+// Trajectory cleanup tests cover retention pruning of trajectory artifacts.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   removeRemovedSessionTrajectoryArtifacts,
@@ -31,6 +33,16 @@ function pointerFile(sessionId: string, runtimeFile: string): string {
   })}\n`;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect((statError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+}
+
 describe("trajectory cleanup", () => {
   it("removes adjacent trajectory sidecars for a deleted session", async () => {
     await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
@@ -50,8 +62,33 @@ describe("trajectory cleanup", () => {
       });
 
       expect(removed.map((entry) => entry.kind).toSorted()).toEqual(["pointer", "runtime"]);
-      await expect(fs.stat(runtimeFile)).rejects.toThrow();
-      await expect(fs.stat(pointerPath)).rejects.toThrow();
+      await expectPathMissing(runtimeFile);
+      await expectPathMissing(pointerPath);
+    });
+  });
+
+  it("removes legacy runtime sidecars for SQLite marker sessions", async () => {
+    await withTempDir({ prefix: "openclaw-trajectory-cleanup-" }, async (dir) => {
+      const sessionId = "session-1";
+      const storePath = path.join(dir, "sessions.json");
+      const sessionFile = formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId,
+        storePath,
+      });
+      const runtimeFile = resolveTrajectoryFilePath({ env: {}, sessionFile, sessionId });
+      await fs.mkdir(path.dirname(runtimeFile), { recursive: true });
+      await fs.writeFile(runtimeFile, runtimeEvent(sessionId), "utf8");
+
+      const removed = await removeSessionTrajectoryArtifacts({
+        sessionId,
+        sessionFile,
+        storePath,
+        restrictToStoreDir: true,
+      });
+
+      expect(removed).toEqual([{ kind: "runtime", path: runtimeFile }]);
+      await expectPathMissing(runtimeFile);
     });
   });
 
@@ -72,9 +109,9 @@ describe("trajectory cleanup", () => {
         restrictToStoreDir: true,
       });
 
-      expect(removed).toEqual([]);
-      await expect(fs.stat(runtimeFile)).resolves.toBeDefined();
-      await expect(fs.stat(pointerPath)).resolves.toBeDefined();
+      expect(removed).toStrictEqual([]);
+      expect((await fs.stat(runtimeFile)).isFile()).toBe(true);
+      expect((await fs.stat(pointerPath)).isFile()).toBe(true);
     });
   });
 
@@ -101,8 +138,8 @@ describe("trajectory cleanup", () => {
         restrictToStoreDir: true,
       });
 
-      await expect(fs.stat(safeExternalRuntime)).rejects.toThrow();
-      await expect(fs.stat(pointerPath)).rejects.toThrow();
+      await expectPathMissing(safeExternalRuntime);
+      await expectPathMissing(pointerPath);
 
       await fs.writeFile(pointerPath, pointerFile(sessionId, unsafeExternalRuntime), "utf8");
       await removeSessionTrajectoryArtifacts({
@@ -112,7 +149,7 @@ describe("trajectory cleanup", () => {
         restrictToStoreDir: true,
       });
 
-      await expect(fs.stat(unsafeExternalRuntime)).resolves.toBeDefined();
+      expect((await fs.stat(unsafeExternalRuntime)).isFile()).toBe(true);
     });
   });
 });

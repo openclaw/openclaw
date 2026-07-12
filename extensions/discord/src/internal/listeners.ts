@@ -1,14 +1,16 @@
+// Discord plugin module implements listeners behavior.
 import {
   GatewayDispatchEvents,
   type APIMessage,
   type APIReaction,
+  type APIVoiceState,
   type GatewayPresenceUpdateDispatchData,
   type GatewayThreadUpdateDispatchData,
 } from "discord-api-types/v10";
 import type { Client } from "./client.js";
 import { Guild, Message, User } from "./structures.js";
 
-export type DiscordMessageDispatchData = {
+type DiscordMessageDispatchData = {
   id?: string;
   channel_id: string;
   channelId?: string;
@@ -21,7 +23,7 @@ export type DiscordMessageDispatchData = {
   channel?: unknown;
 };
 
-export type DiscordReactionDispatchData = {
+type DiscordReactionDispatchData = {
   user_id?: string;
   channel_id: string;
   message_id: string;
@@ -36,13 +38,17 @@ export type DiscordReactionDispatchData = {
   rawMessage?: APIMessage;
 };
 
-export abstract class BaseListener {
+abstract class BaseListener {
   abstract readonly type: string;
   abstract handle(data: unknown, client: Client): Promise<void> | void;
 }
 
 export abstract class ReadyListener extends BaseListener {
   readonly type = GatewayDispatchEvents.Ready;
+}
+
+export abstract class ResumedListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.Resumed;
 }
 
 export abstract class MessageCreateListener extends BaseListener {
@@ -70,6 +76,11 @@ export abstract class PresenceUpdateListener extends BaseListener {
     data: GatewayPresenceUpdateDispatchData,
     client: Client,
   ): Promise<void> | void;
+}
+
+export abstract class VoiceStateUpdateListener extends BaseListener {
+  readonly type = GatewayDispatchEvents.VoiceStateUpdate;
+  abstract override handle(data: APIVoiceState, client: Client): Promise<void> | void;
 }
 
 export abstract class ThreadUpdateListener extends BaseListener {

@@ -18,14 +18,20 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "chutes": ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"]
+  "setup": {
+    "providers": [
+      {
+        "id": "chutes",
+        "envVars": ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
       "provider": "chutes",
       "method": "oauth",
       "choiceId": "chutes",
+      "appGuidedAuth": "oauth",
       "choiceLabel": "Chutes (OAuth)",
       "choiceHint": "Browser sign-in",
       "groupId": "chutes",
@@ -36,6 +42,7 @@
       "provider": "chutes",
       "method": "api-key",
       "choiceId": "chutes-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Chutes API key",
       "choiceHint": "Open-source models including Llama, DeepSeek, and more",
       "groupId": "chutes",
@@ -567,6 +574,9 @@
             "name": "Qwen/Qwen2.5-VL-32B-Instruct",
             "reasoning": false,
             "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxPixels": 12845056, "preferredSidePx": 2048, "tokenMode": "provider" }
+            },
             "contextWindow": 16384,
             "maxTokens": 16384,
             "cost": {
@@ -581,6 +591,9 @@
             "name": "Qwen/Qwen3-VL-235B-A22B-Instruct",
             "reasoning": false,
             "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxPixels": 12845056, "preferredSidePx": 2048, "tokenMode": "provider" }
+            },
             "contextWindow": 262144,
             "maxTokens": 262144,
             "cost": {

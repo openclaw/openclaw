@@ -1,39 +1,57 @@
+// Gateway server test helpers create isolated config/state dirs, start gateway
+// servers/clients, and provide common RPC/session fixtures.
 import fs from "node:fs/promises";
-import { type AddressInfo, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import "./test-helpers.mocks.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import {
   clearSessionStoreCacheForTest,
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
 } from "../config/sessions.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntries,
+} from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import {
+  approveDevicePairing,
+  getPairedDevice,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
+import { resetGatewaySuspendCoordinatorForTest } from "../infra/gateway-suspend-coordinator.js";
+import { __testing as restartTesting } from "../infra/restart.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
+import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   DEFAULT_AGENT_ID,
+  normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
+import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-runtime-internal.js";
 import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 import type { GatewayServerOptions } from "./server.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
@@ -41,7 +59,7 @@ import {
   cronIsolatedRun,
   embeddedRunMock,
   getReplyFromConfig,
-  piSdkMock,
+  agentDiscoveryMock,
   sendWhatsAppMock,
   sessionStoreSaveDelayMs,
   setTestConfigRoot,
@@ -51,20 +69,14 @@ import {
   testTailnetIPv4,
 } from "./test-helpers.runtime-state.js";
 
-// Import lazily after test env/home setup so config/session paths resolve to test dirs.
-// Keep one cached module per worker for speed.
-let serverModulePromise: Promise<typeof import("./server.js")> | undefined;
-
-async function getServerModule() {
-  serverModulePromise ??= import("./server.js");
-  return await serverModulePromise;
-}
+const getServerModule = createLazyRuntimeModule(() => import("./server.js"));
 
 const GATEWAY_TEST_ENV_KEYS = [
   "HOME",
   "USERPROFILE",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_AGENT_DIR",
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
   "OPENCLAW_SKIP_GMAIL_WATCHER",
@@ -86,6 +98,9 @@ let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
 let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
+// Gateway tests exercise RPC/server behavior, not production bind auto-detection by default.
+// Keep suite fixtures loopback-stable inside containers; bind-specific tests opt in explicitly.
+const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
 
 function resolveGatewayTestMainSessionKeys(): string[] {
   const resolved = resolveMainSessionKeyFromConfig();
@@ -157,7 +172,7 @@ async function persistTestSessionConfig(): Promise<void> {
   }
   const nextStoreValue =
     typeof testState.sessionStorePath === "string"
-      ? preservedTemplateStore || testState.sessionStorePath
+      ? testState.sessionStorePath
       : preservedTemplateStore;
   for (const configPath of configPaths) {
     const config = { ...parsedConfigs.get(configPath) };
@@ -196,10 +211,15 @@ export async function writeSessionStore(params: {
   if (!storePath) {
     throw new Error("writeSessionStore requires testState.sessionStorePath");
   }
-  const agentId = params.agentId ?? DEFAULT_AGENT_ID;
-  const store: Record<string, Partial<SessionEntry>> = {};
+  const upsertsByAgentId = new Map<string, Array<{ sessionKey: string; entry: SessionEntry }>>();
   for (const [requestKey, entry] of Object.entries(params.entries)) {
     const rawKey = requestKey.trim();
+    if (typeof entry.sessionId !== "string" || entry.sessionId.trim().length === 0) {
+      continue;
+    }
+    const agentId = normalizeAgentId(
+      params.agentId ?? parseAgentSessionKey(rawKey)?.agentId ?? DEFAULT_AGENT_ID,
+    );
     const storeKey =
       rawKey === "global" || rawKey === "unknown"
         ? rawKey
@@ -208,14 +228,40 @@ export async function writeSessionStore(params: {
             requestKey,
             mainKey: params.mainKey,
           });
-    store[storeKey] = entry;
+    const upserts = upsertsByAgentId.get(agentId) ?? [];
+    upserts.push({
+      sessionKey: storeKey,
+      entry: {
+        ...entry,
+        sessionId: entry.sessionId,
+        updatedAt: entry.updatedAt ?? 0,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId,
+          sessionId: entry.sessionId,
+          storePath,
+        }),
+      },
+    });
+    upsertsByAgentId.set(agentId, upserts);
   }
-  // Gateway suites often reuse the same store path across tests while writing the
-  // file directly; clear the in-process cache so handlers reload the seeded state.
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+  if (upsertsByAgentId.size === 0) {
+    upsertsByAgentId.set(normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID), []);
+  }
+  for (const [agentId, upserts] of upsertsByAgentId) {
+    const removals = listSessionEntries({ agentId, storePath }).map(({ sessionKey }) => ({
+      sessionKey,
+    }));
+    await applySessionEntryLifecycleMutation({
+      agentId,
+      storePath,
+      removals,
+      upserts,
+      skipMaintenance: true,
+    });
+  }
   clearSessionStoreCacheForTest();
 }
 
@@ -226,6 +272,7 @@ async function setupGatewayTestHome() {
   process.env.USERPROFILE = tempHome;
   process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
   delete process.env.OPENCLAW_CONFIG_PATH;
+  delete process.env.OPENCLAW_AGENT_DIR;
 }
 
 function applyGatewaySkipEnv() {
@@ -242,15 +289,30 @@ function applyGatewaySkipEnv() {
     : "openclaw-test-no-bundled-extensions";
 }
 
+function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: boolean }): void {
+  // Resume a held scheduler before hard admission reset invalidates and forgets its
+  // lease. Then cancel restart timers and retire their module-local signal lease.
+  resetGatewaySuspendCoordinatorForTest();
+  if (options.preserveRuntimeBindings) {
+    restartTesting.resetSigusr1TransientState();
+  } else {
+    restartTesting.resetSigusr1State();
+  }
+  resetGatewayWorkAdmission();
+}
+
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   // Some tests intentionally use fake timers; ensure they don't leak into gateway suites.
   vi.useRealTimers();
+  resetGatewayLifecycleTestState({ preserveRuntimeBindings: false });
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   if (!tempHome) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
   }
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (stateDir) {
     await fs.rm(stateDir, {
@@ -303,11 +365,10 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
-  testState.gatewayBind = undefined;
+  testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
-  testState.canvasHostPort = undefined;
   testState.legacyIssues = [];
   testState.legacyParsed = {};
   testState.migrationConfig = null;
@@ -336,8 +397,8 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
-  embeddedRunMock.compactEmbeddedPiSession.mockReset();
-  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValue({
+  embeddedRunMock.compactEmbeddedAgentSession.mockReset();
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
     ok: true,
     compacted: true,
     result: {
@@ -352,16 +413,19 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   resetAgentRunContextForTest();
   const mod = await getServerModule();
-  await mod.__resetModelCatalogCacheForTest();
-  piSdkMock.enabled = false;
-  piSdkMock.discoverCalls = 0;
-  piSdkMock.models = [];
+  await mod.resetModelCatalogCacheForTest();
+  agentDiscoveryMock.enabled = false;
+  agentDiscoveryMock.discoverCalls = 0;
+  agentDiscoveryMock.models = [];
 }
 
 async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
+  resetGatewayLifecycleTestState({ preserveRuntimeBindings: activeSuiteGatewayServerCount > 0 });
   clearGatewaySubagentRuntime();
   resetLogger();
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
   if (options.restoreEnv) {
     gatewayEnvSnapshot?.restore();
     gatewayEnvSnapshot = undefined;
@@ -384,6 +448,7 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
 
 async function resetGatewayTestRuntimeOnly() {
   vi.useRealTimers();
+  resetGatewayLifecycleTestState({ preserveRuntimeBindings: true });
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   applyGatewaySkipEnv();
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -393,11 +458,10 @@ async function resetGatewayTestRuntimeOnly() {
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
-  testState.gatewayBind = undefined;
+  testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
-  testState.canvasHostPort = undefined;
   testState.legacyIssues = [];
   testState.legacyParsed = {};
   testState.migrationConfig = null;
@@ -426,8 +490,8 @@ async function resetGatewayTestRuntimeOnly() {
   embeddedRunMock.abortCalls = [];
   embeddedRunMock.waitCalls = [];
   embeddedRunMock.waitResults.clear();
-  embeddedRunMock.compactEmbeddedPiSession.mockReset();
-  embeddedRunMock.compactEmbeddedPiSession.mockResolvedValue({
+  embeddedRunMock.compactEmbeddedAgentSession.mockReset();
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValue({
     ok: true,
     compacted: true,
     result: {
@@ -449,6 +513,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   const scope = options?.scope ?? "test";
   if (scope === "suite") {
     beforeAll(async () => {
+      vi.useRealTimers();
       if (activeSuiteHookScopeCount === 0) {
         await setupGatewayTestHome();
         await resetGatewayTestState({ uniqueConfigRoot: false });
@@ -456,6 +521,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
       activeSuiteHookScopeCount += 1;
     });
     beforeEach(async () => {
+      vi.useRealTimers();
       if (activeSuiteGatewayServerCount > 0) {
         await resetGatewayTestRuntimeOnly();
         return;
@@ -479,6 +545,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   }
 
   beforeEach(async () => {
+    vi.useRealTimers();
     await setupGatewayTestHome();
     await resetGatewayTestState({ uniqueConfigRoot: false });
   }, 60_000);
@@ -490,20 +557,6 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
 
 export async function getFreePort(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
-
-export async function occupyPort(): Promise<{
-  server: ReturnType<typeof createServer>;
-  port: number;
-}> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const port = (server.address() as AddressInfo).port;
-      resolve({ server, port });
-    });
-  });
 }
 
 type GatewayTestMessage = {
@@ -557,7 +610,6 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   timeoutMs = 10_000,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout>;
     function cleanup() {
       clearTimeout(timer);
       ws.off("message", handler);
@@ -574,7 +626,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
         resolve(obj);
       }
     }
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       cleanup();
       reject(new Error("timeout"));
     }, timeoutMs);
@@ -845,42 +897,121 @@ export function testOnlyResolveAuthTokenForSignature(opts?: {
   return resolveAuthTokenForSignature(opts);
 }
 
+type ConnectReqClient = {
+  id: string;
+  displayName?: string;
+  version: string;
+  platform: string;
+  mode: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
+  instanceId?: string;
+};
+
+type ConnectReqDevice = {
+  id: string;
+  publicKey: string;
+  signature: string;
+  signedAt: number;
+  nonce?: string;
+};
+
+type ConnectReqOptions = {
+  token?: string;
+  bootstrapToken?: string;
+  deviceToken?: string;
+  password?: string;
+  skipDefaultAuth?: boolean;
+  minProtocol?: number;
+  maxProtocol?: number;
+  client?: ConnectReqClient;
+  role?: string;
+  scopes?: string[];
+  caps?: string[];
+  commands?: string[];
+  permissions?: Record<string, boolean>;
+  device?: ConnectReqDevice | null;
+  deviceIdentityPath?: string;
+  skipConnectChallengeNonce?: boolean;
+  prePairDevice?: boolean;
+  timeoutMs?: number;
+};
+
+function shouldPrePairTestDevice(params: {
+  client: ConnectReqClient;
+  opts?: ConnectReqOptions;
+}): boolean {
+  if (params.opts?.device !== undefined || params.opts?.deviceToken) {
+    return false;
+  }
+  if (params.opts?.prePairDevice !== undefined) {
+    return params.opts.prePairDevice;
+  }
+  if (params.opts?.skipDefaultAuth === true) {
+    return false;
+  }
+  return (
+    params.client.mode === GATEWAY_CLIENT_MODES.WEBCHAT ||
+    params.client.id === GATEWAY_CLIENT_NAMES.WEBCHAT_UI
+  );
+}
+
+function pairedDeviceAllowsScopes(params: {
+  paired: Awaited<ReturnType<typeof getPairedDevice>>;
+  publicKey: string;
+  role: string;
+  scopes: string[];
+}): boolean {
+  if (!params.paired || params.paired.publicKey !== params.publicKey) {
+    return false;
+  }
+  const pairedRoles = params.paired.roles ?? (params.paired.role ? [params.paired.role] : []);
+  if (!pairedRoles.includes(params.role)) {
+    return false;
+  }
+  const approvedScopes = params.paired.approvedScopes ?? params.paired.scopes ?? [];
+  return params.scopes.every((scope) => approvedScopes.includes(scope));
+}
+
+async function prePairTestDevice(params: {
+  device: ConnectReqDevice;
+  client: ConnectReqClient;
+  role: string;
+  scopes: string[];
+}): Promise<void> {
+  const paired = await getPairedDevice(params.device.id);
+  if (
+    pairedDeviceAllowsScopes({
+      paired,
+      publicKey: params.device.publicKey,
+      role: params.role,
+      scopes: params.scopes,
+    })
+  ) {
+    return;
+  }
+  const pairing = await requestDevicePairing({
+    deviceId: params.device.id,
+    publicKey: params.device.publicKey,
+    role: params.role,
+    scopes: params.scopes,
+    clientId: params.client.id,
+    clientMode: params.client.mode,
+    platform: params.client.platform,
+    deviceFamily: params.client.deviceFamily,
+    silent: false,
+  });
+  const approved = await approveDevicePairing(pairing.request.requestId, {
+    callerScopes: params.scopes,
+  });
+  if (approved?.status !== "approved") {
+    throw new Error(`failed to pre-pair test device ${params.device.id}`);
+  }
+}
+
 export async function connectReq(
   ws: WebSocket,
-  opts?: {
-    token?: string;
-    bootstrapToken?: string;
-    deviceToken?: string;
-    password?: string;
-    skipDefaultAuth?: boolean;
-    minProtocol?: number;
-    maxProtocol?: number;
-    client?: {
-      id: string;
-      displayName?: string;
-      version: string;
-      platform: string;
-      mode: string;
-      deviceFamily?: string;
-      modelIdentifier?: string;
-      instanceId?: string;
-    };
-    role?: string;
-    scopes?: string[];
-    caps?: string[];
-    commands?: string[];
-    permissions?: Record<string, boolean>;
-    device?: {
-      id: string;
-      publicKey: string;
-      signature: string;
-      signedAt: number;
-      nonce?: string;
-    } | null;
-    deviceIdentityPath?: string;
-    skipConnectChallengeNonce?: boolean;
-    timeoutMs?: number;
-  },
+  opts?: ConnectReqOptions,
 ): Promise<ConnectResponse> {
   const { randomUUID } = await import("node:crypto");
   const id = randomUUID();
@@ -963,6 +1094,20 @@ export async function connectReq(
       nonce: connectChallengeNonce,
     };
   })();
+  if (
+    device &&
+    shouldPrePairTestDevice({
+      client,
+      opts,
+    })
+  ) {
+    await prePairTestDevice({
+      device,
+      client,
+      role,
+      scopes: requestedScopes,
+    });
+  }
   const isResponseForId = (o: unknown): boolean => {
     if (!o || typeof o !== "object" || Array.isArray(o)) {
       return false;
@@ -1094,7 +1239,9 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
         return events;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error("timeout waiting for system event");
 }

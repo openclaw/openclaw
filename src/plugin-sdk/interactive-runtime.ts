@@ -1,4 +1,12 @@
-export { reduceInteractiveReply } from "../channels/plugins/outbound/interactive.js";
+/**
+ * Runtime SDK subpath for interactive replies and message presentation helpers.
+ */
+export {
+  adaptMessagePresentationForChannel,
+  applyPresentationActionLimits,
+  presentationPageSize,
+  reduceInteractiveReply,
+} from "../channels/plugins/outbound/interactive.js";
 export type {
   InteractiveButtonStyle,
   InteractiveReply,
@@ -8,14 +16,21 @@ export type {
   InteractiveReplySelectBlock,
   InteractiveReplyTextBlock,
   MessagePresentation,
+  MessagePresentationAction,
   MessagePresentationBlock,
   MessagePresentationButton,
   MessagePresentationButtonStyle,
   MessagePresentationButtonsBlock,
+  MessagePresentationChartBlock,
+  MessagePresentationChartSegment,
+  MessagePresentationChartSeries,
   MessagePresentationContextBlock,
   MessagePresentationDividerBlock,
+  MessagePresentationInteractiveBlock,
   MessagePresentationOption,
   MessagePresentationSelectBlock,
+  MessagePresentationTableBlock,
+  MessagePresentationTableCell,
   MessagePresentationTextBlock,
   MessagePresentationTone,
   ReplyPayloadDelivery,
@@ -27,9 +42,17 @@ export {
   hasReplyChannelData,
   hasReplyContent,
   interactiveReplyToPresentation,
+  isMessagePresentationInteractiveBlock,
   normalizeMessagePresentation,
   normalizeInteractiveReply,
+  presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
+  renderMessagePresentationChartFallbackText,
   renderMessagePresentationFallbackText,
+  renderMessagePresentationTableFallbackText,
+  resolveMessagePresentationActionValue,
+  resolveMessagePresentationButtonAction,
+  resolveMessagePresentationControlValue,
+  resolveMessagePresentationOptionAction,
   resolveInteractiveTextFallback,
 } from "../interactive/payload.js";

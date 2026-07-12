@@ -1,7 +1,8 @@
+// Synology Chat plugin module implements gateway runtime behavior.
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { dispatchSynologyChatInboundTurn } from "./inbound-turn.js";
+import { dispatchSynologyChatInboundEvent } from "./inbound-event.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import { createWebhookHandler, type WebhookHandlerDeps } from "./webhook-handler.js";
 
@@ -68,7 +69,7 @@ function createUnknownArgsLogAdapter(
   };
 }
 
-export function collectSynologyGatewayStartupIssues(params: {
+function collectSynologyGatewayStartupIssues(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
   accountId: string;
@@ -173,11 +174,12 @@ export function validateSynologyGatewayAccountStartup(params: {
 }
 
 export function registerSynologyWebhookRoute(params: {
+  cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
   accountId: string;
   log?: SynologyGatewayLog;
 }): () => void {
-  const { account, log } = params;
+  const { cfg, account, log } = params;
   const routeKey = getRouteKey(account);
   const prevUnregister = activeRouteUnregisters.get(routeKey);
   if (prevUnregister) {
@@ -188,8 +190,10 @@ export function registerSynologyWebhookRoute(params: {
 
   const handler = createWebhookHandler({
     account,
+    trustedProxies: cfg.gateway?.trustedProxies,
+    allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
     deliver: async (msg) =>
-      await dispatchSynologyChatInboundTurn({
+      await dispatchSynologyChatInboundEvent({
         account,
         msg,
         log: createUnknownArgsLogAdapter(log),

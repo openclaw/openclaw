@@ -1,30 +1,11 @@
-/**
- * Gateway types.
- *
- * core/gateway/gateway.ts now imports all dependencies directly (both
- * core/ modules and upper-layer files). The only injected dependency
- * is `runtime` (PluginRuntime), which is a framework-provided object.
- */
-
-// ============ Logger ============
+// Qqbot type declarations define plugin contracts.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { EngineLogger } from "../types.js";
 export type { EngineLogger };
 
-// ============ Account ============
-
-/** Re-export GatewayAccount from engine/types.ts (single source of truth). */
 import type { GatewayAccount as _GatewayAccount } from "../types.js";
 export type GatewayAccount = _GatewayAccount;
 
-// ============ PluginRuntime subset ============
-
-/**
- * Subset of PluginRuntime used by the gateway.
- *
- * This is NOT a custom adapter — it's the exact same object shape that
- * the framework injects. We define it here so core/ doesn't need to
- * depend on the plugin-sdk root barrel.
- */
 export interface GatewayPluginRuntime {
   channel: {
     activity: {
@@ -42,6 +23,9 @@ export interface GatewayPluginRuntime {
         peer: { kind: "group" | "direct"; id: string };
       }) => { sessionKey: string; accountId: string; agentId?: string };
     };
+    commands?: {
+      isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
+    };
     reply: {
       dispatchReplyWithBufferedBlockDispatcher: (params: unknown) => Promise<unknown>;
       resolveEffectiveMessagesConfig: (
@@ -56,7 +40,7 @@ export interface GatewayPluginRuntime {
       resolveStorePath: (store: unknown, params: { agentId: string }) => string;
       recordInboundSession: (params: unknown) => Promise<unknown>;
     };
-    turn: {
+    inbound: {
       run: (params: unknown) => Promise<unknown>;
     };
     text: {
@@ -77,13 +61,6 @@ export interface GatewayPluginRuntime {
       error?: string;
     }>;
   };
-  /**
-   * Config API for reading/writing the framework configuration.
-   *
-   * Used by the interaction handler (config query/update) directly
-   * within the engine layer. Optional because not all runtime
-   * environments provide config write capability.
-   */
   config?: {
     current: () => Record<string, unknown>;
     replaceConfigFile: (params: {
@@ -93,12 +70,8 @@ export interface GatewayPluginRuntime {
   };
 }
 
-// ============ Shared result types ============
-
-/** Re-export ProcessedAttachments from inbound-attachments (single source of truth). */
 export type { ProcessedAttachments } from "./inbound-attachments.js";
 
-/** Outbound result from media sends. */
 export interface OutboundResult {
   channel: string;
   messageId?: string;
@@ -106,12 +79,8 @@ export interface OutboundResult {
   error?: string;
 }
 
-/** Re-export RefAttachmentSummary for convenience. */
 export type { RefAttachmentSummary } from "../ref/types.js";
 
-// ============ WebSocket Event Types ============
-
-/** Raw WebSocket payload structure. */
 export interface WSPayload {
   op: number;
   d: unknown;
@@ -119,8 +88,7 @@ export interface WSPayload {
   t?: string;
 }
 
-/** Attachment shape shared by all message event types. */
-export interface RawMessageAttachment {
+interface RawMessageAttachment {
   content_type: string;
   url: string;
   filename?: string;
@@ -128,8 +96,7 @@ export interface RawMessageAttachment {
   asr_refer_text?: string;
 }
 
-/** Referenced message element (used for quote messages). */
-export interface RawMsgElement {
+interface RawMsgElement {
   msg_idx?: string;
   content?: string;
   attachments?: Array<
@@ -203,7 +170,7 @@ import type { EngineAdapters } from "../adapter/index.js";
  * future additions (admin lookup, proactive push, per-group toggles)
  * don't keep polluting the top-level context type.
  */
-export interface GatewayGroupOptions {
+interface GatewayGroupOptions {
   /**
    * Whether group-chat gating is enabled. Defaults to `true`; set to
    * `false` to disable all group processing (e.g. for a DM-only smoke
@@ -245,7 +212,7 @@ export interface GatewayGroupOptions {
 export interface CoreGatewayContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
-  cfg: unknown;
+  cfg: OpenClawConfig;
   onReady?: (data: unknown) => void;
   /**
    * Invoked when a RESUMED event is received after reconnect.
@@ -254,6 +221,12 @@ export interface CoreGatewayContext {
    */
   onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
+  /**
+   * Invoked when the gateway websocket closes or permanently stops
+   * (fatal close code / reconnect attempts exhausted). Without this the
+   * channel status keeps reporting the last `connected: true` snapshot.
+   */
+  onDisconnected?: (info: { reason?: string; fatal?: boolean }) => void;
   log?: EngineLogger;
   /** PluginRuntime injected by the framework — same object in both versions. */
   runtime: GatewayPluginRuntime;

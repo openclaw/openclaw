@@ -1,7 +1,13 @@
-import type { PluginRuntimeChannel } from "./types-channel.js";
+// Plugin runtime types describe activated plugin capabilities exposed to core execution.
+// Owner schema module import keeps the ProtocolSchemas registry out of the
+// public plugin-sdk dts graph (check-plugin-sdk-exports guards this).
+import type { NodePluginToolDescriptor } from "../../../packages/gateway-protocol/src/schema/nodes.js";
+import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLogger };
+
+type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
@@ -15,6 +21,13 @@ export type SubagentRunParams = {
   lightContext?: boolean;
   deliver?: boolean;
   idempotencyKey?: string;
+  cwd?: string;
+};
+
+export type PluginManagedWorktree = {
+  id: string;
+  path: string;
+  branch: string;
 };
 
 export type SubagentRunResult = {
@@ -63,6 +76,7 @@ export type RuntimeNodeListResult = {
     connected?: boolean;
     caps?: string[];
     commands?: string[];
+    nodePluginTools?: NodePluginToolDescriptor[];
   }>;
 };
 
@@ -72,10 +86,26 @@ export type RuntimeNodeInvokeParams = {
   params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
+  /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
+  scopes?: OperatorScope[];
+};
+
+export type RuntimeGatewayRequestOptions = {
+  timeoutMs?: number;
 };
 
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
+  gateway: {
+    /** Whether this process owns an active Gateway request context. */
+    isAvailable: () => Promise<boolean>;
+    /** Dispatch a Gateway method as the current trusted plugin. */
+    request: <T = unknown>(
+      method: string,
+      params?: Record<string, unknown>,
+      options?: RuntimeGatewayRequestOptions,
+    ) => Promise<T>;
+  };
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
     waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
@@ -89,6 +119,17 @@ export type PluginRuntime = PluginRuntimeCore & {
   nodes: {
     list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
+  };
+  worktrees: {
+    create: (params: {
+      repoRoot: string;
+      name: string;
+      baseRef?: string;
+      ownerKind: "workboard";
+      ownerId: string;
+    }) => Promise<PluginManagedWorktree>;
+    release: (params: { path: string }) => Promise<void>;
+    removeIfLossless: (params: { path: string }) => Promise<boolean>;
   };
   channel: PluginRuntimeChannel;
 };

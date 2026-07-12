@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewaySession
 import android.Manifest
 import android.content.Context
@@ -10,10 +11,15 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 
+/**
+ * Injectable location facade for command tests and Android runtime access.
+ */
 internal interface LocationDataSource {
   fun hasFinePermission(context: Context): Boolean
 
   fun hasCoarsePermission(context: Context): Boolean
+
+  fun hasBackgroundPermission(context: Context): Boolean
 
   suspend fun fetchLocation(
     desiredProviders: List<String>,
@@ -32,6 +38,10 @@ private class DefaultLocationDataSource(
 
   override fun hasCoarsePermission(context: Context): Boolean =
     ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+      PackageManager.PERMISSION_GRANTED
+
+  override fun hasBackgroundPermission(context: Context): Boolean =
+    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
       PackageManager.PERMISSION_GRANTED
 
   override suspend fun fetchLocation(
@@ -53,6 +63,8 @@ class LocationHandler private constructor(
   private val dataSource: LocationDataSource,
   private val json: Json,
   private val isForeground: () -> Boolean,
+  private val locationMode: () -> LocationMode,
+  private val backgroundLocationEnabled: () -> Boolean,
   private val locationPreciseEnabled: () -> Boolean,
 ) {
   constructor(
@@ -60,25 +72,34 @@ class LocationHandler private constructor(
     location: LocationCaptureManager,
     json: Json,
     isForeground: () -> Boolean,
+    locationMode: () -> LocationMode,
+    backgroundLocationEnabled: () -> Boolean,
     locationPreciseEnabled: () -> Boolean,
   ) : this(
     appContext = appContext,
     dataSource = DefaultLocationDataSource(location),
     json = json,
     isForeground = isForeground,
+    locationMode = locationMode,
+    backgroundLocationEnabled = backgroundLocationEnabled,
     locationPreciseEnabled = locationPreciseEnabled,
   )
 
+  /** Reports whether precise GPS-backed location can be requested from Android. */
   fun hasFineLocationPermission(): Boolean = dataSource.hasFinePermission(appContext)
 
+  /** Reports whether network/coarse location can be requested from Android. */
   fun hasCoarseLocationPermission(): Boolean = dataSource.hasCoarsePermission(appContext)
 
   companion object {
+    /** Creates a handler with injected location state for permission and payload tests. */
     internal fun forTesting(
       appContext: Context,
       dataSource: LocationDataSource,
       json: Json = Json { ignoreUnknownKeys = true },
       isForeground: () -> Boolean = { true },
+      locationMode: () -> LocationMode = { LocationMode.WhileUsing },
+      backgroundLocationEnabled: () -> Boolean = { false },
       locationPreciseEnabled: () -> Boolean = { true },
     ): LocationHandler =
       LocationHandler(
@@ -86,15 +107,20 @@ class LocationHandler private constructor(
         dataSource = dataSource,
         json = json,
         isForeground = isForeground,
+        locationMode = locationMode,
+        backgroundLocationEnabled = backgroundLocationEnabled,
         locationPreciseEnabled = locationPreciseEnabled,
       )
   }
 
+  /** Handles location.get with foreground, permission, and user precision gates applied. */
   suspend fun handleLocationGet(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!isForeground()) {
+    if (!isForeground() && !allowsBackgroundLocation()) {
+      // Android foreground restrictions and user expectation keep live location tied to the visible app.
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_BACKGROUND_UNAVAILABLE",
-        message = "LOCATION_BACKGROUND_UNAVAILABLE: location requires OpenClaw to stay open",
+        message =
+          "LOCATION_BACKGROUND_UNAVAILABLE: choose Always and grant background location access",
       )
     }
     if (!dataSource.hasFinePermission(appContext) && !dataSource.hasCoarsePermission(appContext)) {
@@ -105,6 +131,8 @@ class LocationHandler private constructor(
     }
     val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
     val preciseEnabled = locationPreciseEnabled()
+    // Gateway requests are advisory; Android permission and user settings decide
+    // whether precise capture is actually allowed for this invocation.
     val accuracy =
       when (desiredAccuracy) {
         "precise" -> if (preciseEnabled && dataSource.hasFinePermission(appContext)) "precise" else "balanced"
@@ -113,6 +141,7 @@ class LocationHandler private constructor(
       }
     val providers =
       when (accuracy) {
+        // Provider order is part of the accuracy policy: GPS first for precise, network first otherwise.
         "precise" -> listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
         "coarse" -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
         else -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
@@ -137,6 +166,11 @@ class LocationHandler private constructor(
     }
   }
 
+  private fun allowsBackgroundLocation(): Boolean =
+    backgroundLocationEnabled() &&
+      locationMode() == LocationMode.Always &&
+      dataSource.hasBackgroundPermission(appContext)
+
   private fun parseLocationParams(paramsJson: String?): Triple<Long?, Long, String?> {
     if (paramsJson.isNullOrBlank()) {
       return Triple(null, 10_000L, null)
@@ -151,6 +185,7 @@ class LocationHandler private constructor(
     val timeoutMs =
       (root?.get("timeoutMs") as? JsonPrimitive)?.content?.toLongOrNull()?.coerceIn(1_000L, 60_000L)
         ?: 10_000L
+    // desiredAccuracy is advisory; invalid values fall through to the default policy.
     val desiredAccuracy =
       (root?.get("desiredAccuracy") as? JsonPrimitive)?.content?.trim()?.lowercase()
     return Triple(maxAgeMs, timeoutMs, desiredAccuracy)

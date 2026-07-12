@@ -1,7 +1,8 @@
+// Msteams tests cover policy plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import {
-  isMSTeamsGroupAllowed,
+  resolveMSTeamsGroupToolPolicy,
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "./policy.js";
@@ -158,83 +159,43 @@ describe("msteams policy", () => {
     });
   });
 
-  describe("isMSTeamsGroupAllowed", () => {
-    it("allows when policy is open", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "open",
-          allowFrom: [],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(true);
-    });
+  describe("resolveMSTeamsGroupToolPolicy", () => {
+    it("uses stable projected keys and never raw mutable names", () => {
+      const cfg = {
+        channels: {
+          msteams: {
+            dangerouslyAllowNameMatching: true,
+            teams: {
+              "Mutable Team": {
+                channels: {
+                  "Mutable Channel": { tools: { allow: ["exec"] } },
+                },
+              },
+              "19:stable-team@thread.tacv2": {
+                channels: {
+                  "19:stable-channel@thread.tacv2": { tools: { allow: ["read"] } },
+                },
+              },
+            },
+          },
+        },
+      };
 
-    it("blocks when policy is disabled", () => {
       expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "disabled",
-          allowFrom: ["user-id"],
-          senderId: "user-id",
-          senderName: "User",
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupId: "19:unknown@thread.tacv2",
+          groupChannel: "Mutable Channel",
+          groupSpace: "Mutable Team",
         }),
-      ).toBe(false);
-    });
-
-    it("blocks allowlist when empty", () => {
+      ).toBeUndefined();
       expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: [],
-          senderId: "user-id",
-          senderName: "User",
+        resolveMSTeamsGroupToolPolicy({
+          cfg,
+          groupId: "19:stable-channel@thread.tacv2",
+          groupSpace: "19:stable-team@thread.tacv2",
         }),
-      ).toBe(false);
-    });
-
-    it("allows allowlist when sender matches", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["User-Id"],
-          senderId: "user-id",
-          senderName: "User",
-        }),
-      ).toBe(true);
-    });
-
-    it("blocks sender-name allowlist matches by default", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["user"],
-          senderId: "other",
-          senderName: "User",
-        }),
-      ).toBe(false);
-    });
-
-    it("allows sender-name allowlist matches when explicitly enabled", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["user"],
-          senderId: "other",
-          senderName: "User",
-          allowNameMatching: true,
-        }),
-      ).toBe(true);
-    });
-
-    it("allows allowlist wildcard", () => {
-      expect(
-        isMSTeamsGroupAllowed({
-          groupPolicy: "allowlist",
-          allowFrom: ["*"],
-          senderId: "other",
-          senderName: "User",
-        }),
-      ).toBe(true);
+      ).toEqual({ allow: ["read"] });
     });
   });
 });

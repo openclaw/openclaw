@@ -10,15 +10,28 @@ export type ProviderThinkingPolicyContext = {
   modelId: string;
 };
 
+export type ProviderThinkingModelCompat = {
+  thinkingFormat?: string;
+  supportedReasoningEfforts?: readonly string[] | null;
+};
+
 /**
  * Provider-owned default thinking policy input.
  *
  * `reasoning` is the merged catalog hint for the selected model when one is
  * available. Providers can use it to keep "reasoning model => low" behavior
  * without re-reading the catalog themselves.
+ *
+ * `compat` carries model-level request contract facts for the selected model
+ * when available. Providers can use it to expose model-specific thinking
+ * profiles only when the configured payload style supports them.
  */
 export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
+  /** Effective agent runtime selected for this model, when known. */
+  agentRuntime?: string | null;
   reasoning?: boolean;
+  params?: Record<string, unknown>;
+  compat?: ProviderThinkingModelCompat | null;
 };
 
 export type ProviderThinkingLevelId =
@@ -29,7 +42,8 @@ export type ProviderThinkingLevelId =
   | "high"
   | "xhigh"
   | "adaptive"
-  | "max";
+  | "max"
+  | "ultra";
 
 export type ProviderThinkingLevel = {
   id: ProviderThinkingLevelId;
@@ -49,4 +63,10 @@ export type ProviderThinkingLevel = {
 export type ProviderThinkingProfile = {
   levels: ProviderThinkingLevel[] | ReadonlyArray<ProviderThinkingLevel>;
   defaultLevel?: ProviderThinkingLevelId | null;
+  /**
+   * Some bundled providers have model-specific thinking contracts that are more
+   * current than cached generic catalog metadata. Keep this opt-in so
+   * `reasoning: false` remains authoritative for ordinary catalog entries.
+   */
+  preserveWhenCatalogReasoningFalse?: boolean;
 };

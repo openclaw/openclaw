@@ -1,11 +1,14 @@
+// Committer tests cover committer script behavior.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "committer");
 const { createTempDir } = createScriptTestHarness();
+let templateRepo: string;
 
 function run(cwd: string, command: string, args: string[]) {
   return execFileSync(command, args, {
@@ -20,7 +23,12 @@ function git(cwd: string, ...args: string[]) {
 
 function createRepo() {
   const repo = createTempDir("committer-test-");
+  cpSync(templateRepo, repo, { recursive: true });
+  return repo;
+}
 
+function createTemplateRepo() {
+  const repo = mkdtempSync(path.join(tmpdir(), "committer-template-"));
   git(repo, "init", "-q");
   git(repo, "config", "user.email", "test@example.com");
   git(repo, "config", "user.name", "Test User");
@@ -57,7 +65,13 @@ function commitWithHelperArgs(repo: string, ...args: string[]) {
 
 function committedPaths(repo: string) {
   const output = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD");
-  return output.split("\n").filter(Boolean).toSorted();
+  const paths: string[] = [];
+  for (const line of output.split("\n")) {
+    if (line) {
+      paths.push(line);
+    }
+  }
+  return paths.toSorted();
 }
 
 function committedFileContents(repo: string, relativePath: string) {
@@ -65,6 +79,14 @@ function committedFileContents(repo: string, relativePath: string) {
 }
 
 describe("scripts/committer", () => {
+  beforeAll(() => {
+    templateRepo = createTemplateRepo();
+  });
+
+  afterAll(() => {
+    rmSync(templateRepo, { recursive: true, force: true });
+  });
+
   it("accepts supported path argument shapes", () => {
     const cases = [
       {
@@ -150,18 +172,14 @@ describe("scripts/committer", () => {
     expect(committedPaths(repo)).toEqual(["note.txt"]);
   });
 
-  it("passes FAST_COMMIT through to git hooks when using --fast", () => {
+  it("bypasses git hooks when using --fast", () => {
     const repo = createRepo();
-    installHook(
-      repo,
-      ".githooks/pre-commit",
-      '#!/usr/bin/env bash\nset -euo pipefail\n[ "${FAST_COMMIT:-}" = "1" ] || exit 91\n',
-    );
+    installHook(repo, ".githooks/pre-commit", "#!/usr/bin/env bash\nset -euo pipefail\nexit 91\n");
     writeRepoFile(repo, "note.txt", "hello\n");
 
-    const output = commitWithHelperArgs(repo, "--fast", "test: fast hook env", "note.txt");
+    const output = commitWithHelperArgs(repo, "--fast", "test: fast no verify", "note.txt");
 
-    expect(output).toContain('Committed "test: fast hook env" with 1 files');
+    expect(output).toContain('Committed "test: fast no verify" with 1 files');
     expect(committedPaths(repo)).toEqual(["note.txt"]);
   });
 

@@ -5,35 +5,25 @@
       "description": "This translation layer make sure that we expose codex error code in camel case.\n\nWhen an upstream HTTP status is available (for example, from the Responses API or a provider), it is forwarded in `httpStatusCode` on the relevant `codexErrorInfo` variant.",
       "oneOf": [
         {
-          "enum": [
-            "contextWindowExceeded",
-            "usageLimitExceeded",
-            "serverOverloaded",
-            "cyberPolicy",
-            "internalServerError",
-            "unauthorized",
-            "badRequest",
-            "threadRollbackFailed",
-            "sandboxError",
-            "other"
-          ],
-          "type": "string"
-        },
-        {
           "additionalProperties": false,
           "properties": {
             "httpConnectionFailed": {
               "properties": {
                 "httpStatusCode": {
                   "format": "uint16",
-                  "minimum": 0.0,
-                  "type": ["integer", "null"]
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 }
               },
               "type": "object"
             }
           },
-          "required": ["httpConnectionFailed"],
+          "required": [
+            "httpConnectionFailed"
+          ],
           "title": "HttpConnectionFailedCodexErrorInfo",
           "type": "object"
         },
@@ -45,14 +35,19 @@
               "properties": {
                 "httpStatusCode": {
                   "format": "uint16",
-                  "minimum": 0.0,
-                  "type": ["integer", "null"]
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 }
               },
               "type": "object"
             }
           },
-          "required": ["responseStreamConnectionFailed"],
+          "required": [
+            "responseStreamConnectionFailed"
+          ],
           "title": "ResponseStreamConnectionFailedCodexErrorInfo",
           "type": "object"
         },
@@ -64,14 +59,19 @@
               "properties": {
                 "httpStatusCode": {
                   "format": "uint16",
-                  "minimum": 0.0,
-                  "type": ["integer", "null"]
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 }
               },
               "type": "object"
             }
           },
-          "required": ["responseStreamDisconnected"],
+          "required": [
+            "responseStreamDisconnected"
+          ],
           "title": "ResponseStreamDisconnectedCodexErrorInfo",
           "type": "object"
         },
@@ -83,14 +83,19 @@
               "properties": {
                 "httpStatusCode": {
                   "format": "uint16",
-                  "minimum": 0.0,
-                  "type": ["integer", "null"]
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 }
               },
               "type": "object"
             }
           },
-          "required": ["responseTooManyFailedAttempts"],
+          "required": [
+            "responseTooManyFailedAttempts"
+          ],
           "title": "ResponseTooManyFailedAttemptsCodexErrorInfo",
           "type": "object"
         },
@@ -104,25 +109,51 @@
                   "$ref": "#/definitions/NonSteerableTurnKind"
                 }
               },
-              "required": ["turnKind"],
+              "required": [
+                "turnKind"
+              ],
               "type": "object"
             }
           },
-          "required": ["activeTurnNotSteerable"],
+          "required": [
+            "activeTurnNotSteerable"
+          ],
           "title": "ActiveTurnNotSteerableCodexErrorInfo",
           "type": "object"
+        },
+        {
+          "enum": [
+            "contextWindowExceeded",
+            "sessionBudgetExceeded",
+            "usageLimitExceeded",
+            "serverOverloaded",
+            "cyberPolicy",
+            "internalServerError",
+            "unauthorized",
+            "badRequest",
+            "threadRollbackFailed",
+            "sandboxError",
+            "other"
+          ],
+          "type": "string"
         }
       ]
     },
     "NonSteerableTurnKind": {
-      "enum": ["review", "compact"],
+      "enum": [
+        "review",
+        "compact"
+      ],
       "type": "string"
     },
     "TurnError": {
       "properties": {
         "additionalDetails": {
           "default": null,
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "codexErrorInfo": {
           "anyOf": [
@@ -138,7 +169,9 @@
           "type": "string"
         }
       },
-      "required": ["message"],
+      "required": [
+        "message"
+      ],
       "type": "object"
     }
   },
@@ -156,7 +189,12 @@
       "type": "boolean"
     }
   },
-  "required": ["error", "threadId", "turnId", "willRetry"],
+  "required": [
+    "error",
+    "threadId",
+    "turnId",
+    "willRetry"
+  ],
   "title": "ErrorNotification",
   "type": "object"
 }

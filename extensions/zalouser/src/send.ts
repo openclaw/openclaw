@@ -1,3 +1,5 @@
+// Zalouser plugin module implements send behavior.
+import { createZalouserSendReceipt } from "./send-receipt.js";
 import { parseZalouserTextStyles } from "./text-styles.js";
 import type { ZaloEventMessage, ZaloSendOptions, ZaloSendResult } from "./types.js";
 import {
@@ -10,8 +12,11 @@ import {
 } from "./zalo-js.js";
 import { TextStyle } from "./zca-constants.js";
 
-export type ZalouserSendOptions = ZaloSendOptions;
-export type ZalouserSendResult = ZaloSendResult;
+type ZalouserSendOptions = ZaloSendOptions & {
+  /** Persist each concrete platform send before the next internal chunk starts. */
+  onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void;
+};
+type ZalouserSendResult = ZaloSendResult;
 
 const ZALO_TEXT_LIMIT = 2000;
 const DEFAULT_TEXT_CHUNK_MODE = "length";
@@ -28,25 +33,26 @@ export async function sendMessageZalouser(
   text: string,
   options: ZalouserSendOptions = {},
 ): Promise<ZalouserSendResult> {
+  const { onDeliveryResult, ...transportOptions } = options;
   const prepared =
-    options.textMode === "markdown"
+    transportOptions.textMode === "markdown"
       ? parseZalouserTextStyles(text)
-      : { text, styles: options.textStyles };
-  const textChunkLimit = options.textChunkLimit ?? ZALO_TEXT_LIMIT;
+      : { text, styles: transportOptions.textStyles };
+  const textChunkLimit = transportOptions.textChunkLimit ?? ZALO_TEXT_LIMIT;
   const chunks = splitStyledText(
     prepared.text,
     (prepared.styles?.length ?? 0) > 0 ? prepared.styles : undefined,
     textChunkLimit,
-    options.textChunkMode,
+    transportOptions.textChunkMode,
   );
 
   let lastResult: ZalouserSendResult | null = null;
   for (const [index, chunk] of chunks.entries()) {
     const chunkOptions =
       index === 0
-        ? { ...options, textStyles: chunk.styles }
+        ? { ...transportOptions, textStyles: chunk.styles }
         : {
-            ...options,
+            ...transportOptions,
             caption: undefined,
             mediaLocalRoots: undefined,
             mediaUrl: undefined,
@@ -54,12 +60,19 @@ export async function sendMessageZalouser(
           };
     const result = await sendZaloTextMessage(threadId, chunk.text, chunkOptions);
     if (!result.ok) {
-      return result;
+      throw new Error(result.error || "Failed to send Zalouser message");
     }
+    await onDeliveryResult?.(result);
     lastResult = result;
   }
 
-  return lastResult ?? { ok: false, error: "No message content provided" };
+  return (
+    lastResult ?? {
+      ok: false,
+      error: "No message content provided",
+      receipt: createZalouserSendReceipt({ threadId, kind: "text" }),
+    }
+  );
 }
 
 export async function sendImageZalouser(
@@ -110,6 +123,7 @@ export async function sendReactionZalouser(params: {
   return {
     ok: result.ok,
     error: result.error,
+    receipt: createZalouserSendReceipt({ threadId: params.threadId, kind: "unknown" }),
   };
 }
 

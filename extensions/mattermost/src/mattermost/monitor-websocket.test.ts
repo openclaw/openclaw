@@ -1,10 +1,24 @@
+// Mattermost tests cover monitor websocket plugin behavior.
+import { once } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
+  MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
   type MattermostWebSocketLike,
   WebSocketClosedBeforeOpenError,
 } from "./monitor-websocket.js";
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
 
 class FakeWebSocket implements MattermostWebSocketLike {
   public readonly sent: string[] = [];
@@ -119,11 +133,18 @@ describe("mattermost websocket monitor", () => {
       socket.emitClose(1006, "connection refused");
     });
 
-    const failure = connectOnce();
-    await expect(failure).rejects.toBeInstanceOf(WebSocketClosedBeforeOpenError);
-    await expect(failure).rejects.toMatchObject({
-      message: "websocket closed before open (code 1006)",
-    });
+    let failure: unknown;
+    try {
+      await connectOnce();
+    } catch (caught) {
+      failure = caught;
+    }
+    expect(failure).toBeInstanceOf(WebSocketClosedBeforeOpenError);
+    expect((failure as WebSocketClosedBeforeOpenError).message).toBe(
+      "websocket closed before open (code 1006)",
+    );
+    expect((failure as WebSocketClosedBeforeOpenError).code).toBe(1006);
+    expect((failure as WebSocketClosedBeforeOpenError).reason).toBe("connection refused");
   });
 
   it("retries when first attempt errors before open and next attempt succeeds", async () => {
@@ -167,13 +188,85 @@ describe("mattermost websocket monitor", () => {
     expect(sockets).toHaveLength(2);
     expect(sockets[0].closeCalls).toBe(1);
     expect(sockets[1].sent).toHaveLength(1);
-    expect(JSON.parse(sockets[1].sent[0])).toMatchObject({
+    expect(JSON.parse(sockets[1].sent[0] ?? "")).toEqual({
       action: "authentication_challenge",
       data: { token: "token" },
       seq: 1,
     });
-    expect(patches.some((patch) => patch.connected === true)).toBe(true);
-    expect(patches.filter((patch) => patch.connected === false)).toHaveLength(2);
+    expect(countMatching(patches, (patch) => patch.connected === true)).toBe(1);
+    expect(countMatching(patches, (patch) => patch.connected === false)).toBe(2);
+  });
+
+  it("accepts large valid post envelopes and rejects oversized websocket payloads", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected TCP websocket server address");
+    }
+
+    const quotedCardBody = '"'.repeat(380_000);
+    const largeProps = { cards: [{ body: quotedCardBody }] };
+    const largePostEnvelope = JSON.stringify({
+      event: "posted",
+      data: {
+        post: JSON.stringify({
+          id: "post-large",
+          message: "large Mattermost integration post",
+          props: largeProps,
+        }),
+      },
+    });
+    expect(JSON.stringify(largeProps).length).toBeLessThan(800_000);
+    expect(Buffer.byteLength(largePostEnvelope)).toBeGreaterThan(1024 * 1024);
+    expect(Buffer.byteLength(largePostEnvelope)).toBeLessThan(
+      MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES,
+    );
+
+    const runtime = testRuntime();
+    const onPosted = vi.fn(async () => {});
+    server.on("connection", (socket) => {
+      socket.once("message", () => {
+        socket.send(
+          JSON.stringify({
+            event: "posted",
+            data: {
+              post: JSON.stringify({
+                id: "post-1",
+                message: "normal Mattermost post",
+              }),
+            },
+          }),
+        );
+        socket.send(largePostEnvelope);
+        socket.send(Buffer.alloc(MATTERMOST_WEBSOCKET_MAX_PAYLOAD_BYTES + 1, 0x78));
+      });
+    });
+
+    try {
+      await createMattermostConnectOnce({
+        wsUrl: `ws://127.0.0.1:${address.port}`,
+        botToken: "token",
+        runtime,
+        nextSeq: () => 1,
+        onPosted,
+      })();
+    } finally {
+      server.close();
+      await once(server, "close");
+    }
+
+    expect(onPosted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "post-1", message: "normal Mattermost post" }),
+      expect.any(Object),
+    );
+    expect(onPosted).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "post-large", props: largeProps }),
+      expect.any(Object),
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Max payload size exceeded"),
+    );
   });
 
   it("dispatches reaction events to the reaction handler", async () => {
@@ -214,24 +307,16 @@ describe("mattermost websocket monitor", () => {
 
     expect(onReaction).toHaveBeenCalledTimes(1);
     expect(onPosted).not.toHaveBeenCalled();
-    const payload = onReaction.mock.calls[0]?.[0];
-    expect(payload).toMatchObject({
-      event: "reaction_added",
-      data: {
-        reaction: JSON.stringify({
-          user_id: "user-1",
-          post_id: "post-1",
-          emoji_name: "thumbsup",
-        }),
-      },
+    const reaction = JSON.stringify({
+      user_id: "user-1",
+      post_id: "post-1",
+      emoji_name: "thumbsup",
     });
-    expect(payload.data?.reaction).toBe(
-      JSON.stringify({
-        user_id: "user-1",
-        post_id: "post-1",
-        emoji_name: "thumbsup",
-      }),
-    );
+    const payload = onReaction.mock.calls.at(0)?.[0];
+    expect(payload).toEqual({
+      event: "reaction_added",
+      data: { reaction },
+    });
   });
 
   it("terminates when bot update_at changes (disable/enable cycle)", async () => {

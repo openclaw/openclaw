@@ -1,18 +1,18 @@
+// Dispatches chat commands to registered handlers and formats their results.
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
-import { emitResetCommandHooks } from "./commands-reset-hooks.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
-export { emitResetCommandHooks } from "./commands-reset-hooks.js";
-let commandHandlersRuntimePromise: Promise<typeof import("./commands-handlers.runtime.js")> | null =
-  null;
+const commandHandlersRuntimeLoader = createLazyImportLoader(
+  () => import("./commands-handlers.runtime.js"),
+);
 
 function loadCommandHandlersRuntime() {
-  commandHandlersRuntimePromise ??= import("./commands-handlers.runtime.js");
-  return commandHandlersRuntimePromise;
+  return commandHandlersRuntimeLoader.load();
 }
 
 let HANDLERS: CommandHandler[] | null = null;
@@ -35,7 +35,20 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   if (HANDLERS === null) {
     HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
   }
-  const resetResult = await maybeHandleResetCommand(params);
+  const allowCreateSessionEntry = params.allowCreateSessionEntry === true;
+  const initialSessionEntry =
+    params.initialSessionEntry ??
+    (allowCreateSessionEntry
+      ? undefined
+      : params.sessionEntry
+        ? { ...params.sessionEntry }
+        : undefined);
+  const commandParams: HandleCommandsParams = {
+    ...params,
+    initialSessionEntry,
+    allowCreateSessionEntry,
+  };
+  const resetResult = await maybeHandleResetCommand(commandParams);
   if (resetResult) {
     return normalizeCommandHandlerResult(resetResult);
   }
@@ -47,7 +60,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   });
 
   for (const handler of HANDLERS) {
-    const result = await handler(params, allowTextCommands);
+    const result = await handler(commandParams, allowTextCommands);
     if (result) {
       return normalizeCommandHandlerResult(result);
     }

@@ -1,9 +1,11 @@
+// Allowlist config edit helpers build safe config mutations for channel allowlists.
 import type { ConfigWriteTarget } from "../channels/plugins/config-writes.js";
 import type { ChannelAllowlistAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+import { isRecord } from "../utils.js";
 
 type AllowlistConfigPaths = {
   readPaths: string[][];
@@ -11,7 +13,10 @@ type AllowlistConfigPaths = {
   cleanupPaths?: string[][];
 };
 
+/** Named allowlist entries attached to a route-specific override. */
 export type AllowlistGroupOverride = { label: string; entries: string[] };
+
+/** Per-entry display-name lookup results for channel allowlist UIs. */
 export type AllowlistNameResolution = Array<{
   input: string;
   resolved: boolean;
@@ -43,10 +48,12 @@ const LEGACY_DM_ALLOWLIST_CONFIG_PATHS: AllowlistConfigPaths = {
   cleanupPaths: [["dm", "allowFrom"]],
 };
 
+/** Resolve modern DM/group allowlist paths for account-scoped channel config writes. */
 export function resolveDmGroupAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? DM_ALLOWLIST_CONFIG_PATHS : GROUP_ALLOWLIST_CONFIG_PATHS;
 }
 
+/** Resolve DM-only paths that still read and clean up the old nested dm.allowFrom location. */
 export function resolveLegacyDmAllowlistConfigPaths(scope: "dm" | "group") {
   return scope === "dm" ? LEGACY_DM_ALLOWLIST_CONFIG_PATHS : null;
 }
@@ -181,6 +188,8 @@ function resolveAccountScopedWriteTarget(
       writeTarget: { kind: "channel", scope: { channelId } } as const satisfies ConfigWriteTarget,
     };
   }
+  // Once an accounts map exists, even the default account writes through it so scoped
+  // and unscoped config do not diverge inside the same channel stanza.
   const accounts = (channel.accounts ??= {}) as Record<string, unknown>;
   const existingAccount = Object.hasOwn(accounts, normalizedAccountId)
     ? accounts[normalizedAccountId]
@@ -226,30 +235,32 @@ function ensureNestedObject(
 }
 
 function setNestedValue(root: Record<string, unknown>, path: string[], value: unknown) {
-  if (path.length === 0) {
+  const leaf = path.at(-1);
+  if (leaf === undefined) {
     return;
   }
   if (path.length === 1) {
-    root[path[0]] = value;
+    root[leaf] = value;
     return;
   }
   const parent = ensureNestedObject(root, path.slice(0, -1));
-  parent[path[path.length - 1]] = value;
+  parent[leaf] = value;
 }
 
 function deleteNestedValue(root: Record<string, unknown>, path: string[]) {
-  if (path.length === 0) {
+  const leaf = path.at(-1);
+  if (leaf === undefined) {
     return;
   }
   if (path.length === 1) {
-    delete root[path[0]];
+    delete root[leaf];
     return;
   }
   const parent = getNestedValue(root, path.slice(0, -1));
-  if (!parent || typeof parent !== "object") {
+  if (!isRecord(parent)) {
     return;
   }
-  delete (parent as Record<string, unknown>)[path[path.length - 1]];
+  delete parent[leaf];
 }
 
 function applyAccountScopedAllowlistConfigEdit(params: {
@@ -316,6 +327,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
     } else {
       setNestedValue(resolvedTarget.target, params.paths.writePath, next);
     }
+    // Legacy readers can observe multiple paths, but writes must leave one canonical path.
     for (const path of params.paths.cleanupPaths ?? []) {
       deleteNestedValue(resolvedTarget.target, path);
     }

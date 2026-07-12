@@ -17,14 +17,15 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - `action="tabs"` before opening a new tab if retries/timeouts may have left windows behind.
 2. Prefer stable tab handles:
    - Open important tabs with `label`, for example `label="meet"`.
-   - Use `tabId` handles like `t1` or labels like `meet` as `targetId` in later calls.
-   - Avoid relying on raw DevTools `targetId` unless the tool just returned it.
+   - After `action="tabs"` or `action="open"`, store `suggestedTargetId` and pass it as `targetId` in later calls.
+   - `suggestedTargetId` is the label when one exists, otherwise the stable `tabId` handle like `t1`.
+   - Avoid relying on raw DevTools `targetId` except for immediate diagnostics; it can change under Chromium target replacement.
 3. Read before you click:
    - Use `action="snapshot"` on the intended `targetId`.
    - Use the same `targetId` for follow-up actions so refs stay on the same tab.
    - For durable Playwright refs, request `refs="aria"` when supported. If you receive `axN` refs from `snapshotFormat="aria"`, use them only after that same snapshot call; stale or unbound `axN` refs fail fast and need a fresh snapshot.
    - Use `urls=true` when link text is ambiguous or a direct navigation target would avoid brittle clicks.
-   - Use `labels=true` on snapshot or screenshot when visual position matters.
+   - Use `labels=true` on snapshot or screenshot when visual position matters. On Playwright-backed profiles, the response includes an `annotations` array (`{ref, number, role, name?, box}`) with each ref's bounding box in the captured image's coordinate space, so you can reason about position without re-snapshotting; screenshot labels can also combine with `fullPage=true` (CLI: `--full-page`) to label the whole document, or `ref` / `element` to clip to one element. `profile="user"` and other existing-session (chrome-mcp) profiles render an overlay into page screenshots but do not attach `annotations` or use the Playwright full-page/ref/element projection helper, so read positions from the labeled image itself on those profiles. The raw-CDP fallback (no Playwright) does not support labeled screenshots at all and returns a 501, so only request `labels` when Playwright is available.
 4. Act narrowly:
    - Prefer `action="act"` with a ref from the latest snapshot.
    - After navigation, modal changes, or form submission, snapshot again before the next action.
@@ -76,7 +77,9 @@ If an action fails with a missing or stale ref:
 
 Use `profile="user"` only when existing cookies/login matter. This attaches to the user's running Chromium-based browser.
 
-For `profile="user"` and other existing-session profiles, omit `timeoutMs` on `act:type`, `evaluate`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill`; that driver rejects per-call timeout overrides for those actions.
+On macOS, `action="importprofile"` is the alternative when the agent should use an isolated managed browser with cookies copied from a real Chrome-family profile. First use `action="profiles"` and inspect `systemProfiles`, then import into a fresh managed profile name. Import asks for one Keychain/Touch ID consent prompt. It copies cookies, not local storage or IndexedDB; device-bound session credentials (DBSC) mean some Google sessions may still require re-authentication.
+
+For `profile="user"` and other existing-session profiles, omit `timeoutMs` on `act:type`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill`; that driver rejects per-call timeout overrides for those actions. `act:evaluate` accepts `timeoutMs`.
 
 ## Google Meet Notes
 

@@ -1,10 +1,23 @@
-import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+/**
+ * Browser route utility functions.
+ *
+ * Wraps async handlers, profile lookup, JSON errors, and route value coercion
+ * shared across browser control endpoints.
+ */
+import { BrowserProfileUnavailableError, type BrowserErrorResponse } from "../errors.js";
+import {
+  type BrowserRouteContext,
+  type ProfileContext,
+  withProfileContextOperation,
+} from "../server-context.js";
+import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteHandler } from "./types.js";
 
 function normalizeOptionalString(value: string): string | undefined {
   return value.trim() || undefined;
 }
 
+/** Convert thrown async route errors into next(error) calls for the HTTP layer. */
 export function asyncBrowserRoute(handler: BrowserRouteHandler): BrowserRouteHandler {
   return (req, res) => handler(req, res);
 }
@@ -13,6 +26,7 @@ export function asyncBrowserRoute(handler: BrowserRouteHandler): BrowserRouteHan
  * Extract profile name from query string or body and get profile context.
  * Query string takes precedence over body for consistency with GET routes.
  */
+/** Resolve the profile context requested by query/profile parameters. */
 export function getProfileContext(
   req: BrowserRequest,
   ctx: BrowserRouteContext,
@@ -35,14 +49,61 @@ export function getProfileContext(
   try {
     return ctx.forProfile(profileName);
   } catch (err) {
-    return { error: String(err), status: 404 };
+    const mapped = ctx.mapTabError(err);
+    return mapped
+      ? { error: mapped.message, status: mapped.status }
+      : { error: String(err), status: 404 };
   }
 }
 
+/** Run one profile-scoped route transaction, restarting an unhealthy owned browser once. */
+export async function runProfileRouteOperation<T>(params: {
+  profileCtx: ProfileContext;
+  signal?: AbortSignal;
+  run: (signal: AbortSignal) => Promise<T>;
+}): Promise<T> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      return await withProfileContextOperation(params.profileCtx, params.signal, params.run);
+    } catch (err) {
+      if (!isProfileRestartRequiredError(err)) {
+        throw err;
+      }
+      if (attempt !== 0) {
+        throw new BrowserProfileUnavailableError(
+          `Browser profile "${params.profileCtx.profile.name}" could not stabilize after restart.`,
+        );
+      }
+      try {
+        await params.profileCtx.ensureBrowserAvailable({ signal: params.signal });
+      } catch (restartErr) {
+        if (isProfileRestartRequiredError(restartErr)) {
+          throw new BrowserProfileUnavailableError(
+            `Browser profile "${params.profileCtx.profile.name}" could not restart.`,
+          );
+        }
+        throw restartErr;
+      }
+    }
+  }
+  throw new Error("browser profile could not stabilize");
+}
+
+/** Send a simple JSON error response. */
 export function jsonError(res: BrowserResponse, status: number, message: string) {
   res.status(status).json({ error: message });
 }
 
+/** Send a mapped browser-domain error while preserving validated metadata. */
+export function jsonBrowserError(res: BrowserResponse, error: BrowserErrorResponse) {
+  const body =
+    "reason" in error
+      ? { error: error.message, reason: error.reason, details: error.details }
+      : { error: error.message };
+  res.status(error.status).json(body);
+}
+
+/** Coerce route values to strings while treating nullish values as empty. */
 export function toStringOrEmpty(value: unknown) {
   if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
     return normalizeOptionalString(String(value)) ?? "";
@@ -50,18 +111,7 @@ export function toStringOrEmpty(value: unknown) {
   return "";
 }
 
-export function toNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  const normalized = typeof value === "string" ? normalizeOptionalString(value) : undefined;
-  if (normalized) {
-    const parsed = Number(normalized);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
+/** Coerce route boolean values from booleans or common string forms. */
 export function toBoolean(value: unknown) {
   if (typeof value === "boolean") {
     return value;
@@ -79,6 +129,7 @@ export function toBoolean(value: unknown) {
   return undefined;
 }
 
+/** Coerce a route value to a string array when every entry is a string. */
 export function toStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;

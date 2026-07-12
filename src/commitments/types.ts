@@ -1,3 +1,4 @@
+// Defines commitment records, kinds, and scheduling state.
 export type CommitmentKind = "event_check_in" | "deadline_check" | "care_check_in" | "open_loop";
 
 export type CommitmentSensitivity = "routine" | "personal" | "care";
@@ -35,7 +36,9 @@ export type CommitmentRecord = CommitmentScope & {
   dueWindow: CommitmentDueWindow;
   sourceMessageId?: string;
   sourceRunId?: string;
-  sourceUserText: string;
+  /** @deprecated Legacy-only field from early stores. Do not replay this into delivery prompts. */
+  sourceUserText?: string;
+  /** @deprecated Legacy-only field from early stores. Do not replay this into delivery prompts. */
   sourceAssistantText?: string;
   createdAtMs: number;
   updatedAtMs: number;

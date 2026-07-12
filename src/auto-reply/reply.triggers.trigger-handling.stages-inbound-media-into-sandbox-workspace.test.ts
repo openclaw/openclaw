@@ -1,3 +1,4 @@
+/** Tests trigger handling for staging inbound media into sandbox workspaces. */
 import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,19 +18,20 @@ const childProcessMocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
 const fsSafeMocks = vi.hoisted(() => {
-  class MockSafeOpenError extends Error {
+  class MockFsSafeError extends Error {
     readonly code: string;
 
     constructor(code: string, message: string) {
       super(message);
-      this.name = "SafeOpenError";
+      this.name = "FsSafeError";
       this.code = code;
     }
   }
 
   return {
-    SafeOpenError: MockSafeOpenError,
-    copyFileWithinRoot: vi.fn(),
+    FsSafeError: MockFsSafeError,
+    rootCopyFrom: vi.fn(),
+    root: vi.fn(),
     readLocalFileSafely: vi.fn(),
   };
 });
@@ -51,7 +53,7 @@ vi.mock("node:child_process", async () => {
 vi.mock("../infra/fs-safe.js", () => fsSafeMocks);
 vi.mock("../media/channel-inbound-roots.js", () => mediaRootMocks);
 
-async function copyFileWithinRootForTest({
+async function rootCopyFromForTest({
   sourcePath,
   rootDir,
   relativePath,
@@ -64,7 +66,7 @@ async function copyFileWithinRootForTest({
 }) {
   const sourceStat = await fs.stat(sourcePath);
   if (typeof maxBytes === "number" && sourceStat.size > maxBytes) {
-    throw new fsSafeMocks.SafeOpenError(
+    throw new fsSafeMocks.FsSafeError(
       "too-large",
       `file exceeds limit of ${maxBytes} bytes (got ${sourceStat.size})`,
     );
@@ -75,7 +77,7 @@ async function copyFileWithinRootForTest({
   const destPath = path.resolve(rootReal, relativePath);
   const rootPrefix = `${rootReal}${path.sep}`;
   if (destPath !== rootReal && !destPath.startsWith(rootPrefix)) {
-    throw new fsSafeMocks.SafeOpenError("outside-workspace", "file is outside workspace root");
+    throw new fsSafeMocks.FsSafeError("outside-workspace", "file is outside workspace root");
   }
 
   const parentDir = dirname(destPath);
@@ -87,7 +89,7 @@ async function copyFileWithinRootForTest({
       try {
         const stat = await fs.lstat(cursor);
         if (stat.isSymbolicLink()) {
-          throw new fsSafeMocks.SafeOpenError("symlink", "symlink not allowed");
+          throw new fsSafeMocks.FsSafeError("symlink", "symlink not allowed");
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -102,7 +104,7 @@ async function copyFileWithinRootForTest({
   try {
     const destStat = await fs.lstat(destPath);
     if (destStat.isSymbolicLink()) {
-      throw new fsSafeMocks.SafeOpenError("symlink", "symlink not allowed");
+      throw new fsSafeMocks.FsSafeError("symlink", "symlink not allowed");
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -117,7 +119,16 @@ beforeEach(() => {
   sandboxMocks.ensureSandboxWorkspaceForSession.mockReset();
   sandboxMocks.assertSandboxPath.mockReset().mockResolvedValue({ resolved: "", relative: "" });
   childProcessMocks.spawn.mockClear();
-  fsSafeMocks.copyFileWithinRoot.mockReset().mockImplementation(copyFileWithinRootForTest);
+  fsSafeMocks.rootCopyFrom.mockReset().mockImplementation(rootCopyFromForTest);
+  fsSafeMocks.root.mockReset().mockImplementation(async (rootDir: string) => ({
+    copyIn: async (relativePath: string, sourcePath: string, options?: { maxBytes?: number }) =>
+      await rootCopyFromForTest({
+        sourcePath,
+        rootDir,
+        relativePath,
+        maxBytes: options?.maxBytes,
+      }),
+  }));
   mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots
     .mockReset()
     .mockReturnValue(["/Users/demo/Library/Messages/Attachments"]);
@@ -157,6 +168,70 @@ async function writeInboundMedia(
 }
 
 describe("stageSandboxMedia", () => {
+  it("stages managed inbound media URIs into the sandbox workspace", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
+      const fileName = "report.pdf";
+      const mediaPath = await writeInboundMedia(home, fileName, "pdf-bytes");
+      const mediaUri = `media://inbound/${fileName}`;
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+      ctx.MediaType = "application/pdf";
+      sessionCtx.MediaType = "application/pdf";
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = `media/inbound/${fileName}`;
+      expect(result.staged.get(mediaUri)).toBe(stagedPath);
+      expect(result.staged.get(await fs.realpath(mediaPath))).toBe(stagedPath);
+      expect(ctx.MediaPath).toBe(stagedPath);
+      expect(sessionCtx.MediaPath).toBe(stagedPath);
+      expect(ctx.MediaUrl).toBe(stagedPath);
+      expect(sessionCtx.MediaUrl).toBe(stagedPath);
+      await expect(fs.readFile(join(sandboxDir, stagedPath), "utf8")).resolves.toBe("pdf-bytes");
+    });
+  });
+
+  it("stages managed inbound media URIs into the host workspace when sandboxing is off", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const cfg = createSandboxMediaStageConfig(home);
+      const workspaceDir = join(home, "openclaw");
+      sandboxMocks.ensureSandboxWorkspaceForSession.mockResolvedValue(null);
+      const fileName = "host-report.pdf";
+      await writeInboundMedia(home, fileName, "host-pdf-bytes");
+      const existingProjectFile = join(workspaceDir, "media", "inbound", fileName);
+      await fs.mkdir(dirname(existingProjectFile), { recursive: true });
+      await fs.writeFile(existingProjectFile, "project-file");
+      const mediaUri = `media://inbound/${fileName}`;
+      const { ctx, sessionCtx } = createSandboxMediaContexts(mediaUri);
+      ctx.MediaType = "application/pdf";
+      sessionCtx.MediaType = "application/pdf";
+
+      const result = await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      });
+
+      const stagedPath = ctx.MediaPath ?? "";
+      const stagedRelativePath = path.relative(workspaceDir, stagedPath);
+      expect(stagedRelativePath).toMatch(
+        new RegExp(`^media/inbound/openclaw-staged-[0-9a-f-]+/${fileName}$`),
+      );
+      expect(result.staged.get(mediaUri)).toBe(stagedPath);
+      expect(sessionCtx.MediaPath).toBe(stagedPath);
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("host-pdf-bytes");
+      await expect(fs.readFile(existingProjectFile, "utf8")).resolves.toBe("project-file");
+    });
+  });
+
   it("stages allowed media and blocks unsafe paths", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sandboxDir } = await setupSandboxWorkspace(home);
@@ -178,9 +253,10 @@ describe("stageSandboxMedia", () => {
         expect(sessionCtx.MediaPath).toBe(stagedPath);
         expect(ctx.MediaUrl).toBe(stagedPath);
         expect(sessionCtx.MediaUrl).toBe(stagedPath);
-        await expect(
-          fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
-        ).resolves.toBeTruthy();
+        const stagedStats = await fs.stat(
+          join(sandboxDir, "media", "inbound", basename(mediaPath)),
+        );
+        expect(stagedStats.isFile()).toBe(true);
       }
 
       {
@@ -196,9 +272,13 @@ describe("stageSandboxMedia", () => {
           workspaceDir,
         });
 
-        await expect(
-          fs.stat(join(sandboxDir, "media", "inbound", basename(sensitiveFile))),
-        ).rejects.toThrow();
+        let stagedStatError: NodeJS.ErrnoException | undefined;
+        try {
+          await fs.stat(join(sandboxDir, "media", "inbound", basename(sensitiveFile)));
+        } catch (error) {
+          stagedStatError = error as NodeJS.ErrnoException;
+        }
+        expect(stagedStatError?.code).toBe("ENOENT");
         expect(ctx.MediaPath).toBe(sensitiveFile);
       }
 
@@ -275,9 +355,13 @@ describe("stageSandboxMedia", () => {
         workspaceDir,
       });
 
-      await expect(
-        fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath))),
-      ).rejects.toThrow();
+      let stagedStatError: NodeJS.ErrnoException | undefined;
+      try {
+        await fs.stat(join(sandboxDir, "media", "inbound", basename(mediaPath)));
+      } catch (error) {
+        stagedStatError = error as NodeJS.ErrnoException;
+      }
+      expect(stagedStatError?.code).toBe("ENOENT");
       expect(ctx.MediaPath).toBe(mediaPath);
       expect(sessionCtx.MediaPath).toBe(mediaPath);
     });

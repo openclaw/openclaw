@@ -1,6 +1,7 @@
+// Groq tests cover index plugin behavior.
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { contributeGroqResolvedModelCompat, resolveGroqReasoningCompatPatch } from "./api.js";
+import { resolveGroqReasoningCompatPatch } from "./api.js";
 import plugin from "./index.js";
 
 describe("groq provider compat", () => {
@@ -8,12 +9,17 @@ describe("groq provider compat", () => {
     expect(resolveGroqReasoningCompatPatch("qwen/qwen3-32b")).toEqual({
       supportsReasoningEffort: true,
       supportedReasoningEfforts: ["none", "default"],
-      reasoningEffortMap: expect.objectContaining({
+      reasoningEffortMap: {
+        adaptive: "default",
+        high: "default",
         off: "none",
+        none: "none",
+        minimal: "default",
         low: "default",
         medium: "default",
-        high: "default",
-      }),
+        max: "default",
+        xhigh: "default",
+      },
     });
   });
 
@@ -24,28 +30,40 @@ describe("groq provider compat", () => {
     });
   });
 
-  it("contributes compat only for Groq OpenAI-compatible chat models", () => {
-    expect(
-      contributeGroqResolvedModelCompat({
-        modelId: "qwen/qwen3-32b",
-        model: { api: "openai-completions", provider: "groq" },
-      }),
-    ).toMatchObject({ supportedReasoningEfforts: ["none", "default"] });
-    expect(
-      contributeGroqResolvedModelCompat({
-        modelId: "qwen/qwen3-32b",
-        model: { api: "openai-completions", provider: "openrouter" },
-      }),
-    ).toBeUndefined();
-  });
-
   it("registers Groq model and media providers", () => {
     const captured = capturePluginRegistration(plugin);
-    expect(captured.providers[0]).toMatchObject({
+    const [provider] = captured.providers;
+    if (!provider) {
+      throw new Error("Expected Groq provider");
+    }
+    expect(provider).toMatchObject({
+      docsPath: "/providers/groq",
+      envVars: ["GROQ_API_KEY"],
       id: "groq",
       label: "Groq",
-      envVars: ["GROQ_API_KEY"],
     });
-    expect(captured.mediaUnderstandingProviders[0]?.id).toBe("groq");
+    expect(provider.auth).toHaveLength(1);
+    expect(provider.auth[0]).toMatchObject({
+      id: "api-key",
+      kind: "api_key",
+      label: "Groq API key",
+      wizard: {
+        choiceId: "groq-api-key",
+        groupId: "groq",
+      },
+    });
+    expect(captured.mediaUnderstandingProviders).toHaveLength(1);
+    const [mediaProvider] = captured.mediaUnderstandingProviders;
+    if (!mediaProvider) {
+      throw new Error("Expected Groq media understanding provider");
+    }
+    const { transcribeAudio, ...mediaProviderMetadata } = mediaProvider;
+    expect(mediaProviderMetadata).toEqual({
+      autoPriority: { audio: 20 },
+      capabilities: ["audio"],
+      defaultModels: { audio: "whisper-large-v3-turbo" },
+      id: "groq",
+    });
+    expect(transcribeAudio).toBeTypeOf("function");
   });
 });

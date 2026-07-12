@@ -1,11 +1,12 @@
+// Facade runtime helpers load plugin API facades from installed plugin packages.
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
+import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-} from "../plugins/jiti-loader-cache.js";
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugins/plugin-module-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
   loadBundledPluginPublicSurfaceModuleSync as loadBundledPluginPublicSurfaceModuleSyncLight,
@@ -24,6 +25,7 @@ export {
   listImportedBundledPluginFacadeIds,
 } from "./facade-loader.js";
 
+/** Create a lazy value/function proxy for one property of a facade module. */
 export function createLazyFacadeValue<TFacade extends object, K extends keyof TFacade>(
   loadFacadeModule: () => TFacade,
   key: K,
@@ -74,15 +76,18 @@ function resolveFacadeModuleLocationUncached(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  const bundledPluginsDir = resolveBundledPluginsDir(params.env ?? process.env);
-  const bundledLocation = resolveBundledFacadeModuleLocation({
-    ...params,
-    currentModulePath: CURRENT_MODULE_PATH,
-    packageRoot: OPENCLAW_PACKAGE_ROOT,
-    bundledPluginsDir,
-  });
-  if (bundledLocation) {
-    return bundledLocation;
+  const env = params.env ?? process.env;
+  if (!areBundledPluginsDisabled(env)) {
+    const bundledPluginsDir = resolveBundledPluginsDir(env);
+    const bundledLocation = resolveBundledFacadeModuleLocation({
+      ...params,
+      currentModulePath: CURRENT_MODULE_PATH,
+      packageRoot: OPENCLAW_PACKAGE_ROOT,
+      bundledPluginsDir,
+    });
+    if (bundledLocation) {
+      return bundledLocation;
+    }
   }
   return resolveRegistryPluginModuleLocation(params);
 }
@@ -110,16 +115,15 @@ const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
 ] as const;
 
 let facadeActivationCheckRuntimeModule: FacadeActivationCheckRuntimeModule | undefined;
-const facadeActivationCheckRuntimeJitiLoaders: PluginJitiLoaderCache = new Map();
+const facadeActivationCheckRuntimeLoaders: PluginModuleLoaderCache = new Map();
 
-function getFacadeActivationCheckRuntimeJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: facadeActivationCheckRuntimeJitiLoaders,
+function getFacadeActivationCheckRuntimeSourceLoader(modulePath: string) {
+  return getCachedPluginSourceModuleLoader({
+    cache: facadeActivationCheckRuntimeLoaders,
     modulePath,
     importerUrl: import.meta.url,
-    jitiFilename: import.meta.url,
+    loaderFilename: import.meta.url,
     aliasMap: {},
-    tryNative: false,
   });
 }
 
@@ -149,12 +153,24 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
     return facadeActivationCheckRuntimeModule;
   }
   facadeActivationCheckRuntimeModule = loadFacadeActivationCheckRuntimeFromCandidates((candidate) =>
-    getFacadeActivationCheckRuntimeJiti(candidate)(candidate),
+    getFacadeActivationCheckRuntimeSourceLoader(candidate)(candidate),
   );
   if (facadeActivationCheckRuntimeModule) {
     return facadeActivationCheckRuntimeModule;
   }
   throw new Error("Unable to load facade activation check runtime");
+}
+
+// Async twin of loadFacadeActivationCheckRuntime for async call sites: dynamic
+// import resolves the source graph under vitest where the sync createRequire/jiti
+// candidates cannot, and warms the shared memo so subsequent sync loads reuse it.
+async function loadFacadeActivationCheckRuntimeAsync(): Promise<FacadeActivationCheckRuntimeModule> {
+  facadeActivationCheckRuntimeModule ??= await import("./facade-activation-check.runtime.js");
+  return facadeActivationCheckRuntimeModule;
+}
+
+function setFacadeActivationCheckRuntimeForTest(module: FacadeActivationCheckRuntimeModule): void {
+  facadeActivationCheckRuntimeModule = module;
 }
 
 function loadFacadeModuleAtLocationSync<T extends object>(params: {
@@ -181,6 +197,7 @@ function buildFacadeActivationCheckParams(
   };
 }
 
+/** Load a bundled or registry-backed plugin public surface, tracking activation ownership. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   params: BundledPluginPublicSurfaceParams,
@@ -206,6 +223,7 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   });
 }
 
+/** Check whether an activated bundled plugin public surface may be loaded. */
 export function canLoadActivatedBundledPluginPublicSurface(params: {
   dirName: string;
   artifactBasename: string;
@@ -216,6 +234,7 @@ export function canLoadActivatedBundledPluginPublicSurface(params: {
   ).allowed;
 }
 
+/** Load an activated plugin public surface or throw when activation policy blocks access. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
@@ -228,6 +247,7 @@ export function loadActivatedBundledPluginPublicSurfaceModuleSync<T extends obje
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }
 
+/** Load an activated plugin public surface, returning null when activation policy blocks access. */
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic facade loaders use caller-supplied module surface types.
 export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends object>(params: {
   dirName: string;
@@ -243,14 +263,32 @@ export function tryLoadActivatedBundledPluginPublicSurfaceModuleSync<T extends o
   return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }
 
-export function resetFacadeRuntimeStateForTest(): void {
-  resetFacadeLoaderStateForTest();
-  facadeActivationCheckRuntimeModule?.resetFacadeActivationCheckRuntimeStateForTest();
-  facadeActivationCheckRuntimeModule = undefined;
-  facadeActivationCheckRuntimeJitiLoaders.clear();
+/** Async variant of tryLoadActivatedBundledPluginPublicSurfaceModuleSync for async call sites. */
+export async function tryLoadActivatedBundledPluginPublicSurfaceModule<T extends object>(params: {
+  dirName: string;
+  artifactBasename: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<T | null> {
+  const runtime = await loadFacadeActivationCheckRuntimeAsync();
+  const access = runtime.resolveBundledPluginPublicSurfaceAccess(
+    buildFacadeActivationCheckParams(params),
+  );
+  if (!access.allowed) {
+    return null;
+  }
+  return loadBundledPluginPublicSurfaceModuleSync<T>(params);
 }
 
-export const __testing = {
+/** Reset facade runtime caches and activation-check test overrides. */
+export function resetFacadeRuntimeStateForTest(): void {
+  resetFacadeLoaderStateForTest();
+  facadeActivationCheckRuntimeModule = undefined;
+  facadeActivationCheckRuntimeLoaders.clear();
+}
+
+/** Test-only hooks for facade activation and resolution checks. */
+export const testing = {
+  setFacadeActivationCheckRuntimeForTest,
   loadFacadeModuleAtLocationSync,
   resolveRegistryPluginModuleLocationFromRegistry: resolveRegistryPluginModuleLocationFromRecords,
   resolveFacadeModuleLocation,
@@ -293,3 +331,4 @@ export const __testing = {
       buildFacadeActivationCheckParams(params),
     )) as (params: BundledPluginPublicSurfaceParams) => string,
 };
+export { testing as __testing };

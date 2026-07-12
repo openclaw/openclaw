@@ -1,3 +1,4 @@
+// Synology Chat plugin module implements inbound context behavior.
 export type SynologyInboundMessage = {
   body: string;
   from: string;
@@ -8,5 +9,3 @@ export type SynologyInboundMessage = {
   commandAuthorized: boolean;
   chatUserId?: string;
 };
-
-export type { ResolvedSynologyChatAccount } from "./types.js";

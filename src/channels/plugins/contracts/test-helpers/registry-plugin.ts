@@ -1,32 +1,14 @@
+/**
+ * Bundled channel plugin contract shard selectors.
+ *
+ * Assigns plugin ids to deterministic registry contract shards.
+ */
 import type { ChannelId } from "../../channel-id.types.js";
-import { normalizeChannelMeta } from "../../meta-normalization.js";
-import type { ChannelPlugin } from "../../types.js";
-import {
-  getBundledChannelCatalogEntry,
-  getBundledChannelPlugin,
-  listBundledChannelPluginIds,
-  listBundledChannelPlugins,
-} from "./bundled-channel-plugin-loader.js";
-
-type PluginContractEntry = {
-  id: string;
-  plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">;
-};
+import { listBundledChannelPluginIds } from "./bundled-channel-plugin-loader.js";
 
 type PluginContractRef = {
   id: ChannelId;
 };
-
-function toPluginContractEntry(plugin: ChannelPlugin): PluginContractEntry {
-  const existingMeta = getBundledChannelCatalogEntry(plugin.id)?.channel;
-  return {
-    id: plugin.id,
-    plugin: {
-      ...plugin,
-      meta: normalizeChannelMeta({ id: plugin.id, meta: plugin.meta, existing: existingMeta }),
-    },
-  };
-}
 
 function getBundledChannelPluginIdsForShard(params: {
   shardIndex: number;
@@ -37,20 +19,7 @@ function getBundledChannelPluginIdsForShard(params: {
   );
 }
 
-export function getPluginContractRegistry(): PluginContractEntry[] {
-  return listBundledChannelPlugins().map(toPluginContractEntry);
-}
-
-export function getPluginContractRegistryShard(params: {
-  shardIndex: number;
-  shardCount: number;
-}): PluginContractEntry[] {
-  return getBundledChannelPluginIdsForShard(params).flatMap((id) => {
-    const plugin = getBundledChannelPlugin(id);
-    return plugin ? [toPluginContractEntry(plugin)] : [];
-  });
-}
-
+/** Returns bundled plugin refs assigned to one contract-test shard. */
 export function getPluginContractRegistryShardRefs(params: {
   shardIndex: number;
   shardCount: number;

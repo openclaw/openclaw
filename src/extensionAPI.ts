@@ -24,12 +24,11 @@ export { resolveAgentDir, resolveAgentWorkspaceDir } from "./agents/agent-scope.
 export { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./agents/defaults.js";
 export { resolveAgentIdentity } from "./agents/identity.js";
 export { resolveThinkingDefault } from "./agents/model-selection.js";
-export { runEmbeddedPiAgent } from "./agents/pi-embedded.js";
+export {
+  runEmbeddedAgent,
+  /** @deprecated Use runEmbeddedAgent. */
+  runEmbeddedAgent as runEmbeddedPiAgent,
+} from "./agents/embedded-agent.js";
 export { resolveAgentTimeoutMs } from "./agents/timeout.js";
 export { ensureAgentWorkspace } from "./agents/workspace.js";
-export {
-  resolveStorePath,
-  loadSessionStore,
-  saveSessionStore,
-  resolveSessionFilePath,
-} from "./config/sessions.js";
+export { resolveStorePath, updateSessionStoreEntry } from "./config/sessions.js";

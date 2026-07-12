@@ -1,3 +1,4 @@
+// Openai tests cover openai tts plugin behavior.
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
@@ -11,7 +12,7 @@ describeLive("openai tts live", () => {
     const speechProvider = buildOpenAISpeechProvider();
 
     const voices = await speechProvider.listVoices?.({});
-    expect(voices).toEqual(expect.arrayContaining([expect.objectContaining({ id: "alloy" })]));
+    expect(voices?.some((voice) => voice.id === "alloy")).toBe(true);
 
     const providerConfig = {
       apiKey: OPENAI_API_KEY,

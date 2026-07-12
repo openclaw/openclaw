@@ -1,20 +1,15 @@
+// Extracts document extractor public artifacts from plugin manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   DocumentExtractorPlugin,
   PluginDocumentExtractorEntry,
 } from "./document-extractor-types.js";
-import {
-  loadBundledPluginPublicArtifactModuleSync,
-  resolveBundledPluginPublicArtifactPath,
-} from "./public-surface-loader.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 
 const DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "document-extractor.js",
   "document-extractor-api.js",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isDocumentExtractorPlugin(value: unknown): value is DocumentExtractorPlugin {
   return (
@@ -26,28 +21,6 @@ function isDocumentExtractorPlugin(value: unknown): value is DocumentExtractorPl
     (value.autoDetectOrder === undefined || typeof value.autoDetectOrder === "number") &&
     typeof value.extract === "function"
   );
-}
-
-function tryLoadBundledPublicArtifactModule(params: {
-  dirName: string;
-}): Record<string, unknown> | null {
-  for (const artifactBasename of DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: params.dirName,
-        artifactBasename,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
-  return null;
 }
 
 function collectExtractorFactories(mod: Record<string, unknown>): {
@@ -81,11 +54,15 @@ function collectExtractorFactories(mod: Record<string, unknown>): {
   return { extractors, errors };
 }
 
+/** Loads document extractor entries from a bundled plugin public artifact module. */
 export function loadBundledDocumentExtractorEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
 }): PluginDocumentExtractorEntry[] | null {
-  const mod = tryLoadBundledPublicArtifactModule({ dirName: params.dirName });
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+    dirName: params.dirName,
+    artifactCandidates: DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES,
+  });
   if (!mod) {
     return null;
   }
@@ -99,10 +76,4 @@ export function loadBundledDocumentExtractorEntriesFromDir(params: {
     return null;
   }
   return extractors.map((extractor) => Object.assign({}, extractor, { pluginId: params.pluginId }));
-}
-
-export function hasBundledDocumentExtractorPublicArtifact(pluginId: string): boolean {
-  return DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES.some((artifactBasename) =>
-    Boolean(resolveBundledPluginPublicArtifactPath({ dirName: pluginId, artifactBasename })),
-  );
 }

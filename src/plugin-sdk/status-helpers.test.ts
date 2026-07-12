@@ -1,3 +1,4 @@
+// Status helper tests cover plugin status normalization and user-facing summaries.
 import { describe, expect, it } from "vitest";
 import {
   createAsyncComputedAccountStatusAdapter,
@@ -345,6 +346,24 @@ describe("buildRuntimeAccountStatusSnapshot", () => {
         lastEventAt: 13,
         lastTransportActivityAt: 14,
         healthState: "healthy",
+        probe: undefined,
+      },
+    },
+    {
+      name: "projects terminalDisconnect when set",
+      input: {
+        runtime: {
+          running: false,
+          healthState: "logged-out",
+          terminalDisconnect: true,
+        },
+      },
+      extra: undefined,
+      expected: {
+        ...defaultRuntimeState,
+        running: false,
+        healthState: "logged-out",
+        terminalDisconnect: true,
         probe: undefined,
       },
     },

@@ -1,9 +1,17 @@
+// Codex tests cover provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "./prompt-overlay.js";
+import { buildCodexModelDefinition } from "./provider-catalog.js";
 import { codexProviderDiscovery } from "./provider-discovery.js";
-import { buildCodexProvider, buildCodexProviderCatalog } from "./provider.js";
-import { CodexAppServerClient } from "./src/app-server/client.js";
 import {
+  buildCodexProvider,
+  buildCodexProviderCatalog,
+  resolveCodexSupportedReasoningEffort,
+} from "./provider.js";
+import { CodexAppServerClient } from "./src/app-server/client.js";
+import type { listCodexAppServerModels } from "./src/app-server/models.js";
+import {
+  createIsolatedCodexAppServerClient,
   getSharedCodexAppServerClient,
   resetSharedCodexAppServerClientForTests,
 } from "./src/app-server/shared-client.js";
@@ -17,9 +25,10 @@ function expectStaticFallbackCatalog(
   result: Awaited<ReturnType<typeof buildCodexProviderCatalog>>,
 ) {
   expect(result.provider.models.map((model) => model.id)).toEqual([
+    "gpt-5.6-sol",
+    "gpt-5.6-luna",
     "gpt-5.5",
     "gpt-5.4-mini",
-    "gpt-5.2",
   ]);
 }
 
@@ -27,12 +36,88 @@ function createFakeCodexClient(): CodexAppServerClient {
   return {
     initialize: vi.fn(async () => undefined),
     request: vi.fn(async () => ({ data: [] })),
+    addNotificationHandler: vi.fn(() => () => undefined),
+    addRequestHandler: vi.fn(() => () => undefined),
     addCloseHandler: vi.fn(() => () => undefined),
+    setThreadSessionRequestGuard: vi.fn(),
     close: vi.fn(),
   } as unknown as CodexAppServerClient;
 }
 
+const TEST_CODEX_APP_SERVER_CONFIG = {
+  appServer: {
+    command: "/tmp/openclaw-test-codex",
+  },
+};
+
+async function listTestCodexAppServerModels(
+  options: Parameters<typeof listCodexAppServerModels>[0] = {},
+) {
+  expect(options.sharedClient).toBe(false);
+  const client = await createIsolatedCodexAppServerClient({
+    startOptions: options.startOptions,
+    timeoutMs: options.timeoutMs,
+    authProfileId: null,
+  });
+  try {
+    await client.request(
+      "model/list",
+      {
+        limit: options.limit ?? null,
+        cursor: options.cursor ?? null,
+        includeHidden: options.includeHidden ?? null,
+      },
+      { timeoutMs: options.timeoutMs },
+    );
+    return { models: [] };
+  } finally {
+    client.close();
+  }
+}
+
+function expectRecordFields(value: unknown, expected: Record<string, unknown>) {
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(expectedValue);
+  }
+  return actual;
+}
+
+function mockCallArg(mockFn: { mock: { calls: unknown[][] } }, callIndex: number): unknown {
+  return mockFn.mock.calls[callIndex]?.[0];
+}
+
 describe("codex provider", () => {
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+    "uses the known context window for discovered %s models",
+    (modelId) => {
+      const model = buildCodexModelDefinition({
+        id: modelId,
+        model: modelId,
+        inputModalities: ["text", "image"],
+      });
+
+      expect(model.contextWindow).toBe(372_000);
+    },
+  );
+
+  it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
+    "classifies %s as a modern Codex model",
+    (modelId) => {
+      const provider = buildCodexProvider();
+
+      expect(
+        provider.isModernModelRef?.({
+          provider: "openai",
+          modelId,
+        } as never),
+      ).toBe(true);
+    },
+  );
+
   it("maps Codex app-server models to a Codex provider catalog", async () => {
     const listModels = vi.fn(async () => ({
       models: [
@@ -60,21 +145,26 @@ describe("codex provider", () => {
       pluginConfig: { discovery: { timeoutMs: 1234 } },
     });
 
-    expect(listModels).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 100, timeoutMs: 1234, sharedClient: false }),
-    );
-    expect(result.provider).toMatchObject({
+    expectRecordFields(mockCallArg(listModels, 0), {
+      limit: 100,
+      timeoutMs: 1234,
+      sharedClient: false,
+    });
+    expectRecordFields(result.provider, {
       auth: "token",
-      api: "openai-codex-responses",
-      models: [
-        {
-          id: "gpt-5.4",
-          name: "gpt-5.4",
-          reasoning: true,
-          input: ["text", "image"],
-          compat: { supportsReasoningEffort: true },
-        },
-      ],
+      api: "openai-chatgpt-responses",
+    });
+    expect(result.provider.models).toHaveLength(1);
+    expectRecordFields(result.provider.models[0], {
+      id: "gpt-5.4",
+      name: "gpt-5.4",
+      reasoning: true,
+      input: ["text", "image"],
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+        supportsUsageInStreaming: true,
+      },
     });
   });
 
@@ -127,14 +217,13 @@ describe("codex provider", () => {
       env: {},
     } as never);
 
-    expect(listModels).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 100, timeoutMs: 4321, sharedClient: false }),
-    );
-    expect(result).toMatchObject({
-      provider: {
-        models: [{ id: "gpt-5.4" }],
-      },
+    expectRecordFields(mockCallArg(listModels, 0), {
+      limit: 100,
+      timeoutMs: 4321,
+      sharedClient: false,
     });
+    const resultProvider = result && "provider" in result ? result.provider : undefined;
+    expect(resultProvider?.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
   });
 
   it("pages through live discovery before building the provider catalog", async () => {
@@ -155,8 +244,8 @@ describe("codex provider", () => {
       .mockResolvedValueOnce({
         models: [
           {
-            id: "gpt-5.2",
-            model: "gpt-5.2",
+            id: "gpt-5.5",
+            model: "gpt-5.5",
             hidden: false,
             inputModalities: ["text"],
             supportedReasoningEfforts: [],
@@ -169,15 +258,17 @@ describe("codex provider", () => {
       listModels,
     });
 
-    expect(listModels).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ cursor: undefined, limit: 100, sharedClient: false }),
-    );
-    expect(listModels).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ cursor: "page-2", limit: 100, sharedClient: false }),
-    );
-    expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.2"]);
+    expectRecordFields(mockCallArg(listModels, 0), {
+      cursor: undefined,
+      limit: 100,
+      sharedClient: false,
+    });
+    expectRecordFields(mockCallArg(listModels, 1), {
+      cursor: "page-2",
+      limit: 100,
+      sharedClient: false,
+    });
+    expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.5"]);
   });
 
   it("reports discovery failures before using the fallback catalog", async () => {
@@ -215,9 +306,11 @@ describe("codex provider", () => {
 
     await buildCodexProviderCatalog({
       env: { OPENCLAW_CODEX_DISCOVERY_LIVE: "1" },
+      pluginConfig: TEST_CODEX_APP_SERVER_CONFIG,
+      listModels: listTestCodexAppServerModels,
     });
 
-    expect(client.close).toHaveBeenCalledTimes(1);
+    expect(client["close"]).toHaveBeenCalledTimes(1);
   });
 
   it("does not close an active shared app-server client during live discovery", async () => {
@@ -227,13 +320,25 @@ describe("codex provider", () => {
       .mockReturnValueOnce(activeClient)
       .mockReturnValueOnce(discoveryClient);
 
-    await getSharedCodexAppServerClient({ timeoutMs: 1000 });
+    await getSharedCodexAppServerClient({
+      startOptions: {
+        transport: "stdio",
+        command: "/tmp/openclaw-test-codex",
+        commandSource: "config",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+      },
+      timeoutMs: 1000,
+      authProfileId: null,
+    });
     await buildCodexProviderCatalog({
       env: { OPENCLAW_CODEX_DISCOVERY_LIVE: "1" },
+      pluginConfig: TEST_CODEX_APP_SERVER_CONFIG,
+      listModels: listTestCodexAppServerModels,
     });
 
-    expect(activeClient.close).not.toHaveBeenCalled();
-    expect(discoveryClient.close).toHaveBeenCalledTimes(1);
+    expect(activeClient["close"]).not.toHaveBeenCalled();
+    expect(discoveryClient["close"]).toHaveBeenCalledTimes(1);
   });
 
   it("resolves arbitrary Codex app-server model ids as text-only until discovered", () => {
@@ -245,10 +350,10 @@ describe("codex provider", () => {
       modelRegistry: { find: () => null },
     } as never);
 
-    expect(model).toMatchObject({
+    expectRecordFields(model, {
       id: "custom-model",
       provider: "codex",
-      api: "openai-codex-responses",
+      api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api",
       input: ["text"],
     });
@@ -263,7 +368,7 @@ describe("codex provider", () => {
       modelRegistry: { find: () => null },
     } as never);
 
-    expect(model).toMatchObject({
+    expectRecordFields(model, {
       id: "gpt-5.5",
       input: ["text", "image"],
     });
@@ -278,10 +383,12 @@ describe("codex provider", () => {
       modelRegistry: { find: () => null },
     } as never);
 
-    expect(model).toMatchObject({
+    expectRecordFields(model, {
       id: "o4-mini",
       reasoning: true,
-      compat: { supportsReasoningEffort: true },
+      compat: {
+        supportsUsageInStreaming: true,
+      },
     });
     expect(
       provider
@@ -290,6 +397,152 @@ describe("codex provider", () => {
     ).toBe(true);
   });
 
+  it("uses fallback reasoning metadata for GPT-5.6 Luna", () => {
+    const provider = buildCodexProvider();
+    const model = provider.resolveDynamicModel?.({
+      provider: "codex",
+      modelId: "gpt-5.6-luna",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expectRecordFields(model, {
+      id: "gpt-5.6-luna",
+      reasoning: true,
+      contextWindow: 372_000,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        supportsUsageInStreaming: true,
+      },
+    });
+    expect(
+      provider
+        .resolveThinkingProfile?.({ provider: "codex", modelId: "gpt-5.6-luna" } as never)
+        ?.levels.map((level) => level.id),
+    ).toContain("max");
+  });
+
+  it("exposes max only for known native GPT-5.6 models", () => {
+    const provider = buildCodexProvider();
+    const levels = (modelId: string) =>
+      provider
+        .resolveThinkingProfile?.({ provider: "codex", modelId } as never)
+        ?.levels.map((level) => level.id);
+
+    expect(levels("gpt-5.6-sol")).toContain("max");
+    expect(levels("gpt-5.6-terra")).toContain("max");
+    expect(levels("gpt-5.6-luna")).toContain("max");
+    expect(levels("gpt-5.6")).not.toContain("max");
+    expect(levels("gpt-5.6-sol-oai")).not.toContain("max");
+  });
+
+  it("uses app-server reasoning metadata as the authoritative thinking profile", () => {
+    const provider = buildCodexProvider();
+
+    expect(
+      provider
+        .resolveThinkingProfile?.({
+          provider: "codex",
+          modelId: "gpt-5.4-pro",
+          compat: { supportedReasoningEfforts: ["medium", "high", "xhigh"] },
+        } as never)
+        ?.levels.map((level) => level.id),
+    ).toEqual(["off", "medium", "high", "xhigh"]);
+  });
+
+  it("uses known GPT-5.6 native Codex fallbacks when model/list metadata is unavailable", () => {
+    const provider = buildCodexProvider();
+    const levels = (modelId: string, supportedReasoningEfforts?: string[]) =>
+      provider
+        .resolveThinkingProfile?.({
+          provider: "codex",
+          modelId,
+          ...(supportedReasoningEfforts ? { compat: { supportedReasoningEfforts } } : {}),
+        } as never)
+        ?.levels.map((level) => level.id);
+
+    expect(levels("gpt-5.6-sol")).toContain("ultra");
+    expect(levels("gpt-5.6-terra")).toContain("ultra");
+    expect(levels("gpt-5.6-luna")).toEqual(["off", "low", "medium", "high", "xhigh", "max"]);
+    expect(levels("gpt-5.6")).not.toContain("ultra");
+
+    const directOpenAIEfforts = ["none", "low", "medium", "high", "xhigh", "max"];
+    expect(levels("gpt-5.6-sol", directOpenAIEfforts)).toContain("ultra");
+    expect(levels("gpt-5.6-terra", directOpenAIEfforts)).toContain("ultra");
+  });
+
+  it.each([
+    { modelId: "gpt-5.6-sol", expected: "low" },
+    { modelId: "gpt-5.6-terra", expected: "medium" },
+    { modelId: "gpt-5.6-luna", expected: "medium" },
+  ] as const)("uses the native $modelId default reasoning effort", ({ modelId, expected }) => {
+    const provider = buildCodexProvider();
+
+    expect(
+      provider.resolveThinkingProfile?.({ provider: "codex", modelId } as never)?.defaultLevel,
+    ).toBe(expected);
+  });
+
+  it("omits the native default when authoritative model/list metadata does not support it", () => {
+    const provider = buildCodexProvider();
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "codex",
+        modelId: "gpt-5.6-sol",
+        compat: { supportedReasoningEfforts: ["high"] },
+      } as never)?.defaultLevel,
+    ).toBeUndefined();
+  });
+
+  it("uses app-server model/list reasoning metadata as authoritative", () => {
+    const provider = buildCodexProvider();
+    const levels = (modelId: string, supportedReasoningEfforts: string[]) =>
+      provider
+        .resolveThinkingProfile?.({
+          provider: "codex",
+          modelId,
+          compat: { supportedReasoningEfforts },
+        } as never)
+        ?.levels.map((level) => level.id);
+
+    const maxEfforts = ["low", "medium", "high", "xhigh", "max"];
+    const ultraEfforts = [...maxEfforts, "ultra"];
+    expect(levels("gpt-5.6-sol", maxEfforts)).not.toContain("ultra");
+    expect(levels("gpt-5.6-terra", maxEfforts)).not.toContain("ultra");
+    expect(levels("gpt-5.6-sol", ultraEfforts)).toContain("ultra");
+    expect(levels("gpt-5.6-terra", ultraEfforts)).toContain("ultra");
+    expect(levels("gpt-5.6-luna", maxEfforts)).not.toContain("ultra");
+  });
+
+  it.each([
+    ["max", ["low", "medium", "high", "xhigh", "ultra"], "xhigh"],
+    ["xhigh", ["low", "medium", "high", "ultra"], "high"],
+  ] as const)(
+    "does not upgrade requested %s to Ultra when model metadata omits that effort",
+    (requested, supportedReasoningEfforts, expected) => {
+      expect(resolveCodexSupportedReasoningEffort({ requested, supportedReasoningEfforts })).toBe(
+        expected,
+      );
+    },
+  );
+
+  it.each(["gpt-5.5-pro", "gpt-5.4-pro"] as const)(
+    "uses the known %s effort profile when app-server metadata is absent",
+    (modelId) => {
+      const provider = buildCodexProvider();
+
+      expect(
+        provider
+          .resolveThinkingProfile?.({
+            provider: "codex",
+            modelId,
+          } as never)
+          ?.levels.map((level) => level.id),
+      ).toEqual(["off", "medium", "high", "xhigh"]);
+    },
+  );
+
   it("declares synthetic auth because the harness owns Codex credentials", () => {
     const provider = buildCodexProvider();
 
@@ -297,6 +550,121 @@ describe("codex provider", () => {
       apiKey: "codex-app-server",
       source: "codex-app-server",
       mode: "token",
+    });
+  });
+
+  it("fetches usage from native Codex app-server rate limits for synthetic auth", async () => {
+    const readRateLimits = vi.fn(async () => ({
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 9,
+            windowDurationMins: 300,
+            resetsAt: 1_700_003_600,
+          },
+        },
+      },
+    }));
+    const provider = buildCodexProvider({ readRateLimits });
+
+    await expect(
+      provider.fetchUsageSnapshot?.({
+        provider: "openai",
+        token: "codex-app-server",
+        timeoutMs: 3500,
+        config: {},
+        env: {},
+        fetchFn: fetch,
+      } as never),
+    ).resolves.toEqual({
+      provider: "openai",
+      displayName: "OpenAI",
+      windows: [{ label: "5h", usedPercent: 9, resetAt: 1_700_003_600_000 }],
+      plan: undefined,
+    });
+    expect(readRateLimits).toHaveBeenCalledWith({
+      timeoutMs: 3500,
+      agentDir: undefined,
+      config: {},
+      startOptions: expect.objectContaining({
+        command: "codex",
+        commandSource: "managed",
+      }),
+    });
+  });
+
+  it("keeps synthetic usage rate-limit reads on the configured Codex auth bridge", async () => {
+    const requestCodexAppServerJson = vi.fn(async (_params: unknown) => ({
+      rateLimitsByLimitId: {},
+    }));
+    vi.doMock("./src/app-server/request.js", () => ({
+      requestCodexAppServerJson,
+    }));
+    try {
+      const provider = buildCodexProvider();
+
+      await provider.fetchUsageSnapshot?.({
+        provider: "openai",
+        token: "codex-app-server",
+        authProfileId: "openai:work",
+        timeoutMs: 3500,
+        config: {
+          plugins: {
+            entries: {
+              codex: {
+                config: TEST_CODEX_APP_SERVER_CONFIG,
+              },
+            },
+          },
+        },
+        env: {},
+        fetchFn: fetch,
+      } as never);
+
+      expect(requestCodexAppServerJson).toHaveBeenCalledWith({
+        method: "account/rateLimits/read",
+        timeoutMs: 3500,
+        agentDir: undefined,
+        authProfileId: "openai:work",
+        config: {
+          plugins: {
+            entries: {
+              codex: {
+                config: TEST_CODEX_APP_SERVER_CONFIG,
+              },
+            },
+          },
+        },
+        startOptions: expect.objectContaining({
+          command: "/tmp/openclaw-test-codex",
+          commandSource: "config",
+          args: ["app-server", "--listen", "stdio://"],
+        }),
+        isolated: true,
+      });
+    } finally {
+      vi.doUnmock("./src/app-server/request.js");
+    }
+  });
+
+  it("exposes a setup auth choice for installing Codex as an external provider", async () => {
+    const provider = buildCodexProvider();
+
+    const authChoice = provider.auth[0];
+    expectRecordFields(authChoice, {
+      id: "app-server",
+      kind: "custom",
+    });
+    expectRecordFields(authChoice?.wizard, {
+      choiceId: "codex",
+      choiceLabel: "Codex app-server",
+      onboardingScopes: ["text-inference"],
+    });
+    const authResult = await authChoice?.run({} as never);
+    expectRecordFields(authResult, {
+      profiles: [],
+      defaultModel: "codex/gpt-5.6-sol",
     });
   });
 
@@ -314,27 +682,30 @@ describe("codex provider", () => {
       agentDir: "/tmp/openclaw-agent",
     } as never);
 
-    expect(
-      result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
-    ).toEqual(["gpt-5.5", "gpt-5.4-mini", "gpt-5.2"]);
+    const models = result && "provider" in result ? result.provider.models : [];
+    expect(models.map((model) => model.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-luna",
+      "gpt-5.5",
+      "gpt-5.4-mini",
+    ]);
+    expect(models.find((model) => model.id === "gpt-5.6-sol")?.contextWindow).toBe(372_000);
+    expect(models.find((model) => model.id === "gpt-5.6-luna")?.contextWindow).toBe(372_000);
   });
 
   it("adds the GPT-5 prompt overlay to Codex provider runs", () => {
     const provider = buildCodexProvider();
 
-    expect(
-      provider.resolveSystemPromptContribution?.({
-        provider: "codex",
-        modelId: "gpt-5.4",
-      } as never),
-    ).toEqual({
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "codex",
+      modelId: "gpt-5.4",
+    } as never);
+    expectRecordFields(contribution, {
       stablePrefix: CODEX_GPT5_BEHAVIOR_CONTRACT,
-      sectionOverrides: {
-        interaction_style: expect.stringContaining(
-          "Quiet monitoring does not satisfy an explicit ongoing-work instruction.",
-        ),
-      },
     });
+    const interactionStyle = contribution?.sectionOverrides?.interaction_style;
+    expect(interactionStyle).toContain("Live chat tone: short, natural, human.");
+    expect(interactionStyle).not.toContain("Use heartbeats to create useful proactive progress");
   });
 
   it("does not add the GPT-5 prompt overlay to non-GPT-5 Codex provider runs", () => {

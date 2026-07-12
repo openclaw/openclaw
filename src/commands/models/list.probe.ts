@@ -1,16 +1,23 @@
+/** Auth probe planning and execution helpers for model diagnostics. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import {
   type AuthProfileCredential,
   type AuthProfileEligibilityReasonCode,
+  externalCliDiscoveryScoped,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileEligibility,
-  resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
+import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../../agents/model-auth.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
@@ -27,18 +34,21 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
-let embeddedRunnerModulePromise: Promise<typeof import("../../agents/pi-embedded.js")> | undefined;
+const embeddedRunnerModuleLoader = createLazyImportLoader(
+  () => import("../../agents/embedded-agent.js"),
+);
 
 function loadEmbeddedRunnerModule() {
-  embeddedRunnerModulePromise ??= import("../../agents/pi-embedded.js");
-  return embeddedRunnerModulePromise;
+  return embeddedRunnerModuleLoader.load();
 }
 
+/** Normalized probe status bucket for auth/model diagnostics. */
 export type AuthProbeStatus =
   | "ok"
   | "auth"
@@ -49,6 +59,7 @@ export type AuthProbeStatus =
   | "unknown"
   | "no_model";
 
+/** Reason code for probes that never reached a model call. */
 export type AuthProbeReasonCode =
   | "excluded_by_auth_order"
   | "missing_credential"
@@ -58,6 +69,7 @@ export type AuthProbeReasonCode =
   | "ineligible_profile"
   | "no_model";
 
+/** Result for one profile/env/models.json auth probe target. */
 export type AuthProbeResult = {
   provider: string;
   model?: string;
@@ -80,6 +92,7 @@ type AuthProbeTarget = {
   mode?: string;
 };
 
+/** Summary for a full auth probe run. */
 export type AuthProbeSummary = {
   startedAt: number;
   finishedAt: number;
@@ -95,6 +108,7 @@ export type AuthProbeSummary = {
   results: AuthProbeResult[];
 };
 
+/** Runtime options controlling provider/profile filtering and probe cost. */
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
@@ -103,6 +117,7 @@ export type AuthProbeOptions = {
   maxTokens: number;
 };
 
+/** Maps runtime failover reasons into stable auth probe status buckets. */
 export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
   if (!reason) {
     return "unknown";
@@ -146,6 +161,32 @@ function buildCandidateMap(modelCandidates: string[]): Map<string, string[]> {
   return map;
 }
 
+function catalogProbePriority(provider: string, modelId: string): number {
+  const id = modelId.trim().toLowerCase();
+  if (provider !== "anthropic") {
+    return 50;
+  }
+  if (/^claude-haiku-4-5-\d{8}$/.test(id)) {
+    return 0;
+  }
+  if (id === "claude-haiku-4-5") {
+    return 1;
+  }
+  if (id === "claude-sonnet-5" || id.startsWith("claude-sonnet-5-")) {
+    return 2;
+  }
+  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
+    return 3;
+  }
+  if (id.startsWith("claude-sonnet-4-")) {
+    return 4;
+  }
+  if (id.startsWith("claude-3-")) {
+    return 100;
+  }
+  return 50;
+}
+
 function selectProbeModel(params: {
   provider: string;
   candidates: Map<string, string[]>;
@@ -154,9 +195,17 @@ function selectProbeModel(params: {
   const { provider, candidates, catalog } = params;
   const direct = candidates.get(provider);
   if (direct && direct.length > 0) {
-    return { provider, model: direct[0] };
+    return { provider, model: expectDefined(direct[0], "direct entry at 0") };
   }
-  const fromCatalog = catalog.find((entry) => normalizeProviderId(entry.provider) === provider);
+  const fromCatalog = catalog
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => normalizeProviderId(entry.provider) === provider)
+    .toSorted((left, right) => {
+      const priority =
+        catalogProbePriority(provider, left.entry.id) -
+        catalogProbePriority(provider, right.entry.id);
+      return priority || left.index - right.index;
+    })[0]?.entry;
   if (fromCatalog) {
     return { provider, model: fromCatalog.id };
   }
@@ -247,6 +296,7 @@ async function maybeResolveUnresolvedRefIssue(params: {
   }
 }
 
+/** Builds probe targets plus preflight failures for missing/invalid credentials. */
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
   agentDir?: string;
@@ -256,10 +306,17 @@ export async function buildProbeTargets(params: {
   options: AuthProbeOptions;
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
   const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
-  const store = ensureAuthProfileStore(agentDir);
+  const store = ensureAuthProfileStore(agentDir, {
+    externalCli: externalCliDiscoveryScoped({
+      config: cfg,
+      allowKeychainPrompt: false,
+      providerIds: providers,
+      profileIds: options.profileIds,
+    }),
+  });
   const providerFilter = options.provider?.trim();
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
-  const profileFilter = new Set((options.profileIds ?? []).map((id) => id.trim()).filter(Boolean));
+  const profileFilter = new Set(normalizeUniqueStringEntries(options.profileIds));
   const refResolveCache: SecretRefResolveCache = {};
   const catalog = await loadModelCatalog({ config: cfg });
   const candidates = buildCandidateMap(modelCandidates);
@@ -285,10 +342,17 @@ export async function buildProbeTargets(params: {
         findNormalizedProviderValue(cfg?.auth?.order, providerKey)
       );
     })();
-    const allowedProfiles =
-      explicitOrder && explicitOrder.length > 0
-        ? new Set(resolveAuthProfileOrder({ cfg, store, provider: providerKey }))
-        : null;
+    const orderResolution = resolveAuthProfileOrderWithMetadata({
+      cfg,
+      store,
+      provider: providerKey,
+      forModel: model?.model,
+    });
+    const allowedProfiles = orderResolution.hasExplicitOrder
+      ? new Set(orderResolution.profileIds)
+      : null;
+    // Explicit auth.order both selects and documents profile eligibility; report
+    // excluded profiles instead of silently skipping them.
     const filteredProfiles = profileFilter.size
       ? profileIds.filter((id) => profileFilter.has(id))
       : profileIds;
@@ -381,12 +445,17 @@ export async function buildProbeTargets(params: {
     if (profileFilter.size > 0) {
       continue;
     }
-
-    const envKey = resolveEnvApiKey(providerKey, process.env, {
-      config: cfg,
-      workspaceDir,
-    });
     const hasUsableModelsJsonKey = hasUsableCustomProviderApiKey(cfg, providerKey);
+    if (orderResolution.hasExplicitOrder && !hasUsableModelsJsonKey) {
+      continue;
+    }
+
+    const envKey = orderResolution.hasExplicitOrder
+      ? null
+      : resolveEnvApiKey(providerKey, process.env, {
+          config: cfg,
+          workspaceDir,
+        });
     if (!envKey && !hasUsableModelsJsonKey) {
       continue;
     }
@@ -464,8 +533,8 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
-    const { runEmbeddedPiAgent } = await loadEmbeddedRunnerModule();
-    await runEmbeddedPiAgent({
+    const { runEmbeddedAgent } = await loadEmbeddedRunnerModule();
+    await runEmbeddedAgent({
       sessionId,
       sessionFile,
       agentId,
@@ -485,6 +554,7 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
       disableTools: true,
+      modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
     });
     return buildResult("ok");
@@ -512,7 +582,7 @@ async function runTargetsWithConcurrency(params: {
   const concurrency = Math.max(1, Math.min(targets.length || 1, params.concurrency));
 
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
-  const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const agentDir = params.agentDir ?? resolveAgentDir(cfg, agentId);
   const workspaceDir =
     params.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
@@ -532,7 +602,7 @@ async function runTargetsWithConcurrency(params: {
       if (index >= targets.length) {
         return;
       }
-      const target = targets[index];
+      const target = expectDefined(targets[index], "targets entry at index");
       onProgress?.({
         completed,
         total: targets.length,
@@ -559,6 +629,7 @@ async function runTargetsWithConcurrency(params: {
   return results.filter((entry): entry is AuthProbeResult => Boolean(entry));
 }
 
+/** Runs all auth probes with bounded concurrency and returns a summary. */
 export async function runAuthProbes(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -608,6 +679,7 @@ export async function runAuthProbes(params: {
   };
 }
 
+/** Formats probe latency for table output. */
 export function formatProbeLatency(latencyMs?: number | null) {
   if (!latencyMs && latencyMs !== 0) {
     return "-";
@@ -615,16 +687,7 @@ export function formatProbeLatency(latencyMs?: number | null) {
   return formatMs(latencyMs);
 }
 
-export function groupProbeResults(results: AuthProbeResult[]): Map<string, AuthProbeResult[]> {
-  const map = new Map<string, AuthProbeResult[]>();
-  for (const result of results) {
-    const list = map.get(result.provider) ?? [];
-    list.push(result);
-    map.set(result.provider, list);
-  }
-  return map;
-}
-
+/** Sorts probe results by provider and display label. */
 export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {
   return results.slice().toSorted((a, b) => {
     const provider = a.provider.localeCompare(b.provider);
@@ -637,6 +700,7 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
+/** Produces the terse completion line for auth probe output. */
 export function describeProbeSummary(summary: AuthProbeSummary): string {
   if (summary.totalTargets === 0) {
     return "No probe targets.";

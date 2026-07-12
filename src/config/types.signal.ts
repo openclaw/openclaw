@@ -1,8 +1,11 @@
+// Defines Signal channel configuration types.
+import type { ReplyToMode } from "./types.base.js";
 import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type SignalReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 export type SignalReactionLevel = "off" | "ack" | "minimal" | "extensive";
+export type SignalApiMode = "auto" | "native" | "container";
 
 export type SignalGroupConfig = {
   requireMention?: boolean;
@@ -17,6 +20,8 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   account?: string;
   /** Optional account UUID for signal-cli (used for loop protection). */
   accountUuid?: string;
+  /** Optional signal-cli config directory path (passed as --config). */
+  configPath?: string;
   /** Optional full base URL for signal-cli HTTP daemon. */
   httpUrl?: string;
   /** HTTP host for signal-cli daemon (default 127.0.0.1). */
@@ -33,10 +38,16 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
+  /** OpenClaw-side target aliases keyed by friendly name. */
+  aliases?: Record<string, string>;
   /** Per-group overrides keyed by Signal group id (or "*"). */
   groups?: Record<string, SignalGroupConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Control native reply quoting when replies target an inbound Signal message. */
+  replyToMode?: ReplyToMode;
+  /** Optional per-chat-type native reply quoting overrides. */
+  replyToModeByChatType?: Partial<Record<"direct" | "group", ReplyToMode>>;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SignalReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
@@ -57,14 +68,16 @@ export type SignalAccountConfig = CommonChannelMessagingConfig & {
 };
 
 export type SignalConfig = {
+  /**
+   * Signal API mode (channel-global):
+   * - "auto" (default): Auto-detect based on available endpoints
+   * - "native": Use native signal-cli with JSON-RPC + SSE (/api/v1/rpc, /api/v1/events)
+   * - "container": Use bbernhard/signal-cli-rest-api with REST + WebSocket (/v2/send, /v1/receive/{account}).
+   *   Requires the container to run with MODE=json-rpc for real-time message receiving.
+   */
+  apiMode?: SignalApiMode;
   /** Optional per-account Signal configuration (multi-account). */
   accounts?: Record<string, SignalAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & SignalAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    signal?: SignalConfig;
-  }
-}

@@ -1,10 +1,20 @@
 {
   "id": "qianfan",
+  "icon": "https://cdn.simpleicons.org/baidu",
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["qianfan"],
+  "setup": {
+    "providers": [
+      {
+        "id": "qianfan",
+        "authMethods": ["api-key"],
+        "envVars": ["QIANFAN_API_KEY"]
+      }
+    ]
+  },
   "modelCatalog": {
     "providers": {
       "qianfan": {
@@ -46,14 +56,12 @@
       "qianfan": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "qianfan": ["QIANFAN_API_KEY"]
-  },
   "providerAuthChoices": [
     {
       "provider": "qianfan",
       "method": "api-key",
       "choiceId": "qianfan-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "Qianfan API key",
       "groupId": "qianfan",
       "groupLabel": "Qianfan",

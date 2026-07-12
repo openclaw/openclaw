@@ -1,4 +1,5 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+// Qa Lab plugin module implements scenario flow runner behavior.
+import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaTransportState } from "./qa-transport.js";
 import type { QaScenarioFlow, QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
@@ -26,14 +27,17 @@ type QaFlowApi = Record<string, unknown> & {
 };
 
 type QaFlowVars = Record<string, unknown>;
+type QaFlowImportLoader = () => Promise<unknown>;
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
   ...args: string[]
 ) => (...fnArgs: unknown[]) => Promise<unknown>;
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
+  "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
+  "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
+  "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
+};
 
 function formatFlowDetails(details: unknown) {
   if (details === undefined) {
@@ -68,7 +72,10 @@ function getPathWithParent(
 function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
   return {
     ...api,
-    qaImport: (specifier: string) => import(specifier),
+    qaImport: (specifier: string) => {
+      const loader = qaFlowImportLoaders[specifier];
+      return loader ? loader() : import(specifier);
+    },
     vars,
     ...vars,
   };
@@ -134,6 +141,12 @@ async function resolveValue(node: unknown, api: QaFlowApi, vars: QaFlowVars): Pr
 function resolveCallable(path: string, api: QaFlowApi, vars: QaFlowVars) {
   const { parent, value } = getPathWithParent(createEvalContext(api, vars), path);
   if (typeof value !== "function") {
+    if (path.startsWith("transport.")) {
+      const method = path.slice("transport.".length);
+      throw new Error(
+        `QA scenario "${api.scenario.id}" cannot run "${method}": the active transport adapter does not implement this method.`,
+      );
+    }
     throw new Error(`qa flow callable not found: ${path}`);
   }
   return parent ? value.bind(parent) : value;
@@ -152,6 +165,27 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     if (typeof action.saveAs === "string" && action.saveAs.trim()) {
       vars[action.saveAs.trim()] = result;
     }
+    return;
+  }
+  for (const name of [
+    "sendInbound",
+    "sendNativeCommand",
+    "waitForOutbound",
+    "waitForOutboundSequence",
+    "waitForNoOutbound",
+  ] as const) {
+    if (name in action) {
+      const callable = resolveCallable(`transport.${name}`, api, vars);
+      const result = await callable(await resolveValue(action[name], api, vars));
+      if (typeof action.saveAs === "string" && action.saveAs.trim()) {
+        vars[action.saveAs.trim()] = result;
+      }
+      return;
+    }
+  }
+  if (action.resetTransport === true) {
+    const reset = resolveCallable("transport.reset", api, vars);
+    await reset();
     return;
   }
   if (typeof action.set === "string") {
@@ -291,8 +325,4 @@ export async function runScenarioFlow(params: {
     },
   }));
   return await params.api.runScenario(params.scenarioTitle, steps);
-}
-
-export function describeScenarioFlowError(error: unknown) {
-  return formatErrorMessage(error);
 }

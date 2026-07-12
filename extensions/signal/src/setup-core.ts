@@ -1,3 +1,4 @@
+// Signal plugin module implements setup core behavior.
 import {
   createCliPathTextInput,
   createDelegatedSetupWizardProxy,
@@ -15,15 +16,18 @@ import {
   type ChannelSetupWizard,
   type ChannelSetupWizardTextInput,
   type OpenClawConfig,
+  createSetupTranslator,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import {
-  normalizeE164,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
+
+const t = createSetupTranslator();
 
 const channel = "signal" as const;
 const MIN_E164_DIGITS = 5;
@@ -37,7 +41,13 @@ export function normalizeSignalAccountInput(value: string | null | undefined): s
   if (!trimmed) {
     return null;
   }
-  const normalized = normalizeE164(trimmed);
+  const phoneInput = trimmed.replace(/^signal:/i, "").trim();
+  // Setup accepts formatting punctuation, but embedded or duplicate pluses are invalid input.
+  const plusCount = phoneInput.match(/\+/g)?.length ?? 0;
+  if (plusCount > 1 || (plusCount === 1 && !phoneInput.startsWith("+"))) {
+    return null;
+  }
+  const normalized = normalizeE164(phoneInput);
   const digits = normalized.slice(1);
   if (!DIGITS_ONLY.test(digits)) {
     return null;
@@ -88,7 +98,7 @@ function buildSignalSetupPatch(input: {
   };
 }
 
-export async function promptSignalAllowFrom(params: {
+async function promptSignalAllowFrom(params: {
   cfg: OpenClawConfig;
   prompter: WizardPrompter;
   accountId?: string;
@@ -98,16 +108,16 @@ export async function promptSignalAllowFrom(params: {
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSignalAccountId(params.cfg),
     prompter: params.prompter,
-    noteTitle: "Signal allowlist",
+    noteTitle: t("wizard.signal.allowlistTitle"),
     noteLines: [
-      "Allowlist Signal DMs by sender id.",
-      "Examples:",
+      t("wizard.signal.allowlistIntro"),
+      t("wizard.signal.examples"),
       "- +15555550123",
       "- uuid:123e4567-e89b-12d3-a456-426614174000",
-      "Multiple entries: comma-separated.",
+      t("wizard.signal.multipleEntries"),
       `Docs: ${formatDocsLink("/signal", "signal")}`,
     ],
-    message: "Signal allowFrom (E.164 or uuid)",
+    message: t("wizard.signal.allowFromPrompt"),
     placeholder: "+15555550123, uuid:123e4567-e89b-12d3-a456-426614174000",
     parseEntries: parseSignalAllowFromEntries,
     getExistingAllowFrom: ({ cfg, accountId }) =>
@@ -189,30 +199,26 @@ export function createSignalCliPathTextInput(
     resolvePath: ({ cfg, accountId, credentialValues }) =>
       resolveSignalCliPath({ cfg, accountId, credentialValues }),
     shouldPrompt,
-    helpTitle: "Signal",
-    helpLines: [
-      "signal-cli not found. Install it, then rerun this step or set channels.signal.cliPath.",
-    ],
   });
 }
 
 export const signalNumberTextInput: ChannelSetupWizardTextInput = {
   inputKey: "signalNumber",
-  message: "Signal bot number (E.164)",
+  message: t("wizard.signal.botNumberPrompt"),
   currentValue: ({ cfg, accountId }) =>
     normalizeSignalAccountInput(resolveSignalAccount({ cfg, accountId }).config.account) ??
     undefined,
-  keepPrompt: (value) => `Signal account set (${value}). Keep it?`,
+  keepPrompt: (value) => t("wizard.signal.accountKeep", { value }),
   validate: ({ value }) =>
     normalizeSignalAccountInput(value) ? undefined : INVALID_SIGNAL_ACCOUNT_ERROR,
   normalizeValue: ({ value }) => normalizeSignalAccountInput(value) ?? value,
 };
 
 export const signalCompletionNote = {
-  title: "Signal next steps",
+  title: t("wizard.signal.nextStepsTitle"),
   lines: [
-    'Link device with: signal-cli link -n "OpenClaw"',
-    "Scan QR in Signal -> Linked Devices",
+    t("wizard.signal.nextLinkDevice"),
+    t("wizard.signal.nextScanQr"),
     `Then run: ${formatCliCommand("openclaw gateway call channels.status --params '{\"probe\":true}'")}`,
     `Docs: ${formatDocsLink("/signal", "signal")}`,
   ],
@@ -242,10 +248,10 @@ export function createSignalSetupWizardProxy(loadWizard: () => Promise<ChannelSe
     channel,
     loadWizard,
     status: {
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs setup",
-      configuredHint: "signal-cli found",
-      unconfiguredHint: "signal-cli missing",
+      configuredLabel: t("wizard.channels.statusConfigured"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
+      configuredHint: t("wizard.channels.statusSignalCliFound"),
+      unconfiguredHint: t("wizard.channels.statusSignalCliMissing"),
       configuredScore: 1,
       unconfiguredScore: 0,
     },

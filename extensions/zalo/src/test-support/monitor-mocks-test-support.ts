@@ -1,4 +1,6 @@
+// Zalo plugin module implements monitor mocks test support behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
@@ -22,7 +24,6 @@ type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 const loadedMonitorModules = new Set<MonitorModule>();
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
-let cachedWebhookModule: Promise<WebhookModule> | undefined;
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -51,11 +52,8 @@ const lifecycleMocks = vi.hoisted(
   }),
 );
 
-export const setWebhookMock = lifecycleMocks.setWebhookMock;
-export const deleteWebhookMock = lifecycleMocks.deleteWebhookMock;
-export const getWebhookInfoMock = lifecycleMocks.getWebhookInfoMock;
+const setWebhookMock = lifecycleMocks.setWebhookMock;
 export const getUpdatesMock = lifecycleMocks.getUpdatesMock;
-export const sendChatActionMock = lifecycleMocks.sendChatActionMock;
 export const sendMessageMock = lifecycleMocks.sendMessageMock;
 export const sendPhotoMock = lifecycleMocks.sendPhotoMock;
 export const getZaloRuntimeMock: UnknownMock = lifecycleMocks.getZaloRuntimeMock;
@@ -104,16 +102,15 @@ async function importSecretInputModule(cacheBust: string): Promise<SecretInputMo
   )) as SecretInputModule;
 }
 
-async function importCachedWebhookModule(): Promise<WebhookModule> {
-  cachedWebhookModule ??= import(webhookModuleUrl) as Promise<WebhookModule>;
-  return await cachedWebhookModule;
-}
+const importCachedWebhookModule = createLazyRuntimeModule(
+  () => import(webhookModuleUrl) as Promise<WebhookModule>,
+);
 
 export async function resetLifecycleTestState() {
   vi.clearAllMocks();
   (await importCachedWebhookModule()).clearZaloWebhookSecurityStateForTest();
   for (const module of loadedMonitorModules) {
-    module.__testing.clearHostedMediaRouteRefsForTest();
+    module.testing.clearHostedMediaRouteRefsForTest();
   }
   setActivePluginRegistry(createEmptyPluginRegistry());
 }
@@ -128,7 +125,7 @@ export function setLifecycleRuntimeCore(
   );
 }
 
-export async function loadLifecycleMonitorModule(): Promise<MonitorModule> {
+async function loadLifecycleMonitorModule(): Promise<MonitorModule> {
   return await importMonitorModule({ cacheBust: "monitor", mocked: true });
 }
 

@@ -1,15 +1,10 @@
 /**
- * Gateway session persistence — JSONL file-based store.
- *
- * Migrated from src/session-store.ts. Dependencies are only Node.js
- * built-ins + log + platform (both zero plugin-sdk).
+ * Gateway session persistence — SQLite KV-backed store.
  */
 
-import fs from "node:fs";
-import path from "node:path";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
-import { getQQBotDataDir, getQQBotDataPath } from "../utils/platform.js";
+import { buildQQBotStateKey, openQQBotSyncKeyedStore } from "../utils/sqlite-state.js";
 
 /** Persisted gateway session state. */
 export interface SessionState {
@@ -24,6 +19,8 @@ export interface SessionState {
 
 const SESSION_EXPIRE_TIME = 5 * 60 * 1000;
 const SAVE_THROTTLE_MS = 1000;
+const SESSION_NAMESPACE = "gateway-sessions";
+const MAX_SESSIONS = 1000;
 
 const throttleState = new Map<
   string,
@@ -34,69 +31,46 @@ const throttleState = new Map<
   }
 >();
 
-function ensureDir(): void {
-  getQQBotDataDir("sessions");
+function createSessionStore() {
+  return openQQBotSyncKeyedStore<SessionState>({
+    namespace: SESSION_NAMESPACE,
+    maxEntries: MAX_SESSIONS,
+    defaultTtlMs: SESSION_EXPIRE_TIME,
+  });
 }
 
-function getSessionDir(): string {
-  return getQQBotDataPath("sessions");
+function sessionKey(accountId: string): string {
+  return buildQQBotStateKey("gateway-session", accountId);
 }
 
-function encodeAccountIdForFileName(accountId: string): string {
-  return Buffer.from(accountId, "utf8").toString("base64url");
-}
-
-function getLegacySessionPath(accountId: string): string {
-  const safeId = accountId.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return path.join(getSessionDir(), `session-${safeId}.json`);
-}
-
-function getSessionPath(accountId: string): string {
-  const encodedId = encodeAccountIdForFileName(accountId);
-  return path.join(getSessionDir(), `session-${encodedId}.json`);
-}
-
-function getCandidateSessionPaths(accountId: string): string[] {
-  const primaryPath = getSessionPath(accountId);
-  const legacyPath = getLegacySessionPath(accountId);
-  return primaryPath === legacyPath ? [primaryPath] : [primaryPath, legacyPath];
-}
-
-function isSessionFileName(file: string): boolean {
-  return file.startsWith("session-") && file.endsWith(".json");
-}
-
-function readSessionStateFile(file: string): { filePath: string; state: SessionState } {
-  const filePath = path.join(getSessionDir(), file);
-  const data = fs.readFileSync(filePath, "utf-8");
-  return { filePath, state: JSON.parse(data) as SessionState };
+function toStoredSessionState(state: SessionState): SessionState {
+  return {
+    sessionId: state.sessionId,
+    lastSeq: state.lastSeq,
+    lastConnectedAt: state.lastConnectedAt,
+    intentLevelIndex: state.intentLevelIndex,
+    accountId: state.accountId,
+    savedAt: state.savedAt,
+    ...(state.appId ? { appId: state.appId } : {}),
+  };
 }
 
 /** Load a saved session, rejecting expired or mismatched appId entries. */
 export function loadSession(accountId: string, expectedAppId?: string): SessionState | null {
   try {
-    let filePath: string | null = null;
-    for (const candidatePath of getCandidateSessionPaths(accountId)) {
-      if (fs.existsSync(candidatePath)) {
-        filePath = candidatePath;
-        break;
-      }
-    }
-    if (!filePath) {
+    const store = createSessionStore();
+    const state = store.lookup(sessionKey(accountId));
+    if (!state) {
       return null;
     }
 
-    const data = fs.readFileSync(filePath, "utf-8");
-    const state = JSON.parse(data) as SessionState;
     const now = Date.now();
 
     if (now - state.savedAt > SESSION_EXPIRE_TIME) {
       debugLog(
         `[session-store] Session expired for ${accountId}, age: ${Math.round((now - state.savedAt) / 1000)}s`,
       );
-      try {
-        fs.unlinkSync(filePath);
-      } catch {}
+      store.delete(sessionKey(accountId));
       return null;
     }
 
@@ -104,14 +78,13 @@ export function loadSession(accountId: string, expectedAppId?: string): SessionS
       debugLog(
         `[session-store] appId mismatch for ${accountId}: saved=${state.appId}, current=${expectedAppId}. Discarding stale session.`,
       );
-      try {
-        fs.unlinkSync(filePath);
-      } catch {}
+      store.delete(sessionKey(accountId));
       return null;
     }
 
     if (!state.sessionId || state.lastSeq === null || state.lastSeq === undefined) {
       debugLog(`[session-store] Invalid session data for ${accountId}`);
+      store.delete(sessionKey(accountId));
       return null;
     }
 
@@ -167,15 +140,11 @@ export function saveSession(state: SessionState): void {
 }
 
 function doSaveSession(state: SessionState): void {
-  const filePath = getSessionPath(state.accountId);
-  const legacyPath = getLegacySessionPath(state.accountId);
   try {
-    ensureDir();
     const stateToSave: SessionState = { ...state, savedAt: Date.now() };
-    fs.writeFileSync(filePath, JSON.stringify(stateToSave, null, 2), "utf-8");
-    if (legacyPath !== filePath && fs.existsSync(legacyPath)) {
-      fs.unlinkSync(legacyPath);
-    }
+    createSessionStore().register(sessionKey(state.accountId), toStoredSessionState(stateToSave), {
+      ttlMs: SESSION_EXPIRE_TIME,
+    });
     debugLog(
       `[session-store] Saved session for ${state.accountId}: sessionId=${state.sessionId}, lastSeq=${state.lastSeq}`,
     );
@@ -196,13 +165,7 @@ export function clearSession(accountId: string): void {
     throttleState.delete(accountId);
   }
   try {
-    let cleared = false;
-    for (const filePath of getCandidateSessionPaths(accountId)) {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        cleared = true;
-      }
-    }
+    const cleared = createSessionStore().delete(sessionKey(accountId));
     if (cleared) {
       debugLog(`[session-store] Cleared session for ${accountId}`);
     }
@@ -211,74 +174,4 @@ export function clearSession(accountId: string): void {
       `[session-store] Failed to clear session for ${accountId}: ${formatErrorMessage(err)}`,
     );
   }
-}
-
-/** Update only lastSeq on the persisted session. */
-export function updateLastSeq(accountId: string, lastSeq: number): void {
-  const existing = loadSession(accountId);
-  if (existing?.sessionId) {
-    saveSession({ ...existing, lastSeq });
-  }
-}
-
-/** Load all saved sessions from disk. */
-export function getAllSessions(): SessionState[] {
-  const sessions = new Map<string, SessionState>();
-  try {
-    const sessionDir = getSessionDir();
-    if (!fs.existsSync(sessionDir)) {
-      return [];
-    }
-    const files = fs.readdirSync(sessionDir);
-
-    for (const file of files) {
-      if (isSessionFileName(file)) {
-        try {
-          const { state } = readSessionStateFile(file);
-          if (typeof state.accountId !== "string" || !state.accountId) {
-            continue;
-          }
-          const existing = sessions.get(state.accountId);
-          if (!existing || (state.savedAt ?? 0) >= (existing.savedAt ?? 0)) {
-            sessions.set(state.accountId, state);
-          }
-        } catch {}
-      }
-    }
-  } catch {}
-  return [...sessions.values()];
-}
-
-/** Remove expired session files from disk. */
-export function cleanupExpiredSessions(): number {
-  let cleaned = 0;
-  try {
-    const sessionDir = getSessionDir();
-    if (!fs.existsSync(sessionDir)) {
-      return 0;
-    }
-    const now = Date.now();
-    const files = fs.readdirSync(sessionDir);
-
-    for (const file of files) {
-      if (isSessionFileName(file)) {
-        const filePath = path.join(sessionDir, file);
-        try {
-          const { state } = readSessionStateFile(file);
-
-          if (now - state.savedAt > SESSION_EXPIRE_TIME) {
-            fs.unlinkSync(filePath);
-            cleaned++;
-            debugLog(`[session-store] Cleaned expired session: ${file}`);
-          }
-        } catch {
-          try {
-            fs.unlinkSync(filePath);
-            cleaned++;
-          } catch {}
-        }
-      }
-    }
-  } catch {}
-  return cleaned;
 }

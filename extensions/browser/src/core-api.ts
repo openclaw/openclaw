@@ -1,3 +1,7 @@
+/**
+ * Browser plugin internal barrel that gathers runtime, SDK, CLI, and gateway
+ * APIs for modules that need a stable local import surface.
+ */
 export {
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   DEFAULT_UPLOAD_DIR,
@@ -10,11 +14,13 @@ export {
   browserConsoleMessages,
   browserDeleteProfile,
   browserDoctor,
+  browserImportProfile,
   browserFocusTab,
   browserNavigate,
   browserOpenTab,
   browserPdfSave,
   browserProfiles,
+  browserSystemProfiles,
   browserResetProfile,
   browserScreenshotAction,
   browserSnapshot,
@@ -30,6 +36,8 @@ export {
   ensureBrowserControlAuth,
   getBrowserControlState,
   getBrowserProfileCapabilities,
+  isBrowserHostLocalRoute,
+  isBrowserSystemProfileImport,
   isPersistentBrowserProfileMutation,
   installBrowserAuthMiddleware,
   installBrowserCommonMiddleware,
@@ -42,6 +50,7 @@ export {
   resolveBrowserConfig,
   resolveBrowserControlAuth,
   resolveExistingPathsWithinRoot,
+  resolveExistingUploadPaths,
   resolveProfile,
   resolveRequestedBrowserProfile,
   startBrowserControlServiceFromConfig,
@@ -55,6 +64,8 @@ export type {
   BrowserDeleteProfileResult,
   BrowserDoctorCheck,
   BrowserDoctorReport,
+  BrowserGraphicsDiagnostics,
+  BrowserImportProfileResult,
   BrowserFormField,
   BrowserResetProfileResult,
   BrowserRouteRegistrar,
@@ -63,6 +74,7 @@ export type {
   BrowserTab,
   BrowserTransport,
   ProfileStatus,
+  SystemProfileInfo,
   SnapshotResult,
 } from "./browser-runtime.js";
 export {

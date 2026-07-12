@@ -1,3 +1,4 @@
+// Tests web push subscription storage and delivery helpers.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,13 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import webPush from "web-push";
 import {
   broadcastWebPush,
-  clearWebPushSubscription,
   clearWebPushSubscriptionByEndpoint,
   listWebPushSubscriptions,
-  loadWebPushSubscription,
   registerWebPushSubscription,
   resolveVapidKeys,
-  sendWebPushNotification,
 } from "./push-web.js";
 
 // Stub resolveStateDir so tests use a temp directory.
@@ -46,7 +44,11 @@ describe("resolveVapidKeys", () => {
     const keys = await resolveVapidKeys(tmpDir);
     expect(keys.publicKey).toBe("test-public-key-base64url");
     expect(keys.privateKey).toBe("test-private-key-base64url");
-    expect(keys.subject).toMatch(/^mailto:/);
+    expect(keys.subject).toBe("https://openclaw.ai");
+    const persistedKeys = JSON.parse(
+      await fs.readFile(path.join(tmpDir, "push", "vapid-keys.json"), "utf8"),
+    ) as { subject?: string };
+    expect(persistedKeys.subject).toBe("https://openclaw.ai");
 
     // Second call returns same keys.
     const keys2 = await resolveVapidKeys(tmpDir);
@@ -87,7 +89,7 @@ describe("subscription CRUD", () => {
       keys,
       baseDir: tmpDir,
     });
-    expect(sub.subscriptionId).toBeTruthy();
+    expect(sub.subscriptionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(sub.endpoint).toBe(endpoint);
     expect(sub.keys.p256dh).toBe("p256dh-key");
     expect(sub.keys.auth).toBe("auth-key");
@@ -111,22 +113,6 @@ describe("subscription CRUD", () => {
     expect(sub2.keys.p256dh).toBe("new-p256dh");
   });
 
-  it("loads a subscription by ID", async () => {
-    const sub = await registerWebPushSubscription({
-      endpoint,
-      keys,
-      baseDir: tmpDir,
-    });
-    const loaded = await loadWebPushSubscription(sub.subscriptionId, tmpDir);
-    expect(loaded).not.toBeNull();
-    expect(loaded!.endpoint).toBe(endpoint);
-  });
-
-  it("returns null for unknown subscription ID", async () => {
-    const loaded = await loadWebPushSubscription("nonexistent", tmpDir);
-    expect(loaded).toBeNull();
-  });
-
   it("lists all subscriptions", async () => {
     await registerWebPushSubscription({
       endpoint: "https://push.example.com/a",
@@ -140,19 +126,6 @@ describe("subscription CRUD", () => {
     });
     const list = await listWebPushSubscriptions(tmpDir);
     expect(list).toHaveLength(2);
-  });
-
-  it("clears a subscription by ID", async () => {
-    const sub = await registerWebPushSubscription({
-      endpoint,
-      keys,
-      baseDir: tmpDir,
-    });
-    const removed = await clearWebPushSubscription(sub.subscriptionId, tmpDir);
-    expect(removed).toBe(true);
-
-    const list = await listWebPushSubscriptions(tmpDir);
-    expect(list).toHaveLength(0);
   });
 
   it("clears a subscription by endpoint", async () => {
@@ -187,25 +160,6 @@ describe("subscription CRUD", () => {
 
 describe("sending", () => {
   const keys = { p256dh: "p256dh-key", auth: "auth-key" };
-
-  it("configures VAPID details for direct sends", async () => {
-    const sub = await registerWebPushSubscription({
-      endpoint: "https://push.example.com/direct",
-      keys,
-      baseDir: tmpDir,
-    });
-
-    const result = await sendWebPushNotification(sub, { title: "Direct" });
-
-    expect(result.ok).toBe(true);
-    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(webPush.setVapidDetails)).toHaveBeenCalledWith(
-      "mailto:openclaw@localhost",
-      "test-public-key-base64url",
-      "test-private-key-base64url",
-    );
-    expect(vi.mocked(webPush.sendNotification)).toHaveBeenCalledTimes(1);
-  });
 
   it("configures VAPID details once before broadcasting to subscribers", async () => {
     await registerWebPushSubscription({

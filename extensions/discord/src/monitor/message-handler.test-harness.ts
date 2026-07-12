@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler harness behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -46,6 +47,7 @@ export async function createBaseDiscordMessageContext(
     commandAuthorized: true,
     baseText: "hi",
     messageText: "hi",
+    preparedMedia: [],
     wasMentioned: false,
     shouldRequireMention: true,
     canDetectMention: true,

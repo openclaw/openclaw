@@ -1,5 +1,12 @@
+/**
+ * Auth-profile doctor copy tests.
+ * Covers provider-specific repair hints without invoking real auth flows.
+ */
 import { describe, expect, it } from "vitest";
-import { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
+import {
+  formatAuthDoctorHint,
+  formatAuthDoctorHintWithPluginBuilder,
+} from "./auth-profiles/doctor.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 const EMPTY_STORE: AuthProfileStore = {
@@ -8,14 +15,43 @@ const EMPTY_STORE: AuthProfileStore = {
 };
 
 describe("formatAuthDoctorHint", () => {
-  it("guides removed qwen portal users to model studio onboarding", async () => {
+  it("does not report restored qwen portal auth as removed", async () => {
+    let pluginBuilderCalled = false;
+    const hint = await formatAuthDoctorHintWithPluginBuilder(
+      {
+        store: EMPTY_STORE,
+        provider: "qwen-portal",
+      },
+      async () => {
+        pluginBuilderCalled = true;
+        return undefined;
+      },
+    );
+
+    expect(pluginBuilderCalled).toBe(true);
+    expect(hint).toBe("");
+  });
+
+  it("guides legacy qwen portal oauth profiles to re-authenticate", async () => {
     const hint = await formatAuthDoctorHint({
-      store: EMPTY_STORE,
+      store: {
+        version: 1,
+        profiles: {
+          "qwen-portal-auth": {
+            type: "oauth",
+            provider: "qwen-portal",
+            access: "old-access",
+            refresh: "old-refresh",
+            expires: 0,
+          },
+        },
+      },
       provider: "qwen-portal",
+      profileId: "qwen-portal-auth",
     });
 
-    expect(hint).toContain("openclaw onboard --auth-choice qwen-api-key");
-    expect(hint).toContain("qwen-api-key-cn");
-    expect(hint).not.toContain("--provider qwen");
+    expect(hint).toBe(
+      "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.",
+    );
   });
 });

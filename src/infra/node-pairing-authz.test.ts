@@ -1,3 +1,4 @@
+// Covers scope requirements for node pairing approvals.
 import { describe, expect, it } from "vitest";
 import { resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
 
@@ -9,8 +10,22 @@ describe("resolveNodePairApprovalScopes", () => {
     ]);
   });
 
+  it("requires operator.admin for browser.proxy commands", () => {
+    expect(resolveNodePairApprovalScopes(["browser.proxy"])).toEqual([
+      "operator.pairing",
+      "operator.admin",
+    ]);
+  });
+
   it("requires operator.write for non-exec commands", () => {
     expect(resolveNodePairApprovalScopes(["canvas.present"])).toEqual([
+      "operator.pairing",
+      "operator.write",
+    ]);
+  });
+
+  it("treats computer.act pairing approval as non-exec surface approval", () => {
+    expect(resolveNodePairApprovalScopes(["computer.act"])).toEqual([
       "operator.pairing",
       "operator.write",
     ]);

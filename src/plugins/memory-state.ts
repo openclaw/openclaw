@@ -1,10 +1,17 @@
+/** Registry state for plugin memory runtimes, prompt supplements, and flush planning. */
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+
+const log = createSubsystemLogger("plugins/memory-state");
 
 export type MemoryPromptSectionBuilder = (params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
 }) => string[];
 
 export type MemoryCorpusSearchResult = {
@@ -44,13 +51,17 @@ export type MemoryCorpusSupplement = {
   search(params: {
     query: string;
     maxResults?: number;
+    agentId?: string;
     agentSessionKey?: string;
+    sandboxed?: boolean;
   }): Promise<MemoryCorpusSearchResult[]>;
   get(params: {
     lookup: string;
     fromLine?: number;
     lineCount?: number;
+    agentId?: string;
     agentSessionKey?: string;
+    sandboxed?: boolean;
   }): Promise<MemoryCorpusGetResult | null>;
 };
 
@@ -101,12 +112,28 @@ export type MemoryPluginRuntime = {
     purpose?: "default" | "status" | "cli";
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
+    debug?: {
+      backend?: "builtin" | "qmd";
+      purpose?: "default" | "status" | "cli";
+      managerMs?: number;
+      managerCacheState?:
+        | "cached-full-hit"
+        | "cached-full-miss"
+        | "transient-cli"
+        | "transient-status"
+        | "pending-create-wait"
+        | "fallback-builtin"
+        | "recent-failure-cooldown";
+      qmdIdentityHash?: string;
+      failureCode?: "qmd-unavailable";
+    };
     error?: string;
   }>;
   resolveMemoryBackendConfig(params: {
     cfg: OpenClawConfig;
     agentId: string;
   }): MemoryRuntimeBackendConfig;
+  closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };
 
@@ -137,19 +164,12 @@ export type MemoryPluginCapabilityRegistration = {
   capability: MemoryPluginCapability;
 };
 
+const LEGACY_MEMORY_COMPAT_PLUGIN_ID = "legacy-memory-v1";
+
 type MemoryPluginState = {
   capability?: MemoryPluginCapabilityRegistration;
   corpusSupplements: MemoryCorpusSupplementRegistration[];
   promptSupplements: MemoryPromptSupplementRegistration[];
-  // LEGACY(memory-v1): kept for external plugins still registering the older
-  // split memory surfaces. Prefer `registerMemoryCapability(...)`.
-  promptBuilder?: MemoryPromptSectionBuilder;
-  // LEGACY(memory-v1): remove after external memory plugins migrate to the
-  // unified capability registration path.
-  flushPlanResolver?: MemoryFlushPlanResolver;
-  // LEGACY(memory-v1): remove after external memory plugins migrate to the
-  // unified capability registration path.
-  runtime?: MemoryPluginRuntime;
 };
 
 const memoryPluginState: MemoryPluginState = {
@@ -172,7 +192,29 @@ export function registerMemoryCapability(
   pluginId: string,
   capability: MemoryPluginCapability,
 ): void {
-  memoryPluginState.capability = { pluginId, capability: { ...capability } };
+  const existingCapability = memoryPluginState.capability?.capability;
+  // A selected memory plugin can add bridge artifacts while memory-core owns sidecar runtime hooks.
+  const shouldPreserveExisting =
+    existingCapability &&
+    Boolean(capability.publicArtifacts) &&
+    !capability.promptBuilder &&
+    !capability.flushPlanResolver &&
+    !capability.runtime;
+  memoryPluginState.capability = {
+    pluginId,
+    capability: {
+      ...(shouldPreserveExisting ? existingCapability : {}),
+      ...capability,
+    },
+  };
+}
+
+function patchMemoryCapability(pluginId: string, patch: MemoryPluginCapability): void {
+  const current =
+    memoryPluginState.capability?.pluginId === pluginId
+      ? memoryPluginState.capability.capability
+      : {};
+  registerMemoryCapability(pluginId, { ...current, ...patch });
 }
 
 export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
@@ -190,7 +232,14 @@ export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistratio
 
 /** @deprecated Use registerMemoryCapability(pluginId, { promptBuilder }) instead. */
 export function registerMemoryPromptSection(builder: MemoryPromptSectionBuilder): void {
-  memoryPluginState.promptBuilder = builder;
+  registerMemoryPromptSectionForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID, builder);
+}
+
+export function registerMemoryPromptSectionForPlugin(
+  pluginId: string,
+  builder: MemoryPromptSectionBuilder,
+): void {
+  patchMemoryCapability(pluginId, { promptBuilder: builder });
 }
 
 export function registerMemoryPromptSupplement(
@@ -207,11 +256,12 @@ export function registerMemoryPromptSupplement(
 export function buildMemoryPromptSection(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
 }): string[] {
   const primary = normalizeMemoryPromptLines(
-    memoryPluginState.capability?.capability.promptBuilder?.(params) ??
-      memoryPluginState.promptBuilder?.(params) ??
-      [],
+    memoryPluginState.capability?.capability.promptBuilder?.(params) ?? [],
   );
   const supplements = memoryPluginState.promptSupplements
     // Keep supplement order stable even if plugin registration order changes.
@@ -227,44 +277,43 @@ function normalizeMemoryPromptLines(value: unknown): string[] {
   return value.filter((line): line is string => typeof line === "string");
 }
 
-export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {
-  return memoryPluginState.capability?.capability.promptBuilder ?? memoryPluginState.promptBuilder;
-}
-
 export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
   return [...memoryPluginState.promptSupplements];
 }
 
 /** @deprecated Use registerMemoryCapability(pluginId, { flushPlanResolver }) instead. */
 export function registerMemoryFlushPlanResolver(resolver: MemoryFlushPlanResolver): void {
-  memoryPluginState.flushPlanResolver = resolver;
+  registerMemoryFlushPlanResolverForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID, resolver);
+}
+
+export function registerMemoryFlushPlanResolverForPlugin(
+  pluginId: string,
+  resolver: MemoryFlushPlanResolver,
+): void {
+  patchMemoryCapability(pluginId, { flushPlanResolver: resolver });
 }
 
 export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
 }): MemoryFlushPlan | null {
-  return (
-    memoryPluginState.capability?.capability.flushPlanResolver?.(params) ??
-    memoryPluginState.flushPlanResolver?.(params) ??
-    null
-  );
-}
-
-export function getMemoryFlushPlanResolver(): MemoryFlushPlanResolver | undefined {
-  return (
-    memoryPluginState.capability?.capability.flushPlanResolver ??
-    memoryPluginState.flushPlanResolver
-  );
+  return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;
 }
 
 /** @deprecated Use registerMemoryCapability(pluginId, { runtime }) instead. */
 export function registerMemoryRuntime(runtime: MemoryPluginRuntime): void {
-  memoryPluginState.runtime = runtime;
+  registerMemoryRuntimeForPlugin(LEGACY_MEMORY_COMPAT_PLUGIN_ID, runtime);
+}
+
+export function registerMemoryRuntimeForPlugin(
+  pluginId: string,
+  runtime: MemoryPluginRuntime,
+): void {
+  patchMemoryCapability(pluginId, { runtime });
 }
 
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
-  return memoryPluginState.capability?.capability.runtime ?? memoryPluginState.runtime;
+  return memoryPluginState.capability?.capability.runtime;
 }
 
 export function hasMemoryRuntime(): boolean {
@@ -274,17 +323,43 @@ export function hasMemoryRuntime(): boolean {
 function cloneMemoryPublicArtifact(
   artifact: MemoryPluginPublicArtifact,
 ): MemoryPluginPublicArtifact {
+  const agentIds = Array.isArray(artifact.agentIds) ? artifact.agentIds : [];
   return {
     ...artifact,
-    agentIds: [...artifact.agentIds],
+    agentIds: [...agentIds],
   };
+}
+
+// The sort below dereferences these fields, so a plugin-supplied artifact
+// missing any of them would crash every status/bridge consumer.
+function isValidMemoryPublicArtifact(
+  artifact: MemoryPluginPublicArtifact | null | undefined,
+): artifact is MemoryPluginPublicArtifact {
+  return (
+    typeof artifact?.kind === "string" &&
+    typeof artifact.workspaceDir === "string" &&
+    typeof artifact.relativePath === "string" &&
+    typeof artifact.absolutePath === "string" &&
+    typeof artifact.contentType === "string"
+  );
 }
 
 export async function listActiveMemoryPublicArtifacts(params: {
   cfg: OpenClawConfig;
 }): Promise<MemoryPluginPublicArtifact[]> {
-  const artifacts =
+  const pluginId = memoryPluginState.capability?.pluginId;
+  const listed =
     (await memoryPluginState.capability?.capability.publicArtifacts?.listArtifacts(params)) ?? [];
+  if (!Array.isArray(listed)) {
+    log.warn(`ignoring public memory artifacts from plugin "${pluginId}": not an array`);
+    return [];
+  }
+  const artifacts = listed.filter(isValidMemoryPublicArtifact);
+  if (artifacts.length < listed.length) {
+    log.warn(
+      `ignoring ${listed.length - artifacts.length} malformed public memory artifact(s) from plugin "${pluginId}": artifacts must include string kind, workspaceDir, relativePath, absolutePath, and contentType`,
+    );
+  }
   return artifacts.map(cloneMemoryPublicArtifact).toSorted((left, right) => {
     const workspaceOrder = left.workspaceDir.localeCompare(right.workspaceDir);
     if (workspaceOrder !== 0) {
@@ -318,19 +393,11 @@ export function restoreMemoryPluginState(state: MemoryPluginState): void {
       }
     : undefined;
   memoryPluginState.corpusSupplements = [...state.corpusSupplements];
-  memoryPluginState.promptBuilder = state.promptBuilder;
   memoryPluginState.promptSupplements = [...state.promptSupplements];
-  memoryPluginState.flushPlanResolver = state.flushPlanResolver;
-  memoryPluginState.runtime = state.runtime;
 }
 
 export function clearMemoryPluginState(): void {
   memoryPluginState.capability = undefined;
   memoryPluginState.corpusSupplements = [];
-  memoryPluginState.promptBuilder = undefined;
   memoryPluginState.promptSupplements = [];
-  memoryPluginState.flushPlanResolver = undefined;
-  memoryPluginState.runtime = undefined;
 }
-
-export const _resetMemoryPluginState = clearMemoryPluginState;

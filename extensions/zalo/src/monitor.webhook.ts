@@ -1,3 +1,4 @@
+// Zalo plugin module implements monitor.webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -23,7 +24,7 @@ import {
 
 const ZALO_WEBHOOK_REPLAY_WINDOW_MS = 5 * 60_000;
 
-export type ZaloWebhookTarget = {
+type ZaloWebhookTarget = {
   token: string;
   account: ResolvedZaloAccount;
   config: OpenClawConfig;
@@ -74,10 +75,6 @@ export function getZaloWebhookStatusCounterSizeForTest(): number {
   return webhookAnomalyTracker.size();
 }
 
-function timingSafeEquals(left: string, right: string): boolean {
-  return safeEqualSecret(left, right);
-}
-
 function buildReplayEventCacheKey(target: ZaloWebhookTarget, update: ZaloUpdate): string | null {
   const messageId = update.message?.message_id;
   if (!messageId) {
@@ -102,7 +99,7 @@ export class ZaloRetryableWebhookError extends Error {
   }
 }
 
-export async function processZaloReplayGuardedUpdate(params: {
+async function processZaloReplayGuardedUpdate(params: {
   target: ZaloWebhookTarget;
   update: ZaloUpdate;
   processUpdate: ZaloWebhookProcessUpdate;
@@ -215,7 +212,7 @@ export async function handleZaloWebhookRequest(
       const target = resolveWebhookTargetWithAuthOrRejectSync({
         targets,
         res,
-        isMatch: (entry) => timingSafeEquals(entry.secret, headerToken),
+        isMatch: (entry) => safeEqualSecret(entry.secret, headerToken),
       });
       if (!target) {
         recordWebhookStatus(targets[0]?.runtime, path, res.statusCode);
@@ -266,7 +263,7 @@ export async function handleZaloWebhookRequest(
         update,
         processUpdate,
         nowMs,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
       });
 

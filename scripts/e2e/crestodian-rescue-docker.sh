@@ -10,7 +10,7 @@ CONTAINER_NAME="openclaw-crestodian-rescue-e2e-$$"
 RUN_LOG="$(mktemp -t openclaw-crestodian-rescue-log.XXXXXX)"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -f "$RUN_LOG"
 }
 trap cleanup EXIT
@@ -24,6 +24,7 @@ set +e
 docker_e2e_run_with_harness \
   --name "$CONTAINER_NAME" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
+  -e "OPENCLAW_GATEWAY_TOKEN=crestodian-rescue-token" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail
     source scripts/lib/openclaw-e2e-instance.sh
@@ -35,9 +36,9 @@ set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker Crestodian rescue smoke failed"
-  cat "$RUN_LOG"
+  docker_e2e_print_log "$RUN_LOG"
   exit "$status"
 fi
 
-cat "$RUN_LOG"
+docker_e2e_print_log "$RUN_LOG"
 echo "OK"

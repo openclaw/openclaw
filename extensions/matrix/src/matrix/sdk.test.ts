@@ -1,9 +1,13 @@
+// Matrix tests cover sdk plugin behavior.
 import "fake-indexeddb/auto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installMatrixTestRuntime } from "../test-runtime.js";
+import { readMatrixRecoveryKeyState } from "./crypto-state-store.js";
 
 function requestUrl(input: RequestInfo | URL | undefined): string {
   if (!input) {
@@ -16,6 +20,47 @@ function requestUrl(input: RequestInfo | URL | undefined): string {
     return input.toString();
   }
   return input.url;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+async function expectAbortError(promise: Promise<unknown>) {
+  const err = await promise.catch((caught: unknown) => caught);
+  expect(err).toBeInstanceOf(Error);
+  expectRecordFields(requireRecord(err, "abort error"), {
+    message: "Matrix startup aborted",
+    name: "AbortError",
+  });
+}
+function expectSomeMockCallOptions(
+  mock: ReturnType<typeof vi.fn>,
+  fields: Record<string, unknown>,
+) {
+  const calls = mock.mock.calls as unknown[][];
+  const matched = calls.some((call) => {
+    const arg = call[0];
+    if (typeof arg !== "object" || arg === null) {
+      return false;
+    }
+    const record = arg as Record<string, unknown>;
+    return Object.entries(fields).every(([key, value]) => Object.is(record[key], value));
+  });
+  expect(matched).toBe(true);
+}
+
+function readStoredRecoveryKey(recoveryKeyPath: string) {
+  return readMatrixRecoveryKeyState(path.dirname(recoveryKeyPath));
 }
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -145,6 +190,7 @@ type MatrixJsClientStub = {
   getJoinedRoomMembers: ReturnType<typeof vi.fn>;
   getStateEvent: ReturnType<typeof vi.fn>;
   getAccountData: ReturnType<typeof vi.fn>;
+  getAccountDataFromServer: ReturnType<typeof vi.fn>;
   setAccountData: ReturnType<typeof vi.fn>;
   getRoomIdForAlias: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -181,6 +227,7 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
   client.getJoinedRoomMembers = vi.fn(async () => ({ joined: {} }));
   client.getStateEvent = vi.fn(async () => ({}));
   client.getAccountData = vi.fn(() => undefined);
+  client.getAccountDataFromServer = vi.fn(async () => null);
   client.setAccountData = vi.fn(async () => {});
   client.getRoomIdForAlias = vi.fn(async () => ({ room_id: "!resolved:example.org" }));
   client.sendMessage = vi.fn(async () => ({ event_id: "$sent" }));
@@ -263,6 +310,8 @@ const { MatrixClient } = await import("./sdk.js");
 
 describe("MatrixClient request hardening", () => {
   beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installMatrixTestRuntime();
     matrixJsClient = createMatrixJsClientStub();
     lastCreateClientOpts = null;
     vi.useRealTimers();
@@ -274,6 +323,20 @@ describe("MatrixClient request hardening", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     clearTestUndiciRuntimeDepsOverride();
+    resetPluginStateStoreForTests();
+  });
+
+  it("reads account data through the server-aware SDK path before initial sync", async () => {
+    matrixJsClient.getAccountDataFromServer.mockResolvedValue({
+      "@alice:example.org": ["!dm:example.org"],
+    });
+    const client = new MatrixClient("https://matrix.example.org", "token");
+
+    await expect(client.getAccountData("m.direct")).resolves.toEqual({
+      "@alice:example.org": ["!dm:example.org"],
+    });
+    expect(matrixJsClient.getAccountDataFromServer).toHaveBeenCalledWith("m.direct");
+    expect(matrixJsClient.getAccountData).not.toHaveBeenCalled();
   });
 
   it("blocks absolute endpoints unless explicitly allowed", async () => {
@@ -292,17 +355,21 @@ describe("MatrixClient request hardening", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("injects a guarded fetchFn into matrix-js-sdk", () => {
-    const client = new MatrixClient("https://matrix.example.org", "token", {
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+  it("injects a guarded fetchFn into matrix-js-sdk", async () => {
+    const client = new MatrixClient("https://matrix.example.org", "token");
     expect(client).toBeInstanceOf(MatrixClient);
 
-    expect(lastCreateClientOpts).toMatchObject({
+    expectRecordFields(requireRecord(lastCreateClientOpts, "create client options"), {
       baseUrl: "https://matrix.example.org",
       accessToken: "token",
     });
-    expect(lastCreateClientOpts?.fetchFn).toEqual(expect.any(Function));
+    const fetchFn = lastCreateClientOpts?.fetchFn as typeof fetch | undefined;
+    if (!fetchFn) {
+      throw new Error("expected Matrix SDK guarded fetch");
+    }
+    await expect(fetchFn("http://127.0.0.1/_matrix/client/v3/account/whoami")).rejects.toThrow(
+      /private|blocked|not allowed/i,
+    );
   });
 
   it("prefers authenticated client media downloads", async () => {
@@ -358,6 +425,50 @@ describe("MatrixClient request hardening", () => {
     expect(secondUrl).toContain("/_matrix/media/v3/download/example.org/media");
   });
 
+  it("preserves encrypted media download limits through the crypto facade", async () => {
+    const payload = Buffer.from([9, 10, 11, 12, 13]);
+    const fetchMock = vi.fn(async () => new Response(payload, { status: 200 }));
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
+      encryption: true,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
+
+    const cryptoFacade = client.crypto;
+    if (!cryptoFacade) {
+      throw new Error("expected Matrix crypto facade");
+    }
+    await expect(
+      cryptoFacade.decryptMedia(
+        {
+          url: "mxc://example.org/encrypted",
+          key: {
+            alg: "A256CTR",
+            ext: true,
+            k: "unused",
+            key_ops: ["encrypt", "decrypt"],
+            kty: "oct",
+          },
+          iv: "unused",
+          hashes: { sha256: "unused" },
+          v: "v2",
+        },
+        {
+          maxBytes: 4,
+          readIdleTimeoutMs: 25,
+        },
+      ),
+    ).rejects.toThrow(/Matrix media exceeds configured size limit/);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("decrypts encrypted room events returned by getEvent", async () => {
     const client = new MatrixClient("https://matrix.example.org", "token");
     matrixJsClient.fetchRoomEvent = vi.fn(async () => ({
@@ -390,7 +501,7 @@ describe("MatrixClient request hardening", () => {
     const event = await client.getEvent("!room:example.org", "$poll");
 
     expect(matrixJsClient.decryptEventIfNeeded).toHaveBeenCalledTimes(1);
-    expect(event).toMatchObject({
+    expectRecordFields(requireRecord(event, "decrypted event"), {
       event_id: "$poll",
       type: "m.poll.start",
       sender: "@alice:example.org",
@@ -501,14 +612,16 @@ describe("MatrixClient request hardening", () => {
 
     const page = await client.getRelations("!room:example.org", "$poll", "m.reference");
 
-    expect(page.originalEvent).toMatchObject({ event_id: "$poll", type: "m.poll.start" });
-    expect(page.events).toEqual([
-      expect.objectContaining({
-        event_id: "$vote",
-        type: "m.poll.response",
-        sender: "@bob:example.org",
-      }),
-    ]);
+    expectRecordFields(requireRecord(page.originalEvent, "original relation event"), {
+      event_id: "$poll",
+      type: "m.poll.start",
+    });
+    expect(page.events).toHaveLength(1);
+    expectRecordFields(requireRecord(page.events[0], "relation event"), {
+      event_id: "$vote",
+      type: "m.poll.response",
+      sender: "@bob:example.org",
+    });
   });
 
   it("blocks cross-protocol redirects when absolute endpoints are allowed", async () => {
@@ -570,7 +683,7 @@ describe("MatrixClient request hardening", () => {
   it("aborts requests after timeout", async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_: URL | string, init?: RequestInit) => {
-      return new Promise<Response>((_, reject) => {
+      return new Promise<Response>((_Value, reject) => {
         init?.signal?.addEventListener("abort", () => {
           reject(new Error("aborted"));
         });
@@ -590,18 +703,42 @@ describe("MatrixClient request hardening", () => {
     await assertion;
   });
 
+  it("falls back to the default timeout for non-finite localTimeoutMs", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn((_: URL | string, init?: RequestInit) => {
+      return new Promise<Response>((_Local, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new Error("aborted"));
+        });
+      });
+    });
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
+      localTimeoutMs: Number.NaN,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    const pending = client.doRequest("GET", "/_matrix/client/v3/account/whoami");
+    const assertion = expect(pending).rejects.toThrow("aborted");
+    await vi.advanceTimersByTimeAsync(60_001);
+
+    await assertion;
+  });
+
   it("wires the sync store into the SDK and flushes it on shutdown", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sdk-store-"));
-    const storagePath = path.join(tempDir, "bot-storage.json");
 
     try {
       const client = new MatrixClient("https://matrix.example.org", "token", {
-        storagePath,
+        storageRootDir: tempDir,
       });
 
       const store = lastCreateClientOpts?.store as { flush: () => Promise<void> } | undefined;
-      expect(store).toBeTruthy();
-      const flushSpy = vi.spyOn(store!, "flush").mockResolvedValue();
+      if (!store) {
+        throw new Error("expected Matrix sync store");
+      }
+      const flushSpy = vi.spyOn(store, "flush").mockResolvedValue();
 
       await client.stopAndPersist();
 
@@ -673,7 +810,7 @@ describe("MatrixClient event bridge", () => {
     const failed: string[] = [];
     const delivered: string[] = [];
 
-    client.on("room.failed_decryption", (_roomId, _event, error) => {
+    client.on("room.failed_decryption", (_roomId, eventValue, error) => {
       failed.push(error.message);
     });
     client.on("room.message", (_roomId, event) => {
@@ -715,7 +852,7 @@ describe("MatrixClient event bridge", () => {
     const failed: string[] = [];
     const delivered: string[] = [];
 
-    client.on("room.failed_decryption", (_roomId, _event, error) => {
+    client.on("room.failed_decryption", (_roomId, eventValue, error) => {
       failed.push(error.message);
     });
     client.on("room.message", (_roomId, event) => {
@@ -825,7 +962,7 @@ describe("MatrixClient event bridge", () => {
       requestOwnUserVerification: vi.fn(async () => null),
     }));
 
-    client.on("room.failed_decryption", (_roomId, _event, error) => {
+    client.on("room.failed_decryption", (_roomId, eventValue, error) => {
       failed.push(error.message);
     });
     client.on("room.message", (_roomId, event) => {
@@ -877,7 +1014,7 @@ describe("MatrixClient event bridge", () => {
     const client = new MatrixClient("https://matrix.example.org", "token");
     const failed: string[] = [];
 
-    client.on("room.failed_decryption", (_roomId, _event, error) => {
+    client.on("room.failed_decryption", (_roomId, eventValue, error) => {
       failed.push(error.message);
     });
 
@@ -955,7 +1092,7 @@ describe("MatrixClient event bridge", () => {
     const failed: string[] = [];
     const delivered: string[] = [];
 
-    client.on("room.failed_decryption", (_roomId, _event, error) => {
+    client.on("room.failed_decryption", (_roomId, eventValue, error) => {
       failed.push(error.message);
     });
     client.on("room.message", (_roomId, event) => {
@@ -999,7 +1136,7 @@ describe("MatrixClient event bridge", () => {
     const client = new MatrixClient("https://matrix.example.org", "token");
     const failed: string[] = [];
 
-    client.on("room.failed_decryption", (_roomId, _event, error) => {
+    client.on("room.failed_decryption", (_roomId, eventValue, error) => {
       failed.push(error.message);
     });
 
@@ -1164,11 +1301,17 @@ describe("MatrixClient event bridge", () => {
     });
 
     await vi.waitFor(() => {
-      expect(releaseSyncReady).toEqual(expect.any(Function));
+      if (!releaseSyncReady) {
+        throw new Error("expected Matrix sync ready release callback");
+      }
     });
     expect(resolved).toBe(false);
 
-    releaseSyncReady?.();
+    const release = releaseSyncReady;
+    if (!release) {
+      throw new Error("expected Matrix sync ready release callback");
+    }
+    release();
     await startPromise;
 
     expect(resolved).toBe(true);
@@ -1211,10 +1354,7 @@ describe("MatrixClient event bridge", () => {
 
     abortController.abort();
 
-    await expect(startPromise).rejects.toMatchObject({
-      message: "Matrix startup aborted",
-      name: "AbortError",
-    });
+    await expectAbortError(startPromise);
   });
 
   it("aborts before post-ready startup work when shutdown races ready sync", async () => {
@@ -1238,10 +1378,7 @@ describe("MatrixClient event bridge", () => {
       }
     });
 
-    await expect(client.start({ abortSignal: abortController.signal })).rejects.toMatchObject({
-      message: "Matrix startup aborted",
-      name: "AbortError",
-    });
+    await expectAbortError(client.start({ abortSignal: abortController.signal }));
     expect(bootstrapCryptoSpy).not.toHaveBeenCalled();
   });
 
@@ -1355,11 +1492,11 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     await client.start();
 
-    expect(bootstrapCrossSigning).toHaveBeenCalledWith(
-      expect.objectContaining({
-        authUploadDeviceSigningKeys: expect.any(Function),
-      }),
+    const crossSigningOptions = requireRecord(
+      (bootstrapCrossSigning.mock.calls as unknown[][])[0]?.[0],
+      "cross-signing options",
     );
+    expect(crossSigningOptions.authUploadDeviceSigningKeys).toBeTypeOf("function");
   });
 
   it("trusts the own Matrix identity after completed self-verification", async () => {
@@ -1561,11 +1698,58 @@ describe("MatrixClient crypto bootstrapping", () => {
       }
     ).cryptoBootstrapper.bootstrap = bootstrapSpy;
 
-    // start() must NOT throw even when the repair bootstrap fails
-    await expect(client.start()).resolves.not.toThrow();
+    await expect(client.start()).resolves.toBeUndefined();
 
     // repair was attempted
     expect(bootstrapSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects recovery keys when secret-storage metadata cannot authenticate them", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-test-"));
+    const recoveryKeyPath = path.join(tmpDir, "recovery-key.json");
+    fs.writeFileSync(
+      recoveryKeyPath,
+      JSON.stringify({
+        version: 1,
+        createdAt: new Date().toISOString(),
+        keyId: "SSSSKEY",
+        privateKeyBase64: Buffer.from([1, 2, 3, 4]).toString("base64"),
+      }),
+      "utf8",
+    );
+    const checkKey = vi.fn(async () => true);
+    Object.assign(matrixJsClient, {
+      secretStorage: {
+        getDefaultKeyId: vi.fn(async () => "SSSSKEY"),
+        getKey: vi.fn(async () => [
+          "SSSSKEY",
+          {
+            algorithm: "m.secret_storage.v1.aes-hmac-sha2",
+            iv: "authenticated-iv",
+          },
+        ]),
+        checkKey,
+      },
+    });
+    const client = new MatrixClient("https://matrix.example.org", "token", {
+      encryption: true,
+      recoveryKeyPath,
+    });
+    await (
+      client as unknown as {
+        ensureCryptoSupportInitialized: () => Promise<void>;
+      }
+    ).ensureCryptoSupportInitialized();
+    const bootstrapper = (
+      client as unknown as {
+        cryptoBootstrapper: {
+          deps: { canUnlockSecretStorage: () => Promise<boolean> };
+        };
+      }
+    ).cryptoBootstrapper;
+
+    await expect(bootstrapper.deps.canUnlockSecretStorage()).resolves.toBe(false);
+    expect(checkKey).not.toHaveBeenCalled();
   });
 
   it("provides secret storage callbacks and resolves stored recovery key", async () => {
@@ -1612,7 +1796,6 @@ describe("MatrixClient crypto bootstrapping", () => {
       debug?: (...args: unknown[]) => void;
       getChild?: (namespace: string) => unknown;
     } | null;
-    expect(logger).not.toBeNull();
     expect(logger?.debug).toBeTypeOf("function");
     expect(logger?.getChild).toBeTypeOf("function");
   });
@@ -1625,7 +1808,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     await client.start();
 
-    const startOpts = matrixJsClient.startClient.mock.calls[0]?.[0] as
+    const startOpts = matrixJsClient.startClient.mock.calls.at(0)?.[0] as
       | { filter?: { getDefinition?: () => unknown } }
       | undefined;
     expect(startOpts?.filter?.getDefinition?.()).toEqual({
@@ -1650,7 +1833,14 @@ describe("MatrixClient crypto bootstrapping", () => {
     await client.start();
 
     expect(databasesSpy).toHaveBeenCalled();
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 60_000);
+    const intervalCall = setIntervalSpy.mock.calls.find((call) => call[1] === 60_000) as
+      | unknown[]
+      | undefined;
+    if (!intervalCall) {
+      throw new Error("expected Matrix IDB snapshot interval");
+    }
+    expect(intervalCall[0]).toBeTypeOf("function");
+    expect(intervalCall[1]).toBe(60_000);
     client.stop();
   });
 
@@ -1733,7 +1923,13 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const status = await client.getOwnDeviceVerificationStatus();
     expect(status.verified).toBe(true);
-    expect(status.backup).toBeDefined();
+    expectRecordFields(requireRecord(status.backup, "backup status"), {
+      serverVersion: null,
+      activeVersion: null,
+      trusted: null,
+      keyLoadAttempted: false,
+      keyLoadError: null,
+    });
     expect(status.serverDeviceKnown).toBeNull();
   });
 
@@ -1774,13 +1970,13 @@ describe("MatrixClient crypto bootstrapping", () => {
       localTimeoutMs: 1,
     });
     vi.spyOn(client, "getRoomKeyBackupStatus").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
     vi.spyOn(client, "getDeviceVerificationStatus").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
     vi.spyOn(client, "listOwnDevices").mockImplementation(
-      async () => await new Promise<never>(() => undefined),
+      async () => await new Promise<never>(() => {}),
     );
 
     const status = await client.getOwnDeviceVerificationStatus();
@@ -1844,7 +2040,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const status = await client.getDeviceVerificationStatus("@peer:example.org", "PEERDEVICE");
     expect(getDeviceVerificationStatus).toHaveBeenCalledWith("@peer:example.org", "PEERDEVICE");
-    expect(status).toMatchObject({
+    expectRecordFields(requireRecord(status, "device verification status"), {
       deviceId: "PEERDEVICE",
       encryptionEnabled: true,
       localVerified: true,
@@ -1958,7 +2154,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.backupUsable).toBe(true);
     expect(result.deviceOwnerVerified).toBe(true);
     expect(result.recoveryKeyStored).toBe(true);
-    expect(fs.existsSync(recoveryKeyPath)).toBe(true);
+    expect(readStoredRecoveryKey(recoveryKeyPath)?.encodedPrivateKey).toBe(encoded);
   });
 
   it("fails recovery-key verification when the device lacks full cross-signing identity trust", async () => {
@@ -2054,7 +2250,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.deviceOwnerVerified).toBe(false);
     expect(result.verified).toBe(false);
     expect(result.recoveryKeyStored).toBe(true);
-    expect(fs.existsSync(recoveryKeyPath)).toBe(true);
+    expect(readStoredRecoveryKey(recoveryKeyPath)?.encodedPrivateKey).toBe(encoded);
   });
 
   it("does not persist a staged recovery key when backup usability came from existing material", async () => {
@@ -2123,10 +2319,8 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.success).toBe(false);
     expect(result.recoveryKeyAccepted).toBe(false);
     expect(result.backupUsable).toBe(true);
-    const persisted = JSON.parse(fs.readFileSync(recoveryKeyPath, "utf8")) as {
-      encodedPrivateKey?: string;
-    };
-    expect(persisted.encodedPrivateKey).toBe(previousEncoded);
+    const persisted = readStoredRecoveryKey(recoveryKeyPath);
+    expect(persisted?.encodedPrivateKey).toBe(previousEncoded);
   });
 
   it("does not persist a staged recovery key that secret storage did not validate", async () => {
@@ -2195,10 +2389,8 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.success).toBe(false);
     expect(result.recoveryKeyAccepted).toBe(false);
     expect(result.backupUsable).toBe(true);
-    const persisted = JSON.parse(fs.readFileSync(recoveryKeyPath, "utf8")) as {
-      encodedPrivateKey?: string;
-    };
-    expect(persisted.encodedPrivateKey).toBe(previousEncoded);
+    const persisted = readStoredRecoveryKey(recoveryKeyPath);
+    expect(persisted?.encodedPrivateKey).toBe(previousEncoded);
   });
 
   it("returns recovery-key diagnostics without bootstrapping when backup is already usable", async () => {
@@ -2377,10 +2569,8 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("full Matrix identity trust");
-    const persisted = JSON.parse(fs.readFileSync(recoveryKeyPath, "utf8")) as {
-      encodedPrivateKey?: string;
-    };
-    expect(persisted.encodedPrivateKey).toBe(previousEncoded);
+    const persisted = readStoredRecoveryKey(recoveryKeyPath);
+    expect(persisted?.encodedPrivateKey).toBe(previousEncoded);
   });
 
   it("reports detailed room-key backup health", async () => {
@@ -2456,7 +2646,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     });
 
     const backup = await client.getRoomKeyBackupStatus();
-    expect(backup).toMatchObject({
+    expectRecordFields(requireRecord(backup, "room key backup status"), {
       serverVersion: "9",
       activeVersion: "9",
       trusted: true,
@@ -2500,7 +2690,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     });
 
     const backup = await client.getRoomKeyBackupStatus();
-    expect(backup).toMatchObject({
+    expectRecordFields(requireRecord(backup, "room key backup status"), {
       serverVersion: "49262",
       activeVersion: "49262",
       trusted: true,
@@ -2781,9 +2971,7 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.previousVersion).toBe("21868");
     expect(result.deletedVersion).toBe("21868");
     expect(result.createdVersion).toBe("21869");
-    expect(bootstrapSecretStorage).toHaveBeenCalledWith(
-      expect.objectContaining({ setupNewKeyBackup: true }),
-    );
+    expectSomeMockCallOptions(bootstrapSecretStorage, { setupNewKeyBackup: true });
     expect(checkKeyBackupAndEnable).toHaveBeenCalledTimes(1);
   });
 
@@ -2833,12 +3021,10 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     expect(result.success).toBe(true);
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
-    expect(bootstrapSecretStorage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        setupNewKeyBackup: true,
-        setupNewSecretStorage: true,
-      }),
-    );
+    expectSomeMockCallOptions(bootstrapSecretStorage, {
+      setupNewKeyBackup: true,
+      setupNewSecretStorage: true,
+    });
   });
 
   it("reloads the new backup decryption key after reset when the old cached key mismatches", async () => {
@@ -2987,12 +3173,10 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.createdVersion).toBe("22000");
     // bootstrapSecretStorage must have been called with setupNewSecretStorage: true
     // because the pre-reset bad MAC status triggered forceNewSecretStorage.
-    expect(bootstrapSecretStorage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        setupNewKeyBackup: true,
-        setupNewSecretStorage: true,
-      }),
-    );
+    expectSomeMockCallOptions(bootstrapSecretStorage, {
+      setupNewKeyBackup: true,
+      setupNewSecretStorage: true,
+    });
     expect(loadSessionBackupPrivateKeyFromSecretStorage).toHaveBeenCalledTimes(1);
   });
 
@@ -3044,17 +3228,18 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.previousVersion).toBe(null);
     expect(result.deletedVersion).toBe(null);
     expect(result.createdVersion).toBe("22001");
-    expect(bootstrapSecretStorage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        setupNewKeyBackup: true,
-        setupNewSecretStorage: true,
-      }),
-    );
+    expectSomeMockCallOptions(bootstrapSecretStorage, {
+      setupNewKeyBackup: true,
+      setupNewSecretStorage: true,
+    });
     expect(loadSessionBackupPrivateKeyFromSecretStorage).toHaveBeenCalledTimes(1);
-    expect(doRequest).not.toHaveBeenCalledWith(
-      "DELETE",
-      expect.stringContaining("/room_keys/version/"),
+    const deleteRoomKeyVersionCalls = doRequest.mock.calls.filter(
+      ([method, endpoint]) =>
+        method === "DELETE" &&
+        typeof endpoint === "string" &&
+        endpoint.includes("/room_keys/version/"),
     );
+    expect(deleteRoomKeyVersionCalls).toStrictEqual([]);
   });
 
   it("forces SSSS recreation when backup-secret access returns a falsey callback error before reset", async () => {
@@ -3102,12 +3287,10 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     expect(result.success).toBe(true);
     expect(result.createdVersion).toBe("22002");
-    expect(bootstrapSecretStorage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        setupNewKeyBackup: true,
-        setupNewSecretStorage: true,
-      }),
-    );
+    expectSomeMockCallOptions(bootstrapSecretStorage, {
+      setupNewKeyBackup: true,
+      setupNewSecretStorage: true,
+    });
     expect(loadSessionBackupPrivateKeyFromSecretStorage).toHaveBeenCalledTimes(1);
   });
 
@@ -3193,7 +3376,9 @@ describe("MatrixClient crypto bootstrapping", () => {
     expect(result.success).toBe(true);
     expect(result.verification.verified).toBe(true);
     expect(result.crossSigning.published).toBe(true);
-    expect(result.cryptoBootstrap).not.toBeNull();
+    if (!result.cryptoBootstrap) {
+      throw new Error("expected Matrix crypto bootstrap result");
+    }
   });
 
   it("reports bootstrap failure when the device is only locally trusted", async () => {
@@ -3285,9 +3470,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     expect(result.success).toBe(true);
     expect(result.verification.backupVersion).toBe("7");
-    expect(bootstrapSecretStorage).toHaveBeenCalledWith(
-      expect.objectContaining({ setupNewKeyBackup: true }),
-    );
+    expectSomeMockCallOptions(bootstrapSecretStorage, { setupNewKeyBackup: true });
   });
 
   it("does not recreate key backup during bootstrap when one already exists", async () => {

@@ -1,3 +1,4 @@
+// Normalizes channel config compatibility fields during config loading.
 import {
   normalizeLegacyDmAliases,
   type CompatMutationResult,
@@ -6,6 +7,7 @@ import {
 export { normalizeLegacyDmAliases };
 export type { CompatMutationResult };
 
+/** Resolved streaming values a channel doctor supplies while migrating legacy aliases. */
 export type LegacyStreamingAliasOptions = {
   resolvedMode: string;
   includePreviewChunk?: boolean;
@@ -13,6 +15,7 @@ export type LegacyStreamingAliasOptions = {
   offModeLegacyNotice?: (pathPrefix: string) => string;
 };
 
+/** Account-level channel config passed to channel-specific doctor migrations. */
 export type NormalizeLegacyChannelAccountParams = {
   account: Record<string, unknown>;
   accountId: string;
@@ -20,12 +23,51 @@ export type NormalizeLegacyChannelAccountParams = {
   changes: string[];
 };
 
+/** Narrows unknown config JSON values to mutable object records. */
 export function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
 }
 
+function parseAliasStreamingMode(value: unknown): "off" | "partial" | "block" | "progress" | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === "off" ||
+    normalized === "partial" ||
+    normalized === "block" ||
+    normalized === "progress"
+    ? normalized
+    : null;
+}
+
+/**
+ * Doctor-only stream mode resolution across nested and legacy alias keys.
+ *
+ * Runtime helpers no longer read `streamMode`, so doctor contracts use this to
+ * preserve legacy intent (nested mode > scalar string > streamMode > scalar
+ * boolean) while migrating flat aliases into `streaming.mode`.
+ */
+export function resolveLegacyAliasStreamingMode(
+  entry: Record<string, unknown>,
+  defaultMode: "off" | "partial" | "block" | "progress",
+): "off" | "partial" | "block" | "progress" {
+  const nestedMode = asObjectRecord(entry.streaming)?.mode;
+  const parsed =
+    parseAliasStreamingMode(nestedMode ?? entry.streaming) ??
+    parseAliasStreamingMode(entry.streamMode);
+  if (parsed) {
+    return parsed;
+  }
+  if (typeof entry.streaming === "boolean") {
+    return entry.streaming ? "partial" : "off";
+  }
+  return defaultMode;
+}
+
+/** Checks whether any account entry still carries a channel-specific legacy alias. */
 export function hasLegacyAccountStreamingAliases(
   value: unknown,
   match: (entry: unknown) => boolean,
@@ -40,11 +82,18 @@ export function hasLegacyAccountStreamingAliases(
 function ensureNestedRecord(owner: Record<string, unknown>, key: string): Record<string, unknown> {
   const existing = asObjectRecord(owner[key]);
   if (existing) {
+    // Clone nested records before migration so callers keep immutable before/after snapshots.
     return { ...existing };
   }
   return {};
 }
 
+/**
+ * Moves legacy flat streaming aliases into the nested `streaming` config shape.
+ *
+ * Existing nested values win over legacy aliases, matching doctor migration rules
+ * that preserve explicit modern config while removing stale compatibility keys.
+ */
 export function normalizeLegacyStreamingAliases(
   params: {
     entry: Record<string, unknown>;
@@ -69,12 +118,14 @@ export function normalizeLegacyStreamingAliases(
     return { entry: params.entry, changed: false };
   }
 
-  let updated = { ...params.entry };
+  const updated = { ...params.entry };
   let changed = false;
   const streaming = ensureNestedRecord(updated, "streaming");
   const block = ensureNestedRecord(streaming, "block");
   const preview = ensureNestedRecord(streaming, "preview");
 
+  // Only fill `streaming.mode` when the modern nested field is absent.
+  let movedStreamMode = false;
   if (
     (hadLegacyStreamMode ||
       typeof beforeStreaming === "boolean" ||
@@ -83,6 +134,7 @@ export function normalizeLegacyStreamingAliases(
   ) {
     streaming.mode = params.resolvedMode;
     if (hadLegacyStreamMode) {
+      movedStreamMode = true;
       params.changes.push(
         `Moved ${params.pathPrefix}.streamMode → ${params.pathPrefix}.streaming.mode (${params.resolvedMode}).`,
       );
@@ -98,55 +150,58 @@ export function normalizeLegacyStreamingAliases(
     changed = true;
   }
   if (hadLegacyStreamMode) {
+    if (!movedStreamMode) {
+      // Every mutation needs a change message: doctor discards mutations with
+      // empty change lists, which would leave the schema-invalid flat key in
+      // the persisted config forever.
+      params.changes.push(
+        `Removed ${params.pathPrefix}.streamMode (${params.pathPrefix}.streaming.mode already set).`,
+      );
+    }
     delete updated.streamMode;
     changed = true;
   }
-  if (updated.chunkMode !== undefined && streaming.chunkMode === undefined) {
-    streaming.chunkMode = updated.chunkMode;
-    delete updated.chunkMode;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.chunkMode → ${params.pathPrefix}.streaming.chunkMode.`,
-    );
+  // Each flat alias either moves into the nested slot or, when the nested
+  // value is already set, is removed outright. Leaving the flat key in place
+  // would keep the config schema-invalid after `doctor --fix` because runtime
+  // schemas no longer accept these aliases.
+  const moveOrRemoveAlias = (
+    flatKey: string,
+    target: Record<string, unknown>,
+    slot: string,
+    nestedPath: string,
+  ) => {
+    if (updated[flatKey] === undefined) {
+      return;
+    }
+    const nested = `${params.pathPrefix}.streaming.${nestedPath}`;
+    if (target[slot] === undefined) {
+      target[slot] = updated[flatKey];
+      params.changes.push(`Moved ${params.pathPrefix}.${flatKey} → ${nested}.`);
+    } else {
+      params.changes.push(`Removed ${params.pathPrefix}.${flatKey} (${nested} already set).`);
+    }
+    delete updated[flatKey];
     changed = true;
+  };
+  moveOrRemoveAlias("chunkMode", streaming, "chunkMode", "chunkMode");
+  moveOrRemoveAlias("blockStreaming", block, "enabled", "block.enabled");
+  if (params.includePreviewChunk === true) {
+    moveOrRemoveAlias("draftChunk", preview, "chunk", "preview.chunk");
   }
-  if (updated.blockStreaming !== undefined && block.enabled === undefined) {
-    block.enabled = updated.blockStreaming;
-    delete updated.blockStreaming;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.blockStreaming → ${params.pathPrefix}.streaming.block.enabled.`,
-    );
-    changed = true;
-  }
-  if (
-    params.includePreviewChunk === true &&
-    updated.draftChunk !== undefined &&
-    preview.chunk === undefined
-  ) {
-    preview.chunk = updated.draftChunk;
-    delete updated.draftChunk;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.draftChunk → ${params.pathPrefix}.streaming.preview.chunk.`,
-    );
-    changed = true;
-  }
-  if (updated.blockStreamingCoalesce !== undefined && block.coalesce === undefined) {
-    block.coalesce = updated.blockStreamingCoalesce;
-    delete updated.blockStreamingCoalesce;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.blockStreamingCoalesce → ${params.pathPrefix}.streaming.block.coalesce.`,
-    );
-    changed = true;
-  }
-  if (
-    updated.nativeStreaming !== undefined &&
-    streaming.nativeTransport === undefined &&
-    params.resolvedNativeTransport !== undefined
-  ) {
-    streaming.nativeTransport = params.resolvedNativeTransport;
+  moveOrRemoveAlias("blockStreamingCoalesce", block, "coalesce", "block.coalesce");
+  if (updated.nativeStreaming !== undefined && params.resolvedNativeTransport !== undefined) {
+    if (streaming.nativeTransport === undefined) {
+      streaming.nativeTransport = params.resolvedNativeTransport;
+      params.changes.push(
+        `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
+      );
+    } else {
+      params.changes.push(
+        `Removed ${params.pathPrefix}.nativeStreaming (${params.pathPrefix}.streaming.nativeTransport already set).`,
+      );
+    }
     delete updated.nativeStreaming;
-    params.changes.push(
-      `Moved ${params.pathPrefix}.nativeStreaming → ${params.pathPrefix}.streaming.nativeTransport.`,
-    );
     changed = true;
   } else if (
     typeof beforeStreaming === "boolean" &&
@@ -177,6 +232,12 @@ export function normalizeLegacyStreamingAliases(
   return { entry: updated, changed };
 }
 
+/**
+ * Runs generic channel doctor alias migration for the root entry and accounts.
+ *
+ * Channel plugins provide streaming resolution and optional account-specific
+ * migrations so core can keep one compatibility path for all channel shapes.
+ */
 export function normalizeLegacyChannelAliases(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
@@ -269,6 +330,7 @@ export function normalizeLegacyChannelAliases(params: {
   return { entry: updated, changed };
 }
 
+/** Detects legacy streaming aliases on one channel or account config entry. */
 export function hasLegacyStreamingAliases(
   value: unknown,
   options?: { includePreviewChunk?: boolean; includeNativeTransport?: boolean },

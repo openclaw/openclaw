@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+/**
+ * Tests helper logic for live agent probe configuration and result handling.
+ */
+import { describe, expect, it, vi } from "vitest";
 import {
   assertCronJobMatches,
   assertLiveImageProbeReply,
   buildLiveCronProbeMessage,
   createLiveCronProbeSpec,
   isClaudeLikeLiveAgent,
+  shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
 
 describe("live-agent-probes", () => {
@@ -18,14 +22,21 @@ describe("live-agent-probes", () => {
   });
 
   it("accepts only cat for the shared image probe reply", () => {
-    expect(() => assertLiveImageProbeReply("cat")).not.toThrow();
-    expect(() =>
+    expect(assertLiveImageProbeReply("cat")).toBeUndefined();
+    expect(
       assertLiveImageProbeReply(
         "model metadata for `gpt-5.5` not found. defaulting to fallback metadata; this can degrade performance and cause issues.cat",
       ),
-    ).not.toThrow();
+    ).toBeUndefined();
     expect(() => assertLiveImageProbeReply("horse")).toThrow("image probe expected 'cat'");
     expect(() => assertLiveImageProbeReply("caterpillar")).toThrow("image probe expected 'cat'");
+  });
+
+  it("skips the shared image probe for text-only live agents unless forced", () => {
+    expect(shouldRunLiveImageProbe({ agent: "claude" })).toBe(true);
+    expect(shouldRunLiveImageProbe({ agent: "opencode" })).toBe(false);
+    expect(shouldRunLiveImageProbe({ agent: "opencode", override: "1" })).toBe(true);
+    expect(shouldRunLiveImageProbe({ agent: "claude", override: "0" })).toBe(false);
   });
 
   it("builds a retryable cron prompt with provider-specific fallback wording", () => {
@@ -33,14 +44,19 @@ describe("live-agent-probes", () => {
       agentId: "codex",
       sessionKey: "agent:codex:acp:test",
     });
-    expect(
-      buildLiveCronProbeMessage({
-        agent: "claude-cli",
-        argsJson: spec.argsJson,
-        attempt: 1,
-        exactReply: spec.name,
-      }),
-    ).toContain("Preserve job.sessionTarget and job.sessionKey exactly as provided.");
+    const claudeRetryPrompt = buildLiveCronProbeMessage({
+      agent: "claude-cli",
+      argsJson: spec.argsJson,
+      attempt: 1,
+      exactReply: spec.name,
+    });
+    expect(claudeRetryPrompt).toContain(
+      "Preserve job.sessionTarget and job.sessionKey exactly as provided.",
+    );
+    expect(claudeRetryPrompt).toContain("search/load MCP tools for `openclaw cron` or `cron`");
+    expect(claudeRetryPrompt).toContain("mcp__openclaw__cron");
+    expect(claudeRetryPrompt).toContain("Do not use Claude native `CronCreate`");
+    expect(claudeRetryPrompt).not.toContain("openclaw-tools");
     expect(
       buildLiveCronProbeMessage({
         agent: "future-agent",
@@ -57,19 +73,32 @@ describe("live-agent-probes", () => {
         exactReply: spec.name,
       }),
     ).toContain("previous OpenClaw cron MCP tool call was cancelled");
-    expect(JSON.parse(spec.argsJson)).toEqual(
-      expect.objectContaining({
-        job: expect.objectContaining({
-          sessionTarget: "session:agent:codex:acp:test",
-          agentId: "codex",
-          sessionKey: "agent:codex:acp:test",
-        }),
-      }),
-    );
+    const args = JSON.parse(spec.argsJson) as {
+      job?: { sessionTarget?: string; agentId?: string; sessionKey?: string };
+    };
+    expect(args.job?.sessionTarget).toBe("session:agent:codex:acp:test");
+    expect(args.job?.agentId).toBe("codex");
+    expect(args.job?.sessionKey).toBe("agent:codex:acp:test");
+  });
+
+  it("builds a cron probe spec when the process clock is outside the Date range", () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+
+    try {
+      const spec = createLiveCronProbeSpec();
+      const args = JSON.parse(spec.argsJson) as {
+        job?: { schedule?: { at?: string } };
+      };
+
+      expect(spec.at).toBe("1970-01-01T00:00:00.000Z");
+      expect(args.job?.schedule?.at).toBe("1970-01-01T00:00:00.000Z");
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("validates cron cli job shape for the shared live probe", () => {
-    expect(() =>
+    expect(
       assertCronJobMatches({
         job: {
           name: "live-mcp-abc",
@@ -82,6 +111,6 @@ describe("live-agent-probes", () => {
         expectedMessage: "probe-abc",
         expectedSessionKey: "agent:dev:test",
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 });

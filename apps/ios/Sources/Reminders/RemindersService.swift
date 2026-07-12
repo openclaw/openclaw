@@ -3,16 +3,25 @@ import Foundation
 import OpenClawKit
 
 final class RemindersService: RemindersServicing {
+    private let reminderAuthorizationStatus: @Sendable () -> EKAuthorizationStatus
+
+    init(
+        reminderAuthorizationStatus: @escaping @Sendable () -> EKAuthorizationStatus = {
+            EKEventStore.authorizationStatus(for: .reminder)
+        })
+    {
+        self.reminderAuthorizationStatus = reminderAuthorizationStatus
+    }
+
     func list(params: OpenClawRemindersListParams) async throws -> OpenClawRemindersListPayload {
-        let store = EKEventStore()
-        let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized = EventKitAuthorization.allowsRead(status: status)
-        guard authorized else {
+        let status = self.reminderAuthorizationStatus()
+        guard EventKitAuthorization.allowsRead(status: status) else {
             throw NSError(domain: "Reminders", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])
         }
 
+        let store = EKEventStore()
         let limit = max(1, min(params.limit ?? 50, 500))
         let statusFilter = params.status ?? .incomplete
 
@@ -48,15 +57,14 @@ final class RemindersService: RemindersServicing {
     }
 
     func add(params: OpenClawRemindersAddParams) async throws -> OpenClawRemindersAddPayload {
-        let store = EKEventStore()
-        let status = EKEventStore.authorizationStatus(for: .reminder)
-        let authorized = EventKitAuthorization.allowsWrite(status: status)
-        guard authorized else {
+        let status = self.reminderAuthorizationStatus()
+        guard EventKitAuthorization.allowsWrite(status: status) else {
             throw NSError(domain: "Reminders", code: 2, userInfo: [
                 NSLocalizedDescriptionKey: "REMINDERS_PERMISSION_REQUIRED: grant Reminders permission",
             ])
         }
 
+        let store = EKEventStore()
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else {
             throw NSError(domain: "Reminders", code: 3, userInfo: [

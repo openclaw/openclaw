@@ -1,3 +1,4 @@
+// Telegram helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const telegramChannelConfigUiHints = {
@@ -21,6 +22,22 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Config Writes",
     help: "Allow Telegram to write config in response to channel events/commands (default: true).",
   },
+  mentionPatterns: {
+    label: "Telegram Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Telegram group chat IDs or chatId:topic:threadId topic IDs. Native Telegram bot mentions still trigger even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Telegram Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Telegram Mention Pattern Allowlist",
+    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Telegram Mention Pattern Denylist",
+    help: "Telegram group chat IDs or chatId:topic:threadId topic IDs where configured regex mention patterns are disabled. Native bot mentions still trigger.",
+  },
   "commands.native": {
     label: "Telegram Native Commands",
     help: 'Override native commands for Telegram (bool or "auto").',
@@ -31,15 +48,19 @@ export const telegramChannelConfigUiHints = {
   },
   streaming: {
     label: "Telegram Streaming Mode",
-    help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
+    help: 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
   },
   "streaming.mode": {
     label: "Telegram Streaming Mode",
-    help: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "partial"). "progress" maps to "partial" on Telegram.',
+    help: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "partial").',
   },
   "streaming.chunkMode": {
     label: "Telegram Chunk Mode",
     help: 'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
+  },
+  richMessages: {
+    label: "Telegram Rich Messages",
+    help: "Opt into Bot API 10.1 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
   },
   "streaming.block.enabled": {
     label: "Telegram Block Streaming Enabled",
@@ -64,6 +85,38 @@ export const telegramChannelConfigUiHints = {
   "streaming.preview.toolProgress": {
     label: "Telegram Draft Tool Progress",
     help: "Show tool/progress activity in the live draft preview message (default: true when preview streaming is active). Set false to keep tool updates out of the edited Telegram preview.",
+  },
+  "streaming.preview.commandText": {
+    label: "Telegram Draft Command Text",
+    help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
+  "streaming.progress.label": {
+    label: "Telegram Progress Label",
+    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
+  },
+  "streaming.progress.labels": {
+    label: "Telegram Progress Label Pool",
+    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
+  },
+  "streaming.progress.maxLines": {
+    label: "Telegram Progress Max Lines",
+    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
+  },
+  "streaming.progress.maxLineChars": {
+    label: "Telegram Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
+  "streaming.progress.toolProgress": {
+    label: "Telegram Progress Tool Lines",
+    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+  },
+  "streaming.progress.commandText": {
+    label: "Telegram Progress Command Text",
+    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
+  },
+  "streaming.progress.commentary": {
+    label: "Telegram Progress Commentary",
+    help: "Show assistant commentary/preamble text in the temporary progress draft. Final answer delivery is unchanged.",
   },
   "retry.attempts": {
     label: "Telegram Retry Attempts",
@@ -93,6 +146,10 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram API Timeout (seconds)",
     help: "Max seconds before Telegram API requests are aborted (default: 500 per grammY).",
   },
+  mediaGroupFlushMs: {
+    label: "Telegram Media Group Flush (ms)",
+    help: "Milliseconds to buffer Telegram albums/media groups before dispatching them as one inbound message. Default: 500.",
+  },
   pollingStallThresholdMs: {
     label: "Telegram Polling Stall Threshold (ms)",
     help: "Milliseconds without completed Telegram getUpdates liveness before the polling watchdog restarts the polling runner. Default: 120000.",
@@ -107,7 +164,7 @@ export const telegramChannelConfigUiHints = {
   },
   trustedLocalFileRoots: {
     label: "Telegram Trusted Local File Roots",
-    help: "Trusted local filesystem roots for self-hosted Telegram Bot API absolute file_path values. Only absolute paths inside these roots are read directly; all other absolute paths are rejected.",
+    help: "Trusted local filesystem roots for self-hosted Telegram Bot API file_path values. Exact in-root paths are read directly; container paths under /var/lib/telegram-bot-api can map into a host volume mount. Other absolute paths are rejected.",
   },
   autoTopicLabel: {
     label: "Telegram Auto Topic Label",
@@ -161,12 +218,12 @@ export const telegramChannelConfigUiHints = {
     label: "Telegram Thread Binding Max Age (hours)",
     help: "Optional hard max age in hours for Telegram bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
   },
-  "threadBindings.spawnSubagentSessions": {
-    label: "Telegram Thread-Bound Subagent Spawn",
-    help: "Allow subagent spawns with thread=true to auto-bind Telegram current conversations when supported.",
+  "threadBindings.spawnSessions": {
+    label: "Telegram Thread-Bound Session Spawn",
+    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-bind Telegram current conversations when supported.",
   },
-  "threadBindings.spawnAcpSessions": {
-    label: "Telegram Thread-Bound ACP Spawn",
-    help: "Allow ACP spawns with thread=true to auto-bind Telegram current conversations when supported.",
+  "threadBindings.defaultSpawnContext": {
+    label: "Telegram Thread Spawn Context",
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
 } satisfies Record<string, ChannelConfigUiHint>;

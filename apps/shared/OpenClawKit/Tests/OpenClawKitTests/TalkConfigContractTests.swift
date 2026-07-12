@@ -9,7 +9,6 @@ private struct TalkConfigContractFixture: Decodable {
     struct SelectionCase: Decodable {
         let id: String
         let defaultProvider: String
-        let payloadValid: Bool
         let expectedSelection: ExpectedSelection?
         let talk: [String: AnyCodable]
 
@@ -58,7 +57,7 @@ private enum TalkConfigContractFixtureLoader {
     private static func findFixtureURL(startingAt fileURL: URL) throws -> URL {
         var directory = fileURL.deletingLastPathComponent()
         while directory.path != "/" {
-            let candidate = directory.appendingPathComponent("test-fixtures/talk-config-contract.json")
+            let candidate = directory.appendingPathComponent("test/fixtures/talk-config-contract.json")
             if FileManager.default.fileExists(atPath: candidate.path) {
                 return candidate
             }
@@ -69,7 +68,7 @@ private enum TalkConfigContractFixtureLoader {
 }
 
 struct TalkConfigContractTests {
-    @Test func selectionFixtures() throws {
+    @Test func `selection fixtures`() throws {
         for fixture in try TalkConfigContractFixtureLoader.load().selectionCases {
             let selection = TalkConfigParsing.selectProviderConfig(
                 fixture.gatewayResponseTalk,
@@ -83,11 +82,10 @@ struct TalkConfigContractTests {
             } else {
                 #expect(selection == nil)
             }
-            #expect(fixture.payloadValid == (selection != nil))
         }
     }
 
-    @Test func timeoutFixtures() throws {
+    @Test func `timeout fixtures`() throws {
         for fixture in try TalkConfigContractFixtureLoader.load().timeoutCases {
             #expect(
                 TalkConfigParsing.resolvedSilenceTimeoutMs(

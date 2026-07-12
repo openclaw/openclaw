@@ -1,3 +1,4 @@
+// Feishu tests cover comment shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   parseCommentContentElements,
@@ -171,12 +172,13 @@ describe("parseCommentContentElements", () => {
       `https://bytedance.larkoffice.com/docx/${VALID_TOKEN_27} 和 https://www.baidu.com/docx/guide`,
     );
     expect(parsed.linkedDocuments).toEqual([
-      expect.objectContaining({
+      {
         rawUrl: `https://bytedance.larkoffice.com/docx/${VALID_TOKEN_27}`,
         urlKind: "docx",
         resolvedObjType: "docx",
         resolvedObjToken: VALID_TOKEN_27,
-      }),
+        isCurrentDocument: false,
+      },
     ]);
   });
 });

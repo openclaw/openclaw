@@ -7,17 +7,17 @@ read_when:
 title: "Migrating from Hermes"
 ---
 
-OpenClaw imports Hermes state through a bundled migration provider. The provider previews everything before changing state, redacts secrets in plans and reports, and creates a verified backup before apply.
+The bundled Hermes migration provider detects state at `~/.hermes`, previews every change before applying, redacts secrets in plans and reports, and writes a verified OpenClaw backup before it touches anything.
 
 <Note>
-Imports require a fresh OpenClaw setup. If you already have local OpenClaw state, reset config, credentials, sessions, and the workspace first, or use `openclaw migrate` directly with `--overwrite` after reviewing the plan.
+Imports require a fresh OpenClaw setup. If you already have local OpenClaw state, reset config, credentials, sessions, and the workspace first, or use `openclaw migrate apply hermes` directly with `--overwrite` after reviewing the plan.
 </Note>
 
 ## Two ways to import
 
 <Tabs>
   <Tab title="Onboarding wizard">
-    The fastest path. The wizard detects Hermes at `~/.hermes` and shows a preview before applying.
+    Detects Hermes at `~/.hermes` and shows a preview before applying.
 
     ```bash
     openclaw onboard --flow import
@@ -65,8 +65,8 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
   <Accordion title="Skills">
     Skills with a `SKILL.md` file under `skills/<name>/` are copied, along with per-skill config values from `skills.config`.
   </Accordion>
-  <Accordion title="API keys (opt-in)">
-    Set `--include-secrets` to import supported `.env` keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`. Without the flag, secrets are never copied.
+  <Accordion title="Auth credentials">
+    Interactive `openclaw migrate` asks before importing auth credentials, with yes selected by default. Accepting imports OpenCode OpenAI OAuth and GitHub Copilot entries from OpenCode's `auth.json`, plus the [supported Hermes `.env` keys](/cli/migrate#supported-env-keys). Hermes's own `auth.json` OAuth entries are legacy state: they surface as a manual reauth/doctor item instead of importing into live auth. Use `--include-secrets` to import credentials in a non-interactive run, `--no-auth-credentials` to skip credential import entirely, or the onboarding wizard's `--import-secrets` flag.
   </Accordion>
 </AccordionGroup>
 
@@ -79,10 +79,9 @@ The provider copies these into the migration report directory for manual review,
 - `logs/`
 - `cron/`
 - `mcp-tokens/`
-- `auth.json`
 - `state.db`
 
-OpenClaw refuses to execute or trust this state automatically because the formats and trust assumptions can drift between systems. Move what you need by hand after reviewing the archive.
+OpenClaw refuses to execute or trust this state automatically because formats and trust assumptions can drift between systems. Move what you need by hand after reviewing the archive.
 
 ## Recommended flow
 
@@ -92,7 +91,7 @@ OpenClaw refuses to execute or trust this state automatically because the format
     openclaw migrate hermes --dry-run
     ```
 
-    The plan lists everything that will change, including conflicts, skipped items, and any sensitive items. Plan output redacts nested secret-looking keys.
+    The plan lists everything that will change, including conflicts, skipped items, and sensitive items. Nested secret-looking keys are redacted in the output.
 
   </Step>
   <Step title="Apply with backup">
@@ -100,7 +99,7 @@ OpenClaw refuses to execute or trust this state automatically because the format
     openclaw migrate apply hermes --yes
     ```
 
-    OpenClaw creates and verifies a backup before applying. If you need API keys imported, add `--include-secrets`.
+    OpenClaw creates and verifies a backup before applying. This non-interactive example imports non-secret state only. Run without `--yes` to answer the credential prompt interactively, or add `--include-secrets` to include supported credentials in an unattended run.
 
   </Step>
   <Step title="Run doctor">
@@ -130,17 +129,18 @@ Apply refuses to continue when the plan reports conflicts (a file or config valu
 Rerun with `--overwrite` only when replacing the existing target is intentional. Providers may still write item-level backups for overwritten files in the migration report directory.
 </Warning>
 
-For a fresh OpenClaw install, conflicts are unusual. They typically appear when you re-run the import on a setup that already has user edits.
+Conflicts are unusual on a fresh install. They typically show up when you re-run the import against a setup that already has user edits.
 
 If a conflict surfaces mid-apply (for example, an unexpected race on a config file), Hermes marks remaining dependent config items as `skipped` with reason `blocked by earlier apply conflict` instead of writing them partially. The migration report records each blocked item so you can resolve the original conflict and rerun the import.
 
 ## Secrets
 
-Secrets are never imported by default.
+Interactive `openclaw migrate` asks whether to import detected auth credentials, with yes selected by default.
 
-- Run `openclaw migrate apply hermes --yes` first to import non-secret state.
-- If you also want supported `.env` keys copied across, rerun with `--include-secrets`.
-- For SecretRef-managed credentials, configure the SecretRef source after the import completes.
+- Accepting imports OpenCode OpenAI OAuth and GitHub Copilot entries from OpenCode's `auth.json`, plus the [supported `.env` keys](/cli/migrate#supported-env-keys). Hermes's own `auth.json` OAuth entries are reported for manual OpenAI reauth or doctor repair instead.
+- Use `--no-auth-credentials`, or answer no at the prompt, to import non-secret state only.
+- Use `--include-secrets` to import credentials in an unattended `--yes` run.
+- Use the onboarding wizard's `--import-secrets` flag to import credentials from the wizard.
 
 ## JSON output for automation
 
@@ -149,7 +149,7 @@ openclaw migrate hermes --dry-run --json
 openclaw migrate apply hermes --json --yes
 ```
 
-With `--json` and no `--yes`, apply prints the plan and does not mutate state. This is the safest mode for CI and shared scripts.
+With `--json` and no `--yes`, apply prints the plan and does not mutate state — the safest mode for CI and shared scripts.
 
 ## Troubleshooting
 
@@ -164,7 +164,7 @@ With `--json` and no `--yes`, apply prints the plan and does not mutate state. T
     Onboarding imports require a fresh setup. Either reset state and re-onboard, or use `openclaw migrate apply hermes` directly, which supports `--overwrite` and explicit backup control.
   </Accordion>
   <Accordion title="API keys did not import">
-    `--include-secrets` is required, and only the keys listed above are recognized. Other variables in `.env` are ignored.
+    Interactive `openclaw migrate` imports API keys only when you accept the credential prompt. Non-interactive `--yes` runs need `--include-secrets`; onboarding imports need `--import-secrets`. Only the [supported `.env` keys](/cli/migrate#supported-env-keys) are recognized — other `.env` variables are ignored.
   </Accordion>
 </AccordionGroup>
 

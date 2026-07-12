@@ -2,7 +2,7 @@
 // Every tool returns the same { ok: false, code, message, canonicalPath? }
 // shape so the model can reason about errors uniformly.
 
-export type FileTransferErrCode =
+type FileTransferErrCode =
   // Path-shape errors (caller's fault)
   | "INVALID_PATH"
   | "INVALID_BASE64"
@@ -27,7 +27,7 @@ export type FileTransferErrCode =
   | "POLICY_DENIED"
   | "NO_POLICY";
 
-export type FileTransferErr = {
+type FileTransferErr = {
   ok: false;
   code: FileTransferErrCode;
   message: string;
@@ -40,21 +40,6 @@ export function err(
   canonicalPath?: string,
 ): FileTransferErr {
   return { ok: false, code, message, ...(canonicalPath ? { canonicalPath } : {}) };
-}
-
-// Translate a node-side fs error to a public error code.
-export function classifyFsError(e: unknown): FileTransferErrCode {
-  const code = (e as { code?: string } | null)?.code;
-  if (code === "ENOENT") {
-    return "NOT_FOUND";
-  }
-  if (code === "EACCES" || code === "EPERM") {
-    return "PERMISSION_DENIED";
-  }
-  if (code === "EISDIR") {
-    return "IS_DIRECTORY";
-  }
-  return "READ_ERROR";
 }
 
 // Convert a node-host error payload to a thrown Error for agent-tool consumption.

@@ -1,20 +1,34 @@
+// Covers core TUI state transitions and backend event rendering.
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../infra/parse-finite-number.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+import { withEnv } from "../test-utils/env.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  canSubmitTuiChatMessage,
+  createDeferredTuiFinish,
   drainAndStopTuiSafely,
+  installTuiTerminalLossExitHandler,
   isIgnorableTuiStopError,
+  isTuiTerminalLossError,
   resolveCodexCliBin,
   resolveCtrlCAction,
   resolveFinalAssistantText,
   resolveGatewayDisconnectState,
   resolveInitialTuiAgentId,
+  resolveTuiToolsToggleActivityStatus,
+  isTuiBusyActivityStatus,
   resolveLocalAuthCliInvocation,
   resolveLocalAuthSpawnCwd,
-  resolveLocalAuthSpawnOptions,
+  resolveLocalAuthSpawnInvocation,
+  resolveTuiCtrlCAction,
+  resolveTuiFooterHostLabel,
+  resolveTuiShutdownHardExitMs,
   resolveTuiSessionKey,
+  scheduleProcessExitAfterTuiReturn,
   stopTuiSafely,
 } from "./tui.js";
 
@@ -53,6 +67,40 @@ describe("resolveFinalAssistantText", () => {
   });
 });
 
+describe("resolveTuiFooterHostLabel", () => {
+  it("hides connection host by default", () => {
+    expect(
+      resolveTuiFooterHostLabel({
+        config: {},
+        connectionUrl: "wss://gateway.example.com/ws",
+      }),
+    ).toBeNull();
+  });
+
+  it("renders only remote hosts when explicitly enabled", () => {
+    const config = { tui: { footer: { showRemoteHost: true } } } satisfies OpenClawConfig;
+
+    expect(
+      resolveTuiFooterHostLabel({
+        config,
+        connectionUrl: "wss://user:secret@gateway.example.com/ws?token=hidden",
+      }),
+    ).toBe("host gateway.example.com");
+    expect(
+      resolveTuiFooterHostLabel({
+        config,
+        connectionUrl: "ws://127.0.0.1:18789",
+      }),
+    ).toBeNull();
+    expect(
+      resolveTuiFooterHostLabel({
+        config,
+        connectionUrl: "local embedded",
+      }),
+    ).toBeNull();
+  });
+});
+
 describe("tui slash commands", () => {
   it("treats /elev as an alias for /elevated", () => {
     expect(parseCommand("/elev on")).toEqual({ name: "elevated", args: "on" });
@@ -67,13 +115,135 @@ describe("tui slash commands", () => {
 
   it("includes gateway text commands", () => {
     const commands = getSlashCommands({});
-    expect(commands.some((command) => command.name === "context")).toBe(true);
-    expect(commands.some((command) => command.name === "commands")).toBe(true);
+    const names = commands.map((command) => command.name);
+    expect(names).toContain("context");
+    expect(names).toContain("commands");
   });
 
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
-    expect(commands.some((command) => command.name === "auth")).toBe(true);
+    expect(commands.map((command) => command.name)).toContain("auth");
+  });
+});
+
+describe("canSubmitTuiChatMessage", () => {
+  it("allows submit when no run registration is pending", () => {
+    expect(canSubmitTuiChatMessage({})).toBe(true);
+  });
+
+  it("allows submit while a run is active so the backend owns queue policy", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        activeChatRunId: "run-active",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows stop text while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        activeChatRunId: "run-active",
+        message: "please stop",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows stop text while a queued run is pending", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        activeChatRunId: "run-active",
+        pendingChatRunId: "run-queued",
+        message: "please stop",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks submits with pending optimistic state", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks submits with a pending chat run id", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingChatRunId: "run-pending",
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks submit while optimistic state is pending during an active run", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        activeChatRunId: "run-active",
+        pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isTuiBusyActivityStatus", () => {
+  it("treats finishing context as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
+  });
+
+  it("treats post-connect initialization as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("starting up")).toBe(true);
+  });
+});
+
+describe("resolveTuiToolsToggleActivityStatus", () => {
+  it("preserves busy status while an active run exists", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "streaming",
+        toolsExpanded: true,
+      }),
+    ).toBe("streaming");
+  });
+
+  it("preserves finishing context after the active run id clears", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "finishing context",
+        toolsExpanded: false,
+      }),
+    ).toBe("finishing context");
+  });
+
+  it("uses the tool toggle status when activity is idle", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "idle",
+        toolsExpanded: false,
+      }),
+    ).toBe("tools collapsed");
+  });
+});
+
+describe("resolveTuiShutdownHardExitMs", () => {
+  it("keeps gateway shutdown bounded by the hard-exit timer", () => {
+    expect(resolveTuiShutdownHardExitMs({ localMode: false })).toBe(2000);
+  });
+
+  it("adds local run shutdown grace before forcing embedded shutdown", () => {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456" }, () => {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(5456);
+    });
+  });
+
+  it("ignores partial local run shutdown grace values", () => {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: "3456abc" }, () => {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(122000);
+    });
+  });
+
+  it("clamps oversized local run shutdown grace values", () => {
+    withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(MAX_TIMER_TIMEOUT_MS + 2000);
+    });
   });
 });
 
@@ -172,14 +342,39 @@ describe("resolveInitialTuiAgentId", () => {
       }),
     ).toBe("main");
   });
+
+  it("falls back when the working directory was deleted", () => {
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("ENOENT: uv_cwd");
+    });
+
+    try {
+      expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main" })).toBe("main");
+    } finally {
+      cwdSpy.mockRestore();
+    }
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {
-  it("returns pairing recovery guidance when disconnect reason requires pairing", () => {
+  it("returns scope-upgrade recovery guidance when disconnect reason requires pairing", () => {
     const state = resolveGatewayDisconnectState("gateway closed (1008): pairing required");
     expect(state.connectionStatus).toContain("pairing required");
-    expect(state.activityStatus).toBe("pairing required: run openclaw devices list");
-    expect(state.pairingHint).toContain("openclaw devices list");
+    expect(state.activityStatus).toBe("device approval needed: preview latest request");
+    expect(state.pairingHint).toContain("openclaw devices approve --latest");
+    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
+    expect(state.pairingHint).toContain("--token");
+    // Must steer users to `devices`, not the unrelated chat-DM `pairing` command.
+    expect(state.pairingHint).not.toContain("openclaw pairing");
+  });
+
+  it("returns the same guidance when the gateway reports a pending scope upgrade", () => {
+    const state = resolveGatewayDisconnectState(
+      "gateway closed (1008): scope upgrade pending approval",
+    );
+    expect(state.activityStatus).toBe("device approval needed: preview latest request");
+    expect(state.pairingHint).toContain("openclaw devices approve --latest");
+    expect(state.pairingHint).toContain("openclaw devices approve <requestId>");
   });
 
   it("falls back to idle for generic disconnect reasons", () => {
@@ -259,6 +454,36 @@ describe("resolveCtrlCAction", () => {
   });
 });
 
+describe("resolveTuiCtrlCAction", () => {
+  it("exits immediately after a gateway disconnect", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+        wasDisconnected: true,
+      }),
+    ).toEqual({
+      action: "exit",
+      nextLastCtrlCAt: 0,
+    });
+  });
+
+  it("forces exit when shutdown is already in progress", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: false,
+        now: 2000,
+        lastCtrlCAt: 1000,
+        exitRequested: true,
+      }),
+    ).toEqual({
+      action: "force-exit",
+      nextLastCtrlCAt: 1000,
+    });
+  });
+});
+
 describe("TUI shutdown safety", () => {
   it("drains terminal input before stopping the TUI", async () => {
     const calls: string[] = [];
@@ -275,6 +500,7 @@ describe("TUI shutdown safety", () => {
     });
 
     expect(drainInput).toHaveBeenCalledOnce();
+    expect(drainInput).toHaveBeenCalledWith(500, 100);
     expect(stop).toHaveBeenCalledOnce();
     expect(calls).toEqual(["drain", "stop"]);
   });
@@ -323,11 +549,11 @@ describe("TUI shutdown safety", () => {
   });
 
   it("swallows only ignorable stop errors", () => {
-    expect(() => {
+    expect(
       stopTuiSafely(() => {
         throw new Error("setRawMode EBADF");
-      });
-    }).not.toThrow();
+      }),
+    ).toBeUndefined();
   });
 
   it("rethrows non-ignorable stop errors", () => {
@@ -336,6 +562,64 @@ describe("TUI shutdown safety", () => {
         throw new Error("boom");
       });
     }).toThrow("boom");
+  });
+
+  it("classifies terminal-loss IO errors", () => {
+    expect(isTuiTerminalLossError({ code: "EIO", syscall: "read" })).toBe(true);
+    expect(isTuiTerminalLossError({ code: "EPIPE", syscall: "write" })).toBe(true);
+    expect(isTuiTerminalLossError(new Error("read EIO at TTY.onStreamRead"))).toBe(true);
+    expect(isTuiTerminalLossError(new Error("ordinary failure"))).toBe(false);
+  });
+
+  it("requests exit once when the TUI terminal closes", () => {
+    const stdin = new EventEmitter() as EventEmitter & {
+      on(event: "close" | "end", listener: () => void): unknown;
+      off(event: "close" | "end", listener: () => void): unknown;
+    };
+    const stdout = new EventEmitter() as EventEmitter & {
+      on(event: "close" | "end", listener: () => void): unknown;
+      off(event: "close" | "end", listener: () => void): unknown;
+    };
+    const requestExit = vi.fn();
+
+    const cleanup = installTuiTerminalLossExitHandler(requestExit, { stdin, stdout });
+    stdin.emit("end");
+    stdout.emit("close");
+    cleanup();
+    stdin.emit("close");
+
+    expect(requestExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves terminal-loss exits requested before the TUI finish handler is installed", () => {
+    const deferredFinish = createDeferredTuiFinish();
+    const finish = vi.fn();
+
+    deferredFinish.requestFinish();
+    expect(finish).not.toHaveBeenCalled();
+
+    deferredFinish.setFinish(finish);
+    expect(finish).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules a process-exit guard after standalone TUI return", () => {
+    let callback: (() => void) | undefined;
+    const unref = vi.fn();
+    const setTimeoutFn = vi.fn((fn: () => void, ms: number) => {
+      callback = fn;
+      expect(ms).toBe(2000);
+      return { unref };
+    });
+    const exit = vi.fn();
+    const writeStderr = vi.fn();
+
+    scheduleProcessExitAfterTuiReturn({ setTimeoutFn, exit, writeStderr });
+
+    expect(setTimeoutFn).toHaveBeenCalledOnce();
+    expect(unref).toHaveBeenCalledOnce();
+    callback?.();
+    expect(writeStderr).toHaveBeenCalledWith("openclaw tui forcing process exit after return\n");
+    expect(exit).toHaveBeenCalledWith(0);
   });
 });
 
@@ -351,10 +635,12 @@ describe("resolveCodexCliBin", () => {
   });
 
   it("returns null or a valid path (never throws)", () => {
-    // The function should never throw regardless of environment
-    expect(() => resolveCodexCliBin()).not.toThrow();
     const result = resolveCodexCliBin();
-    expect(result === null || typeof result === "string").toBe(true);
+    if (result === null) {
+      expect(result).toBeNull();
+    } else {
+      expect(typeof result).toBe("string");
+    }
   });
 });
 
@@ -390,38 +676,50 @@ describe("resolveLocalAuthCliInvocation", () => {
   });
 });
 
-describe("resolveLocalAuthSpawnOptions", () => {
-  it("enables shell mode for Windows cmd shims", () => {
+describe("resolveLocalAuthSpawnInvocation", () => {
+  it("wraps Windows cmd shims through cmd.exe", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toEqual({ shell: true });
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd login"],
+      options: { windowsHide: true, windowsVerbatimArguments: true },
+    });
   });
 
-  it("enables shell mode for Windows bat shims", () => {
+  it("wraps spaced Windows bat shim paths with outer command-line quoting", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
-        command: "C:\\tools\\codex.bat",
+      resolveLocalAuthSpawnInvocation({
+        command: "C:\\Program Files\\Codex\\codex.bat",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toEqual({ shell: true });
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", '""C:\\Program Files\\Codex\\codex.bat" login"'],
+      options: { windowsHide: true, windowsVerbatimArguments: true },
+    });
   });
 
   it("keeps direct execution for non-wrapper commands", () => {
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "/usr/local/bin/codex",
+        args: ["login"],
         platform: "linux",
       }),
-    ).toEqual({});
+    ).toStrictEqual({ command: "/usr/local/bin/codex", args: ["login"], options: {} });
     expect(
-      resolveLocalAuthSpawnOptions({
+      resolveLocalAuthSpawnInvocation({
         command: "C:\\tools\\codex.exe",
+        args: ["login"],
         platform: "win32",
       }),
-    ).toEqual({});
+    ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
   });
 });
 

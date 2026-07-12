@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Line tests cover outbound media plugin behavior.
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ssrfMocks = vi.hoisted(() => ({
   resolvePinnedHostnameWithPolicy: vi.fn(),
@@ -8,11 +9,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
 }));
 
-import {
-  detectLineMediaKind,
-  resolveLineOutboundMedia,
-  validateLineMediaUrl,
-} from "./outbound-media.js";
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
+
+import { resolveLineOutboundMedia, validateLineMediaUrl } from "./outbound-media.js";
 
 describe("validateLineMediaUrl", () => {
   beforeEach(() => {
@@ -62,28 +64,6 @@ describe("validateLineMediaUrl", () => {
     expect(ssrfMocks.resolvePinnedHostnameWithPolicy).toHaveBeenCalledWith("127.0.0.1", {
       policy: { allowPrivateNetwork: false },
     });
-  });
-});
-
-describe("detectLineMediaKind", () => {
-  it("maps image MIME to image", () => {
-    expect(detectLineMediaKind("image/jpeg")).toBe("image");
-  });
-
-  it("maps uppercase image MIME to image", () => {
-    expect(detectLineMediaKind("IMAGE/JPEG")).toBe("image");
-  });
-
-  it("maps video MIME to video", () => {
-    expect(detectLineMediaKind("video/mp4")).toBe("video");
-  });
-
-  it("maps audio MIME to audio", () => {
-    expect(detectLineMediaKind("audio/mpeg")).toBe("audio");
-  });
-
-  it("falls back unknown MIME to image", () => {
-    expect(detectLineMediaKind("application/octet-stream")).toBe("image");
   });
 });
 

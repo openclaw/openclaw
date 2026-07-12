@@ -1,11 +1,18 @@
+// Browser tests cover request policy plugin behavior.
 import { describe, expect, it } from "vitest";
-import { isPersistentBrowserProfileMutation } from "./request-policy.js";
+import {
+  isBrowserHostLocalRoute,
+  isBrowserSystemProfileImport,
+  isPersistentBrowserProfileMutation,
+} from "./request-policy.js";
 import { matchBrowserUrlPattern } from "./url-pattern.js";
 
 describe("isPersistentBrowserProfileMutation", () => {
   it.each([
     ["POST", "/profiles/create"],
     ["POST", "profiles/create"],
+    ["POST", "/profiles/import"],
+    ["POST", "profiles/import"],
     ["POST", "/reset-profile"],
     ["POST", "reset-profile"],
     ["DELETE", "/profiles/poc"],
@@ -25,6 +32,49 @@ describe("isPersistentBrowserProfileMutation", () => {
   });
 });
 
+describe("isBrowserSystemProfileImport", () => {
+  it.each([
+    ["POST", "/profiles/import"],
+    ["POST", "profiles/import"],
+    ["POST", "/profiles/import/"],
+  ])("recognizes the host-local import route for %s %s", (method, path) => {
+    expect(isBrowserSystemProfileImport(method, path)).toBe(true);
+  });
+
+  it.each([
+    ["GET", "/profiles/import"],
+    ["POST", "/profiles/create"],
+    ["POST", "/reset-profile"],
+    ["DELETE", "/profiles/imported"],
+  ])("does not treat %s %s as the import route", (method, path) => {
+    expect(isBrowserSystemProfileImport(method, path)).toBe(false);
+  });
+});
+
+describe("isBrowserHostLocalRoute", () => {
+  it.each([
+    ["POST", "/profiles/import"],
+    ["POST", "profiles/import"],
+    ["GET", "/system-profiles"],
+    ["GET", "system-profiles"],
+    ["GET", "/system-profile-import/status"],
+    ["POST", "/system-profile-import/dismiss"],
+  ])("pins %s %s to the host", (method, path) => {
+    expect(isBrowserHostLocalRoute(method, path)).toBe(true);
+  });
+
+  it.each([
+    ["POST", "/system-profiles"],
+    ["POST", "/system-profile-import/status"],
+    ["GET", "/system-profile-import/dismiss"],
+    ["GET", "/profiles"],
+    ["POST", "/profiles/create"],
+    ["POST", "/reset-profile"],
+  ])("does not pin %s %s to the host", (method, path) => {
+    expect(isBrowserHostLocalRoute(method, path)).toBe(false);
+  });
+});
+
 describe("browser url pattern matching", () => {
   it("matches exact URLs", () => {
     expect(matchBrowserUrlPattern("https://example.com/a", "https://example.com/a")).toBe(true);
@@ -38,9 +88,32 @@ describe("browser url pattern matching", () => {
   });
 
   it("matches glob patterns", () => {
+    expect(matchBrowserUrlPattern("*", "https://example.com/app/dash")).toBe(true);
     expect(matchBrowserUrlPattern("**/dash", "https://example.com/app/dash")).toBe(true);
     expect(matchBrowserUrlPattern("https://example.com/*", "https://example.com/a")).toBe(true);
     expect(matchBrowserUrlPattern("https://example.com/*", "https://other.com/a")).toBe(false);
+    expect(matchBrowserUrlPattern("https://example.com/*", "https://example.com/app/dash")).toBe(
+      false,
+    );
+    expect(matchBrowserUrlPattern("https://example.com/**", "https://example.com/app/dash")).toBe(
+      true,
+    );
+  });
+
+  it("treats URL punctuation as literal in wildcard patterns", () => {
+    expect(
+      matchBrowserUrlPattern(
+        "https://example.com/download?file=*",
+        "https://example.com/download?file=report.pdf",
+      ),
+    ).toBe(true);
+    expect(
+      matchBrowserUrlPattern(
+        "https://example.com/download?file=*",
+        "https://example.com/downloadXfile=report.pdf",
+      ),
+    ).toBe(false);
+    expect(matchBrowserUrlPattern("http://[::1]:*/**", "http://[::1]:9222/json/list")).toBe(true);
   });
 
   it("rejects empty patterns", () => {

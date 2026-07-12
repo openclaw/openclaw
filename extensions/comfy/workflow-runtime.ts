@@ -1,6 +1,9 @@
+// Comfy plugin module implements workflow runtime behavior.
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   isProviderApiKeyConfigured,
   type AuthProfileStore,
@@ -9,26 +12,29 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   normalizeBaseUrl,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
-  buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
   isPrivateOrLoopbackHost,
   mergeSsrFPolicies,
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asBoolean,
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-  resolveUserPath,
-} from "openclaw/plugin-sdk/text-runtime";
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_COMFY_LOCAL_BASE_URL = "http://127.0.0.1:8188";
 const DEFAULT_COMFY_CLOUD_BASE_URL = "https://cloud.comfy.org";
@@ -36,14 +42,16 @@ const DEFAULT_PROMPT_INPUT_NAME = "text";
 const DEFAULT_INPUT_IMAGE_INPUT_NAME = "image";
 const DEFAULT_POLL_INTERVAL_MS = 1_500;
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
+const DEFAULT_GENERATED_MEDIA_MAX_BYTES = 16 * 1024 * 1024;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
 
-export type ComfyMode = "local" | "cloud";
-export type ComfyCapability = "image" | "music" | "video";
-export type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
-export type ComfyWorkflow = Record<string, unknown>;
-export type ComfyProviderConfig = Record<string, unknown>;
+type ComfyMode = "local" | "cloud";
+type ComfyCapability = "image" | "music" | "video";
+type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
+type ComfyWorkflow = Record<string, unknown>;
+type ComfyProviderConfig = Record<string, unknown>;
 type ComfyFetchGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
 type ComfyDispatcherPolicy = ComfyFetchGuardParams["dispatcherPolicy"];
 type ComfyPromptResponse = {
@@ -84,20 +92,20 @@ type ComfyApiKeyResolution =
       status: "configured_unavailable";
     };
 
-export type ComfySourceImage = {
+type ComfySourceImage = {
   buffer: Buffer;
   mimeType: string;
   fileName?: string;
 };
 
-export type ComfyGeneratedAsset = {
+type ComfyGeneratedAsset = {
   buffer: Buffer;
   mimeType: string;
   fileName: string;
   nodeId: string;
 };
 
-export type ComfyWorkflowResult = {
+type ComfyWorkflowResult = {
   assets: ComfyGeneratedAsset[];
   model: string;
   promptId: string;
@@ -106,13 +114,25 @@ export type ComfyWorkflowResult = {
 
 let comfyFetchGuard = fetchWithSsrFGuard;
 
-export function _setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   comfyFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 
+function resolveComfyGeneratedOutputMaxBytes(params: {
+  cfg: OpenClawConfig;
+  capability: ComfyCapability;
+}): number {
+  const configured = params.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return params.capability === "image"
+    ? DEFAULT_GENERATED_IMAGE_MAX_BYTES
+    : DEFAULT_GENERATED_MEDIA_MAX_BYTES;
+}
+
 function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
-  const value = config[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean(config[key]);
 }
 
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
@@ -137,7 +157,7 @@ function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProvider
   return next;
 }
 
-export function getComfyCapabilityConfig(
+function getComfyCapabilityConfig(
   config: ComfyProviderConfig,
   capability: ComfyCapability,
 ): ComfyProviderConfig {
@@ -149,7 +169,7 @@ export function getComfyCapabilityConfig(
   return { ...shared, ...nested };
 }
 
-export function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
+function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
   return normalizeOptionalString(config.mode) === "cloud" ? "cloud" : "local";
 }
 
@@ -259,6 +279,8 @@ function setWorkflowInput(params: {
 function resolveComfyNetworkPolicy(params: {
   baseUrl: string;
   allowPrivateNetwork: boolean;
+  explicitAllowPrivateNetwork: boolean;
+  mode: ComfyMode;
 }): ComfyNetworkPolicy {
   let parsed: URL;
   try {
@@ -268,15 +290,43 @@ function resolveComfyNetworkPolicy(params: {
   }
 
   const hostname = normalizeOptionalLowercaseString(parsed.hostname) ?? "";
-  if (!hostname || !params.allowPrivateNetwork || !isPrivateOrLoopbackHost(hostname)) {
+  if (!hostname) {
     return {};
   }
+  const localHostnamePolicy: SsrFPolicy | undefined =
+    params.mode === "local" ? { hostnameAllowlist: [hostname] } : undefined;
+  const hostnameOnlyPolicy = localHostnamePolicy ? { apiPolicy: localHostnamePolicy } : {};
+  if (!params.allowPrivateNetwork) {
+    return hostnameOnlyPolicy;
+  }
+  // Local mode auto-trusts loopback/IP targets and Compose-style single-label
+  // service names; public-looking FQDNs require the operator's explicit
+  // allowPrivateNetwork opt-in.
+  if (!params.explicitAllowPrivateNetwork && params.mode !== "local") {
+    return {};
+  }
+  if (
+    !params.explicitAllowPrivateNetwork &&
+    params.mode === "local" &&
+    !isPrivateOrLoopbackHost(hostname) &&
+    !isSingleLabelServiceHostname(hostname)
+  ) {
+    return hostnameOnlyPolicy;
+  }
 
-  const hostnamePolicy = buildHostnameAllowlistPolicyFromSuffixAllowlist([hostname]);
-  const privateNetworkPolicy = ssrfPolicyFromDangerouslyAllowPrivateNetwork(true);
+  const originPolicy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(params.baseUrl);
+  if (!originPolicy) {
+    return hostnameOnlyPolicy;
+  }
+
   return {
-    apiPolicy: mergeSsrFPolicies(hostnamePolicy, privateNetworkPolicy),
+    apiPolicy:
+      params.mode === "local" ? mergeSsrFPolicies(originPolicy, localHostnamePolicy) : originPolicy,
   };
+}
+
+function isSingleLabelServiceHostname(hostname: string): boolean {
+  return /^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$/u.test(hostname);
 }
 
 async function readJsonResponse<T>(params: {
@@ -298,31 +348,19 @@ async function readJsonResponse<T>(params: {
   });
   try {
     await assertOkOrThrowHttpError(response, params.errorPrefix);
-    return (await response.json()) as T;
+    return (await readProviderJsonResponse(response, params.errorPrefix)) as T;
   } finally {
     await release();
   }
 }
 
-function inferFileExtension(params: { fileName?: string; mimeType?: string }): string {
-  const normalizedMime = normalizeOptionalLowercaseString(params.mimeType);
-  if (normalizedMime?.includes("jpeg")) {
-    return "jpg";
-  }
-  if (normalizedMime?.includes("png")) {
-    return "png";
-  }
-  if (normalizedMime?.includes("webm")) {
-    return "webm";
-  }
-  if (normalizedMime?.includes("mp4")) {
-    return "mp4";
-  }
-  if (normalizedMime?.includes("mpeg")) {
-    return "mp3";
-  }
-  if (normalizedMime?.includes("wav")) {
-    return "wav";
+/** @internal Test-only export. */
+export const readJsonResponseForTest = readJsonResponse;
+
+function resolveFileExtension(params: { fileName?: string; mimeType?: string }): string {
+  const extension = extensionForMime(params.mimeType);
+  if (extension) {
+    return extension.slice(1);
   }
   const fileName = params.fileName?.trim();
   if (!fileName) {
@@ -356,7 +394,7 @@ async function uploadInputImage(params: {
     "image",
     new Blob([toBlobBytes(params.image.buffer)], { type: params.image.mimeType }),
     normalizeOptionalString(params.image.fileName) ||
-      `input.${inferFileExtension({ mimeType: params.image.mimeType })}`,
+      `input.${resolveFileExtension({ mimeType: params.image.mimeType })}`,
   );
   form.set("type", "input");
   form.set("overwrite", "true");
@@ -411,14 +449,15 @@ async function waitForLocalHistory(params: {
   dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<ComfyHistoryEntry> {
   const deadline = Date.now() + params.timeoutMs;
-  while (Date.now() <= deadline) {
+  for (;;) {
+    const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
     const history = await readJsonResponse<unknown>({
       url: `${params.baseUrl}/history/${params.promptId}`,
       init: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: params.timeoutMs,
+      timeoutMs: requestTimeoutMs,
       policy: params.policy,
       dispatcherPolicy: params.dispatcherPolicy,
       auditContext: "comfy-history",
@@ -430,10 +469,11 @@ async function waitForLocalHistory(params: {
       return entry;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
-
-  throw new Error(`Comfy workflow did not finish within ${Math.ceil(params.timeoutMs / 1000)}s`);
 }
 
 async function waitForCloudCompletion(params: {
@@ -446,14 +486,15 @@ async function waitForCloudCompletion(params: {
   dispatcherPolicy?: ComfyDispatcherPolicy;
 }): Promise<void> {
   const deadline = Date.now() + params.timeoutMs;
-  while (Date.now() <= deadline) {
+  for (;;) {
+    const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
     const status = await readJsonResponse<ComfyStatusResponse>({
       url: `${params.baseUrl}/api/job/${params.promptId}/status`,
       init: {
         method: "GET",
         headers: params.headers,
       },
-      timeoutMs: params.timeoutMs,
+      timeoutMs: requestTimeoutMs,
       policy: params.policy,
       dispatcherPolicy: params.dispatcherPolicy,
       auditContext: "comfy-status",
@@ -469,10 +510,24 @@ async function waitForCloudCompletion(params: {
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, params.pollIntervalMs));
+    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollDelayMs);
+    });
   }
+}
 
-  throw new Error(`Comfy workflow did not finish within ${Math.ceil(params.timeoutMs / 1000)}s`);
+function resolveComfyRemainingMs(
+  deadline: number,
+  timeoutMs: number,
+  defaultTimeoutMs = timeoutMs,
+) {
+  const defaultMs = resolvePositiveTimerTimeoutMs(defaultTimeoutMs, 1);
+  const remainingMs = deadline - Date.now();
+  if (remainingMs <= 0) {
+    throw new Error(`Comfy workflow did not finish within ${Math.ceil(timeoutMs / 1000)}s`);
+  }
+  return Math.max(1, Math.min(defaultMs, remainingMs));
 }
 
 function collectOutputFiles(params: {
@@ -514,6 +569,7 @@ async function downloadOutputFile(params: {
   file: ComfyOutputFile;
   mode: ComfyMode;
   capability: ComfyCapability;
+  maxBytes: number;
 }): Promise<{ buffer: Buffer; mimeType: string }> {
   const fileName =
     normalizeOptionalString(params.file.filename) || normalizeOptionalString(params.file.name);
@@ -534,7 +590,6 @@ async function downloadOutputFile(params: {
     init: {
       method: "GET",
       headers: params.headers,
-      ...(params.mode === "cloud" ? { redirect: "manual" } : {}),
     },
     timeoutMs: params.timeoutMs,
     policy: params.policy,
@@ -543,43 +598,18 @@ async function downloadOutputFile(params: {
   });
 
   try {
-    if (
-      params.mode === "cloud" &&
-      [301, 302, 303, 307, 308].includes(firstResponse.response.status)
-    ) {
-      const redirectUrl = normalizeOptionalString(firstResponse.response.headers.get("location"));
-      if (!redirectUrl) {
-        throw new Error("Comfy cloud output redirect missing location header");
-      }
-      const redirected = await comfyFetchGuard({
-        url: redirectUrl,
-        init: {
-          method: "GET",
-        },
-        timeoutMs: params.timeoutMs,
-        dispatcherPolicy: params.dispatcherPolicy,
-        auditContext,
-      });
-      try {
-        await assertOkOrThrowHttpError(redirected.response, "Comfy output download failed");
-        const mimeType =
-          normalizeOptionalString(redirected.response.headers.get("content-type")) ||
-          "application/octet-stream";
-        return {
-          buffer: Buffer.from(await redirected.response.arrayBuffer()),
-          mimeType,
-        };
-      } finally {
-        await redirected.release();
-      }
-    }
-
     await assertOkOrThrowHttpError(firstResponse.response, "Comfy output download failed");
     const mimeType =
       normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
       "application/octet-stream";
     return {
-      buffer: Buffer.from(await firstResponse.response.arrayBuffer()),
+      buffer: await readResponseWithLimit(firstResponse.response, params.maxBytes, {
+        chunkTimeoutMs: params.timeoutMs,
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Comfy ${params.capability} output download exceeds ${maxBytes} bytes`),
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`Comfy ${params.capability} output download stalled after ${chunkTimeoutMs}ms`),
+      }),
       mimeType,
     };
   } finally {
@@ -640,10 +670,14 @@ export async function runComfyWorkflow(params: {
   const inputImageInputName =
     normalizeOptionalString(capabilityConfig.inputImageInputName) ?? DEFAULT_INPUT_IMAGE_INPUT_NAME;
   const outputNodeId = normalizeOptionalString(capabilityConfig.outputNodeId);
-  const pollIntervalMs =
-    readConfigInteger(capabilityConfig, "pollIntervalMs") ?? DEFAULT_POLL_INTERVAL_MS;
-  const timeoutMs =
-    readConfigInteger(capabilityConfig, "timeoutMs") ?? params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const pollIntervalMs = resolvePositiveTimerTimeoutMs(
+    readConfigInteger(capabilityConfig, "pollIntervalMs"),
+    DEFAULT_POLL_INTERVAL_MS,
+  );
+  const timeoutMs = resolvePositiveTimerTimeoutMs(
+    readConfigInteger(capabilityConfig, "timeoutMs") ?? params.timeoutMs,
+    DEFAULT_TIMEOUT_MS,
+  );
   const providerModel = normalizeOptionalString(params.model) || DEFAULT_COMFY_MODEL;
 
   setWorkflowInput({
@@ -675,13 +709,14 @@ export async function runComfyWorkflow(params: {
     throw new Error("Comfy Cloud API key missing");
   }
 
+  const explicitAllowPrivateNetwork =
+    readConfigBoolean(capabilityConfig, "allowPrivateNetwork") === true;
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: normalizeOptionalString(capabilityConfig.baseUrl),
       defaultBaseUrl:
         mode === "cloud" ? DEFAULT_COMFY_CLOUD_BASE_URL : DEFAULT_COMFY_LOCAL_BASE_URL,
-      allowPrivateNetwork:
-        mode === "local" || readConfigBoolean(capabilityConfig, "allowPrivateNetwork") === true,
+      allowPrivateNetwork: mode === "local" || explicitAllowPrivateNetwork,
       defaultHeaders:
         mode === "cloud"
           ? {
@@ -701,6 +736,8 @@ export async function runComfyWorkflow(params: {
   const networkPolicy = resolveComfyNetworkPolicy({
     baseUrl: normalizedBaseUrl,
     allowPrivateNetwork,
+    explicitAllowPrivateNetwork,
+    mode,
   });
 
   if (params.inputImage) {
@@ -803,6 +840,10 @@ export async function runComfyWorkflow(params: {
   }
 
   const assets: ComfyGeneratedAsset[] = [];
+  const maxOutputBytes = resolveComfyGeneratedOutputMaxBytes({
+    cfg: params.cfg,
+    capability: params.capability,
+  });
   let assetIndex = 0;
   for (const output of outputFiles) {
     const downloaded = await downloadOutputFile({
@@ -814,6 +855,7 @@ export async function runComfyWorkflow(params: {
       file: output.file,
       mode,
       capability: params.capability,
+      maxBytes: maxOutputBytes,
     });
     assetIndex += 1;
     const originalName =
@@ -823,7 +865,7 @@ export async function runComfyWorkflow(params: {
       mimeType: downloaded.mimeType,
       fileName:
         originalName ||
-        `${params.capability}-${assetIndex}.${inferFileExtension({ mimeType: downloaded.mimeType })}`,
+        `${params.capability}-${assetIndex}.${resolveFileExtension({ mimeType: downloaded.mimeType })}`,
       nodeId: output.nodeId,
     });
   }
@@ -832,6 +874,6 @@ export async function runComfyWorkflow(params: {
     assets,
     model: providerModel,
     promptId,
-    outputNodeIds: Array.from(new Set(outputFiles.map((entry) => entry.nodeId))),
+    outputNodeIds: uniqueStrings(outputFiles.map((entry) => entry.nodeId)),
   };
 }

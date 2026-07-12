@@ -1,4 +1,6 @@
-import { killProcessTree } from "../../kill-tree.js";
+import { createLazyRuntimeModule } from "../../../shared/lazy-runtime.js";
+// PTY adapter wraps pseudo-terminal processes for the process supervisor.
+import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
@@ -35,12 +37,9 @@ type PtyModule = {
 
 export type PtyAdapter = SpawnProcessAdapter;
 
-let ptyModulePromise: Promise<PtyModule> | null = null;
-
-async function loadPtyModule(): Promise<PtyModule> {
-  ptyModulePromise ??= import("@lydell/node-pty") as Promise<unknown> as Promise<PtyModule>;
-  return ptyModulePromise;
-}
+const loadPtyModule = createLazyRuntimeModule(
+  () => import("@lydell/node-pty") as Promise<unknown> as Promise<PtyModule>,
+);
 
 export async function createPtyAdapter(params: {
   shell: string;
@@ -75,6 +74,8 @@ export async function createPtyAdapter(params: {
   let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | number | null }> | null =
     null;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
+  let stdinDestroyed = false;
+  let stdinEnded = false;
 
   const clearForceKillWaitFallback = () => {
     if (!forceKillWaitFallbackTimer) {
@@ -89,6 +90,8 @@ export async function createPtyAdapter(params: {
       return;
     }
     clearForceKillWaitFallback();
+    stdinDestroyed = true;
+    stdinEnded = true;
     waitResult = value;
     if (resolveWait) {
       const resolve = resolveWait;
@@ -114,7 +117,18 @@ export async function createPtyAdapter(params: {
     }) ?? null;
 
   const stdin: ManagedRunStdin = {
-    destroyed: false,
+    get destroyed() {
+      return stdinDestroyed;
+    },
+    get writable() {
+      return !stdinDestroyed && !stdinEnded;
+    },
+    get writableEnded() {
+      return stdinEnded;
+    },
+    get writableFinished() {
+      return stdinEnded;
+    },
     write: (data, cb) => {
       try {
         pty.write(data);
@@ -125,11 +139,16 @@ export async function createPtyAdapter(params: {
     },
     end: () => {
       try {
+        stdinEnded = true;
         const eof = process.platform === "win32" ? "\x1a" : "\x04";
         pty.write(eof);
       } catch {
         // ignore EOF errors
       }
+    },
+    destroy: () => {
+      stdinDestroyed = true;
+      stdinEnded = true;
     },
   };
 
@@ -165,8 +184,12 @@ export async function createPtyAdapter(params: {
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
     try {
-      if (signal === "SIGKILL" && typeof pty.pid === "number" && pty.pid > 0) {
-        killProcessTree(pty.pid);
+      if (
+        (signal === "SIGKILL" || signal === "SIGTERM") &&
+        typeof pty.pid === "number" &&
+        pty.pid > 0
+      ) {
+        signalProcessTree(pty.pid, signal);
       } else if (process.platform === "win32") {
         pty.kill();
       } else {
@@ -182,6 +205,8 @@ export async function createPtyAdapter(params: {
   };
 
   const dispose = () => {
+    stdinDestroyed = true;
+    stdinEnded = true;
     try {
       dataListener?.dispose();
     } catch {

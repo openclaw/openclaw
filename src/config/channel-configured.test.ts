@@ -1,29 +1,6 @@
+// Covers channel-configured checks from bootstrap and plugin metadata.
 import { describe, expect, it, vi } from "vitest";
 import { isChannelConfigured } from "./channel-configured.js";
-
-vi.mock("../channels/plugins/configured-state.js", () => ({
-  hasBundledChannelConfiguredState: ({
-    channelId,
-    env,
-  }: {
-    channelId: string;
-    env?: NodeJS.ProcessEnv;
-  }) => {
-    if (channelId === "telegram") {
-      return Boolean(env?.TELEGRAM_BOT_TOKEN);
-    }
-    if (channelId === "discord") {
-      return Boolean(env?.DISCORD_BOT_TOKEN);
-    }
-    if (channelId === "slack") {
-      return Boolean(env?.SLACK_BOT_TOKEN);
-    }
-    if (channelId === "irc") {
-      return Boolean(env?.IRC_HOST && env?.IRC_NICK);
-    }
-    return false;
-  },
-}));
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: () => undefined,
@@ -66,6 +43,38 @@ describe("isChannelConfigured", () => {
         {},
       ),
     ).toBe(true);
+  });
+
+  it("treats explicit enabled channel config as configured state", () => {
+    expect(
+      isChannelConfigured(
+        {
+          channels: {
+            "openclaw-weixin": {
+              enabled: true,
+            },
+          },
+        },
+        "openclaw-weixin",
+        {},
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat disabled channel config as configured state", () => {
+    expect(
+      isChannelConfigured(
+        {
+          channels: {
+            "openclaw-weixin": {
+              enabled: false,
+            },
+          },
+        },
+        "openclaw-weixin",
+        {},
+      ),
+    ).toBe(false);
   });
 
   it("does not treat persisted Matrix credentials as configured channel state", () => {

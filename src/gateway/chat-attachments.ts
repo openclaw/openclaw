@@ -1,12 +1,15 @@
+// Gateway chat attachment parser.
+// Normalizes image attachments, offloads large media, and reports unsupported payloads.
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { estimateBase64DecodedBytes } from "../media/base64.js";
-import { MAX_IMAGE_BYTES } from "../media/constants.js";
-import { extensionForMime, mimeTypeFromFilePath } from "../media/mime.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
-import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -30,7 +33,7 @@ export type OffloadedRef = {
   sizeBytes: number;
 };
 
-export type ParsedMessageWithImages = {
+type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
@@ -48,7 +51,7 @@ type NormalizedAttachment = {
   base64: string;
 };
 
-type SavedMedia = {
+type SavedMediaRef = {
   id: string;
   path: string;
 };
@@ -58,6 +61,59 @@ const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
+export async function persistInboundImagesForTranscript(params: {
+  images: ChatImageContent[];
+  imageOrder: PromptImageOrderEntry[];
+  offloadedRefs: OffloadedRef[];
+  log: Pick<AttachmentLog, "warn">;
+  logContext: string;
+}): Promise<SavedMedia[]> {
+  const inline: SavedMedia[] = [];
+  for (const image of params.images) {
+    try {
+      inline.push(
+        await saveMediaBuffer(Buffer.from(image.data, "base64"), image.mimeType, "inbound"),
+      );
+    } catch (err) {
+      params.log.warn(
+        `${params.logContext}: failed to persist inbound image (${image.mimeType}): ${formatErrorMessage(err)}`,
+      );
+    }
+  }
+
+  const imageOffloaded: SavedMedia[] = [];
+  const nonImageOffloaded: SavedMedia[] = [];
+  for (const ref of params.offloadedRefs) {
+    const saved = {
+      id: ref.id,
+      path: ref.path,
+      size: ref.sizeBytes,
+      contentType: ref.mimeType,
+    };
+    (ref.mimeType.startsWith("image/") ? imageOffloaded : nonImageOffloaded).push(saved);
+  }
+  if (params.imageOrder.length === 0) {
+    return [...inline, ...imageOffloaded, ...nonImageOffloaded];
+  }
+
+  const ordered: SavedMedia[] = [];
+  let inlineIndex = 0;
+  let offloadedIndex = 0;
+  for (const entry of params.imageOrder) {
+    const media = entry === "inline" ? inline[inlineIndex++] : imageOffloaded[offloadedIndex++];
+    if (media) {
+      ordered.push(media);
+    }
+  }
+  ordered.push(
+    ...inline.slice(inlineIndex),
+    ...imageOffloaded.slice(offloadedIndex),
+    ...nonImageOffloaded,
+  );
+  return ordered;
+}
+
+/** Resolve the maximum decoded attachment size accepted for chat image inputs. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   const mb =
@@ -67,7 +123,7 @@ export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   return Math.floor(mb * 1024 * 1024);
 }
 
-export type UnsupportedAttachmentReason =
+type UnsupportedAttachmentReason =
   | "empty-payload"
   | "text-only-image"
   | "unsupported-non-image"
@@ -83,7 +139,7 @@ export class UnsupportedAttachmentError extends Error {
 }
 
 export class MediaOffloadError extends Error {
-  readonly cause: unknown;
+  override readonly cause: unknown;
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "MediaOffloadError";
@@ -107,18 +163,74 @@ function isGenericContainerMime(mime?: string): boolean {
   return mime === "application/zip" || mime === "application/octet-stream";
 }
 
-function shouldIgnoreProvidedImageMime(params: {
+function shouldIgnoreImageMimeHint(params: { sniffedMime?: string; hintedMime?: string }): boolean {
+  return isGenericContainerMime(params.sniffedMime) && isImageMime(params.hintedMime);
+}
+
+function isSpecificMime(mime?: string): boolean {
+  return Boolean(mime && !isGenericContainerMime(mime));
+}
+
+function resolveAttachmentMime(params: {
   sniffedMime?: string;
   providedMime?: string;
-}): boolean {
-  return isGenericContainerMime(params.sniffedMime) && isImageMime(params.providedMime);
+  labelMime?: string;
+}): string {
+  const trustedProvidedMime = shouldIgnoreImageMimeHint({
+    sniffedMime: params.sniffedMime,
+    hintedMime: params.providedMime,
+  })
+    ? undefined
+    : params.providedMime;
+  const trustedLabelMime = shouldIgnoreImageMimeHint({
+    sniffedMime: params.sniffedMime,
+    hintedMime: params.labelMime,
+  })
+    ? undefined
+    : params.labelMime;
+  return (
+    (isSpecificMime(params.sniffedMime) && params.sniffedMime) ||
+    (isSpecificMime(trustedProvidedMime) && trustedProvidedMime) ||
+    (isSpecificMime(trustedLabelMime) && trustedLabelMime) ||
+    params.sniffedMime ||
+    trustedProvidedMime ||
+    trustedLabelMime ||
+    "application/octet-stream"
+  );
+}
+
+function isBase64DataCharCode(code: number): boolean {
+  return (
+    (code >= 0x41 && code <= 0x5a) ||
+    (code >= 0x61 && code <= 0x7a) ||
+    (code >= 0x30 && code <= 0x39) ||
+    code === 0x2b ||
+    code === 0x2f
+  );
 }
 
 function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+
+  let padding = 0;
+  let sawPadding = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 0x3d) {
+      padding += 1;
+      if (padding > 2) {
+        return false;
+      }
+      sawPadding = true;
+      continue;
+    }
+    if (sawPadding || !isBase64DataCharCode(code)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
@@ -138,7 +250,7 @@ function ensureExtension(label: string, mime: string): string {
   return ext ? `${label}${ext}` : label;
 }
 
-function assertSavedMedia(value: unknown, label: string): SavedMedia {
+function assertSavedMedia(value: unknown, label: string): SavedMediaRef {
   if (
     value === null ||
     typeof value !== "object" ||
@@ -184,26 +296,10 @@ function normalizeAttachment(
   if (opts.stripDataUrlPrefix) {
     const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
     if (dataUrlMatch) {
-      base64 = dataUrlMatch[1];
+      base64 = expectDefined(dataUrlMatch[1], "data url match capture group 1");
     }
   }
   return { label, mime, base64 };
-}
-
-function validateAttachmentBase64OrThrow(
-  normalized: NormalizedAttachment,
-  opts: { maxBytes: number },
-): number {
-  if (!isValidBase64(normalized.base64)) {
-    throw new Error(`attachment ${normalized.label}: invalid base64 content`);
-  }
-  const sizeBytes = estimateBase64DecodedBytes(normalized.base64);
-  if (sizeBytes <= 0 || sizeBytes > opts.maxBytes) {
-    throw new Error(
-      `attachment ${normalized.label}: exceeds size limit (${sizeBytes} > ${opts.maxBytes} bytes)`,
-    );
-  }
-  return sizeBytes;
 }
 
 export async function parseMessageWithAttachments(
@@ -264,24 +360,12 @@ export async function parseMessageWithAttachments(
       const providedMime = normalizeMime(mime);
       const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
       const labelMime = normalizeMime(mimeTypeFromFilePath(label));
-      const trustedProvidedMime = shouldIgnoreProvidedImageMime({ sniffedMime, providedMime })
-        ? undefined
-        : providedMime;
 
       // Prefer specific MIME signals over generic container types. OOXML
       // documents (docx/xlsx/pptx) sniff as application/zip; without this
       // priority the agent would receive a `.zip` instead of the specific
       // Office document the caller declared.
-      const finalMime =
-        (sniffedMime && !isGenericContainerMime(sniffedMime) && sniffedMime) ||
-        (trustedProvidedMime &&
-          !isGenericContainerMime(trustedProvidedMime) &&
-          trustedProvidedMime) ||
-        (labelMime && !isGenericContainerMime(labelMime) && labelMime) ||
-        sniffedMime ||
-        trustedProvidedMime ||
-        labelMime ||
-        "application/octet-stream";
+      const finalMime = resolveAttachmentMime({ sniffedMime, providedMime, labelMime });
 
       if (
         sniffedMime &&
@@ -351,7 +435,7 @@ export async function parseMessageWithAttachments(
       const buffer = Buffer.from(b64, "base64");
       verifyDecodedSize(buffer, sizeBytes, label);
 
-      let savedMedia: SavedMedia;
+      let savedMedia: SavedMediaRef;
       try {
         const labelWithExt = ensureExtension(label, finalMime);
         const rawResult = await saveMediaBuffer(
@@ -409,45 +493,4 @@ export async function parseMessageWithAttachments(
     imageOrder,
     offloadedRefs,
   };
-}
-
-/**
- * @deprecated Use parseMessageWithAttachments instead.
- * This function converts images to markdown data URLs which Claude API cannot process as images.
- */
-export function buildMessageWithAttachments(
-  message: string,
-  attachments: ChatAttachment[] | undefined,
-  opts?: { maxBytes?: number },
-): string {
-  const maxBytes = opts?.maxBytes ?? 2_000_000;
-
-  if (!attachments || attachments.length === 0) {
-    return message;
-  }
-
-  const blocks: string[] = [];
-
-  for (const [idx, att] of attachments.entries()) {
-    if (!att) {
-      continue;
-    }
-
-    const normalized = normalizeAttachment(att, idx, {
-      stripDataUrlPrefix: false,
-      requireImageMime: true,
-    });
-    validateAttachmentBase64OrThrow(normalized, { maxBytes });
-
-    const { base64, label, mime } = normalized;
-    const safeLabel = label.replace(/\s+/g, "_");
-    blocks.push(`![${safeLabel}](data:${mime};base64,${base64})`);
-  }
-
-  if (blocks.length === 0) {
-    return message;
-  }
-
-  const separator = message.trim().length > 0 ? "\n\n" : "";
-  return `${message}${separator}${blocks.join("\n\n")}`;
 }

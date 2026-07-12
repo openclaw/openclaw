@@ -1,6 +1,11 @@
 // Public usage fetch helpers for provider plugins.
 
 export type {
+  ProviderUsageCostBreakdown,
+  ProviderUsageCostDaily,
+  ProviderUsageCostHistory,
+  ProviderUsageModelBreakdown,
+  ProviderUsageBilling,
   ProviderUsageSnapshot,
   UsageProviderId,
   UsageWindow,
@@ -9,15 +14,12 @@ export type {
 export {
   fetchClaudeUsage,
   fetchCodexUsage,
+  fetchDeepSeekUsage,
   fetchGeminiUsage,
   fetchMinimaxUsage,
   fetchZaiUsage,
 } from "../infra/provider-usage.fetch.js";
-export {
-  clampPercent,
-  PROVIDER_LABELS,
-  resolveLegacyPiAgentAccessToken,
-} from "../infra/provider-usage.shared.js";
+export { clampPercent, PROVIDER_LABELS } from "../infra/provider-usage.shared.js";
 export {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,

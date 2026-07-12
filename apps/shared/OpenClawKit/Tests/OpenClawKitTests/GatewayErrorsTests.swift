@@ -2,8 +2,8 @@ import Foundation
 import OpenClawKit
 import Testing
 
-@Suite struct GatewayErrorsTests {
-    @Test func bootstrapTokenInvalidIsNonRecoverable() {
+struct GatewayErrorsTests {
+    @Test func `bootstrap token invalid is non recoverable`() {
         let error = GatewayConnectAuthError(
             message: "setup code expired",
             detailCode: GatewayConnectAuthDetailCode.authBootstrapTokenInvalid.rawValue,
@@ -13,7 +13,7 @@ import Testing
         #expect(error.detail == .authBootstrapTokenInvalid)
     }
 
-    @Test func connectAuthErrorPreservesStructuredMetadata() {
+    @Test func `connect auth error preserves structured metadata`() {
         let error = GatewayConnectAuthError(
             message: "pairing required",
             detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
@@ -28,7 +28,11 @@ import Testing
             actionCommand: "openclaw devices approve req-123",
             docsURLString: "https://docs.openclaw.ai/gateway/pairing",
             retryableOverride: false,
-            pauseReconnectOverride: true)
+            pauseReconnectOverride: true,
+            clientMinProtocol: 4,
+            clientMaxProtocol: 4,
+            expectedProtocol: 5,
+            minimumProbeProtocol: 4)
 
         #expect(error.requestId == "req-123")
         #expect(error.detailsReason == "scope-upgrade")
@@ -37,9 +41,76 @@ import Testing
         #expect(error.actionCommand == "openclaw devices approve req-123")
         #expect(error.docsURLString == "https://docs.openclaw.ai/gateway/pairing")
         #expect(error.pauseReconnectOverride == true)
+        #expect(error.clientMinProtocol == 4)
+        #expect(error.clientMaxProtocol == 4)
+        #expect(error.expectedProtocol == 5)
+        #expect(error.minimumProbeProtocol == 4)
     }
 
-    @Test func pairingProblemUsesStructuredRequestMetadata() {
+    @Test func `protocol mismatch maps older app to update problem`() {
+        let error = GatewayConnectAuthError(
+            message: "protocol mismatch",
+            detailCode: GatewayConnectAuthDetailCode.protocolMismatch.rawValue,
+            canRetryWithDeviceToken: false,
+            clientMinProtocol: 4,
+            clientMaxProtocol: 4,
+            expectedProtocol: 5,
+            minimumProbeProtocol: 4)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(error.detail == .protocolMismatch)
+        #expect(error.isNonRecoverable)
+        #expect(problem?.kind == .protocolMismatch)
+        #expect(problem?.owner == .iphone)
+        #expect(problem?.title == "App update required")
+        #expect(problem?.message == "This app is older than the gateway. Update OpenClaw on this device, then retry.")
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+        #expect(problem?.technicalDetails?.contains("clientProtocol=4") == true)
+        #expect(problem?.technicalDetails?.contains("gatewayProtocol=5") == true)
+    }
+
+    @Test func `protocol mismatch maps older gateway to update problem`() {
+        let error = GatewayConnectAuthError(
+            message: "protocol mismatch",
+            detailCode: GatewayConnectAuthDetailCode.protocolMismatch.rawValue,
+            canRetryWithDeviceToken: false,
+            clientMinProtocol: 4,
+            clientMaxProtocol: 4,
+            expectedProtocol: 3,
+            minimumProbeProtocol: 3)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .protocolMismatch)
+        #expect(problem?.owner == .gateway)
+        #expect(problem?.title == "Gateway update required")
+        #expect(problem?
+            .message == "The gateway is older than this app. Update OpenClaw on the gateway host, then retry.")
+        #expect(problem?.actionLabel == "Copy update command")
+        #expect(problem?.actionCommand == "openclaw update")
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+    }
+
+    @Test func `protocol mismatch without versions still gives actionable fallback`() {
+        let error = GatewayConnectAuthError(
+            message: "protocol mismatch",
+            detailCode: GatewayConnectAuthDetailCode.protocolMismatch.rawValue,
+            canRetryWithDeviceToken: false)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .protocolMismatch)
+        #expect(problem?.owner == .both)
+        #expect(problem?
+            .message == "The app and gateway use incompatible protocol versions. Update OpenClaw on both, then retry.")
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+    }
+
+    @Test func `pairing problem uses structured request metadata`() {
         let error = GatewayConnectAuthError(
             message: "pairing required",
             detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
@@ -55,7 +126,35 @@ import Testing
         #expect(problem?.actionCommand == "openclaw devices approve req-123")
     }
 
-    @Test func cancelledTransportDoesNotReplaceStructuredPairingProblem() {
+    @Test func `scope mismatch maps to pairing or repair problem`() {
+        let error = GatewayConnectAuthError(
+            message: "device token scope mismatch",
+            detailCode: GatewayConnectAuthDetailCode.authScopeMismatch.rawValue,
+            canRetryWithDeviceToken: false)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(error.detail == .authScopeMismatch)
+        #expect(error.isNonRecoverable)
+        #expect(problem?.kind == .deviceTokenScopeMismatch)
+        #expect(problem?.needsPairingApproval == true)
+        #expect(problem?.needsCredentialUpdate == false)
+    }
+
+    @Test func `token mismatch suggests onboarding reset`() {
+        let error = GatewayConnectAuthError(
+            message: "token mismatch",
+            detailCode: GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+            canRetryWithDeviceToken: false)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .gatewayAuthTokenMismatch)
+        #expect(problem?.suggestsOnboardingReset == true)
+        #expect(problem?.needsCredentialUpdate == true)
+    }
+
+    @Test func `cancelled transport does not replace structured pairing problem`() {
         let pairing = GatewayConnectAuthError(
             message: "pairing required",
             detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
@@ -73,7 +172,7 @@ import Testing
         #expect(preserved?.requestId == "req-123")
     }
 
-    @Test func unmappedTransportErrorClearsStaleStructuredProblem() {
+    @Test func `unmapped transport error clears stale structured problem`() {
         let pairing = GatewayConnectAuthError(
             message: "pairing required",
             detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
@@ -88,5 +187,63 @@ import Testing
         let mapped = GatewayConnectionProblemMapper.map(error: unknownTransport, preserving: previousProblem)
 
         #expect(mapped == nil)
+    }
+
+    @Test func `tls pin mismatch maps to actionable problem`() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: "gateway.example.ts.net:443",
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: true),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsPinMismatch)
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+        #expect(problem?.actionLabel == "Review certificate")
+        #expect(problem?.canTrustRotatedCertificate == true)
+        #expect(problem?.tlsStoreKey == "gateway.example.ts.net:443")
+        #expect(problem?.tlsExpectedFingerprint == "old")
+        #expect(problem?.tlsObservedFingerprint == "new")
+    }
+
+    @Test func `untrusted TLS certificate pauses reconnect`() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .untrustedCertificate,
+                host: "gateway.example.com",
+                storeKey: "gateway.example.com:443",
+                expectedFingerprint: nil,
+                observedFingerprint: nil,
+                systemTrustOk: false),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsCertificateUntrusted)
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+    }
+
+    @Test func `untrusted TLS mismatch cannot be recovered in app`() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: "gateway.example.ts.net:443",
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: false),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsPinMismatch)
+        #expect(problem?.canTrustRotatedCertificate == false)
     }
 }

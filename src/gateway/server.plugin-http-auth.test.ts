@@ -1,3 +1,5 @@
+// Plugin HTTP auth tests cover protected route canonicalization, operator scope
+// checks, hook/plugin route precedence, and unauthorized variant handling.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, test, vi } from "vitest";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -158,6 +160,16 @@ function createRuntimeScopeRecorderHandler(params: {
   });
 }
 
+async function expectPluginRequestOk(
+  server: Parameters<typeof dispatchRequest>[0],
+  request: Parameters<typeof createRequest>[0],
+): Promise<void> {
+  const response = createResponse();
+  await dispatchRequest(server, createRequest(request), response.res);
+  expect(response.res.statusCode).toBe(200);
+  expect(response.getBody()).toBe("ok");
+}
+
 describe("gateway plugin HTTP auth boundary", () => {
   test("applies default security headers and optional strict transport security", async () => {
     await withGatewayTempConfig("openclaw-plugin-http-security-headers-test-", async () => {
@@ -168,10 +180,11 @@ describe("gateway plugin HTTP auth boundary", () => {
         "nosniff",
       );
       expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith("Referrer-Policy", "no-referrer");
-      expect(withoutHstsResponse.setHeader).not.toHaveBeenCalledWith(
-        "Strict-Transport-Security",
-        expect.any(String),
-      );
+      expect(
+        withoutHstsResponse.setHeader.mock.calls.some(
+          ([headerName]) => headerName === "Strict-Transport-Security",
+        ),
+      ).toBe(false);
 
       const withHsts = createTestGatewayServer({
         resolvedAuth: AUTH_NONE,
@@ -318,23 +331,15 @@ describe("gateway plugin HTTP auth boundary", () => {
           },
         });
 
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/secure-hook",
-            remoteAddress: "203.0.113.10",
-            headers: {
-              "x-forwarded-user": "operator",
-              "x-forwarded-for": "198.51.100.20",
-              "x-openclaw-scopes": "operator.read",
-            },
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
+        await expectPluginRequestOk(server, {
+          path: "/secure-hook",
+          remoteAddress: "203.0.113.10",
+          headers: {
+            "x-forwarded-user": "operator",
+            "x-forwarded-for": "198.51.100.20",
+            "x-openclaw-scopes": "operator.read",
+          },
+        });
       },
     });
 
@@ -361,21 +366,13 @@ describe("gateway plugin HTTP auth boundary", () => {
         shouldEnforcePluginGatewayAuth: (pathContext) => pathContext.pathname === "/secure-hook",
       },
       run: async (server) => {
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/secure-hook",
-            authorization: "Bearer test-token",
-            headers: {
-              "x-openclaw-scopes": "operator.read",
-            },
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
+        await expectPluginRequestOk(server, {
+          path: "/secure-hook",
+          authorization: "Bearer test-token",
+          headers: {
+            "x-openclaw-scopes": "operator.read",
+          },
+        });
       },
     });
 
@@ -404,25 +401,17 @@ describe("gateway plugin HTTP auth boundary", () => {
           pathContext.pathname === "/secure-admin-hook",
       },
       run: async (server) => {
-        const response = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/secure-admin-hook",
-            authorization: "Bearer test-token",
-          }),
-          response.res,
-        );
-
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
+        await expectPluginRequestOk(server, {
+          path: "/secure-admin-hook",
+          authorization: "Bearer test-token",
+        });
       },
     });
 
     expect(observedRuntimeScopes).toHaveLength(1);
-    expect(observedRuntimeScopes[0]).toEqual(
-      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
-    );
+    expect(observedRuntimeScopes[0]).toContain("operator.admin");
+    expect(observedRuntimeScopes[0]).toContain("operator.read");
+    expect(observedRuntimeScopes[0]).toContain("operator.write");
     expect(adminAllowedResults).toEqual([true]);
   });
 
@@ -620,10 +609,127 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test.each([
+    { label: "root-mounted", basePath: "", path: "/settings/plugins" },
+    {
+      label: "base-path-mounted",
+      basePath: "/openclaw",
+      path: "/openclaw/settings/plugins",
+    },
+  ])(
+    "reserves the $label plugin manager GET while preserving writes",
+    async ({ basePath, path }) => {
+      const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+        const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+        if (pathname !== path) {
+          return false;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("plugin-handled");
+        return true;
+      });
+
+      await withGatewayServer({
+        prefix: "openclaw-plugin-http-plugin-manager-reserved-test-",
+        resolvedAuth: AUTH_NONE,
+        overrides: {
+          controlUiEnabled: true,
+          controlUiBasePath: basePath,
+          controlUiRoot: { kind: "missing" },
+          handlePluginRequest,
+        },
+        run: async (server) => {
+          const read = await sendRequest(server, { path });
+          expect(read.res.statusCode).toBe(503);
+          expect(read.getBody()).toContain("Control UI assets not found");
+          expect(handlePluginRequest).not.toHaveBeenCalled();
+
+          const write = await sendRequest(server, { path, method: "POST" });
+          expect(write.res.statusCode).toBe(200);
+          expect(write.getBody()).toBe("plugin-handled");
+          expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        },
+      });
+    },
+  );
+
+  test("reserves standalone approval documents ahead of plugin routes", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-shadowed-approval");
+      return true;
+    });
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-approval-reservation-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/approve/plugin%3Arequest.json" });
+
+        expect(response.res.statusCode).toBe(503);
+        expect(response.getBody()).toContain("Control UI assets not found");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("terminates approval-document writes at the reservation stage", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-shadowed-approval-write");
+      return true;
+    });
+
+    await withRootMountedControlUiServer({
+      prefix: "openclaw-plugin-http-approval-write-reservation-test-",
+      handlePluginRequest,
+      run: async (server) => {
+        for (const method of ["POST", "PUT"] as const) {
+          const response = await sendRequest(server, {
+            path: "/approve/plugin%3Arequest.json",
+            method,
+          });
+
+          // The server approval-document stage owns the terminal 404 for all
+          // methods; writes never fall through to plugin HTTP handlers.
+          expect(response.res.statusCode, method).toBe(404);
+          expect(response.getBody(), method).toBe("Not Found");
+        }
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
+  test("keeps approval documents reserved when control ui serving is disabled", async () => {
+    const handlePluginRequest = vi.fn(async (_req: IncomingMessage, res: ServerResponse) => {
+      res.statusCode = 200;
+      res.end("plugin-shadowed-disabled-approval");
+      return true;
+    });
+
+    await withPluginGatewayServer({
+      prefix: "openclaw-plugin-http-disabled-approval-reservation-test-",
+      resolvedAuth: AUTH_NONE,
+      overrides: {
+        controlUiEnabled: false,
+        controlUiBasePath: "",
+        handlePluginRequest,
+      },
+      run: async (server) => {
+        const response = await sendRequest(server, { path: "/approve/exec%3Arequest" });
+
+        expect(response.res.statusCode).toBe(404);
+        expect(response.getBody()).toBe("Not Found");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+      },
+    });
+  });
+
   test("passes POST webhook routes through root-mounted control ui to plugins", async () => {
     const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-      if (req.method !== "POST" || pathname !== "/bluebubbles-webhook") {
+      if (req.method !== "POST" || pathname !== "/imessage-webhook") {
         return false;
       }
       res.statusCode = 200;
@@ -637,7 +743,7 @@ describe("gateway plugin HTTP auth boundary", () => {
       handlePluginRequest,
       run: async (server) => {
         const response = await sendRequest(server, {
-          path: "/bluebubbles-webhook",
+          path: "/imessage-webhook",
           method: "POST",
         });
 

@@ -1,19 +1,29 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+// Qa Lab tests cover telegram live plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { summarizeLiveTransportRttSamples } from "../shared/live-transport-rtt.js";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
 } from "../shared/live-transport-scenarios.js";
-import { __testing } from "./telegram-live.runtime.js";
+import { testing } from "./telegram-live.runtime.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() =>
-  vi.fn(async (params: { url: string; init?: RequestInit; signal?: AbortSignal }) => ({
-    response: await fetch(params.url, {
-      ...params.init,
-      signal: params.signal,
+  vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      signal?: AbortSignal;
+      timeoutMs?: number;
+    }) => ({
+      response: await fetch(params.url, {
+        ...params.init,
+        signal: params.signal ?? AbortSignal.timeout(params.timeoutMs ?? 0),
+      }),
+      release: async () => {},
     }),
-    release: async () => {},
-  })),
+  ),
 );
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
@@ -26,6 +36,14 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   };
 });
 
+function requireScenario<T extends { id: string }>(scenarios: T[], id: string): T {
+  const scenario = scenarios.find((candidate) => candidate.id === id);
+  if (!scenario) {
+    throw new Error(`Expected scenario ${id}`);
+  }
+  return scenario;
+}
+
 describe("telegram live qa runtime", () => {
   afterEach(() => {
     fetchWithSsrFGuardMock.mockClear();
@@ -35,7 +53,7 @@ describe("telegram live qa runtime", () => {
 
   it("resolves required Telegram QA env vars", () => {
     expect(
-      __testing.resolveTelegramQaRuntimeEnv({
+      testing.resolveTelegramQaRuntimeEnv({
         OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
         OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver",
         OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut",
@@ -49,7 +67,7 @@ describe("telegram live qa runtime", () => {
 
   it("fails when a required Telegram QA env var is missing", () => {
     expect(() =>
-      __testing.resolveTelegramQaRuntimeEnv({
+      testing.resolveTelegramQaRuntimeEnv({
         OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
         OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver",
       }),
@@ -58,7 +76,7 @@ describe("telegram live qa runtime", () => {
 
   it("fails when the Telegram group id is not numeric", () => {
     expect(() =>
-      __testing.resolveTelegramQaRuntimeEnv({
+      testing.resolveTelegramQaRuntimeEnv({
         OPENCLAW_QA_TELEGRAM_GROUP_ID: "qa-group",
         OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver",
         OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut",
@@ -67,59 +85,245 @@ describe("telegram live qa runtime", () => {
   });
 
   it("parses Telegram live progress env booleans", () => {
-    expect(__testing.parseTelegramQaProgressBooleanEnv("true")).toBe(true);
-    expect(__testing.parseTelegramQaProgressBooleanEnv("on")).toBe(true);
-    expect(__testing.parseTelegramQaProgressBooleanEnv("false")).toBe(false);
-    expect(__testing.parseTelegramQaProgressBooleanEnv("off")).toBe(false);
-    expect(__testing.parseTelegramQaProgressBooleanEnv("maybe")).toBeUndefined();
+    expect(testing.parseTelegramQaProgressBooleanEnv("true")).toBe(true);
+    expect(testing.parseTelegramQaProgressBooleanEnv("on")).toBe(true);
+    expect(testing.parseTelegramQaProgressBooleanEnv("false")).toBe(false);
+    expect(testing.parseTelegramQaProgressBooleanEnv("off")).toBe(false);
+    expect(testing.parseTelegramQaProgressBooleanEnv("maybe")).toBeUndefined();
   });
 
   it("defaults Telegram live progress logging from CI when no override is set", () => {
-    expect(__testing.shouldLogTelegramQaLiveProgress({ CI: "true" })).toBe(true);
-    expect(__testing.shouldLogTelegramQaLiveProgress({ CI: "false" })).toBe(false);
+    expect(testing.shouldLogTelegramQaLiveProgress({ CI: "true" })).toBe(true);
+    expect(testing.shouldLogTelegramQaLiveProgress({ CI: "false" })).toBe(false);
   });
 
   it("applies OPENCLAW_QA_SUITE_PROGRESS override to Telegram live logging", () => {
     expect(
-      __testing.shouldLogTelegramQaLiveProgress({
+      testing.shouldLogTelegramQaLiveProgress({
         CI: "false",
         OPENCLAW_QA_SUITE_PROGRESS: "true",
       }),
     ).toBe(true);
     expect(
-      __testing.shouldLogTelegramQaLiveProgress({
+      testing.shouldLogTelegramQaLiveProgress({
         CI: "true",
         OPENCLAW_QA_SUITE_PROGRESS: "false",
       }),
     ).toBe(false);
     expect(
-      __testing.shouldLogTelegramQaLiveProgress({
+      testing.shouldLogTelegramQaLiveProgress({
         CI: "true",
         OPENCLAW_QA_SUITE_PROGRESS: "definitely",
       }),
     ).toBe(true);
   });
 
-  it("normalizes the Telegram QA canary timeout env", () => {
-    expect(__testing.resolveTelegramQaCanaryTimeoutMs({})).toBe(30_000);
+  it("waits until the Telegram channel account is connected", async () => {
+    const gateway = {
+      call: vi
+        .fn()
+        .mockResolvedValueOnce({
+          channelAccounts: {
+            telegram: [
+              {
+                accountId: "sut",
+                connected: false,
+                restartPending: false,
+                running: true,
+              },
+            ],
+          },
+        })
+        .mockResolvedValueOnce({
+          channelAccounts: {
+            telegram: [
+              {
+                accountId: "sut",
+                connected: true,
+                restartPending: false,
+                running: true,
+              },
+            ],
+          },
+        }),
+    };
+
+    await testing.waitForTelegramChannelRunning(gateway as never, "sut", {
+      pollMs: 1,
+      timeoutMs: 100,
+    });
+
+    expect(gateway.call).toHaveBeenCalledTimes(2);
+  });
+
+  it("normalizes the Telegram QA transport ready timeout env", () => {
+    expect(testing.resolveTelegramQaReadyTimeoutMs({})).toBe(45_000);
     expect(
-      __testing.resolveTelegramQaCanaryTimeoutMs({
+      testing.resolveTelegramQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000",
+      }),
+    ).toBe(180_000);
+    expect(
+      testing.resolveTelegramQaReadyTimeoutMs({
+        OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
+      }),
+    ).toBe(45_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        testing.resolveTelegramQaReadyTimeoutMs({
+          OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: value,
+        }),
+      ).toBe(45_000);
+    }
+  });
+
+  it("includes the last Telegram readiness status when the account stays unavailable", async () => {
+    const gateway = {
+      call: vi.fn().mockResolvedValue({
+        channelAccounts: {
+          telegram: [
+            {
+              accountId: "sut",
+              connected: false,
+              lastError: "Telegram getUpdates conflict",
+              restartPending: true,
+              running: true,
+            },
+          ],
+        },
+      }),
+    };
+
+    await expect(
+      testing.waitForTelegramChannelRunning(gateway as never, "sut", {
+        pollMs: 1,
+        timeoutMs: 5,
+      }),
+    ).rejects.toThrow(
+      'telegram account "sut" did not become ready; last status: {"connected":false,"lastError":"Telegram getUpdates conflict","restartPending":true,"running":true}',
+    );
+  });
+
+  it("normalizes the Telegram QA canary timeout env", () => {
+    expect(testing.resolveTelegramQaCanaryTimeoutMs({})).toBe(30_000);
+    expect(
+      testing.resolveTelegramQaCanaryTimeoutMs({
         OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "90000",
       }),
     ).toBe(90_000);
     expect(
-      __testing.resolveTelegramQaCanaryTimeoutMs({
+      testing.resolveTelegramQaCanaryTimeoutMs({
         OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: "nope",
       }),
     ).toBe(30_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        testing.resolveTelegramQaCanaryTimeoutMs({
+          OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: value,
+        }),
+      ).toBe(30_000);
+    }
+  });
+
+  it("normalizes the Telegram QA scenario timeout env", () => {
+    expect(testing.resolveTelegramQaScenarioTimeoutMs(45_000, {})).toBe(45_000);
+    expect(
+      testing.resolveTelegramQaScenarioTimeoutMs(45_000, {
+        OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "180000",
+      }),
+    ).toBe(180_000);
+    expect(
+      testing.resolveTelegramQaScenarioTimeoutMs(45_000, {
+        OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: "nope",
+      }),
+    ).toBe(45_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        testing.resolveTelegramQaScenarioTimeoutMs(45_000, {
+          OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: value,
+        }),
+      ).toBe(45_000);
+    }
+  });
+
+  it("normalizes Telegram RTT options", () => {
+    expect(testing.normalizeTelegramQaRttOptions({})).toBeUndefined();
+    expect(
+      testing.normalizeTelegramQaRttOptions({
+        count: 3,
+        timeoutMs: 45_000,
+      }),
+    ).toEqual({
+      count: 3,
+      maxFailures: 3,
+      checkIds: new Set(["telegram-mentioned-message-reply"]),
+      timeoutMs: 45_000,
+    });
+    expect(
+      testing.normalizeTelegramQaRttOptions({
+        checkIds: ["telegram-mentioned-message-reply"],
+        count: 3,
+        maxFailures: 1,
+      }),
+    ).toEqual({
+      count: 3,
+      maxFailures: 1,
+      checkIds: new Set(["telegram-mentioned-message-reply"]),
+      timeoutMs: 30_000,
+    });
+  });
+
+  it("rejects unknown Telegram RTT checks", () => {
+    expect(() =>
+      testing.normalizeTelegramQaRttOptions({
+        checkIds: ["telegram-rtt-only"],
+        count: 1,
+      }),
+    ).toThrow("unknown Telegram QA RTT check: telegram-rtt-only");
+  });
+
+  it("summarizes live transport RTT timing", () => {
+    expect(
+      summarizeLiveTransportRttSamples([
+        { status: "pass", rttMs: 1000 },
+        { status: "pass", rttMs: 2000 },
+        { status: "pass", rttMs: 4000 },
+        { status: "fail" },
+      ]),
+    ).toEqual({
+      passed: 3,
+      failed: 1,
+      timing: {
+        rttMs: 2000,
+        avgMs: 2333,
+        p50Ms: 2000,
+        p95Ms: 4000,
+        maxMs: 4000,
+        samples: 4,
+        failedSamples: 1,
+      },
+    });
+    expect(summarizeLiveTransportRttSamples([{ status: "fail" }, { status: "fail" }])).toEqual({
+      passed: 0,
+      failed: 2,
+      timing: {
+        rttMs: undefined,
+        avgMs: undefined,
+        p50Ms: undefined,
+        p95Ms: undefined,
+        maxMs: undefined,
+        samples: 2,
+        failedSamples: 2,
+      },
+    });
   });
 
   it("sanitizes and truncates Telegram live progress details", () => {
-    expect(__testing.sanitizeTelegramQaProgressValue("scenario\nid\tvalue")).toBe(
+    expect(testing.sanitizeTelegramQaProgressValue("scenario\nid\tvalue")).toBe(
       "scenario id value",
     );
-    expect(__testing.sanitizeTelegramQaProgressValue("\u0000\u0001")).toBe("<empty>");
-    const details = __testing.formatTelegramQaProgressDetails(`header\n${"x".repeat(500)}`);
+    expect(testing.sanitizeTelegramQaProgressValue("\u0000\u0001")).toBe("<empty>");
+    const details = testing.formatTelegramQaProgressDetails(`header\n${"x".repeat(500)}`);
     expect(details.startsWith("header ")).toBe(true);
     expect(details.length).toBeLessThanOrEqual(240);
     expect(details.endsWith("...")).toBe(true);
@@ -127,7 +331,7 @@ describe("telegram live qa runtime", () => {
 
   it("parses Telegram pooled credential payloads", () => {
     expect(
-      __testing.parseTelegramQaCredentialPayload({
+      testing.parseTelegramQaCredentialPayload({
         groupId: "-100123",
         driverToken: "driver",
         sutToken: "sut",
@@ -141,7 +345,7 @@ describe("telegram live qa runtime", () => {
 
   it("rejects Telegram pooled credential payloads with non-numeric group ids", () => {
     expect(() =>
-      __testing.parseTelegramQaCredentialPayload({
+      testing.parseTelegramQaCredentialPayload({
         groupId: "qa-group",
         driverToken: "driver",
         sutToken: "sut",
@@ -169,7 +373,7 @@ describe("telegram live qa runtime", () => {
       },
     };
 
-    const next = __testing.buildTelegramQaConfig(baseCfg, {
+    const next = testing.buildTelegramQaConfig(baseCfg, {
       groupId: "-100123",
       sutToken: "sut-token",
       driverBotId: 42,
@@ -177,6 +381,9 @@ describe("telegram live qa runtime", () => {
     });
 
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime).toEqual({
+      id: "openclaw",
+    });
     expect(next.plugins?.allow).toContain("telegram");
     expect(next.plugins?.entries?.telegram).toEqual({ enabled: true });
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
@@ -203,7 +410,7 @@ describe("telegram live qa runtime", () => {
 
   it("normalizes observed Telegram messages", () => {
     expect(
-      __testing.normalizeTelegramObservedMessage({
+      testing.normalizeTelegramObservedMessage({
         update_id: 7,
         message: {
           message_id: 9,
@@ -238,9 +445,98 @@ describe("telegram live qa runtime", () => {
     });
   });
 
+  it("normalizes Telegram rich messages as observed text", () => {
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 8,
+        message: {
+          message_id: 10,
+          date: 1_700_000_001,
+          rich_message: { markdown: "**hello** rich" },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+          reply_to_message: { message_id: 9 },
+        },
+      })?.text,
+    ).toBe("**hello** rich");
+
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 9,
+        message: {
+          message_id: 11,
+          date: 1_700_000_002,
+          rich_message: { html: "<b>hello</b> rich" },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+        },
+      })?.text,
+    ).toBe("<b>hello</b> rich");
+
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 10,
+        message: {
+          message_id: 12,
+          date: 1_700_000_003,
+          rich_message: {
+            blocks: [
+              {
+                type: "paragraph",
+                text: ["hello ", { type: "bold", text: "rich" }],
+              },
+              {
+                type: "footer",
+                text: { type: "italic", text: "footer" },
+              },
+            ],
+          },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+        },
+      })?.text,
+    ).toBe("hello rich\nfooter");
+
+    expect(
+      testing.normalizeTelegramObservedMessage({
+        update_id: 11,
+        message: {
+          message_id: 13,
+          date: 1_700_000_004,
+          rich_message: {
+            blocks: [
+              {
+                type: "table",
+                cells: [[{ text: "Open" }, { text: "Claw" }], [{ text: "release" }]],
+              },
+            ],
+          },
+          chat: { id: -100123 },
+          from: {
+            id: 88,
+            is_bot: true,
+            username: "sut_bot",
+          },
+        },
+      })?.text,
+    ).toBe("Open\tClaw\nrelease");
+  });
+
   it("ignores unrelated sut replies when matching the canary response", () => {
     expect(
-      __testing.classifyCanaryReply({
+      testing.classifyCanaryReply({
         groupId: "-100123",
         sutBotId: 88,
         driverMessageId: 55,
@@ -260,7 +556,7 @@ describe("telegram live qa runtime", () => {
       }),
     ).toBe("unthreaded");
     expect(
-      __testing.classifyCanaryReply({
+      testing.classifyCanaryReply({
         groupId: "-100123",
         sutBotId: 88,
         driverMessageId: 55,
@@ -283,7 +579,7 @@ describe("telegram live qa runtime", () => {
 
   it("classifies threaded blank sut replies as matches", () => {
     expect(
-      __testing.classifyCanaryReply({
+      testing.classifyCanaryReply({
         groupId: "-100123",
         sutBotId: 88,
         driverMessageId: 55,
@@ -304,72 +600,337 @@ describe("telegram live qa runtime", () => {
     ).toBe("match");
   });
 
-  it("fails when any requested Telegram scenario id is unknown", () => {
-    expect(() => __testing.findScenario(["telegram-help-command", "typo-scenario"])).toThrow(
-      "unknown Telegram QA scenario id(s): typo-scenario",
+  it("keeps scenario text checks strict while allowing canary presence replies", () => {
+    const message = {
+      updateId: 3,
+      messageId: 11,
+      chatId: -100123,
+      senderId: 88,
+      senderIsBot: true,
+      senderUsername: "sut_bot",
+      text: "",
+      replyToMessageId: 55,
+      timestamp: 1_700_000_002_000,
+      inlineButtons: [],
+      mediaKinds: [],
+    };
+
+    expect(() => testing.assertTelegramScenarioReply({ message })).toThrow(
+      "reply message 11 was empty",
     );
+    expect(() => testing.assertTelegramCanaryPresenceReply(message)).not.toThrow();
+  });
+
+  it("fails when any requested Telegram scenario id is unknown", () => {
+    expect(() =>
+      testing.findScenario(["telegram-mentioned-message-reply", "typo-scenario"]),
+    ).toThrow("unknown Telegram QA scenario id(s): typo-scenario");
+  });
+
+  it("recognizes Telegram observation timeouts with retry details", () => {
+    expect(
+      testing.isTelegramObservedMessageTimeoutError(
+        new Error(
+          "timed out after 8000ms waiting for Telegram message; last polling error: The operation was aborted due to timeout",
+        ),
+        8000,
+      ),
+    ).toBe(true);
+    expect(
+      testing.isTelegramObservedMessageTimeoutError(
+        new Error("timed out after 9000ms waiting for Telegram message"),
+        8000,
+      ),
+    ).toBe(false);
   });
 
   it("includes mention gating in the Telegram live scenario catalog", () => {
-    const scenarios = __testing.findScenario([
-      "telegram-help-command",
-      "telegram-commands-command",
-      "telegram-tools-compact-command",
-      "telegram-whoami-command",
-      "telegram-context-command",
+    const scenarios = testing.findScenario([
+      "telegram-other-bot-command-gating",
       "telegram-mentioned-message-reply",
+      "telegram-stream-final-single-message",
+      "telegram-long-final-reuses-preview",
+      "telegram-long-final-three-chunks",
       "telegram-mention-gating",
     ]);
     expect(scenarios.map((scenario) => scenario.id)).toEqual([
-      "telegram-help-command",
-      "telegram-commands-command",
-      "telegram-tools-compact-command",
-      "telegram-whoami-command",
-      "telegram-context-command",
+      "telegram-other-bot-command-gating",
       "telegram-mentioned-message-reply",
+      "telegram-stream-final-single-message",
+      "telegram-long-final-reuses-preview",
+      "telegram-long-final-three-chunks",
       "telegram-mention-gating",
     ]);
+    const otherBotStep = requireScenario(scenarios, "telegram-other-bot-command-gating").buildRun(
+      "sut_bot",
+    ).steps[0];
+    expect(otherBotStep?.expectReply).toBe(false);
+    expect(otherBotStep?.input).toBe("/status@OpenClawQaOtherBot");
     expect(
       scenarios
         .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
-        ?.buildRun("sut_bot").replyToLatestSutMessage,
+        ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
     ).toBe(true);
+    expect(
+      scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply")
+        ?.evidenceCoverageIds,
+    ).toEqual(["channels.telegram.mention-gating"]);
+    const streamSingleStep = requireScenario(
+      scenarios,
+      "telegram-stream-final-single-message",
+    ).buildRun("sut_bot").steps[0];
+    expect(streamSingleStep?.expectedJoinedSutTextIncludes).toEqual([
+      "QA-TELEGRAM-STREAM-SINGLE-OK",
+    ]);
+    expect(streamSingleStep?.expectedSutMessageCount).toBe(1);
+    expect(streamSingleStep?.replyToLatestSutMessage).toBeUndefined();
+    const longReusesStep = requireScenario(
+      scenarios,
+      "telegram-long-final-reuses-preview",
+    ).buildRun("sut_bot").steps[0];
+    expect(longReusesStep?.expectedJoinedSutTextIncludes).toEqual([
+      "TELEGRAM-LONG-FINAL-BEGIN",
+      "TELEGRAM-LONG-FINAL-END",
+    ]);
+    expect(longReusesStep?.expectedSutMessageCountRange).toEqual([1, 2]);
+    expect(longReusesStep?.replyToLatestSutMessage).toBe(true);
+    const longThreeChunksStep = requireScenario(
+      scenarios,
+      "telegram-long-final-three-chunks",
+    ).buildRun("sut_bot").steps[0];
+    expect(longThreeChunksStep?.expectedJoinedSutTextIncludes).toEqual([
+      "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+      "TELEGRAM-LONG-FINAL-3CHUNK-END",
+    ]);
+    expect(longThreeChunksStep?.expectedSutMessageCount).toBe(3);
+    expect(longThreeChunksStep?.replyToLatestSutMessage).toBe(true);
   });
 
-  it("keeps bot-to-bot plain mentions out of the default Telegram live set", () => {
-    expect(__testing.findScenario().map((scenario) => scenario.id)).toEqual([
-      "telegram-help-command",
-      "telegram-commands-command",
-      "telegram-tools-compact-command",
-      "telegram-whoami-command",
-      "telegram-context-command",
+  it("keeps mock-scripted Telegram checks out of the default live-frontier set", () => {
+    expect(testing.findScenario(undefined, "live-frontier").map((scenario) => scenario.id)).toEqual(
+      [
+        "telegram-other-bot-command-gating",
+        "telegram-mentioned-message-reply",
+        "telegram-mention-gating",
+      ],
+    );
+  });
+
+  it("adds deterministic model-scripted checks to the default mock-openai set", () => {
+    expect(testing.findScenario(undefined, "mock-openai").map((scenario) => scenario.id)).toEqual([
+      "telegram-other-bot-command-gating",
+      "telegram-mentioned-message-reply",
+      "telegram-long-final-reuses-preview",
       "telegram-mention-gating",
     ]);
   });
 
+  it("lists remaining optional Telegram scenario metadata", () => {
+    const catalog = testing.listTelegramQaScenarioCatalog("mock-openai");
+    const streamSingle = requireScenario(catalog, "telegram-stream-final-single-message");
+    expect(streamSingle.defaultEnabled).toBe(false);
+    expect(streamSingle.regressionRefs).toEqual(["openclaw/openclaw#39905"]);
+  });
+
   it("tracks Telegram live coverage against the shared transport contract", () => {
-    expect(__testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS).toEqual([
-      "canary",
-      "help-command",
-      "mention-gating",
-    ]);
+    expect(testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS).toEqual(["canary", "mention-gating"]);
     expect(
       findMissingLiveTransportStandardScenarios({
-        coveredStandardScenarioIds: __testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS,
+        coveredStandardScenarioIds: testing.TELEGRAM_QA_STANDARD_SCENARIO_IDS,
         expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
       }),
     ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);
   });
 
+  it("asserts long Telegram final replies reuse the streamed preview message", () => {
+    expect(
+      testing.assertTelegramScenarioMessageSet({
+        expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
+        expectedSutMessageCountRange: [1, 2],
+        groupId: "-100123",
+        scenarioId: "telegram-long-final-reuses-preview",
+        sutBotId: 99,
+        observedMessages: [
+          {
+            updateId: 1,
+            messageId: 10,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-reuses-preview",
+            scenarioTitle: "Telegram long final reuses the preview message",
+            matchedScenario: true,
+            text: "TELEGRAM-LONG-FINAL-BEGIN part one part two TELEGRAM-LONG-FINAL-END",
+            timestamp: 1_700_000_000_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+
+    expect(
+      testing.assertTelegramScenarioMessageSet({
+        expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
+        expectedSutMessageCountRange: [1, 2],
+        groupId: "-100123",
+        scenarioId: "telegram-long-final-reuses-preview",
+        sutBotId: 99,
+        observedMessages: [
+          {
+            updateId: 1,
+            messageId: 10,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-reuses-preview",
+            scenarioTitle: "Telegram long final reuses the preview message",
+            matchedScenario: true,
+            text: "TELEGRAM-LONG-FINAL-BEGIN part one ",
+            timestamp: 1_700_000_000_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+          {
+            updateId: 2,
+            messageId: 11,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-reuses-preview",
+            scenarioTitle: "Telegram long final reuses the preview message",
+            matchedScenario: true,
+            text: "part two TELEGRAM-LONG-FINAL-END",
+            timestamp: 1_700_000_001_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+
+    expect(() =>
+      testing.assertTelegramScenarioMessageSet({
+        expectedSutMessageCountRange: [1, 2],
+        groupId: "-100123",
+        scenarioId: "telegram-long-final-reuses-preview",
+        sutBotId: 99,
+        observedMessages: [
+          {
+            updateId: 1,
+            messageId: 10,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-reuses-preview",
+            scenarioTitle: "Telegram long final reuses the preview message",
+            matchedScenario: true,
+            text: "preview",
+            timestamp: 1_700_000_000_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+          {
+            updateId: 2,
+            messageId: 11,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-reuses-preview",
+            scenarioTitle: "Telegram long final reuses the preview message",
+            matchedScenario: true,
+            text: "final chunk one",
+            timestamp: 1_700_000_001_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+          {
+            updateId: 3,
+            messageId: 12,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-reuses-preview",
+            scenarioTitle: "Telegram long final reuses the preview message",
+            matchedScenario: true,
+            text: "final chunk two",
+            timestamp: 1_700_000_002_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+        ],
+      }),
+    ).toThrow("expected 1-2 SUT message(s), observed 3");
+  });
+
+  it("accepts legitimate three-chunk Telegram final replies", () => {
+    expect(
+      testing.assertTelegramScenarioMessageSet({
+        expectedJoinedSutTextIncludes: [
+          "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN",
+          "TELEGRAM-LONG-FINAL-3CHUNK-END",
+        ],
+        expectedSutMessageCount: 3,
+        groupId: "-100123",
+        scenarioId: "telegram-long-final-three-chunks",
+        sutBotId: 99,
+        observedMessages: [
+          {
+            updateId: 1,
+            messageId: 10,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-three-chunks",
+            scenarioTitle: "Telegram three-chunk final keeps only final chunks",
+            matchedScenario: true,
+            text: "TELEGRAM-LONG-FINAL-3CHUNK-BEGIN part one ",
+            timestamp: 1_700_000_000_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+          {
+            updateId: 2,
+            messageId: 11,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-three-chunks",
+            scenarioTitle: "Telegram three-chunk final keeps only final chunks",
+            matchedScenario: true,
+            text: "part two ",
+            timestamp: 1_700_000_001_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+          {
+            updateId: 3,
+            messageId: 12,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-three-chunks",
+            scenarioTitle: "Telegram three-chunk final keeps only final chunks",
+            matchedScenario: true,
+            text: "part three TELEGRAM-LONG-FINAL-3CHUNK-END",
+            timestamp: 1_700_000_002_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+  });
+
   it("matches scenario replies by thread or exact marker", () => {
     expect(
-      __testing.matchesTelegramScenarioReply({
+      testing.matchesTelegramScenarioReply({
         groupId: "-100123",
         sentMessageId: 55,
         sutBotId: 88,
         message: {
           updateId: 1,
-          messageId: 10,
+          messageId: 56,
           chatId: -100123,
           senderId: 88,
           senderIsBot: true,
@@ -384,7 +945,28 @@ describe("telegram live qa runtime", () => {
       }),
     ).toBe(true);
     expect(
-      __testing.matchesTelegramScenarioReply({
+      testing.matchesTelegramScenarioReply({
+        groupId: "-100123",
+        sentMessageId: 55,
+        sutBotId: 88,
+        message: {
+          updateId: 5,
+          messageId: 54,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "reply with TELEGRAM_QA_NOMENTION_TOKEN",
+          replyToMessageId: undefined,
+          timestamp: 1_700_000_005_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+        matchText: "TELEGRAM_QA_NOMENTION_TOKEN",
+      }),
+    ).toBe(false);
+    expect(
+      testing.matchesTelegramScenarioReply({
         groupId: "-100123",
         sentMessageId: 55,
         sutBotId: 88,
@@ -405,14 +987,14 @@ describe("telegram live qa runtime", () => {
       }),
     ).toBe(false);
     expect(
-      __testing.matchesTelegramScenarioReply({
+      testing.matchesTelegramScenarioReply({
         allowAnySutReply: true,
         groupId: "-100123",
         sentMessageId: 55,
         sutBotId: 88,
         message: {
           updateId: 3,
-          messageId: 12,
+          messageId: 56,
           chatId: -100123,
           senderId: 88,
           senderIsBot: true,
@@ -425,11 +1007,32 @@ describe("telegram live qa runtime", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      testing.matchesTelegramScenarioReply({
+        allowAnySutReply: true,
+        groupId: "-100123",
+        sentMessageId: 55,
+        sutBotId: 88,
+        message: {
+          updateId: 4,
+          messageId: 54,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "stale reply from a previous scenario",
+          replyToMessageId: undefined,
+          timestamp: 1_700_000_004_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("validates expected Telegram reply markers", () => {
-    expect(() =>
-      __testing.assertTelegramScenarioReply({
+    expect(
+      testing.assertTelegramScenarioReply({
         expectedTextIncludes: ["🧭 Identity", "Channel: telegram"],
         message: {
           updateId: 1,
@@ -445,9 +1048,9 @@ describe("telegram live qa runtime", () => {
           mediaKinds: [],
         },
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
     expect(() =>
-      __testing.assertTelegramScenarioReply({
+      testing.assertTelegramScenarioReply({
         expectedTextIncludes: ["Use /tools verbose for descriptions."],
         message: {
           updateId: 2,
@@ -483,22 +1086,87 @@ describe("telegram live qa runtime", () => {
       }),
     );
 
-    await expect(__testing.callTelegramApi("token", "getMe", undefined, 25)).resolves.toEqual({
+    await expect(testing.callTelegramApi("token", "getMe", undefined, 25)).resolves.toEqual({
       id: 42,
     });
     expect(timeoutSpy).toHaveBeenCalledWith(25);
+    expect(fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      capture: false,
+    });
     expect(signal).toBe(controller.signal);
     expect(signal?.aborted).toBe(false);
     controller.abort();
     expect(signal?.aborted).toBe(true);
   });
 
+  it("caps oversized Telegram API request deadlines", async () => {
+    const controller = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ ok: true, result: { id: 42 } }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+            },
+          }),
+      ),
+    );
+
+    await expect(
+      testing.callTelegramApi("token", "getMe", undefined, Number.MAX_SAFE_INTEGER),
+    ).resolves.toEqual({
+      id: 42,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(fetchWithSsrFGuardMock.mock.calls.at(-1)?.[0]).toMatchObject({
+      timeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
+  });
+
+  it("rejects oversized Telegram API success bodies", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              ok: true,
+              result: {
+                blob: "x".repeat(16 * 1024 * 1024),
+              },
+            }),
+            {
+              status: 200,
+              headers: {
+                "content-type": "application/json",
+              },
+            },
+          ),
+      ),
+    );
+
+    await expect(testing.callTelegramApi("token", "getMe")).rejects.toThrow(
+      "qa-lab-telegram-live.getMe: JSON response exceeds 16777216 bytes",
+    );
+  });
+
   it("treats transient Telegram getUpdates network errors as recoverable", () => {
-    expect(__testing.isRecoverableTelegramQaPollError(new TypeError("fetch failed"))).toBe(true);
-    expect(__testing.isRecoverableTelegramQaPollError(new Error("socket hang up"))).toBe(true);
+    expect(testing.isRecoverableTelegramQaPollError(new TypeError("fetch failed"))).toBe(true);
+    expect(testing.isRecoverableTelegramQaPollError(new Error("socket hang up"))).toBe(true);
     expect(
-      __testing.isRecoverableTelegramQaPollError(new Error("Bad Request: chat not found")),
-    ).toBe(false);
+      testing.isRecoverableTelegramQaPollError(
+        new Error("The operation was aborted due to timeout"),
+      ),
+    ).toBe(true);
+    expect(testing.isRecoverableTelegramQaPollError(new Error("request timed out"))).toBe(true);
+    expect(testing.isRecoverableTelegramQaPollError(new Error("AbortError"))).toBe(true);
+    expect(testing.isRecoverableTelegramQaPollError(new Error("Bad Request: chat not found"))).toBe(
+      false,
+    );
   });
 
   it("retries transient Telegram polling fetch failures while waiting for scenario replies", async () => {
@@ -533,18 +1201,18 @@ describe("telegram live qa runtime", () => {
       );
     vi.stubGlobal("fetch", fetchMock);
     const observedMessages: Parameters<
-      typeof __testing.waitForObservedMessage
+      typeof testing.waitForObservedMessage
     >[0]["observedMessages"] = [];
 
-    const result = await __testing.waitForObservedMessage({
+    const result = await testing.waitForObservedMessage({
       token: "token",
       initialOffset: 7,
       timeoutMs: 5_000,
       observedMessages,
-      observationScenarioId: "telegram-whoami-command",
-      observationScenarioTitle: "Telegram whoami reply",
+      observationScenarioId: "telegram-mentioned-message-reply",
+      observationScenarioTitle: "Telegram mentioned message gets a reply",
       predicate: (message) =>
-        __testing.matchesTelegramScenarioReply({
+        testing.matchesTelegramScenarioReply({
           groupId: "-100123",
           message,
           sentMessageId: 55,
@@ -555,169 +1223,15 @@ describe("telegram live qa runtime", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.message.messageId).toBe(99);
     expect(result.nextOffset).toBe(11);
-    expect(observedMessages).toEqual([
-      expect.objectContaining({
-        matchedScenario: true,
-        messageId: 99,
-        scenarioId: "telegram-whoami-command",
-      }),
-    ]);
-  });
-
-  it("redacts observed message content by default in artifacts", () => {
-    expect(
-      __testing.buildObservedMessagesArtifact({
-        includeContent: false,
-        redactMetadata: false,
-        observedMessages: [
-          {
-            updateId: 1,
-            messageId: 9,
-            chatId: -100123,
-            senderId: 42,
-            senderIsBot: true,
-            senderUsername: "driver_bot",
-            text: "secret text",
-            caption: "secret caption",
-            replyToMessageId: 8,
-            timestamp: 1_700_000_000_000,
-            inlineButtons: ["Approve"],
-            mediaKinds: ["photo"],
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        updateId: 1,
-        messageId: 9,
-        chatId: -100123,
-        senderId: 42,
-        senderIsBot: true,
-        senderUsername: "driver_bot",
-        replyToMessageId: 8,
-        timestamp: 1_700_000_000_000,
-        inlineButtons: ["Approve"],
-        mediaKinds: ["photo"],
-      },
-    ]);
-  });
-
-  it("keeps observed message content in public mode when capture is requested", () => {
-    const redacted = __testing.buildObservedMessagesArtifact({
-      includeContent: true,
-      redactMetadata: true,
-      observedMessages: [
-        {
-          updateId: 1,
-          messageId: 9,
-          chatId: -100123,
-          senderId: 42,
-          senderIsBot: true,
-          senderUsername: "driver_bot",
-          text: "secret text",
-          caption: "secret caption",
-          replyToMessageId: 8,
-          timestamp: 1_700_000_000_000,
-          inlineButtons: ["Approve"],
-          mediaKinds: ["photo"],
-        },
-      ],
-    });
-
-    expect(redacted).toEqual([
-      {
-        senderIsBot: true,
-        inlineButtonCount: 1,
-        mediaKinds: ["photo"],
-        text: "secret text",
-        caption: "secret caption",
-      },
-    ]);
-    expect(redacted[0]).not.toHaveProperty("timestamp");
-    expect(redacted[0]).not.toHaveProperty("inlineButtons");
-    expect(redacted[0]).not.toHaveProperty("senderId");
-    expect(redacted[0]).not.toHaveProperty("senderUsername");
-  });
-
-  it("keeps raw timestamp and inline button text when metadata redaction is disabled", () => {
-    expect(
-      __testing.buildObservedMessagesArtifact({
-        includeContent: true,
-        redactMetadata: false,
-        observedMessages: [
-          {
-            updateId: 1,
-            messageId: 9,
-            chatId: -100123,
-            senderId: 42,
-            senderIsBot: true,
-            senderUsername: "driver_bot",
-            text: "secret text",
-            caption: "secret caption",
-            replyToMessageId: 8,
-            timestamp: 1_700_000_000_000,
-            inlineButtons: ["Approve"],
-            mediaKinds: ["photo"],
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        updateId: 1,
-        messageId: 9,
-        chatId: -100123,
-        senderId: 42,
-        senderIsBot: true,
-        timestamp: 1_700_000_000_000,
-        inlineButtons: ["Approve"],
-        senderUsername: "driver_bot",
-        replyToMessageId: 8,
-        text: "secret text",
-        caption: "secret caption",
-        mediaKinds: ["photo"],
-      },
-    ]);
-  });
-
-  it("adds scenario context to observed message artifacts", () => {
-    expect(
-      __testing.buildObservedMessagesArtifact({
-        includeContent: false,
-        redactMetadata: true,
-        observedMessages: [
-          {
-            updateId: 11,
-            messageId: 21,
-            chatId: -100123,
-            senderId: 88,
-            senderIsBot: true,
-            senderUsername: "sut_bot",
-            scenarioId: "telegram-commands-command",
-            scenarioTitle: "Telegram commands list reply",
-            matchedScenario: false,
-            text: "noise from previous turn",
-            replyToMessageId: 19,
-            timestamp: 1_700_000_003_000,
-            inlineButtons: [],
-            mediaKinds: [],
-          },
-        ],
-      }),
-    ).toEqual([
-      {
-        scenarioId: "telegram-commands-command",
-        scenarioTitle: "Telegram commands list reply",
-        matchedScenario: false,
-        senderIsBot: true,
-        inlineButtonCount: 0,
-        mediaKinds: [],
-      },
-    ]);
+    expect(observedMessages).toHaveLength(1);
+    expect(observedMessages[0]?.matchedScenario).toBe(true);
+    expect(observedMessages[0]?.messageId).toBe(99);
+    expect(observedMessages[0]?.scenarioId).toBe("telegram-mentioned-message-reply");
   });
 
   it("prints Telegram scenario RTT in the Markdown report", () => {
     expect(
-      __testing.renderTelegramQaMarkdown({
+      testing.renderTelegramQaMarkdown({
         cleanupIssues: [],
         credentialSource: "env",
         groupId: "-100123",
@@ -737,6 +1251,38 @@ describe("telegram live qa runtime", () => {
     ).toContain("- RTT: 4321ms");
   });
 
+  it("prints Telegram repeated RTT timing in the Markdown report", () => {
+    const report = testing.renderTelegramQaMarkdown({
+      cleanupIssues: [],
+      credentialSource: "env",
+      groupId: "-100123",
+      redactMetadata: false,
+      startedAt: "2026-04-23T00:00:00.000Z",
+      finishedAt: "2026-04-23T00:00:10.000Z",
+      scenarios: [
+        {
+          id: "telegram-mentioned-message-reply",
+          title: "Telegram mentioned message gets a reply",
+          status: "pass",
+          details: "reply matched; 3/4 RTT checks passed",
+          rttMs: 2000,
+          timing: {
+            avgMs: 2333,
+            p50Ms: 2000,
+            p95Ms: 4000,
+            maxMs: 4000,
+            samples: 4,
+            failedSamples: 1,
+          },
+        },
+      ],
+    });
+
+    expect(report).toContain("- Samples: 3/4");
+    expect(report).toContain("- P50: 2000ms");
+    expect(report).toContain("- P95: 4000ms");
+  });
+
   it("formats phase-specific canary diagnostics with context", () => {
     const error = new Error(
       "SUT bot did not send any group reply after the canary command within 30s.",
@@ -750,7 +1296,7 @@ describe("telegram live qa runtime", () => {
       },
     });
 
-    const message = __testing.canaryFailureMessage({
+    const message = testing.canaryFailureMessage({
       error,
       groupId: "-100123",
       driverBotId: 42,
@@ -776,7 +1322,7 @@ describe("telegram live qa runtime", () => {
       },
     });
 
-    const message = __testing.canaryFailureMessage({
+    const message = testing.canaryFailureMessage({
       error,
       groupId: "-100123",
       driverBotId: 42,
@@ -807,7 +1353,7 @@ describe("telegram live qa runtime", () => {
       context: null,
     });
 
-    const message = __testing.canaryFailureMessage({
+    const message = testing.canaryFailureMessage({
       error,
       groupId: "-100123",
       driverBotId: 42,
@@ -818,5 +1364,11 @@ describe("telegram live qa runtime", () => {
 
     expect(message).toContain("Phase: unknown");
     expect(message).toContain("boom");
+  });
+
+  it("keeps bounded telegram QA progress details on UTF-16 boundaries", () => {
+    const prefix = "a".repeat(236);
+    expect(testing.formatTelegramQaProgressDetails(`${prefix}😀after`)).toBe(`${prefix}...`);
+    expect(testing.formatTelegramQaProgressDetails("a".repeat(241))).toBe(`${"a".repeat(237)}...`);
   });
 });

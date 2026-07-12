@@ -1,3 +1,5 @@
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
+// Google tests cover google plugin behavior.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -9,9 +11,33 @@ import plugin from "./index.js";
 import { createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 const GOOGLE_API_KEY =
-  process.env.GEMINI_API_KEY?.trim() || process.env.GOOGLE_API_KEY?.trim() || "";
+  process.env.GEMINI_API_KEY?.trim() ||
+  process.env.GOOGLE_API_KEY?.trim() ||
+  process.env.GEMINI_PROVIDER_API_KEY?.trim() ||
+  "";
 const LIVE = isLiveTestEnabled() && GOOGLE_API_KEY.length > 0;
 const describeLive = LIVE ? describe : describe.skip;
+
+async function withGoogleApiEnvUnset<T>(fn: () => Promise<T>): Promise<T> {
+  const geminiApiKey = process.env.GEMINI_API_KEY;
+  const googleApiKey = process.env.GOOGLE_API_KEY;
+  delete process.env.GEMINI_API_KEY;
+  delete process.env.GOOGLE_API_KEY;
+  try {
+    return await fn();
+  } finally {
+    if (geminiApiKey === undefined) {
+      delete process.env.GEMINI_API_KEY;
+    } else {
+      process.env.GEMINI_API_KEY = geminiApiKey;
+    }
+    if (googleApiKey === undefined) {
+      delete process.env.GOOGLE_API_KEY;
+    } else {
+      process.env.GOOGLE_API_KEY = googleApiKey;
+    }
+  }
+}
 
 function isTransientGeminiSearchError(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -22,6 +48,20 @@ function isTransientGeminiSearchError(error: unknown): boolean {
   }
   const message = error.message.toLowerCase();
   return message.includes("timeout") || message.includes("aborted");
+}
+
+function hasTrustedFfmpegForLiveVoiceNote(): boolean {
+  try {
+    resolveFfmpegBin();
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("ffmpeg not found in trusted system directories")) {
+      console.warn("[google:live] skip voice-note transcode: ffmpeg unavailable");
+      return false;
+    }
+    throw error;
+  }
 }
 
 const registerGooglePlugin = () =>
@@ -50,6 +90,10 @@ describeLive("google plugin live", () => {
   }, 120_000);
 
   it("transcodes speech to Opus for voice-note targets", async () => {
+    if (!hasTrustedFfmpegForLiveVoiceNote()) {
+      return;
+    }
+
     const { speechProviders } = await registerGooglePlugin();
     const provider = requireRegisteredProvider(speechProviders, "google");
 
@@ -116,12 +160,54 @@ describeLive("google plugin live", () => {
       }
     }
     if (lastError) {
-      throw lastError;
+      throw toLintErrorObject(lastError, "Non-Error thrown");
     }
 
     expect(result?.provider).toBe("gemini");
     expect(typeof result?.content).toBe("string");
-    expect((result?.content as string).length).toBeGreaterThan(20);
+    expect((result!.content as string).length).toBeGreaterThan(20);
     expect(Array.isArray(result?.citations)).toBe(true);
   }, 120_000);
+
+  it("runs Gemini web search through the Google model provider config fallback", async () => {
+    await withGoogleApiEnvUnset(async () => {
+      const provider = createGeminiWebSearchProvider();
+      const tool = provider.createTool?.({
+        config: {
+          models: {
+            providers: {
+              google: {
+                apiKey: GOOGLE_API_KEY,
+              },
+            },
+          },
+        },
+        searchConfig: { provider: "gemini", cacheTtlMinutes: 0, timeoutSeconds: 90 },
+      } as never);
+
+      const result = await tool?.execute({ query: "OpenClaw GitHub", count: 1 });
+
+      expect(process.env.GEMINI_API_KEY).toBeUndefined();
+      expect(process.env.GOOGLE_API_KEY).toBeUndefined();
+      expect(result?.provider).toBe("gemini");
+      expect(typeof result?.content).toBe("string");
+      expect((result!.content as string).length).toBeGreaterThan(20);
+      expect(Array.isArray(result?.citations)).toBe(true);
+      expect((result!.citations as unknown[]).length).toBeGreaterThan(0);
+    });
+  }, 120_000);
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

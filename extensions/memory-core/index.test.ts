@@ -1,5 +1,9 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { describe, expect, it } from "vitest";
+// Memory Core tests cover index plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginApi, OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
+import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMemoryFlushPlan,
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
@@ -8,9 +12,52 @@ import {
 } from "./src/flush-plan.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
+const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
+const getMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => null));
+const createMemoryRuntimeMock = vi.hoisted(() =>
+  vi.fn(() => ({
+    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeMemorySearchManager: closeMemorySearchManagerMock,
+    getMemorySearchManager: getMemorySearchManagerMock,
+  })),
+);
+
+vi.mock("./src/runtime-provider.js", () => ({
+  createMemoryRuntime: createMemoryRuntimeMock,
+  memoryRuntime: {
+    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeMemorySearchManager: closeMemorySearchManagerMock,
+    getMemorySearchManager: getMemorySearchManagerMock,
+  },
+}));
+
+import plugin from "./index.js";
+
+const hostRuntime = {
+  llm: {
+    acquireLocalService: async () => undefined,
+  },
+} as unknown as OpenClawPluginApi["runtime"];
+
+function registerMemoryCoreRuntime(): MemoryPluginRuntime {
+  let runtime: MemoryPluginRuntime | undefined;
+  plugin.register(
+    createTestPluginApi({
+      runtime: hostRuntime,
+      registerMemoryCapability(capability) {
+        runtime = capability.runtime;
+      },
+    }),
+  );
+  if (!runtime) {
+    throw new Error("expected memory-core to register a memory runtime");
+  }
+  return runtime;
+}
+
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {
-    expect(buildPromptSection({ availableTools: new Set() })).toEqual([]);
+    expect(buildPromptSection({ availableTools: new Set() })).toStrictEqual([]);
   });
 
   it("describes the two-step flow when both memory tools are available", () => {
@@ -53,6 +100,47 @@ describe("buildPromptSection", () => {
   });
 });
 
+describe("memory-core plugin runtime registration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("registers the dreaming runtime slash command", () => {
+    let command: OpenClawPluginCommandDefinition | undefined;
+    plugin.register(
+      createTestPluginApi({
+        runtime: hostRuntime,
+        registerCommand(definition) {
+          command = definition;
+        },
+      }),
+    );
+
+    expect(command?.name).toBe("dreaming");
+    expect(command?.acceptsArgs).toBe(true);
+    expect(command?.exposeSenderIsOwner).toBe(true);
+    expect(command?.description).toContain("Enable or disable");
+  });
+
+  it("wires scoped memory search cleanup through the lazy runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
+
+    expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
+  });
+
+  it("binds the host local-service hook to the registered memory runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.getMemorySearchManager({ cfg, agentId: "main" });
+
+    expect(createMemoryRuntimeMock).toHaveBeenCalledWith(hostRuntime.llm.acquireLocalService);
+  });
+});
+
 describe("buildMemoryFlushPlan", () => {
   const cfg = {
     agents: {
@@ -84,8 +172,9 @@ describe("buildMemoryFlushPlan", () => {
 
     expect(plan?.prompt).toContain("memory/2026-02-16.md");
     expect(plan?.prompt).toContain(
-      "Current time: Monday, February 16th, 2026 - 10:00 AM (America/New_York) / 2026-02-16 15:00 UTC",
+      "Current time: Monday, February 16th, 2026 - 10:00 AM (America/New_York)",
     );
+    expect(plan?.prompt).toContain("Reference UTC: 2026-02-16 15:00 UTC");
     expect(plan?.relativePath).toBe("memory/2026-02-16.md");
   });
 
@@ -114,7 +203,6 @@ describe("buildMemoryFlushPlan", () => {
 
   it("defaults to safe prompts and gating values", () => {
     const plan = buildMemoryFlushPlan();
-    expect(plan).not.toBeNull();
     expect(plan?.softThresholdTokens).toBe(DEFAULT_MEMORY_FLUSH_SOFT_TOKENS);
     expect(plan?.forceFlushTranscriptBytes).toBe(DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES);
     expect(plan?.prompt).toContain("memory/");

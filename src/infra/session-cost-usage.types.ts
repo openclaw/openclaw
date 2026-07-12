@@ -1,16 +1,12 @@
+// Shared session cost and usage accounting type contracts.
 import type { NormalizedUsage } from "../agents/usage.js";
+import type { Usage } from "../llm/types.js";
 import type {
   SessionUsageTimePoint as SharedSessionUsageTimePoint,
   SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
 } from "../shared/session-usage-timeseries-types.js";
 
-export type CostBreakdown = {
-  total?: number;
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-};
+export type CostBreakdown = Partial<Usage["cost"]>;
 
 export type ParsedUsageEntry = {
   usage: NormalizedUsage;
@@ -51,7 +47,7 @@ export type CostUsageTotals = {
   missingCostEntries: number;
 };
 
-export type CostUsageDailyEntry = CostUsageTotals & {
+type CostUsageDailyEntry = CostUsageTotals & {
   date: string;
 };
 
@@ -60,7 +56,20 @@ export type CostUsageSummary = {
   days: number;
   daily: CostUsageDailyEntry[];
   totals: CostUsageTotals;
+  cacheStatus?: {
+    status: "fresh" | "partial" | "stale" | "refreshing";
+    cachedFiles: number;
+    pendingFiles: number;
+    staleFiles: number;
+    refreshedAt?: number;
+  };
 };
+
+export type UsageCacheStatus = NonNullable<CostUsageSummary["cacheStatus"]>;
+
+export type UsageDailyBucket =
+  | { mode: "utc-offset"; utcOffsetMinutes: number }
+  | { mode: "time-zone"; timeZone: string };
 
 export type SessionDailyUsage = {
   date: string; // YYYY-MM-DD
@@ -87,6 +96,21 @@ export type SessionUtcQuarterHourMessageCounts = {
   toolCalls: number;
   toolResults: number;
   errors: number;
+};
+
+export type SessionUtcQuarterHourTokenUsage = {
+  date: string; // YYYY-MM-DD (UTC)
+  quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  // Uses the same token total basis as CostUsageTotals: usage.total when present,
+  // otherwise input + output + cacheRead + cacheWrite. This intentionally differs
+  // from legacy dailyBreakdown.tokens, which preserves its existing component-sum
+  // behavior until daily usage buckets are refactored separately.
+  totalTokens: number;
+  totalCost: number;
 };
 
 export type SessionLatencyStats = {
@@ -142,6 +166,7 @@ export type SessionCostSummary = CostUsageTotals & {
   dailyBreakdown?: SessionDailyUsage[]; // Per-day token/cost breakdown
   dailyMessageCounts?: SessionDailyMessageCounts[];
   utcQuarterHourMessageCounts?: SessionUtcQuarterHourMessageCounts[]; // UTC quarter-hour buckets for precise hourly stats
+  utcQuarterHourTokenUsage?: SessionUtcQuarterHourTokenUsage[]; // UTC quarter-hour buckets for precise token mosaic stats
   dailyLatency?: SessionDailyLatency[];
   dailyModelUsage?: SessionDailyModelUsage[];
   messageCounts?: SessionMessageCounts;

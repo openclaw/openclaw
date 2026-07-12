@@ -1,6 +1,9 @@
+// Discord plugin module implements gateway metadata behavior.
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Type } from "typebox";
@@ -14,9 +17,10 @@ const DEFAULT_DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/";
 const DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 30_000;
 const MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS = 120_000;
 const DISCORD_GATEWAY_INFO_TIMEOUT_ENV = "OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS";
+const DISCORD_GATEWAY_METADATA_MAX_BYTES = 4 * 1024 * 1024;
 const DISCORD_GATEWAY_METADATA_FALLBACK_LOG_INTERVAL_MS = 60_000;
 
-export type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
+type DiscordGatewayMetadataResponse = Pick<Response, "ok" | "status" | "text">;
 export type DiscordGatewayFetchInit = Record<string, unknown> & {
   headers?: Record<string, string>;
 };
@@ -24,6 +28,10 @@ export type DiscordGatewayFetch = (
   input: string,
   init?: DiscordGatewayFetchInit,
 ) => Promise<DiscordGatewayMetadataResponse>;
+type DiscordGatewayMetadataFetchOptions = {
+  capture?: false | { flowId: string; meta: Record<string, unknown> };
+  proxyUrl?: string;
+};
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 
@@ -51,7 +59,14 @@ function resolveFetchInputUrl(input: RequestInfo | URL): string {
 }
 
 async function materializeGuardedResponse(response: Response): Promise<Response> {
-  const body = await response.arrayBuffer();
+  const body = new Uint8Array(
+    await readResponseWithLimit(response, DISCORD_GATEWAY_METADATA_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `Discord gateway metadata response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    }),
+  );
   return new Response(body, {
     status: response.status,
     statusText: response.statusText,
@@ -60,12 +75,11 @@ async function materializeGuardedResponse(response: Response): Promise<Response>
 }
 
 function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
-  const numeric =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isFinite(numeric) || numeric <= 0) {
+  const numeric = parseStrictPositiveInteger(value);
+  if (numeric === undefined) {
     return undefined;
   }
-  return Math.min(Math.floor(numeric), MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
+  return Math.min(numeric, MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
 }
 
 export function resolveDiscordGatewayInfoTimeoutMs(params?: {
@@ -265,10 +279,10 @@ export function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; e
   };
 }
 
-export async function fetchDiscordGatewayMetadataDirect(
+export async function fetchDiscordGatewayMetadataGuarded(
   input: string,
   init?: DiscordGatewayFetchInit,
-  capture?: false | { flowId: string; meta: Record<string, unknown> },
+  options?: DiscordGatewayMetadataFetchOptions,
 ): Promise<Response> {
   const guarded = await fetchWithSsrFGuard({
     url: resolveFetchInputUrl(input),
@@ -276,6 +290,16 @@ export async function fetchDiscordGatewayMetadataDirect(
     policy: { allowedHostnames: [DISCORD_API_HOST] },
     capture: false,
     auditContext: "discord.gateway.metadata",
+    ...(options?.proxyUrl
+      ? {
+          mode: "trusted_explicit_proxy" as const,
+          dispatcherPolicy: {
+            mode: "explicit-proxy" as const,
+            proxyUrl: options.proxyUrl,
+            allowPrivateProxy: true,
+          },
+        }
+      : {}),
   });
   let response: Response;
   try {
@@ -283,15 +307,15 @@ export async function fetchDiscordGatewayMetadataDirect(
   } finally {
     await guarded.release();
   }
-  if (capture) {
+  if (options?.capture) {
     captureHttpExchange({
       url: input,
       method: (init?.method as string | undefined) ?? "GET",
       requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
       requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
       response,
-      flowId: capture.flowId,
-      meta: capture.meta,
+      flowId: options.capture.flowId,
+      meta: options.capture.meta,
     });
   }
   return response;

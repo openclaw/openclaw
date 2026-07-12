@@ -1,9 +1,16 @@
+/**
+ * Shared config normalization for Codex native web search.
+ */
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
 
+/** Whether native Codex search may use cached or live external web access. */
 export type CodexNativeSearchMode = "cached" | "live";
+/** OpenAI search context-size hint for Codex native web search. */
 export type CodexNativeSearchContextSize = "low" | "medium" | "high";
 
+/** Optional approximate user location for Codex native web search. */
 export type CodexNativeSearchUserLocation = {
   country?: string;
   region?: string;
@@ -11,6 +18,7 @@ export type CodexNativeSearchUserLocation = {
   timezone?: string;
 };
 
+/** Normalized Codex native web-search settings. */
 export type ResolvedCodexNativeWebSearchConfig = {
   enabled: boolean;
   mode: CodexNativeSearchMode;
@@ -20,16 +28,7 @@ export type ResolvedCodexNativeWebSearchConfig = {
 };
 
 function normalizeAllowedDomains(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const deduped = [
-    ...new Set(
-      value
-        .map((entry) => (typeof entry === "string" ? entry.trim() : null))
-        .filter((entry): entry is string => Boolean(entry)),
-    ),
-  ];
+  const deduped = normalizeUniqueTrimmedStringList(value);
   return deduped.length > 0 ? deduped : undefined;
 }
 
@@ -59,6 +58,7 @@ function normalizeUserLocation(value: unknown): CodexNativeSearchUserLocation | 
     : undefined;
 }
 
+/** Resolve Codex native web-search config from OpenClaw tool settings. */
 export function resolveCodexNativeWebSearchConfig(
   config: OpenClawConfig | undefined,
 ): ResolvedCodexNativeWebSearchConfig {
@@ -72,6 +72,7 @@ export function resolveCodexNativeWebSearchConfig(
   };
 }
 
+/** Return concise prompt/status text for enabled Codex native search. */
 export function describeCodexNativeWebSearch(
   config: OpenClawConfig | undefined,
 ): string | undefined {

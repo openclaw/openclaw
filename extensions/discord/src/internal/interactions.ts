@@ -1,3 +1,4 @@
+// Discord plugin module implements interactions behavior.
 import {
   ComponentType,
   InteractionResponseType,
@@ -7,6 +8,7 @@ import {
   type APIChannel,
   type APIInteraction,
   type APIInteractionDataResolvedChannel,
+  type APIMessage,
   type APIMessageComponentInteraction,
   type APIModalSubmitInteraction,
   type APIUser,
@@ -14,7 +16,6 @@ import {
 import {
   createInteractionCallback,
   createWebhookMessage,
-  deleteWebhookMessage,
   editWebhookMessage,
   getWebhookMessage,
 } from "./api.js";
@@ -41,6 +42,15 @@ export { ModalFields } from "./modal-fields.js";
 
 type InteractionClient = StructureClient & {
   options: { clientId: string };
+  componentHandler: {
+    waitForMessageComponent(
+      message: Message,
+      timeoutMs: number,
+    ): Promise<
+      | { success: true; customId: string; message: Message; values?: string[] }
+      | { success: false; message: Message; reason: "timed out" }
+    >;
+  };
   fetchChannel(id: string): Promise<DiscordChannel>;
 };
 
@@ -198,15 +208,6 @@ export class BaseInteraction {
     return result;
   }
 
-  async deleteReply(): Promise<unknown> {
-    return await deleteWebhookMessage(
-      this.client.rest,
-      this.client.options.clientId,
-      this.token,
-      "@original",
-    );
-  }
-
   async fetchReply(): Promise<unknown> {
     return await getWebhookMessage(
       this.client.rest,
@@ -214,6 +215,16 @@ export class BaseInteraction {
       this.token,
       "@original",
     );
+  }
+
+  async replyAndWaitForComponent(payload: MessagePayload, timeoutMs = 300_000) {
+    const result = await this.reply(payload);
+    const rawMessage = isRawMessage(result) ? result : await this.fetchReply();
+    if (!isRawMessage(rawMessage)) {
+      throw new Error("Discord interaction reply did not return a message");
+    }
+    const message = new Message(this.client, rawMessage as APIMessage);
+    return await this.client.componentHandler.waitForMessageComponent(message, timeoutMs);
   }
 
   async followUp(payload: MessagePayload): Promise<unknown> {
@@ -266,7 +277,7 @@ export class BaseComponentInteraction extends BaseInteraction {
   async update(payload: MessagePayload): Promise<unknown> {
     return await this.callback(InteractionResponseType.UpdateMessage, serializePayload(payload));
   }
-  async acknowledge(): Promise<unknown> {
+  override async acknowledge(): Promise<unknown> {
     return await this.callback(InteractionResponseType.DeferredMessageUpdate);
   }
   async showModal(modal: Modal): Promise<unknown> {
@@ -291,7 +302,7 @@ export class ModalInteraction extends BaseInteraction {
       client,
     );
   }
-  async acknowledge(): Promise<unknown> {
+  override async acknowledge(): Promise<unknown> {
     return await this.callback(InteractionResponseType.DeferredMessageUpdate);
   }
 }
@@ -334,4 +345,13 @@ export function parseComponentInteractionData(
   customId: string,
 ): ComponentData {
   return component.customIdParser(customId).data;
+}
+
+function isRawMessage(value: unknown): value is { id: string; channel_id: string } {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    typeof (value as { id?: unknown }).id === "string" &&
+    typeof (value as { channel_id?: unknown }).channel_id === "string"
+  );
 }

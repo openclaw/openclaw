@@ -1,3 +1,5 @@
+// Google Meet plugin module implements chrome browser proxy behavior.
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 
 type BrowserProxyResult = {
@@ -9,6 +11,19 @@ export type BrowserTab = {
   title?: string;
   url?: string;
 };
+
+// Meet automation scripts match English UI labels ("Join now", "Turn off microphone").
+// hl=en pins the Meet page language regardless of account/browser locale; without it,
+// non-English profiles render localized labels and every DOM matcher goes blind.
+export function forceMeetEnglishUi(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.searchParams.set("hl", "en");
+    return parsed.toString();
+  } catch {
+    return url;
+  }
+}
 
 export function normalizeMeetUrlForReuse(url: string | undefined): string | undefined {
   if (!url) {
@@ -35,7 +50,23 @@ export function isSameMeetUrlForReuse(a: string | undefined, b: string | undefin
   return Boolean(normalizedA && normalizedB && normalizedA === normalizedB);
 }
 
-export type GoogleMeetNodeInfo = {
+export function isEnglishMeetTab(url: string | undefined): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "https:" &&
+      parsed.hostname.toLowerCase() === "meet.google.com" &&
+      parsed.searchParams.get("hl")?.toLowerCase() === "en"
+    );
+  } catch {
+    return false;
+  }
+}
+
+type GoogleMeetNodeInfo = {
   caps?: string[];
   commands?: string[];
   connected?: boolean;
@@ -148,7 +179,13 @@ export async function resolveChromeNode(params: {
 function unwrapNodeInvokePayload(raw: unknown): unknown {
   const record = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   if (typeof record.payloadJSON === "string" && record.payloadJSON.trim()) {
-    return JSON.parse(record.payloadJSON);
+    try {
+      return JSON.parse(record.payloadJSON);
+    } catch (error) {
+      throw new Error("Google Meet browser proxy returned malformed payloadJSON.", {
+        cause: error,
+      });
+    }
   }
   if ("payload" in record) {
     return record.payload;
@@ -183,7 +220,8 @@ export async function callBrowserProxyOnNode(params: {
       body: params.body,
       timeoutMs: params.timeoutMs,
     },
-    timeoutMs: params.timeoutMs + 5_000,
+    timeoutMs: addTimerTimeoutGraceMs(params.timeoutMs) ?? 1,
+    scopes: ["operator.admin"],
   });
   return parseBrowserProxyResult(raw);
 }

@@ -1,17 +1,22 @@
-import fs from "node:fs/promises";
-import os from "node:os";
+// Session permissions and hooks tests protect gateway access control around
+// patch/delete/compact/restore APIs plus emitted internal hook payloads.
 import path from "node:path";
-import { expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
-import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
+import { afterAll, expect, test, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+
+const permHookTempDirs: string[] = [];
+
+afterAll(() => {
+  cleanupTempDirs(permHookTempDirs);
+});
 import {
-  connectOk,
-  rpcReq,
-  testState,
-  trackConnectChallengeNonce,
-  writeSessionStore,
-} from "./test-helpers.js";
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { isSessionPatchEvent } from "../hooks/internal-hooks.js";
+import { requireRecord } from "./test-helpers.assertions.js";
+import { connectWebchatClient, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionHookMocks,
@@ -21,10 +26,34 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient, getHarness } = setupGatewaySessionsTestHarness();
+type PermissionClient = NonNullable<Parameters<typeof connectWebchatClient>[0]["client"]>;
+
+async function openPermissionClient(client: Pick<PermissionClient, "id" | "mode">) {
+  return await connectWebchatClient({
+    port: getHarness().port,
+    client: {
+      id: client.id,
+      version: "1.0.0",
+      platform: "test",
+      mode: client.mode,
+    },
+  });
+}
+
+function requireFirstCallArg(mock: { mock: { calls: readonly (readonly unknown[])[] } }) {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0];
+}
 
 test("webchat clients cannot patch, delete, compact, or restore sessions", async () => {
   const { dir } = await createSessionStoreDir();
   const fixture = await createCheckpointFixture(dir);
+  if (!fixture.preCompactionSession || !fixture.preCompactionSessionFile) {
+    throw new Error("expected legacy checkpoint fixture");
+  }
 
   await writeSessionStore({
     entries: {
@@ -59,19 +88,9 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
     },
   });
 
-  const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
-    headers: { origin: `http://127.0.0.1:${getHarness().port}` },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, {
-    client: {
-      id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-    scopes: ["operator.admin"],
+  const ws = await openPermissionClient({
+    id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+    mode: GATEWAY_CLIENT_MODES.UI,
   });
 
   const patched = await rpcReq(ws, "sessions.patch", {
@@ -105,7 +124,7 @@ test("webchat clients cannot patch, delete, compact, or restore sessions", async
 });
 
 test("session:patch hook fires with correct context", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-patch-hook-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-patch-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -127,29 +146,25 @@ test("session:patch hook fires with correct context", async () => {
   });
 
   expect(patched.ok).toBe(true);
-  expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
-    expect.objectContaining({
-      type: "session",
-      action: "patch",
-      sessionKey: expect.stringMatching(/agent:main:main/),
-      context: expect.objectContaining({
-        sessionEntry: expect.objectContaining({
-          sessionId: "sess-hook-test",
-          label: "updated-label",
-        }),
-        patch: expect.objectContaining({
-          label: "updated-label",
-        }),
-        cfg: expect.any(Object),
-      }),
-    }),
+  const event = requireRecord(
+    requireFirstCallArg(sessionHookMocks.triggerInternalHook),
+    "internal hook event",
   );
+  expect(event.type).toBe("session");
+  expect(event.action).toBe("patch");
+  expect(event.sessionKey).toBe("agent:main:main");
+  const context = requireRecord(event.context, "internal hook context");
+  const sessionEntry = requireRecord(context.sessionEntry, "session entry");
+  expect(sessionEntry.sessionId).toBe("sess-hook-test");
+  expect(sessionEntry.label).toBe("updated-label");
+  expect(requireRecord(context.patch, "session patch").label).toBe("updated-label");
+  requireRecord(context.cfg, "config");
 
   ws.close();
 });
 
 test("session:patch hook does not fire for webchat clients", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-hook-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-webchat-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -161,19 +176,9 @@ test("session:patch hook does not fire for webchat clients", async () => {
 
   sessionHookMocks.triggerInternalHook.mockClear();
 
-  const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
-    headers: { origin: `http://127.0.0.1:${getHarness().port}` },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, {
-    client: {
-      id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.UI,
-    },
-    scopes: ["operator.admin"],
+  const ws = await openPermissionClient({
+    id: GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+    mode: GATEWAY_CLIENT_MODES.UI,
   });
 
   const patched = await rpcReq(ws, "sessions.patch", {
@@ -188,7 +193,7 @@ test("session:patch hook does not fire for webchat clients", async () => {
 });
 
 test("session:patch hook only fires after successful patch", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-success-hook-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-success-hook-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -218,12 +223,12 @@ test("session:patch hook only fires after successful patch", async () => {
   });
 
   expect(validPatch.ok).toBe(true);
-  expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledWith(
-    expect.objectContaining({
-      type: "session",
-      action: "patch",
-    }),
+  const event = requireRecord(
+    requireFirstCallArg(sessionHookMocks.triggerInternalHook),
+    "internal hook event",
   );
+  expect(event.type).toBe("session");
+  expect(event.action).toBe("patch");
 
   ws.close();
 });
@@ -239,13 +244,14 @@ test("session:patch skips clone and dispatch when no hooks listen", async () => 
   });
 
   expect(patched.ok).toBe(true);
-  expect(structuredCloneSpy).not.toHaveBeenCalledWith(
-    expect.objectContaining({
-      cfg: expect.any(Object),
-      patch: expect.any(Object),
-      sessionEntry: expect.any(Object),
-    }),
-  );
+  const clonedHookContexts = structuredCloneSpy.mock.calls.filter(([value]) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return false;
+    }
+    const record = value as Record<string, unknown>;
+    return Boolean(record.cfg && record.patch && record.sessionEntry);
+  });
+  expect(clonedHookContexts).toHaveLength(0);
   expect(sessionHookMocks.triggerInternalHook).not.toHaveBeenCalled();
 
   structuredCloneSpy.mockRestore();
@@ -280,7 +286,7 @@ test("session:patch hook mutations cannot change the response path", async () =>
     resolved: {
       modelProvider: string;
       model: string;
-      agentRuntime: { id: string; fallback?: string; source: string };
+      agentRuntime: { id: string; source: string };
     };
   }>(ws, "sessions.patch", {
     key: "agent:main:main",
@@ -291,7 +297,7 @@ test("session:patch hook mutations cannot change the response path", async () =>
   expect(patched.payload?.resolved).toEqual({
     modelProvider: "anthropic",
     model: "claude-opus-4-6",
-    agentRuntime: { id: "pi", source: "implicit" },
+    agentRuntime: { id: "auto", source: "implicit" },
   });
   expect(patched.payload?.entry.label).toBe("cfg-isolation");
 
@@ -299,7 +305,7 @@ test("session:patch hook mutations cannot change the response path", async () =>
 });
 
 test("control-ui client can delete sessions even in webchat mode", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-control-ui-delete-"));
+  const dir = makeTempDir(permHookTempDirs, "openclaw-sessions-control-ui-delete-");
   const storePath = path.join(dir, "sessions.json");
   testState.sessionStorePath = storePath;
 
@@ -310,19 +316,9 @@ test("control-ui client can delete sessions even in webchat mode", async () => {
     },
   });
 
-  const ws = new WebSocket(`ws://127.0.0.1:${getHarness().port}`, {
-    headers: { origin: `http://127.0.0.1:${getHarness().port}` },
-  });
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, {
-    client: {
-      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      version: "1.0.0",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-    },
-    scopes: ["operator.admin"],
+  const ws = await openPermissionClient({
+    id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+    mode: GATEWAY_CLIENT_MODES.WEBCHAT,
   });
 
   const deleted = await rpcReq<{ ok: true; deleted: boolean }>(ws, "sessions.delete", {
@@ -331,11 +327,9 @@ test("control-ui client can delete sessions even in webchat mode", async () => {
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
-  expect(store["agent:main:discord:group:dev"]).toBeUndefined();
+  expect(
+    loadSessionEntry({ sessionKey: "agent:main:discord:group:dev", storePath }),
+  ).toBeUndefined();
 
   ws.close();
 });

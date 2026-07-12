@@ -1,3 +1,4 @@
+/** Shared plugin-loader fixture builders for temp manifests, bundle roots, and isolated env state. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -32,7 +33,6 @@ const fixtureRoot = mkdtempSafe(path.join(os.tmpdir(), "openclaw-plugin-"));
 let tempDirIndex = 0;
 const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const prevDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-const prevPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
 
 export const EMPTY_PLUGIN_SCHEMA = {
   type: "object",
@@ -82,6 +82,7 @@ export function writePlugin(params: {
   body: string;
   dir?: string;
   filename?: string;
+  configSchema?: Record<string, unknown>;
 }): TempPlugin {
   const dir = params.dir ?? makeTempDir();
   const filename = params.filename ?? `${params.id}.cjs`;
@@ -93,7 +94,7 @@ export function writePlugin(params: {
     JSON.stringify(
       {
         id: params.id,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
+        configSchema: params.configSchema ?? EMPTY_PLUGIN_SCHEMA,
       },
       null,
       2,
@@ -150,11 +151,6 @@ export function resetPluginLoaderTestStateForTest() {
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   } else {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = prevDisableBundledPlugins;
-  }
-  if (prevPluginStageDir === undefined) {
-    delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
-  } else {
-    process.env.OPENCLAW_PLUGIN_STAGE_DIR = prevPluginStageDir;
   }
 }
 

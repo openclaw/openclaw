@@ -1,3 +1,4 @@
+// Setup wizard helper tests cover channel setup step formatting and config writes.
 import {
   resolveSetupWizardAllowFromEntries,
   resolveSetupWizardGroupAllowlist,
@@ -84,6 +85,16 @@ const matrixNamedAccountPromotionKeys = [
 ] as const;
 const telegramSingleAccountKeysToMove = ["streaming"] as const;
 
+function collectNamedAccountIds(accounts: Record<string, unknown>): string[] {
+  const ids: string[] = [];
+  for (const accountId of Object.keys(accounts)) {
+    if (accountId) {
+      ids.push(accountId);
+    }
+  }
+  return ids;
+}
+
 function resolveMatrixSingleAccountPromotionTarget(params: {
   channel: { defaultAccount?: string; accounts?: Record<string, unknown> };
 }): string {
@@ -98,7 +109,7 @@ function resolveMatrixSingleAccountPromotionTarget(params: {
       ) ?? DEFAULT_ACCOUNT_ID
     );
   }
-  const namedAccounts = Object.keys(accounts).filter(Boolean);
+  const namedAccounts = collectNamedAccountIds(accounts);
   return namedAccounts.length === 1 ? namedAccounts[0] : DEFAULT_ACCOUNT_ID;
 }
 
@@ -147,15 +158,21 @@ function createTokenPrompter(params: { confirms: boolean[]; texts: string[] }) {
   const texts = [...params.texts];
   return {
     confirm: vi.fn(async () => confirms.shift() ?? true),
-    text: vi.fn(async () => texts.shift() ?? ""),
+    text: vi.fn<(textParams: { sensitive?: boolean }) => Promise<string>>(
+      async () => texts.shift() ?? "",
+    ),
   };
 }
 
 function parseCsvInputs(value: string): string[] {
-  return value
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const entries: string[] = [];
+  for (const part of value.split(",")) {
+    const entry = part.trim();
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+  return entries;
 }
 
 type AllowFromResolver = (params: {
@@ -504,6 +521,11 @@ describe("promptSingleChannelToken", () => {
     });
     expect(result).toEqual(expected);
     expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
+    // Token entry is a credential: masked in terminals, and the Crestodian
+    // chat bridge refuses plain-text secrets based on this flag.
+    for (const call of prompter.text.mock.calls) {
+      expect(call[0]).toMatchObject({ sensitive: true });
+    }
   });
 });
 
@@ -627,7 +649,7 @@ describe("promptParsedAllowFromForScopedChannel", () => {
       placeholder: "placeholder",
       parseEntries: (raw) =>
         parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
-      getExistingAllowFrom: ({ cfg }) => cfg.channels?.imessage?.allowFrom ?? [],
+      getExistingAllowFrom: ({ cfg: cfgValue }) => cfgValue.channels?.imessage?.allowFrom ?? [],
     });
 
     expect(next.channels?.imessage?.allowFrom).toEqual(["alice"]);
@@ -659,8 +681,8 @@ describe("promptParsedAllowFromForScopedChannel", () => {
       message: "msg",
       placeholder: "placeholder",
       parseEntries: (raw) => ({ entries: [raw.trim()] }),
-      getExistingAllowFrom: ({ cfg, accountId }) =>
-        cfg.channels?.signal?.accounts?.[accountId]?.allowFrom ?? [],
+      getExistingAllowFrom: ({ cfg: cfgLocal, accountId }) =>
+        cfgLocal.channels?.signal?.accounts?.[accountId]?.allowFrom ?? [],
     });
 
     expect(next.channels?.signal?.accounts?.alt?.allowFrom).toEqual(["+15555550124"]);
@@ -705,7 +727,7 @@ describe("promptParsedAllowFromForAccount", () => {
     const next = await promptParsedAllowFromForAccount({
       cfg: {
         channels: {
-          bluebubbles: {
+          imessage: {
             accounts: {
               alt: {
                 allowFrom: ["old"],
@@ -717,7 +739,7 @@ describe("promptParsedAllowFromForAccount", () => {
       accountId: "alt",
       defaultAccountId: DEFAULT_ACCOUNT_ID,
       prompter,
-      noteTitle: "BlueBubbles allowlist",
+      noteTitle: "iMessage allowlist",
       noteLines: ["line"],
       message: "msg",
       placeholder: "placeholder",
@@ -725,7 +747,7 @@ describe("promptParsedAllowFromForAccount", () => {
         parseSetupEntriesWithParser(raw, (entry) => ({ value: entry.toLowerCase() })),
       getExistingAllowFrom: ({ cfg, accountId }) => [
         ...((
-          cfg.channels?.bluebubbles?.accounts?.[accountId] as
+          cfg.channels?.imessage?.accounts?.[accountId] as
             | { allowFrom?: ReadonlyArray<string | number> }
             | undefined
         )?.allowFrom ?? []),
@@ -733,7 +755,7 @@ describe("promptParsedAllowFromForAccount", () => {
       applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
         patchChannelConfigForAccount({
           cfg,
-          channel: "bluebubbles",
+          channel: "imessage",
           accountId,
           patch: { allowFrom },
         }),
@@ -741,12 +763,12 @@ describe("promptParsedAllowFromForAccount", () => {
 
     expect(
       (
-        next.channels?.bluebubbles?.accounts?.alt as
+        next.channels?.imessage?.accounts?.alt as
           | { allowFrom?: ReadonlyArray<string | number> }
           | undefined
       )?.allowFrom,
     ).toEqual(["alice"]);
-    expect(prompter.note).toHaveBeenCalledWith("line", "BlueBubbles allowlist");
+    expect(prompter.note).toHaveBeenCalledWith("line", "iMessage allowlist");
   });
 
   it("can merge parsed values with existing entries", async () => {
@@ -788,7 +810,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
       parseEntries: (raw) => ({ entries: [raw.trim().toLowerCase()] }),
       getExistingAllowFrom: ({ cfg, accountId }) => [
         ...((
-          cfg.channels?.bluebubbles?.accounts?.[accountId] as
+          cfg.channels?.imessage?.accounts?.[accountId] as
             | { allowFrom?: ReadonlyArray<string | number> }
             | undefined
         )?.allowFrom ?? []),
@@ -796,7 +818,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
       applyAllowFrom: ({ cfg, accountId, allowFrom }) =>
         patchChannelConfigForAccount({
           cfg,
-          channel: "bluebubbles",
+          channel: "imessage",
           accountId,
           patch: { allowFrom },
         }),
@@ -806,7 +828,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
     const next = await promptAllowFrom({
       cfg: {
         channels: {
-          bluebubbles: {
+          imessage: {
             accounts: {
               work: {
                 allowFrom: ["old"],
@@ -820,7 +842,7 @@ describe("createPromptParsedAllowFromForAccount", () => {
 
     expect(
       (
-        next.channels?.bluebubbles?.accounts?.work as
+        next.channels?.imessage?.accounts?.work as
           | { allowFrom?: ReadonlyArray<string | number> }
           | undefined
       )?.allowFrom,
@@ -2104,12 +2126,14 @@ describe("resolveAccountIdForConfigure", () => {
     });
 
     expect(accountId).toBe("prompted-id");
-    expect(prompter.select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "Signal account",
-        initialValue: "fallback",
-      }),
-    );
+    const selectCalls = prompter.select.mock.calls as unknown as Array<
+      [{ message?: string; initialValue?: string }]
+    >;
+    const selectOptions = selectCalls[0]?.[0] as
+      | { message?: string; initialValue?: string }
+      | undefined;
+    expect(selectOptions?.message).toBe("Signal account");
+    expect(selectOptions?.initialValue).toBe("fallback");
     expect(prompter.text).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,10 @@
+/** Doctor prompt adapter that centralizes repair, force, update, and noninteractive behavior. */
 import { confirm, select } from "@clack/prompts";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+} from "../../packages/terminal-core/src/prompt-style.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { stylePromptHint, stylePromptMessage } from "../terminal/prompt-style.js";
 import {
   resolveDoctorRepairMode,
   shouldAutoApproveDoctorFix,
@@ -27,6 +31,7 @@ export type DoctorPrompter = {
   repairMode: DoctorRepairMode;
 };
 
+/** Creates a doctor prompter honoring --fix, --yes, --force, noninteractive, and update modes. */
 export function createDoctorPrompter(params: {
   runtime: RuntimeEnv;
   options: DoctorOptions;
@@ -42,12 +47,15 @@ export function createDoctorPrompter(params: {
     if (!repairMode.canPrompt) {
       return p.initialValue ?? false;
     }
+    // Exit 130 (SIGINT convention) so the installer can distinguish
+    // user cancellation from normal doctor failures.
     return guardCancel(
       await confirm({
         ...p,
         message: stylePromptMessage(p.message),
       }),
       params.runtime,
+      130,
     );
   };
 
@@ -73,6 +81,7 @@ export function createDoctorPrompter(params: {
           message: stylePromptMessage(p.message),
         }),
         params.runtime,
+        130,
       );
     },
     confirmRuntimeRepair: async (p) => {
@@ -98,6 +107,7 @@ export function createDoctorPrompter(params: {
           message: stylePromptMessage(confirmParams.message),
         }),
         params.runtime,
+        130,
       );
     },
     select: async <T>(p: Parameters<typeof select>[0], fallback: T) => {
@@ -113,6 +123,7 @@ export function createDoctorPrompter(params: {
           ),
         }),
         params.runtime,
+        130,
       ) as T;
     },
     shouldRepair: repairMode.shouldRepair,

@@ -1,4 +1,7 @@
+// Matrix helper module supports config behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
@@ -27,19 +30,10 @@ import {
   normalizeOptionalAccountId,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "./config-runtime-api.js";
-import {
-  hasReadyMatrixEnvAuth,
-  resolveGlobalMatrixEnvConfig,
-  resolveMatrixEnvAuthReadiness,
-  resolveScopedMatrixEnvConfig,
-  type MatrixEnvConfig,
-} from "./env-auth.js";
+import { resolveGlobalMatrixEnvConfig, resolveScopedMatrixEnvConfig } from "./env-auth.js";
 import { repairCurrentTokenStorageMetaDeviceId } from "./storage.js";
 import type { MatrixAuth, MatrixResolvedConfig } from "./types.js";
-import {
-  resolveValidatedMatrixHomeserverUrl,
-  validateMatrixHomeserverUrl,
-} from "./url-validation.js";
+import { resolveValidatedMatrixHomeserverUrl } from "./url-validation.js";
 
 type MatrixAuthClientDeps = {
   MatrixClient: typeof import("../sdk.js").MatrixClient;
@@ -47,21 +41,12 @@ type MatrixAuthClientDeps = {
   retryMinDelayMs?: number;
 };
 
-type MatrixCredentialsReadDeps = {
-  loadMatrixCredentials: typeof import("../credentials-read.js").loadMatrixCredentials;
-  credentialsMatchConfig: typeof import("../credentials-read.js").credentialsMatchConfig;
-};
-
-type MatrixCredentialsWriteRuntime = typeof import("../credentials-write.runtime.js");
-
-type MatrixSecretInputDeps = {
-  resolveConfiguredSecretInputString: typeof import("./config-secret-input.runtime.js").resolveConfiguredSecretInputString;
-};
-
-let matrixAuthClientDepsPromise: Promise<MatrixAuthClientDeps> | undefined;
-let matrixCredentialsReadDepsPromise: Promise<MatrixCredentialsReadDeps> | undefined;
-let matrixCredentialsWriteRuntimePromise: Promise<MatrixCredentialsWriteRuntime> | undefined;
-let matrixSecretInputDepsPromise: Promise<MatrixSecretInputDeps> | undefined;
+const loadDefaultMatrixAuthClientDeps = createLazyRuntimeModule(() =>
+  Promise.all([import("../sdk.js"), import("./logging.js")]).then(([sdkModule, loggingModule]) => ({
+    MatrixClient: sdkModule.MatrixClient,
+    ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
+  })),
+);
 let matrixAuthClientDepsForTest: MatrixAuthClientDeps | undefined;
 
 const MATRIX_AUTH_REQUEST_RETRY_RE =
@@ -79,36 +64,25 @@ async function loadMatrixAuthClientDeps(): Promise<MatrixAuthClientDeps> {
   if (matrixAuthClientDepsForTest) {
     return matrixAuthClientDepsForTest;
   }
-  matrixAuthClientDepsPromise ??= Promise.all([import("../sdk.js"), import("./logging.js")]).then(
-    ([sdkModule, loggingModule]) => ({
-      MatrixClient: sdkModule.MatrixClient,
-      ensureMatrixSdkLoggingConfigured: loggingModule.ensureMatrixSdkLoggingConfigured,
-    }),
-  );
-  return await matrixAuthClientDepsPromise;
+  return await loadDefaultMatrixAuthClientDeps();
 }
 
-async function loadMatrixCredentialsReadDeps(): Promise<MatrixCredentialsReadDeps> {
-  matrixCredentialsReadDepsPromise ??= import("../credentials-read.js").then(
-    (credentialsReadModule) => ({
-      loadMatrixCredentials: credentialsReadModule.loadMatrixCredentials,
-      credentialsMatchConfig: credentialsReadModule.credentialsMatchConfig,
-    }),
-  );
-  return await matrixCredentialsReadDepsPromise;
-}
+const loadMatrixCredentialsReadDeps = createLazyRuntimeModule(() =>
+  import("../credentials-read.js").then((credentialsReadModule) => ({
+    loadMatrixCredentials: credentialsReadModule.loadMatrixCredentials,
+    credentialsMatchConfig: credentialsReadModule.credentialsMatchConfig,
+  })),
+);
 
-async function loadMatrixCredentialsWriteRuntime(): Promise<MatrixCredentialsWriteRuntime> {
-  matrixCredentialsWriteRuntimePromise ??= import("../credentials-write.runtime.js");
-  return await matrixCredentialsWriteRuntimePromise;
-}
+const loadMatrixCredentialsWriteRuntime = createLazyRuntimeModule(
+  () => import("../credentials-write.runtime.js"),
+);
 
-async function loadMatrixSecretInputDeps(): Promise<MatrixSecretInputDeps> {
-  matrixSecretInputDepsPromise ??= import("./config-secret-input.runtime.js").then((runtime) => ({
+const loadMatrixSecretInputDeps = createLazyRuntimeModule(() =>
+  import("./config-secret-input.runtime.js").then((runtime) => ({
     resolveConfiguredSecretInputString: runtime.resolveConfiguredSecretInputString,
-  }));
-  return await matrixSecretInputDepsPromise;
-}
+  })),
+);
 
 function shouldRetryMatrixAuthRequest(err: unknown): boolean {
   return MATRIX_AUTH_REQUEST_RETRY_RE.test(formatErrorMessage(err));
@@ -421,7 +395,7 @@ function readMatrixAccountConfigField(
 }
 
 function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
-  return typeof value === "number" ? Math.max(0, Math.floor(value)) : undefined;
+  return resolveOptionalIntegerOption(value, { min: 0 });
 }
 
 function buildMatrixNetworkFields(params: {
@@ -449,10 +423,8 @@ function buildMatrixNetworkFields(params: {
 export { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 export {
   hasReadyMatrixEnvAuth,
-  resolveGlobalMatrixEnvConfig,
   resolveMatrixEnvAuthReadiness,
   resolveScopedMatrixEnvConfig,
-  type MatrixEnvConfig,
 } from "./env-auth.js";
 export {
   resolveValidatedMatrixHomeserverUrl,
@@ -568,7 +540,11 @@ export function resolveMatrixAuthContext(params: {
 } {
   const cfg = requireRuntimeConfig(params.cfg, "Matrix auth context") as CoreConfig;
   const env = params?.env ?? process.env;
+  const requestedAccountId = params?.accountId?.trim();
   const explicitAccountId = normalizeOptionalAccountId(params?.accountId);
+  if (requestedAccountId && !explicitAccountId) {
+    throw new Error(`Matrix account id "${requestedAccountId}" is invalid.`);
+  }
   const effectiveAccountId = explicitAccountId ?? resolveImplicitMatrixAccountId(cfg, env);
   if (!effectiveAccountId) {
     throw new Error(
@@ -584,6 +560,11 @@ export function resolveMatrixAuthContext(params: {
     throw new Error(
       `Matrix account "${explicitAccountId}" is not configured. Add channels.matrix.accounts.${explicitAccountId} or define scoped ${getMatrixScopedEnvVarNames(explicitAccountId).accessToken.replace(/_ACCESS_TOKEN$/, "")}_* variables.`,
     );
+  }
+  const matrix = resolveMatrixBaseConfig(cfg);
+  const account = findMatrixAccountConfig(cfg, effectiveAccountId);
+  if (matrix.enabled === false || account?.enabled === false) {
+    throw new Error(`Matrix account "${effectiveAccountId}" is disabled.`);
   }
   const resolved = resolveMatrixConfigForAccount(cfg, effectiveAccountId, env);
 

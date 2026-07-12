@@ -1,3 +1,4 @@
+// Webhooks helper module supports config behavior.
 import { z } from "zod";
 import { normalizeWebhookPath } from "../runtime-api.js";
 
@@ -30,7 +31,7 @@ const webhooksPluginConfigSchema = z
 
 export type WebhookSecretInput = z.infer<typeof secretInputSchema>;
 
-export type ConfiguredWebhookRouteConfig = {
+type ConfiguredWebhookRouteConfig = {
   routeId: string;
   path: string;
   sessionKey: string;

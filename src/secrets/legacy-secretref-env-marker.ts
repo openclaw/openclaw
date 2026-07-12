@@ -1,3 +1,4 @@
+/** Detects legacy SecretRef env markers in config values. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   LEGACY_SECRETREF_ENV_MARKER_PREFIX,
@@ -10,6 +11,7 @@ import {
   type DiscoveredConfigSecretTarget,
 } from "./target-registry.js";
 
+/** Legacy marker string found on a registered secret target, with parsed ref when possible. */
 export type LegacySecretRefEnvMarkerCandidate = {
   path: string;
   pathSegments: string[];
@@ -36,7 +38,10 @@ function toCandidate(
   };
 }
 
-export function collectLegacySecretRefEnvMarkerCandidates(
+/**
+ * Finds legacy env marker strings on registered secret targets without mutating config.
+ */
+function collectLegacySecretRefEnvMarkerCandidates(
   config: OpenClawConfig,
 ): LegacySecretRefEnvMarkerCandidate[] {
   const defaults = config.secrets?.defaults;
@@ -45,6 +50,9 @@ export function collectLegacySecretRefEnvMarkerCandidates(
     .filter((candidate): candidate is LegacySecretRefEnvMarkerCandidate => candidate !== null);
 }
 
+/**
+ * Converts parseable legacy env marker strings into structured env SecretRef objects.
+ */
 export function migrateLegacySecretRefEnvMarkers(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
@@ -63,6 +71,7 @@ export function migrateLegacySecretRefEnvMarkers(config: OpenClawConfig): {
     if (!ref) {
       continue;
     }
+    // Only registered existing paths are rewritten; malformed markers remain for explicit repair.
     if (setPathExistingStrict(next, candidate.pathSegments, ref)) {
       changes.push(
         `Moved ${candidate.path} ${LEGACY_SECRETREF_ENV_MARKER_PREFIX}${ref.id} marker → structured env SecretRef.`,

@@ -1,5 +1,11 @@
+/**
+ * Local non-interactive onboarding orchestration.
+ *
+ * This entrypoint applies config changes, optionally installs the gateway
+ * daemon, verifies health, and emits machine-readable setup output.
+ */
 import { formatCliCommand } from "../../cli/command-format.js";
-import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
@@ -11,10 +17,12 @@ import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
-  resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
+import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
 import type { OnboardOptions } from "../onboard-types.js";
+import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
 import {
   type GatewayHealthFailureDiagnostics,
@@ -32,6 +40,7 @@ const WINDOWS_INSTALL_DAEMON_HEALTH_PROBE_TIMEOUT_MS = 15_000;
 const INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 10_000;
 const WINDOWS_INSTALL_DAEMON_HEALTH_COMMAND_TIMEOUT_MS = 90_000;
 
+/** Returns platform-specific health timing for managed daemon installs. */
 export function resolveInstallDaemonGatewayHealthTiming(
   platform: NodeJS.Platform = process.platform,
 ): {
@@ -59,6 +68,8 @@ async function collectGatewayHealthFailureDiagnostics(): Promise<
   const diagnostics: GatewayHealthFailureDiagnostics = {};
 
   try {
+    // Load daemon diagnostics only on failure; successful setup should not pay
+    // the service/log inspection cost or import daemon-specific modules.
     const { resolveGatewayService } = await import("../../daemon/service.js");
     const service = resolveGatewayService();
     const env = process.env as Record<string, string | undefined>;
@@ -94,10 +105,13 @@ async function collectGatewayHealthFailureDiagnostics(): Promise<
     : undefined;
 }
 
+/** Resolves the auth material used by the post-setup gateway health probe. */
 export async function resolveGatewayHealthProbeToken(
   nextConfig: OpenClawConfig,
 ): Promise<{ token?: string; password?: string; unresolvedRefReason?: string }> {
   if (nextConfig.gateway?.auth?.mode === "password") {
+    // Password mode uses the configured password directly; token fallback must
+    // stay disabled or the probe can validate the wrong auth mode.
     const resolved = await resolveConfiguredSecretInputString({
       config: nextConfig,
       env: process.env,
@@ -135,6 +149,7 @@ function formatGatewayHealthFailureDetail(params: {
   return detail || undefined;
 }
 
+/** Runs local non-interactive setup from config mutation through health verification. */
 export async function runNonInteractiveLocalSetup(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -163,6 +178,8 @@ export async function runNonInteractiveLocalSetup(params: {
         env: process.env,
       });
   if (!opts.authChoice && inferredAuthChoice && inferredAuthChoice.matches.length > 1) {
+    // Multiple provider flags make implicit auth selection ambiguous; require a
+    // single explicit --auth-choice rather than choosing by flag order.
     runtime.error(
       [
         "Multiple API key flags were provided for non-interactive setup.",
@@ -175,6 +192,8 @@ export async function runNonInteractiveLocalSetup(params: {
   }
   const authChoice = opts.authChoice ?? inferredAuthChoice?.choice ?? "skip";
   if (authChoice !== "skip") {
+    // Auth-choice handling is loaded only when needed so skip-only onboarding
+    // avoids provider plugin discovery and credential helper imports.
     const { applyNonInteractiveAuthChoice } = await import("./local/auth-choice.js");
     const nextConfigAfterAuth = await applyNonInteractiveAuthChoice({
       nextConfig,
@@ -202,16 +221,22 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = gatewayResult.nextConfig;
 
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+  if (!opts.skipHooks) {
+    nextConfig = enableDefaultOnboardingInternalHooks(nextConfig);
+  }
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await replaceConfigFile({
+  nextConfig = await commitNonInteractiveOnboardConfig({
     nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
+    baseConfig,
+    baseHash,
+    reset: opts.reset,
   });
   logConfigUpdated(runtime);
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+    skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
@@ -241,6 +266,8 @@ export async function runNonInteractiveLocalSetup(params: {
           skippedReason: daemonInstall.skippedReason,
         };
     if (!daemonInstall.installed && !opts.skipHealth) {
+      // Treat a failed requested daemon install as setup failure when health is
+      // expected; otherwise later probes would fail with less actionable output.
       logNonInteractiveOnboardingFailure({
         opts,
         runtime,
@@ -272,7 +299,7 @@ export async function runNonInteractiveLocalSetup(params: {
 
   if (!opts.skipHealth) {
     const { healthCommand } = await import("../health.js");
-    const links = resolveControlUiLinks({
+    const links = resolveLocalControlUiProbeLinks({
       bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom" | "tailnet",
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
@@ -293,6 +320,8 @@ export async function runNonInteractiveLocalSetup(params: {
         : undefined,
     });
     if (!probe.ok) {
+      // Non-daemon setup attaches to an existing gateway, so collect expensive
+      // daemon diagnostics only when this run was responsible for installing it.
       const detail = formatGatewayHealthFailureDetail({
         probeDetail: probe.detail,
         unresolvedRefReason: probeAuth.unresolvedRefReason,
@@ -317,8 +346,8 @@ export async function runNonInteractiveLocalSetup(params: {
         diagnostics,
         hints: !opts.installDaemon
           ? [
-              "Non-interactive local setup only waits for an already-running gateway unless you pass --install-daemon.",
-              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run with \`--install-daemon\`, or use \`--skip-health\`.`,
+              "Non-interactive local setup only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`.",
+              `Fix: start \`${formatCliCommand("openclaw gateway run")}\`, re-run \`${formatCliCommand("openclaw onboard --install-daemon")}\`, or use \`${formatCliCommand("openclaw onboard --skip-health")}\`.`,
               process.platform === "win32"
                 ? "Native Windows managed gateway install tries Scheduled Tasks first and falls back to a per-user Startup-folder login item when task creation is denied."
                 : undefined,

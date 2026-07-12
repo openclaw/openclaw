@@ -1,3 +1,4 @@
+// Server network runtime e2e tests verify gateway startup isolation, proxy env handling, and runtime cleanup.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,7 +10,7 @@ import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/index.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { startGatewayServer } from "./server.js";
 import { getFreeGatewayPort } from "./test-helpers.e2e.js";
 
@@ -38,6 +39,14 @@ function isEnvHttpProxyDispatcher(dispatcher: unknown): boolean {
   );
 }
 
+async function closeTestDispatcher(dispatcher: unknown): Promise<void> {
+  const close = (dispatcher as { close?: () => Promise<void> | void } | undefined)?.close;
+  if (typeof close !== "function") {
+    return;
+  }
+  await close.call(dispatcher);
+}
+
 describe("gateway network runtime", () => {
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
@@ -64,14 +73,15 @@ describe("gateway network runtime", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
     try {
-      setGlobalDispatcher(new Agent());
+      const testDispatcher = new Agent();
+      setGlobalDispatcher(testDispatcher);
       for (const key of NETWORK_GATEWAY_ENV_KEYS) {
-        delete process.env[key];
+        deleteTestEnvValue(key);
       }
       process.env.HTTPS_PROXY = "http://127.0.0.1:9";
 
-      process.env.HOME = tempHome;
-      process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
+      setTestEnvValue("HOME", tempHome);
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
       process.env.OPENCLAW_SKIP_CRON = "1";
@@ -90,7 +100,7 @@ describe("gateway network runtime", () => {
         configPath,
         `${JSON.stringify({ gateway: { auth: { mode: "token", token } } }, null, 2)}\n`,
       );
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 
       server = await startGatewayServer(await getFreeGatewayPort(), {
         bind: "loopback",
@@ -101,7 +111,11 @@ describe("gateway network runtime", () => {
       expect(isEnvHttpProxyDispatcher(getGlobalDispatcher())).toBe(true);
     } finally {
       await server?.close({ reason: "gateway proxy bootstrap test complete" });
+      const dispatcherToClose = getGlobalDispatcher();
       setGlobalDispatcher(originalDispatcher);
+      if (dispatcherToClose !== originalDispatcher) {
+        await closeTestDispatcher(dispatcherToClose);
+      }
       await fs.rm(tempHome, { recursive: true, force: true });
       envSnapshot.restore();
     }

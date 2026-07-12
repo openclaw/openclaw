@@ -1,8 +1,9 @@
+// Line tests cover accounts plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveLineAccount,
   resolveDefaultLineAccountId,
@@ -11,7 +12,6 @@ import {
 } from "./accounts.js";
 
 describe("LINE accounts", () => {
-  const originalEnv = { ...process.env };
   const tempDirs: string[] = [];
 
   const createSecretFile = (fileName: string, contents: string) => {
@@ -23,13 +23,12 @@ describe("LINE accounts", () => {
   };
 
   beforeEach(() => {
-    process.env = { ...originalEnv };
-    delete process.env.LINE_CHANNEL_ACCESS_TOKEN;
-    delete process.env.LINE_CHANNEL_SECRET;
+    vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "");
+    vi.stubEnv("LINE_CHANNEL_SECRET", "");
   });
 
   afterEach(() => {
-    process.env = originalEnv;
+    vi.unstubAllEnvs();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -59,8 +58,8 @@ describe("LINE accounts", () => {
     });
 
     it("resolves account from environment variables", () => {
-      process.env.LINE_CHANNEL_ACCESS_TOKEN = "env-token";
-      process.env.LINE_CHANNEL_SECRET = "env-secret";
+      vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "env-token");
+      vi.stubEnv("LINE_CHANNEL_SECRET", "env-secret");
 
       const cfg: OpenClawConfig = {
         channels: {
@@ -198,10 +197,164 @@ describe("LINE accounts", () => {
         },
       };
 
+      expect(() => resolveLineAccount({ cfg })).toThrow(
+        /LINE credential file.*must not be a symlink/,
+      );
+    });
+
+    it("resolves default account credentials from accounts.default", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            accounts: {
+              default: {
+                channelAccessToken: "default-token",
+                channelSecret: "default-secret",
+                name: "Default Bot",
+              },
+            },
+          },
+        },
+      };
+
       const account = resolveLineAccount({ cfg });
-      expect(account.channelAccessToken).toBe("");
-      expect(account.channelSecret).toBe("");
-      expect(account.tokenSource).toBe("none");
+
+      expect(account.accountId).toBe(DEFAULT_ACCOUNT_ID);
+      expect(account.enabled).toBe(true);
+      expect(account.channelAccessToken).toBe("default-token");
+      expect(account.channelSecret).toBe("default-secret");
+      expect(account.name).toBe("Default Bot");
+      expect(account.tokenSource).toBe("config");
+    });
+
+    it("prefers accounts.default credentials over top-level base credentials", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            channelAccessToken: "base-token",
+            channelSecret: "base-secret",
+            accounts: {
+              default: {
+                channelAccessToken: "override-token",
+                channelSecret: "override-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.channelAccessToken).toBe("override-token");
+      expect(account.channelSecret).toBe("override-secret");
+    });
+
+    it("treats named accounts without explicit enabled as enabled", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            accounts: {
+              twgreen: {
+                channelAccessToken: "twgreen-token",
+                channelSecret: "twgreen-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg, accountId: "twgreen" });
+
+      expect(account.enabled).toBe(true);
+      expect(account.channelAccessToken).toBe("twgreen-token");
+      expect(account.channelSecret).toBe("twgreen-secret");
+    });
+
+    it("disables a named account when channels.line.enabled is false", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: false,
+            accounts: {
+              twgreen: {
+                enabled: true,
+                channelAccessToken: "twgreen-token",
+                channelSecret: "twgreen-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg, accountId: "twgreen" });
+
+      expect(account.enabled).toBe(false);
+    });
+
+    it("disables accounts.default when channels.line.enabled is false", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: false,
+            accounts: {
+              default: {
+                channelAccessToken: "default-token",
+                channelSecret: "default-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.enabled).toBe(false);
+    });
+
+    it("respects explicit enabled:false on a named account", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            accounts: {
+              twgreen: {
+                enabled: false,
+                channelAccessToken: "twgreen-token",
+                channelSecret: "twgreen-secret",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg, accountId: "twgreen" });
+
+      expect(account.enabled).toBe(false);
+    });
+
+    it("prefers accounts.default name over top-level channels.line.name", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          line: {
+            enabled: true,
+            name: "Top-level Bot",
+            accounts: {
+              default: {
+                channelAccessToken: "default-token",
+                channelSecret: "default-secret",
+                name: "Default Account Bot",
+              },
+            },
+          },
+        },
+      };
+
+      const account = resolveLineAccount({ cfg });
+
+      expect(account.name).toBe("Default Account Bot");
     });
   });
 

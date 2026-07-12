@@ -1,10 +1,11 @@
+// Implements text-to-speech commands and persisted voice preferences.
 import crypto from "node:crypto";
-import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
-import { logVerbose } from "../../globals.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
+import { logVerbose } from "../../globals.js";
 import {
   canonicalizeSpeechProviderId,
   getSpeechProvider,
@@ -32,7 +33,10 @@ import {
 } from "../../tts/tts.js";
 import { isSilentReplyPayloadText } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
-import { persistSessionEntry } from "./commands-session-store.js";
+import {
+  persistSessionEntry,
+  sessionEntryPersistenceConflictReply,
+} from "./commands-session-store.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type ParsedTtsCommand = {
@@ -150,7 +154,7 @@ async function buildTtsAudioReply(params: {
       provider: result.provider,
       reply: {
         mediaUrl: result.audioPath,
-        audioAsVoice: result.voiceCompatible === true,
+        audioAsVoice: result.audioAsVoice === true || result.voiceCompatible === true,
         trustedLocalMedia: true,
         spokenText: params.text,
       },
@@ -227,17 +231,23 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     }
     if (requested === "on") {
       params.sessionEntry.ttsAuto = "always";
-      await persistSessionEntry(params);
+      if (!(await persistSessionEntry({ ...params, touchedFields: ["ttsAuto"] }))) {
+        return sessionEntryPersistenceConflictReply();
+      }
       return { shouldContinue: false, reply: { text: "🔊 TTS enabled for this chat." } };
     }
     if (requested === "off") {
       params.sessionEntry.ttsAuto = "off";
-      await persistSessionEntry(params);
+      if (!(await persistSessionEntry({ ...params, touchedFields: ["ttsAuto"] }))) {
+        return sessionEntryPersistenceConflictReply();
+      }
       return { shouldContinue: false, reply: { text: "🔇 TTS disabled for this chat." } };
     }
     if (requested === "default" || requested === "inherit" || requested === "clear") {
       delete params.sessionEntry.ttsAuto;
-      await persistSessionEntry(params);
+      if (!(await persistSessionEntry({ ...params, touchedFields: ["ttsAuto"] }))) {
+        return sessionEntryPersistenceConflictReply();
+      }
       return { shouldContinue: false, reply: { text: "🔊 TTS chat override cleared." } };
     }
     return { shouldContinue: false, reply: ttsUsage() };
@@ -288,7 +298,14 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
 
     params.sessionEntry.lastTtsReadLatestHash = hash;
     params.sessionEntry.lastTtsReadLatestAt = Date.now();
-    await persistSessionEntry(params);
+    if (
+      !(await persistSessionEntry({
+        ...params,
+        touchedFields: ["lastTtsReadLatestHash", "lastTtsReadLatestAt"],
+      }))
+    ) {
+      return sessionEntryPersistenceConflictReply();
+    }
     return { shouldContinue: false, reply: audio.reply };
   }
 
@@ -428,8 +445,9 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
         },
       };
     }
-    const next = Number.parseInt(args.trim(), 10);
-    if (!Number.isFinite(next) || next < 100 || next > 4096) {
+    const trimmedLimit = args.trim();
+    const next = /^\d+$/.test(trimmedLimit) ? Number(trimmedLimit) : Number.NaN;
+    if (!Number.isSafeInteger(next) || next < 100 || next > 4096) {
       return {
         shouldContinue: false,
         reply: { text: "❌ Limit must be between 100 and 4096 characters." },

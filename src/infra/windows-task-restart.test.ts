@@ -1,8 +1,10 @@
+// Covers Windows scheduled-task gateway restart script generation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
+import { getWindowsCmdExePath } from "./windows-install-roots.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => os.tmpdir()));
@@ -43,6 +45,14 @@ function decodeCmdPathArg(value: string): string {
   const withoutQuotes =
     trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed;
   return withoutQuotes.replace(/\^!/g, "!").replace(/%%/g, "%");
+}
+
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+  const call = mock.mock.calls[0];
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
 }
 
 afterEach(() => {
@@ -91,33 +101,41 @@ describe("relaunchGatewayScheduledTask", () => {
     });
 
     const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
+    const cmdExePath = getWindowsCmdExePath();
 
-    expect(result).toMatchObject({
-      ok: true,
-      method: "schtasks",
-      tried: expect.arrayContaining(['schtasks /Run /TN "OpenClaw Gateway (work)"']),
+    expect(result.ok).toBe(true);
+    expect(result.method).toBe("schtasks");
+    expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
+    expect(result.tried).toContain(`${cmdExePath} /d /s /c ${seenCommandArg}`);
+    const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
+    expect(spawnCall[0]).toBe(cmdExePath);
+    expect(spawnCall[1]).toStrictEqual(["/d", "/s", "/c", seenCommandArg]);
+    expect(spawnCall[2]).toStrictEqual({
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
     });
-    expect(result.tried).toContain(`cmd.exe /d /s /c ${seenCommandArg}`);
-    expect(spawnMock).toHaveBeenCalledWith(
-      "cmd.exe",
-      ["/d", "/s", "/c", expect.any(String)],
-      expect.objectContaining({
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
-      }),
-    );
     expect(unref).toHaveBeenCalledOnce();
 
     const scriptPath = [...createdScriptPaths][0];
-    expect(scriptPath).toBeTruthy();
+    if (scriptPath === undefined) {
+      throw new Error("expected restart helper script path");
+    }
+    expect(fs.statSync(scriptPath).isFile()).toBe(true);
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain("timeout /t 1 /nobreak >nul");
     expect(script).toContain("gateway-restart.log");
     expect(script).toContain(
       'openclaw restart attempt source=windows-task-handoff target="OpenClaw Gateway (work)"',
     );
+    expect(script).toContain(
+      `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$task = Get-ScheduledTask -TaskName 'OpenClaw Gateway (work)' -ErrorAction SilentlyContinue; if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }; exit 1" >nul 2>&1`,
+    );
+    expect(script).not.toContain("findstr");
     expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (work)" >>');
+    expect(script.indexOf("powershell.exe -NoProfile")).toBeLessThan(
+      script.indexOf('schtasks /Run /TN "OpenClaw Gateway (work)"'),
+    );
     expect(script).toContain('del "%~f0" >nul 2>&1');
   });
 
@@ -135,6 +153,24 @@ describe("relaunchGatewayScheduledTask", () => {
     const scriptPath = [...createdScriptPaths][0];
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)" >>');
+  });
+
+  it("escapes custom task names in the PowerShell running-task probe", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(args[3]));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask({
+      OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway (Bob's work)",
+    });
+
+    const scriptPath = [...createdScriptPaths][0];
+    const script = fs.readFileSync(scriptPath, "utf8");
+    expect(script).toContain(
+      `-Command "$task = Get-ScheduledTask -TaskName 'OpenClaw Gateway (Bob''s work)' -ErrorAction SilentlyContinue; if ($null -ne $task -and $task.State -eq 'Running') { exit 0 }; exit 1"`,
+    );
+    expect(script).not.toContain("findstr");
   });
 
   it("returns failed when the helper cannot be spawned", () => {
@@ -158,11 +194,26 @@ describe("relaunchGatewayScheduledTask", () => {
 
     relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
 
-    expect(spawnMock).toHaveBeenCalledWith(
-      "cmd.exe",
-      ["/d", "/s", "/c", expect.stringMatching(/^".*&.*"$/)],
-      expect.any(Object),
-    );
+    expect(spawnMock).toHaveBeenCalledOnce();
+    const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
+    const commandArgs = spawnCall[1];
+    if (!Array.isArray(commandArgs)) {
+      throw new Error("expected cmd.exe argument array");
+    }
+    const commandArg = commandArgs[3];
+    if (typeof commandArg !== "string") {
+      throw new Error("expected quoted restart helper path");
+    }
+    expect(spawnCall[0]).toBe(getWindowsCmdExePath());
+    expect(commandArgs).toStrictEqual(["/d", "/s", "/c", commandArg]);
+    expect(commandArg.startsWith('"')).toBe(true);
+    expect(commandArg.endsWith('"')).toBe(true);
+    expect(commandArg).toContain("&");
+    expect(spawnCall[2]).toStrictEqual({
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
   });
 
   it("includes startup fallback", () => {
@@ -184,7 +235,7 @@ describe("relaunchGatewayScheduledTask", () => {
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain(`schtasks /Query /TN`);
     expect(script).toContain(":fallback");
-    expect(script).toContain(`start "" /min cmd.exe /d /c`);
+    expect(script).toContain(`start "" /min ${getWindowsCmdExePath()} /d /c`);
     expect(script).toContain(taskScriptPath);
   });
 });

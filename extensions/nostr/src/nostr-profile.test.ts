@@ -1,5 +1,6 @@
-import { verifyEvent, getPublicKey } from "nostr-tools";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+// Nostr tests cover nostr profile plugin behavior.
+import { verifyEvent, getPublicKey, type SimplePool } from "nostr-tools";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
 import {
   createProfileEvent,
@@ -7,6 +8,7 @@ import {
   contentToProfile,
   validateProfile,
   sanitizeProfileForDisplay,
+  publishProfile,
   type ProfileContent,
 } from "./nostr-profile.js";
 import { TEST_HEX_PRIVATE_KEY_BYTES } from "./test-fixtures.js";
@@ -119,6 +121,10 @@ describe("createProfileEvent", () => {
     vi.setSystemTime(new Date("2024-01-15T12:00:00Z"));
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("creates a valid kind:0 event", () => {
     const profile: NostrProfile = {
       name: "testbot",
@@ -129,7 +135,7 @@ describe("createProfileEvent", () => {
 
     expect(event.kind).toBe(0);
     expect(event.pubkey).toBe(TEST_PUBKEY);
-    expect(event.tags).toEqual([]);
+    expect(event.tags).toStrictEqual([]);
     expect(event.id).toMatch(/^[0-9a-f]{64}$/);
     expect(event.sig).toMatch(/^[0-9a-f]{128}$/);
   });
@@ -183,8 +189,6 @@ describe("createProfileEvent", () => {
     const expectedTimestamp = Math.floor(Date.now() / 1000);
     expect(event.created_at).toBe(expectedTimestamp);
   });
-
-  vi.useRealTimers();
 });
 
 // ============================================================================
@@ -202,8 +206,10 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(true);
-    expect(result.profile).toBeDefined();
-    expect(result.errors).toBeUndefined();
+    expect(result.profile?.name).toBe("validuser");
+    expect(result.profile?.about).toBe("A valid user");
+    expect(result.profile?.picture).toBe("https://example.com/pic.png");
+    expect(result).not.toHaveProperty("errors");
   });
 
   it("rejects profile with invalid URL", () => {
@@ -215,8 +221,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toBeDefined();
-    expect(result.errors!.some((e) => e.includes("https://"))).toBe(true);
+    expect(result.errors).toEqual(["picture: URL must use https:// protocol"]);
   });
 
   it("rejects profile with javascript: URL", () => {
@@ -249,7 +254,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors!.some((e) => e.includes("256"))).toBe(true);
+    expect(result.errors).toEqual(["name: Too big: expected string to have <=256 characters"]);
   });
 
   it("rejects about exceeding 2000 characters", () => {
@@ -260,7 +265,7 @@ describe("validateProfile", () => {
     const result = validateProfile(profile);
 
     expect(result.valid).toBe(false);
-    expect(result.errors!.some((e) => e.includes("2000"))).toBe(true);
+    expect(result.errors).toEqual(["about: Too big: expected string to have <=2000 characters"]);
   });
 
   it("accepts empty profile", () => {
@@ -408,5 +413,76 @@ describe("edge cases", () => {
 
     const event = createTestProfileEvent(profile);
     expect(verifyEvent(event)).toBe(true);
+  });
+});
+
+// ============================================================================
+// Profile Publishing Tests
+// ============================================================================
+
+describe("publishProfile", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function createFakePool(publishResult: unknown): SimplePool {
+    return {
+      publish: vi.fn(() => [publishResult]),
+    } as unknown as SimplePool;
+  }
+
+  it("clears the per-relay timeout timer after a successful publish", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const profile: NostrProfile = { name: "test" };
+    const pool = createFakePool(Promise.resolve());
+
+    const result = await publishProfile(
+      pool,
+      TEST_HEX_PRIVATE_KEY_BYTES,
+      ["wss://relay.example"],
+      profile,
+    );
+
+    expect(result.successes).toEqual(["wss://relay.example"]);
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the per-relay timeout timer after a publish timeout", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const profile: NostrProfile = { name: "test" };
+    const pool = createFakePool(new Promise(() => {}));
+
+    const promise = publishProfile(
+      pool,
+      TEST_HEX_PRIVATE_KEY_BYTES,
+      ["wss://relay.example"],
+      profile,
+    );
+    vi.advanceTimersByTime(6_000);
+    const result = await promise;
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]?.error).toContain("timeout");
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not add dangling timers when publishing to multiple relays", async () => {
+    vi.spyOn(globalThis, "setTimeout").mockClear();
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const profile: NostrProfile = { name: "test" };
+    const pool = createFakePool(Promise.resolve());
+
+    await publishProfile(
+      pool,
+      TEST_HEX_PRIVATE_KEY_BYTES,
+      ["wss://relay.a", "wss://relay.b"],
+      profile,
+    );
+
+    expect(clearTimeoutSpy).toHaveBeenCalledTimes(2);
   });
 });

@@ -1,3 +1,9 @@
+/**
+ * Top-level `openclaw onboard` command entrypoint.
+ *
+ * It validates global setup flags, performs optional reset handling, and then
+ * routes to interactive or non-interactive onboarding.
+ */
 import { formatCliCommand } from "../cli/command-format.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
@@ -10,6 +16,7 @@ import {
   normalizeLegacyOnboardAuthChoice,
   resolveDeprecatedAuthChoiceReplacement,
 } from "./auth-choice-legacy.js";
+import { runGuidedOnboarding } from "./onboard-guided.js";
 import { DEFAULT_WORKSPACE, handleReset } from "./onboard-helpers.js";
 import { runInteractiveSetup } from "./onboard-interactive.js";
 import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
@@ -17,6 +24,44 @@ import type { OnboardOptions, ResetScope } from "./onboard-types.js";
 
 const VALID_RESET_SCOPES = new Set<ResetScope>(["config", "config+creds+sessions", "full"]);
 
+/**
+ * Interactive onboarding defaults to guided setup. Any explicit
+ * setup flag beyond this allowlist keeps the classic wizard — those flags are
+ * a public automation contract and guided setup does not honor them.
+ * Boolean false and undefined mean "not passed" (Commander coerces unset
+ * booleans to false); explicit `--no-install-daemon` arrives as `false` via
+ * resolveInstallDaemonFlag and is special-cased. `--modern` never reaches this
+ * dispatch; the command layer routes it through the inference-gated Crestodian.
+ */
+const GUIDED_SAFE_ONBOARD_KEYS = new Set([
+  "workspace",
+  "acceptRisk",
+  "reset",
+  "resetScope",
+  "nonInteractive",
+  "classic",
+]);
+
+function wantsClassicInteractiveSetup(opts: OnboardOptions): boolean {
+  if (opts.classic === true) {
+    return true;
+  }
+  if (opts.installDaemon !== undefined) {
+    return true;
+  }
+  for (const [key, value] of Object.entries(opts)) {
+    if (GUIDED_SAFE_ONBOARD_KEYS.has(key) || key === "installDaemon") {
+      continue;
+    }
+    if (value === undefined || value === false) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Runs the onboard command after normalizing legacy flags and setup mode. */
 export async function setupWizardCommand(
   opts: OnboardOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -27,6 +72,8 @@ export async function setupWizardCommand(
     env: process.env,
   });
   if (opts.nonInteractive && isDeprecatedAuthChoice(originalAuthChoice, { env: process.env })) {
+    // Non-interactive output must be deterministic; reject deprecated aliases
+    // instead of printing prompts or compatibility guidance mid-flow.
     runtime.error(
       formatDeprecatedNonInteractiveAuthChoiceError(originalAuthChoice, {
         env: process.env,
@@ -45,23 +92,36 @@ export async function setupWizardCommand(
     normalizedAuthChoice === opts.authChoice && flow === opts.flow
       ? opts
       : { ...opts, authChoice: normalizedAuthChoice, flow };
+  if (normalizedOpts.classic && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--classic cannot be combined with --non-interactive. Remove --non-interactive to open the classic wizard, or remove --classic for automated setup.",
+    );
+    runtime.exit(1);
+    return;
+  }
   if (
     normalizedOpts.secretInputMode &&
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
     normalizedOpts.secretInputMode !== "ref" // pragma: allowlist secret
   ) {
-    runtime.error('Invalid --secret-input-mode. Use "plaintext" or "ref".');
+    runtime.error(
+      `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for the interactive setup.`,
+    );
     runtime.exit(1);
     return;
   }
 
   if (normalizedOpts.resetScope && !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)) {
-    runtime.error('Invalid --reset-scope. Use "config", "config+creds+sessions", or "full".');
+    runtime.error(
+      `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
+    );
     runtime.exit(1);
     return;
   }
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
+    // Non-interactive setup can write credentials and daemon config without a
+    // prompt, so the operator must acknowledge the security docs explicitly.
     runtime.error(
       [
         "Non-interactive setup requires explicit risk acknowledgement.",
@@ -74,6 +134,8 @@ export async function setupWizardCommand(
   }
 
   if (normalizedOpts.reset) {
+    // Reset runs before setup mode dispatch so both interactive and
+    // non-interactive setup start from the same cleaned state.
     const snapshot = await readConfigFileSnapshot();
     const baseConfig = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
     const workspaceDefault =
@@ -98,10 +160,12 @@ export async function setupWizardCommand(
     return;
   }
 
-  await runInteractiveSetup(normalizedOpts, runtime);
+  if (wantsClassicInteractiveSetup(normalizedOpts)) {
+    await runInteractiveSetup(normalizedOpts, runtime);
+    return;
+  }
+
+  await runGuidedOnboarding(normalizedOpts, runtime);
 }
 
 export const onboardCommand = setupWizardCommand;
-
-export type { OnboardOptions } from "./onboard-types.js";
-export type { OnboardOptions as SetupWizardOptions } from "./onboard-types.js";

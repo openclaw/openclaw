@@ -1,5 +1,7 @@
-import { PluginLruCache } from "./plugin-lru-cache.js";
+/** Cache state helper for plugin loader registries, in-flight loads, and warning suppression. */
+import { PluginLruCache } from "./plugin-cache-primitives.js";
 
+/** Error thrown when one plugin registry cache key attempts nested loading. */
 export class PluginLoadReentryError extends Error {
   readonly cacheKey: string;
 
@@ -10,6 +12,7 @@ export class PluginLoadReentryError extends Error {
   }
 }
 
+/** Small registry cache with reentry detection and per-key warning memory. */
 export class PluginLoaderCacheState<T> {
   readonly #registryCache: PluginLruCache<T>;
   readonly #inFlightLoads = new Set<string>();
@@ -30,6 +33,11 @@ export class PluginLoaderCacheState<T> {
   clear(): void {
     this.#registryCache.clear();
     this.#inFlightLoads.clear();
+    this.#openAllowlistWarningCache.clear();
+  }
+
+  clearCachedRegistries(): void {
+    this.#registryCache.clear();
     this.#openAllowlistWarningCache.clear();
   }
 

@@ -1,3 +1,8 @@
+/**
+ * Bundled channel runtime artifact resolver.
+ *
+ * Resolves generated contract artifacts through runtime records with local workspace fallback.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,10 +35,7 @@ function resolveBundledChannelWorkspaceArtifactPath(
   return null;
 }
 
-export function resolveBundledChannelContractArtifactUrl(
-  pluginId: string,
-  entryBaseName: string,
-): string {
+function resolveBundledChannelContractArtifactUrl(pluginId: string, entryBaseName: string): string {
   const normalizedEntryBaseName = entryBaseName.replace(/\.(?:[cm]?js|ts)$/u, "");
   const record = resolvePluginRuntimeRecord(pluginId, () => {
     throw new Error(`missing bundled channel plugin '${pluginId}'`);
@@ -50,6 +52,7 @@ export function resolveBundledChannelContractArtifactUrl(
   return pathToFileURL(modulePath).href;
 }
 
+/** Imports a generated bundled channel artifact through the contract boundary. */
 export async function importBundledChannelContractArtifact<T extends object>(
   pluginId: string,
   entryBaseName: string,

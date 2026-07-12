@@ -1,11 +1,6 @@
-/**
- * GatewayConnection — WebSocket lifecycle, heartbeat, reconnect, and session persistence.
- *
- * Encapsulates all connection state as class fields (replaces 11 closure variables).
- * Event handling and message processing are delegated to injected handlers.
- */
-
+// Qqbot plugin module implements gateway connection behavior.
 import WebSocket from "ws";
+import type { EngineAdapters } from "../adapter/index.js";
 import {
   trySlashCommand,
   type SlashCommandHandlerContext,
@@ -28,29 +23,24 @@ import { dispatchEvent } from "./event-dispatcher.js";
 import { createMessageQueue, type QueuedMessage } from "./message-queue.js";
 import { ReconnectState } from "./reconnect.js";
 import type { GatewayAccount, EngineLogger, GatewayPluginRuntime, WSPayload } from "./types.js";
+import { createQQWSClient } from "./ws-client.js";
 
-// ============ Connection context ============
-
-export interface GatewayConnectionContext {
+interface GatewayConnectionContext {
   account: GatewayAccount;
   abortSignal: AbortSignal;
   cfg: unknown;
   log?: EngineLogger;
   runtime: GatewayPluginRuntime;
+  adapters: EngineAdapters;
   onReady?: (data: unknown) => void;
-  /** Called when a RESUMED event is received (reconnect success). */
   onResumed?: (data: unknown) => void;
   onError?: (error: Error) => void;
-  /** Process a queued message (inbound pipeline → outbound dispatch). */
+  onDisconnected?: (info: { reason?: string; fatal?: boolean }) => void;
   handleMessage: (event: QueuedMessage) => Promise<void>;
-  /** Called when an INTERACTION_CREATE event is received (e.g. approval button clicks). */
   onInteraction?: (event: InteractionEvent) => void;
 }
 
-// ============ GatewayConnection ============
-
 export class GatewayConnection {
-  // ---- Connection state ----
   private isAborted = false;
   private currentWs: WebSocket | null = null;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -74,7 +64,6 @@ export class GatewayConnection {
     });
   }
 
-  /** Start the connection loop. Resolves when abortSignal fires. */
   async start(): Promise<void> {
     this.restoreSession();
     this.registerAbortHandler();
@@ -83,8 +72,6 @@ export class GatewayConnection {
       this.ctx.abortSignal.addEventListener("abort", () => resolve());
     });
   }
-
-  // ============ Session persistence ============
 
   private restoreSession(): void {
     const { account, log } = this.ctx;
@@ -111,8 +98,6 @@ export class GatewayConnection {
       appId: account.appId,
     });
   }
-
-  // ============ Abort + cleanup ============
 
   private registerAbortHandler(): void {
     const { account, abortSignal, log: _log } = this.ctx;
@@ -144,12 +129,15 @@ export class GatewayConnection {
     this.currentWs = null;
   }
 
-  // ============ Reconnect ============
-
   private scheduleReconnect(customDelay?: number): void {
     const { account: _account, log } = this.ctx;
     if (this.isAborted || this.reconnect.isExhausted()) {
       log?.error(`Max reconnect attempts reached or aborted`);
+      // Exhaustion is a permanent give-up: report it as fatal so the
+      // channel status does not keep claiming a live connection.
+      if (!this.isAborted) {
+        this.ctx.onDisconnected?.({ reason: "reconnect attempts exhausted", fatal: true });
+      }
       return;
     }
     if (this.reconnectTimer) {
@@ -164,8 +152,6 @@ export class GatewayConnection {
       }
     }, delay);
   }
-
-  // ============ Connect ============
 
   private async connect(): Promise<void> {
     const { account, log } = this.ctx;
@@ -188,18 +174,24 @@ export class GatewayConnection {
       log?.info(`✅ Access token obtained successfully`);
       const gatewayUrl = await getGatewayUrl(accessToken, account.appId);
       log?.info(`Connecting to ${gatewayUrl}`);
-
-      const ws = new WebSocket(gatewayUrl, {
-        headers: { "User-Agent": getPluginUserAgent() },
+      const ws = await createQQWSClient({
+        gatewayUrl,
+        userAgent: getPluginUserAgent(),
       });
       this.currentWs = ws;
 
-      // ---- Slash command interception ----
       const slashCtx: SlashCommandHandlerContext = {
         account,
+        cfg: this.ctx.cfg,
         log,
         getMessagePeerId: (msg) => this.msgQueue.getMessagePeerId(msg),
         getQueueSnapshot: (peerId) => this.msgQueue.getSnapshot(peerId),
+        resolveCommandAuthorized: (params) =>
+          this.ctx.adapters.access.resolveSlashCommandAuthorization({
+            cfg: this.ctx.cfg,
+            accountId: account.accountId,
+            ...params,
+          }),
       };
 
       const trySlashCommandOrEnqueue = async (msg: QueuedMessage): Promise<void> => {
@@ -224,7 +216,7 @@ export class GatewayConnection {
       });
 
       // ---- WebSocket: message ----
-      ws.on("message", async (data) => {
+      ws.on("message", (data) => {
         try {
           const rawData = decodeGatewayMessageData(data);
           const payload = JSON.parse(rawData) as WSPayload;
@@ -262,12 +254,20 @@ export class GatewayConnection {
               break;
 
             case GatewayOp.RECONNECT:
+              this.ctx.onDisconnected?.({
+                reason: "server requested reconnect",
+                fatal: false,
+              });
               this.cleanup();
               this.scheduleReconnect();
               break;
 
             case GatewayOp.INVALID_SESSION: {
               const canResume = d as boolean;
+              this.ctx.onDisconnected?.({
+                reason: canResume ? "session resume rejected" : "session invalidated",
+                fatal: false,
+              });
               if (!canResume) {
                 this.sessionId = null;
                 this.lastSeq = null;
@@ -287,6 +287,12 @@ export class GatewayConnection {
       // ---- WebSocket: close ----
       ws.on("close", (code, reason) => {
         log?.info(`WebSocket closed: ${code} ${reason.toString()}`);
+        // cleanup() clears currentWs before a server-driven reconnect. Ignore
+        // the old socket's delayed close both during that gap and after the
+        // replacement is live, or it can reschedule reconnect handling.
+        if (this.currentWs !== ws) {
+          return;
+        }
         this.isConnecting = false;
         this.handleClose(code);
       });
@@ -360,6 +366,13 @@ export class GatewayConnection {
     }
 
     this.cleanup();
+
+    // Publish the disconnect so channel status stops claiming a live
+    // connection; a fatal close (bot banned / offline) never reconnects.
+    // Abort-driven closes are an intentional stop, not a status change.
+    if (!this.isAborted) {
+      this.ctx.onDisconnected?.({ reason: action.reason, fatal: action.fatal });
+    }
 
     if (action.fatal) {
       return;

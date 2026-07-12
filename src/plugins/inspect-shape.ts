@@ -1,15 +1,23 @@
+// Inspects plugin registry shape for diagnostics and snapshots.
 import type { PluginRegistry } from "./registry.js";
 import { hasKind } from "./slots.js";
 
 export type PluginCapabilityKind =
   | "cli-backend"
   | "text-inference"
+  | "embedding"
   | "speech"
   | "realtime-transcription"
   | "realtime-voice"
   | "media-understanding"
+  | "transcript-source"
+  | "document-extractors"
   | "image-generation"
+  | "video-generation"
+  | "music-generation"
   | "web-search"
+  | "worker-provider"
+  | "session-catalog"
   | "agent-harness"
   | "context-engine"
   | "channel";
@@ -33,18 +41,31 @@ export type PluginShapeSummary = {
   usesLegacyBeforeAgentStart: boolean;
 };
 
-export function buildPluginCapabilityEntries(
+function buildPluginCapabilityEntries(
   plugin: PluginRegistry["plugins"][number],
+  report: Pick<PluginRegistry, "sessionCatalogs">,
 ): PluginCapabilityEntry[] {
   return [
     { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
+    { kind: "embedding" as const, ids: plugin.embeddingProviderIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
+    { kind: "transcript-source" as const, ids: plugin.transcriptSourceProviderIds },
+    { kind: "document-extractors" as const, ids: plugin.contracts?.documentExtractors ?? [] },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
+    { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
+    { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
+    { kind: "worker-provider" as const, ids: plugin.contracts?.workerProviders ?? [] },
+    {
+      kind: "session-catalog" as const,
+      ids: report.sessionCatalogs
+        .filter((entry) => entry.pluginId === plugin.id)
+        .map((entry) => entry.provider.id),
+    },
     { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
     {
       kind: "context-engine" as const,
@@ -57,7 +78,7 @@ export function buildPluginCapabilityEntries(
   ].filter((entry) => entry.ids.length > 0);
 }
 
-export function derivePluginInspectShape(params: {
+function derivePluginInspectShape(params: {
   capabilityCount: number;
   typedHookCount: number;
   customHookCount: number;
@@ -92,9 +113,12 @@ export function derivePluginInspectShape(params: {
 
 export function buildPluginShapeSummary(params: {
   plugin: PluginRegistry["plugins"][number];
-  report: Pick<PluginRegistry, "hooks" | "typedHooks" | "tools">;
+  report: Pick<
+    PluginRegistry,
+    "hooks" | "typedHooks" | "tools" | "gatewayMethodDescriptors" | "sessionCatalogs"
+  >;
 }): PluginShapeSummary {
-  const capabilities = buildPluginCapabilityEntries(params.plugin);
+  const capabilities = buildPluginCapabilityEntries(params.plugin, params.report);
   const typedHookCount = params.report.typedHooks.filter(
     (entry) => entry.pluginId === params.plugin.id,
   ).length;
@@ -103,6 +127,10 @@ export function buildPluginShapeSummary(params: {
   ).length;
   const toolCount = params.report.tools.filter(
     (entry) => entry.pluginId === params.plugin.id,
+  ).length;
+  const gatewayMethodCount = (params.report.gatewayMethodDescriptors ?? []).filter(
+    (descriptor) =>
+      descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === params.plugin.id,
   ).length;
   const capabilityCount = capabilities.length;
   const shape = derivePluginInspectShape({
@@ -114,7 +142,7 @@ export function buildPluginShapeSummary(params: {
     cliCount: params.plugin.cliCommands.length,
     serviceCount: params.plugin.services.length,
     gatewayDiscoveryServiceCount: params.plugin.gatewayDiscoveryServiceIds.length,
-    gatewayMethodCount: params.plugin.gatewayMethods.length,
+    gatewayMethodCount,
     httpRouteCount: params.plugin.httpRoutes,
   });
 

@@ -1,23 +1,31 @@
+/**
+ * Resolves and persists live-session model switch requests.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
+import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
 } from "./model-selection.js";
-import {
-  abortEmbeddedPiRun,
-  consumeEmbeddedRunModelSwitch,
-  requestEmbeddedRunModelSwitch,
-  type EmbeddedRunModelSwitchRequest,
-} from "./pi-embedded-runner/runs.js";
+import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 export { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
-export type LiveSessionModelSelection = EmbeddedRunModelSwitchRequest;
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+export type LiveSessionModelSelection = {
+  provider: string;
+  model: string;
+  agentRuntimeOverride?: string;
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+};
+
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_PROVIDER_ID = "openai";
+
 export function resolveLiveSessionModelSelection(params: {
-  cfg?: { session?: { store?: string } } | undefined;
+  cfg?: OpenClawConfig | undefined;
   sessionKey?: string;
   agentId?: string;
   defaultProvider: string;
@@ -38,7 +46,12 @@ export function resolveLiveSessionModelSelection(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
+    hydrateSkillPromptRefs: false,
+    readConsistency: "latest",
+  });
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -56,41 +69,39 @@ export function resolveLiveSessionModelSelection(params: {
     entry?.providerOverride?.trim() ??
     defaultModelRef.provider;
   const model = persisted?.model ?? defaultModelRef.model;
+  const agentRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+    provider,
+    entry,
+    cfg,
+  });
   const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
   return {
     provider,
     model,
+    ...(agentRuntimeOverride ? { agentRuntimeOverride } : {}),
     authProfileId,
     authProfileIdSource: authProfileId ? entry?.authProfileOverrideSource : undefined,
   };
 }
 
-export function requestLiveSessionModelSwitch(params: {
-  sessionEntry?: Pick<SessionEntry, "sessionId">;
-  selection: LiveSessionModelSelection;
-}): boolean {
-  const sessionId = normalizeOptionalString(params.sessionEntry?.sessionId);
-  if (!sessionId) {
-    return false;
-  }
-  const aborted = abortEmbeddedPiRun(sessionId);
-  if (!aborted) {
-    return false;
-  }
-  requestEmbeddedRunModelSwitch(sessionId, params.selection);
-  return true;
-}
-
-export function consumeLiveSessionModelSwitch(
-  sessionId: string,
-): LiveSessionModelSelection | undefined {
-  return consumeEmbeddedRunModelSwitch(sessionId);
+function isAlreadyAppliedOpenAICodexRuntimePromotion(
+  current: { provider: string; model: string },
+  next: LiveSessionModelSelection,
+): boolean {
+  // The embedded Codex runtime reports openai after applying a canonical
+  // openai selection. Other runtime aliases remain real live-switch targets.
+  return (
+    normalizeProviderId(current.provider) === OPENAI_CODEX_PROVIDER_ID &&
+    normalizeProviderId(next.provider) === OPENAI_PROVIDER_ID &&
+    current.model === next.model
+  );
 }
 
 export function hasDifferentLiveSessionModelSelection(
   current: {
     provider: string;
     model: string;
+    agentRuntimeOverride?: string;
     authProfileId?: string;
     authProfileIdSource?: string;
   },
@@ -99,25 +110,16 @@ export function hasDifferentLiveSessionModelSelection(
   if (!next) {
     return false;
   }
+  const modelSelectionDiffers =
+    (current.provider !== next.provider || current.model !== next.model) &&
+    !isAlreadyAppliedOpenAICodexRuntimePromotion(current, next);
   return (
-    current.provider !== next.provider ||
-    current.model !== next.model ||
+    modelSelectionDiffers ||
+    normalizeOptionalString(current.agentRuntimeOverride) !== next.agentRuntimeOverride ||
     normalizeOptionalString(current.authProfileId) !== next.authProfileId ||
     (normalizeOptionalString(current.authProfileId) ? current.authProfileIdSource : undefined) !==
       next.authProfileIdSource
   );
-}
-
-export function shouldTrackPersistedLiveSessionModelSelection(
-  current: {
-    provider: string;
-    model: string;
-    authProfileId?: string;
-    authProfileIdSource?: string;
-  },
-  persisted: LiveSessionModelSelection | null | undefined,
-): boolean {
-  return !hasDifferentLiveSessionModelSelection(current, persisted);
 }
 
 /**
@@ -137,18 +139,19 @@ export function shouldTrackPersistedLiveSessionModelSelection(
  * set so the switch fires on the next clean retry opportunity — even if that
  * falls into a subsequent user turn.
  *
- * This replaces the previous approach that used an in-memory map
- * (`consumeEmbeddedRunModelSwitch`) which could not distinguish between
+ * This replaces the previous approach that used an in-memory run-state map,
+ * which could not distinguish between
  * user-initiated `/model` switches and system-initiated fallback rotations.
  */
 export function shouldSwitchToLiveModel(params: {
-  cfg?: { session?: { store?: string } } | undefined;
+  cfg?: OpenClawConfig | undefined;
   sessionKey?: string;
   agentId?: string;
   defaultProvider: string;
   defaultModel: string;
   currentProvider: string;
   currentModel: string;
+  currentAgentRuntimeOverride?: string;
   currentAuthProfileId?: string;
   currentAuthProfileIdSource?: string;
 }): LiveSessionModelSelection | undefined {
@@ -160,7 +163,13 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
+    hydrateSkillPromptRefs: false,
+    clone: false,
+    readConsistency: "latest",
+  });
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }
@@ -176,6 +185,7 @@ export function shouldSwitchToLiveModel(params: {
       {
         provider: params.currentProvider,
         model: params.currentModel,
+        agentRuntimeOverride: params.currentAgentRuntimeOverride,
         authProfileId: params.currentAuthProfileId,
         authProfileIdSource: params.currentAuthProfileIdSource,
       },
@@ -217,10 +227,13 @@ export async function clearLiveModelSwitchPending(params: {
   if (!storePath) {
     return;
   }
-  await updateSessionStore(storePath, (store) => {
-    const entry = store[sessionKey];
-    if (entry) {
-      delete entry.liveModelSwitchPending;
-    }
-  });
+  await patchSessionEntry(
+    { storePath, sessionKey },
+    (entry) => {
+      const next = { ...entry };
+      delete next.liveModelSwitchPending;
+      return next;
+    },
+    { replaceEntry: true },
+  );
 }

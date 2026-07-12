@@ -1,9 +1,15 @@
+// Memory Core plugin module implements cli behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveMemoryRemDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveMemoryDreamingConfig,
+  resolveMemoryLightDreamingConfig,
+  resolveMemoryRemDreamingConfig,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
@@ -46,6 +52,11 @@ import {
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import type {
+  MemoryCoreAcquireLocalService,
+  MemoryCoreLocalServiceHost,
+} from "./memory/embedding-local-service.js";
+import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
@@ -66,6 +77,72 @@ type MemoryManager = NonNullable<Awaited<ReturnType<typeof getMemorySearchManage
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
 
 type MemorySourceName = "memory" | "sessions";
+
+type LlamaCppRuntimeStatus = {
+  state?: string;
+  backend?: string;
+  buildType?: string;
+  deviceNames?: string[];
+  memory?: {
+    totalBytes: number;
+    usedBytes: number;
+    freeBytes: number;
+    unifiedBytes: number;
+    observedAtMs: number;
+  };
+  offload?: {
+    supported: boolean;
+    offloadedLayers?: number;
+    totalLayers?: number;
+  };
+  context?: {
+    requestedSize: number | "auto";
+  };
+  loadError?: string;
+};
+
+function readLlamaCppRuntimeStatus(
+  status: ReturnType<MemoryManager["status"]>,
+): LlamaCppRuntimeStatus | null {
+  const runtime = asRecord(asRecord(status.custom)?.llamaCppRuntime);
+  return runtime?.engine === "llama.cpp" ? (runtime as LlamaCppRuntimeStatus) : null;
+}
+
+function formatMemoryIndexIdentityWarning(
+  status: ReturnType<MemoryManager["status"]>,
+  agentId: string,
+): {
+  reason: string;
+  fix: string;
+} | null {
+  const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
+  const reason =
+    (indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing") &&
+    typeof indexIdentity.reason === "string"
+      ? indexIdentity.reason
+      : undefined;
+  if (!reason) {
+    return null;
+  }
+  return {
+    reason,
+    fix: `Run: openclaw memory status --index --agent ${agentId}`,
+  };
+}
+
+function formatRuntimeBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
+}
 
 type SourceScan = {
   source: MemorySourceName;
@@ -126,7 +203,7 @@ function resolveMemoryPluginConfig(cfg: OpenClawConfig): Record<string, unknown>
   return asRecord(entry?.config) ?? {};
 }
 
-const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})\.md$/;
+const DAILY_MEMORY_FILE_NAME_RE = /^(\d{4}-\d{2}-\d{2})(?:-[^/]+)?\.md$/i;
 
 async function listHistoricalDailyFiles(inputPath: string): Promise<string[]> {
   const resolvedPath = path.resolve(inputPath);
@@ -196,12 +273,23 @@ async function createHistoricalRemHarnessWorkspace(params: {
 
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
-  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
-  if (!dreaming.enabled) {
-    return "off";
-  }
-  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
-  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"}`;
+  const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
+  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
+  const timezone = deep.timezone ?? light.timezone ?? rem.timezone;
+  const formatCron = (cron: string) => (timezone ? `${cron} (${timezone})` : cron);
+  const lightSummary = light.enabled
+    ? `light=${formatCron(light.cron)} · limit=${light.limit} · lookbackDays=${light.lookbackDays}`
+    : null;
+  const remSummary = rem.enabled
+    ? `rem=${formatCron(rem.cron)} · limit=${rem.limit} · lookbackDays=${rem.lookbackDays} · minPatternStrength=${rem.minPatternStrength}`
+    : null;
+  const hasLighterPhase = light.enabled || rem.enabled;
+  const deepLabel = hasLighterPhase ? "deep=" : "";
+  const deepDetails = `${formatCron(deep.cron)} · limit=${deep.limit} · minScore=${deep.minScore} · minRecallCount=${deep.minRecallCount} · minUniqueQueries=${deep.minUniqueQueries} · recencyHalfLifeDays=${deep.recencyHalfLifeDays} · maxAgeDays=${deep.maxAgeDays ?? "none"} · maxPromotedSnippetTokens=${deep.maxPromotedSnippetTokens}`;
+  const deepSummary = deep.enabled ? `${deepLabel}${deepDetails}` : null;
+  const phases = [lightSummary, remSummary, deepSummary].filter(Boolean);
+  return phases.length > 0 ? phases.join(" · ") : "off";
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
@@ -230,9 +318,14 @@ function formatAuditCounts(audit: ShortTermAuditSummary): string {
 function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
-    actions.push(
-      `rewrote store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
-    );
+    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
+    const details = [
+      repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
+      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    actions.push(`rewrote store${details ? ` (${details})` : ""}`);
   }
   if (repair.removedStaleLock) {
     actions.push("removed stale lock");
@@ -320,6 +413,10 @@ function formatExtraPaths(workspaceDir: string, extraPaths: string[]): string[] 
 function extractIsoDayFromPath(filePath: string): string | null {
   const match = path.basename(filePath).match(DAILY_MEMORY_FILE_NAME_RE);
   return match?.[1] ?? null;
+}
+
+function normalizeRelativePath(baseDir: string, filePath: string): string {
+  return path.relative(baseDir, filePath).replace(/\\/g, "/");
 }
 
 function groundedMarkdownToDiaryLines(markdown: string): string[] {
@@ -447,6 +544,7 @@ async function withMemoryManagerForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemoryManagerPurpose;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
   run: (manager: MemoryManager) => Promise<void>;
 }): Promise<void> {
   const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
@@ -455,6 +553,9 @@ async function withMemoryManagerForAgent(params: {
   };
   if (params.purpose) {
     managerParams.purpose = params.purpose;
+  }
+  if (params.acquireLocalService) {
+    managerParams.acquireLocalService = params.acquireLocalService;
   }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
@@ -490,7 +591,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   try {
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
     const totalFiles = entries.filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
+      (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
     ).length;
     return { source: "sessions", totalFiles, issues };
   } catch (err) {
@@ -542,7 +643,7 @@ async function scanMemoryFiles(
     }
   }
 
-  let dirReadable: boolean | null = null;
+  let dirReadable: boolean | null;
   try {
     await fs.access(memoryDir, fsSync.constants.R_OK);
     dirReadable = true;
@@ -574,7 +675,7 @@ async function scanMemoryFiles(
     }
   }
 
-  let totalFiles: number | null = 0;
+  let totalFiles: number | null;
   if (dirReadable === null) {
     totalFiles = null;
   } else {
@@ -647,7 +748,10 @@ async function scanMemorySources(params: {
   return { sources: scans, totalFiles, issues };
 }
 
-export async function runMemoryStatus(opts: MemoryCommandOptions) {
+export async function runMemoryStatus(
+  opts: MemoryCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   setVerbose(Boolean(opts.verbose));
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory status");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
@@ -670,20 +774,37 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       cfg,
       agentId,
       purpose: managerPurpose,
+      acquireLocalService: hostOptions?.acquireLocalService,
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
         let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
         let indexError: string | undefined;
         const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
         if (deep) {
-          await withProgress({ label: "Checking memory…", total: 2 }, async (progress) => {
-            progress.setLabel("Probing vector…");
-            await manager.probeVectorAvailability();
-            progress.tick();
-            progress.setLabel("Probing embeddings…");
-            embeddingProbe = await manager.probeEmbeddingAvailability();
-            progress.tick();
-          });
+          const initialStatus = manager.status();
+          const hasVectorStoreProbe =
+            initialStatus.backend === "builtin" &&
+            typeof manager.probeVectorStoreAvailability === "function";
+          await withProgress(
+            { label: "Checking memory…", total: hasVectorStoreProbe ? 3 : 2 },
+            async (progress) => {
+              progress.setLabel(hasVectorStoreProbe ? "Probing vector store…" : "Probing vectors…");
+              if (hasVectorStoreProbe) {
+                await manager.probeVectorStoreAvailability?.();
+              } else {
+                await manager.probeVectorAvailability();
+              }
+              progress.tick();
+              progress.setLabel("Probing embeddings…");
+              embeddingProbe = await manager.probeEmbeddingAvailability();
+              progress.tick();
+              if (hasVectorStoreProbe) {
+                progress.setLabel("Checking semantic vectors…");
+                await manager.probeVectorAvailability();
+                progress.tick();
+              }
+            },
+          );
           if (opts.index && syncFn) {
             await withProgressTotals(
               {
@@ -717,8 +838,6 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
           } else if (opts.index && !syncFn) {
             defaultRuntime.log("Memory backend does not support manual reindex.");
           }
-        } else {
-          await manager.probeVectorAvailability();
         }
         const status = manager.status();
         const sources = (
@@ -834,12 +953,61 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       `${label("Dreaming")} ${info(formatDreamingSummary(cfg))}`,
     ].filter(Boolean) as string[];
     if (embeddingProbe) {
-      const state = embeddingProbe.ok ? "ready" : "unavailable";
-      const stateColor = embeddingProbe.ok ? theme.success : theme.warn;
+      const state =
+        embeddingProbe.ok && embeddingProbe.checked === false
+          ? "skipped"
+          : embeddingProbe.ok
+            ? "ready"
+            : "unavailable";
+      const stateColor =
+        state === "skipped" ? theme.muted : embeddingProbe.ok ? theme.success : theme.warn;
       lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
       if (embeddingProbe.error) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
+    }
+    const llamaCppRuntime = opts.deep ? readLlamaCppRuntimeStatus(status) : null;
+    if (llamaCppRuntime) {
+      const runtime = llamaCppRuntime;
+      const backend = runtime.backend ?? "unknown";
+      const build = runtime.buildType ? ` (${runtime.buildType})` : "";
+      lines.push(`${label("llama.cpp")} ${info(backend)}${muted(build)}`);
+      if (runtime.deviceNames?.length) {
+        lines.push(`${label("Devices")} ${info(runtime.deviceNames.join(", "))}`);
+      }
+      if (runtime.memory) {
+        const unified =
+          runtime.memory.unifiedBytes > 0
+            ? ` · ${formatRuntimeBytes(runtime.memory.unifiedBytes)} unified`
+            : "";
+        lines.push(
+          `${label("VRAM snapshot")} ${info(`${formatRuntimeBytes(runtime.memory.usedBytes)} used · ${formatRuntimeBytes(runtime.memory.freeBytes)} free · ${formatRuntimeBytes(runtime.memory.totalBytes)} total${unified}`)} ${muted(`(${new Date(runtime.memory.observedAtMs).toISOString()})`)}`,
+        );
+      }
+      if (runtime.offload) {
+        const layers =
+          typeof runtime.offload.offloadedLayers === "number" &&
+          typeof runtime.offload.totalLayers === "number"
+            ? `${runtime.offload.offloadedLayers}/${runtime.offload.totalLayers} layers`
+            : runtime.offload.supported
+              ? "supported"
+              : "unsupported";
+        lines.push(`${label("GPU offload")} ${info(layers)}`);
+      }
+      if (runtime.context) {
+        lines.push(
+          `${label("Requested context")} ${info(`${runtime.context.requestedSize} tokens`)}`,
+        );
+      }
+      if (runtime.loadError) {
+        lines.push(`${label("llama.cpp error")} ${warn(runtime.loadError)}`);
+      }
+    }
+    const identityWarning = formatMemoryIndexIdentityWarning(status, agentId);
+    if (identityWarning) {
+      lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
+      lines.push(`${label("Vector search")} ${warn("paused until memory is rebuilt")}`);
+      lines.push(`${label("Fix")} ${muted(identityWarning.fix)}`);
     }
     if (status.sourceCounts?.length) {
       lines.push(label("By source"));
@@ -858,20 +1026,31 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
     }
     if (status.vector) {
-      const vectorState = status.vector.enabled
-        ? status.vector.available === undefined
-          ? "unknown"
-          : status.vector.available
-            ? "ready"
-            : "unavailable"
-        : "disabled";
-      const vectorColor =
-        vectorState === "ready"
-          ? theme.success
-          : vectorState === "unavailable"
-            ? theme.warn
-            : theme.muted;
-      lines.push(`${label("Vector")} ${colorize(rich, vectorColor, vectorState)}`);
+      const formatVectorState = (available: boolean | undefined) =>
+        status.vector?.enabled
+          ? available === undefined
+            ? "unknown"
+            : available
+              ? "ready"
+              : "unavailable"
+          : "disabled";
+      const formatVectorLine = (lineLabel: string, state: string) => {
+        const vectorColor =
+          state === "ready" ? theme.success : state === "unavailable" ? theme.warn : theme.muted;
+        lines.push(`${label(lineLabel)} ${colorize(rich, vectorColor, state)}`);
+      };
+      if (status.backend === "builtin") {
+        const storeState = formatVectorState(status.vector.storeAvailable);
+        formatVectorLine("Vector store", storeState);
+        if (status.vector.semanticAvailable !== undefined) {
+          formatVectorLine("Semantic vectors", formatVectorState(status.vector.semanticAvailable));
+        }
+      } else {
+        const vectorState = formatVectorState(
+          status.vector.semanticAvailable ?? status.vector.available,
+        );
+        formatVectorLine("Vector", vectorState);
+      }
       if (status.vector.dims) {
         lines.push(`${label("Vector dims")} ${info(String(status.vector.dims))}`);
       }
@@ -999,7 +1178,10 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   }
 }
 
-export async function runMemoryIndex(opts: MemoryCommandOptions) {
+export async function runMemoryIndex(
+  opts: MemoryCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   setVerbose(Boolean(opts.verbose));
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
   emitMemorySecretResolveDiagnostics(diagnostics);
@@ -1009,6 +1191,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
       cfg,
       agentId,
       purpose: "cli",
+      acquireLocalService: hostOptions?.acquireLocalService,
       run: async (manager) => {
         try {
           const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -1117,16 +1300,34 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
           if (qmdIndexSummary) {
             defaultRuntime.log(qmdIndexSummary);
           }
-          const postIndexStatus = manager.status();
+          let postIndexStatus = manager.status();
+          let semanticVectorAvailable = postIndexStatus.vector?.semanticAvailable;
+          const vectorStoreAvailable =
+            postIndexStatus.vector?.storeAvailable ?? postIndexStatus.vector?.available;
+          if (
+            postIndexStatus.backend === "builtin" &&
+            (postIndexStatus.vector?.enabled ?? false) &&
+            semanticVectorAvailable === undefined &&
+            vectorStoreAvailable !== false &&
+            typeof manager.probeVectorAvailability === "function"
+          ) {
+            semanticVectorAvailable = await manager.probeVectorAvailability();
+            postIndexStatus = manager.status();
+            semanticVectorAvailable =
+              postIndexStatus.vector?.semanticAvailable ?? semanticVectorAvailable;
+          }
           const vectorEnabled = postIndexStatus.vector?.enabled ?? false;
-          const vectorAvailable = postIndexStatus.vector?.available;
+          const vectorAvailable =
+            semanticVectorAvailable ??
+            postIndexStatus.vector?.semanticAvailable ??
+            postIndexStatus.vector?.available ??
+            postIndexStatus.vector?.storeAvailable;
           const vectorLoadErr = postIndexStatus.vector?.loadError;
           if (vectorEnabled && vectorAvailable === false) {
-            const errDetail = vectorLoadErr ? `: ${vectorLoadErr}` : "";
             // Indexing still persisted chunks/FTS state; keep the command successful but
             // emit a stderr warning so operators and scripts can detect degraded recall.
             defaultRuntime.error(
-              `Memory index WARNING (${agentId}): chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded.`,
+              `Memory index WARNING (${agentId}): chunks_vec not updated — ${formatMemoryVectorDegradedWriteReason(vectorLoadErr)}. Vector recall degraded.`,
             );
           } else {
             defaultRuntime.log(`Memory index updated (${agentId}).`);
@@ -1144,6 +1345,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
 export async function runMemorySearch(
   queryArg: string | undefined,
   opts: MemorySearchCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
 ) {
   const query = opts.query ?? queryArg;
   if (!query) {
@@ -1154,14 +1356,20 @@ export async function runMemorySearch(
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory search");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
+  const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
+  const dreamingEnabled = resolveMemoryDreamingConfig({
+    pluginConfig: memoryPluginConfig,
+    cfg,
+  }).enabled;
   const dreaming = resolveShortTermPromotionDreamingConfig({
-    pluginConfig: resolveMemoryPluginConfig(cfg),
+    pluginConfig: memoryPluginConfig,
     cfg,
   });
   await withMemoryManagerForAgent({
     cfg,
     agentId,
     purpose: "cli",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const sessionKey = buildCliMemorySearchSessionKey(agentId);
       let results: Awaited<ReturnType<typeof manager.search>>;
@@ -1181,17 +1389,28 @@ export async function runMemorySearch(
         typeof (manager as { status?: () => { workspaceDir?: string } }).status === "function"
           ? manager.status().workspaceDir
           : undefined;
-      void recordShortTermRecalls({
-        workspaceDir,
-        query,
-        results,
-        timezone: dreaming.timezone,
-      }).catch(() => {
-        // Recall tracking is best-effort and must not block normal search results.
-      });
+      if (dreamingEnabled) {
+        void recordShortTermRecalls({
+          workspaceDir,
+          query,
+          results,
+          timezone: dreaming.timezone,
+        }).catch(() => {
+          // Recall tracking is best-effort and must not block normal search results.
+        });
+      }
       if (opts.json) {
         defaultRuntime.writeJson({ results });
         return;
+      }
+      const identityWarning =
+        typeof manager.status === "function"
+          ? formatMemoryIndexIdentityWarning(manager.status(), agentId)
+          : null;
+      if (identityWarning) {
+        defaultRuntime.error(
+          `Memory index warning: ${identityWarning.reason}. Vector memory search is paused until the index is rebuilt. ${identityWarning.fix}`,
+        );
       }
       if (results.length === 0) {
         defaultRuntime.log("No matches.");
@@ -1215,7 +1434,10 @@ export async function runMemorySearch(
   });
 }
 
-export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
+export async function runMemoryPromote(
+  opts: MemoryPromoteCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory promote");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
@@ -1224,6 +1446,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
@@ -1266,6 +1489,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
             minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
             minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
             maxAgeDays: dreaming.maxAgeDays,
+            maxPromotedSnippetTokens: dreaming.maxPromotedSnippetTokens,
             timezone: dreaming.timezone,
           });
         } catch (err) {
@@ -1344,7 +1568,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           colorize(
             rich,
             theme.muted,
-            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+            `signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
           ),
         );
         if (candidate.conceptTags.length > 0) {
@@ -1392,6 +1616,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
 export async function runMemoryPromoteExplain(
   selectorArg: string | undefined,
   opts: MemoryPromoteExplainOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
 ) {
   const selector = selectorArg?.trim();
   if (!selector) {
@@ -1408,6 +1633,7 @@ export async function runMemoryPromoteExplain(
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
@@ -1459,7 +1685,8 @@ export async function runMemoryPromoteExplain(
           candidate,
           passes: {
             score: candidate.score >= thresholds.minScore,
-            recallCount: candidate.recallCount >= thresholds.minRecallCount,
+            // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
+            recallCount: candidate.signalCount >= thresholds.minRecallCount,
             uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
             maxAge:
               thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
@@ -1485,7 +1712,7 @@ export async function runMemoryPromoteExplain(
         colorize(
           rich,
           theme.muted,
-          `score=${candidate.score.toFixed(3)} recallCount=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
+          `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
         ),
         colorize(
           rich,
@@ -1506,7 +1733,10 @@ export async function runMemoryPromoteExplain(
   });
 }
 
-export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
+export async function runMemoryRemHarness(
+  opts: MemoryRemHarnessOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-harness");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
@@ -1515,6 +1745,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
@@ -1598,6 +1829,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
               minUniqueQueries: preview.deepConfig.minUniqueQueries,
               recencyHalfLifeDays: preview.deepConfig.recencyHalfLifeDays,
               maxAgeDays: preview.deepConfig.maxAgeDays ?? null,
+              maxPromotedSnippetTokens: preview.deepConfig.maxPromotedSnippetTokens,
             },
             rem: { skipped: preview.remSkipped, ...remPreview },
             grounded: groundedPreview,
@@ -1685,7 +1917,10 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
   });
 }
 
-export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
+export async function runMemoryRemBackfill(
+  opts: MemoryRemBackfillOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-backfill");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
@@ -1694,6 +1929,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
@@ -1800,10 +2036,14 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
           workspaceDir: scratchDir,
           inputPaths: workspaceSourceFiles,
         });
-        const sourcePathByDay = new Map(
-          sourceFiles
-            .map((sourcePath) => [extractIsoDayFromPath(sourcePath), sourcePath] as const)
-            .filter((entry): entry is [string, string] => Boolean(entry[0])),
+        const sourcePathByScratchRelativePath = new Map(
+          workspaceSourceFiles.map(
+            (scratchPath, index) =>
+              [
+                normalizeRelativePath(scratchDir, scratchPath),
+                sourceFiles[index] ?? scratchPath,
+              ] as const,
+          ),
         );
         const entries = grounded.files
           .map((file) => {
@@ -1813,7 +2053,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
             }
             return {
               isoDay,
-              sourcePath: sourcePathByDay.get(isoDay) ?? file.path,
+              sourcePath: sourcePathByScratchRelativePath.get(file.path) ?? file.path,
               bodyLines: groundedMarkdownToDiaryLines(file.renderedMarkdown),
             };
           })

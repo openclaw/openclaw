@@ -1,12 +1,19 @@
+// Codex tests cover transport stdio plugin behavior.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
+  createStdioTransport,
+  resolveCodexAppServerDetachedMode,
   resolveCodexAppServerSpawnEnv,
   resolveCodexAppServerSpawnInvocation,
 } from "./transport-stdio.js";
+
+const spawnMock = vi.hoisted(() => vi.fn(() => ({ pid: 1234 })));
+
+vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 
 const tempDirs: string[] = [];
 
@@ -20,6 +27,10 @@ afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+beforeEach(() => {
+  spawnMock.mockClear();
 });
 
 function startOptions(command: string): CodexAppServerStartOptions {
@@ -87,6 +98,36 @@ describe("resolveCodexAppServerSpawnInvocation", () => {
       shell: undefined,
       windowsHide: true,
     });
+  });
+
+  it("rejects Windows Codex app-server commands that include inline script arguments", () => {
+    expect(() =>
+      resolveCodexAppServerSpawnInvocation(
+        startOptions(
+          "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+        ),
+        {
+          platform: "win32",
+          env: {},
+          execPath: "C:\\node\\node.exe",
+        },
+      ),
+    ).toThrow("Windows spawn command must be an executable path only");
+  });
+});
+
+describe("createStdioTransport", () => {
+  it("spawns a compatibility endpoint in its configured working directory", () => {
+    createStdioTransport({
+      ...startOptions("codex"),
+      cwd: "/srv/codex-project",
+    });
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "codex",
+      ["app-server", "--listen", "stdio://"],
+      expect.objectContaining({ cwd: "/srv/codex-project" }),
+    );
   });
 });
 
@@ -167,5 +208,21 @@ describe("resolveCodexAppServerSpawnEnv", () => {
     expect(Object.hasOwn(env, "__proto__")).toBe(false);
     expect(Object.hasOwn(env, "constructor")).toBe(false);
     expect(Object.hasOwn(env, "prototype")).toBe(false);
+  });
+});
+
+describe("resolveCodexAppServerDetachedMode", () => {
+  it("detaches normal POSIX app-server processes", () => {
+    expect(resolveCodexAppServerDetachedMode({}, "darwin")).toBe(true);
+  });
+
+  it("keeps QA app-server processes in the gateway process group", () => {
+    expect(resolveCodexAppServerDetachedMode({ OPENCLAW_QA_PARENT_PID: "12345" }, "linux")).toBe(
+      false,
+    );
+  });
+
+  it("does not detach Windows app-server processes", () => {
+    expect(resolveCodexAppServerDetachedMode({}, "win32")).toBe(false);
   });
 });

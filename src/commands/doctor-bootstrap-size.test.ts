@@ -1,3 +1,4 @@
+// Doctor bootstrap-size tests cover prompt-context budget warnings and note rendering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -8,7 +9,7 @@ const resolveBootstrapContextForRun = vi.hoisted(() => vi.fn());
 const resolveBootstrapMaxChars = vi.hoisted(() => vi.fn(() => 20_000));
 const resolveBootstrapTotalMaxChars = vi.hoisted(() => vi.fn(() => 150_000));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -21,7 +22,7 @@ vi.mock("../agents/bootstrap-files.js", () => ({
   resolveBootstrapContextForRun,
 }));
 
-vi.mock("../agents/pi-embedded-helpers.js", () => ({
+vi.mock("../agents/embedded-agent-helpers.js", () => ({
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 }));
@@ -53,10 +54,31 @@ describe("noteBootstrapFileSize", () => {
     await noteBootstrapFileSize({} as OpenClawConfig);
     expect(note).toHaveBeenCalledTimes(1);
     const [message, title] = note.mock.calls[0] ?? [];
-    expect(String(title)).toBe("Bootstrap file size");
-    expect(String(message)).toContain("will be truncated");
-    expect(String(message)).toContain("AGENTS.md");
-    expect(String(message)).toContain("max/file");
+    expect(title).toBe("Bootstrap file size");
+    expect(message).toBe(
+      [
+        "Workspace bootstrap files exceed limits and will be truncated:",
+        "- AGENTS.md: 25,000 raw / 20,000 injected (20% truncated; max/file)",
+        "Total bootstrap injected chars: 20,000 (13% of max/total 150,000).",
+        "Total bootstrap raw chars (before truncation): 25,000.",
+        "",
+        "- Tip: tune `agents.list[].bootstrapMaxChars` for this agent, or `agents.defaults.bootstrapMaxChars` as fallback, for per-file limits.",
+      ].join("\n"),
+    );
+  });
+
+  it("threads the default agent id through bootstrap size resolution", async () => {
+    resolveDefaultAgentId.mockReturnValueOnce("custom-agent");
+    resolveBootstrapContextForRun.mockResolvedValue({
+      bootstrapFiles: [],
+      contextFiles: [],
+    });
+    await noteBootstrapFileSize({} as OpenClawConfig);
+    expect(resolveBootstrapMaxChars).toHaveBeenCalledWith(expect.anything(), "custom-agent");
+    expect(resolveBootstrapTotalMaxChars).toHaveBeenCalledWith(expect.anything(), "custom-agent");
+    expect(resolveBootstrapContextForRun).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "custom-agent" }),
+    );
   });
 
   it("stays silent when files are comfortably within limits", async () => {

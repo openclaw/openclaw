@@ -1,9 +1,16 @@
-import { createHash } from "node:crypto";
+// Produces redacted runtime config snapshots for diagnostics and UI surfaces.
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import type { OpenClawConfig } from "./types.js";
 
-export type RuntimeConfigSnapshotRefreshParams = {
-  sourceConfig: OpenClawConfig;
+export type RuntimeConfigSnapshotRefreshOptions = {
+  includeAuthStoreRefs?: boolean;
 };
+
+export type RuntimeConfigSnapshotRefreshParams = RuntimeConfigSnapshotRefreshOptions & {
+  sourceConfig: OpenClawConfig;
+  preflightResult?: unknown;
+};
+type MaybePromise<T> = T | Promise<T>;
 
 export type ConfigWriteAfterWrite =
   | { mode: "auto" }
@@ -57,6 +64,7 @@ export function resolveConfigWriteFollowUp(
 }
 
 export type RuntimeConfigSnapshotRefreshHandler = {
+  preflight?: (params: RuntimeConfigSnapshotRefreshParams) => MaybePromise<unknown>;
   refresh: (params: RuntimeConfigSnapshotRefreshParams) => boolean | Promise<boolean>;
   clearOnRefreshFailure?: () => void;
 };
@@ -113,7 +121,7 @@ function configSnapshotsMatch(left: OpenClawConfig, right: OpenClawConfig): bool
 }
 
 export function hashRuntimeConfigValue(value: OpenClawConfig): string {
-  return createHash("sha256").update(stableConfigStringify(value)).digest("base64url");
+  return sha256Base64Url(stableConfigStringify(value));
 }
 
 function createRuntimeConfigSnapshotMetadata(
@@ -263,19 +271,45 @@ export function loadPinnedRuntimeConfig(loadFresh: () => OpenClawConfig): OpenCl
   return getRuntimeConfigSnapshot() ?? config;
 }
 
+export async function preflightRuntimeSnapshotWrite(params: {
+  nextSourceConfig: OpenClawConfig;
+  refreshOptions?: RuntimeConfigSnapshotRefreshOptions;
+  createRefreshError: (detail: string, cause: unknown) => Error;
+  formatRefreshError: (error: unknown) => string;
+}): Promise<unknown> {
+  const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+  if (!refreshHandler?.preflight) {
+    return undefined;
+  }
+  try {
+    return await refreshHandler.preflight({
+      sourceConfig: params.nextSourceConfig,
+      ...params.refreshOptions,
+    });
+  } catch (error) {
+    throw params.createRefreshError(params.formatRefreshError(error), error);
+  }
+}
+
 export async function finalizeRuntimeSnapshotWrite(params: {
   nextSourceConfig: OpenClawConfig;
+  refreshOptions?: RuntimeConfigSnapshotRefreshOptions;
   hadRuntimeSnapshot: boolean;
   hadBothSnapshots: boolean;
   loadFreshConfig: () => OpenClawConfig;
   notifyCommittedWrite: () => void;
   createRefreshError: (detail: string, cause: unknown) => Error;
   formatRefreshError: (error: unknown) => string;
+  preflightResult?: unknown;
 }): Promise<void> {
   const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
   if (refreshHandler) {
     try {
-      const refreshed = await refreshHandler.refresh({ sourceConfig: params.nextSourceConfig });
+      const refreshed = await refreshHandler.refresh({
+        sourceConfig: params.nextSourceConfig,
+        ...params.refreshOptions,
+        preflightResult: params.preflightResult,
+      });
       if (refreshed) {
         params.notifyCommittedWrite();
         return;

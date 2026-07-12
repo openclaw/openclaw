@@ -1,3 +1,4 @@
+// Status runtime shared tests cover gateway health, runtime details, and safe status probe fallbacks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveStatusGatewayHealth,
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   getDaemonStatusSummary: vi.fn(),
   getNodeDaemonStatusSummary: vi.fn(),
   resolveReadOnlyChannelPluginsForConfig: vi.fn(),
+  resolveModelAuthLabel: vi.fn(),
 }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
@@ -25,6 +27,10 @@ vi.mock("../channels/plugins/read-only.js", () => ({
 
 vi.mock("../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
+}));
+
+vi.mock("../agents/model-auth-label.js", () => ({
+  resolveModelAuthLabel: mocks.resolveModelAuthLabel,
 }));
 
 vi.mock("../security/audit.runtime.js", () => ({
@@ -40,6 +46,30 @@ vi.mock("./status.daemon.js", () => ({
   getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,
 }));
 
+function requireProviderUsageCall(): {
+  timeoutMs?: number;
+  config?: unknown;
+  agentDir?: string;
+  providers?: string[];
+  auth?: Array<Record<string, unknown>>;
+} {
+  const call = mocks.loadProviderUsageSummary.mock.calls[0];
+  if (!call) {
+    throw new Error("expected provider usage summary call");
+  }
+  const params = call.at(0);
+  if (!params || typeof params !== "object") {
+    throw new Error("expected provider usage summary params");
+  }
+  return params as {
+    timeoutMs?: number;
+    config?: unknown;
+    agentDir?: string;
+    providers?: string[];
+    auth?: Array<Record<string, unknown>>;
+  };
+}
+
 describe("status-runtime-shared", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -48,6 +78,7 @@ describe("status-runtime-shared", () => {
     mocks.callGateway.mockResolvedValue({ ok: true });
     mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
     mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
+    mocks.resolveModelAuthLabel.mockReturnValue(undefined);
     mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
       plugins: [{ id: "telegram" }],
       configuredChannelIds: ["telegram"],
@@ -68,13 +99,13 @@ describe("status-runtime-shared", () => {
       includeFilesystem: true,
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
-      plugins: expect.any(Array),
+      plugins: [{ id: "telegram" }],
     });
     expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
       { gateway: {} },
       {
         activationSourceConfig: { gateway: {} },
-        includeSetupRuntimeFallback: false,
+        includeSetupFallbackPlugins: false,
       },
     );
   });
@@ -102,9 +133,199 @@ describe("status-runtime-shared", () => {
   });
 
   it("resolves usage summaries with the provided timeout", async () => {
-    await resolveStatusUsageSummary(1234);
+    await resolveStatusUsageSummary({
+      timeoutMs: 1234,
+      config: { gateway: {} },
+    });
 
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({ timeoutMs: 1234 });
+    const usageCall = requireProviderUsageCall();
+    expect(usageCall.timeoutMs).toBe(1234);
+    expect(usageCall.config).toEqual({ gateway: {} });
+    expect(usageCall.agentDir).toContain("main");
+  });
+
+  it("adds Codex synthetic usage for configured OpenAI Codex runtime routes without profiles", async () => {
+    mocks.loadProviderUsageSummary
+      .mockResolvedValueOnce({
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            windows: [],
+            error: "HTTP 429",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        updatedAt: 2,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [{ label: "5h", usedPercent: 9 }],
+          },
+        ],
+      });
+
+    await expect(
+      resolveStatusUsageSummary({
+        timeoutMs: 3456,
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.5" },
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/status-agent",
+      }),
+    ).resolves.toEqual({
+      updatedAt: 1,
+      providers: [
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          windows: [],
+          error: "HTTP 429",
+        },
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 9 }],
+        },
+      ],
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenNthCalledWith(2, {
+      timeoutMs: 3456,
+      providers: ["openai"],
+      auth: [
+        {
+          provider: "openai",
+          token: "codex-app-server",
+          hookProvider: "codex",
+        },
+      ],
+      config: expect.any(Object),
+      agentDir: "/tmp/status-agent",
+    });
+  });
+
+  it("keeps existing OpenAI usage when Codex synthetic usage has no windows", async () => {
+    mocks.loadProviderUsageSummary
+      .mockResolvedValueOnce({
+        updatedAt: 1,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [{ label: "5h", usedPercent: 22 }],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        updatedAt: 2,
+        providers: [
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            windows: [],
+          },
+        ],
+      });
+
+    await expect(
+      resolveStatusUsageSummary({
+        timeoutMs: 3456,
+        config: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.5" },
+              models: {
+                "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/status-agent",
+      }),
+    ).resolves.toEqual({
+      updatedAt: 1,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 22 }],
+        },
+      ],
+    });
+  });
+
+  it("does not add Codex synthetic usage for OpenAI routes pinned to OpenClaw runtime", async () => {
+    await resolveStatusUsageSummary({
+      timeoutMs: 3456,
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/status-agent",
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
+    expect(requireProviderUsageCall()).not.toHaveProperty("auth");
+  });
+
+  it("does not add Codex synthetic usage for API-key-backed OpenAI Codex runtime routes", async () => {
+    mocks.resolveModelAuthLabel.mockReturnValue("api-key (openai:api)");
+
+    await resolveStatusUsageSummary({
+      timeoutMs: 3456,
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/status-agent",
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce();
+    expect(requireProviderUsageCall()).not.toHaveProperty("auth");
+    expect(mocks.resolveModelAuthLabel).toHaveBeenCalledWith({
+      provider: "openai",
+      acceptedProviderIds: ["openai"],
+      cfg: expect.any(Object),
+      agentDir: "/tmp/status-agent",
+      includeExternalProfiles: false,
+    });
+  });
+
+  it("resolves usage summaries with explicit agent scope", async () => {
+    await resolveStatusUsageSummary({
+      timeoutMs: 2345,
+      config: { gateway: {} },
+      agentDir: "/tmp/status-agent",
+    });
+
+    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({
+      timeoutMs: 2345,
+      config: { gateway: {} },
+      agentDir: "/tmp/status-agent",
+    });
   });
 
   it("resolves gateway health with the shared probe call shape", async () => {
@@ -205,7 +426,10 @@ describe("status-runtime-shared", () => {
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
     });
-    expect(mocks.loadProviderUsageSummary).toHaveBeenCalledWith({ timeoutMs: 1234 });
+    const usageCall = requireProviderUsageCall();
+    expect(usageCall.timeoutMs).toBe(1234);
+    expect(usageCall.config).toEqual({ gateway: {} });
+    expect(usageCall.agentDir).toContain("main");
     expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
       method: "health",
       params: { probe: true },
@@ -283,10 +507,11 @@ describe("status-runtime-shared", () => {
       config: { gateway: {} },
       sourceConfig: { gateway: { mode: "local" } },
       deep: false,
+      deepTimeoutMs: 1234,
       includeFilesystem: true,
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
-      plugins: expect.any(Array),
+      plugins: [{ id: "telegram" }],
     });
   });
 });

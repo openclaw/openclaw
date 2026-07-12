@@ -1,5 +1,8 @@
+// Daemon lifecycle core tests cover service lifecycle transitions and platform adapters.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { GatewayServiceControlArgs } from "../../daemon/service-types.js";
+import type { GatewayService } from "../../daemon/service.js";
 import {
   defaultRuntime,
   resetLifecycleRuntimeLogs,
@@ -84,6 +87,26 @@ function stubServiceGatewayTokenEnv() {
   });
 }
 
+async function withUnsupportedGatewayService(
+  run: (unsupportedService: GatewayService) => Promise<void>,
+) {
+  const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("aix");
+  try {
+    const { resolveGatewayService } = await import("../../daemon/service.js");
+    await run(resolveGatewayService());
+  } finally {
+    platformSpy.mockRestore();
+  }
+}
+
+function expectUnsupportedServiceCheckFailure() {
+  const payload = readJsonLog<{ ok?: boolean; error?: string }>();
+  expect(payload.ok).toBe(false);
+  expect(payload.error).toContain(
+    "Gateway service check failed: Error: Gateway service install not supported on aix",
+  );
+}
+
 describe("runServiceRestart token drift", () => {
   beforeAll(async () => {
     ({ runServiceRestart, runServiceStart, runServiceStop } = await import("./lifecycle-core.js"));
@@ -107,6 +130,75 @@ describe("runServiceRestart token drift", () => {
       environment: { OPENCLAW_GATEWAY_TOKEN: "service-token" },
     });
     stubEmptyGatewayEnv();
+  });
+
+  it("rejects unsupported-platform start before not-loaded recovery", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "started" as const,
+      message: "should not run",
+      loaded: true,
+    }));
+
+    await withUnsupportedGatewayService(async (unsupportedService) => {
+      await expect(
+        runServiceStart({
+          serviceNoun: "Gateway",
+          service: unsupportedService,
+          renderStartHints: () => ["openclaw gateway install"],
+          opts: { json: true },
+          onNotLoaded,
+        }),
+      ).rejects.toThrow("__exit__:1");
+    });
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expectUnsupportedServiceCheckFailure();
+  });
+
+  it("rejects unsupported-platform stop before unmanaged fallback", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "stopped" as const,
+      message: "should not run",
+    }));
+
+    await withUnsupportedGatewayService(async (unsupportedService) => {
+      await expect(
+        runServiceStop({
+          serviceNoun: "Gateway",
+          service: unsupportedService,
+          opts: { json: true },
+          onNotLoaded,
+        }),
+      ).rejects.toThrow("__exit__:1");
+    });
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expectUnsupportedServiceCheckFailure();
+  });
+
+  it("rejects unsupported-platform restart before unmanaged fallback", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "restarted" as const,
+      message: "should not run",
+    }));
+    const postRestartCheck = vi.fn(async () => {});
+
+    await withUnsupportedGatewayService(async (unsupportedService) => {
+      await expect(
+        runServiceRestart({
+          serviceNoun: "Gateway",
+          service: unsupportedService,
+          renderStartHints: () => ["openclaw gateway install"],
+          opts: { json: true },
+          onNotLoaded,
+          postRestartCheck,
+        }),
+      ).rejects.toThrow("__exit__:1");
+    });
+
+    expect(onNotLoaded).not.toHaveBeenCalled();
+    expect(postRestartCheck).not.toHaveBeenCalled();
+    expectUnsupportedServiceCheckFailure();
   });
 
   it("prints the container restart hint when restart is requested for a not-loaded service", async () => {
@@ -134,8 +226,8 @@ describe("runServiceRestart token drift", () => {
 
     expect(loadConfig).toHaveBeenCalledTimes(1);
     const payload = readJsonLog<{ warnings?: string[] }>();
-    expect(payload.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("gateway install --force")]),
+    expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
+      true,
     );
   });
 
@@ -156,8 +248,8 @@ describe("runServiceRestart token drift", () => {
     await runServiceRestart(createServiceRunArgs(true));
 
     const payload = readJsonLog<{ warnings?: string[] }>();
-    expect(payload.warnings).toEqual(
-      expect.arrayContaining([expect.stringContaining("gateway install --force")]),
+    expect(payload.warnings?.some((warning) => warning.includes("gateway install --force"))).toBe(
+      true,
     );
   });
 
@@ -214,6 +306,31 @@ describe("runServiceRestart token drift", () => {
     expect(payload.result).toBe("stopped");
     expect(payload.message).toContain("unmanaged process");
     expect(service.stop).not.toHaveBeenCalled();
+  });
+
+  it("runs a requested managed stop even when the service is not loaded", async () => {
+    const onNotLoaded = vi.fn(async () => ({
+      result: "stopped" as const,
+      message: "Gateway stop signal sent to unmanaged process on port 18789: 4200.",
+    }));
+    service.isLoaded.mockResolvedValue(false);
+
+    await runServiceStop({
+      serviceNoun: "Gateway",
+      service,
+      opts: { json: true, disable: true },
+      stopWhenNotLoaded: true,
+      onNotLoaded,
+    });
+
+    const payload = readJsonLog<{ result?: string; service?: { loaded?: boolean } }>();
+    expect(payload.result).toBe("stopped");
+    expect(payload.service?.loaded).toBe(false);
+    expect(service.stop).toHaveBeenCalledTimes(1);
+    const [stopOptions] = service.stop.mock.calls[0] ?? [];
+    expect(stopOptions?.env).toBe(process.env);
+    expect(stopOptions?.disable).toBe(true);
+    expect(onNotLoaded).not.toHaveBeenCalled();
   });
 
   it("emits started when a not-loaded start path repairs the service", async () => {
@@ -321,9 +438,53 @@ describe("runServiceRestart token drift", () => {
 
     await runServiceRestart(createServiceRunArgs());
 
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({ targetPid: 1234 });
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 1234,
+      reason: "gateway.restart",
+    });
     expect(clearGatewayRestartIntentSync).not.toHaveBeenCalled();
     expect(service.restart).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures service restart warnings in json restart output", async () => {
+    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.warn?.(
+        "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+      );
+      return { outcome: "completed" };
+    });
+
+    await runServiceRestart(createServiceRunArgs());
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toContain(
+      "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+    );
+    expect(service.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ warn: expect.any(Function) }),
+    );
+  });
+
+  it("writes restart force and wait options into the service-manager intent", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+
+    await runServiceRestart({
+      ...createServiceRunArgs(),
+      opts: {
+        json: true,
+        restartIntent: {
+          waitMs: 2_500,
+        },
+      },
+    });
+
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 1234,
+      reason: "gateway.restart",
+      intent: {
+        waitMs: 2_500,
+      },
+    });
   });
 
   it("clears restart intent when service-manager restart fails before signaling", async () => {
@@ -333,7 +494,10 @@ describe("runServiceRestart token drift", () => {
 
     await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
 
-    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({ targetPid: 1234 });
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 1234,
+      reason: "gateway.restart",
+    });
     expect(clearGatewayRestartIntentSync).toHaveBeenCalledOnce();
   });
 
@@ -351,6 +515,92 @@ describe("runServiceRestart token drift", () => {
     const payload = readJsonLog<{ result?: string; message?: string }>();
     expect(payload.result).toBe("scheduled");
     expect(payload.message).toBe("restart scheduled, gateway will restart momentarily");
+  });
+
+  it("captures service start warnings in json start output", async () => {
+    service.restart.mockImplementationOnce(async (args?: GatewayServiceControlArgs) => {
+      args?.warn?.(
+        "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+      );
+      return { outcome: "completed" };
+    });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+    });
+
+    const payload = readJsonLog<{ warnings?: string[] }>();
+    expect(payload.warnings).toContain(
+      "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+    );
+    expect(service.restart).toHaveBeenCalledWith(
+      expect.objectContaining({ warn: expect.any(Function) }),
+    );
+  });
+
+  it("repairs stale loaded services during start before reporting success", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway"],
+      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+    });
+    type RepairLoadedService = NonNullable<
+      Parameters<typeof runServiceStart>[0]["repairLoadedService"]
+    >;
+    const repairLoadedService = vi.fn<RepairLoadedService>(async (ctx) => {
+      ctx.warn?.(
+        "Existing generated LaunchAgent env wrapper contains custom behavior and will be overwritten.",
+      );
+      return {
+        result: "started" as const,
+        message: "Gateway service definition repaired and started.",
+        warnings: ["service was installed by OpenClaw 2026.4.24, current CLI is 2026.5.2"],
+        loaded: true,
+      };
+    });
+
+    await runServiceStart({
+      serviceNoun: "Gateway",
+      service,
+      renderStartHints: () => [],
+      opts: { json: true },
+      repairLoadedService,
+    });
+
+    expect(repairLoadedService).toHaveBeenCalledTimes(1);
+    expect(service.restart).not.toHaveBeenCalled();
+    const payload = readJsonLog<{
+      result?: string;
+      message?: string;
+      warnings?: string[];
+      service?: { loaded?: boolean };
+    }>();
+    expect(payload.result).toBe("started");
+    expect(payload.message).toBe("Gateway service definition repaired and started.");
+    expect(payload.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("service was installed by OpenClaw"),
+        expect.stringContaining("custom behavior and will be overwritten"),
+      ]),
+    );
+    expect(payload.service?.loaded).toBe(true);
+  });
+
+  it("fails start with an install hint when a stale loaded service has no repair callback", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway"],
+      environment: { OPENCLAW_SERVICE_VERSION: "2026.4.24" },
+    });
+
+    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    const payload = readJsonLog<{ ok?: boolean; error?: string; hints?: string[] }>();
+    expect(payload.ok).toBe(false);
+    expect(payload.error).toContain("service needs repair");
+    expect(payload.hints).toEqual(["openclaw gateway install --force"]);
+    expect(service.restart).not.toHaveBeenCalled();
   });
 
   it("fails start when restarting a stopped installed service errors", async () => {
@@ -383,15 +633,12 @@ describe("runServiceRestart token drift", () => {
     }>();
     expect(payload.ok).toBe(true);
     expect(payload.result).toBe("not-loaded");
-    expect(payload.hints).toEqual(expect.arrayContaining(["openclaw gateway install"]));
-    expect(payload.hintItems).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "install",
-          text: "openclaw gateway install",
-        }),
-      ]),
-    );
+    expect(payload.hints?.includes("openclaw gateway install")).toBe(true);
+    expect(
+      payload.hintItems?.some(
+        (item) => item.kind === "install" && item.text === "openclaw gateway install",
+      ),
+    ).toBe(true);
     expect(service.restart).not.toHaveBeenCalled();
   });
 });

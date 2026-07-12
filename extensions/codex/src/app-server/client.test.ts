@@ -1,13 +1,14 @@
+// Codex tests cover client plugin behavior.
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   CodexAppServerClient,
-  CodexAppServerRpcError,
   MIN_CODEX_APP_SERVER_VERSION,
   isCodexAppServerApprovalRequest,
+  isCodexAppServerIndeterminateTransportError,
   readCodexVersionFromUserAgent,
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
@@ -30,8 +31,8 @@ describe("CodexAppServerClient", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     for (const client of clients) {
       client.close();
     }
@@ -50,6 +51,31 @@ describe("CodexAppServerClient", () => {
     expect(outbound.method).toBe("model/list");
   });
 
+  it("removes unpaired surrogate code units from outbound JSON-RPC strings", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const high = String.fromCharCode(0xd83d);
+    const low = String.fromCharCode(0xdc00);
+
+    const request = harness.client.request("thread/start", {
+      prompt: `left${high}right`,
+      nested: [`low${low}end`, "emoji 🙈 ok"],
+    });
+
+    expect(harness.writes[0]).not.toContain("\\ud83d");
+    expect(harness.writes[0]).not.toContain("\\udc00");
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as {
+      params?: { prompt?: string; nested?: string[] };
+    };
+    expect(outbound.params?.prompt).toBe("leftright");
+    expect(outbound.params?.nested).toEqual(["lowend", "emoji 🙈 ok"]);
+    harness.send({
+      id: JSON.parse(harness.writes[0] ?? "{}").id,
+      result: { threadId: "thread-1" },
+    });
+    await expect(request).resolves.toEqual({ threadId: "thread-1" });
+  });
+
   it("logs a redacted preview for malformed app-server messages", async () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createClientHarness();
@@ -57,15 +83,68 @@ describe("CodexAppServerClient", () => {
 
     harness.process.stdout.write('{"token":"secret-value"} trailing\n');
 
-    await vi.waitFor(() =>
-      expect(warn).toHaveBeenCalledWith(
-        "failed to parse codex app-server message",
-        expect.objectContaining({
-          linePreview: '{"token":"<redacted>"} trailing',
-        }),
-      ),
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    const [message, rawMetadata] = warn.mock.calls[0] ?? [];
+    expect(message).toBe("failed to parse codex app-server message");
+    const metadata = rawMetadata as
+      | {
+          error?: unknown;
+          errorMessage?: string;
+          fragmentCount?: number;
+          linePreview?: string;
+          consoleMessage?: string;
+        }
+      | undefined;
+    expect(metadata?.error).toBeInstanceOf(SyntaxError);
+    expect(metadata?.errorMessage).toBe(
+      "Unexpected non-whitespace character after JSON at position 25 (line 1 column 26)",
+    );
+    expect(metadata?.fragmentCount).toBe(1);
+    expect(metadata?.linePreview).toBe('{"token":"<redacted>"} trailing');
+    expect(metadata?.consoleMessage).toBe(
+      'failed to parse codex app-server message: preview="{\\"token\\":\\"<redacted>\\"} trailing"',
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
+  });
+
+  it("redacts prefixed env credential names from app-server previews", () => {
+    expect(
+      testing.redactCodexAppServerLinePreview(
+        "fatal OPENAI_API_KEY=sk-live ANTHROPIC_API_KEY='anthropic-secret' OTHER=value",
+      ),
+    ).toBe("fatal OPENAI_API_KEY=<redacted> ANTHROPIC_API_KEY='<redacted>' OTHER=value");
+  });
+
+  it("keeps malformed-message previews UTF-16 safe at the log boundary", () => {
+    const prefix = "x".repeat(499);
+
+    expect(testing.redactCodexAppServerLinePreview(`${prefix}😀`)).toBe(`${prefix}...`);
+  });
+
+  it("recovers app-server messages split by raw newlines inside JSON strings", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const notifications: unknown[] = [];
+    harness.client.addNotificationHandler((notification) => {
+      notifications.push(notification);
+    });
+
+    harness.process.stdout.write(
+      '{"method":"item/commandExecution/outputDelta","params":{"delta":"first' +
+        "\n" +
+        'second"}}\n',
+    );
+
+    await vi.waitFor(() =>
+      expect(notifications).toEqual([
+        {
+          method: "item/commandExecution/outputDelta",
+          params: { delta: "first\nsecond" },
+        },
+      ]),
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("preserves JSON-RPC error codes", async () => {
@@ -76,11 +155,45 @@ describe("CodexAppServerClient", () => {
     const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({ id: outbound.id, error: { code: -32601, message: "Method not found" } });
 
-    await expect(request).rejects.toMatchObject({
-      name: "CodexAppServerRpcError",
-      code: -32601,
-      message: "Method not found",
-    } satisfies Partial<CodexAppServerRpcError>);
+    await expect(request).rejects.toHaveProperty("name", "CodexAppServerRpcError");
+    await expect(request).rejects.toHaveProperty("code", -32601);
+    await expect(request).rejects.toHaveProperty("message", "Method not found");
+  });
+
+  it("surfaces relogin details from Codex app-server RPC errors", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("thread/start", {});
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: outbound.id,
+      error: {
+        code: -32602,
+        message: "failed to load configuration",
+        data: {
+          reason: "cloudRequirements",
+          errorCode: "Auth",
+          action: "relogin",
+          statusCode: 401,
+          detail:
+            "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+        },
+      },
+    });
+
+    await expect(request).rejects.toHaveProperty(
+      "message",
+      "failed to load configuration: Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    );
+    await expect(request).rejects.toHaveProperty("data", {
+      reason: "cloudRequirements",
+      errorCode: "Auth",
+      action: "relogin",
+      statusCode: 401,
+      detail:
+        "Your authentication session could not be refreshed automatically. Please log out and sign in again.",
+    });
   });
 
   it("rejects timed-out requests and ignores late responses", async () => {
@@ -118,17 +231,21 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.125.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.143.0 (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
-    expect(outbound).toMatchObject({
+    expect(outbound).toStrictEqual({
+      id: outbound.id,
       method: "initialize",
       params: {
         clientInfo: {
           name: "openclaw",
           title: "OpenClaw",
-          version: expect.any(String),
+          version: OPENCLAW_VERSION,
+        },
+        capabilities: {
+          experimentalApi: true,
         },
       },
     });
@@ -153,11 +270,11 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.125.0-alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.143.0-alpha.2 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.125.0-alpha.2`,
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.143.0-alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -166,11 +283,11 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.125.0+alpha.2 (macOS; test)" },
+      result: { userAgent: "openclaw/0.143.0+alpha.2 (macOS; test)" },
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.125.0+alpha.2`,
+      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.143.0+alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -179,7 +296,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.126.0-alpha.1 (macOS; test)" },
+      result: { userAgent: "openclaw/0.144.0-alpha.1 (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
@@ -190,7 +307,7 @@ describe("CodexAppServerClient", () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.126.0+custom (macOS; test)" },
+      result: { userAgent: "openclaw/0.144.0+custom (macOS; test)" },
     });
 
     await expect(initializing).resolves.toBeUndefined();
@@ -207,7 +324,7 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("force-stops app-server transports that ignore the graceful signal", async () => {
+  it("waits for app-server transports to exit after closing stdin before force-stopping", async () => {
     vi.useFakeTimers();
     const process = Object.assign(new EventEmitter(), {
       stdin: {
@@ -224,9 +341,10 @@ describe("CodexAppServerClient", () => {
       unref: vi.fn(),
     });
 
-    __testing.closeCodexAppServerTransport(process, { forceKillDelayMs: 25 });
+    testing.closeCodexAppServerTransport(process, { forceKillDelayMs: 25 });
 
-    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(process.stdin.end).toHaveBeenCalledTimes(1);
+    expect(process.kill).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(25);
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     expect(process.unref).toHaveBeenCalledTimes(1);
@@ -249,18 +367,46 @@ describe("CodexAppServerClient", () => {
       unref: vi.fn(),
     });
 
-    const closed = __testing.closeCodexAppServerTransportAndWait(process, {
+    const closed = testing.closeCodexAppServerTransportAndWait(process, {
       exitTimeoutMs: 100,
       forceKillDelayMs: 25,
     });
-    await vi.advanceTimersByTimeAsync(25);
 
-    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(process.stdin.end).toHaveBeenCalledTimes(1);
+    expect(process.kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(25);
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     process.signalCode = "SIGKILL";
     process.emit("exit");
 
     await expect(closed).resolves.toBe(true);
+  });
+
+  it("keeps async shutdown alive until the exit timeout resolves", async () => {
+    vi.useFakeTimers();
+    const process = Object.assign(new EventEmitter(), {
+      stdin: {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy: vi.fn(),
+        unref: vi.fn(),
+      },
+      stdout: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      stderr: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn(),
+      unref: vi.fn(),
+    });
+
+    const closed = testing.closeCodexAppServerTransportAndWait(process, {
+      exitTimeoutMs: 100,
+      forceKillDelayMs: 25,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expect(closed).resolves.toBe(false);
   });
 
   it("handles stdin write errors without crashing the process", async () => {
@@ -270,21 +416,78 @@ describe("CodexAppServerClient", () => {
     // Start a pending request so we can verify it gets properly rejected.
     const pending = harness.client.request("test/method");
 
-    // Simulate the child process closing its pipe — a write to the now-dead
-    // stdin emits an asynchronous EPIPE error on the stream.
-    harness.process.stdin.destroy(Object.assign(new Error("write EPIPE"), { code: "EPIPE" }));
+    // Simulate the child process closing its pipe: stdin emits an asynchronous
+    // EPIPE error before the transport observes a process exit.
+    const pipeError = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
+    harness.process.stdin.emit("error", pipeError);
 
     // The pending request must be rejected with the pipe error rather than
     // an unhandled exception tearing down the gateway.
-    await expect(pending).rejects.toThrow("write EPIPE");
+    const pendingError = await pending.catch((error: unknown) => error);
+    expect(pendingError).toBeInstanceOf(Error);
+    expect((pendingError as Error).message).toContain("write EPIPE");
+    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
 
-    // Subsequent requests are rejected immediately (client is closed).
+    // Subsequent requests keep the original close reason so startup logs stay actionable.
+    await expect(harness.client.request("another/method")).rejects.toThrow("write EPIPE");
+  });
+
+  it("handles stdout stream errors without crashing the process", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const pending = harness.client.request("test/method");
+    const readError = Object.assign(new Error("stdout pipe broke"), { code: "EIO" });
+
+    expect(() => harness.process.stdout.emit("error", readError)).not.toThrow();
+
+    const pendingError = await pending.catch((error: unknown) => error);
+    expect(pendingError).toBeInstanceOf(Error);
+    expect((pendingError as Error).message).toContain("stdout pipe broke");
+    expect(isCodexAppServerIndeterminateTransportError(pendingError)).toBe(true);
+    await expect(harness.client.request("another/method")).rejects.toThrow("stdout pipe broke");
+  });
+
+  it("keeps RPC requests usable after stderr stream errors", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const pending = harness.client.request("test/method");
+    const firstRequest = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    const stderrError = Object.assign(new Error("stderr pipe broke"), { code: "EIO" });
+
+    expect(() => harness.process.stderr.emit("error", stderrError)).not.toThrow();
+    expect(warn).toHaveBeenCalledWith("codex app-server stderr stream failed", {
+      error: stderrError,
+    });
+
+    harness.send({ id: firstRequest.id, result: { ok: true } });
+    await expect(pending).resolves.toEqual({ ok: true });
+
+    const next = harness.client.request("another/method");
+    const secondRequest = JSON.parse(harness.writes[1] ?? "{}") as { id?: number };
+    harness.send({ id: secondRequest.id, result: { ok: "still-connected" } });
+    await expect(next).resolves.toEqual({ ok: "still-connected" });
+  });
+
+  it("preserves redacted app-server stderr on exit errors", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const pending = harness.client.request("test/method");
+    harness.process.stderr.write('fatal token="secret-value" while booting\n');
+    harness.process.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      'codex app-server exited: code=1 signal=null stderr="fatal token=\\"<redacted>\\" while booting"',
+    );
     await expect(harness.client.request("another/method")).rejects.toThrow(
-      "codex app-server client is closed",
+      "codex app-server exited: code=1 signal=null",
     );
   });
 
-  it("does not write to stdin after the child process exits", async () => {
+  it("does not write to stdin after the child process exits", () => {
     const harness = createClientHarness();
     clients.push(harness.client);
 
@@ -298,7 +501,7 @@ describe("CodexAppServerClient", () => {
 
   it("reads the Codex version from the app-server user agent", () => {
     expect(readCodexVersionFromUserAgent("Codex Desktop/0.125.0")).toBe("0.125.0");
-    expect(readCodexVersionFromUserAgent("openclaw/0.125.0 (macOS; test)")).toBe("0.125.0");
+    expect(readCodexVersionFromUserAgent("openclaw/0.143.0 (macOS; test)")).toBe("0.143.0");
     expect(readCodexVersionFromUserAgent("codex_cli_rs/0.125.0-dev (linux; test)")).toBe(
       "0.125.0-dev",
     );
@@ -327,6 +530,38 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it("returns JSON-RPC internal errors when server request handlers throw", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    harness.client.addRequestHandler((request) => {
+      if (request.method === "account/chatgptAuthTokens/refresh") {
+        throw new Error("refresh_token_invalidated: reauthentication required");
+      }
+      return undefined;
+    });
+
+    harness.send({
+      id: "srv-refresh",
+      method: "account/chatgptAuthTokens/refresh",
+      params: { accountId: "acct-1" },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "srv-refresh",
+      error: {
+        code: -32603,
+        message: "refresh_token_invalidated: reauthentication required",
+      },
+    });
+    expect(warn).toHaveBeenCalledWith("codex app-server server request handler failed", {
+      id: "srv-refresh",
+      method: "account/chatgptAuthTokens/refresh",
+      error: expect.any(Error),
+    });
+  });
+
   it("fails closed when a dynamic tool server request handler hangs", async () => {
     vi.useFakeTimers();
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
@@ -334,13 +569,13 @@ describe("CodexAppServerClient", () => {
     clients.push(harness.client);
     harness.client.addRequestHandler((request) => {
       if (request.method === "item/tool/call") {
-        return new Promise<never>(() => undefined);
+        return new Promise<never>(() => {});
       }
       return undefined;
     });
 
     harness.send({ id: "srv-timeout", method: "item/tool/call", params: { tool: "message" } });
-    await vi.advanceTimersByTimeAsync(__testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
     await vi.waitFor(() => expect(harness.writes.length).toBe(1));
 
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
@@ -350,19 +585,16 @@ describe("CodexAppServerClient", () => {
         contentItems: [
           {
             type: "inputText",
-            text: `OpenClaw dynamic tool call timed out after ${__testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
+            text: `OpenClaw dynamic tool call timed out after ${testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
           },
         ],
       },
     });
-    expect(warn).toHaveBeenCalledWith(
-      "codex app-server server request timed out",
-      expect.objectContaining({
-        id: "srv-timeout",
-        method: "item/tool/call",
-        timeoutMs: __testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
-      }),
-    );
+    expect(warn).toHaveBeenCalledWith("codex app-server server request timed out", {
+      id: "srv-timeout",
+      method: "item/tool/call",
+      timeoutMs: testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+    });
   });
 
   it("fails closed for unhandled native app-server approvals", async () => {

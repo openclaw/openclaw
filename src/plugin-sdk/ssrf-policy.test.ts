@@ -1,5 +1,12 @@
+// SSRF policy tests cover URL allow/deny decisions for plugin network helpers.
 import { describe, expect, it, vi } from "vitest";
 import type { LookupFn } from "../infra/net/ssrf.js";
+import {
+  resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
+  SsrFBlockedError,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "../infra/net/ssrf.js";
 import {
   assertHttpUrlTargetsPrivateNetwork,
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
@@ -142,6 +149,7 @@ describe("mergeSsrFPolicies", () => {
         {
           allowPrivateNetwork: true,
           allowedHostnames: ["api.example.com"],
+          allowedOrigins: ["http://10.0.0.5:1234"],
           hostnameAllowlist: ["downloads.example.com"],
         },
         {
@@ -149,6 +157,7 @@ describe("mergeSsrFPolicies", () => {
           allowRfc2544BenchmarkRange: true,
           allowIpv6UniqueLocalRange: true,
           allowedHostnames: ["api.example.com", "cdn.example.com"],
+          allowedOrigins: ["http://10.0.0.5:1234", "http://10.0.0.5:4321"],
           hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
         },
       ),
@@ -158,6 +167,7 @@ describe("mergeSsrFPolicies", () => {
       allowRfc2544BenchmarkRange: true,
       allowIpv6UniqueLocalRange: true,
       allowedHostnames: ["api.example.com", "cdn.example.com"],
+      allowedOrigins: ["http://10.0.0.5:1234", "http://10.0.0.5:4321"],
       hostnameAllowlist: ["downloads.example.com", "assets.example.com"],
     });
   });
@@ -382,4 +392,132 @@ describe("buildHostnameAllowlistPolicyFromSuffixAllowlist", () => {
   ])("$name", ({ input, expected }) => {
     expect(buildHostnameAllowlistPolicyFromSuffixAllowlist(input)).toEqual(expected);
   });
+});
+
+describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin — SDK boundary safety", () => {
+  // The constructor itself is permissive: any well-formed http(s) origin
+  // becomes a single-entry allowedOrigins policy. The metadata/link-local
+  // block lives in the resolver (assertAllowedTrustedHostnameResolvedAddressesOrThrow),
+  // so a plugin author's allowedOrigins entry pointing at a metadata target
+  // must still be rejected when an actual request goes through the guard.
+  it.each([
+    {
+      name: "AWS/EC2 IMDS IPv4 literal",
+      hostname: "169.254.169.254",
+      family: 4,
+    },
+    {
+      name: "Alibaba/100-net metadata IPv4 literal",
+      hostname: "100.100.100.200",
+      family: 4,
+    },
+    {
+      name: "GCP metadata canonical hostname",
+      hostname: "metadata.google.internal",
+      family: 4,
+      resolvedAddress: "169.254.169.254",
+    },
+    {
+      name: "IPv6 ULA metadata literal",
+      hostname: "[fd00:ec2::254]",
+      family: 6,
+      resolvedAddress: "fd00:ec2::254",
+    },
+    {
+      name: "non-metadata link-local IPv4 literal",
+      hostname: "169.254.42.42",
+      family: 4,
+    },
+  ])(
+    "rejects plugin-supplied allowedOrigins entry: $name",
+    async ({ hostname, family, resolvedAddress }) => {
+      const baseUrl = `http://${hostname}/v1`;
+      const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+      expect(policy?.allowedOrigins).toEqual([new URL(baseUrl).origin]);
+
+      const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+      const lookupAddress = resolvedAddress ?? hostname.replace(/^\[|\]$/g, "");
+      await expect(
+        resolvePinnedHostnameWithPolicy(hostname, {
+          policy: policyForUrl,
+          lookupFn: createLookupFn([{ address: lookupAddress, family }]),
+        }),
+      ).rejects.toThrow(SsrFBlockedError);
+    },
+  );
+
+  it("rebinding a trusted private origin to a metadata IP is still rejected", async () => {
+    const baseUrl = "http://lan-llm.corp.internal:11434/v1";
+    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
+        policy: policyForUrl,
+        lookupFn: createLookupFn([{ address: "169.254.169.254", family: 4 }]),
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
+
+  it.each([
+    ["IPv4 loopback", "127.0.0.1", 4],
+    ["IPv6 loopback", "::1", 6],
+    ["IPv4-mapped IPv6 loopback", "::ffff:127.0.0.1", 6],
+    ["NAT64-embedded IPv4 loopback", "64:ff9b::127.0.0.1", 6],
+    ["ISATAP-embedded IPv4 loopback", "2001:4860:1::5efe:7f00:1", 6],
+  ] as const)("rejects a trusted private origin rebound to %s", async (_name, address, family) => {
+    const baseUrl = "http://lan-llm.corp.internal:11434/v1";
+    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
+        policy: policyForUrl,
+        lookupFn: createLookupFn([{ address, family }]),
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
+
+  it.each([
+    ["IPv4 unspecified", "0.0.0.0", 4],
+    ["IPv4 unspecified range", "0.42.42.42", 4],
+    ["IPv6 unspecified", "::", 6],
+    ["IPv4-mapped IPv6 unspecified", "::ffff:0.0.0.0", 6],
+    ["NAT64-embedded IPv4 unspecified", "64:ff9b::0.0.0.0", 6],
+  ] as const)("rejects a trusted private origin rebound to %s", async (_name, address, family) => {
+    const baseUrl = "http://lan-llm.corp.internal:11434/v1";
+    const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+    const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("lan-llm.corp.internal", {
+        policy: policyForUrl,
+        lookupFn: createLookupFn([{ address, family }]),
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+  });
+
+  it.each([
+    ["localhost", "127.0.0.1", 4],
+    ["localhost.localdomain", "127.0.0.1", 4],
+    ["api.localhost", "::1", 6],
+    ["127.0.0.1", "127.0.0.1", 4],
+    ["[::1]", "::1", 6],
+    ["[64:ff9b::127.0.0.1]", "64:ff9b::127.0.0.1", 6],
+  ] as const)(
+    "allows an explicit %s origin to resolve to loopback",
+    async (host, address, family) => {
+      const baseUrl = `http://${host}:11434/v1`;
+      const policy = ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl);
+      const policyForUrl = resolveSsrFPolicyForUrl(new URL(baseUrl), policy);
+      const hostname = new URL(baseUrl).hostname.replace(/^\[|\]$/g, "");
+
+      await expect(
+        resolvePinnedHostnameWithPolicy(hostname, {
+          policy: policyForUrl,
+          lookupFn: createLookupFn([{ address, family }]),
+        }),
+      ).resolves.toBeDefined();
+    },
+  );
 });

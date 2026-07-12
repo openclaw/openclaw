@@ -1,10 +1,13 @@
+// Detects system command availability for setup and diagnostics.
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { pickBestEffortPrimaryLanIPv4 } from "./network-discovery-display.js";
 
@@ -26,7 +29,7 @@ export type SystemPresence = {
   ts: number;
 };
 
-export type SystemPresenceUpdate = {
+type SystemPresenceUpdate = {
   key: string;
   previous?: SystemPresence;
   next: SystemPresence;
@@ -37,6 +40,7 @@ export type SystemPresenceUpdate = {
 const entries = new Map<string, SystemPresence>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
+const SELF_INSTANCE_ID = randomUUID();
 
 function normalizePresenceKey(key: string | undefined): string | undefined {
   return normalizeOptionalLowercaseString(key);
@@ -102,6 +106,7 @@ function initSelfPresence() {
     modelIdentifier,
     mode: "gateway",
     reason: "self",
+    instanceId: SELF_INSTANCE_ID,
     text,
     ts: Date.now(),
   };
@@ -140,6 +145,16 @@ function parsePresence(text: string): SystemPresence {
     return { text: trimmed, ts: Date.now() };
   }
   const [, host, ip, version, lastInputStr, mode, reasonRaw] = match;
+  if (
+    host === undefined ||
+    ip === undefined ||
+    version === undefined ||
+    lastInputStr === undefined ||
+    mode === undefined ||
+    reasonRaw === undefined
+  ) {
+    return { text: trimmed, ts: Date.now() };
+  }
   const lastInputSeconds = Number.parseInt(lastInputStr, 10);
   const reason = reasonRaw.trim();
   return {
@@ -197,7 +212,7 @@ export function updateSystemPresence(payload: SystemPresencePayload): SystemPres
     normalizePresenceKey(parsed.instanceId) ||
     normalizePresenceKey(parsed.host) ||
     parsed.ip ||
-    parsed.text.slice(0, 64) ||
+    truncateUtf16Safe(parsed.text, 64) ||
     normalizeLowercaseStringOrEmpty(os.hostname());
   const hadExisting = entries.has(key);
   const existing = entries.get(key) ?? ({} as SystemPresence);
@@ -278,8 +293,8 @@ export function listSystemPresence(): SystemPresence[] {
   if (entries.size > MAX_ENTRIES) {
     const sorted = [...entries.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
     const toDrop = entries.size - MAX_ENTRIES;
-    for (let i = 0; i < toDrop; i++) {
-      entries.delete(sorted[i][0]);
+    for (const [key] of sorted.slice(0, toDrop)) {
+      entries.delete(key);
     }
   }
   touchSelfPresence();

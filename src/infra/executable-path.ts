@@ -1,9 +1,10 @@
+// Resolves executable paths from PATH and platform-specific install locations.
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
 
-export function isDriveLessWindowsRootedPath(value: string): boolean {
+function isDriveLessWindowsRootedPath(value: string): boolean {
   return process.platform === "win32" && /^:[\\/]/.test(value);
 }
 
@@ -25,7 +26,7 @@ export function resolveExecutablePathCandidate(
     return expanded;
   }
   if (path.isAbsolute(expanded)) {
-    return expanded;
+    return path.resolve(expanded);
   }
   const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
   return path.resolve(base, expanded);
@@ -45,8 +46,10 @@ function resolveWindowsExecutableExtensions(
     "",
     ...(
       env?.PATHEXT ??
+      env?.PathExt ??
       env?.Pathext ??
       process.env.PATHEXT ??
+      process.env.PathExt ??
       process.env.Pathext ??
       ".EXE;.CMD;.BAT;.COM"
     )
@@ -59,8 +62,10 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
   return new Set(
     (
       env?.PATHEXT ??
+      env?.PathExt ??
       env?.Pathext ??
       process.env.PATHEXT ??
+      process.env.PathExt ??
       process.env.Pathext ??
       ".EXE;.CMD;.BAT;.COM"
     )
@@ -70,7 +75,7 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
   );
 }
 
-export function isExecutableFile(filePath: string): boolean {
+export function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
   try {
     const stat = fs.statSync(filePath);
     if (!stat.isFile()) {
@@ -81,7 +86,7 @@ export function isExecutableFile(filePath: string): boolean {
       if (!ext) {
         return true;
       }
-      return resolveWindowsExecutableExtSet(undefined).has(ext);
+      return resolveWindowsExecutableExtSet(options?.env).has(ext);
     }
     fs.accessSync(filePath, fs.constants.X_OK);
     return true;
@@ -95,12 +100,13 @@ export function resolveExecutableFromPathEnv(
   pathEnv: string,
   env?: NodeJS.ProcessEnv,
 ): string | undefined {
-  const entries = pathEnv.split(path.delimiter).filter(Boolean);
+  const delimiter = process.platform === "win32" ? ";" : path.delimiter;
+  const entries = pathEnv.split(delimiter).filter(Boolean);
   const extensions = resolveWindowsExecutableExtensions(executable, env);
   for (const entry of entries) {
     for (const ext of extensions) {
       const candidate = path.join(entry, executable + ext);
-      if (isExecutableFile(candidate)) {
+      if (isExecutableFile(candidate, { env })) {
         return candidate;
       }
     }
@@ -117,9 +123,56 @@ export function resolveExecutablePath(
     return undefined;
   }
   if (candidate.includes("/") || candidate.includes("\\")) {
-    return isExecutableFile(candidate) ? candidate : undefined;
+    return isExecutableFile(candidate, options) ? candidate : undefined;
   }
   const envPath =
     options?.env?.PATH ?? options?.env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
   return resolveExecutableFromPathEnv(candidate, envPath, options?.env);
+}
+
+const KNOWN_PATHEXT = new Set([".com", ".exe", ".bat", ".cmd"]);
+
+/**
+ * On Windows, resolves a bare command name to its full .cmd or .exe path by
+ * probing PATH/PATHEXT without executing another resolver. On non-Windows this
+ * is a no-op.
+ */
+export function resolveExecutable(cmd: string): string {
+  if (process.platform !== "win32") {
+    return cmd;
+  }
+  if (KNOWN_PATHEXT.has(normalizeLowercaseStringOrEmpty(path.extname(cmd)))) {
+    return cmd;
+  }
+
+  const envPath = process.env.PATH ?? process.env.Path ?? "";
+  const entries = envPath.split(";").filter(Boolean);
+  const extensions = resolveWindowsExecutableExtensions(cmd, process.env);
+  const matches: string[] = [];
+  for (const entry of entries) {
+    for (const ext of extensions) {
+      const candidate = path.join(entry, cmd + ext);
+      if (isExecutableFile(candidate, { env: process.env })) {
+        matches.push(candidate);
+      }
+    }
+  }
+
+  const cmdMatch = matches.find(
+    (match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".cmd",
+  );
+  if (cmdMatch) {
+    return cmdMatch;
+  }
+  const exeMatch = matches.find(
+    (match) => normalizeLowercaseStringOrEmpty(path.extname(match)) === ".exe",
+  );
+  if (exeMatch) {
+    return exeMatch;
+  }
+  if (matches[0]) {
+    return matches[0];
+  }
+
+  return cmd;
 }

@@ -7,6 +7,7 @@ public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authTokenMismatch = "AUTH_TOKEN_MISMATCH"
     case authBootstrapTokenInvalid = "AUTH_BOOTSTRAP_TOKEN_INVALID"
     case authDeviceTokenMismatch = "AUTH_DEVICE_TOKEN_MISMATCH"
+    case authScopeMismatch = "AUTH_SCOPE_MISMATCH"
     case authTokenMissing = "AUTH_TOKEN_MISSING"
     case authTokenNotConfigured = "AUTH_TOKEN_NOT_CONFIGURED"
     case authPasswordMissing = "AUTH_PASSWORD_MISSING"
@@ -18,6 +19,7 @@ public enum GatewayConnectAuthDetailCode: String, Sendable {
     case authTailscaleWhoisFailed = "AUTH_TAILSCALE_WHOIS_FAILED"
     case authTailscaleIdentityMismatch = "AUTH_TAILSCALE_IDENTITY_MISMATCH"
     case pairingRequired = "PAIRING_REQUIRED"
+    case protocolMismatch = "PROTOCOL_MISMATCH"
     case controlUiDeviceIdentityRequired = "CONTROL_UI_DEVICE_IDENTITY_REQUIRED"
     case deviceIdentityRequired = "DEVICE_IDENTITY_REQUIRED"
     case deviceAuthInvalid = "DEVICE_AUTH_INVALID"
@@ -53,6 +55,10 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
     public let docsURLString: String?
     public let retryableOverride: Bool?
     public let pauseReconnectOverride: Bool?
+    public let clientMinProtocol: Int?
+    public let clientMaxProtocol: Int?
+    public let expectedProtocol: Int?
+    public let minimumProbeProtocol: Int?
 
     public init(
         message: String,
@@ -68,7 +74,11 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         actionCommand: String? = nil,
         docsURLString: String? = nil,
         retryableOverride: Bool? = nil,
-        pauseReconnectOverride: Bool? = nil)
+        pauseReconnectOverride: Bool? = nil,
+        clientMinProtocol: Int? = nil,
+        clientMaxProtocol: Int? = nil,
+        expectedProtocol: Int? = nil,
+        minimumProbeProtocol: Int? = nil)
     {
         let trimmedMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedDetailCode = detailCodeRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -89,6 +99,10 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         self.docsURLString = Self.trimmedOrNil(docsURLString)
         self.retryableOverride = retryableOverride
         self.pauseReconnectOverride = pauseReconnectOverride
+        self.clientMinProtocol = clientMinProtocol
+        self.clientMaxProtocol = clientMaxProtocol
+        self.expectedProtocol = expectedProtocol
+        self.minimumProbeProtocol = minimumProbeProtocol
     }
 
     public init(
@@ -105,7 +119,11 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
         actionCommand: String? = nil,
         docsURLString: String? = nil,
         retryableOverride: Bool? = nil,
-        pauseReconnectOverride: Bool? = nil)
+        pauseReconnectOverride: Bool? = nil,
+        clientMinProtocol: Int? = nil,
+        clientMaxProtocol: Int? = nil,
+        expectedProtocol: Int? = nil,
+        minimumProbeProtocol: Int? = nil)
     {
         self.init(
             message: message,
@@ -121,7 +139,11 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
             actionCommand: actionCommand,
             docsURLString: docsURLString,
             retryableOverride: retryableOverride,
-            pauseReconnectOverride: pauseReconnectOverride)
+            pauseReconnectOverride: pauseReconnectOverride,
+            clientMinProtocol: clientMinProtocol,
+            clientMaxProtocol: clientMaxProtocol,
+            expectedProtocol: expectedProtocol,
+            minimumProbeProtocol: minimumProbeProtocol)
     }
 
     private static func trimmedOrNil(_ value: String?) -> String? {
@@ -160,7 +182,9 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
              .authPasswordMismatch,
              .authPasswordNotConfigured,
              .authRateLimited,
+             .authScopeMismatch,
              .pairingRequired,
+             .protocolMismatch,
              .controlUiDeviceIdentityRequired,
              .deviceIdentityRequired:
             true

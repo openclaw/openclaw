@@ -1,3 +1,4 @@
+// Level filter tests cover logger filtering by configured log level.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { readLoggingConfigMock, shouldSkipMutatingLoggingConfigReadMock } = vi.hoisted(() => ({
@@ -39,6 +40,18 @@ afterEach(() => {
   logging.setLoggerOverride(null);
   vi.restoreAllMocks();
 });
+
+function firstMockArg(mock: { mock: { calls: readonly unknown[][] } }): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error("expected mock call");
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error("expected mock call argument to be an object");
+  }
+  return arg as Record<string, unknown>;
+}
 
 describe("isFileLogLevelEnabled", () => {
   it("returns false for all levels when configured as silent", () => {
@@ -124,10 +137,7 @@ describe("getChildLogger minLevel inheritance", () => {
 
     logging.toPinoLikeLogger(base, "info").child({ component: "test" });
 
-    expect(getSubLoggerSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        minLevel: logging.levelToMinLevel("error"),
-      }),
-    );
+    expect(getSubLoggerSpy).toHaveBeenCalledOnce();
+    expect(firstMockArg(getSubLoggerSpy).minLevel).toBe(logging.levelToMinLevel("error"));
   });
 });

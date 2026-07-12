@@ -1,3 +1,5 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+// Status text types describe runtime status records used by status rendering.
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -8,6 +10,8 @@ import type { SessionEntry, SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
 
+// Input contract for buildStatusText. Most fields are already resolved by the
+// caller so status rendering can stay presentation-focused and side-effect-light.
 export type BuildStatusTextParams = {
   cfg: OpenClawConfig;
   sessionEntry?: SessionEntry;
@@ -16,12 +20,13 @@ export type BuildStatusTextParams = {
   sessionScope?: SessionScope;
   storePath?: string;
   statusChannel: string;
+  statusAccountId?: string;
   workspaceDir?: string;
   provider: string;
   model: string;
   contextTokens?: number;
   resolvedThinkLevel?: ThinkLevel;
-  resolvedFastMode?: boolean;
+  resolvedFastMode?: FastMode;
   resolvedHarness?: string;
   resolvedVerboseLevel: VerboseLevel;
   resolvedReasoningLevel: ReasoningLevel;
@@ -31,6 +36,7 @@ export type BuildStatusTextParams = {
   defaultGroupActivation: () => "always" | "mention";
   mediaDecisions?: MediaUnderstandingDecision[];
   taskLineOverride?: string;
+  pluginHealthLineOverride?: string;
   skipDefaultTaskLookup?: boolean;
   primaryModelLabelOverride?: string;
   modelAuthOverride?: string;

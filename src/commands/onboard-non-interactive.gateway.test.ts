@@ -1,10 +1,12 @@
+// Non-interactive gateway onboarding tests cover local/remote setup, auth, daemon install, and config writes.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { createThrowingRuntime } from "./onboard-non-interactive.test-helpers.js";
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
@@ -14,6 +16,14 @@ type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemon
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
   vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
 );
+const createPreMigrationBackupMock = vi.hoisted(() => vi.fn(async () => undefined));
+const migrationProviderMock = vi.hoisted(() => ({
+  id: "hermes",
+  label: "Hermes",
+  description: "Hermes migration provider",
+  plan: vi.fn(),
+  apply: vi.fn(),
+}));
 const healthCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",
@@ -88,8 +98,20 @@ vi.mock("../config/io.js", () => ({
   },
 }));
 
+const capturedReplaceConfigFileCalls: Array<{
+  nextConfig: OpenClawConfig;
+  writeOptions?: { allowConfigSizeDrop?: boolean; unsetPaths?: string[][] };
+}> = [];
+
 vi.mock("../config/config.js", () => ({
-  replaceConfigFile: async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+  replaceConfigFile: async ({
+    nextConfig,
+    writeOptions,
+  }: {
+    nextConfig: OpenClawConfig;
+    writeOptions?: { allowConfigSizeDrop?: boolean; unsetPaths?: string[][] };
+  }) => {
+    capturedReplaceConfigFileCalls.push({ nextConfig, ...(writeOptions ? { writeOptions } : {}) });
     testConfigStore.set(resolveTestConfigPath(), nextConfig);
   },
   resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
@@ -113,6 +135,10 @@ vi.mock("./onboard-helpers.js", () => {
       httpUrl: `http://127.0.0.1:${port}`,
       wsUrl: `ws://127.0.0.1:${port}`,
     }),
+    resolveLocalControlUiProbeLinks: ({ port }: { port: number }) => ({
+      httpUrl: `http://127.0.0.1:${port}`,
+      wsUrl: `ws://127.0.0.1:${port}`,
+    }),
     waitForGatewayReachable: (params: {
       url: string;
       token?: string;
@@ -130,6 +156,21 @@ vi.mock("./onboard-non-interactive/local/daemon-install.js", () => ({
 vi.mock("./health.js", () => ({
   healthCommand: healthCommandMock,
 }));
+
+vi.mock("../plugins/migration-provider-runtime.js", () => ({
+  ensureStandaloneMigrationProviderRegistryLoaded: vi.fn(),
+  resolvePluginMigrationProviders: () => [migrationProviderMock],
+  resolvePluginMigrationProvider: ({ providerId }: { providerId: string }) =>
+    providerId === migrationProviderMock.id ? migrationProviderMock : undefined,
+}));
+
+vi.mock("./migrate/apply.js", async (importActual) => {
+  const actual = await importActual<typeof import("./migrate/apply.js")>();
+  return {
+    ...actual,
+    createPreMigrationBackup: createPreMigrationBackupMock,
+  };
+});
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => gatewayServiceMock,
@@ -187,6 +228,46 @@ function createJsonCaptureRuntime() {
     readCapturedJson: () => capturedJson,
   };
 }
+
+type MockWithCalls<TArgs extends unknown[]> = {
+  mock: {
+    calls: TArgs[];
+  };
+};
+
+function readFirstMockCall(mock: unknown, label: string): unknown[] {
+  const calls = (mock as MockWithCalls<unknown[]>).mock.calls;
+  const call = calls[0];
+  if (!call) {
+    throw new Error(`Expected ${label} to be called`);
+  }
+  return call;
+}
+
+type EnsureWorkspaceOptions = {
+  skipBootstrap?: boolean;
+};
+
+type MigrationPlanCall = {
+  config?: OpenClawConfig;
+  includeSecrets?: boolean;
+  overwrite?: boolean;
+  source?: string;
+};
+
+type MigrationApplyCall = {
+  reportDir?: string;
+  source?: string;
+};
+
+type GatewayHealthCall = {
+  password?: string;
+  token?: string;
+};
+
+type HealthCommandCall = GatewayHealthCall & {
+  config?: OpenClawConfig;
+};
 
 async function expectLocalJsonSetupFailure(stateDir: string, runtimeWithCapture: RuntimeEnv) {
   await expect(
@@ -259,8 +340,8 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       throw new Error("temp home not initialized");
     }
     const stateDir = await fs.mkdtemp(path.join(tempHome, prefix));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    delete process.env.OPENCLAW_CONFIG_PATH;
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
     return stateDir;
   };
   const withStateDir = async (
@@ -287,16 +368,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       "OPENCLAW_GATEWAY_TOKEN",
       "OPENCLAW_GATEWAY_PASSWORD",
     ]);
-    process.env.OPENCLAW_SKIP_CHANNELS = "1";
-    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-    process.env.OPENCLAW_SKIP_CRON = "1";
-    process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-    process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    setTestEnvValue("OPENCLAW_SKIP_CHANNELS", "1");
+    setTestEnvValue("OPENCLAW_SKIP_GMAIL_WATCHER", "1");
+    setTestEnvValue("OPENCLAW_SKIP_CRON", "1");
+    setTestEnvValue("OPENCLAW_SKIP_CANVAS_HOST", "1");
+    setTestEnvValue("OPENCLAW_SKIP_BROWSER_CONTROL_SERVER", "1");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
+    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
 
     tempHome = await makeTempWorkspace("openclaw-onboard-");
-    process.env.HOME = tempHome;
+    setTestEnvValue("HOME", tempHome);
 
     await loadGatewayOnboardModules();
   });
@@ -311,12 +392,115 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   afterEach(() => {
     waitForGatewayReachableMock = undefined;
     testConfigStore.clear();
+    capturedReplaceConfigFileCalls.length = 0;
+    ensureWorkspaceAndSessionsMock.mockClear();
     installGatewayDaemonNonInteractiveMock.mockClear();
+    createPreMigrationBackupMock.mockClear();
+    migrationProviderMock.plan.mockReset();
+    migrationProviderMock.apply.mockReset();
     healthCommandMock.mockClear();
     gatewayServiceMock.isLoaded.mockClear();
     gatewayServiceMock.readRuntime.mockClear();
     readLastGatewayErrorLineMock.mockClear();
   });
+
+  it("preserves existing agents.list and bindings on onboard rerun (openclaw#84692)", async () => {
+    await withStateDir("state-preserve-agents-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+      const seededAgents = [
+        { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
+        { id: "beta", model: "openai/gpt-4o" },
+      ];
+      const seededBindings = [
+        {
+          type: "route" as const,
+          agentId: "alpha",
+          match: {
+            channel: "discord",
+            peer: { kind: "direct" as const, id: "user-1" },
+          },
+        },
+        {
+          type: "route" as const,
+          agentId: "beta",
+          match: {
+            channel: "discord",
+            peer: { kind: "direct" as const, id: "user-2" },
+          },
+        },
+      ];
+      testConfigStore.set(resolveTestConfigPath(), {
+        agents: { list: seededAgents, defaults: { workspace } },
+        bindings: seededBindings,
+        gateway: { mode: "local", port: 18789, auth: { mode: "token", token: "seed_tok" } },
+      } as OpenClawConfig);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+          gatewayAuth: "token",
+          gatewayToken: "seed_tok",
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig();
+      expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
+      expect(cfg.bindings).toEqual(seededBindings);
+
+      const onboardWrite = capturedReplaceConfigFileCalls.at(-1);
+      expect(onboardWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
+    });
+  }, 60_000);
+
+  it("allows local onboard plugin install-record migration size drops", async () => {
+    await withStateDir("state-local-plugin-installs-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+      testConfigStore.set(resolveTestConfigPath(), {
+        plugins: {
+          installs: {
+            demo: {
+              source: "path",
+              installPath: path.join(stateDir, "plugins", "demo"),
+            },
+          },
+        },
+      } as OpenClawConfig);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+          gatewayAuth: "token",
+          gatewayToken: "tok_plugin_installs",
+        },
+        runtime,
+      );
+
+      const migrationWrite = capturedReplaceConfigFileCalls.at(-2);
+      expect(migrationWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(migrationWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
+      expect(migrationWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
+
+      const onboardWrite = capturedReplaceConfigFileCalls.at(-1);
+      expect(onboardWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(onboardWrite?.writeOptions?.unsetPaths).toBeUndefined();
+      expect(onboardWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
+    });
+  }, 60_000);
 
   it("writes gateway token auth into config", async () => {
     await withStateDir("state-noninteractive-", async (stateDir) => {
@@ -343,6 +527,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         gateway?: { mode?: string; auth?: { mode?: string; token?: string } };
         agents?: { defaults?: { workspace?: string } };
         tools?: { profile?: string };
+        hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
       }>();
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
@@ -350,6 +535,31 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
+      expect(cfg?.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
+    });
+  }, 60_000);
+
+  it("does not auto-enable default hooks when skipHooks is set", async () => {
+    await withStateDir("state-skip-hooks-", async (stateDir) => {
+      const workspace = path.join(stateDir, "openclaw");
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipHooks: true,
+          skipSkills: true,
+          skipHealth: true,
+          installDaemon: false,
+          gatewayBind: "loopback",
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig();
+      expect(cfg.hooks).toBeUndefined();
     });
   }, 60_000);
 
@@ -377,11 +587,90 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       expect(cfg.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg.agents?.defaults?.skipBootstrap).toBe(true);
-      expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledWith(
-        workspace,
+      expect(ensureWorkspaceAndSessionsMock).toHaveBeenCalledOnce();
+      const [workspaceArg, runtimeArg, optionsArg] = readFirstMockCall(
+        ensureWorkspaceAndSessionsMock,
+        "ensureWorkspaceAndSessions",
+      ) as [string, RuntimeEnv, EnsureWorkspaceOptions];
+      expect(workspaceArg).toBe(workspace);
+      expect(runtimeArg).toBe(runtime);
+      expect(optionsArg.skipBootstrap).toBe(true);
+    });
+  }, 60_000);
+
+  it("applies non-interactive migration imports instead of ignoring import flags", async () => {
+    await withStateDir("state-noninteractive-import-", async (stateDir) => {
+      const source = path.join(stateDir, "hermes-home");
+      const workspace = path.join(stateDir, "openclaw");
+      const planned: MigrationPlan = {
+        providerId: "hermes",
+        source,
+        target: workspace,
+        summary: {
+          total: 1,
+          planned: 1,
+          migrated: 0,
+          skipped: 0,
+          conflicts: 0,
+          errors: 0,
+          sensitive: 0,
+        },
+        items: [
+          {
+            id: "workspace:AGENTS.md",
+            kind: "workspace",
+            action: "copy",
+            status: "planned",
+            source: path.join(source, "AGENTS.md"),
+            target: path.join(workspace, "AGENTS.md"),
+          },
+        ],
+      };
+      const applied: MigrationApplyResult = {
+        ...planned,
+        summary: {
+          ...planned.summary,
+          planned: 0,
+          migrated: 1,
+        },
+        items: planned.items.map((item) => ({ ...item, status: "migrated" as const })),
+      };
+      migrationProviderMock.plan.mockResolvedValueOnce(planned);
+      migrationProviderMock.apply.mockResolvedValueOnce(applied);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "local",
+          workspace,
+          authChoice: "skip",
+          skipHealth: true,
+          importFrom: "hermes",
+          importSource: source,
+        },
         runtime,
-        expect.objectContaining({ skipBootstrap: true }),
       );
+
+      expect(migrationProviderMock.plan).toHaveBeenCalledOnce();
+      const [planCall] = readFirstMockCall(
+        migrationProviderMock.plan,
+        "migrationProvider.plan",
+      ) as [MigrationPlanCall];
+      expect(planCall.source).toBe(source);
+      expect(planCall.includeSecrets).toBe(false);
+      expect(planCall.overwrite).toBe(false);
+      expect(planCall.config?.agents?.defaults?.workspace).toBe(workspace);
+      expect(migrationProviderMock.apply).toHaveBeenCalledOnce();
+      const [applyCall, appliedPlan] = readFirstMockCall(
+        migrationProviderMock.apply,
+        "migrationProvider.apply",
+      ) as [MigrationApplyCall, MigrationPlan];
+      expect(applyCall.source).toBe(source);
+      expect(applyCall.reportDir).toContain(path.join(stateDir, "migration", "hermes"));
+      expect(appliedPlan).toBe(planned);
+      expect(readTestConfig().agents?.defaults?.workspace).toBe(workspace);
+      expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
+      expect(healthCommandMock).not.toHaveBeenCalled();
     });
   }, 60_000);
 
@@ -403,11 +692,104 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       const cfg = readTestConfig<{
         gateway?: { mode?: string; remote?: { url?: string; token?: string } };
+        hooks?: { internal?: { entries?: Record<string, { enabled?: boolean }> } };
       }>();
 
       expect(cfg.gateway?.mode).toBe("remote");
       expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(cfg.gateway?.remote?.token).toBe(token);
+      expect(cfg.hooks?.internal?.entries?.["session-memory"]).toEqual({ enabled: true });
+    });
+  }, 60_000);
+
+  it("preserves existing agents.list and bindings on remote onboard rerun (openclaw#84692)", async () => {
+    await withStateDir("state-remote-preserve-agents-", async (_stateDir) => {
+      const port = getPseudoPort(30_000);
+      const token = "tok_remote_seed";
+      const seededAgents = [
+        { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
+        { id: "beta", model: "openai/gpt-4o" },
+      ];
+      const seededBindings = [
+        {
+          type: "route" as const,
+          agentId: "alpha",
+          match: {
+            channel: "discord",
+            peer: { kind: "direct" as const, id: "user-1" },
+          },
+        },
+      ];
+      testConfigStore.set(resolveTestConfigPath(), {
+        agents: { list: seededAgents },
+        bindings: seededBindings,
+        gateway: {
+          mode: "remote",
+          remote: { url: `ws://127.0.0.1:${port}`, token },
+        },
+      } as OpenClawConfig);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "remote",
+          remoteUrl: `ws://127.0.0.1:${port}`,
+          remoteToken: token,
+          authChoice: "skip",
+          json: true,
+        },
+        runtime,
+      );
+
+      const cfg = readTestConfig();
+      expect(cfg.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
+      expect(cfg.bindings).toEqual(seededBindings);
+
+      const remoteWrite = capturedReplaceConfigFileCalls.at(-1);
+      expect(remoteWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
+    });
+  }, 60_000);
+
+  it("allows remote onboard plugin install-record migration size drops", async () => {
+    await withStateDir("state-remote-plugin-installs-", async (stateDir) => {
+      const port = getPseudoPort(30_000);
+      const token = "tok_remote_seed";
+      testConfigStore.set(resolveTestConfigPath(), {
+        plugins: {
+          installs: {
+            demo: {
+              source: "path",
+              installPath: path.join(stateDir, "plugins", "demo"),
+            },
+          },
+        },
+        gateway: {
+          mode: "remote",
+          remote: { url: `ws://127.0.0.1:${port}`, token },
+        },
+      } as OpenClawConfig);
+
+      await runNonInteractiveSetup(
+        {
+          nonInteractive: true,
+          mode: "remote",
+          remoteUrl: `ws://127.0.0.1:${port}`,
+          remoteToken: token,
+          authChoice: "skip",
+          json: true,
+        },
+        runtime,
+      );
+
+      const migrationWrite = capturedReplaceConfigFileCalls.at(-2);
+      expect(migrationWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(migrationWrite?.writeOptions?.unsetPaths).toEqual([["plugins", "installs"]]);
+      expect(migrationWrite?.writeOptions?.allowConfigSizeDrop).toBe(true);
+
+      const remoteWrite = capturedReplaceConfigFileCalls.at(-1);
+      expect(remoteWrite?.nextConfig.plugins?.installs).toBeUndefined();
+      expect(remoteWrite?.writeOptions?.unsetPaths).toBeUndefined();
+      expect(remoteWrite?.writeOptions?.allowConfigSizeDrop).toBe(false);
     });
   }, 60_000);
 
@@ -433,7 +815,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
           runtime,
         ),
       ).rejects.toThrow(
-        /only waits for an already-running gateway unless you pass --install-daemon[\s\S]*--skip-health/,
+        /only waits for an already-running gateway unless you pass `--install-daemon` to `openclaw onboard`[\s\S]*openclaw onboard --install-daemon[\s\S]*openclaw onboard --skip-health/,
       );
     });
   }, 60_000);
@@ -470,27 +852,21 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         runtime,
       );
 
-      expect(waitForGatewayReachableMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          token,
-          password: undefined,
-        }),
-      );
-      expect(healthCommandMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          token,
-          password: undefined,
-          config: expect.objectContaining({
-            gateway: expect.objectContaining({
-              auth: expect.objectContaining({
-                mode: "token",
-                token,
-              }),
-            }),
-          }),
-        }),
-        expect.any(Object),
-      );
+      const [gatewayHealthCall] = readFirstMockCall(
+        waitForGatewayReachableMock,
+        "waitForGatewayReachable",
+      ) as [GatewayHealthCall];
+      expect(gatewayHealthCall.token).toBe(token);
+      expect(gatewayHealthCall.password).toBeUndefined();
+      const [healthCall, healthRuntime] = readFirstMockCall(healthCommandMock, "healthCommand") as [
+        HealthCommandCall,
+        RuntimeEnv,
+      ];
+      expect(healthCall.token).toBe(token);
+      expect(healthCall.password).toBeUndefined();
+      expect(healthCall.config?.gateway?.auth?.mode).toBe("token");
+      expect(healthCall.config?.gateway?.auth?.token).toBe(token);
+      expect(healthRuntime).toBe(runtime);
     });
   }, 60_000);
 
@@ -590,14 +966,43 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("classifies daemon health ECONNREFUSED failures with a recovery command", async () => {
+    await withStateDir("state-local-daemon-health-refused-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
+      }));
+      gatewayServiceMock.readRuntime.mockResolvedValueOnce({
+        status: "stopped",
+        state: "failed",
+        pid: 0,
+      });
+      readLastGatewayErrorLineMock.mockResolvedValueOnce("");
+
+      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
+      await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
+
+      const parsed = JSON.parse(readCapturedJson()) as {
+        ok: boolean;
+        phase: string;
+        classification?: string;
+        hints?: string[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.phase).toBe("gateway-health");
+      expect(parsed.classification).toBe("service-stopped");
+      expect(parsed.hints).toContain("Fix: run `openclaw gateway restart`.");
+    });
+  }, 60_000);
+
   it("auto-generates token auth when binding LAN and persists the token", async () => {
     if (process.platform === "win32") {
       // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.
       return;
     }
     await withStateDir("state-lan-", async (stateDir) => {
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
 
       const port = getPseudoPort(40_000);
       const workspace = path.join(stateDir, "openclaw");

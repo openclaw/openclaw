@@ -1,3 +1,4 @@
+// Discord tests cover interactions plugin behavior.
 import {
   ComponentType,
   type GuildMemberFlags,
@@ -13,6 +14,7 @@ import {
   createInteraction,
   type RawInteraction,
 } from "./interactions.js";
+import { Message } from "./structures.js";
 import {
   attachRestMock,
   createInternalComponentInteractionPayload,
@@ -178,6 +180,81 @@ describe("BaseInteraction", () => {
     expect(interaction.user?.username).toBe("alice");
     expect(interaction.user?.globalName).toBe("Alice Cooper");
     expect(interaction.user?.discriminator).toBe("1234");
+  });
+
+  it("waits for a one-off component reply without invoking registered handlers", async () => {
+    const get = vi.fn(async () => ({
+      id: "message1",
+      channel_id: "channel1",
+      author: {
+        id: "bot1",
+        username: "bot",
+        discriminator: "0000",
+        global_name: null,
+        avatar: null,
+      },
+      content: "pick",
+      timestamp: "2026-05-01T00:00:00.000Z",
+    }));
+    const post = vi.fn(async () => undefined);
+    const client = createInternalTestClient();
+    attachRestMock(client, { get, post });
+    const interaction = new BaseInteraction(
+      client,
+      createInternalInteractionPayload({ id: "interaction1", token: "token1" }),
+    );
+
+    const wait = interaction.replyAndWaitForComponent({ content: "pick" }, 1_000);
+    await vi.waitFor(() =>
+      expect(get).toHaveBeenCalledWith("/webhooks/app1/token1/messages/%40original"),
+    );
+
+    await client.handleInteraction(
+      createInternalComponentInteractionPayload({
+        id: "component-interaction1",
+        token: "component-token1",
+        data: { custom_id: "button1" },
+        message: {
+          id: "message1",
+          channel_id: "channel1",
+          author: {
+            id: "bot1",
+            username: "bot",
+            discriminator: "0000",
+            global_name: null,
+            avatar: null,
+          },
+          content: "pick",
+          timestamp: "2026-05-01T00:00:00.000Z",
+          edited_timestamp: null,
+          tts: false,
+          mention_everyone: false,
+          mentions: [],
+          mention_roles: [],
+          attachments: [],
+          embeds: [],
+          pinned: false,
+          type: 0,
+        },
+      }),
+    );
+
+    const result = await wait;
+    if (!result.success) {
+      throw new Error("expected component wait to succeed");
+    }
+    expect(result.customId).toBe("button1");
+    expect(result.message).toBeInstanceOf(Message);
+    expect(result.message?.id).toBe("message1");
+    expect(result.message?.channelId).toBe("channel1");
+    expect(result.values).toBeUndefined();
+    expect(post).toHaveBeenNthCalledWith(
+      2,
+      "/interactions/component-interaction1/component-token1/callback",
+      {
+        body: { type: InteractionResponseType.DeferredMessageUpdate },
+      },
+    );
   });
 });
 

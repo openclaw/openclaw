@@ -1,6 +1,8 @@
+// Covers config snapshot redaction and restoration behavior.
 import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { redactSnapshotTestHints as mainSchemaHints } from "../../test/helpers/config/redact-snapshot-test-hints.js";
+import { materializeRuntimeConfig } from "./materialize.js";
 import { REDACTED_SENTINEL, redactConfigSnapshot } from "./redact-snapshot.js";
 import {
   makeSnapshot,
@@ -8,7 +10,7 @@ import {
   type TestSnapshot,
 } from "./redact-snapshot.test-helpers.js";
 import { buildConfigSchema, type ConfigUiHints } from "./schema.js";
-import type { ConfigFileSnapshot } from "./types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 function expectNestedLevelPairValue(
   source: Record<string, Record<string, Record<string, unknown>>>,
@@ -356,6 +358,110 @@ describe("redactConfigSnapshot", () => {
     expect(restored.models.providers.openai.request.auth.token).toBe("provider-secret-token");
   });
 
+  it("redacts model provider local service env values from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  models: {
+    providers: {
+      local: {
+        baseUrl: "http://127.0.0.1:18000/v1",
+        models: [],
+        localService: {
+          command: "/usr/local/bin/server",
+          env: {
+            HF_HOME: "local-service-secret-home",
+            MAX_TOKENS: "local-service-secret-limit",
+          },
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        models: {
+          providers: {
+            local: {
+              baseUrl: "http://127.0.0.1:18000/v1",
+              models: [],
+              localService: {
+                command: "/usr/local/bin/server",
+                env: {
+                  HF_HOME: "local-service-secret-home",
+                  MAX_TOKENS: "local-service-secret-limit",
+                },
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.models.providers.local.localService.env.HF_HOME).toBe(REDACTED_SENTINEL);
+    expect(cfg.models.providers.local.localService.env.MAX_TOKENS).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("local-service-secret-home");
+    expect(result.raw).not.toContain("local-service-secret-limit");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.models.providers.local.localService.env.HF_HOME).toBe(
+      "local-service-secret-home",
+    );
+  });
+
+  it("redacts install policy env values from config snapshots", () => {
+    const hints = buildConfigSchema().uiHints;
+    const raw = `{
+  security: {
+    installPolicy: {
+      enabled: true,
+      exec: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-install-policy",
+        env: {
+          POLICY_TOKEN: "operator-policy-secret-token",
+          AUDIT_ENDPOINT: "operator-policy-secret-endpoint",
+        },
+      },
+    },
+  },
+}`;
+    const snapshot = makeSnapshot(
+      {
+        security: {
+          installPolicy: {
+            enabled: true,
+            exec: {
+              source: "exec",
+              command: "/usr/local/bin/openclaw-install-policy",
+              env: {
+                POLICY_TOKEN: "operator-policy-secret-token",
+                AUDIT_ENDPOINT: "operator-policy-secret-endpoint",
+              },
+            },
+          },
+        },
+      },
+      raw,
+    );
+
+    const result = redactConfigSnapshot(snapshot, hints);
+    const cfg = result.config as typeof snapshot.config;
+    expect(cfg.security.installPolicy.exec.env.POLICY_TOKEN).toBe(REDACTED_SENTINEL);
+    expect(cfg.security.installPolicy.exec.env.AUDIT_ENDPOINT).toBe(REDACTED_SENTINEL);
+    expect(result.raw).toContain(REDACTED_SENTINEL);
+    expect(result.raw).not.toContain("operator-policy-secret-token");
+    expect(result.raw).not.toContain("operator-policy-secret-endpoint");
+
+    const restored = restoreRedactedValues(result.config, snapshot.config, hints);
+    expect(restored.security.installPolicy.exec.env.POLICY_TOKEN).toBe(
+      "operator-policy-secret-token",
+    );
+  });
+
   it("redacts model provider request proxy URLs from config snapshots", () => {
     const hints = buildConfigSchema().uiHints;
     const raw = `{
@@ -496,6 +602,27 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     expect(result.raw).not.toContain("abcdef1234567890ghij");
     expect(result.raw).toContain(REDACTED_SENTINEL);
+  });
+
+  it("keeps raw text when runtime materialization adds undefined safe-bin fields", () => {
+    const sourceConfig = {
+      tools: {
+        exec: {
+          ask: "off",
+          security: "full",
+        },
+      },
+    } satisfies OpenClawConfig;
+    const raw = JSON.stringify(sourceConfig);
+    const runtimeConfig = materializeRuntimeConfig(structuredClone(sourceConfig), "snapshot");
+    const snapshot = {
+      ...makeSnapshot(sourceConfig, raw),
+      config: runtimeConfig,
+      runtimeConfig,
+    };
+
+    expect(runtimeConfig.tools?.exec).toHaveProperty("safeBinProfiles", undefined);
+    expect(redactConfigSnapshot(snapshot).raw).toBe(raw);
   });
 
   it("drops raw text when overlap fallback triggers", () => {
@@ -648,9 +775,9 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     expect(result.raw).toBeNull();
     expect(result.parsed).toBeNull();
-    expect(result.sourceConfig).toEqual({});
-    expect(result.resolved).toEqual({});
-    expect(result.runtimeConfig).toEqual({});
+    expect(result.sourceConfig).toStrictEqual({});
+    expect(result.resolved).toStrictEqual({});
+    expect(result.runtimeConfig).toStrictEqual({});
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
   });

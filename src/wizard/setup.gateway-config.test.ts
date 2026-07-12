@@ -1,3 +1,4 @@
+// Setup gateway config tests cover gateway prompt choices and config output.
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
@@ -28,17 +29,24 @@ describe("configureGatewayForSetup", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
     const selectQueue = [...params.selectQueue];
     const textQueue = [...params.textQueue];
-    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+    const select = vi.fn(async (paramsLocal: WizardSelectParams<unknown>) => {
       const next = selectQueue.shift();
       if (next !== undefined) {
         return next;
       }
-      return params.initialValue ?? params.options[0]?.value;
+      return paramsLocal.initialValue ?? paramsLocal.options[0]?.value;
     }) as unknown as WizardPrompter["select"];
 
     return buildWizardPrompter({
       select,
-      text: vi.fn(async () => textQueue.shift() as string),
+      text: vi.fn(async (paramsLocal) => {
+        const value = textQueue.shift() as string;
+        const error = typeof value === "string" ? paramsLocal.validate?.(value) : undefined;
+        if (error) {
+          throw new Error(error);
+        }
+        return value;
+      }),
     });
   }
 
@@ -99,6 +107,14 @@ describe("configureGatewayForSetup", () => {
     expect(result.nextConfig.gateway?.nodes?.denyCommands).toContain("screen.record");
   });
 
+  it.each(["1e3", "0x1000"])("rejects loose gateway port input: %s", async (port) => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    await expect(runGatewayConfig({ textQueue: [port] })).rejects.toThrow(
+      "Use a port number from 1 to 65535",
+    );
+  });
+
   it("prefers OPENCLAW_GATEWAY_TOKEN during quickstart token setup", async () => {
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "token-from-env";
@@ -112,6 +128,56 @@ describe("configureGatewayForSetup", () => {
       });
 
       expect(result.settings.gatewayToken).toBe("token-from-env");
+    } finally {
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
+    }
+  });
+
+  it("keeps OPENCLAW_GATEWAY_TOKEN in advanced flow when user confirms keeping existing", async () => {
+    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "advanced-env-token";
+    mocks.randomToken.mockReturnValue("should-not-be-used");
+    mocks.randomToken.mockClear();
+
+    try {
+      const selectQueue = ["loopback", "token", "off"];
+      const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+        const next = selectQueue.shift();
+        if (next !== undefined) {
+          return next;
+        }
+        return params.initialValue ?? params.options[0]?.value;
+      }) as unknown as WizardPrompter["select"];
+      const text = vi.fn(async () => "18789") as unknown as WizardPrompter["text"];
+      const confirm = vi.fn(async () => true);
+      const prompter = buildWizardPrompter({ select, text, confirm });
+
+      const result = await configureGatewayForSetup({
+        flow: "advanced",
+        baseConfig: {},
+        nextConfig: {},
+        localPort: 18789,
+        quickstartGateway: {
+          hasExisting: false,
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          tailscaleMode: "off",
+          token: undefined,
+          password: undefined,
+          customBindHost: undefined,
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      });
+
+      expect(result.settings.gatewayToken).toBe("advanced-env-token");
+      expect(mocks.randomToken).not.toHaveBeenCalled();
     } finally {
       if (prevToken === undefined) {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -281,7 +347,7 @@ describe("configureGatewayForSetup", () => {
       ...createQuickstartGateway("token"),
       token: {
         source: "exec" as const,
-        provider: "gatewayTokens",
+        provider: "gatewaytokens",
         id: "gateway/auth/token",
       },
     };
@@ -297,7 +363,7 @@ describe("configureGatewayForSetup", () => {
       nextConfig: {
         secrets: {
           providers: {
-            gatewayTokens: {
+            gatewaytokens: {
               source: "exec",
               command: process.execPath,
               allowInsecurePath: true,

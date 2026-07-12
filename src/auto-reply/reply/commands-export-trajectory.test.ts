@@ -1,59 +1,10 @@
+// Tests trajectory export command approval routing.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildExportTrajectoryCommandReply } from "./commands-export-trajectory.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-
-const hoisted = await vi.hoisted(async () => {
-  const { createExportCommandSessionMocks } = await import("./commands-export-test-mocks.js");
-  return {
-    ...createExportCommandSessionMocks(vi),
-    exportTrajectoryBundleMock: vi.fn(() => ({
-      outputDir: "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
-      manifest: {
-        eventCount: 7,
-        runtimeEventCount: 3,
-        transcriptEventCount: 4,
-      },
-      events: [{ type: "context.compiled" }],
-      runtimeFile: "/tmp/target-store/session.trajectory.jsonl",
-      supplementalFiles: ["metadata.json", "artifacts.json", "prompts.json"],
-    })),
-    resolveDefaultTrajectoryExportDirMock: vi.fn(
-      () => "/tmp/workspace/.openclaw/trajectory-exports/openclaw-trajectory-session",
-    ),
-    existsSyncMock: vi.fn((file: fs.PathLike, actualExistsSync: (path: fs.PathLike) => boolean) =>
-      actualExistsSync(file),
-    ),
-  };
-});
-
-vi.mock("../../config/sessions/paths.js", () => ({
-  resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,
-  resolveSessionFilePath: hoisted.resolveSessionFilePathMock,
-  resolveSessionFilePathOptions: hoisted.resolveSessionFilePathOptionsMock,
-}));
-
-vi.mock("../../config/sessions/store.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
-}));
-
-vi.mock("../../trajectory/export.js", () => ({
-  exportTrajectoryBundle: hoisted.exportTrajectoryBundleMock,
-  resolveDefaultTrajectoryExportDir: hoisted.resolveDefaultTrajectoryExportDirMock,
-}));
-
-vi.mock("node:fs", async () => {
-  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-  const mockedFs = {
-    ...actual,
-    existsSync: (file: fs.PathLike) => hoisted.existsSyncMock(file, actual.existsSync),
-  };
-  return {
-    ...mockedFs,
-    default: mockedFs,
-  };
-});
 
 const tempDirs: string[] = [];
 
@@ -63,9 +14,19 @@ function makeTempDir(): string {
   return dir;
 }
 
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 function makeParams(workspaceDir = makeTempDir()): HandleCommandsParams {
   return {
-    cfg: {},
+    cfg: {
+      session: {
+        store: "/tmp/openclaw-sessions.json",
+      },
+    },
     ctx: {
       SessionKey: "agent:main:slash-session",
       AccountId: "account-1",
@@ -144,140 +105,35 @@ function createExecDeps(
 
 function readEncodedRequestFromCommand(command: string): Record<string, unknown> {
   const match = command.match(/'?--request-json-base64'?\s+'?([A-Za-z0-9_-]+)'?/u);
-  expect(match?.[1]).toBeTruthy();
-  return JSON.parse(Buffer.from(match?.[1] ?? "", "base64url").toString("utf8")) as Record<
-    string,
-    unknown
-  >;
+  const encoded = match?.[1];
+  if (encoded === undefined) {
+    throw new Error("expected encoded export request");
+  }
+  return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Record<string, unknown>;
 }
 
-describe("buildExportTrajectoryReply", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    hoisted.existsSyncMock.mockImplementation(
-      (file: fs.PathLike, actualExistsSync: (path: fs.PathLike) => boolean) =>
-        file.toString() === "/tmp/target-store/session.jsonl" || actualExistsSync(file),
-    );
-  });
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value) {
+    throw new Error("expected record");
+  }
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
 
-  afterEach(() => {
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  it("builds a trajectory bundle from the target session", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-
-    const reply = await buildExportTrajectoryReply(makeParams());
-
-    expect(reply.text).toContain("✅ Trajectory exported!");
-    expect(reply.text).toContain("session-branch.json");
-    expect(reply.text).not.toContain("session.jsonl");
-    expect(reply.text).not.toContain("runtime.jsonl");
-    expect(hoisted.resolveDefaultSessionStorePathMock).toHaveBeenCalledWith("target");
-    expect(hoisted.exportTrajectoryBundleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        sessionKey: "agent:target:session",
-        workspaceDir: expect.stringContaining("openclaw-export-command-"),
-      }),
-    );
-  });
-
-  it("keeps user-named output paths inside the workspace trajectory export directory", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-    const params = makeParams();
-    params.command.commandBodyNormalized = "/export-trajectory my-bundle";
-
-    await buildExportTrajectoryReply(params);
-
-    expect(hoisted.exportTrajectoryBundleMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        outputDir: path.join(params.workspaceDir, ".openclaw", "trajectory-exports", "my-bundle"),
-      }),
-    );
-  });
-
-  it("rejects absolute output paths", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-    const params = makeParams();
-    params.command.commandBodyNormalized = "/export-trajectory /tmp/outside";
-
-    const reply = await buildExportTrajectoryReply(params);
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects home-relative output paths", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-    const params = makeParams();
-    params.command.commandBodyNormalized = "/export-trajectory ~/bundle";
-
-    const reply = await buildExportTrajectoryReply(params);
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("does not echo absolute session paths when the transcript is missing", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-    hoisted.existsSyncMock.mockImplementation(
-      (file: fs.PathLike, actualExistsSync: (path: fs.PathLike) => boolean) =>
-        file.toString() === "/tmp/target-store/session.jsonl" ? false : actualExistsSync(file),
-    );
-
-    const reply = await buildExportTrajectoryReply(makeParams());
-
-    expect(reply.text).toBe("❌ Session file not found.");
-    expect(reply.text).not.toContain("/tmp/target-store/session.jsonl");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects output paths redirected by a symlinked exports directory", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-    const workspaceDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    fs.mkdirSync(path.join(workspaceDir, ".openclaw"), { recursive: true });
-    fs.symlinkSync(outsideDir, path.join(workspaceDir, ".openclaw", "trajectory-exports"));
-    const params = makeParams(workspaceDir);
-    params.command.commandBodyNormalized = "/export-trajectory my-bundle";
-
-    const reply = await buildExportTrajectoryReply(params);
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects default output paths redirected by a symlinked exports directory", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-    const workspaceDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    fs.mkdirSync(path.join(workspaceDir, ".openclaw"), { recursive: true });
-    fs.symlinkSync(outsideDir, path.join(workspaceDir, ".openclaw", "trajectory-exports"));
-
-    const reply = await buildExportTrajectoryReply(makeParams(workspaceDir));
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects symlinked state directories before creating export folders", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-    const workspaceDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    fs.symlinkSync(outsideDir, path.join(workspaceDir, ".openclaw"));
-    const params = makeParams(workspaceDir);
-    params.command.commandBodyNormalized = "/export-trajectory my-bundle";
-
-    const reply = await buildExportTrajectoryReply(params);
-
-    expect(reply.text).toContain("Failed to resolve output path");
-    expect(fs.existsSync(path.join(outsideDir, "trajectory-exports"))).toBe(false);
-    expect(hoisted.exportTrajectoryBundleMock).not.toHaveBeenCalled();
-  });
-});
+function execCallRecord(
+  execCalls: Array<{ defaults: unknown; params: unknown }>,
+  index = 0,
+): { defaults: Record<string, unknown>; params: Record<string, unknown> } {
+  const call = execCalls[index];
+  if (!call) {
+    throw new Error(`expected exec call at index ${index}`);
+  }
+  return {
+    defaults: requireRecord(call.defaults),
+    params: requireRecord(call.params),
+  };
+}
 
 describe("buildExportTrajectoryCommandReply", () => {
   beforeEach(() => {
@@ -285,10 +141,10 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("requests per-run exec approval for trajectory exports", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
+    const params = makeParams();
 
-    const reply = await buildExportTrajectoryCommandReply(makeParams(), deps);
+    const reply = await buildExportTrajectoryCommandReply(params, deps);
 
     expect(reply.text).toContain(
       "Trajectory exports can include prompts, model messages, tool schemas",
@@ -297,20 +153,20 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(reply.text).toContain("do not use allow-all");
     expect(reply.text).toContain("Allowed decisions: allow-once, deny");
     expect(execCalls).toHaveLength(1);
-    expect(execCalls[0]?.defaults).toMatchObject({
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
-      trigger: "export-trajectory",
-      currentChannelId: "bot",
-      accountId: "account-1",
-    });
-    expect(execCalls[0]?.params).toMatchObject({
-      security: "allowlist",
-      ask: "always",
-      background: true,
-    });
-    const command = (execCalls[0]?.params as { command?: string }).command ?? "";
+    const execCall = execCallRecord(execCalls);
+    expect(execCall.defaults.host).toBe("gateway");
+    expect(execCall.defaults.security).toBe("allowlist");
+    expect(execCall.defaults.ask).toBe("always");
+    expect(execCall.defaults.trigger).toBe("export-trajectory");
+    expect(execCall.defaults.approvalFollowupMode).toBe("agent");
+    expect(execCall.defaults.sessionId).toBe("session-1");
+    expect(execCall.defaults.sessionStore).toBe("/tmp/openclaw-sessions.json");
+    expect(execCall.defaults.currentChannelId).toBe("bot");
+    expect(execCall.defaults.accountId).toBe("account-1");
+    expect(execCall.params.security).toBe("allowlist");
+    expect(execCall.params.ask).toBe("always");
+    expect(execCall.params.background).toBe(true);
+    const command = typeof execCall.params.command === "string" ? execCall.params.command : "";
     expect(command).toContain("sessions");
     expect(command).toContain("export-trajectory");
     expect(command).toContain("--request-json-base64");
@@ -318,14 +174,12 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(command).not.toContain("--session-key");
     expect(command).not.toContain("openclaw sessions export-trajectory");
     const request = readEncodedRequestFromCommand(command);
-    expect(request).toMatchObject({
-      sessionKey: "agent:target:session",
-      workspace: expect.stringContaining("openclaw-export-command-"),
-    });
+    expect(request.sessionKey).toBe("agent:target:session");
+    expect(request.workspace).toBe(params.workspaceDir);
+    expect(String(request.workspace)).toContain("openclaw-export-command-");
   });
 
   it("uses the originating Telegram route for native trajectory export followups", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
     params.ctx = {
@@ -349,33 +203,29 @@ describe("buildExportTrajectoryCommandReply", () => {
     await buildExportTrajectoryCommandReply(params, deps);
 
     expect(execCalls).toHaveLength(1);
-    expect(execCalls[0]?.defaults).toMatchObject({
-      messageProvider: "telegram",
-      currentChannelId: "telegram:8460800771",
-      accountId: "account-1",
-    });
+    const execCall = execCallRecord(execCalls);
+    expect(execCall.defaults.messageProvider).toBe("telegram");
+    expect(execCall.defaults.currentChannelId).toBe("telegram:8460800771");
+    expect(execCall.defaults.accountId).toBe("account-1");
   });
 
   it("keeps user-controlled export values out of the shell command", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
     params.command.commandBodyNormalized = "/export-trajectory bad'; Invoke-Expression evil ;'";
 
     await buildExportTrajectoryCommandReply(params, deps);
 
-    const command = (execCalls[0]?.params as { command?: string }).command ?? "";
+    const commandValue = execCallRecord(execCalls).params.command;
+    const command = typeof commandValue === "string" ? commandValue : "";
     expect(command).toMatch(/'?sessions'?\s+'?export-trajectory'?/u);
     expect(command).toMatch(/'?--request-json-base64'?\s+'?[A-Za-z0-9_-]+'?/u);
     expect(command).toMatch(/'?--json'?$/u);
     expect(command).not.toContain("Invoke-Expression");
-    expect(readEncodedRequestFromCommand(command)).toMatchObject({
-      output: "bad';",
-    });
+    expect(readEncodedRequestFromCommand(command).output).toBe("bad';");
   });
 
   it("rejects oversized output paths before requesting exec approval", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
     params.command.commandBodyNormalized = `/export-trajectory ${"a".repeat(513)}`;
@@ -387,7 +237,6 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("rejects oversized encoded export requests before requesting exec approval", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
     params.workspaceDir = `/${"workspace".repeat(1200)}`;
@@ -399,7 +248,6 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("routes group trajectory export approval privately", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, privateReplies, deps } = createExecDeps({
       privateTargets: [
         { channel: "telegram", to: "owner-dm", accountId: "account-1" },
@@ -424,15 +272,13 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(privateReplies[0]?.text).toContain("openclaw sessions export-trajectory");
     expect(privateReplies[0]?.text).toContain("Session: agent:target:session");
     expect(execCalls).toHaveLength(1);
-    expect(execCalls[0]?.defaults).toMatchObject({
-      messageProvider: "telegram",
-      currentChannelId: "owner-dm",
-      accountId: "account-1",
-    });
+    const execCall = execCallRecord(execCalls);
+    expect(execCall.defaults.messageProvider).toBe("telegram");
+    expect(execCall.defaults.currentChannelId).toBe("owner-dm");
+    expect(execCall.defaults.accountId).toBe("account-1");
   });
 
   it("fails closed in groups when no private owner route is available", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, privateReplies, deps } = createExecDeps();
     const params = makeParams();
     params.isGroup = true;

@@ -40,6 +40,7 @@
         "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive"]
       },
       "timeoutMs": { "type": "integer", "minimum": 250, "maximum": 120000 },
+      "setupGraceTimeoutMs": { "type": "integer", "minimum": 0, "maximum": 30000 },
       "queryMode": {
         "type": "string",
         "enum": ["message", "recent", "full"]
@@ -54,6 +55,14 @@
           "precision-heavy",
           "preference-only"
         ]
+      },
+      "toolsAllow": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "pattern": "^(?!\\*$)(?![Gg][Rr][Oo][Uu][Pp]:).+"
+        },
+        "maxItems": 32
       },
       "promptOverride": { "type": "string" },
       "promptAppend": { "type": "string" },
@@ -99,7 +108,7 @@
     },
     "modelFallbackPolicy": {
       "label": "Model Fallback Policy",
-      "help": "Deprecated compatibility field. Active Memory no longer uses a built-in fallback model; set modelFallback explicitly if you want a fallback."
+      "help": "Deprecated compatibility field. modelFallback is only the chain-resolution last resort when no explicit plugin model, session model, or agent primary model resolves; it is not runtime failover."
     },
     "allowedChatTypes": {
       "label": "Allowed Chat Types",
@@ -114,7 +123,12 @@
       "help": "Optional explicit denylist of chat/user IDs. Sessions whose resolved conversation id matches the list are skipped even when the chat type is allowed. Applied after allowedChatIds."
     },
     "timeoutMs": {
-      "label": "Timeout (ms)"
+      "label": "Timeout (ms)",
+      "help": "Recall work budget on the main lane. Before recall, the hook allows up to 1500 ms for session/config preflight. After recall starts, it reserves another fixed 1500 ms only for abort settlement and transcript recovery."
+    },
+    "setupGraceTimeoutMs": {
+      "label": "Setup Grace Timeout (ms)",
+      "help": "Advanced: extra recall-work budget for cold embedded-run setup. Defaults to 0. The separate 1500 ms preflight cap and 1500 ms post-recall completion allowance still apply."
     },
     "queryMode": {
       "label": "Query Mode",
@@ -123,6 +137,10 @@
     "promptStyle": {
       "label": "Prompt Style",
       "help": "Choose how eager or strict the blocking memory sub-agent should be when deciding whether to return memory."
+    },
+    "toolsAllow": {
+      "label": "Allowed Memory Tools",
+      "help": "Advanced: tool names the blocking memory sub-agent may use. Defaults to memory_search and memory_get, or memory_recall when plugins.slots.memory selects memory-lancedb; configure this for other non-core memory providers. Wildcards, group entries, and core agent tools are ignored."
     },
     "thinking": {
       "label": "Thinking Override",
