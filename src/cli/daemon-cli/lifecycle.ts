@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
+import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
   findInstalledSystemdGatewayScope,
@@ -87,11 +88,7 @@ async function resolveGatewayLifecycleContext(service = resolveGatewayService())
   env: NodeJS.ProcessEnv;
 }> {
   const command = await service.readCommand(process.env).catch(() => null);
-  const serviceEnv = command?.environment ?? undefined;
-  const mergedEnv = {
-    ...(process.env as Record<string, string | undefined>),
-    ...(serviceEnv ?? undefined),
-  } as NodeJS.ProcessEnv;
+  const mergedEnv = mergeGatewayServiceEnv(process.env, command);
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
   const config = await readBestEffortConfig().catch(() => undefined);
