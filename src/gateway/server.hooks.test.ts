@@ -87,6 +87,21 @@ function mockIsolatedRunOk(): void {
   });
 }
 
+function createDeferred() {
+  let resolve = () => {};
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+async function waitForPotentialDuplicateDispatch(timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (cronIsolatedRun.mock.calls.length < 2 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function waitForCronIsolatedRuns(count: number, timeoutMs = 2_000): Promise<void> {
   await expect
     .poll(() => cronIsolatedRun.mock.calls.length, { timeout: timeoutMs, interval: 10 })
@@ -753,6 +768,169 @@ describe("gateway server hooks", () => {
       expect(peekSystemEvents(resolveMainKey())).toHaveLength(0);
     });
   });
+
+  test("shares one pending direct agent dispatch across simultaneous duplicates", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+
+    await withGatewayServer(async ({ port }) => {
+      const runnerAdmission = createDeferred();
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementation(async (params: unknown) => {
+        await runnerAdmission.promise;
+        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+        return { status: "ok", summary: "done" };
+      });
+
+      const firstResponse = postAgentHookWithIdempotency(port, "pending-direct-idem");
+      await waitForCronIsolatedRuns(1);
+      const duplicateResponse = postAgentHookWithIdempotency(port, "pending-direct-idem");
+      await waitForPotentialDuplicateDispatch();
+      runnerAdmission.resolve();
+
+      const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
+      const firstBody = (await first.json()) as { runId?: string };
+      const duplicateBody = (await duplicate.json()) as { runId?: string };
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      expect(requireNonEmptyString(duplicateBody.runId, "duplicate hook run id")).toBe(
+        requireNonEmptyString(firstBody.runId, "first hook run id"),
+      );
+    });
+  });
+
+  test("evicts a failed pending direct agent replay so a later request can retry", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+
+    await withGatewayServer(async ({ port }) => {
+      const failedAdmission = createDeferred();
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun
+        .mockImplementationOnce(async () => {
+          await failedAdmission.promise;
+          return {
+            status: "error",
+            summary: 'Session "agent:main:hook:pending-retry" changed while starting work. Retry.',
+          };
+        })
+        .mockImplementationOnce(async (params: unknown) => {
+          (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+          return { status: "ok", summary: "done" };
+        });
+      const request = () =>
+        postHook(
+          port,
+          "/hooks/agent",
+          { message: "Dispatch" },
+          { headers: { "Idempotency-Key": "failed-pending-direct-idem" } },
+        );
+
+      const firstResponse = request();
+      await waitForCronIsolatedRuns(1);
+      const duplicateResponse = request();
+      await waitForPotentialDuplicateDispatch();
+      failedAdmission.resolve();
+
+      const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
+      expect(first.status).toBe(409);
+      expect(duplicate.status).toBe(first.status);
+      const firstBody = (await first.json()) as { runId?: string };
+      const duplicateBody = (await duplicate.json()) as { runId?: string };
+      const failedRunId = requireNonEmptyString(firstBody.runId, "failed hook run id");
+      expect(duplicateBody.runId).toBe(failedRunId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+
+      const retry = await request();
+      expect(retry.status).toBe(200);
+      const retryBody = (await retry.json()) as { runId?: string };
+      expect(requireNonEmptyString(retryBody.runId, "retried hook run id")).not.toBe(failedRunId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  test("shares one pending mapped agent dispatch across simultaneous duplicates", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "mapped-pending" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+        },
+      ],
+    };
+
+    await withGatewayServer(async ({ port }) => {
+      const runnerAdmission = createDeferred();
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementation(async (params: unknown) => {
+        await runnerAdmission.promise;
+        (params as { onExecutionStarted?: () => void }).onExecutionStarted?.();
+        return { status: "ok", summary: "done" };
+      });
+      const request = () =>
+        postHook(
+          port,
+          "/hooks/mapped-pending",
+          { subject: "Email" },
+          { headers: { "Idempotency-Key": "pending-mapped-idem" } },
+        );
+
+      const firstResponse = request();
+      await waitForCronIsolatedRuns(1);
+      const duplicateResponse = request();
+      await waitForPotentialDuplicateDispatch();
+      runnerAdmission.resolve();
+
+      const [first, duplicate] = await Promise.all([firstResponse, duplicateResponse]);
+      expect(first.status).toBe(200);
+      expect(duplicate.status).toBe(200);
+      const firstBody = (await first.json()) as { runId?: string };
+      const duplicateBody = (await duplicate.json()) as { runId?: string };
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(1);
+      expect(requireNonEmptyString(duplicateBody.runId, "duplicate mapped hook run id")).toBe(
+        requireNonEmptyString(firstBody.runId, "first mapped hook run id"),
+      );
+    });
+  });
+
+  test("aborts timed-out runner admission without allowing late execution", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+
+    await withGatewayServer(async ({ port }) => {
+      const runnerAdmission = createDeferred();
+      const runnerSettled = createDeferred();
+      const onExecutionStarted = vi.fn();
+      const executionSideEffect = vi.fn();
+      let abortSignal: AbortSignal | undefined;
+      cronIsolatedRun.mockClear();
+      cronIsolatedRun.mockImplementationOnce(async (params: unknown) => {
+        const call = params as {
+          abortSignal?: AbortSignal;
+          onExecutionStarted?: () => void;
+        };
+        abortSignal = call.abortSignal;
+        await runnerAdmission.promise;
+        if (!call.abortSignal?.aborted) {
+          onExecutionStarted.mockImplementation(call.onExecutionStarted ?? (() => {}));
+          onExecutionStarted();
+          executionSideEffect();
+        }
+        runnerSettled.resolve();
+        return { status: "ok", summary: "done" };
+      });
+
+      const responsePromise = postHook(port, "/hooks/agent", { message: "Blocked admission" });
+      await waitForCronIsolatedRuns(1);
+      const response = await responsePromise;
+      expect(response.status).toBe(503);
+      expect(abortSignal?.aborted).toBe(true);
+
+      runnerAdmission.resolve();
+      await runnerSettled.promise;
+      expect(onExecutionStarted).not.toHaveBeenCalled();
+      expect(executionSideEffect).not.toHaveBeenCalled();
+    });
+  }, 20_000);
 
   test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
