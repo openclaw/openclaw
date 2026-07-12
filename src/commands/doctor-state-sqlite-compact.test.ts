@@ -246,7 +246,10 @@ describe("runDoctorStateSqliteCompact", () => {
       reader.exec("BEGIN; SELECT COUNT(*) FROM compact_payload;");
       writer.exec("INSERT INTO compact_payload (payload) VALUES ('newer wal frame');");
 
-      expect(() => runDoctorStateSqliteCompact({ env })).toThrow(/checkpoint remained busy/);
+      // Exercise the real busy checkpoint result without waiting the production lock timeout.
+      expect(() => runDoctorStateSqliteCompact({ env }, { busyTimeoutMs: 0 })).toThrow(
+        /checkpoint remained busy/,
+      );
       expect(readPragma(writer, "auto_vacuum")).toBe(0);
     } finally {
       reader.exec("ROLLBACK;");
