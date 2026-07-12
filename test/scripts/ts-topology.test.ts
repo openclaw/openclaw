@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
 // Ts Topology tests cover ts topology script behavior.
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { analyzeTopology, filterRecordsForReport } from "../../scripts/lib/ts-topology/analyze.js";

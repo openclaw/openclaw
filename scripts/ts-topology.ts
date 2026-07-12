@@ -168,7 +168,8 @@ export async function main(argv: string[], io: IoLike = process): Promise<number
   }
 }
 
-if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+const entrypointPath = process.argv[1];
+if (entrypointPath && import.meta.url === pathToFileURL(entrypointPath).href) {
   const exitCode = await main(process.argv.slice(2));
   if (exitCode !== 0) {
     process.exit(exitCode);
