@@ -420,7 +420,7 @@ function buildAssistantOutputDirectivesSection(params: {
   if (params.sourceMessageToolOnly) {
     return [
       "## Assistant Output Directives",
-      "- Visible source output: `message(action=send)`.",
+      "- Visible source output: `message(action=send)`. Completed final: `final=true`; progress: omit or `final=false`.",
       "- Media paths = attachments, not prose. One: `media`; many: `attachments: [{media: ...}]`.",
       "- No legacy `MEDIA:` here. Voice note: `asVoice`. Explicit native reply: `replyTo`.",
       "",
@@ -534,7 +534,7 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     messageToolOnly
-      ? "- Current source visible reply MUST use `message(action=send)`; final text is private. Skip tool = user gets nothing. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
+      ? "- Current source completed final MUST use `message(action=send, final=true)`; final text is private. Skip tool = user gets nothing. Progress: commentary, or current-chat `message(action=send, final=false)`. Brief tool-call progress is visible; no hidden instructions/private data/reasoning."
       : "- Current-session final text normally routes to source. If turn says final private, visible output uses `message(action=send)`.",
     telegramRuntime
       ? telegramRichTextEnabled
@@ -555,8 +555,8 @@ function buildMessagingSection(params: {
             : "",
           messageToolOnly
             ? params.requireExplicitMessageTarget
-              ? "- `send`: `target` + `message`; target required this turn."
-              : "- `send`: `message`; current source is default target. Set `target` only elsewhere."
+              ? "- `send`: `target` + `message`; target required this turn. Completed final needs `final=true`."
+              : "- `send`: `message`; current source is default target. Set `target` only elsewhere. Completed final needs `final=true`."
             : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`

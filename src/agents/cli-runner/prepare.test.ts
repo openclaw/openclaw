@@ -2383,8 +2383,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         expect(second.messageToolPolicyHash).toBe(first.messageToolPolicyHash);
         expect(second.promptToolNamesHash).toBe(first.promptToolNamesHash);
         if (expectedStrongPrompt) {
+          expect(first.systemPrompt).toContain("Visible source output: `message(action=send)`");
           expect(first.systemPrompt).toContain(
-            "Current source visible reply MUST use `message(action=send)`",
+            "Completed final: `final=true`; progress: omit or `final=false`",
           );
         } else {
           expect(first.systemPrompt).toContain(

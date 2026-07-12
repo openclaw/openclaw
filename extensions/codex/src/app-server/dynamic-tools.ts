@@ -698,6 +698,10 @@ export function createCodexDynamicToolBridge(params: {
           toolName === "message" &&
           !resultIsError &&
           (rawResult.terminate === true || result.terminate === true);
+        const explicitFinalSourceReply =
+          params.hookContext?.sourceReplyDeliveryMode === "message_tool_only" &&
+          toolName === "message" &&
+          executedArgs.final === true;
         if (deliveredSourceReply || receiptConfirmedSourceReply || toolConfirmedSourceReply) {
           telemetry.didDeliverSourceReplyViaMessageTool = true;
         }
@@ -707,8 +711,7 @@ export function createCodexDynamicToolBridge(params: {
             result.terminate === true ||
             isToolResultYield(rawResult) ||
             isToolResultYield(result) ||
-            deliveredSourceReply ||
-            receiptConfirmedSourceReply,
+            (explicitFinalSourceReply && (deliveredSourceReply || receiptConfirmedSourceReply)),
         );
         const asyncStarted =
           isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);

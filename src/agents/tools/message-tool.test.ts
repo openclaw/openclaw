@@ -755,6 +755,22 @@ describe("message tool secret scoping", () => {
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
   });
 
+  it("keeps the final delivery-control hint out of channel action payloads", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "done", final: true },
+      toolOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "telegram",
+        agentSessionKey: "agent:main:telegram:direct:123456789",
+      },
+    });
+
+    expect(input?.params).toMatchObject({ action: "send", message: "done" });
+    expect(input?.params).not.toHaveProperty("final");
+  });
+
   it("defaults internal WebChat message tool sends to the source-reply sink", async () => {
     mockSendResult();
 
@@ -2093,6 +2109,7 @@ describe("message tool schema scoping", () => {
 
     expect(getActionEnum(properties)).toEqual(["send"]);
     expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("final");
     expect(properties).toHaveProperty("target");
     expect(properties).toHaveProperty("media");
     expect(properties).not.toHaveProperty("pollId");

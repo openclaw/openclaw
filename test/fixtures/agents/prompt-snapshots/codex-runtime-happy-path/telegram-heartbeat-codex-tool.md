@@ -209,8 +209,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 53523,
-    "roughTokens": 13381
+    "chars": 53766,
+    "roughTokens": 13442
   },
   "openClawDeveloperInstructions": {
     "chars": 2172,
@@ -221,8 +221,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6702
   },
   "totalWithDynamicToolsJson": {
-    "chars": 80333,
-    "roughTokens": 20084
+    "chars": 80576,
+    "roughTokens": 20144
   },
   "userInputText": {
     "chars": 1271,
@@ -614,6 +614,10 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
         },
         "filename": {
           "type": "string"
+        },
+        "final": {
+          "description": "Set true only for the completed final answer to the current source conversation. Leave false or omit for progress, acknowledgements, and proactive messages.",
+          "type": "boolean"
         },
         "forceDocument": {
           "description": "Send media as document; no compression.",

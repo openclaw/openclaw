@@ -1318,7 +1318,28 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
-  it("marks delivered message-tool-only source replies as terminal", async () => {
+  it.each([undefined, false])(
+    "keeps delivered message-tool-only progress replies non-terminal when final=%s",
+    async (final) => {
+      const bridge = createBridgeWithToolResult(
+        "message",
+        textToolResult("Sent.", { messageId: "imessage-progress-6264" }),
+        { sourceReplyDeliveryMode: "message_tool_only" },
+      );
+
+      const result = await handleMessageToolCall(bridge, {
+        action: "send",
+        message: "I'm tracing the request now.",
+        ...(final === undefined ? {} : { final }),
+      });
+
+      expect(result).toEqual(expectInputText("Sent."));
+      expect(result.terminate).toBeUndefined();
+      expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    },
+  );
+
+  it("marks explicitly final delivered message-tool-only source replies as terminal", async () => {
     const bridge = createBridgeWithToolResult(
       "message",
       textToolResult("Sent.", { messageId: "imessage-6264" }),
@@ -1327,6 +1348,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "send",
+      final: true,
       message: "visible reply",
     });
 
@@ -1365,6 +1387,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "send",
+      final: true,
       message: "visible reply",
     });
 
@@ -1412,6 +1435,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "reply",
+      final: true,
       channel: "imessage",
       target: "+12069106512",
       messageId: "853",
@@ -1456,6 +1480,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "reply",
+      final: true,
       channel: "sms",
       target: "+1 (206) 910-6512",
       messageId: "853",
@@ -1494,6 +1519,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "reply",
+      final: true,
       channel: "imessage",
       target: "+12069106512",
       messageId: "857",
@@ -1530,6 +1556,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "reply",
+      final: true,
       channel: "imessage",
       target: "+12069106512",
       messageId: "861",
@@ -1558,6 +1585,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "reply",
+      final: true,
       channel: "imessage",
       target: "+12069106512",
       messageId: "862",
@@ -1588,6 +1616,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "reply",
+      final: true,
       channel: "imessage",
       target: "+12069106512",
       messageId: "862",
@@ -1610,6 +1639,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "reply",
+      final: true,
       channel: "imessage",
       target: "+12069106512",
       messageId: "863",
@@ -1631,6 +1661,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "reply",
+      final: true,
       channel: "imessage",
       target: "+12069106512",
       messageId: "865",
@@ -1698,6 +1729,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const firstResult = await handleMessageToolCall(bridge, {
       action: "send",
+      final: true,
       message: "visible reply",
     });
     const secondResult = await bridge.handleToolCall({
@@ -1724,6 +1756,7 @@ describe("createCodexDynamicToolBridge", () => {
 
     const result = await handleMessageToolCall(bridge, {
       action: "send",
+      final: true,
       target: "channel:other",
       message: "cross-channel reply",
     });

@@ -644,6 +644,12 @@ function buildSendSchema(options: {
 }) {
   const props: Record<string, TSchema> = {
     message: Type.Optional(Type.String()),
+    final: Type.Optional(
+      Type.Boolean({
+        description:
+          "Set true only for the completed final answer to the current source conversation. Leave false or omit for progress, acknowledgements, and proactive messages.",
+      }),
+    ),
     effectId: Type.Optional(
       Type.String({
         description: "sendWithEffect id/name.",
@@ -1346,7 +1352,7 @@ function appendMessageToolVisibleReplyHint(
   const targetGuidance = requireExplicitTarget
     ? "send needs target."
     : "target defaults current source; set only elsewhere.";
-  return `${description} This turn visible reply: action="send" + message; ${targetGuidance} Final answer private.`;
+  return `${description} This turn visible reply: action="send" + message; completed final sets final=true; progress omits final or sets final=false; ${targetGuidance} Final answer private.`;
 }
 
 function appendMessageToolReadHint(
@@ -1442,6 +1448,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
+      // `final` is a model/runtime delivery-control hint. It must not leak into
+      // channel action payloads or affect provider-level idempotency.
+      delete params.final;
 
       // Sanitize outbound text fields in three layers:
       //

@@ -208,8 +208,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 52233,
-    "roughTokens": 13059
+    "chars": 52476,
+    "roughTokens": 13119
   },
   "openClawDeveloperInstructions": {
     "chars": 2153,
@@ -220,8 +220,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6568
   },
   "totalWithDynamicToolsJson": {
-    "chars": 78504,
-    "roughTokens": 19626
+    "chars": 78747,
+    "roughTokens": 19687
   },
   "userInputText": {
     "chars": 1033,
@@ -606,6 +606,10 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "filename": {
           "type": "string"
+        },
+        "final": {
+          "description": "Set true only for the completed final answer to the current source conversation. Leave false or omit for progress, acknowledgements, and proactive messages.",
+          "type": "boolean"
         },
         "forceDocument": {
           "description": "Send media as document; no compression.",

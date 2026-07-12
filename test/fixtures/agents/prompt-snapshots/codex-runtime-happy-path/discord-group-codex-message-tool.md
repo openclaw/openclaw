@@ -208,8 +208,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 52506,
-    "roughTokens": 13127
+    "chars": 52749,
+    "roughTokens": 13188
   },
   "openClawDeveloperInstructions": {
     "chars": 3262,
@@ -220,8 +220,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6947
   },
   "totalWithDynamicToolsJson": {
-    "chars": 80295,
-    "roughTokens": 20074
+    "chars": 80538,
+    "roughTokens": 20135
   },
   "userInputText": {
     "chars": 1442,
@@ -619,6 +619,10 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
         },
         "filename": {
           "type": "string"
+        },
+        "final": {
+          "description": "Set true only for the completed final answer to the current source conversation. Leave false or omit for progress, acknowledgements, and proactive messages.",
+          "type": "boolean"
         },
         "forceDocument": {
           "description": "Send media as document; no compression.",

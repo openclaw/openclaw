@@ -1121,7 +1121,11 @@ describe("buildAgentSystemPrompt", () => {
         },
       });
 
-      expect(prompt).toContain("Current source visible reply MUST use `message(action=send)`");
+      expect(prompt).toContain(
+        "Current source completed final MUST use `message(action=send, final=true)`",
+      );
+      expect(prompt).toContain("Progress: commentary");
+      expect(prompt).toContain("message(action=send, final=false)");
       expect(prompt).toContain("Skip tool = user gets nothing");
       expect(prompt).toContain(
         "Media paths = attachments, not prose. One: `media`; many: `attachments: [{media: ...}]`.",
@@ -1151,7 +1155,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("`send`: `target` + `message`; target required this turn");
+    expect(prompt).toContain(
+      "`send`: `target` + `message`; target required this turn. Completed final needs `final=true`",
+    );
     expect(prompt).toContain(
       "Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed reply => `message(action=send)`; final text private.",
     );
@@ -1195,7 +1201,9 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("Current source visible reply MUST use `message(action=send)`");
+    expect(prompt).toContain(
+      "Current source completed final MUST use `message(action=send, final=true)`",
+    );
     expect(prompt).not.toContain("Group/channel:");
   });
 

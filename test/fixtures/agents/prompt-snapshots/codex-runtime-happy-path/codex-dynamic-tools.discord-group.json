@@ -66,6 +66,10 @@
         "filename": {
           "type": "string"
         },
+        "final": {
+          "description": "Set true only for the completed final answer to the current source conversation. Leave false or omit for progress, acknowledgements, and proactive messages.",
+          "type": "boolean"
+        },
         "forceDocument": {
           "description": "Send media as document; no compression.",
           "type": "boolean"
