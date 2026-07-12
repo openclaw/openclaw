@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { PortListener, PortListenerKind, PortUsage } from "./ports-types.js";
+import { MAX_TCP_PORT } from "./tcp-port.js";
 
 /** Classifies a listener as OpenClaw Gateway, SSH tunnel, known non-gateway, or unknown. */
 export function classifyPortListener(listener: PortListener, _port: number): PortListenerKind {
@@ -54,7 +55,7 @@ function parseListenerAddress(address: string): { host: string; port: number } |
       expectDefined(bracketMatch[2], "bracket match capture group 2"),
       10,
     );
-    return Number.isFinite(port)
+    return Number.isFinite(port) && port >= 1 && port <= MAX_TCP_PORT
       ? { host: normalizeLowercaseStringOrEmpty(bracketMatch[1]), port }
       : null;
   }
@@ -68,7 +69,7 @@ function parseListenerAddress(address: string): { host: string; port: number } |
     return null;
   }
   const port = Number.parseInt(portToken, 10);
-  return Number.isFinite(port) ? { host, port } : null;
+  return Number.isFinite(port) && port >= 1 && port <= MAX_TCP_PORT ? { host, port } : null;
 }
 
 // Dual-stack listener output can include IPv4-mapped IPv6 addresses; keep them
