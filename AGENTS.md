@@ -137,6 +137,7 @@ Skills own workflows; root owns hard policy and routing.
 - Base/head changed: stop and rewarm Testbox; never override stale lease checks.
 - Compound Testbox commands: `bash -lc`, never `sh -lc`; job env uses Bash `declare`.
 - Testbox cleanup: `blacksmith testbox stop --id <tbx_id>`; id is not positional.
+- Delegated Testbox rejects `--fresh-pr` and `--stop-after`; sync current checkout, workflow owns lifecycle.
 - PR review artifacts: keep template enum values; put evidence detail in summaries.
 - Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
 - Visual proof: use Crabbox, set up like a user, then screenshot-verify. No harness/bypass/shortcut unless explicitly asked.
