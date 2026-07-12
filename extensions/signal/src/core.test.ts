@@ -993,10 +993,45 @@ describe("signal outbound", () => {
 
   it("resolves only proven direct reply authors", async () => {
     const replyContext = { to: "signal:+15551234567", replyToId: "1700000000001" };
-    await registerSignalReplyContext({ ...replyContext, author: "+15551234567" });
-    await registerSignalReplyContext({ ...replyContext, author: "+15550001111" });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      sourceTimestamp: 100,
+    });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15550001111",
+      sourceTimestamp: 200,
+    });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      sourceTimestamp: 300,
+    });
     await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
       ambiguous: true,
+    });
+    await clearSignalReplyAuthorsForTest();
+  });
+
+  it("keeps newer reply context when older events arrive out of order", async () => {
+    const replyContext = { to: "signal:+15551234567", replyToId: "1700000000002" };
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      body: "newer",
+      sourceTimestamp: 200,
+    });
+    await registerSignalReplyContext({
+      ...replyContext,
+      author: "+15551234567",
+      body: "older",
+      sourceTimestamp: 100,
+    });
+
+    await expect(resolveSignalReplyContextWithPersistence(replyContext)).resolves.toEqual({
+      author: "+15551234567",
+      body: "newer",
     });
     await clearSignalReplyAuthorsForTest();
   });

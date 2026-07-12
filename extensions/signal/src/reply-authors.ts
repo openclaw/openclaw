@@ -110,18 +110,18 @@ function resolveSourceTimestamp(value: number | null | undefined): number {
 function mergeReplyContext(
   current: SignalReplyContextRecord | undefined,
   next: SignalReplyContextRecord & { kind: "resolved" },
-): SignalReplyContextRecord | undefined {
+): SignalReplyContextRecord {
   if (!current) {
     return next;
   }
   if (current.kind === "ambiguous") {
-    return undefined;
+    return current;
   }
   if (current.author !== next.author) {
     const { author: _author, body: _body, ...identity } = next;
     return { ...identity, kind: "ambiguous" };
   }
-  return next.sourceTimestamp >= current.sourceTimestamp ? next : undefined;
+  return next.sourceTimestamp >= current.sourceTimestamp ? next : current;
 }
 
 export async function registerSignalReplyContext(params: {
@@ -159,17 +159,13 @@ export async function registerSignalReplyContext(params: {
   const expiresAt = registeredAt + DEFAULT_REPLY_AUTHOR_TTL_MS;
   if (!store) {
     const next = mergeReplyContext(memoryReplyContexts.get(key), record);
-    if (next) {
-      memoryReplyContexts.set(key, { ...next, expiresAt });
-    }
+    memoryReplyContexts.set(key, { ...next, expiresAt });
     pruneMemoryReplyContexts(registeredAt);
     return;
   }
   if (!store.update) {
     const next = mergeReplyContext(memoryReplyContexts.get(key), record);
-    if (next) {
-      memoryReplyContexts.set(key, { ...next, expiresAt });
-    }
+    memoryReplyContexts.set(key, { ...next, expiresAt });
     pruneMemoryReplyContexts(registeredAt);
     persistentStoreDisabled = true;
     getOptionalSignalRuntime()
