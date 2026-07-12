@@ -1,8 +1,10 @@
 // Control Ui Mock Dev script supports OpenClaw repository automation.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
   createControlUiMockBootstrapConfig,
@@ -35,10 +37,14 @@ const TOTAL_TELEGRAM_SESSIONS = 180;
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
 
+function mockFileHash(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 function parseArgs(args: string[]): CliOptions {
   const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], `control UI mock argument at index ${i}`);
     if (arg === "--allowed-host") {
       const allowedHost = args[++i]?.trim();
       if (allowedHost) {
@@ -242,6 +248,144 @@ function buildSessionDiffMock() {
     ],
     additions: 6,
     deletions: 2,
+  };
+}
+
+function buildPluginCatalogMock() {
+  const entry = (params: {
+    id: string;
+    name: string;
+    description: string;
+    category: string;
+    installed: boolean;
+    enabled?: boolean;
+    featured?: boolean;
+  }) => ({
+    id: params.id,
+    name: params.name,
+    description: params.description,
+    version: "1.4.0",
+    installed: params.installed,
+    enabled: params.installed && (params.enabled ?? true),
+    state: params.installed ? ((params.enabled ?? true) ? "enabled" : "disabled") : "not-installed",
+    category: params.category,
+    featured: params.featured ?? false,
+    removable: params.installed,
+  });
+  return {
+    plugins: [
+      entry({
+        id: "telegram",
+        name: "Telegram",
+        description: "Chat with your agent from Telegram DMs and groups.",
+        category: "channel",
+        installed: true,
+      }),
+      entry({
+        id: "discord",
+        name: "Discord",
+        description: "Bridge agents into Discord servers and DMs.",
+        category: "channel",
+        installed: true,
+        enabled: false,
+      }),
+      entry({
+        id: "memory-wiki",
+        name: "Memory Wiki",
+        description: "Long-term wiki-style memory for people and projects.",
+        category: "memory",
+        installed: true,
+      }),
+      entry({
+        id: "browser",
+        name: "Browser",
+        description: "Drive a managed browser profile for research and automation.",
+        category: "tool",
+        installed: false,
+        featured: true,
+      }),
+      entry({
+        id: "canvas",
+        name: "Canvas",
+        description: "Generate and preview visual artifacts from sessions.",
+        category: "tool",
+        installed: false,
+      }),
+    ],
+    diagnostics: [],
+    mutationAllowed: true,
+  };
+}
+
+function buildSkillWorkshopMocks(baseTime: number) {
+  const hour = 60 * 60 * 1000;
+  const day = 24 * hour;
+  const proposals = [
+    {
+      id: "prop-release-tweets",
+      kind: "update",
+      status: "pending",
+      title: "Tighten release tweet drafting",
+      description: "Capture the changelog-to-tweet flow the agent keeps re-deriving.",
+      skillName: "release-tweets",
+      skillKey: "release-tweets",
+      createdAt: new Date(baseTime - 2 * hour).toISOString(),
+      updatedAt: new Date(baseTime - hour).toISOString(),
+      scanState: "clean",
+    },
+    {
+      id: "prop-crawler-etiquette",
+      kind: "create",
+      status: "pending",
+      title: "Add crawler etiquette skill",
+      description: "Rate limits and robots.txt handling learned during the docs sweep.",
+      skillName: "crawler-etiquette",
+      skillKey: "crawler-etiquette",
+      createdAt: new Date(baseTime - 3 * day).toISOString(),
+      updatedAt: new Date(baseTime - 2 * day).toISOString(),
+      scanState: "clean",
+    },
+    {
+      id: "prop-changelog-style",
+      kind: "update",
+      status: "applied",
+      title: "Changelog bullet style",
+      description: "One bullet per entry, no hard wraps.",
+      skillName: "changelog-style",
+      skillKey: "changelog-style",
+      createdAt: new Date(baseTime - 6 * day).toISOString(),
+      updatedAt: new Date(baseTime - 5 * day).toISOString(),
+      scanState: "clean",
+    },
+  ];
+  return {
+    list: {
+      schema: "openclaw.skill-workshop.proposals-manifest.v1",
+      updatedAt: new Date(baseTime - hour).toISOString(),
+      proposals,
+    },
+    inspect: {
+      cases: proposals.map((proposal) => ({
+        match: { proposalId: proposal.id },
+        response: {
+          record: {
+            ...proposal,
+            proposedVersion: "2",
+            target: { skillName: proposal.skillName, skillKey: proposal.skillKey },
+          },
+          content: [
+            `# ${proposal.title}`,
+            "",
+            proposal.description,
+            "",
+            "## Steps",
+            "1. Gather the source material.",
+            "2. Apply the documented workflow.",
+          ].join("\n"),
+          supportFiles: [],
+        },
+      })),
+    },
   };
 }
 
@@ -560,6 +704,41 @@ function buildScrollableChatHistory(baseTime: number): unknown[] {
     );
   }
 
+  // Completed work turn: commentary + tool results ahead of the final reply
+  // exercise the collapsed "Worked for X" rollup at the end of the thread.
+  const workTurnBase = baseTime + 37 * 60_000;
+  messages.push(
+    chatHistoryMessage(
+      "user",
+      "Mock work request: refactor the render guard and rerun the suite.",
+      workTurnBase,
+    ),
+    chatHistoryMessage(
+      "assistant",
+      "Checking the guard implementation before editing.",
+      workTurnBase + 5_000,
+    ),
+    {
+      role: "toolResult",
+      toolCallId: "mock-work-read",
+      toolName: "read",
+      content: [{ type: "text", text: "Read ui/src/pages/chat/chat-thread.ts (120 lines)." }],
+      timestamp: workTurnBase + 12_000,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "mock-work-exec",
+      toolName: "exec",
+      content: [{ type: "text", text: "pnpm test chat-thread — 12 passed." }],
+      timestamp: workTurnBase + 95_000,
+    },
+    chatHistoryMessage(
+      "assistant",
+      "Refactored the render guard and reran the suite; all 12 tests pass.",
+      workTurnBase + 172_000,
+    ),
+  );
+
   return messages;
 }
 
@@ -754,7 +933,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         ...file,
         content: sessionFileContentByPath.get(file.path) ?? "",
         // Fake CAS token so the file panel offers edit mode against the mock.
-        hash: `mock-hash-${file.name}`,
+        hash: mockFileHash(sessionFileContentByPath.get(file.path) ?? ""),
       },
       root: sessionWorkspaceRoot,
       sessionKey: "agent:alpha",
@@ -767,7 +946,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         ...file,
         kind: "modified",
         workspacePath: file.path,
-        hash: `mock-hash-${file.name}-saved`,
+        hash: mockFileHash(`${file.path}:saved`),
         updatedAtMs: baseTime,
       },
       root: sessionWorkspaceRoot,
@@ -822,6 +1001,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
   // heatmap stay filled no matter when the mock harness runs.
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
+  const skillWorkshop = buildSkillWorkshopMocks(Date.now());
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
@@ -830,6 +1010,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
       "sessions.diff": buildSessionDiffMock(),
+      "plugins.list": buildPluginCatalogMock(),
+      "skills.proposals.list": skillWorkshop.list,
+      "skills.proposals.inspect": skillWorkshop.inspect,
       "usage.cost": profileUsage.cost,
       "sessions.usage": profileUsage.sessions,
       "models.authStatus": modelProviders.authStatus,

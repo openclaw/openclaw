@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./app-host.ts";
 import type {
@@ -43,7 +43,30 @@ type ShellNavigationState = {
     context: ApplicationContext;
   };
   handleNativeToggleSidebar: () => void;
+  handleNativeOpenSearch: () => void;
+  handleNativeNewSession: () => void;
+  onboarding: boolean;
+  updated: () => void;
 };
+
+type ShellSettingsSearchLoadState = {
+  runtime: {
+    context: ApplicationContext;
+  };
+  handleSettingsSearchQueryChange: (query: string) => Promise<void>;
+};
+
+type TestWebKitWindow = Window & {
+  webkit?: {
+    messageHandlers: {
+      openclawNav: { postMessage: (message: unknown) => void };
+    };
+  };
+};
+
+afterEach(() => {
+  Reflect.deleteProperty(window, "webkit");
+});
 
 type ShellEpochState = {
   navDrawerOpen: boolean;
@@ -179,6 +202,91 @@ describe("OpenClaw shell source initialization", () => {
   });
 });
 
+describe("OpenClaw shell settings search", () => {
+  it("loads config and schema for a non-empty query", async () => {
+    const runtimeConfig = {
+      ensureLoaded: vi.fn(() => Promise.resolve()),
+      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellSettingsSearchLoadState;
+    shell.runtime = {
+      context: { runtimeConfig } as unknown as ApplicationContext,
+    };
+
+    await shell.handleSettingsSearchQueryChange("browser");
+
+    expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledOnce();
+  });
+
+  it("does not load schema through a replaced runtime config capability", async () => {
+    let finishLoad: (() => void) | undefined;
+    const firstRuntimeConfig = {
+      ensureLoaded: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishLoad = resolve;
+          }),
+      ),
+      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const secondRuntimeConfig = {
+      ensureLoaded: vi.fn(() => Promise.resolve()),
+      ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellSettingsSearchLoadState;
+    shell.runtime = {
+      context: { runtimeConfig: firstRuntimeConfig } as unknown as ApplicationContext,
+    };
+
+    const load = shell.handleSettingsSearchQueryChange("browser");
+    shell.runtime = {
+      context: { runtimeConfig: secondRuntimeConfig } as unknown as ApplicationContext,
+    };
+    finishLoad?.();
+    await load;
+
+    expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+    expect(firstRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
+    expect(secondRuntimeConfig.ensureSchemaLoaded).not.toHaveBeenCalled();
+  });
+
+  it.each(["config", "schema"] as const)(
+    "contains rejected %s loads within settings search",
+    async (failureStage) => {
+      const runtimeConfig = {
+        ensureLoaded: vi.fn(() =>
+          failureStage === "config"
+            ? Promise.reject(new Error("config unavailable"))
+            : Promise.resolve(),
+        ),
+        ensureSchemaLoaded: vi.fn(() =>
+          failureStage === "schema"
+            ? Promise.reject(new Error("schema unavailable"))
+            : Promise.resolve(),
+        ),
+      } as unknown as ApplicationContext["runtimeConfig"];
+      const shell = document.createElement(
+        "openclaw-app-shell",
+      ) as unknown as ShellSettingsSearchLoadState;
+      shell.runtime = {
+        context: { runtimeConfig } as unknown as ApplicationContext,
+      };
+
+      await expect(shell.handleSettingsSearchQueryChange("browser")).resolves.toBeUndefined();
+
+      expect(runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+      expect(runtimeConfig.ensureSchemaLoaded).toHaveBeenCalledTimes(
+        failureStage === "schema" ? 1 : 0,
+      );
+    },
+  );
+});
+
 describe("OpenClaw shell keyboard shortcuts", () => {
   it("opens Settings with Shift-Command-Comma", () => {
     const navigate = vi.fn();
@@ -219,6 +327,67 @@ describe("OpenClaw shell keyboard shortcuts", () => {
 
     shell.handleNativeToggleSidebar();
     expect(update).toHaveBeenLastCalledWith({ navCollapsed: false });
+  });
+
+  it("opens search and starts a session from native titlebar events", () => {
+    const navigate = vi.fn();
+    const openPalette = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    Object.defineProperty(shell, "commandPalette", {
+      configurable: true,
+      value: { openPalette },
+    });
+    shell.runtime = {
+      context: {
+        navigate,
+        agentSelection: { state: { selectedId: "agent/a" } },
+      } as unknown as ApplicationContext,
+    };
+    shell.handleNativeOpenSearch();
+    shell.handleNativeNewSession();
+
+    expect(openPalette).toHaveBeenCalledOnce();
+    expect(navigate).toHaveBeenCalledWith("new-session", { search: "?agent=agent%2Fa" });
+  });
+
+  it("does not start a native session during onboarding", () => {
+    const navigate = vi.fn();
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    shell.runtime = {
+      context: {
+        navigate,
+        agentSelection: { state: { selectedId: "main" } },
+      } as unknown as ApplicationContext,
+    };
+    shell.onboarding = true;
+
+    shell.handleNativeNewSession();
+
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates native nav state reports", () => {
+    const postMessage = vi.fn();
+    (window as TestWebKitWindow).webkit = {
+      messageHandlers: { openclawNav: { postMessage } },
+    };
+    const snapshot = { navCollapsed: false, navWidth: 280 };
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    shell.runtime = {
+      context: {
+        navigation: { snapshot },
+      } as unknown as ApplicationContext,
+    };
+
+    shell.updated();
+    shell.updated();
+    snapshot.navCollapsed = true;
+    shell.updated();
+
+    expect(postMessage.mock.calls).toEqual([
+      [{ type: "nav-state", collapsed: false, width: 280 }],
+      [{ type: "nav-state", collapsed: true, width: 280 }],
+    ]);
   });
 
   it("leaves plain Command-Comma to the browser", () => {

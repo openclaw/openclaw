@@ -1,6 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
+import { ErrorShapeSchema } from "./frames.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -74,6 +75,12 @@ export const SessionFileRelevanceSchema = Type.Union([
   Type.Literal("mixed"),
 ]);
 
+const SessionFileHashSchema = Type.String({
+  minLength: 64,
+  maxLength: 64,
+  pattern: "^[a-f0-9]{64}$",
+});
+
 /** One file path referenced by a session transcript. */
 export const SessionFileEntrySchema = Type.Object(
   {
@@ -85,7 +92,7 @@ export const SessionFileEntrySchema = Type.Object(
     size: Type.Optional(Type.Integer({ minimum: 0 })),
     updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     content: Type.Optional(Type.String()),
-    hash: Type.Optional(NonEmptyString),
+    hash: Type.Optional(SessionFileHashSchema),
   },
   { additionalProperties: false },
 );
@@ -164,7 +171,7 @@ export const SessionsFilesSetParamsSchema = Type.Object(
     path: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     content: Type.String(),
-    expectedHash: NonEmptyString,
+    expectedHash: SessionFileHashSchema,
   },
   { additionalProperties: false },
 );
@@ -269,6 +276,41 @@ export const SessionsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Searches one agent's indexed session transcripts, optionally within selected sessions. */
+export const SessionsSearchParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    sessionKeys: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, maxItems: 200 })),
+    query: Type.String({ minLength: 1, maxLength: 4096 }),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 25 })),
+  },
+  { additionalProperties: false },
+);
+
+/** One full-text session transcript match with follow-up provenance. */
+export const SessionsSearchHitSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    sessionId: NonEmptyString,
+    messageId: NonEmptyString,
+    role: Type.Union([Type.Literal("user"), Type.Literal("assistant")]),
+    timestamp: Type.Integer({ minimum: 0 }),
+    snippet: Type.String(),
+    score: Type.Number(),
+  },
+  { additionalProperties: false },
+);
+
+/** Full-text search response; indexing marks a still-running first-use reconcile. */
+export const SessionsSearchResultSchema = Type.Object(
+  {
+    results: Type.Array(SessionsSearchHitSchema),
+    indexing: Type.Optional(Type.Boolean()),
+    truncated: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 /** Repairs or removes invalid session records from the selected agent scope. */
 export const SessionsCleanupParamsSchema = Type.Object(
   {
@@ -357,7 +399,7 @@ export const SessionsCreateParamsSchema = Type.Object(
       Type.String({
         minLength: 1,
         description:
-          "Absolute source directory for a managed worktree. Requires worktree=true and operator.admin.",
+          "Absolute source directory for a managed worktree, or the working directory on execNode. Requires operator.admin.",
       }),
     ),
   },
@@ -381,6 +423,7 @@ export const SessionsCreateResultSchema = Type.Object(
     sessionId: Type.Optional(NonEmptyString),
     entry: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     runStarted: Type.Optional(Type.Boolean()),
+    runError: Type.Optional(ErrorShapeSchema),
     worktree: Type.Optional(SessionWorktreeInfoSchema),
   },
   { additionalProperties: true },
@@ -405,6 +448,8 @@ export const SessionsMessagesSubscribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    /** Opt in to sanitized durable approval events for this session and its descendants. */
+    includeApprovals: Type.Optional(Type.Literal(true)),
   },
   { additionalProperties: false },
 );
@@ -741,6 +786,9 @@ export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
 export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
+export type SessionsSearchParams = Static<typeof SessionsSearchParamsSchema>;
+export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;
+export type SessionsSearchResult = Static<typeof SessionsSearchResultSchema>;
 export type SessionCompactionCheckpoint = Static<typeof SessionCompactionCheckpointSchema>;
 export type SessionOperationEvent = Static<typeof SessionOperationEventSchema>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;

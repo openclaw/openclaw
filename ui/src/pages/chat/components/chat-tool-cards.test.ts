@@ -7,18 +7,21 @@ vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
 vi.mock("../tool-display.ts", () => ({
   formatToolDetail: (display: { detail?: string }) => display.detail,
   resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => {
+    const argRecord =
+      args && typeof args === "object" && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : undefined;
     const labels: Record<string, string> = {
       sessions_spawn: "Sub-agent",
       skill_workshop: "Skill Workshop",
       web_search: "Web Search",
     };
     const detail =
-      name === "skill_workshop" &&
-      args &&
-      typeof args === "object" &&
-      typeof (args as { action?: unknown }).action === "string"
-        ? (args as { action: string }).action
-        : undefined;
+      name === "skill_workshop" && typeof argRecord?.action === "string"
+        ? argRecord.action
+        : name === "read" && typeof argRecord?.path === "string"
+          ? argRecord.path
+          : undefined;
     return {
       name,
       label: labels[name] ?? name,
@@ -29,12 +32,17 @@ vi.mock("../tool-display.ts", () => ({
 }));
 
 import {
+  buildMcpAppHostCapabilities,
+  resolveMcpAppSandboxUrl,
+} from "../../../components/mcp-app-view.ts";
+import { t } from "../../../i18n/index.ts";
+import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolErrorOutput,
 } from "../../../lib/chat/tool-cards.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -64,6 +72,111 @@ function pointerClick(element: Element) {
 }
 
 describe("tool-cards", () => {
+  it("advertises the CSP actually applied to MCP Apps", () => {
+    expect(
+      buildMcpAppHostCapabilities({ connectDomains: ["https://api.example.com"] }),
+    ).toMatchObject({
+      sandbox: { csp: { connectDomains: ["https://api.example.com"] } },
+    });
+    expect(buildMcpAppHostCapabilities()).toMatchObject({ sandbox: { csp: {} } });
+  });
+
+  it("accepts only the dedicated-origin MCP App sandbox endpoint", () => {
+    expect(
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox?csp=abc",
+        8444,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toBe("https://gateway.example:8444/mcp-app-sandbox?csp=abc");
+    expect(
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox",
+        18790,
+        "https://apps.example.com",
+        "wss://gateway.example",
+        "https://gateway.example",
+      ),
+    ).toBe("https://apps.example.com/mcp-app-sandbox");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "https://attacker.example/mcp-app-sandbox",
+        8444,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "data:text/html;base64,cHJveHk=",
+        8444,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox",
+        8443,
+        undefined,
+        "wss://gateway.example:8443/openclaw",
+        "https://gateway.example:8443",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+    expect(() =>
+      resolveMcpAppSandboxUrl(
+        "/mcp-app-sandbox",
+        8444,
+        "https://gateway.example:8443",
+        "wss://gateway.example:8443/openclaw",
+        "https://control.example",
+      ),
+    ).toThrow("MCP App sandbox URL is invalid");
+  });
+
+  it("routes MCP App previews through the dedicated double-iframe host", async () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_app",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_message",
+        { sessionKey: "agent:main:main" },
+      ),
+      container,
+    );
+
+    const view = container.querySelector("mcp-app-view");
+    expect(view).not.toBeNull();
+    expect(view?.getAttribute("src")).toBeNull();
+    expect((view as { viewId?: string }).viewId).toBe("cv_app");
+
+    const toolContainer = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_tool",
+        { sessionKey: "agent:main:main" },
+      ),
+      toolContainer,
+    );
+    expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
+  });
+
   it("keeps selected summary text from toggling the disclosure", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -279,15 +392,27 @@ describe("tool-cards", () => {
     }
   });
 
-  it("opens the raw file path from an expanded edit card", () => {
+  it.each([
+    { name: "read", args: { path: "packages/app/src/read.ts" }, path: "packages/app/src/read.ts" },
+    {
+      name: "edit",
+      args: { file_path: "packages/app/src/edit.ts", oldText: "old", newText: "new" },
+      path: "packages/app/src/edit.ts",
+    },
+    {
+      name: "write",
+      args: { path: "packages/app/src/write.ts", content: "new" },
+      path: "packages/app/src/write.ts",
+    },
+  ])("opens the raw file path from an expanded $name card", ({ name, args, path }) => {
     const container = document.createElement("div");
     const onOpenWorkspaceFile = vi.fn();
     render(
       renderToolCard(
         {
-          id: "msg:edit:open",
-          name: "edit",
-          args: { file_path: "packages/app/src/raw-name.ts", oldText: "old", newText: "new" },
+          id: `msg:${name}:open`,
+          name,
+          args,
           completed: true,
         },
         {
@@ -304,9 +429,7 @@ describe("tool-cards", () => {
     );
     expect(pathButton).toBeInstanceOf(HTMLButtonElement);
     pathButton!.click();
-    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({
-      path: "packages/app/src/raw-name.ts",
-    });
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path });
   });
 
   it("keeps read offsets and limits visible in expanded args", () => {
@@ -667,6 +790,9 @@ describe("tool-cards", () => {
     const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
     expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
     expect([...sidebarButton!.classList]).toEqual(["chat-tool-card__action-btn"]);
+    const tooltip = sidebarButton!.parentElement as HTMLElement & { content?: string };
+    expect(tooltip.content).toBe(t("chat.toolCards.openDetails"));
+    expect(sidebarButton!.getAttribute("aria-label")).toBe(t("chat.toolCards.openDetails"));
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");

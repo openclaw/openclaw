@@ -545,6 +545,7 @@ export function resetChatStateForRouteSession(
     ) === true;
   state.currentSessionId = null;
   state.reconnectResumeSessionId = null;
+  state.chatHistoryPagination = { hasMore: false };
   state.chatMessage = "";
   state.chatAttachments = [];
   state.chatReplyTarget = null;
@@ -1261,6 +1262,7 @@ export function createPageState(
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: settings.sessionKey,
     chatLoading: false,
+    chatHistoryPagination: { hasMore: false },
     chatSending: false,
     chatMessage: "",
     chatMessages: [] as unknown[],

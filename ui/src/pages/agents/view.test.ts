@@ -147,12 +147,12 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
 }
 
 describe("renderAgents", () => {
-  it("renders Memory after Cron and scopes the panel to the selected agent", () => {
+  it("renders Memory after Automations and scopes the panel to the selected agent", () => {
     const container = document.createElement("div");
     render(renderAgents(createProps({ activePanel: "memory" })), container);
 
     const tabs = [...container.querySelectorAll(".agent-tab")].map((tab) => directText(tab));
-    expect(tabs.slice(-2)).toEqual(["Cron Jobs", "Memory"]);
+    expect(tabs.slice(-2)).toEqual([t("agents.tabs.cronJobs"), t("agents.tabs.memory")]);
     const panel = container.querySelector<HTMLElement & { agentId: string }>(
       "openclaw-agent-memory-panel",
     );
@@ -392,7 +392,7 @@ describe("renderAgents", () => {
     expect(skillsTab.querySelector(".agent-tab-count")?.textContent).toBe("1");
   });
 
-  it("keeps the Cron Jobs tab label while localizing channel refresh never state", async () => {
+  it("localizes agent tabs and the channel refresh never state", async () => {
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("zh-CN");
     const container = document.createElement("div");
@@ -418,7 +418,15 @@ describe("renderAgents", () => {
         (button) => button.textContent?.trim(),
       );
 
-      expect(tabLabels).toEqual(["概览", "文件", "工具", "技能", "频道", "Cron Jobs", "记忆"]);
+      expect(tabLabels).toEqual([
+        "概览",
+        "文件",
+        "工具",
+        "技能",
+        "频道",
+        t("agents.tabs.cronJobs"),
+        "记忆",
+      ]);
       const cards = container.querySelectorAll("section.card");
       expect(cards[1]?.querySelector(".muted")?.textContent?.trim()).toBe("上次刷新：从未");
     } finally {
@@ -429,6 +437,50 @@ describe("renderAgents", () => {
 });
 
 describe("renderAgentFiles", () => {
+  it("does not accept another file selection while a file request is loading", () => {
+    const container = document.createElement("div");
+    const onSelectFile = vi.fn();
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            {
+              name: "AGENTS.md",
+              path: "/tmp/workspace/AGENTS.md",
+              missing: false,
+            },
+            {
+              name: "HEARTBEAT.md",
+              path: "/tmp/workspace/HEARTBEAT.md",
+              missing: false,
+            },
+          ],
+        },
+        agentFilesLoading: true,
+        agentFilesError: null,
+        agentFileActive: "AGENTS.md",
+        agentFileContents: { "AGENTS.md": "# Instructions" },
+        agentFileDrafts: { "AGENTS.md": "# Instructions" },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    const heartbeatTab = expectAgentTab(container, "HEARTBEAT");
+    expect(heartbeatTab.disabled).toBe(true);
+    heartbeatTab.click();
+    expect(onSelectFile).not.toHaveBeenCalled();
+  });
+
   it("renders the upgraded markdown preview structure with file metadata", () => {
     const container = document.createElement("div");
 

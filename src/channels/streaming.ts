@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Channel streaming config normalization and progress-draft formatting helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -13,6 +14,7 @@ import type {
   TextChunkMode,
 } from "../config/types.base.js";
 import { asBoolean } from "../utils/boolean.js";
+import { warnFlatStreamingKeyFallback } from "./streaming-flat-key-deprecation.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -29,16 +31,25 @@ export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
 export type StreamingCompatEntry = {
   /**
-   * Canonical nested streaming config. Some channel schemas (for example
-   * Mattermost) also accept a scalar mode string or boolean here.
+   * Canonical nested streaming config. External SDK plugin configs may still
+   * carry a scalar mode string or boolean here; bundled schemas reject those.
    */
   streaming?: unknown;
+  chunkMode?: unknown;
+  blockStreaming?: unknown;
+  blockStreamingCoalesce?: unknown;
+  draftChunk?: unknown;
 };
 
-// Config reads consume the canonical nested streaming shape only. Legacy flat
-// keys (streamMode, chunkMode, blockStreaming, draftChunk,
-// blockStreamingCoalesce, nativeStreaming) are migrated by `openclaw doctor
-// --fix` via channel doctor contracts and are ignored at runtime.
+// Nested streaming config wins. Every bundled channel except Matrix and
+// Feishu now uses a nested-only streaming schema with doctor migrating the
+// flat spellings, so in-tree the flat delivery keys (chunkMode,
+// blockStreaming, blockStreamingCoalesce, draftChunk) are legacy config. The
+// fallback reads below serve external SDK plugin configs plus the pending
+// Matrix/Feishu migrations and emit a once-per-key deprecation warning;
+// remove them (and the flat StreamingCompatEntry fields) once those channels
+// migrate and the next release train closes the SDK deprecation window.
+// Mode-family aliases (streamMode) are doctor-only and stay unread here.
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -767,28 +778,63 @@ export function getChannelStreamingConfigObject(
   return streaming ? (streaming as ChannelStreamingConfig) : undefined;
 }
 
+function resolveWithFlatFallback<T>(params: {
+  nested: T | undefined;
+  flat: T | undefined;
+  flatKey: string;
+  nestedPath: string;
+}): T | undefined {
+  if (params.nested !== undefined) {
+    return params.nested;
+  }
+  if (params.flat !== undefined) {
+    warnFlatStreamingKeyFallback(params.flatKey, params.nestedPath);
+  }
+  return params.flat;
+}
+
 export function resolveChannelStreamingChunkMode(
   entry: StreamingCompatEntry | null | undefined,
 ): TextChunkMode | undefined {
-  return asTextChunkMode(getChannelStreamingConfigObject(entry)?.chunkMode);
+  return resolveWithFlatFallback({
+    nested: asTextChunkMode(getChannelStreamingConfigObject(entry)?.chunkMode),
+    flat: asTextChunkMode(entry?.chunkMode),
+    flatKey: "chunkMode",
+    nestedPath: "chunkMode",
+  });
 }
 
 export function resolveChannelStreamingBlockEnabled(
   entry: StreamingCompatEntry | null | undefined,
 ): boolean | undefined {
-  return asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled);
+  return resolveWithFlatFallback({
+    nested: asBoolean(getChannelStreamingConfigObject(entry)?.block?.enabled),
+    flat: asBoolean(entry?.blockStreaming),
+    flatKey: "blockStreaming",
+    nestedPath: "block.enabled",
+  });
 }
 
 export function resolveChannelStreamingBlockCoalesce(
   entry: StreamingCompatEntry | null | undefined,
 ): BlockStreamingCoalesceConfig | undefined {
-  return asBlockStreamingCoalesceConfig(getChannelStreamingConfigObject(entry)?.block?.coalesce);
+  return resolveWithFlatFallback({
+    nested: asBlockStreamingCoalesceConfig(getChannelStreamingConfigObject(entry)?.block?.coalesce),
+    flat: asBlockStreamingCoalesceConfig(entry?.blockStreamingCoalesce),
+    flatKey: "blockStreamingCoalesce",
+    nestedPath: "block.coalesce",
+  });
 }
 
 export function resolveChannelStreamingPreviewChunk(
   entry: StreamingCompatEntry | null | undefined,
 ): BlockStreamingChunkConfig | undefined {
-  return asBlockStreamingChunkConfig(getChannelStreamingConfigObject(entry)?.preview?.chunk);
+  return resolveWithFlatFallback({
+    nested: asBlockStreamingChunkConfig(getChannelStreamingConfigObject(entry)?.preview?.chunk),
+    flat: asBlockStreamingChunkConfig(entry?.draftChunk),
+    flatKey: "draftChunk",
+    nestedPath: "preview.chunk",
+  });
 }
 
 export function resolveChannelStreamingPreviewToolProgress(
@@ -874,9 +920,9 @@ export function resolveChannelPreviewStreamMode(
   entry: StreamingCompatEntry | null | undefined,
   defaultMode: "off" | "partial",
 ): StreamingMode {
-  // Scalar `streaming` (mode string or boolean) stays supported here: channel
-  // schemas that never adopted the nested-only shape (for example Mattermost)
-  // still accept it as canonical config, not as a legacy alias.
+  // Scalar `streaming` (mode string or boolean) is rejected by every bundled
+  // channel schema and doctor-migrated to streaming.mode; the read here stays
+  // only for external SDK plugin configs that predate the nested shape.
   const parsedStreaming = parsePreviewStreamingMode(
     getChannelStreamingConfigObject(entry)?.mode ?? entry?.streaming,
   );
@@ -1139,7 +1185,10 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
       resolveProgressDraftLineMergeKeys(entry).some((entryKey) => lineKeys.includes(entryKey)),
     );
     if (existingIndex >= 0) {
-      const replacement = mergeProgressDraftLineUpdate(lines[existingIndex], line);
+      const replacement = mergeProgressDraftLineUpdate(
+        expectDefined(lines[existingIndex], "lines entry at existing index"),
+        line,
+      );
       if (replacement === lines[existingIndex]) {
         return lines;
       }
@@ -1215,13 +1264,17 @@ export function formatChannelProgressDraftText(params: {
   /** Short narration paragraph; when present it replaces the tool lines. */
   narration?: string;
 }): string {
-  const rawLabel = resolveChannelProgressDraftLabel({
-    entry: params.entry,
-    seed: params.seed,
-    random: params.random,
-  });
-  const resolvedLabel = rawLabel;
   const narration = params.narration ? compactChannelProgressDraftNarration(params.narration) : "";
+  const progress = resolveChannelProgressDraftConfig(params.entry);
+  const hasConfiguredLabel = progress.label !== undefined || progress.labels !== undefined;
+  const resolvedLabel =
+    narration && !hasConfiguredLabel
+      ? undefined
+      : resolveChannelProgressDraftLabel({
+          entry: params.entry,
+          seed: params.seed,
+          random: params.random,
+        });
   if (narration) {
     const formatted = (params.formatLine ?? ((line: string) => line))(narration);
     return resolvedLabel ? `${resolvedLabel}\n\n${formatted}` : formatted;

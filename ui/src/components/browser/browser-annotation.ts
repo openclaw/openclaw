@@ -150,7 +150,7 @@ export function buildAnnotationPrompt(params: {
 
 export const ANNOTATION_STROKE_COLOR = "#e0442d";
 
-export function annotationStrokeWidth(imageWidth: number): number {
+function annotationStrokeWidth(imageWidth: number): number {
   return Math.max(4, Math.round(imageWidth * 0.005));
 }
 
@@ -190,7 +190,9 @@ export function paintAnnotations(
     if (stroke.points.length === 1) {
       // A click without movement still deserves a visible dot.
       const point = stroke.points[0];
-      ctx.lineTo(clamp01(point.x) * params.width + 0.1, clamp01(point.y) * params.height);
+      if (point) {
+        ctx.lineTo(clamp01(point.x) * params.width + 0.1, clamp01(point.y) * params.height);
+      }
     }
     ctx.stroke();
   }

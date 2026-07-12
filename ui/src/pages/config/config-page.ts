@@ -25,12 +25,22 @@ import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  AI_AGENTS_SECTION_KEYS,
+  AUTOMATION_SECTION_KEYS,
+  COMMUNICATION_SECTION_KEYS,
+  configSectionKeysForPage,
+  INFRASTRUCTURE_SECTION_KEYS,
+  SCOPED_CONFIG_SECTION_KEYS,
+  type ConfigPageId,
+} from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
 import {
   renderQuickSettings,
   type QuickSettingsChannel,
   type QuickSettingsSecurity,
 } from "./quick.ts";
+import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -38,14 +48,7 @@ import {
   type ConfigViewState,
 } from "./view.ts";
 
-export type ConfigPageId =
-  | "config"
-  | "communications"
-  | "appearance"
-  | "automation"
-  | "mcp"
-  | "infrastructure"
-  | "ai-agents";
+export type { ConfigPageId } from "./config-sections.ts";
 
 type ConfigFormMode = "form" | "raw";
 type ConfigSelection = { activeSection: string | null; activeSubsection: string | null };
@@ -60,49 +63,13 @@ const CONFIG_PAGE_I18N_KEYS = {
   "ai-agents": "aiAgents",
 } as const satisfies Record<ConfigPageId, string>;
 
-const COMMUNICATION_SECTION_KEYS = [
-  "messages",
-  "broadcast",
-  "__notifications__",
-  "talk",
-  "audio",
-  "channels",
-] as const;
-const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
-const AUTOMATION_SECTION_KEYS = ["commands", "hooks", "bindings", "cron", "approvals", "plugins"];
-const INFRASTRUCTURE_SECTION_KEYS = [
-  "gateway",
-  "web",
-  "browser",
-  "nodeHost",
-  "canvasHost",
-  "discovery",
-  "media",
-  "acp",
-  "mcp",
-] as const;
-const AI_AGENTS_SECTION_KEYS = [
-  "agents",
-  "models",
-  "skills",
-  "tools",
-  "memory",
-  "session",
-] as const;
-const SCOPED_CONFIG_SECTION_KEYS = new Set<string>([
-  ...COMMUNICATION_SECTION_KEYS,
-  ...APPEARANCE_SECTION_KEYS,
-  ...AUTOMATION_SECTION_KEYS,
-  ...INFRASTRUCTURE_SECTION_KEYS,
-  ...AI_AGENTS_SECTION_KEYS,
-]);
 const KNOWN_CHANNELS = [
-  { id: "telegram", label: "Telegram" },
-  { id: "discord", label: "Discord" },
-  { id: "slack", label: "Slack" },
-  { id: "whatsapp", label: "WhatsApp" },
-  { id: "signal", label: "Signal" },
-  { id: "imessage", label: "iMessage" },
+  { id: "telegram", labelKey: "configPage.channels.telegram" },
+  { id: "discord", labelKey: "configPage.channels.discord" },
+  { id: "slack", labelKey: "configPage.channels.slack" },
+  { id: "whatsapp", labelKey: "configPage.channels.whatsapp" },
+  { id: "signal", labelKey: "configPage.channels.signal" },
+  { id: "imessage", labelKey: "configPage.channels.imessage" },
 ] as const;
 
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
@@ -150,18 +117,7 @@ function normalizeConfigSelection(
   activeSection: string | null,
   activeSubsection: string | null,
 ): ConfigSelection {
-  const sections: readonly string[] | null =
-    pageId === "communications"
-      ? COMMUNICATION_SECTION_KEYS
-      : pageId === "appearance"
-        ? APPEARANCE_SECTION_KEYS
-        : pageId === "automation"
-          ? AUTOMATION_SECTION_KEYS
-          : pageId === "mcp" || pageId === "infrastructure"
-            ? INFRASTRUCTURE_SECTION_KEYS
-            : pageId === "ai-agents"
-              ? AI_AGENTS_SECTION_KEYS
-              : null;
+  const sections = configSectionKeysForPage(pageId) ?? null;
   if (pageId === "config" && activeSection && SCOPED_CONFIG_SECTION_KEYS.has(activeSection)) {
     return { activeSection: null, activeSubsection: null };
   }
@@ -205,7 +161,9 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
     configuredIds.length > 0
       ? configuredIds.toSorted((left, right) => left.localeCompare(right))
       : KNOWN_CHANNELS.map(({ id }) => id);
-  const labels = new Map<string, string>(KNOWN_CHANNELS.map(({ id, label }) => [id, label]));
+  const labels = new Map<string, string>(
+    KNOWN_CHANNELS.map(({ id, labelKey }) => [id, t(labelKey)]),
+  );
   return channelIds.map((id) => {
     const value = configured[id];
     const connected = Boolean(value && typeof value === "object" && Object.keys(value).length);
@@ -215,7 +173,7 @@ function quickChannels(config: unknown): QuickSettingsChannel[] {
         labels.get(id) ??
         id.replace(/[-_]+/g, " ").replace(/\b\w/g, (character) => character.toUpperCase()),
       connected,
-      detail: connected ? "Configured" : undefined,
+      detail: connected ? t("common.configured") : undefined,
     };
   });
 }
@@ -278,6 +236,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private context!: ApplicationContext;
 
   @property({ attribute: "page-id" }) pageId: ConfigPageId = "config";
+  @property({ attribute: false }) routeData: ConfigRouteData | null = null;
 
   @state() private settings = loadSettings();
   @state() private settingsMode: "quick" | "advanced" = "quick";
@@ -324,6 +283,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
   private systemInfoPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private pendingRouteTargetId: string | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.runtimeConfig,
@@ -358,11 +318,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   override connectedCallback() {
     super.connectedCallback();
     this.settings = loadSettings();
-    const linkedSelection = configSelectionFromSearch(
-      this.pageId,
-      globalThis.location?.search ?? "",
-    );
-    this.selections = { ...this.selections, [this.pageId]: linkedSelection };
+    this.syncRouteData();
   }
 
   override disconnectedCallback() {
@@ -376,6 +332,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
+  override willUpdate(changed: PropertyValues) {
+    if (changed.has("pageId") || changed.has("routeData")) {
+      this.syncRouteData();
+    }
+  }
+
   override updated(changed: PropertyValues) {
     const pageChanged = changed.has("pageId") && changed.get("pageId") !== undefined;
     const modeChanged = changed.has("settingsMode") && changed.get("settingsMode") !== undefined;
@@ -383,6 +345,40 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.invalidateSystemInfoRequest();
     }
     this.syncSystemInfoPolling();
+    this.scrollToPendingRouteTarget();
+  }
+
+  private syncRouteData() {
+    const selection = this.routeData
+      ? normalizeConfigSelection(this.pageId, this.routeData.section, null)
+      : configSelectionFromSearch(this.pageId, globalThis.location?.search ?? "");
+    this.selections = { ...this.selections, [this.pageId]: selection };
+    const targetBlockId =
+      this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
+    this.pendingRouteTargetId = targetBlockId;
+    if (this.pageId !== "config") {
+      return;
+    }
+    if (this.routeData?.section) {
+      this.settingsMode = "advanced";
+    } else if (targetBlockId?.startsWith("settings-general-")) {
+      this.settingsMode = "quick";
+    }
+  }
+
+  private scrollToPendingRouteTarget() {
+    const targetId = this.pendingRouteTargetId;
+    if (!targetId) {
+      return;
+    }
+    const target = [...this.renderRoot.querySelectorAll<HTMLElement>("[id]")].find(
+      (element) => element.id === targetId,
+    );
+    if (!target) {
+      return;
+    }
+    target.scrollIntoView?.({ behavior: "smooth", block: "start" });
+    this.pendingRouteTargetId = null;
   }
 
   private isSystemInfoVisible(): boolean {
@@ -402,11 +398,12 @@ export class ConfigPage extends OpenClawLightDomElement {
           this.runtimeConfigSource === runtimeConfig
             ? runtimeConfig.ensureSchemaLoaded()
             : undefined,
-        );
+        )
+        .catch(() => undefined);
       return;
     }
     if (!config.configSchema && !config.configSchemaLoading) {
-      void runtimeConfig.ensureSchemaLoaded();
+      void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
     }
   }
 
@@ -648,7 +645,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.customThemeImportSelectOnSuccess = false;
       this.customThemeImportMessage = {
         kind: "success",
-        text: `Imported ${customTheme.label}.`,
+        text: t("configPage.themeImported", { name: customTheme.label }),
       };
     } catch (error) {
       this.customThemeImportMessage = {
@@ -670,22 +667,17 @@ export class ConfigPage extends OpenClawLightDomElement {
     });
     this.customThemeImportMessage = {
       kind: "success",
-      text: "Custom theme removed.",
+      text: t("configPage.themeRemoved"),
     };
   }
 
   private includeSections(): readonly string[] | undefined {
-    return this.pageId === "communications"
-      ? COMMUNICATION_SECTION_KEYS
-      : this.pageId === "appearance"
-        ? APPEARANCE_SECTION_KEYS
-        : this.pageId === "automation"
-          ? AUTOMATION_SECTION_KEYS
-          : this.pageId === "mcp" || this.pageId === "infrastructure"
-            ? INFRASTRUCTURE_SECTION_KEYS
-            : this.pageId === "ai-agents"
-              ? AI_AGENTS_SECTION_KEYS
-              : undefined;
+    return configSectionKeysForPage(this.pageId);
+  }
+
+  private isUpdateBusy(): boolean {
+    const update = this.context.overlays.snapshot;
+    return update.updateRunning || update.updateReconciliationPending;
   }
 
   private renderAdvancedConfig(configObject: Record<string, unknown>) {
@@ -718,7 +710,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       loading: configState.configLoading,
       saving: configState.configSaving,
       applying: configState.configApplying,
-      updating: this.context.overlays.snapshot.updateRunning,
+      updating: this.isUpdateBusy(),
       connected: configState.connected,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
@@ -872,8 +864,10 @@ export class ConfigPage extends OpenClawLightDomElement {
       version:
         appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
       configDirty: runtimeConfig.state.configFormDirty,
+      configLoading: runtimeConfig.state.configLoading,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
+      configUpdating: this.isUpdateBusy(),
       configReady: Boolean(runtimeConfig.state.configSnapshot?.hash),
       onResetConfig: () => runtimeConfig.resetDraft(),
       onSaveConfig: () => void runtimeConfig.save(),
@@ -914,11 +908,15 @@ export class ConfigPage extends OpenClawLightDomElement {
       return nothing;
     }
     const modes = [
-      ["quick", "Simple"],
-      ["advanced", "Advanced"],
+      ["quick", t("configPage.simple")],
+      ["advanced", t("configPage.advanced")],
     ] as const;
     return html`
-      <div class="config-view-toggle qs-segmented" role="tablist" aria-label="Settings view">
+      <div
+        class="config-view-toggle qs-segmented"
+        role="tablist"
+        aria-label=${t("configPage.settingsView")}
+      >
         ${modes.map(
           ([mode, label]) => html`
             <button

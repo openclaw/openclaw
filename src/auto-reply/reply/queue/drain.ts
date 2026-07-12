@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
@@ -156,6 +157,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string
     run.execOverrides?.security ?? "",
     run.execOverrides?.ask ?? "",
     run.execOverrides?.node ?? "",
+    run.execOverrides?.nodeCwd ?? "",
     run.bashElevated?.enabled === true,
     run.bashElevated?.allowed === true,
     run.bashElevated?.defaultLevel ?? "",
@@ -624,7 +626,10 @@ function consumeQueueSummaryDelivery(
         (entry) => entry.sources.includes(source) || entry.sourceRefs.has(source),
       );
       if (elisionIndex >= 0) {
-        const entry = queue.summaryElisions[elisionIndex];
+        const entry = expectDefined(
+          queue.summaryElisions[elisionIndex],
+          "summary elisions entry at elision index",
+        );
         const elidedSourceIndex = entry.sources.indexOf(entry.sourceRefs.get(source) ?? source);
         entry.sources.splice(elidedSourceIndex, 1);
         entry.count = entry.sources.length;
@@ -659,7 +664,7 @@ function releaseQueueSummaryDeliveryForRetry(
 function dropAbortedQueueSummarySources(queue: FollowupQueueSummaryState): number {
   let dropped = 0;
   for (let index = queue.summarySources.length - 1; index >= 0; index -= 1) {
-    const source = queue.summarySources[index];
+    const source = expectDefined(queue.summarySources[index], "summary sources entry at index");
     if (!isFollowupRunAborted(source)) {
       continue;
     }
@@ -775,7 +780,7 @@ async function dropAbortedFollowups(
 ): Promise<number> {
   let dropped = 0;
   for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
+    const item = expectDefined(items[index], "items entry at index");
     if (isFollowupRunAborted(item)) {
       await runFollowup(item);
       completeFollowupRunLifecycle(item);
@@ -979,7 +984,7 @@ async function drainElidedOverflowSummary(params: {
         )
       : [];
   for (let index = entry.sources.length - 1; index >= 0; index -= 1) {
-    const source = entry.sources[index];
+    const source = expectDefined(entry.sources[index], "sources entry at index");
     if (!isFollowupRunAborted(source)) {
       continue;
     }

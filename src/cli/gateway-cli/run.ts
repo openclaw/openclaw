@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { request } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -51,6 +52,7 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { printClawBanner } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { withProgress } from "../progress.js";
@@ -183,7 +185,7 @@ function formatModeErrorList(modes: readonly string[]): string {
     return "";
   }
   if (quoted.length === 1) {
-    return quoted[0];
+    return expectDefined(quoted[0], "quoted entry at 0");
   }
   if (quoted.length === 2) {
     return `${quoted[0]} or ${quoted[1]}`;
@@ -598,6 +600,12 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   const rawStreamPath = toOptionString(opts.rawStreamPath);
   if (rawStreamPath) {
     process.env.OPENCLAW_RAW_STREAM_PATH = rawStreamPath;
+  }
+
+  // Foreground TTY runs get the banner before the module-loading spinner;
+  // managed/piped runs (launchd, tests, logs) stay banner-free.
+  if (process.stdout.isTTY) {
+    await printClawBanner(defaultRuntime);
   }
 
   const startupTrace = createGatewayCliStartupTrace();

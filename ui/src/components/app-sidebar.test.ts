@@ -345,6 +345,38 @@ describe("AppSidebar session catalog pagination", () => {
     ],
   });
 
+  it("renders catalog groups inside the shared sessions scroller", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValue(catalogPage([{ threadId: "thread-1", name: "Newest" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      // One scroll region: catalog groups live inside the sessions scroller.
+      // Sibling scroll-less sections flex-squeeze and paint over each other.
+      expect(
+        sidebar.querySelector('.sidebar-recent-sessions [data-session-section="catalog:codex"]'),
+      ).not.toBeNull();
+      expect(sidebar.querySelectorAll(".sidebar-sessions")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("appends host pages and keeps them through the next poll refresh", async () => {
     vi.useFakeTimers();
     try {
@@ -1236,6 +1268,27 @@ describe("AppSidebar multi-select", () => {
     const menu = await sessionMenu(sidebar);
     expect(menu.selectionCount).toBe(1);
     expect(menu.querySelector('[data-shortcut="r"]')).not.toBeNull();
+  });
+});
+
+describe("AppSidebar transient menus", () => {
+  // Regression: the nav column is a stacking context (z-index 10) painted
+  // below the sidebar resizer (z-index 20), so transient menus must render
+  // through the top-layer surface host instead of plain fixed divs.
+  it("hosts the session sort menu in the top-layer menu surface", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+
+    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort");
+    if (!trigger) {
+      throw new Error("expected sort menu trigger");
+    }
+    trigger.click();
+    await sidebar.updateComplete;
+
+    const menu = sidebar.querySelector(".sidebar-session-sort-menu");
+    expect(menu).not.toBeNull();
+    expect(menu?.closest("openclaw-menu-surface")).not.toBeNull();
   });
 });
 

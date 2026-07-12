@@ -1,6 +1,7 @@
 /** Broad plugin loader coverage for manifest discovery, runtime registration, and diagnostics. */
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
@@ -467,9 +468,9 @@ function runSinglePluginRegistryScenarios<
 function loadRegistryFromScenarioPlugins(plugins: readonly TempPlugin[]) {
   return plugins.length === 1
     ? loadRegistryFromSinglePlugin({
-        plugin: plugins[0],
+        plugin: expectDefined(plugins[0], "plugins[0] test invariant"),
         pluginConfig: {
-          allow: [plugins[0].id],
+          allow: [expectDefined(plugins[0], "plugins[0] test invariant").id],
         },
       })
     : loadRegistryFromAllowedPlugins([...plugins]);
@@ -2725,7 +2726,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     manifestSpy.mockRestore();
   });
 
-  it("only publishes plugin commands to the global registry during activating loads", () => {
+  it("only publishes command and interactive globals during activating loads", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "command-plugin",
@@ -2739,10 +2740,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
             acceptsArgs: true,
             handler: async ({ args }) => ({ text: \`paired:\${args ?? ""}\` }),
           });
+          api.registerInteractiveHandler({
+            channel: "telegram",
+            namespace: "pair",
+            handle: async () => ({ handled: true }),
+          });
         },
       };`,
     });
     clearPluginCommands();
+    clearPluginInteractiveHandlers();
 
     const scoped = loadOpenClawPlugins({
       cache: false,
@@ -2759,7 +2766,15 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(scoped.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
     expect(scoped.commands.map((entry) => entry.command.name)).toEqual(["pair"]);
+    expect(scoped.interactiveHandlers).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        namespace: "pair",
+        pluginId: "command-plugin",
+      }),
+    ]);
     expect(getPluginCommandSpecs("telegram")).toStrictEqual([]);
+    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toBeNull();
 
     const active = loadOpenClawPlugins({
       cache: false,
@@ -2781,8 +2796,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
         acceptsArgs: true,
       },
     ]);
+    expect(resolvePluginInteractiveNamespaceMatch("telegram", "pair:device")).toMatchObject({
+      namespace: "pair",
+      payload: "device",
+      registration: {
+        pluginId: "command-plugin",
+      },
+    });
 
     clearPluginCommands();
+    clearPluginInteractiveHandlers();
   });
 
   it("clears plugin agent harnesses during activating reloads", () => {

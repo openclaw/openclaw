@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Gateway node command policy.
 // Computes per-platform allowlists from built-in, plugin, runtime, and config inputs.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -6,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_BROWSER_PROXY_COMMAND,
   NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_SYSTEM_RUN_COMMANDS,
@@ -51,9 +53,15 @@ const PHOTOS_COMMANDS = ["photos.latest"];
 
 const MOTION_COMMANDS = ["motion.activity", "motion.pedometer"];
 
+const HEALTH_DANGEROUS_COMMANDS = ["health.summary"];
+
 const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 
 const TALK_PTT_COMMANDS = ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"];
+
+// The iPhone node owns the relay to its companion Watch. Keep these commands
+// out of the direct watchOS node surface, which has a separate fixed policy.
+const IOS_WATCH_RELAY_COMMANDS = ["watch.status", "watch.notify"];
 
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
@@ -61,6 +69,7 @@ const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 const SYSTEM_COMMANDS = [
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_SYSTEM_NOTIFY_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
@@ -68,6 +77,7 @@ const SYSTEM_COMMANDS = [
 const DESKTOP_HOST_COMMANDS = new Set<string>([
   ...NODE_SYSTEM_RUN_COMMANDS,
   ...NODE_EXEC_APPROVALS_COMMANDS,
+  NODE_FS_LIST_DIR_COMMAND,
   NODE_BROWSER_PROXY_COMMAND,
   NODE_MCP_TOOLS_CALL_COMMAND,
   ...SCREEN_COMMANDS,
@@ -88,6 +98,7 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...CALENDAR_DANGEROUS_COMMANDS,
   ...REMINDERS_DANGEROUS_COMMANDS,
   ...SMS_DANGEROUS_COMMANDS,
+  ...HEALTH_DANGEROUS_COMMANDS,
 ];
 
 const PLATFORM_DEFAULTS: Record<string, string[]> = {
@@ -393,9 +404,15 @@ function resolveNodeCommandAllowlistInternal(
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
   const base = filterDesktopHostCommandDefaults({
     platformId,
-    commands: PLATFORM_DEFAULTS[platformId] ?? PLATFORM_DEFAULTS.unknown,
+    commands:
+      expectDefined(PLATFORM_DEFAULTS[platformId], "platform defaults entry at platform id") ??
+      PLATFORM_DEFAULTS.unknown,
     includeDesktopHostCommands: options?.includeDesktopHostCommands,
   });
+  const watchRelayCommands =
+    platformId === "ios" && normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"
+      ? IOS_WATCH_RELAY_COMMANDS
+      : [];
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
   const pluginDefaults = listDefaultPluginNodeCommands(platformId);
   const approved = filterApprovedRuntimeCommands({
@@ -415,7 +432,7 @@ function resolveNodeCommandAllowlistInternal(
   // Dangerous plugin commands are excluded from plugin defaults. Explicit
   // gateway.nodes.allowCommands below can still opt them in for operators.
   const allow = new Set(
-    [...base, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
+    [...base, ...watchRelayCommands, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())
       .filter(
         (cmd) => cmd && !dangerousPluginCommands.has(cmd) && !dangerousBuiltinCommands.has(cmd),

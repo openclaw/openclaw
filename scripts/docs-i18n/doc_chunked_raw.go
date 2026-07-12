@@ -26,10 +26,14 @@ var docsProtocolTokens = []string{
 }
 
 type docChunkStructure struct {
-	fenceCount      int
-	tagCounts       map[string]int
-	headingLevels   []int
-	inlineCodeSpans []string
+	fenceCount            int
+	tagCounts             map[string]int
+	headingLevels         []int
+	listShapes            []markdownListShape
+	inlineCodeSpans       []string
+	fencedPlaceholders    []string
+	fencedProtocolTokens  []string
+	fencedDirectiveTokens []string
 }
 
 type docChunkSplitPlan struct {
@@ -53,7 +57,32 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 		}
 		out.WriteString(translated)
 	}
-	return out.String(), nil
+	translatedBody := out.String()
+	if err := validateDocBodyFencedLiterals(body, translatedBody); err != nil {
+		return "", fmt.Errorf("%s: final document validation: %w", relPath, err)
+	}
+	return translatedBody, nil
+}
+
+func validateDocBodyFencedLiterals(source, translated string) error {
+	if markdownLiteralFencesBalanced(source) != markdownLiteralFencesBalanced(translated) {
+		return fmt.Errorf("code fence balance mismatch")
+	}
+	sourceStructure := summarizeDocChunkStructure(source)
+	translatedStructure := summarizeDocChunkStructure(translated)
+	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
+		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
+	}
+	if !slices.Equal(sourceStructure.fencedPlaceholders, translatedStructure.fencedPlaceholders) {
+		return fmt.Errorf("fenced placeholder mismatch: source=%d translated=%d", len(sourceStructure.fencedPlaceholders), len(translatedStructure.fencedPlaceholders))
+	}
+	if !slices.Equal(sourceStructure.fencedProtocolTokens, translatedStructure.fencedProtocolTokens) {
+		return fmt.Errorf("fenced protocol marker mismatch: source=%d translated=%d", len(sourceStructure.fencedProtocolTokens), len(translatedStructure.fencedProtocolTokens))
+	}
+	if !slices.Equal(sourceStructure.fencedDirectiveTokens, translatedStructure.fencedDirectiveTokens) {
+		return fmt.Errorf("fenced directive mismatch: source=%d translated=%d", len(sourceStructure.fencedDirectiveTokens), len(translatedStructure.fencedDirectiveTokens))
+	}
+	return nil
 }
 
 func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chunkID string, blocks []string, srcLang, tgtLang string) (string, error) {
@@ -209,8 +238,20 @@ func validateDocChunkTranslation(source, translated string) error {
 	if !slices.Equal(sourceStructure.headingLevels, translatedStructure.headingLevels) {
 		return fmt.Errorf("heading structure mismatch: source=%v translated=%v", sourceStructure.headingLevels, translatedStructure.headingLevels)
 	}
+	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
+		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
+	}
 	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
 		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
+	}
+	if !slices.Equal(sourceStructure.fencedPlaceholders, translatedStructure.fencedPlaceholders) {
+		return fmt.Errorf("fenced placeholder mismatch: source=%d translated=%d", len(sourceStructure.fencedPlaceholders), len(translatedStructure.fencedPlaceholders))
+	}
+	if !slices.Equal(sourceStructure.fencedProtocolTokens, translatedStructure.fencedProtocolTokens) {
+		return fmt.Errorf("fenced protocol marker mismatch: source=%d translated=%d", len(sourceStructure.fencedProtocolTokens), len(translatedStructure.fencedProtocolTokens))
+	}
+	if !slices.Equal(sourceStructure.fencedDirectiveTokens, translatedStructure.fencedDirectiveTokens) {
+		return fmt.Errorf("fenced directive mismatch: source=%d translated=%d", len(sourceStructure.fencedDirectiveTokens), len(translatedStructure.fencedDirectiveTokens))
 	}
 	if !slices.Equal(sortedKeys(sourceStructure.tagCounts), sortedKeys(translatedStructure.tagCounts)) {
 		return fmt.Errorf("component tag set mismatch")
@@ -353,11 +394,16 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 			counts[tagName+":"+direction]++
 		}
 	}
+	fencedPlaceholders, fencedProtocolTokens, fencedDirectiveTokens := extractMarkdownFencedLiteralValues(text)
 	return docChunkStructure{
-		fenceCount:      counts["__fence_toggle__"],
-		tagCounts:       countsWithoutFence(counts),
-		headingLevels:   extractMarkdownHeadingLevels(text),
-		inlineCodeSpans: extractMarkdownInlineCodeValues(text),
+		fenceCount:            counts["__fence_toggle__"],
+		tagCounts:             countsWithoutFence(counts),
+		headingLevels:         extractMarkdownHeadingLevels(text),
+		listShapes:            extractMarkdownListShapes(text),
+		inlineCodeSpans:       extractMarkdownInlineCodeValues(text),
+		fencedPlaceholders:    fencedPlaceholders,
+		fencedProtocolTokens:  fencedProtocolTokens,
+		fencedDirectiveTokens: fencedDirectiveTokens,
 	}
 }
 

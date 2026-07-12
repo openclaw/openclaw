@@ -1,18 +1,19 @@
 // Session store facade coordinates reads, writes, maintenance, delivery metadata, and exports.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE,
   isAgentHarnessSessionKey,
   isValidAgentHarnessSessionStoreEntry,
+  MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
   resolveAgentHarnessSessionStoreError,
   resolveAgentHarnessSessionStoreEntryError,
+  resolveAgentHarnessSessionStoreTransitionError,
 } from "../../sessions/agent-harness-session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -98,25 +99,6 @@ export type {
 } from "./store-cache.js";
 export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 
-export type SessionEntryPatchProjectionSnapshot = {
-  entries: ReadonlyArray<{ sessionKey: string; entry: SessionEntry }>;
-};
-
-export type SessionEntryPatchProjectionTarget = {
-  candidateKeys?: readonly string[];
-  primaryKey: string;
-};
-
-export type SessionEntryPatchProjectionContext = SessionEntryPatchProjectionSnapshot &
-  SessionEntryPatchProjectionTarget & {
-    existingEntry?: SessionEntry;
-  };
-
-export type SessionEntryPatchProjectionFailure = { ok: false };
-
-export type SessionEntryPatchProjectionResult<TFailure extends SessionEntryPatchProjectionFailure> =
-  { ok: true; entry: SessionEntry } | TFailure;
-
 const log = createSubsystemLogger("sessions/store");
 const writerStoreFileStats = new WeakMap<
   Record<string, SessionEntry>,
@@ -126,9 +108,6 @@ const writerLockedSessionEntries = new WeakMap<
   Record<string, SessionEntry>,
   ReadonlyMap<string, SessionEntry>
 >();
-
-const MODEL_SELECTION_LOCK_REMOVAL_MESSAGE =
-  "Model-selection-locked sessions cannot be removed, unlocked, or reassigned.";
 
 type SessionStoreInvariantContext = {
   allowedLockedEntryRemovals?: ReadonlyMap<string, SessionEntry>;
@@ -343,7 +322,7 @@ export type DeletedAgentSessionEntryPurgeParams = {
 };
 
 function cloneSessionEntry(entry: SessionEntry): SessionEntry {
-  return cloneSessionStoreRecord({ entry }).entry;
+  return expectDefined(cloneSessionStoreRecord({ entry }).entry, "cloned session entry");
 }
 
 function cloneSessionEntries(store: Record<string, SessionEntry>): Record<string, SessionEntry> {
@@ -376,78 +355,14 @@ function snapshotLockedSessionEntries(
   return lockedEntries;
 }
 
-function sessionLockOwnerMatches(previous: SessionEntry, next: SessionEntry): boolean {
-  const previousOwner = normalizeOptionalString(previous.agentHarnessId)?.toLowerCase();
-  const nextOwner = normalizeOptionalString(next.agentHarnessId)?.toLowerCase();
-  return (
-    previousOwner === nextOwner &&
-    normalizeOptionalAgentRuntimeId(previousOwner) === normalizeOptionalAgentRuntimeId(nextOwner)
-  );
-}
-
-function hasEquivalentRelocatedLockedEntry(params: {
-  previousKey: string;
-  previousEntry: SessionEntry;
-  store: Record<string, SessionEntry>;
-}): boolean {
-  // Reserved keys are source identities, not aliases. Moving one would let a
-  // writer detach a native harness binding while retaining only its session id.
-  if (isAgentHarnessSessionKey(params.previousKey)) {
-    return false;
-  }
-  const sessionId = normalizeOptionalString(params.previousEntry.sessionId);
-  if (!sessionId) {
-    return false;
-  }
-  for (const [sessionKey, entry] of Object.entries(params.store)) {
-    if (
-      sessionKey === params.previousKey ||
-      entry.modelSelectionLocked !== true ||
-      entry.sessionId !== sessionId ||
-      !sessionLockOwnerMatches(params.previousEntry, entry)
-    ) {
-      continue;
-    }
-    return true;
-  }
-  return false;
-}
-
 function assertLockedSessionEntriesPreserved(params: {
   allowedRemovals?: ReadonlyMap<string, SessionEntry>;
   before?: ReadonlyMap<string, SessionEntry>;
   store: Record<string, SessionEntry>;
 }): void {
-  for (const [sessionKey, previousEntry] of params.before ?? []) {
-    const nextEntry = params.store[sessionKey];
-    if (
-      nextEntry?.modelSelectionLocked === true &&
-      sessionLockOwnerMatches(previousEntry, nextEntry)
-    ) {
-      if (nextEntry.sessionId !== previousEntry.sessionId) {
-        throw new Error(AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE);
-      }
-      continue;
-    }
-    const allowedRemoval = params.allowedRemovals?.get(sessionKey);
-    if (
-      nextEntry === undefined &&
-      allowedRemoval !== undefined &&
-      JSON.stringify(previousEntry) === JSON.stringify(allowedRemoval)
-    ) {
-      continue;
-    }
-    if (
-      nextEntry === undefined &&
-      hasEquivalentRelocatedLockedEntry({
-        previousKey: sessionKey,
-        previousEntry,
-        store: params.store,
-      })
-    ) {
-      continue;
-    }
-    throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+  const error = resolveAgentHarnessSessionStoreTransitionError(params);
+  if (error) {
+    throw new Error(error);
   }
 }
 
@@ -1196,113 +1111,6 @@ export async function updateSessionStore<T>(
     },
     { reentrant: opts?.reentrant },
   );
-}
-
-function cloneSessionEntryProjectionSnapshot(
-  store: Record<string, SessionEntry>,
-): SessionEntryPatchProjectionSnapshot {
-  return {
-    entries: Object.entries(store).map(([sessionKey, entry]) => ({
-      sessionKey,
-      entry: cloneSessionEntry(entry),
-    })),
-  };
-}
-
-function resolveFreshestProjectedEntry(params: {
-  store: Record<string, SessionEntry>;
-  candidateKeys: readonly string[];
-}): SessionEntry | undefined {
-  let freshest: SessionEntry | undefined;
-  const keys = new Set<string>();
-  for (const candidateKey of params.candidateKeys) {
-    const trimmed = normalizeOptionalString(candidateKey) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    keys.add(trimmed);
-  }
-  for (const key of keys) {
-    const entry = params.store[key];
-    if (!entry) {
-      continue;
-    }
-    if (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0)) {
-      freshest = entry;
-    }
-  }
-  return freshest;
-}
-
-function migrateSessionEntryProjectionTarget(params: {
-  store: Record<string, SessionEntry>;
-  target: SessionEntryPatchProjectionTarget;
-}): void {
-  const candidateKeys = params.target.candidateKeys ?? [params.target.primaryKey];
-  const freshest = resolveFreshestProjectedEntry({
-    store: params.store,
-    candidateKeys,
-  });
-  const currentPrimary = params.store[params.target.primaryKey];
-  if (
-    freshest &&
-    (!currentPrimary || (freshest.updatedAt ?? 0) > (currentPrimary.updatedAt ?? 0))
-  ) {
-    params.store[params.target.primaryKey] = freshest;
-  }
-
-  const keysToDelete = new Set<string>();
-  for (const candidateKey of candidateKeys) {
-    const trimmed = normalizeOptionalString(candidateKey) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    if (trimmed !== params.target.primaryKey) {
-      keysToDelete.add(trimmed);
-    }
-  }
-  for (const key of keysToDelete) {
-    delete params.store[key];
-  }
-}
-
-/**
- * Applies a storage-neutral entry projection inside the session-store writer.
- * The projection receives a cloned snapshot and returns the replacement entry;
- * it cannot mutate the backing whole store.
- */
-export async function applySessionEntryPatchProjection<
-  TFailure extends SessionEntryPatchProjectionFailure,
->(params: {
-  storePath: string;
-  resolveTarget: (
-    snapshot: SessionEntryPatchProjectionSnapshot,
-  ) => SessionEntryPatchProjectionTarget;
-  project: (
-    context: SessionEntryPatchProjectionContext,
-  ) =>
-    | Promise<SessionEntryPatchProjectionResult<TFailure>>
-    | SessionEntryPatchProjectionResult<TFailure>;
-}): Promise<SessionEntryPatchProjectionResult<TFailure>> {
-  return await runExclusiveSessionStoreWrite(params.storePath, async () => {
-    const store = loadMutableSessionStoreForWriter(params.storePath);
-    const target = params.resolveTarget(cloneSessionEntryProjectionSnapshot(store));
-    migrateSessionEntryProjectionTarget({ store, target });
-    const projected = await params.project({
-      ...target,
-      entries: cloneSessionEntryProjectionSnapshot(store).entries,
-      ...(store[target.primaryKey]
-        ? { existingEntry: cloneSessionEntry(store[target.primaryKey]) }
-        : {}),
-    });
-    if (projected.ok) {
-      store[target.primaryKey] = cloneSessionEntry(projected.entry);
-    }
-    await saveSessionStoreUnlocked(params.storePath, store, {
-      activeSessionKey: target.primaryKey,
-    });
-    return projected.ok ? { ...projected, entry: cloneSessionEntry(projected.entry) } : projected;
-  });
 }
 
 /** Resets one persisted session entry and rotates its file-backed transcript artifacts. */

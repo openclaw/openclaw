@@ -36,8 +36,10 @@ const rawSqliteAllowPathGroups = {
   ],
   "SQLite database lifecycle, schema, transactions, and pragmas": [
     "src/infra/node-sqlite.ts",
+    "src/infra/sqlite-index-schema.ts",
     "src/infra/sqlite-integrity.ts",
     "src/infra/sqlite-pragma.test-support.ts",
+    "src/infra/sqlite-schema-contract.ts",
     "src/infra/sqlite-transaction.ts",
     "src/infra/sqlite-user-version.ts",
     "src/infra/sqlite-wal.ts",
@@ -45,17 +47,23 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
-  "backup snapshot maintenance": ["src/commands/backup-verify.ts", "src/infra/backup-create.ts"],
+  "backup snapshot maintenance": [
+    "src/commands/backup-verify.ts",
+    "src/infra/backup-create.ts",
+    "src/snapshot/local-repository.ts",
+  ],
   "agent auth profile read-only bootstrap": ["src/agents/auth-profiles/sqlite.ts"],
   "read-only SQLite status probes": [
     "src/commands/doctor-db-bloat.ts",
     "src/commands/status.scan.shared.ts",
   ],
-  "doctor legacy state migration": [
+  "doctor SQLite maintenance and legacy state migration": [
     "src/commands/doctor/cron/migration-ledger.ts",
+    "src/commands/doctor-sqlite-compact.ts",
     "src/commands/doctor-session-sqlite.ts",
-    "src/commands/doctor-session-sqlite-compact.ts",
     "src/commands/doctor-session-sqlite-readers.ts",
+    "src/commands/doctor-session-sqlite-recover-report.ts",
+    "src/commands/doctor-state-sqlite-compact.ts",
     "src/infra/state-migrations.ts",
     "src/infra/state-migrations.debug-proxy.ts",
   ],

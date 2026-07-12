@@ -1470,6 +1470,7 @@ export function createExecTool(
       host,
       workdir: params.workdir,
       defaultCwd: defaults?.cwd,
+      nodeCwd: defaults?.nodeCwd,
       sandbox: defaults?.sandbox,
     });
     return markResolvedExecWorkdirPrepared(params, {
@@ -1788,6 +1789,7 @@ export function createExecTool(
               host,
               workdir: params.workdir,
               defaultCwd: defaults?.cwd,
+              nodeCwd: defaults?.nodeCwd,
               sandbox,
             });
       if (workdirResolution.kind === "unavailable") {
@@ -2172,4 +2174,3 @@ export const testing = {
   parseOpenClawChannelsLoginShellCommand,
   validateScriptFileForShellBleed,
 };
-export { testing as __testing };
