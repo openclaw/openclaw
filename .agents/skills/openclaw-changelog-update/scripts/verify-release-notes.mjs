@@ -861,6 +861,21 @@ export function resolvedReleasePullRequests(
   );
 }
 
+export function releasePullRequestReferencesToSuppress(
+  currentPullRequests,
+  subject,
+  associatedPullRequests,
+  hasProvenanceOverride,
+) {
+  const candidates = new Set(currentPullRequests);
+  if (hasProvenanceOverride) {
+    for (const match of subject.matchAll(/\(#(\d+)\)\s*$/g)) {
+      candidates.add(Number(match[1]));
+    }
+  }
+  return [...candidates].filter((number) => !associatedPullRequests.includes(number));
+}
+
 function changedPathsForCommit(hash) {
   return new Set(
     git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", hash, "--"])
@@ -1241,15 +1256,21 @@ function sourceCommits(base, target, mainRef) {
         (hash) => canonicalMainPullRequests.get(hash) ?? [],
       );
     const matchedMainCommits = canonicalMainCommitsByReleaseCommit.get(commit.hash) ?? [];
+    const provenanceOverride = provenanceOverrides.get(commit.hash);
     const associatedPullRequests = resolvedReleasePullRequests(
       currentPullRequests,
       mainPullRequests,
       matchedMainCommits.length > 0,
-      provenanceOverrides.get(commit.hash),
+      provenanceOverride,
     );
     commit.pullRequests = associatedPullRequests;
     const suppressedBackportPullRequests = new Set(
-      currentPullRequests.filter((number) => !associatedPullRequests.includes(number)),
+      releasePullRequestReferencesToSuppress(
+        currentPullRequests,
+        commit.subject,
+        associatedPullRequests,
+        provenanceOverride !== undefined,
+      ),
     );
     commit.references = commit.references.filter(
       (number) => !suppressedBackportPullRequests.has(number),

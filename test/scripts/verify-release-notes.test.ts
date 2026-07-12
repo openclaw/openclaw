@@ -16,6 +16,7 @@ import {
   highlightCountError,
   persistGithubSnapshot,
   releaseNoteReferences,
+  releasePullRequestReferencesToSuppress,
   releaseProvenanceMarkers,
   renderedContributionRecordReferences,
   resolvedReleasePullRequests,
@@ -78,6 +79,14 @@ describe("release-note verification", () => {
     expect(resolvedReleasePullRequests([104939], [], false, [104905, 102980, 104956])).toEqual([
       104905, 102980, 104956,
     ]);
+    expect(
+      releasePullRequestReferencesToSuppress(
+        [],
+        "test(live): harden GPT-5.6 nonce retries for July (#104939)",
+        [104905, 102980, 104956],
+        true,
+      ),
+    ).toEqual([104939]);
   });
 
   it("rejects malformed, out-of-range, or conflicting release provenance markers", () => {
