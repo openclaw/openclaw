@@ -23,10 +23,16 @@ const CLEAR_TERMINAL = "\x1b[2J\x1b[H";
 const MAX_PAIRING_PHONE_DIGITS = 15;
 const PAIRING_PHONE_INPUT_PATTERN = /^\+?[\d\s().-]+$/;
 const PHONE_CODE_PAIRING_READY_TIMEOUT_MS = 5 * 60_000;
-const STALE_PHONE_CODE_AUTH_NOT_CLEARED_MESSAGE =
-  "Previous WhatsApp phone-code login left partial credentials in this auth directory, but OpenClaw could not safely clear them. Run `openclaw channels logout --channel whatsapp` for managed accounts, or remove the custom auth directory's WhatsApp credentials manually, then retry login.";
 
 type LoginSocket = Awaited<ReturnType<typeof createWaSocket>>;
+
+function formatWhatsAppAccountCommand(action: "login" | "logout", accountId: string): string {
+  return formatCliCommand(`openclaw channels ${action} --channel whatsapp --account ${accountId}`);
+}
+
+function formatStalePhoneCodeAuthNotClearedMessage(accountId: string): string {
+  return `Previous WhatsApp phone-code login left partial credentials in this auth directory, but OpenClaw could not safely clear them. Run ${formatWhatsAppAccountCommand("logout", accountId)} for managed accounts, or remove the custom auth directory's WhatsApp credentials manually, then retry login.`;
+}
 
 export function normalizeWhatsAppPairingPhoneNumber(phoneNumber: string): string {
   const input = phoneNumber.trim();
@@ -66,6 +72,7 @@ function assertLinkedLoginSocketMatchesPairingPhoneNumber(
   sock: LoginSocket,
   pairingPhoneNumber: string,
   authDir: string,
+  accountId: string,
 ): void {
   const creds = sock.authState.creds;
   const identity = resolveComparableIdentity(
@@ -81,7 +88,7 @@ function assertLinkedLoginSocketMatchesPairingPhoneNumber(
   }
   const linkedIdentity = identity.e164 ?? identity.jid ?? identity.lid ?? "unknown";
   throw new Error(
-    `Existing WhatsApp credentials are linked to ${linkedIdentity}, not +${pairingPhoneNumber}. Run ${formatCliCommand("openclaw channels logout --channel whatsapp")} before linking a different phone number.`,
+    `Existing WhatsApp credentials are linked to ${linkedIdentity}, not +${pairingPhoneNumber}. Run ${formatWhatsAppAccountCommand("logout", accountId)} before linking a different phone number.`,
   );
 }
 
@@ -147,16 +154,18 @@ type CredentialPersistenceFailure = { error: unknown };
 
 async function prepareWebAuthForLoginOrThrow(params: {
   authDir: string;
+  accountId: string;
   isLegacyAuthDir: boolean;
   runtime: RuntimeEnv;
   beforeCredentialPersistence?: () => Promise<void>;
 }): Promise<void> {
-  const result = await prepareWebAuthForLogin({ ...params, mode: "preserve-linked" });
+  const { accountId, ...authParams } = params;
+  const result = await prepareWebAuthForLogin({ ...authParams, mode: "preserve-linked" });
   if (result === "unstable") {
     throw new WhatsAppAuthUnstableError();
   }
   if (result === "not-cleared") {
-    throw new Error(STALE_PHONE_CODE_AUTH_NOT_CLEARED_MESSAGE);
+    throw new Error(formatStalePhoneCodeAuthNotClearedMessage(accountId));
   }
 }
 
@@ -187,6 +196,7 @@ async function runWebLogin(
   const socketTiming = resolveWhatsAppSocketTiming(cfg);
   await prepareWebAuthForLoginOrThrow({
     authDir: account.authDir,
+    accountId: account.accountId,
     isLegacyAuthDir: account.isLegacyAuthDir,
     runtime,
     beforeCredentialPersistence,
@@ -275,6 +285,7 @@ async function runWebLogin(
       if (context.reason === "timeout") {
         await prepareWebAuthForLoginOrThrow({
           authDir: account.authDir,
+          accountId: account.accountId,
           isLegacyAuthDir: account.isLegacyAuthDir,
           runtime,
         });
@@ -289,6 +300,7 @@ async function runWebLogin(
           loginSock,
           phoneMode.pairingPhoneNumber,
           account.authDir,
+          account.accountId,
         );
         if (context.reason === "initial") {
           logInfo("Existing WhatsApp credentials found; waiting for connection...", runtime);
@@ -352,9 +364,10 @@ async function runWebLogin(
     }
 
     if (result.outcome === "logged-out") {
+      const loginCommand = formatWhatsAppAccountCommand("login", account.accountId);
       const relinkInstruction = phoneMode
-        ? `${formatCliCommand("openclaw channels login --channel whatsapp")}, choose phone-number linking, and link again.`
-        : `${formatCliCommand("openclaw channels login")} and scan the QR again.`;
+        ? `${loginCommand}, choose phone-number linking, and link again.`
+        : `${loginCommand} and scan the QR again.`;
       runtime.error(
         danger(
           `WhatsApp reported the session is logged out. Cleared cached web session; please rerun ${relinkInstruction}`,

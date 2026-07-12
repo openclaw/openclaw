@@ -316,8 +316,10 @@ describe("web login", () => {
     const runtime = createNonExitingRuntimeEnv();
 
     await expect(
-      loginWebWithPhoneCode(false, "+1 (555) 123-4567", waiter, runtime),
-    ).rejects.toThrow("Previous WhatsApp phone-code login left partial credentials");
+      loginWebWithPhoneCode(false, "+1 (555) 123-4567", waiter, runtime, "work"),
+    ).rejects.toThrow(
+      /Previous WhatsApp phone-code login.*openclaw channels logout --channel whatsapp --account work/,
+    );
 
     expect(createWaSocket).not.toHaveBeenCalled();
     expect(waiter).not.toHaveBeenCalled();
@@ -359,12 +361,15 @@ describe("web login", () => {
     const runtime = createNonExitingRuntimeEnv();
 
     await expect(
-      loginWebWithPhoneCode(false, "+1 (666) 123-4567", waiter, runtime),
+      loginWebWithPhoneCode(false, "+1 (666) 123-4567", waiter, runtime, "work"),
     ).rejects.toThrow("Existing WhatsApp credentials are linked to +15551234567");
 
     expect(sock.requestPairingCode).not.toHaveBeenCalled();
     expect(waiter).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("not +16661234567"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw channels logout --channel whatsapp --account work"),
+    );
   });
 
   it("keeps LID-only completed phone-code creds when the linked phone cannot be proven different", async () => {
@@ -483,6 +488,30 @@ describe("web login", () => {
       expect.objectContaining({ mode: "clear-existing" }),
     );
     expect(waiter).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports an account-scoped relink command after repeated logged-out responses", async () => {
+    const firstSock = createPhoneCodeSocket("11112222");
+    const secondSock = createPhoneCodeSocket("33334444");
+    vi.mocked(createWaSocket)
+      .mockImplementationOnce(resolveSocketAfterImmediateQr(firstSock))
+      .mockImplementationOnce(resolveSocketAfterImmediateQr(secondSock));
+    const loggedOutError = Object.assign(new Error("logged out"), {
+      output: { statusCode: 401 },
+    });
+    const waiter: typeof waitForWaConnection = vi
+      .fn()
+      .mockRejectedValueOnce(loggedOutError)
+      .mockRejectedValueOnce(loggedOutError);
+    const runtime = createNonExitingRuntimeEnv();
+
+    await expect(
+      loginWebWithPhoneCode(false, "+15551234567", waiter, runtime, "work"),
+    ).rejects.toThrow("Session logged out; cache cleared");
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("openclaw channels login --channel whatsapp --account work"),
+    );
   });
 
   it("surfaces a completed credential write failure during the 515 handoff", async () => {
