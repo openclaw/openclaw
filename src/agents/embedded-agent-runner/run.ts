@@ -2096,8 +2096,6 @@ async function runEmbeddedAgentInternal(
       };
       let lastRetryFailoverReason: FailoverReason | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
-      let incompleteTurnContinuationPrompt: string | null = null;
-      let nextAttemptPromptOverride: string | null = null;
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
       let codexAppServerRecoveryRetries = 0;
@@ -2156,10 +2154,18 @@ async function runEmbeddedAgentInternal(
         adoptActiveSessionId(resolvedTarget.sessionId);
       };
       let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
-      // Same-prompt retries may reuse the user leaf only after its write is confirmed.
-      let activePromptPersisted = suppressNextUserMessagePersistence;
-      // Compaction continuation also needs to know whether the current inbound turn is durable.
-      let lastPersistedCurrentMessageId: string | number | undefined;
+      let activePrompt: {
+        override?: string;
+        persisted: boolean;
+        internal: boolean;
+      } = {
+        persisted: suppressNextUserMessagePersistence,
+        internal: false,
+      };
+      const activateInternalPrompt = (prompt: string, persisted: boolean) => {
+        activePrompt = { override: prompt, persisted, internal: true };
+        suppressNextUserMessagePersistence = persisted;
+      };
       const onUserMessagePersisted: RunEmbeddedAgentParams["onUserMessagePersisted"] = (
         message,
       ) => {
@@ -2168,10 +2174,7 @@ async function runEmbeddedAgentInternal(
         };
         const blockedBeforeAgentRun = messageMetadata["__openclaw"]?.beforeAgentRunBlocked;
         const markCurrentUserMessagePersisted = () => {
-          activePromptPersisted = true;
-          if (params.currentMessageId !== undefined) {
-            lastPersistedCurrentMessageId = params.currentMessageId;
-          }
+          activePrompt.persisted = true;
           params.onUserMessagePersisted?.(message);
         };
         const recorder = params.userTurnTranscriptRecorder;
@@ -2211,8 +2214,7 @@ async function runEmbeddedAgentInternal(
         recorder.markRuntimePersistencePending(canonicalPersistence);
       };
       const continueFromCurrentTranscript = () => {
-        nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
-        suppressNextUserMessagePersistence = true;
+        activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true);
       };
       const waitForCurrentUserMessagePersistence = async () => {
         if (params.userTurnTranscriptRecorder?.hasRuntimePersistencePending() === true) {
@@ -2532,14 +2534,12 @@ async function runEmbeddedAgentInternal(
           }
 
           const basePrompt =
-            nextAttemptPromptOverride ??
-            incompleteTurnContinuationPrompt ??
+            activePrompt.override ??
             resolveEmbeddedAttemptBasePrompt({
               nativeModelOwned,
               provider,
               prompt: params.prompt,
             });
-          nextAttemptPromptOverride = null;
           const prompt = compactionContinuationRetryInstruction
             ? `${basePrompt}\n\n${compactionContinuationRetryInstruction}`
             : basePrompt;
@@ -2727,7 +2727,7 @@ async function runEmbeddedAgentInternal(
             prompt,
             transcriptPrompt: params.transcriptPrompt,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
-            skipPreparedUserTurnMessage: incompleteTurnContinuationPrompt !== null,
+            skipPreparedUserTurnMessage: activePrompt.internal,
             currentInboundEventKind: params.currentInboundEventKind,
             currentInboundContext: params.currentInboundContext,
             images: params.images,
@@ -2876,7 +2876,7 @@ async function runEmbeddedAgentInternal(
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
             onUserMessagePersisted,
             onUserMessagePersistenceInvalidated: () => {
-              activePromptPersisted = false;
+              activePrompt.persisted = false;
             },
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
           })
@@ -2896,7 +2896,7 @@ async function runEmbeddedAgentInternal(
           }
           const attempt = normalizeEmbeddedRunAttemptResult(rawAttempt);
           await waitForCurrentUserMessagePersistence();
-          suppressNextUserMessagePersistence = activePromptPersisted;
+          suppressNextUserMessagePersistence = activePrompt.persisted;
           if (attemptCancellationRequested) {
             throwIfAborted();
             throw createAgentRunDirectAbortError();
@@ -3581,18 +3581,14 @@ async function runEmbeddedAgentInternal(
                   continueFromCurrentTranscript();
                 } else {
                   await waitForCurrentUserMessagePersistence();
-                  if (incompleteTurnContinuationPrompt !== null) {
-                    // Compaction must not suppress a continuation that never reached JSONL.
-                    suppressNextUserMessagePersistence = activePromptPersisted;
-                  } else if (
-                    params.currentMessageId !== undefined &&
-                    params.currentMessageId === lastPersistedCurrentMessageId
-                  ) {
+                  if (activePrompt.internal) {
+                    // Retry the same internal prompt and preserve its exact durability state.
+                    suppressNextUserMessagePersistence = activePrompt.persisted;
+                  } else if (activePrompt.persisted) {
                     // The first attempt reached the embedded agent far enough to persist this user turn.
                     // Retrying the original prompt would replay it, so resume from the
                     // compacted transcript and suppress the next user append.
-                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
-                    suppressNextUserMessagePersistence = true;
+                    activateInternalPrompt(MID_TURN_PRECHECK_CONTINUATION_PROMPT, true);
                   }
                 }
                 continue;
@@ -4549,9 +4545,7 @@ async function runEmbeddedAgentInternal(
           ) {
             reasoningOnlyRetryAttempts += 1;
             // The assistant leaf is already durable, so persist a new user boundary.
-            incompleteTurnContinuationPrompt = nextReasoningOnlyRetryInstruction;
-            activePromptPersisted = false;
-            suppressNextUserMessagePersistence = false;
+            activateInternalPrompt(nextReasoningOnlyRetryInstruction, false);
             log.warn(
               `reasoning-only assistant turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
@@ -4575,7 +4569,7 @@ async function runEmbeddedAgentInternal(
           ) {
             missingAssistantRetryAttempts += 1;
             // Same-prompt retries reuse the canonical user leaf only when it was written.
-            suppressNextUserMessagePersistence = activePromptPersisted;
+            suppressNextUserMessagePersistence = activePrompt.persisted;
             log.warn(
               `missing assistant terminal message detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
@@ -4589,9 +4583,7 @@ async function runEmbeddedAgentInternal(
           ) {
             emptyResponseRetryAttempts += 1;
             // The assistant leaf is already durable, so persist a new user boundary.
-            incompleteTurnContinuationPrompt = nextEmptyResponseRetryInstruction;
-            activePromptPersisted = false;
-            suppressNextUserMessagePersistence = false;
+            activateInternalPrompt(nextEmptyResponseRetryInstruction, false);
             log.warn(
               `empty response detected: runId=${params.runId} sessionId=${params.sessionId} ` +
                 `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
@@ -4816,11 +4808,10 @@ async function runEmbeddedAgentInternal(
             !emptyAssistantReplyIsSilent;
           if (beforeAgentFinalizeRevisionReason && shouldHonorBeforeAgentFinalizeRevision) {
             beforeAgentFinalizeRevisionAttempts += 1;
-            nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
-              beforeAgentFinalizeRevisionReason,
+            activateInternalPrompt(
+              buildBeforeAgentFinalizeRetryPrompt(beforeAgentFinalizeRevisionReason),
+              true,
             );
-            incompleteTurnContinuationPrompt = null;
-            suppressNextUserMessagePersistence = true;
             compactionContinuationRetryInstruction = null;
             log.warn(
               `before_agent_finalize requested one more pass: ` +
