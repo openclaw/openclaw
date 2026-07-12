@@ -10,6 +10,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -608,6 +609,7 @@ export function ensureOpenClawAgentDatabaseSchema(
   const databaseOptions = { ...options, agentId };
   const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+  assertAgentDatabaseIntegrityBeforeMutation(db, pathname);
   configureSqlitePreSchemaPragmas(db, {
     busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   });
@@ -803,6 +805,16 @@ export function inspectOpenClawAgentDatabaseOwner(
   }
 }
 
+function assertAgentDatabaseIntegrityBeforeMutation(
+  database: DatabaseSync,
+  pathname: string,
+): void {
+  database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+  // Writable open permits interrupted journal recovery. Schema and connection
+  // setup must wait until full table/index consistency is proven afterward.
+  assertSqliteIntegrity(database, pathname);
+}
+
 /** Open or return a cached per-agent database after schema and owner validation. */
 export function openOpenClawAgentDatabase(
   options: OpenClawAgentDatabaseOptions,
@@ -833,6 +845,7 @@ export function openOpenClawAgentDatabase(
   const walMaintenance = (() => {
     let maintenance: SqliteWalMaintenance | undefined;
     try {
+      assertAgentDatabaseIntegrityBeforeMutation(db, pathname);
       configureSqlitePreSchemaPragmas(db, {
         busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
       });
