@@ -310,14 +310,17 @@ function makeInvalidSnapshot(params: {
   issues: ConfigFileSnapshot["issues"];
   warnings?: ConfigFileSnapshot["warnings"];
   path?: string;
+  raw?: string;
+  parsed?: unknown;
 }): ConfigFileSnapshot {
+  const parsed = params.parsed ?? {};
   return {
     path: params.path ?? "/tmp/custom-openclaw.json",
     exists: true,
-    raw: "{}",
-    parsed: {},
-    sourceConfig: {},
-    resolved: {},
+    raw: params.raw ?? "{}",
+    parsed,
+    sourceConfig: parsed as OpenClawConfig,
+    resolved: parsed as OpenClawConfig,
     valid: false,
     runtimeConfig: {},
     config: {},
@@ -1133,6 +1136,46 @@ describe("config cli", () => {
       expectErrorIncludes("config is invalid");
       expectErrorIncludes("agents.defaults.suppressToolErrorWarnings");
       expect(mockLog).not.toHaveBeenCalled();
+    });
+
+    it("prints line numbers, bracket array paths, and safe received values", async () => {
+      const parsed = {
+        agents: {
+          list: [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d", tools: { profile: "none" } }],
+        },
+      };
+      const raw = [
+        "{",
+        '  "agents": {',
+        '    "list": [',
+        '      { "id": "a" },',
+        '      { "id": "b" },',
+        '      { "id": "c" },',
+        '      { "id": "d", "tools": { "profile": "none" } }',
+        "    ]",
+        "  }",
+        "}",
+      ].join("\n");
+      setSnapshotOnce(
+        makeInvalidSnapshot({
+          raw,
+          parsed,
+          path: "/tmp/openclaw.json",
+          issues: [
+            {
+              path: "agents.list.3.tools.profile",
+              message: 'Invalid input (allowed: "minimal", "coding", "messaging", "full")',
+              allowedValues: ["minimal", "coding", "messaging", "full"],
+            },
+          ],
+        }),
+      );
+
+      await expect(runConfigCommand(["config", "validate"])).rejects.toThrow("__exit__:1");
+
+      expectErrorIncludes(
+        'openclaw.json:7 — agents.list[3].tools.profile: Invalid input (allowed: "minimal", "coding", "messaging", "full"), got: "none"',
+      );
     });
 
     it("replaces doctor advice for plugin packaging compiled-output failures", async () => {

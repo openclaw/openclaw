@@ -64,6 +64,19 @@ describe("mapZodIssueToConfigIssue", () => {
       });
       expect(result.path).toBe("agents.list.0.name");
     });
+
+    it("keeps validation messages free of source-value display hints", () => {
+      const result = testing.mapZodIssueToConfigIssue({
+        code: "invalid_value",
+        path: ["agents", "list", 3, "tools", "profile"],
+        message: "Invalid input",
+        values: ["minimal", "coding", "messaging", "full"],
+      });
+      expect(result.path).toBe("agents.list.3.tools.profile");
+      expect(result.message).toBe(
+        'Invalid input (allowed: "minimal", "coding", "messaging", "full")',
+      );
+    });
   });
 
   // ---------------------------------------------------------------------------

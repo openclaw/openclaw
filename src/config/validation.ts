@@ -204,7 +204,7 @@ function toConfigPathSegments(pathLocal3: unknown): ConfigPathSegment[] {
 }
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
-  return segments.join(".");
+  return segments.map((segment) => String(segment)).join(".");
 }
 
 function formatMissingOfficialExternalPluginWarning(
@@ -822,7 +822,8 @@ export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigVal
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
-  const pathItem = formatConfigPath(toConfigPathSegments(record?.path));
+  const pathSegments = toConfigPathSegments(record?.path);
+  const pathItem = formatConfigPath(pathSegments);
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
 
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
@@ -848,7 +849,10 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   }
 
   if (!allowedValuesSummary) {
-    return { path: pathItem, message: enrichedMessage };
+    return {
+      path: pathItem,
+      message: enrichedMessage,
+    };
   }
 
   return {
