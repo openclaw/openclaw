@@ -25,7 +25,10 @@ import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
-import { isTaskFlowCancellationPending } from "./task-cancellation-state.js";
+import {
+  isProvisionalSubagentKillTask,
+  isTaskFlowCancellationPending,
+} from "./task-cancellation-state.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -218,6 +221,21 @@ function assertParentFlowLinkAllowed(params: {
 function ensureLinkedTaskFlowRegistryReady(task: Pick<TaskRecord, "parentFlowId">): void {
   if (task.parentFlowId?.trim()) {
     ensureTaskFlowRegistryReady();
+  }
+}
+
+function ensureTaskCancellationReady(task: TaskRecord): void {
+  const runId = task.runId?.trim();
+  const linkedTasks =
+    runId && (task.runtime === "acp" || task.runtime === "subagent")
+      ? getTasksByRunScope({
+          runId,
+          runtime: task.runtime,
+          sessionKey: task.childSessionKey,
+        })
+      : [task];
+  for (const linkedTask of linkedTasks.length > 0 ? linkedTasks : [task]) {
+    ensureLinkedTaskFlowRegistryReady(linkedTask);
   }
 }
 
@@ -2322,6 +2340,7 @@ export async function cancelTaskById(params: {
   }
   const childSessionKey = task.childSessionKey?.trim();
   try {
+    ensureTaskCancellationReady(task);
     // A direct kill is only a provisional terminal projection. Re-read the
     // owning subagent run before promotion so its canonical completion can win.
     if (task.runtime !== "cli") {
@@ -2508,6 +2527,18 @@ export async function cancelTaskById(params: {
       task: cloneTaskRecord(task),
     };
   }
+}
+
+export function assertTaskCancellationReadyById(taskId: string): TaskRecord | null {
+  ensureTaskRegistryReady();
+  const task = tasks.get(taskId.trim());
+  if (!task) {
+    return null;
+  }
+  if (!isTerminalTaskStatus(task.status) || isProvisionalSubagentKillTask(task)) {
+    ensureTaskCancellationReady(task);
+  }
+  return cloneTaskRecord(task);
 }
 
 // Callers that provide their own order use this cloned snapshot to avoid paying

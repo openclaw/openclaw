@@ -19,6 +19,7 @@ export function reloadTaskRuntimeStateFromStore(): void {
 }
 
 export {
+  assertTaskCancellationReadyById,
   cancelTaskById,
   createTaskRecord,
   deleteTaskRecordById,
