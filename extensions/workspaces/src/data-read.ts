@@ -2,6 +2,9 @@ import path from "node:path";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
+  COMPUTED_OPS,
+  type ComputedOp,
+  STREAM_EVENT_ALLOWLIST,
   WorkspaceBindingResolutionError,
   normalizeWorkspaceDataLogicalPath,
 } from "./binding-contract.js";
@@ -50,6 +53,61 @@ function readBinding(value: unknown): WorkspaceBinding {
       source: "file",
       path: value.path,
       ...(value.pointer !== undefined ? { pointer: value.pointer } : {}),
+    };
+  }
+  if (value.source === "stream") {
+    if (typeof value.event !== "string" || !value.event.trim()) {
+      throw new WorkspaceBindingResolutionError(
+        "binding_invalid",
+        "stream binding event is required",
+      );
+    }
+    if (!STREAM_EVENT_ALLOWLIST.includes(value.event as (typeof STREAM_EVENT_ALLOWLIST)[number])) {
+      throw new WorkspaceBindingResolutionError(
+        "binding_invalid",
+        "stream binding event is not allowlisted",
+      );
+    }
+    return {
+      source: "stream",
+      event: value.event,
+      ...(typeof value.pointer === "string" ? { pointer: value.pointer } : {}),
+    };
+  }
+  if (value.source === "computed") {
+    if (typeof value.op !== "string") {
+      throw new WorkspaceBindingResolutionError(
+        "binding_invalid",
+        "computed binding op is required",
+      );
+    }
+    if (!COMPUTED_OPS.includes(value.op as ComputedOp)) {
+      throw new WorkspaceBindingResolutionError(
+        "binding_invalid",
+        "computed binding op is invalid",
+      );
+    }
+    if (!Array.isArray(value.inputs)) {
+      throw new WorkspaceBindingResolutionError(
+        "binding_invalid",
+        "computed binding inputs are required",
+      );
+    }
+    if (
+      value.inputs.length < 1 ||
+      value.inputs.length > 32 ||
+      value.inputs.some((input) => typeof input !== "string")
+    ) {
+      throw new WorkspaceBindingResolutionError(
+        "binding_invalid",
+        "computed binding inputs are invalid",
+      );
+    }
+    return {
+      source: "computed",
+      op: value.op as ComputedOp,
+      inputs: value.inputs,
+      ...(typeof value.arg === "string" ? { arg: value.arg } : {}),
     };
   }
   throw new WorkspaceBindingResolutionError("binding_invalid", "binding source is invalid");
@@ -151,6 +209,12 @@ export async function resolveBinding(
     throw new WorkspaceBindingResolutionError(
       "binding_client_resolved",
       "rpc workspace bindings are resolved by the Control UI gateway client",
+    );
+  }
+  if (binding.source === "stream" || binding.source === "computed") {
+    throw new WorkspaceBindingResolutionError(
+      "binding_client_resolved",
+      `${binding.source} workspace bindings are resolved by the Control UI client`,
     );
   }
   return await resolveFileBinding(binding, options);

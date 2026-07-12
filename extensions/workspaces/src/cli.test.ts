@@ -108,10 +108,21 @@ describe("workspace CLI", () => {
       "value",
       { source: "static", value: { ok: true } },
     ]);
+    expect(parseWorkspaceBindingShorthand("live=stream:presence#/presence/0")).toEqual([
+      "live",
+      { source: "stream", event: "presence", pointer: "/presence/0" },
+    ]);
+    expect(
+      parseWorkspaceBindingShorthand('total=computed:{"op":"sum","inputs":["subtotal","tax"]}'),
+    ).toEqual(["total", { source: "computed", op: "sum", inputs: ["subtotal", "tax"] }]);
 
     expect(() => parseWorkspaceBindingShorthand("file:q3.json")).toThrow("binding must be");
     expect(() => parseWorkspaceBindingShorthand("value=static:{bad")).toThrow("invalid static");
     expect(() => parseWorkspaceBindingShorthand("value=command:date")).toThrow("binding source");
+    expect(() => parseWorkspaceBindingShorthand("live=stream:")).toThrow(
+      "stream binding event is required",
+    );
+    expect(() => parseWorkspaceBindingShorthand("total=computed:{bad")).toThrow("invalid computed");
   });
 
   it("round-trips tabs and widgets through the L1 gateway methods", async () => {
@@ -139,7 +150,13 @@ describe("workspace CLI", () => {
             "--title",
             "Q3 Revenue",
             "--binding",
-            "value=file:q3.json#/revenue",
+            "subtotal=static:40",
+            "--binding",
+            "tax=static:2",
+            "--binding",
+            'value=computed:{"op":"sum","inputs":["subtotal","tax"]}',
+            "--output-binding",
+            "value",
             "--props",
             '{"format":"usd"}',
           ],
@@ -157,7 +174,12 @@ describe("workspace CLI", () => {
           {
             title: "Q3 Revenue",
             grid: { x: 0, y: 0, w: 4, h: 2 },
-            bindings: { value: { source: "file", path: "q3.json", pointer: "/revenue" } },
+            outputBinding: "value",
+            bindings: {
+              subtotal: { source: "static", value: 40 },
+              tax: { source: "static", value: 2 },
+              value: { source: "computed", op: "sum", inputs: ["subtotal", "tax"] },
+            },
             props: { format: "usd" },
           },
         ],
@@ -168,8 +190,30 @@ describe("workspace CLI", () => {
         expect.objectContaining({ tab: "finance" }),
         expect.objectContaining({ mode: "cli", scopes: ["operator.write", "operator.read"] }),
       );
+      await captureStdout(async () => {
+        await program.parseAsync(
+          [
+            "workspaces",
+            "widgets",
+            "update",
+            "--tab",
+            "finance",
+            "--id",
+            "q3-revenue",
+            "--binding",
+            "value=stream:presence#/presence/0",
+            "--output-binding",
+            "value",
+          ],
+          { from: "user" },
+        );
+      });
+      expect(store.read().tabs[1]?.widgets[0]).toMatchObject({
+        outputBinding: "value",
+        bindings: { value: { source: "stream", event: "presence", pointer: "/presence/0" } },
+      });
       expect(broadcast).toHaveBeenCalledWith("plugin.workspaces.changed", {
-        workspaceVersion: 3,
+        workspaceVersion: 4,
         changedTabSlug: "finance",
         actor: "user",
       });

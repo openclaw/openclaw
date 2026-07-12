@@ -11,6 +11,7 @@ import {
   WORKSPACE_GRID_COLUMNS,
   workspaceAgentProvenance,
   type WorkspaceBinding,
+  type WorkspaceBindingContract,
   type WorkspaceChangedEvent,
   type WorkspaceGridRect,
   type WorkspaceTab,
@@ -27,6 +28,8 @@ export type WorkspaceUiState = {
   loaded: boolean;
   error: string | null;
   workspace: WorkspaceDocument | null;
+  /** Plugin-owned capabilities from `workspaces.get`; empty means fail closed. */
+  bindingContract: WorkspaceBindingContract;
   /** Slug of the workspace tab in view; null until the doc resolves a default. */
   activeSlug: string | null;
   /** Whether the hidden-tabs overflow menu is open. */
@@ -90,6 +93,7 @@ export function getWorkspaceState(host: WorkspaceHost): WorkspaceUiState {
       loaded: false,
       error: null,
       workspace: null,
+      bindingContract: { streamEvents: [], computedOps: [] },
       activeSlug: null,
       hiddenMenuOpen: false,
       pendingWidgetIds: new Set(),
@@ -131,7 +135,13 @@ function normalizeBinding(value: unknown): WorkspaceBinding | null {
     return null;
   }
   const source = value.source;
-  if (source !== "rpc" && source !== "file" && source !== "static") {
+  if (
+    source !== "rpc" &&
+    source !== "file" &&
+    source !== "static" &&
+    source !== "stream" &&
+    source !== "computed"
+  ) {
     return null;
   }
   return {
@@ -141,6 +151,12 @@ function normalizeBinding(value: unknown): WorkspaceBinding | null {
     ...(typeof value.pointer === "string" ? { pointer: value.pointer } : {}),
     ...(isRecord(value.params) ? { params: value.params } : {}),
     ...("value" in value ? { value: value.value } : {}),
+    ...(typeof value.event === "string" ? { event: value.event } : {}),
+    ...(typeof value.op === "string" ? { op: value.op } : {}),
+    ...(Array.isArray(value.inputs)
+      ? { inputs: value.inputs.filter((input): input is string => typeof input === "string") }
+      : {}),
+    ...(typeof value.arg === "string" ? { arg: value.arg } : {}),
   };
 }
 
@@ -175,7 +191,22 @@ function normalizeWidget(value: unknown): WorkspaceWidget | null {
     collapsed: value.collapsed === true,
     ...(typeof value.createdBy === "string" ? { createdBy: value.createdBy } : {}),
     ...(normalizeBindings(value.bindings) ? { bindings: normalizeBindings(value.bindings) } : {}),
+    ...(typeof value.outputBinding === "string" ? { outputBinding: value.outputBinding } : {}),
     ...(isRecord(value.props) ? { props: value.props } : {}),
+  };
+}
+
+function normalizeStringList(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function normalizeBindingContract(value: unknown): WorkspaceBindingContract {
+  const record = isRecord(value) ? value : {};
+  return {
+    streamEvents: normalizeStringList(record.streamEvents),
+    computedOps: normalizeStringList(record.computedOps),
   };
 }
 
@@ -366,6 +397,9 @@ export async function loadWorkspace(
       // workspaces.get responds { doc, workspaceVersion } — read `doc`
       // (a bare payload is tolerated for forward-compat).
       isRecord(payload) && "doc" in payload ? payload.doc : payload,
+    );
+    state.bindingContract = normalizeBindingContract(
+      isRecord(payload) ? payload.bindingContract : undefined,
     );
     state.workspace = workspace;
     state.activeSlug = resolveActiveSlug(workspace, opts?.requestedSlug ?? state.activeSlug);
@@ -741,6 +775,12 @@ export async function resolveBinding(
       const value = await client.request(binding.method, params);
       return { value: applyPointer(value, binding.pointer) };
     }
+    if (binding.source === "stream") {
+      return { error: "Stream bindings resolve via subscription, not a one-shot read." };
+    }
+    if (binding.source === "computed") {
+      return { error: "Computed bindings resolve from sibling values, not a one-shot read." };
+    }
     // file: `workspaces.data.read` accepts ONLY a `binding` param (its readParams
     // whitelist rejects anything else), and it resolves the file AND applies the
     // JSON pointer server-side, returning the final value under `data`. So we send
@@ -774,6 +814,106 @@ export function applyPointer(value: unknown, pointer: string | undefined): unkno
     }
   }
   return current;
+}
+
+function collectNumbers(value: unknown, numbers: number[]): void {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    numbers.push(value);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectNumbers(entry, numbers);
+    }
+  }
+}
+
+function countElements(value: unknown): number {
+  if (Array.isArray(value)) {
+    return value.length;
+  }
+  return value === undefined || value === null ? 0 : 1;
+}
+
+function formatComputed(template: string, values: unknown[]): string {
+  return template.replace(/\{(\d+)\}/g, (_match, digits: string) => {
+    const value = values[Number(digits)];
+    if (typeof value === "string") {
+      return value;
+    }
+    if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+      return String(value);
+    }
+    return value === undefined || value === null ? "" : (JSON.stringify(value) ?? "");
+  });
+}
+
+/** Derive a computed value through a fixed operation switch; no expressions are evaluated. */
+export function resolveComputedBinding(
+  op: string,
+  inputValues: unknown[],
+  arg?: string,
+): WorkspaceBindingResult {
+  switch (op) {
+    case "sum":
+    case "avg":
+    case "min":
+    case "max": {
+      const numbers: number[] = [];
+      for (const value of inputValues) {
+        collectNumbers(value, numbers);
+      }
+      if (op === "sum") {
+        return { value: numbers.reduce((total, value) => total + value, 0) };
+      }
+      if (numbers.length === 0) {
+        return { value: null };
+      }
+      if (op === "avg") {
+        return { value: numbers.reduce((total, value) => total + value, 0) / numbers.length };
+      }
+      return {
+        value: numbers.reduce((result, value) =>
+          op === "min" ? Math.min(result, value) : Math.max(result, value),
+        ),
+      };
+    }
+    case "count":
+      return {
+        value: inputValues.reduce<number>((total, value) => total + countElements(value), 0),
+      };
+    case "last":
+      return { value: inputValues.length ? inputValues[inputValues.length - 1] : null };
+    case "pick":
+      return { value: applyPointer(inputValues[0], arg) };
+    case "format":
+      return { value: formatComputed(arg ?? "", inputValues) };
+    default:
+      return { error: `Unknown computed op: ${op}` };
+  }
+}
+
+/** Subscribe to an allowlisted event on the Control UI's existing gateway connection. */
+export function subscribeToStreamBinding(
+  client: GatewayBrowserClient | null,
+  binding: WorkspaceBinding,
+  allowedEvents: readonly string[],
+  onValue: (result: WorkspaceBindingResult) => void,
+): () => void {
+  const event = binding.event;
+  if (!client || !event || !allowedEvents.includes(event)) {
+    return () => {};
+  }
+  return client.addEventListener((frame: GatewayEventFrame) => {
+    if (frame.event !== event) {
+      return;
+    }
+    try {
+      onValue({ value: applyPointer(frame.payload, binding.pointer) });
+    } catch (error) {
+      onValue({ error: formatError(error) });
+    }
+  });
 }
 
 export { workspaceAgentProvenance };

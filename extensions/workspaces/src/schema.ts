@@ -1,4 +1,10 @@
-import { DATA_READ_RPC_ALLOWLIST, normalizeWorkspaceDataLogicalPath } from "./binding-contract.js";
+import {
+  COMPUTED_OPS,
+  type ComputedOp,
+  DATA_READ_RPC_ALLOWLIST,
+  normalizeWorkspaceDataLogicalPath,
+  STREAM_EVENT_ALLOWLIST,
+} from "./binding-contract.js";
 
 export type JsonValue =
   | null
@@ -17,7 +23,19 @@ type WorkspaceRpcBinding = {
 };
 type WorkspaceFileBinding = { source: "file"; path: string; pointer?: string };
 type WorkspaceStaticBinding = { source: "static"; value: JsonValue };
-export type WorkspaceBinding = WorkspaceRpcBinding | WorkspaceFileBinding | WorkspaceStaticBinding;
+type WorkspaceStreamBinding = { source: "stream"; event: string; pointer?: string };
+type WorkspaceComputedBinding = {
+  source: "computed";
+  op: ComputedOp;
+  inputs: string[];
+  arg?: string;
+};
+export type WorkspaceBinding =
+  | WorkspaceRpcBinding
+  | WorkspaceFileBinding
+  | WorkspaceStaticBinding
+  | WorkspaceStreamBinding
+  | WorkspaceComputedBinding;
 export type WorkspaceWidget = {
   id: string;
   kind: string;
@@ -28,6 +46,8 @@ export type WorkspaceWidget = {
   /** Provenance stamp; the Control UI renders an "AI" chip for `agent:<id>`. */
   createdBy: WorkspaceActor;
   bindings?: Record<string, WorkspaceBinding>;
+  /** Binding rendered by the widget; required when the binding map is ambiguous. */
+  outputBinding?: string;
   props?: JsonValue;
 };
 export type WorkspaceTab = {
@@ -75,8 +95,10 @@ export const BUILTIN_WIDGET_KINDS = [
 const BUILTIN_KINDS = new Set<string>(BUILTIN_WIDGET_KINDS);
 const CUSTOM_KIND_PATTERN = /^custom:(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
 const CUSTOM_WIDGET_NAME_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
+const BINDING_ID_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
 const MAX_STATIC_BINDING_BYTES = 8 * 1024;
 const MAX_RPC_BINDING_PARAMS_BYTES = 8 * 1024;
+const MAX_COMPUTED_INPUTS = 32;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -236,26 +258,100 @@ function validateBinding(value: unknown, path: string): WorkspaceBinding {
     }
     return { source, value: jsonValue };
   }
+  if (source === "stream") {
+    assertKnownKeys(record, ["source", "event", "pointer"], path);
+    const event = requireString(record, "event", path);
+    if (!STREAM_EVENT_ALLOWLIST.includes(event as (typeof STREAM_EVENT_ALLOWLIST)[number])) {
+      throw new Error(`${path}.event is not allowlisted`);
+    }
+    const pointer = optionalString(record, "pointer", path);
+    if (pointer !== undefined && !pointer.startsWith("/")) {
+      throw new Error(`${path}.pointer must be a JSON pointer`);
+    }
+    return { source, event, ...(pointer !== undefined ? { pointer } : {}) };
+  }
+  if (source === "computed") {
+    assertKnownKeys(record, ["source", "op", "inputs", "arg"], path);
+    const op = requireString(record, "op", path);
+    if (!COMPUTED_OPS.includes(op as ComputedOp)) {
+      throw new Error(`${path}.op is not a valid computed op`);
+    }
+    const rawInputs = requireArray(record.inputs, `${path}.inputs`);
+    if (rawInputs.length < 1 || rawInputs.length > MAX_COMPUTED_INPUTS) {
+      throw new Error(`${path}.inputs must contain 1 to ${MAX_COMPUTED_INPUTS} entries`);
+    }
+    const inputs = rawInputs.map((entry, index) => {
+      if (typeof entry !== "string" || !BINDING_ID_PATTERN.test(entry)) {
+        throw new Error(`${path}.inputs[${index}] is invalid`);
+      }
+      return entry;
+    });
+    const needsArg = op === "pick" || op === "format";
+    const arg = optionalString(record, "arg", path);
+    if (needsArg && !arg) {
+      throw new Error(`${path}.arg is required for the ${op} op`);
+    }
+    if (!needsArg && arg !== undefined) {
+      throw new Error(`${path}.arg is not allowed for the ${op} op`);
+    }
+    if (op === "pick" && arg !== undefined && !arg.startsWith("/")) {
+      throw new Error(`${path}.arg must be a JSON pointer for the pick op`);
+    }
+    return { source, op: op as ComputedOp, inputs, ...(arg !== undefined ? { arg } : {}) };
+  }
   throw new Error(`${path}.source is invalid`);
 }
 
 function validateBindingRecord(value: unknown, path: string): Record<string, WorkspaceBinding> {
   const record = assertRecord(value, path);
-  return Object.fromEntries(
+  const bindings = Object.fromEntries(
     Object.entries(record).map(([key, entry]) => {
-      if (key === "__proto__" || !/^[A-Za-z0-9._-]{1,64}$/.test(key)) {
+      if (!BINDING_ID_PATTERN.test(key)) {
         throw new Error(`${path}.${key} binding id is invalid`);
       }
       return [key, validateBinding(entry, `${path}.${key}`)];
     }),
   );
+  // Computed bindings depend only on leaf siblings. This makes cycles
+  // structurally impossible without maintaining a second dependency graph.
+  for (const [key, binding] of Object.entries(bindings)) {
+    if (binding.source !== "computed") {
+      continue;
+    }
+    for (const input of binding.inputs) {
+      if (!Object.hasOwn(bindings, input)) {
+        throw new Error(`${path}.${key}.inputs references unknown binding: ${input}`);
+      }
+      const target = bindings[input]!;
+      if (target.source === "computed") {
+        throw new Error(
+          `${path}.${key}.inputs may not reference another computed binding: ${input}`,
+        );
+      }
+      if (target.source === "stream") {
+        throw new Error(`${path}.${key}.inputs may not reference a stream binding: ${input}`);
+      }
+    }
+  }
+  return bindings;
 }
 
 function validateWidget(value: unknown, path: string): WorkspaceWidget {
   const record = assertRecord(value, path);
   assertKnownKeys(
     record,
-    ["id", "kind", "title", "grid", "collapsed", "hidden", "createdBy", "bindings", "props"],
+    [
+      "id",
+      "kind",
+      "title",
+      "grid",
+      "collapsed",
+      "hidden",
+      "createdBy",
+      "bindings",
+      "outputBinding",
+      "props",
+    ],
     path,
   );
   const id = requireString(record, "id", path);
@@ -278,6 +374,16 @@ function validateWidget(value: unknown, path: string): WorkspaceWidget {
     record.bindings === undefined
       ? undefined
       : validateBindingRecord(record.bindings, `${path}.bindings`);
+  const outputBinding = optionalString(record, "outputBinding", path);
+  if (outputBinding !== undefined && !BINDING_ID_PATTERN.test(outputBinding)) {
+    throw new Error(`${path}.outputBinding is invalid`);
+  }
+  if (outputBinding !== undefined && (!bindings || !Object.hasOwn(bindings, outputBinding))) {
+    throw new Error(`${path}.outputBinding references unknown binding: ${outputBinding}`);
+  }
+  if (bindings && Object.keys(bindings).length > 1 && outputBinding === undefined) {
+    throw new Error(`${path}.outputBinding is required when bindings contains more than one entry`);
+  }
   const props =
     record.props === undefined ? undefined : assertJsonValue(record.props, `${path}.props`);
   return {
@@ -289,6 +395,7 @@ function validateWidget(value: unknown, path: string): WorkspaceWidget {
     hidden: requireBoolean(record, "hidden", path),
     createdBy: validateActor(record.createdBy, `${path}.createdBy`),
     ...(bindings !== undefined ? { bindings } : {}),
+    ...(outputBinding !== undefined ? { outputBinding } : {}),
     ...(props !== undefined ? { props } : {}),
   };
 }
@@ -455,4 +562,37 @@ export function validateWorkspaceDoc(value: unknown): WorkspaceDoc {
     widgetsRegistry: validateWidgetsRegistry(record.widgetsRegistry),
     prefs: validatePrefs(record.prefs, tabSlugs),
   };
+}
+export function migrateWorkspaceDoc(value: unknown): { doc: WorkspaceDoc; changed: boolean } {
+  const record = assertRecord(value, "workspaces");
+  const schemaVersion = record.schemaVersion;
+  if (typeof schemaVersion !== "number" || !Number.isInteger(schemaVersion)) {
+    throw new Error("schemaVersion must be an integer");
+  }
+  if (schemaVersion > CURRENT_WORKSPACE_SCHEMA_VERSION) {
+    throw new Error(`unsupported future workspace schemaVersion: ${schemaVersion}`);
+  }
+  if (schemaVersion < CURRENT_WORKSPACE_SCHEMA_VERSION) {
+    throw new Error(`unsupported old workspace schemaVersion: ${schemaVersion}`);
+  }
+  const migrated = structuredClone(record);
+  let changed = false;
+  if (Array.isArray(migrated.tabs)) {
+    for (const tab of migrated.tabs) {
+      if (!isRecord(tab) || !Array.isArray(tab.widgets)) {
+        continue;
+      }
+      for (const widget of tab.widgets) {
+        if (!isRecord(widget) || widget.outputBinding !== undefined || !isRecord(widget.bindings)) {
+          continue;
+        }
+        const bindingIds = Object.keys(widget.bindings);
+        if (bindingIds.length > 1) {
+          widget.outputBinding = bindingIds[0];
+          changed = true;
+        }
+      }
+    }
+  }
+  return { doc: validateWorkspaceDoc(migrated), changed };
 }

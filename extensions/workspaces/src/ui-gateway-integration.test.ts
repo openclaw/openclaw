@@ -165,6 +165,12 @@ describe("workspace UI <-> gateway integration seam", () => {
       await loadWorkspace(state, client);
       expect(state.loaded).toBe(true);
       expect(state.error).toBeNull();
+      // Keep capability negotiation on the real UI <-> gateway seam: split unit
+      // tests on either side would both stay green if the wire field drifted.
+      expect(state.bindingContract).toEqual({
+        streamEvents: ["presence", "sessions.changed"],
+        computedOps: ["sum", "avg", "min", "max", "last", "count", "pick", "format"],
+      });
       // Direct real-routing assertion on the get payload (independent of the UI's
       // defensive normalize): the seeded tab/widget survive the round-trip.
       const got = (await client.request("workspaces.get", {})) as { doc: WorkspaceDoc };

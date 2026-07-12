@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { COMPUTED_OPS, STREAM_EVENT_ALLOWLIST, type ComputedOp } from "./binding-contract.js";
 import {
   validateWorkspaceDoc,
   type WorkspaceBinding,
@@ -70,7 +71,10 @@ function parseWorkspaceGrid(value: string): WorkspaceGrid {
 export function parseWorkspaceBindingShorthand(value: string): [string, WorkspaceBinding] {
   const eqIndex = value.indexOf("=");
   if (eqIndex <= 0) {
-    throw new Error("binding must be id=file:<path>, id=rpc:<method>, or id=static:<json>");
+    throw new Error(
+      "binding must be id=file:<path>, id=rpc:<method>, id=static:<json>, " +
+        "id=stream:<event>, or id=computed:<json>",
+    );
   }
   const id = value.slice(0, eqIndex).trim();
   const body = value.slice(eqIndex + 1).trim();
@@ -104,7 +108,48 @@ export function parseWorkspaceBindingShorthand(value: string): [string, Workspac
   if (body.startsWith("static:")) {
     return [id, { source: "static", value: parseJson(body.slice("static:".length), "static") }];
   }
-  throw new Error("binding source must be file, rpc, or static");
+  if (body.startsWith("stream:")) {
+    const streamSpec = body.slice("stream:".length);
+    const hashIndex = streamSpec.indexOf("#");
+    const event = (hashIndex >= 0 ? streamSpec.slice(0, hashIndex) : streamSpec).trim();
+    const pointer = hashIndex >= 0 ? streamSpec.slice(hashIndex + 1) : undefined;
+    if (!event) {
+      throw new Error("stream binding event is required");
+    }
+    if (!STREAM_EVENT_ALLOWLIST.includes(event as (typeof STREAM_EVENT_ALLOWLIST)[number])) {
+      throw new Error(`stream binding event is not allowlisted: ${event}`);
+    }
+    return [id, { source: "stream", event, ...(pointer !== undefined ? { pointer } : {}) }];
+  }
+  if (body.startsWith("computed:")) {
+    const value = parseJson(body.slice("computed:".length), "computed");
+    if (!isRecord(value)) {
+      throw new Error("computed binding must be a JSON object");
+    }
+    const op = value.op;
+    const inputs = value.inputs;
+    const arg = value.arg;
+    if (typeof op !== "string" || !COMPUTED_OPS.includes(op as ComputedOp)) {
+      throw new Error("computed binding op is invalid");
+    }
+    if (!Array.isArray(inputs) || inputs.some((input) => typeof input !== "string")) {
+      throw new Error("computed binding inputs must be an array of binding ids");
+    }
+    const stringInputs = inputs.filter((input): input is string => typeof input === "string");
+    if (arg !== undefined && typeof arg !== "string") {
+      throw new Error("computed binding arg must be a string");
+    }
+    return [
+      id,
+      {
+        source: "computed",
+        op: op as ComputedOp,
+        inputs: stringInputs,
+        ...(arg !== undefined ? { arg } : {}),
+      },
+    ];
+  }
+  throw new Error("binding source must be file, rpc, static, stream, or computed");
 }
 
 function collectBinding(value: string, previous: string[] = []): string[] {
@@ -306,6 +351,7 @@ export function registerWorkspaceCli(options: RegisterWorkspaceCliOptions): void
       .option("--title <title>", "Widget title")
       .option("--grid <x,y,w,h>", "Widget grid", "0,0,4,2")
       .option("--binding <id=source>", "Binding shorthand", collectBinding, [])
+      .option("--output-binding <id>", "Binding id rendered by the widget")
       .option("--props <json>", "Widget props JSON"),
   ).action(
     async (
@@ -316,6 +362,7 @@ export function registerWorkspaceCli(options: RegisterWorkspaceCliOptions): void
         title?: string;
         grid?: string;
         binding?: string[];
+        outputBinding?: string;
         props?: string;
       },
     ) => {
@@ -328,6 +375,7 @@ export function registerWorkspaceCli(options: RegisterWorkspaceCliOptions): void
           ...(commandOptions.title ? { title: commandOptions.title } : {}),
           grid: parseWorkspaceGrid(commandOptions.grid ?? "0,0,4,2"),
           ...(bindings ? { bindings } : {}),
+          ...(commandOptions.outputBinding ? { outputBinding: commandOptions.outputBinding } : {}),
           ...(commandOptions.props ? { props: parseJson(commandOptions.props, "props") } : {}),
         },
       });
@@ -343,7 +391,10 @@ export function registerWorkspaceCli(options: RegisterWorkspaceCliOptions): void
       .requiredOption("--id <id>", "Widget id")
       .option("--title <title>", "Widget title")
       .option("--collapsed <bool>", "Collapsed state", parseOptionalBoolean)
-      .option("--hidden <bool>", "Hidden state", parseOptionalBoolean),
+      .option("--hidden <bool>", "Hidden state", parseOptionalBoolean)
+      .option("--binding <id=source>", "Replacement binding shorthand", collectBinding, [])
+      .option("--output-binding <id>", "Binding id rendered by the widget")
+      .option("--props <json>", "Replacement widget props JSON"),
   ).action(
     async (
       commandOptions: GatewayOptions & {
@@ -352,12 +403,19 @@ export function registerWorkspaceCli(options: RegisterWorkspaceCliOptions): void
         title?: string;
         collapsed?: boolean;
         hidden?: boolean;
+        binding?: string[];
+        outputBinding?: string;
+        props?: string;
       },
     ) => {
+      const bindings = parseBindings(commandOptions.binding);
       const patch = {
         ...(commandOptions.title !== undefined ? { title: commandOptions.title } : {}),
         ...(commandOptions.collapsed !== undefined ? { collapsed: commandOptions.collapsed } : {}),
         ...(commandOptions.hidden !== undefined ? { hidden: commandOptions.hidden } : {}),
+        ...(bindings ? { bindings } : {}),
+        ...(commandOptions.outputBinding ? { outputBinding: commandOptions.outputBinding } : {}),
+        ...(commandOptions.props ? { props: parseJson(commandOptions.props, "props") } : {}),
       };
       requirePatch(patch);
       const result = await callWorkspaceGateway("workspaces.widget.update", commandOptions, {

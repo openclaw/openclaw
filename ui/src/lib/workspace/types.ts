@@ -13,7 +13,7 @@ export type WorkspaceCreatedBy = string;
 
 export type WorkspaceWidgetKind = string;
 
-export type WorkspaceBindingSource = "rpc" | "file" | "static";
+export type WorkspaceBindingSource = "rpc" | "file" | "static" | "stream" | "computed";
 
 export type WorkspaceBinding = {
   source: WorkspaceBindingSource;
@@ -26,6 +26,13 @@ export type WorkspaceBinding = {
   params?: Record<string, unknown>;
   /** `static` bindings carry their value inline. */
   value?: unknown;
+  /** `stream` bindings consume an allowlisted gateway broadcast. */
+  event?: string;
+  /** `computed` bindings derive a value from sibling binding ids. */
+  op?: string;
+  inputs?: string[];
+  /** Argument for the `pick` and `format` computed operations. */
+  arg?: string;
 };
 
 export type WorkspaceGridRect = {
@@ -43,7 +50,14 @@ export type WorkspaceWidget = {
   collapsed: boolean;
   createdBy?: WorkspaceCreatedBy;
   bindings?: Record<string, WorkspaceBinding>;
+  outputBinding?: string;
   props?: Record<string, unknown>;
+};
+
+/** Server-owned binding capabilities returned alongside the persisted document. */
+export type WorkspaceBindingContract = {
+  streamEvents: string[];
+  computedOps: string[];
 };
 
 export type WorkspaceTab = {

@@ -28,6 +28,21 @@ describe("workspace data binding resolver", () => {
     });
   });
 
+  it("returns the client-resolution signal for stream and computed bindings", async () => {
+    await expect(resolveBinding({ source: "stream", event: "presence" })).rejects.toMatchObject({
+      code: "binding_client_resolved",
+    });
+    await expect(
+      resolveBinding({ source: "computed", op: "sum", inputs: ["a"] }),
+    ).rejects.toMatchObject({ code: "binding_client_resolved" });
+  });
+
+  it("rejects stream events that read-only workspace clients cannot receive", async () => {
+    await expect(
+      resolveBinding({ source: "stream", event: "plugin.workspaces.changed" }),
+    ).rejects.toMatchObject({ code: "binding_invalid" });
+  });
+
   it("allowlists the read methods the L4 builtin data widgets bind", () => {
     // Frozen so a builtin can never reference a method the write-time schema
     // would reject. system-presence backs builtin:instances; cron.runs backs

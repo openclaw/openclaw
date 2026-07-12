@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_WORKSPACE } from "./default-workspace.js";
-import { validateWorkspaceDoc, type WorkspaceDoc } from "./schema.js";
+import { migrateWorkspaceDoc, validateWorkspaceDoc, type WorkspaceDoc } from "./schema.js";
 
 function validDoc(): WorkspaceDoc {
   return structuredClone(DEFAULT_WORKSPACE);
@@ -124,5 +124,165 @@ describe("Workspaces document schema", () => {
     expectInvalid((doc) => {
       doc.tabs[0]!.createdBy = "robot" as never;
     }, "createdBy");
+  });
+
+  it("accepts stream bindings on readable event channels", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.bindings = {
+      live: { source: "stream", event: "presence", pointer: "/online" },
+    } as never;
+
+    expect(() => validateWorkspaceDoc(doc)).not.toThrow();
+  });
+
+  it("rejects stream bindings on non-allowlisted event channels", () => {
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        live: { source: "stream", event: "evil.channel" },
+      } as never;
+    }, "bindings.live.event is not allowlisted");
+  });
+
+  it("does not advertise the write-scoped workspace change event as stream-readable", () => {
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        live: { source: "stream", event: "plugin.workspaces.changed" },
+      } as never;
+    }, "bindings.live.event is not allowlisted");
+  });
+
+  it("requires an explicit output binding when a widget has multiple bindings", () => {
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        a: { source: "static", value: 1 },
+        b: { source: "static", value: 2 },
+      } as never;
+    }, "outputBinding is required when bindings contains more than one entry");
+  });
+
+  it("accepts a validated non-first output binding", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.bindings = {
+      a: { source: "static", value: 2 },
+      b: { source: "static", value: 3 },
+      total: { source: "computed", op: "sum", inputs: ["a", "b"] },
+    } as never;
+    doc.tabs[0]!.widgets[0]!.outputBinding = "total";
+
+    expect(validateWorkspaceDoc(doc).tabs[0]!.widgets[0]).toMatchObject({
+      outputBinding: "total",
+    });
+  });
+
+  it("migrates the legacy first-binding choice into an explicit outputBinding", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0]!.bindings = {
+      first: { source: "static", value: 1 },
+      second: { source: "static", value: 2 },
+    };
+
+    const migrated = migrateWorkspaceDoc(doc);
+    expect(migrated.changed).toBe(true);
+    expect(migrated.doc.tabs[0]!.widgets[0]!.outputBinding).toBe("first");
+  });
+
+  it("rejects prototype-chain names as computed inputs and output bindings", () => {
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        total: { source: "computed", op: "sum", inputs: ["constructor"] },
+      } as never;
+    }, "references unknown binding: constructor");
+
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = { value: { source: "static", value: 1 } };
+      doc.tabs[0]!.widgets[0]!.outputBinding = "constructor";
+    }, "references unknown binding: constructor");
+  });
+
+  it("rejects an output binding that is absent from the widget binding map", () => {
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        value: { source: "static", value: 1 },
+      } as never;
+      doc.tabs[0]!.widgets[0]!.outputBinding = "missing";
+    }, "outputBinding references unknown binding: missing");
+  });
+
+  it("accepts every computed operation with valid sibling inputs", () => {
+    for (const op of ["sum", "avg", "min", "max", "last", "count"]) {
+      const doc = validDoc();
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        total: { source: "computed", op, inputs: ["a", "b"] },
+        a: { source: "static", value: 1 },
+        b: { source: "static", value: 2 },
+      } as never;
+      doc.tabs[0]!.widgets[0]!.outputBinding = "total";
+      expect(() => validateWorkspaceDoc(doc)).not.toThrow();
+    }
+
+    for (const [op, arg] of [
+      ["pick", "/nested/value"],
+      ["format", "{0} of {1}"],
+    ]) {
+      const doc = validDoc();
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        derived: { source: "computed", op, inputs: ["a"], arg },
+        a: { source: "static", value: 1 },
+      } as never;
+      doc.tabs[0]!.widgets[0]!.outputBinding = "derived";
+      expect(() => validateWorkspaceDoc(doc)).not.toThrow();
+    }
+  });
+
+  it("rejects invalid computed operations, inputs, and arguments", () => {
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        total: { source: "computed", op: "eval", inputs: ["a"] },
+        a: { source: "static", value: 1 },
+      } as never;
+    }, "bindings.total.op is not a valid computed op");
+
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        total: { source: "computed", op: "sum", inputs: [] },
+      } as never;
+    }, "bindings.total.inputs must contain 1 to 32 entries");
+
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        derived: { source: "computed", op: "pick", inputs: ["a"] },
+        a: { source: "static", value: 1 },
+      } as never;
+    }, "bindings.derived.arg is required for the pick op");
+
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        total: { source: "computed", op: "sum", inputs: ["a"], arg: "unused" },
+        a: { source: "static", value: 1 },
+      } as never;
+    }, "bindings.total.arg is not allowed for the sum op");
+  });
+
+  it("rejects computed inputs that reference missing or computed siblings", () => {
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        total: { source: "computed", op: "sum", inputs: ["missing"] },
+      } as never;
+    }, "references unknown binding: missing");
+
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        total: { source: "computed", op: "sum", inputs: ["mid"] },
+        mid: { source: "computed", op: "sum", inputs: ["a"] },
+        a: { source: "static", value: 1 },
+      } as never;
+    }, "may not reference another computed binding: mid");
+
+    expectInvalid((doc) => {
+      doc.tabs[0]!.widgets[0]!.bindings = {
+        total: { source: "computed", op: "sum", inputs: ["live"] },
+        live: { source: "stream", event: "presence" },
+      } as never;
+    }, "may not reference a stream binding: live");
   });
 });

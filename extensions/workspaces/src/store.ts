@@ -27,6 +27,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { WidgetAssetTokens } from "./asset-tokens.js";
 import { DEFAULT_WORKSPACE } from "./default-workspace.js";
 import {
+  migrateWorkspaceDoc,
   validateWorkspaceDoc,
   type WorkspaceActor,
   type WorkspaceWidgetRegistryEntry,
@@ -154,7 +155,15 @@ export class WorkspaceStore {
       this.commit(seeded, { snapshot: null });
       return structuredClone(seeded);
     }
-    const doc = validateWorkspaceDoc(JSON.parse(row.doc));
+    const migrated = migrateWorkspaceDoc(JSON.parse(row.doc));
+    const doc = migrated.doc;
+    if (migrated.changed) {
+      const serialized = serializeWorkspaceDoc(doc);
+      assertWorkspaceSize(serialized);
+      this.db
+        .prepare("UPDATE workspace SET doc = ?, updated_ms = ? WHERE id = 1")
+        .run(serialized, Date.now());
+    }
     this.cached = doc;
     return structuredClone(doc);
   }
@@ -213,7 +222,7 @@ export class WorkspaceStore {
         this.db.prepare("DELETE FROM undo WHERE version = ?").run(row.version);
         // transact() stamps the next version, so the restored document lands as a
         // forward write rather than a rewind.
-        const snapshot = validateWorkspaceDoc(JSON.parse(row.doc));
+        const snapshot = migrateWorkspaceDoc(JSON.parse(row.doc)).doc;
         // Approval state is a separate operator decision, not layout history.
         // Undo may restore tabs/widgets, but it must never revive a revoked
         // approval or discard a registry decision made after the snapshot.

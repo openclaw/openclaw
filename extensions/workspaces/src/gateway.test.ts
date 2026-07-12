@@ -99,6 +99,12 @@ describe("workspace gateway methods", () => {
       const read = await callMethod(methods.get("workspaces.get")!, {}, broadcast);
       expect(read.response?.[0]).toBe(true);
       expect(read.response?.[1]).toMatchObject({ workspaceVersion: 1 });
+      expect(read.response?.[1]).toMatchObject({
+        bindingContract: {
+          streamEvents: ["presence", "sessions.changed"],
+          computedOps: ["sum", "avg", "min", "max", "last", "count", "pick", "format"],
+        },
+      });
       expect(broadcast).not.toHaveBeenCalled();
 
       // Provenance is derived from the caller. An RPC client must not be able to
