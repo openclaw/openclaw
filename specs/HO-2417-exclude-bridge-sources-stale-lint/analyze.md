@@ -14,6 +14,7 @@
 - Fatal: 0
 - Critical: 0
 - Missing part: none
+- Ambiguity Count: 0
 - UI evidence: N/A. This change has no UI, route, or snapshot surface.
 - Async lifecycle ownership: N/A. The lint operation is bounded local analysis
   and does not acquire or transfer pipeline ownership.

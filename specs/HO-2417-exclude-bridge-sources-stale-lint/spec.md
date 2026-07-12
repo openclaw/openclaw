@@ -13,7 +13,7 @@ As a wiki maintainer, I need lint to distinguish immutable bridge evidence from
 knowledge that needs freshness review so that a clean bridge import does not
 produce false-positive stale-page warnings.
 
-## Functional Requirements
+## Requirements
 
 - Only source pages currently registered in source-sync state with group
   `bridge` are excluded from the `stale-page` lint rule.
@@ -39,8 +39,8 @@ pages, resolving open questions, or changing source timestamps.
 
 ## Clarification
 
-No [NEEDS CLARIFICATION] markers remain. The source-sync entry `group` is the
-authoritative distinction: only `bridge` is immutable bridge evidence;
+Clarification complete; no unresolved scope questions remain. The source-sync
+entry `group` is the authoritative distinction: only `bridge` is immutable bridge evidence;
 `unsafe-local` and untracked pages remain ordinary freshness-review candidates.
 
 ## UI applicability
