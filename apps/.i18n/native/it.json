@@ -1799,6 +1799,11 @@
       "translated": "Ora"
     },
     {
+      "id": "native.android.d3bcf29a4964cee7",
+      "source": "${durationMs}ms",
+      "translated": "${durationMs} ms"
+    },
+    {
       "id": "native.android.0ce41ada06508a71",
       "source": "No details",
       "translated": "Nessun dettaglio"
@@ -4339,11 +4344,6 @@
       "translated": "Offline"
     },
     {
-      "id": "native.android.e79f173a190fca95",
-      "source": "Node",
-      "translated": "Nodo"
-    },
-    {
       "id": "native.android.c0cbf2ed1fc50e4c",
       "source": "Not paired",
       "translated": "Non abbinato"
@@ -4934,6 +4934,11 @@
       "translated": "Nodo ${nodeId}"
     },
     {
+      "id": "native.android.e79f173a190fca95",
+      "source": "Node",
+      "translated": "Nodo"
+    },
+    {
       "id": "native.android.d744d434533ea8ed",
       "source": "Gateway",
       "translated": "Gateway"
@@ -4957,6 +4962,21 @@
       "id": "native.android.d47aea365fe8edc5",
       "source": "soon",
       "translated": "a breve"
+    },
+    {
+      "id": "native.android.af1a7c8d9114beca",
+      "source": "Main",
+      "translated": "Principale"
+    },
+    {
+      "id": "native.android.7dc2b8245fe0f92c",
+      "source": "Isolated",
+      "translated": "Isolato"
+    },
+    {
+      "id": "native.android.8a78b5264b380055",
+      "source": "Current",
+      "translated": "Attuale"
     },
     {
       "id": "native.android.98b1e19bdbc1e640",
@@ -5057,6 +5077,21 @@
       "id": "native.android.0df1b7be4afd30ae",
       "source": "Due",
       "translated": "Scadenza"
+    },
+    {
+      "id": "native.android.2aba2d9099a7012b",
+      "source": "${days}d",
+      "translated": "${days} g"
+    },
+    {
+      "id": "native.android.f735bbd08c3387ad",
+      "source": "${hours}h",
+      "translated": "${hours} h"
+    },
+    {
+      "id": "native.android.1a1e1ed534d745e7",
+      "source": "${minutes}m",
+      "translated": "${minutes} min"
     },
     {
       "id": "native.android.a1530e72e0309a1f",
