@@ -309,7 +309,7 @@ Remove a config value by dot path. Use `--dry-run` to validate the removal befor
 ```bash
 openclaw config unset plugins.entries.brave.config.webSearch.apiKey
 openclaw config unset secrets.providers.env-provider --dry-run
-openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
+openclaw config unset tools.alsoAllow --dry-run --allow-exec
 ```
 
 ### Dry-run options
@@ -348,7 +348,7 @@ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
     Allow exec SecretRef resolvability checks during dry-run. Exec providers are skipped by default to avoid command side effects. Requires `--dry-run`.
 
     ```bash
-    openclaw config unset secrets.providers.vault --dry-run --allow-exec
+    openclaw config unset tools.alsoAllow --dry-run --allow-exec
     ```
 
   </Tab>
@@ -371,12 +371,12 @@ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
 
     ```bash
     # Without --allow-exec: exec refs skipped
-    $ openclaw config unset secrets.providers.exec-provider --dry-run
+    $ openclaw config unset tools.alsoAllow --dry-run
 
     Dry run note: skipped 1 exec SecretRef resolvability check(s). Re-run with --allow-exec to execute exec providers during dry-run.
 
     # With --allow-exec: exec providers are executed
-    $ openclaw config unset secrets.providers.exec-provider --dry-run --allow-exec
+    $ openclaw config unset tools.alsoAllow --dry-run --allow-exec
     ```
 
   </Accordion>
