@@ -1404,12 +1404,10 @@ export async function startGatewayServer(
       await import("./operator-approval-session-events.js");
     // Managers publish through this runtime, while replay routes durable
     // expiry back through the owning manager to release its parked waiter once.
-    let approvalManagersForReplay:
-      | {
-          exec: ExecApprovalManager;
-          plugin: ExecApprovalManager<PluginApprovalRequestPayload>;
-        }
-      | undefined;
+    const approvalManagersForReplay: {
+      exec?: ExecApprovalManager;
+      plugin?: ExecApprovalManager<PluginApprovalRequestPayload>;
+    } = {};
     const approvalSessionEvents = createOperatorApprovalSessionEventRuntime({
       clients,
       sessionMessageSubscribers,
@@ -1418,8 +1416,8 @@ export async function startGatewayServer(
       reconcileTerminal: (record) => {
         const manager =
           record.kind === "exec"
-            ? approvalManagersForReplay?.exec
-            : approvalManagersForReplay?.plugin;
+            ? approvalManagersForReplay.exec
+            : approvalManagersForReplay.plugin;
         return manager?.reconcileDurableTerminal(record) ?? false;
       },
     });
@@ -1449,7 +1447,8 @@ export async function startGatewayServer(
         coreGatewayHandlers: coreGatewayHandlersLocal,
       };
     });
-    approvalManagersForReplay = { exec: execApprovalManager, plugin: pluginApprovalManager };
+    approvalManagersForReplay.exec = execApprovalManager;
+    approvalManagersForReplay.plugin = pluginApprovalManager;
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,

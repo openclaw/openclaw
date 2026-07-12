@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
-import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import {
   closeOpenClawStateDatabaseForTest,
   type OpenClawStateDatabaseOptions,
@@ -526,14 +525,9 @@ describe("operator approval session events", () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const databaseOptions = createDatabaseOptions();
-    let runtime!: ReturnType<typeof createOperatorApprovalSessionEventRuntime>;
-    const manager = new ExecApprovalManager<ExecApprovalRequestPayload>({
-      approvalKind: "exec",
-      persistence: { runtimeEpoch: "session-events", databaseOptions },
-      resolveAllowedDecisions: () => ["allow-once", "deny"],
-      resolveAudienceSessionKeys: () => [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
-      onLifecycle: (event) => runtime.publish(event),
-    });
+    // Replay reconciliation runs only after the manager exists; route it
+    // through a holder so both sides can stay const.
+    const managerHolder: { current?: ExecApprovalManager } = {};
     const parent = createClient({
       connId: "parent-reviewer",
       scopes: ["operator.approvals"],
@@ -543,9 +537,18 @@ describe("operator approval session events", () => {
       clients: [parent],
       databaseOptions,
       now: () => Date.now(),
-      reconcileTerminal: (record) => manager.reconcileDurableTerminal(record),
+      reconcileTerminal: (record) =>
+        managerHolder.current?.reconcileDurableTerminal(record) ?? false,
     });
-    runtime = harness.runtime;
+    const runtime = harness.runtime;
+    const manager = new ExecApprovalManager({
+      approvalKind: "exec",
+      persistence: { runtimeEpoch: "session-events", databaseOptions },
+      resolveAllowedDecisions: () => ["allow-once", "deny"],
+      resolveAudienceSessionKeys: () => [SOURCE_SESSION_KEY, PARENT_SESSION_KEY],
+      onLifecycle: (event) => runtime.publish(event),
+    });
+    managerHolder.current = manager;
     harness.subscribers.subscribe("parent-reviewer", PARENT_SESSION_KEY, {
       includeApprovals: true,
     });

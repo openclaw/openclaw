@@ -292,7 +292,7 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       const normalizedConnId = normalize(connId);
       const normalizedSessionKey = normalize(sessionKey);
       if (!normalizedConnId || !normalizedSessionKey) {
-        return;
+        return undefined;
       }
       const hadMessages =
         sessionToConnIds.get(normalizedSessionKey)?.has(normalizedConnId) ?? false;

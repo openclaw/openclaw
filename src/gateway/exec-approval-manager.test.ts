@@ -309,10 +309,11 @@ describe("ExecApprovalManager", () => {
   });
 
   it("emits pending only after durable insert and live waiter registration", async () => {
-    let manager!: ExecApprovalManager<ExecApprovalRequestPayload>;
     let durableAtCallback: ReturnType<typeof getOperatorApproval> = null;
     let waiterAtCallback: Promise<ExecApprovalDecision | null> | null = null;
     const lifecycleEvents: OperatorApprovalLifecycleEvent[] = [];
+    // The lifecycle callback fires only during register(), after
+    // createPersistentManager has returned, so `created` is initialized.
     const created = createPersistentManager({
       onLifecycle: (event) => {
         lifecycleEvents.push(event);
@@ -321,11 +322,11 @@ describe("ExecApprovalManager", () => {
             id: event.record.id,
             databaseOptions: created.databaseOptions,
           });
-          waiterAtCallback = manager.awaitDecision(event.record.id);
+          waiterAtCallback = created.manager.awaitDecision(event.record.id);
         }
       },
     });
-    manager = created.manager;
+    const manager = created.manager;
     const record = manager.create(
       { command: "echo ordered", sessionKey: "agent:main:child" },
       60_000,
