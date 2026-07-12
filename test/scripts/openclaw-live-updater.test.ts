@@ -1040,12 +1040,13 @@ describe("openclaw live updater", () => {
     expect(output.gatewayRuntime).toMatchObject({ entrypoint: source, pid: 123 });
     expect(JSON.stringify(output)).not.toContain("not-serialized");
     expect(controlEntrypoint).toBe(source);
+    const uid = process.getuid?.() ?? 501;
     expect(commands.calls).toEqual([
-      `/bin/launchctl bootout gui/${process.getuid()}/ai.openclaw.gateway`,
+      `/bin/launchctl bootout gui/${uid}/ai.openclaw.gateway`,
       "prove gateway stopped",
       "pnpm build",
-      `/bin/launchctl enable gui/${process.getuid()}/ai.openclaw.gateway`,
-      `/bin/launchctl bootstrap gui/${process.getuid()} ${plistPath}`,
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
     ]);
   });
 
@@ -1115,11 +1116,12 @@ describe("openclaw live updater", () => {
       entrypoint: source,
       previousEntrypoint: snapshot,
     });
+    const uid = process.getuid?.() ?? 501;
     expect(commands.calls).toEqual([
       "pnpm install --frozen-lockfile",
       "pnpm build",
-      `/bin/launchctl enable gui/${process.getuid()}/ai.openclaw.gateway`,
-      `/bin/launchctl bootstrap gui/${process.getuid()} ${plistPath}`,
+      `/bin/launchctl enable gui/${uid}/ai.openclaw.gateway`,
+      `/bin/launchctl bootstrap gui/${uid} ${plistPath}`,
     ]);
   });
 
