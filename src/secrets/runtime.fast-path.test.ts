@@ -417,12 +417,12 @@ describe("secrets runtime fast path", () => {
       agentDirs: [agentDir],
       loadAuthStore: () => authStore("old-key"),
     });
+    activateSecretsRuntimeSnapshot(initial);
     const concurrent = await prepareSecretsRuntimeSnapshot({
       config: config(19_012),
       agentDirs: [agentDir],
       loadAuthStore: () => authStore("new-key"),
     });
-    activateSecretsRuntimeSnapshot(initial);
     const staleRefreshHandler = getRuntimeConfigSnapshotRefreshHandler();
     if (!staleRefreshHandler?.preflight) {
       throw new Error("expected active runtime refresh preflight handler");

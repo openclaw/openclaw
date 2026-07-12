@@ -430,6 +430,7 @@ describe("secrets runtime state", () => {
       baselineAKey: "a-old",
       candidateAKey: "a-candidate",
       currentAKey: "a-candidate",
+      currentAExternal: false,
       expectedAKey: "a-old",
     },
     {
@@ -437,6 +438,7 @@ describe("secrets runtime state", () => {
       baselineAKey: "a-old",
       candidateAKey: null,
       currentAKey: null,
+      currentAExternal: false,
       expectedAKey: "a-old",
     },
     {
@@ -444,6 +446,7 @@ describe("secrets runtime state", () => {
       baselineAKey: "a-old",
       candidateAKey: "a-candidate",
       currentAKey: "a-external",
+      currentAExternal: true,
       expectedAKey: "a-external",
     },
     {
@@ -451,6 +454,7 @@ describe("secrets runtime state", () => {
       baselineAKey: "a-old",
       candidateAKey: "a-candidate",
       currentAKey: null,
+      currentAExternal: false,
       expectedAKey: null,
     },
     {
@@ -458,11 +462,12 @@ describe("secrets runtime state", () => {
       baselineAKey: null,
       candidateAKey: "a-candidate",
       currentAKey: "a-external",
+      currentAExternal: true,
       expectedAKey: "a-external",
     },
   ])(
     "resolves per-profile ownership for $label while preserving post-activation profile B",
-    ({ label, baselineAKey, candidateAKey, currentAKey, expectedAKey }) => {
+    ({ label, baselineAKey, candidateAKey, currentAKey, currentAExternal, expectedAKey }) => {
       const agentDir = `/tmp/openclaw-auth-post-activation-${label}`;
       const profile = (provider: string, key: string) => ({
         type: "api_key" as const,
@@ -473,6 +478,7 @@ describe("secrets runtime state", () => {
         aKey: string | null,
         bKey: string,
         port: number,
+        aExternal = false,
       ): PreparedSecretsRuntimeSnapshot => ({
         sourceConfig: {},
         config: { gateway: { port } },
@@ -485,6 +491,7 @@ describe("secrets runtime state", () => {
                 ...(aKey === null ? {} : { "provider-a:default": profile("provider-a", aKey) }),
                 "provider-b:default": profile("provider-b", bKey),
               },
+              runtimeExternalProfileIds: aExternal ? ["provider-a:default"] : undefined,
             },
           },
         ],
@@ -512,7 +519,7 @@ describe("secrets runtime state", () => {
         }),
       ).toBe(true);
       setRuntimeAuthProfileStoreSnapshot(
-        snapshot(currentAKey, "b-external", 19_002).authStores[0]!.store,
+        snapshot(currentAKey, "b-external", 19_002, currentAExternal).authStores[0]!.store,
         agentDir,
       );
       noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
@@ -537,6 +544,11 @@ describe("secrets runtime state", () => {
         expect(restored?.["provider-a:default"]).toMatchObject({ key: expectedAKey });
       }
       expect(restored?.["provider-b:default"]).toMatchObject({ key: "b-external" });
+      if (currentAExternal) {
+        expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.runtimeExternalProfileIds).toContain(
+          "provider-a:default",
+        );
+      }
     },
   );
 
@@ -604,7 +616,7 @@ describe("secrets runtime state", () => {
     });
   });
 
-  it("retains baseline external ownership when the candidate omits that profile", () => {
+  it("invalidates a partial store when an omitted candidate owner mutates", () => {
     const agentDir = "/tmp/openclaw-auth-external-omission";
     const snapshot = (
       profiles: AuthProfileStore["profiles"],
@@ -676,7 +688,7 @@ describe("secrets runtime state", () => {
         refreshHandler: null,
       }),
     ).toBe(true);
-    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)?.profiles["openai:x"]).toEqual(profileX);
+    expect(getRuntimeAuthProfileStoreSnapshot(agentDir)).toBeUndefined();
   });
 
   it.each([
