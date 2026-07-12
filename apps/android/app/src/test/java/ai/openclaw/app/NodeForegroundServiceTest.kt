@@ -35,15 +35,15 @@ class NodeForegroundServiceTest {
     runBlocking {
       val localeChanges = MutableStateFlow(0L)
       val firstEmission = CompletableDeferred<Unit>()
-      val emissions = mutableListOf<String>()
+      val emissions = mutableListOf<LocaleAwareNotificationState<String>>()
       val collection =
         launch(start = CoroutineStart.UNDISPATCHED) {
           refreshNotificationOnLocaleChanges(
             states = flowOf("stable"),
             localeChanges = localeChanges,
           ).take(2)
-            .collect { state ->
-              emissions += state
+            .collect { update ->
+              emissions += update
               if (emissions.size == 1) firstEmission.complete(Unit)
             }
         }
@@ -52,7 +52,13 @@ class NodeForegroundServiceTest {
       localeChanges.value = 1L
       collection.join()
 
-      assertEquals(listOf("stable", "stable"), emissions)
+      assertEquals(
+        listOf(
+          LocaleAwareNotificationState(state = "stable", localeRevision = 0L),
+          LocaleAwareNotificationState(state = "stable", localeRevision = 1L),
+        ),
+        emissions,
+      )
     }
 
   @Test

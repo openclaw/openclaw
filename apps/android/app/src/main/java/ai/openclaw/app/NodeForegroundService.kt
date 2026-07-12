@@ -124,7 +124,9 @@ class NodeForegroundService : Service() {
         refreshNotificationOnLocaleChanges(
           states = notificationStates,
           localeChanges = nativeLocaleChanges,
-        ).collect { state ->
+        ).collect { update ->
+          ensureChannelForLocaleRevision(update.localeRevision)
+          val state = update.state
           voiceCaptureMode = state.mode
           val title =
             when {
@@ -149,6 +151,14 @@ class NodeForegroundService : Service() {
           )
         }
       }
+  }
+
+  private var channelLocaleRevision: Long? = null
+
+  private fun ensureChannelForLocaleRevision(localeRevision: Long) {
+    if (channelLocaleRevision == localeRevision) return
+    ensureChannel()
+    channelLocaleRevision = localeRevision
   }
 
   override fun onStartCommand(
@@ -422,7 +432,15 @@ private data class VoiceNotificationState(
 }
 
 /** Re-emits stable runtime state when app-owned notification copy changes locale. */
+internal data class LocaleAwareNotificationState<T>(
+  val state: T,
+  val localeRevision: Long,
+)
+
 internal fun <T> refreshNotificationOnLocaleChanges(
   states: Flow<T>,
   localeChanges: Flow<Long>,
-): Flow<T> = combine(states, localeChanges) { state, _ -> state }
+): Flow<LocaleAwareNotificationState<T>> =
+  combine(states, localeChanges) { state, localeRevision ->
+    LocaleAwareNotificationState(state = state, localeRevision = localeRevision)
+  }

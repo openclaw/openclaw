@@ -139,12 +139,17 @@ describe("Android app i18n resources", () => {
     expect(findings).not.toContain("Internal code");
   });
 
-  it("inventories command and overview model display literals", () => {
+  it("inventories command, attention, and overview model display literals", () => {
     const source = `
       data class CommandItem(
         val key: String,
         val title: String,
         val subtitle: String,
+      )
+      data class HomeAttentionRow(
+        val title: String,
+        val subtitle: String,
+        val route: String,
       )
       data class OverviewMetricCardSpec(
         val title: String,
@@ -157,6 +162,11 @@ describe("Android app i18n resources", () => {
         key = "voice",
         title = nativeString("Start Voice"),
         subtitle = nativeString("Talk with OpenClaw"),
+      )
+      HomeAttentionRow(
+        title = "Gateway",
+        subtitle = "Connect before chat, voice, and live status.",
+        route = "gateway",
       )
       OverviewMetricCardSpec(
         title = nativeString("Gateway"),
@@ -173,6 +183,8 @@ describe("Android app i18n resources", () => {
       expect.arrayContaining([
         "Open Chat",
         "Start a conversation",
+        "Gateway",
+        "Connect before chat, voice, and live status.",
         "Online",
         "All systems nominal",
       ]),
@@ -183,8 +195,8 @@ describe("Android app i18n resources", () => {
         "voice",
         "Start Voice",
         "Talk with OpenClaw",
-        "Gateway",
         "Offline",
+        "gateway",
       ]),
     );
   });

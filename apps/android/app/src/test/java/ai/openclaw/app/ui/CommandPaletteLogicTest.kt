@@ -30,6 +30,13 @@ class CommandPaletteLogicTest {
   }
 
   @Test
+  fun sessionSearchIgnoresQueryCase() {
+    assertTrue(commandSessionMatches(title = "Incident Review", query = "INCIDENT"))
+    assertTrue(commandSessionMatches(title = "Incident Review", query = "review"))
+    assertFalse(commandSessionMatches(title = "Incident Review", query = "deployment"))
+  }
+
+  @Test
   fun accessibilityDescriptionUsesLocalizedActionCopyWithoutDuplicateVerbs() {
     val chatDescription =
       commandActionAccessibilityDescription(CommandAction.Chat, "Ouvrir le chat") { _, _ ->

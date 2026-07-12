@@ -309,6 +309,7 @@ const UI_MODEL_STRING_NAME_RE =
   /^(?:contentDescription|errorText|helperText|onClickLabel|statusText)$/u;
 const UI_MODEL_CLASS_FIELDS = new Map<string, ReadonlySet<string>>([
   ["CommandItem", new Set(["subtitle", "title"])],
+  ["HomeAttentionRow", new Set(["subtitle", "title"])],
   ["OverviewMetricCardSpec", new Set(["subtitle", "title", "value"])],
   ["SettingsToggleRow", new Set(["subtitle", "title"])],
 ]);

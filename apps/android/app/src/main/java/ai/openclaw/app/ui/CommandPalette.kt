@@ -84,7 +84,7 @@ internal fun CommandPalette(
     sessions
       .filter { session ->
         val title = commandSessionTitle(session.displayName)
-        normalizedQuery.isEmpty() || title.lowercase().contains(normalizedQuery)
+        commandSessionMatches(title = title, query = normalizedQuery)
       }.take(5)
 
   Surface(modifier = Modifier.fillMaxSize(), color = ClawTheme.colors.canvas, contentColor = ClawTheme.colors.text) {
@@ -177,6 +177,11 @@ internal data class CommandItem(
   /** Matches palette queries against both action title and explanatory subtitle. */
   fun matches(query: String): Boolean = query.isEmpty() || title.contains(query, ignoreCase = true) || subtitle.contains(query, ignoreCase = true)
 }
+
+internal fun commandSessionMatches(
+  title: String,
+  query: String,
+): Boolean = query.isEmpty() || title.contains(query, ignoreCase = true)
 
 internal fun commandActionAccessibilityDescription(
   action: CommandAction,

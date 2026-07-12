@@ -1248,27 +1248,33 @@ internal fun homeAttentionRows(
 ): List<HomeAttentionRow> =
   listOfNotNull(
     if (!isConnected) {
-      HomeAttentionRow("Gateway", "Connect before chat, voice, and live status.", Icons.Default.Cloud, Tab.Settings, SettingsRoute.Gateway)
+      HomeAttentionRow(
+        nativeString("Gateway"),
+        nativeString("Connect before chat, voice, and live status."),
+        Icons.Default.Cloud,
+        Tab.Settings,
+        SettingsRoute.Gateway,
+      )
     } else {
       null
     },
     if (pendingApprovals > 0) {
-      HomeAttentionRow("Approvals", approvalsSummary(pendingApprovals), Icons.Default.Lock, Tab.Settings, SettingsRoute.Approvals)
+      HomeAttentionRow(nativeString("Approvals"), approvalsSummary(pendingApprovals), Icons.Default.Lock, Tab.Settings, SettingsRoute.Approvals)
     } else {
       null
     },
     if (channelsSummary.channels.any { it.error != null }) {
-      HomeAttentionRow("Channels", channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels)
+      HomeAttentionRow(nativeString("Channels"), channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels)
     } else {
       null
     },
     if (nodesDevicesSummary.pendingDevices.isNotEmpty() || nodesDevicesSummary.hasNodeCapabilityApprovalPending()) {
-      HomeAttentionRow("Nodes & Devices", nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices)
+      HomeAttentionRow(nativeString("Nodes & Devices"), nodesDevicesSummaryText(nodesDevicesSummary), Icons.Default.Cloud, Tab.Settings, SettingsRoute.NodesDevices)
     } else {
       null
     },
     if (isConnected && readyProviderCount == 0 && unknownProviderCount == 0) {
-      HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.Settings, SettingsRoute.ProvidersModels)
+      HomeAttentionRow(nativeString("Providers"), nativeString("No ready providers"), Icons.Outlined.Inventory2, Tab.Settings, SettingsRoute.ProvidersModels)
     } else {
       null
     },
