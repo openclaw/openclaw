@@ -1,6 +1,4 @@
 // Qa Lab tests cover runtime parity classification behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   formatSqliteSessionFileMarker,
@@ -19,13 +17,12 @@ import {
   type RuntimeParityCell,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
-const tempRoots: string[] = [];
+const tempDirs = createTempDirHarness();
 
 afterEach(async () => {
-  await Promise.all(
-    tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { force: true, recursive: true })),
-  );
+  await tempDirs.cleanup();
 });
 
 async function seedRuntimeParityTranscript(params: {
@@ -33,8 +30,7 @@ async function seedRuntimeParityTranscript(params: {
   sessionId: string;
   sessionKey: string;
 }) {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-qa-runtime-parity-"));
-  tempRoots.push(tempRoot);
+  const tempRoot = await tempDirs.makeTempDir("openclaw-qa-runtime-parity-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(tempRoot, "state") };
   const storePath = resolveStorePath(undefined, { agentId: "qa", env });
   await upsertSessionEntry({
