@@ -169,7 +169,7 @@ final class TalkModeManager: NSObject {
     var gatewayTalkVoiceModeTitle: String = "Not loaded"
     var gatewayTalkVoiceModeSubtitle: String?
     var gatewayTalkVoiceModeAccessibilityValue: String = "Not loaded"
-    var gatewayTalkActiveModeTitle: String = "Not active"
+    var gatewayTalkActiveModeTitle: String = .init(localized: "Not active")
     var gatewayTalkActiveModeSubtitle: String?
     var gatewayTalkLastIssueText: String?
     var gatewayTalkCurrentFallbackIssue: TalkRuntimeIssue?
@@ -439,7 +439,7 @@ final class TalkModeManager: NSObject {
         self.isListening = false
         self.isSpeaking = false
         self.isUserSpeechDetected = false
-        self.gatewayTalkActiveModeTitle = "Not active"
+        self.gatewayTalkActiveModeTitle = String(localized: "Not active")
         self.gatewayTalkActiveModeSubtitle = nil
         guard shouldRestart else {
             if self.isEnabled {
@@ -512,7 +512,7 @@ final class TalkModeManager: NSObject {
             self.stopNativeCaptureAndDiscardTranscript()
             self.stopSpeaking(storeInterruption: false)
             self.deactivateAudioSession()
-            self.gatewayTalkActiveModeTitle = "Not active"
+            self.gatewayTalkActiveModeTitle = String(localized: "Not active")
             self.gatewayTalkActiveModeSubtitle = nil
             if self.isEnabled, !self.isSpeaking {
                 self.setStatus(String(localized: "Offline"), phase: .idle)
@@ -825,7 +825,7 @@ final class TalkModeManager: NSObject {
         self.setStatus(String(localized: "Off"), phase: .idle)
         self.pendingRealtimeIssue = nil
         self.gatewayTalkCurrentFallbackIssue = nil
-        self.gatewayTalkActiveModeTitle = "Not active"
+        self.gatewayTalkActiveModeTitle = String(localized: "Not active")
         self.gatewayTalkActiveModeSubtitle = nil
         self.gatewayTalkLastIssueText = nil
         self.lastTranscript = ""
@@ -878,7 +878,7 @@ final class TalkModeManager: NSObject {
             String(localized: "Paused"),
             phase: .idle,
             watchPresentation: .localized("Paused"))
-        self.gatewayTalkActiveModeTitle = "Paused"
+        self.gatewayTalkActiveModeTitle = String(localized: "Paused")
         self.gatewayTalkActiveModeSubtitle = nil
         self.lastTranscript = ""
         self.lastHeard = nil
@@ -2188,7 +2188,7 @@ final class TalkModeManager: NSObject {
                 self.realtimeRelayStartIssue = issue
                 self.pendingRealtimeIssue = issue
                 self.gatewayTalkLastIssueText = issue.diagnosticSummary
-                self.gatewayTalkActiveModeTitle = "Realtime unavailable"
+                self.gatewayTalkActiveModeTitle = String(localized: "Realtime unavailable")
                 self.gatewayTalkActiveModeSubtitle = issue.displayMessage
             },
             onSpeakingChanged: { [weak self] speaking in
@@ -3811,13 +3811,13 @@ extension TalkModeManager {
     private func markNativeTalkActive() {
         self.pendingRealtimeIssue = nil
         self.gatewayTalkCurrentFallbackIssue = nil
-        self.gatewayTalkActiveModeTitle = "iOS Speech + TTS"
+        self.gatewayTalkActiveModeTitle = String(localized: "iOS Speech + TTS")
         self.gatewayTalkActiveModeSubtitle = nil
         self.setStatus(String(localized: "Listening"), phase: .listening)
     }
 
     private func markNativeFallbackActive(after issue: TalkRuntimeIssue) {
-        self.gatewayTalkActiveModeTitle = "iOS Speech fallback"
+        self.gatewayTalkActiveModeTitle = String(localized: "iOS Speech fallback")
         self.gatewayTalkActiveModeSubtitle = issue.displayMessage
         self.gatewayTalkCurrentFallbackIssue = issue
         self.gatewayTalkLastIssueText = issue.diagnosticSummary
@@ -4610,7 +4610,7 @@ extension TalkModeManager {
     func _test_recordRealtimeIssue(_ issue: TalkRuntimeIssue) {
         self.pendingRealtimeIssue = issue
         self.gatewayTalkLastIssueText = issue.diagnosticSummary
-        self.gatewayTalkActiveModeTitle = "Realtime unavailable"
+        self.gatewayTalkActiveModeTitle = String(localized: "Realtime unavailable")
         self.gatewayTalkActiveModeSubtitle = issue.displayMessage
     }
 

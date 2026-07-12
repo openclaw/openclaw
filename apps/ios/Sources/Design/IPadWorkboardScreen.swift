@@ -1126,8 +1126,8 @@ private struct IPadWorkboardKanbanCard: View {
             return sessionKey
         }
         return self.card.agentId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            ? self.card.agentId ?? "Default agent"
-            : "Default agent"
+            ? self.card.agentId ?? String(localized: "Default agent")
+            : String(localized: "Default agent")
     }
 }
 
@@ -1281,8 +1281,8 @@ struct IPadWorkboardQueueRow: View {
             return sessionKey
         }
         return self.card.agentId?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            ? self.card.agentId ?? "Default agent"
-            : "Default agent"
+            ? self.card.agentId ?? String(localized: "Default agent")
+            : String(localized: "Default agent")
     }
 }
 

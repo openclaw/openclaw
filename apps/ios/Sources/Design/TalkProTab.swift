@@ -254,7 +254,7 @@ struct TalkProTab: View {
         let title = self.appModel.talkMode.gatewayTalkActiveModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let subtitle = (appModel.talkMode.gatewayTalkActiveModeSubtitle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty { return "Not active" }
+        if title.isEmpty { return String(localized: "Not active") }
         if subtitle.isEmpty { return title }
         return "\(title) • \(subtitle)"
     }

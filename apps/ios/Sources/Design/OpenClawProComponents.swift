@@ -650,7 +650,7 @@ struct OpenClawGatewayCompactPill: View {
     @Environment(NodeAppModel.self) private var appModel
 
     var body: some View {
-        OpenClawStatusBadge(label: .localized(self.title), tone: self.tone)
+        OpenClawStatusBadge(label: .verbatim(self.title), tone: self.tone)
             .accessibilityLabel(
                 String(
                     format: String(localized: "Gateway %@"),
@@ -660,13 +660,13 @@ struct OpenClawGatewayCompactPill: View {
     private var title: String {
         switch GatewayStatusBuilder.build(appModel: self.appModel) {
         case .connected:
-            "Online"
+            String(localized: "Online")
         case .connecting:
-            "Connecting"
+            String(localized: "Connecting")
         case .error:
-            "Attention"
+            String(localized: "Attention")
         case .disconnected:
-            "Offline"
+            String(localized: "Offline")
         }
     }
 

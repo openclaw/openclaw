@@ -349,13 +349,13 @@ struct RootTabs: View {
     private var sidebarGatewayStatusTitle: String {
         switch self.gatewayStatus {
         case .connected:
-            "Online"
+            String(localized: "Online")
         case .connecting:
-            "Connecting"
+            String(localized: "Connecting")
         case .error:
-            "Needs attention"
+            String(localized: "Needs attention")
         case .disconnected:
-            "Offline"
+            String(localized: "Offline")
         }
     }
 

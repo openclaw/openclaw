@@ -46,6 +46,14 @@ struct RuntimeLocalizationSourceGuardTests {
         let widget = try Self.source("ActivityWidget/OpenClawLiveActivity.swift")
         let project = try Self.source("project.yml")
         let dreaming = try Self.source("Sources/Design/AgentProDreamingDestination.swift")
+        let phoneControlHub = try Self.source("Sources/Design/RootTabsPhoneControlHub.swift")
+        let proComponents = try Self.source("Sources/Design/OpenClawProComponents.swift")
+        let skillWorkshop = try Self.source("Sources/Design/IPadSkillWorkshopScreen.swift")
+        let workboard = try Self.source("Sources/Design/IPadWorkboardScreen.swift")
+        let talkPro = try Self.source("Sources/Design/TalkProTab.swift")
+        let talkManager = try Self.source("Sources/Voice/TalkModeManager.swift")
+        let rootTabs = try Self.source("Sources/RootTabs.swift")
+        let rootTabsNavigation = try Self.source("Sources/RootTabsNavigation.swift")
         let watchInbox = try Self.source("WatchApp/Sources/WatchInboxView.swift")
         let chat = try Self.sharedSource("OpenClawChatUI/ChatMessageViews.swift")
 
@@ -73,6 +81,18 @@ struct RuntimeLocalizationSourceGuardTests {
         #expect(watchInbox.contains("case localized(LocalizedStringResource)"))
         #expect(!watchInbox.contains("WatchTextValue: ExpressibleByStringLiteral"))
         #expect(watchInbox.contains("accessory: .verbatim(self.store.talkSummaryText)"))
+        #expect(rootTabs.contains("String(localized: \"Needs attention\")"))
+        #expect(rootTabsNavigation.contains("case .gateway: String(localized: \"Settings / Gateway\")"))
+        #expect(phoneControlHub.contains("case .error: String(localized: \"Attention\")"))
+        #expect(phoneControlHub.contains("String(localized: \"Default Agent\")"))
+        #expect(proComponents.contains("OpenClawStatusBadge(label: .verbatim(self.title)"))
+        #expect(proComponents.contains("String(localized: \"Online\")"))
+        #expect(skillWorkshop.contains("String(localized: \"Default agent\")"))
+        #expect(!workboard.contains("?? \"Default agent\""))
+        #expect(talkPro.contains("if title.isEmpty { return String(localized: \"Not active\") }"))
+        #expect(talkManager.contains("String(localized: \"iOS Speech fallback\")"))
+        #expect(talkManager.contains("String(localized: \"Realtime unavailable\")"))
+        #expect(!talkManager.contains("gatewayTalkActiveModeTitle = \""))
     }
 
     private static func source(_ path: String) throws -> String {

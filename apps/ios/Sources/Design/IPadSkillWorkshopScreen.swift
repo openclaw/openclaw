@@ -607,7 +607,7 @@ struct IPadSkillWorkshopScreen: View {
             return name.isEmpty ? String(localized: "Default agent") : name
         }
         let activeName = Self.normalizedScopeID(self.appModel.activeAgentName)
-        return activeName.isEmpty ? "Default agent" : activeName
+        return activeName.isEmpty ? String(localized: "Default agent") : activeName
     }
 
     private var selectedAgentParam: String? {
