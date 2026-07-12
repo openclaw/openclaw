@@ -380,9 +380,7 @@ describe("release-note verification", () => {
 
   it("ignores the stale generated record while rewriting it", () => {
     const record = {
-      pullRequests: new Map([
-        [104732, { references: [102289], thanks: ["fuller-stack-dev"] }],
-      ]),
+      pullRequests: new Map([[104732, { references: [102289], thanks: ["fuller-stack-dev"] }]]),
       legacyIssues: new Map(),
     };
 
