@@ -682,7 +682,7 @@ describe("channel ingress queue", () => {
         insertCorruptRow(stateDir, '["test","account"]', "claim-bad", {
           payload_json: "{{{broken",
           status: "claimed",
-          claim_token: "tok-1",
+          claim_token: "test-token-placeholder",
           claim_owner: "worker",
           claimed_at: 200,
         });
@@ -897,7 +897,7 @@ describe("channel ingress queue", () => {
         insertCorruptRow(stateDir, '["test","account"]', "stale-bad", {
           payload_json: "{corrupt",
           status: "claimed",
-          claim_token: "tok-1",
+          claim_token: "test-token-placeholder",
           claim_owner: "worker",
           claimed_at: oldTime,
         });
