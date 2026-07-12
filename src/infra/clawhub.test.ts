@@ -429,7 +429,7 @@ describe("clawhub helpers", () => {
     expect(url.searchParams.get("q")).toBe("calendar");
   });
 
-  it("clamps searchClawHubSkills limit to the configured maximum", async () => {
+  it("forwards searchClawHubSkills limit verbatim to the API", async () => {
     let requestedUrl = "";
     await searchClawHubSkills({
       query: "calendar",
@@ -442,7 +442,7 @@ describe("clawhub helpers", () => {
         });
       },
     });
-    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("100");
+    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("999999");
   });
 
   it("passes through a valid searchClawHubSkills limit unchanged", async () => {
@@ -476,7 +476,7 @@ describe("clawhub helpers", () => {
     expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
   });
 
-  it("omits fractional searchClawHubSkills limits after truncation", async () => {
+  it("forwards fractional searchClawHubSkills limits verbatim", async () => {
     let requestedUrl = "";
     await searchClawHubSkills({
       query: "calendar",
@@ -489,10 +489,10 @@ describe("clawhub helpers", () => {
         });
       },
     });
-    expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
+    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("0.5");
   });
 
-  it("clamps searchClawHubPackages limit to the configured maximum", async () => {
+  it("forwards searchClawHubPackages limit verbatim to the API", async () => {
     let requestedUrl = "";
     await searchClawHubPackages({
       query: "security",
@@ -505,7 +505,7 @@ describe("clawhub helpers", () => {
         });
       },
     });
-    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("100");
+    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("999999");
   });
 
   it("passes through a valid searchClawHubPackages limit unchanged", async () => {
@@ -539,7 +539,7 @@ describe("clawhub helpers", () => {
     expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
   });
 
-  it("omits fractional searchClawHubPackages limits after truncation", async () => {
+  it("forwards fractional searchClawHubPackages limits verbatim", async () => {
     let requestedUrl = "";
     await searchClawHubPackages({
       query: "security",
@@ -552,7 +552,7 @@ describe("clawhub helpers", () => {
         });
       },
     });
-    expect(new URL(requestedUrl).searchParams.has("limit")).toBe(false);
+    expect(new URL(requestedUrl).searchParams.get("limit")).toBe("0.5");
   });
 
   it("sends owner-qualified skill detail lookups as slug plus ownerHandle", async () => {

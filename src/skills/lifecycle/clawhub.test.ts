@@ -2647,6 +2647,36 @@ describe("skills-clawhub", () => {
       baseUrl: undefined,
     });
   });
+
+  it("clamps skill search limit to the configured maximum", async () => {
+    searchClawHubSkillsMock.mockResolvedValueOnce([]);
+    await searchSkillsFromClawHub({ limit: 999_999 });
+    expect(searchClawHubSkillsMock).toHaveBeenCalledWith({
+      query: "*",
+      limit: 100,
+      baseUrl: undefined,
+    });
+  });
+
+  it("omits skill search limit when none is provided", async () => {
+    searchClawHubSkillsMock.mockResolvedValueOnce([]);
+    await searchSkillsFromClawHub({});
+    expect(searchClawHubSkillsMock).toHaveBeenCalledWith({
+      query: "*",
+      limit: undefined,
+      baseUrl: undefined,
+    });
+  });
+
+  it("omits fractional skill search limits below 1 after truncation", async () => {
+    searchClawHubSkillsMock.mockResolvedValueOnce([]);
+    await searchSkillsFromClawHub({ limit: 0.5 });
+    expect(searchClawHubSkillsMock).toHaveBeenCalledWith({
+      query: "*",
+      limit: undefined,
+      baseUrl: undefined,
+    });
+  });
 });
 
 describe("ClawHub origin provenance readback", () => {
