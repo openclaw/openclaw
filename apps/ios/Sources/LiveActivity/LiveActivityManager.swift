@@ -83,10 +83,6 @@ final class LiveActivityManager {
         self.updateCurrent(state: self.attentionState(presentation: presentation), staleDate: nil)
     }
 
-    func handleConnecting(statusText: String = String(localized: "Connecting...")) {
-        self.handleConnecting(presentation: Self.connectingPresentation(statusText: statusText))
-    }
-
     private func handleConnecting(presentation: StatusPresentation) {
         self.updateCurrent(
             state: self.connectingState(presentation: presentation),
