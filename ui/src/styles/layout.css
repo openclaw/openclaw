@@ -105,6 +105,22 @@ html.openclaw-native-macos .shell-nav-expand {
   top: 52px;
 }
 
+/* Newer Mac apps host a native sidebar toggle in the titlebar next to
+   back/forward and add openclaw-native-nav; visually retire the floating
+   duplicate but keep it focusable: collapse focus restoration targets it
+   (app-host.ts) and keyboard/screen-reader users still need an in-page
+   expand control, so it reveals itself on keyboard focus like a skip link.
+   Older apps only add openclaw-native-macos and keep it visible. */
+html.openclaw-native-nav .shell-nav-expand {
+  opacity: 0;
+  pointer-events: none;
+}
+
+html.openclaw-native-nav .shell-nav-expand:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
@@ -679,6 +695,9 @@ html.openclaw-native-macos .shell-nav-expand {
 }
 
 .sidebar {
+  /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
+     never shine through with a mismatched tone. */
+  --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -686,11 +705,11 @@ html.openclaw-native-macos .shell-nav-expand {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  background: var(--sidebar-bg);
 }
 
 :root[data-theme-mode="light"] .sidebar {
-  background: color-mix(in srgb, var(--panel) 98%, white 2%);
+  --sidebar-bg: color-mix(in srgb, var(--panel) 98%, white 2%);
 }
 
 .sidebar-shell {
@@ -974,6 +993,13 @@ html.openclaw-native-macos .shell-nav-expand {
   cursor: default;
 }
 
+/* The scroller's children must not flex-shrink: shrink squeezes each section
+   to its min-height while the fixed-height rows inside overflow and paint
+   over the following section. Fixed sizing makes the list scroll instead. */
+.sidebar-recent-sessions > * {
+  flex: 0 0 auto;
+}
+
 .sidebar-recent-sessions__group {
   display: flex;
   flex-direction: column;
@@ -1023,7 +1049,7 @@ html.openclaw-native-macos .shell-nav-expand {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--bg);
+  background: var(--sidebar-bg);
 }
 
 .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
@@ -1217,6 +1243,14 @@ html.openclaw-native-macos .shell-nav-expand {
 .sidebar-recent-session--active {
   background: color-mix(in srgb, var(--accent-subtle) 68%, transparent);
   border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--text-strong);
+}
+
+/* Multi-select highlight: stronger border than --active so a selection stays
+   readable when it includes the active row. */
+.sidebar-recent-session--selected {
+  background: color-mix(in srgb, var(--accent-subtle) 52%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
   color: var(--text-strong);
 }
 
@@ -1686,8 +1720,7 @@ openclaw-session-menu[popover] {
   color: var(--accent);
 }
 
-/* Single compact icon row: status dot, then utility icons right-aligned.
-   The footer signals connectivity only; gateway version lives in Settings. */
+/* Single compact row: status, build identity, then utility icons right-aligned. */
 .sidebar-footer-bar {
   display: flex;
   align-items: center;
@@ -1698,6 +1731,26 @@ openclaw-session-menu[popover] {
 
 .sidebar-footer-bar__spacer {
   flex: 1 1 auto;
+}
+
+/* Host elements are display:contents, so the anchor itself is the flex item;
+   min-width 0 lets it yield to the footer icons and ellipsize. */
+.sidebar-footer-build {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.sidebar-footer-build:hover,
+.sidebar-footer-build:focus-visible {
+  color: var(--text);
+  text-decoration: none;
 }
 
 /* Dev-checkout branch strip: only rendered when the gateway runs from a git
@@ -1746,8 +1799,9 @@ openclaw-session-menu[popover] {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  /* 28px keeps the fixed-width footer row from ellipsizing "commit · age". */
+  width: 28px;
+  height: 28px;
   flex: 0 0 auto;
   border: none;
   border-radius: var(--radius-md);
@@ -1800,6 +1854,13 @@ openclaw-session-menu[popover] {
   height: 8px;
   border-radius: var(--radius-full);
   flex-shrink: 0;
+}
+
+/* The online/offline glow spreads 4px beyond the dot; the footer bar's 2px gap
+   alone lets it collide with the build text. 6px + gap matches the 8px dot
+   spacing in the settings sidebar footer. */
+.sidebar-footer-bar .sidebar-status__dot {
+  margin-right: 6px;
 }
 
 .sidebar-status__dot.sidebar-connection-status--online {

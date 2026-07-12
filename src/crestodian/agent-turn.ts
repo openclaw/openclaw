@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { CliPrivateToolEvent } from "../agents/cli-runner/types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { CliSessionBinding } from "../config/sessions.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
@@ -48,8 +47,8 @@ export type CrestodianAgentTurnRunner = (params: {
 
 export type CrestodianAgentSession = {
   sessionId: string;
-  /** Host-owned pending proposal and render state; see crestodian-tool.ts. */
-  proposalRef: import("../agents/tools/crestodian-tool.js").CrestodianToolProposalRef;
+  /** Host-owned pending-proposal fingerprint; see crestodian-tool.ts. */
+  proposalRef: { current?: string };
   /** Native CLI session plus the fingerprints that make --resume safe. */
   cliSessionBinding?: CliSessionBinding;
   /** CLI backend that owns cliSessionBinding; native sessions are not portable. */
@@ -96,10 +95,8 @@ function extractRunText(result: EmbeddedRunResult): string | undefined {
 }
 
 function discardUnannouncedProposal(
-  proposalRef: import("../agents/tools/crestodian-tool.js").CrestodianToolProposalRef,
-  proposalBeforeTurn:
-    | import("../agents/tools/crestodian-tool.js").CrestodianToolProposal
-    | undefined,
+  proposalRef: { current?: string },
+  proposalBeforeTurn: string | undefined,
 ): void {
   // A failed/invisible turn cannot leave a newly registered mutation armable:
   // the planner fallback never showed that proposal to the user. Preserve a
@@ -248,31 +245,34 @@ async function planCrestodianAgentTurn(
  * mutation consumes it, and directive actions replay the interactive handoff —
  * same lifecycle as crestodian-tool.ts enforces.
  */
-async function createCrestodianToolStateMirror(params: {
-  proposalRef: import("../agents/tools/crestodian-tool.js").CrestodianToolProposalRef;
+async function mirrorCrestodianToolStateFromEvents(params: {
+  runId: string;
+  proposalRef: { current?: string };
   directiveRef: { current?: CrestodianAgentTurnDirective };
-}): Promise<(event: CliPrivateToolEvent) => void> {
+}): Promise<() => void> {
   const [
+    { onAgentEvent },
     { extractToolResultText },
     { resolveCrestodianProposalTransition, resolveCrestodianDirectiveTransition },
   ] = await Promise.all([
+    import("../infra/agent-events.js"),
     import("../agents/embedded-agent-subscribe.tools.js"),
     import("../agents/tools/crestodian-tool.js"),
   ]);
-  const argsByToolCallId = new Map<string, Record<string, unknown>>();
-  return (event) => {
-    const name = event.name;
+  return onAgentEvent((evt) => {
+    if (evt.runId !== params.runId || evt.stream !== "tool" || evt.data.phase !== "result") {
+      return;
+    }
+    const name = typeof evt.data.name === "string" ? evt.data.name : "";
     // CLI harnesses report MCP tools with transport prefixes (mcp__openclaw__crestodian).
     if (name !== "crestodian" && !name.endsWith("__crestodian")) {
       return;
     }
-    if (event.phase === "start") {
-      argsByToolCallId.set(event.toolCallId, event.args);
-      return;
-    }
-    const args = argsByToolCallId.get(event.toolCallId) ?? {};
-    argsByToolCallId.delete(event.toolCallId);
-    const resultText = extractToolResultText(event.result) ?? "";
+    const args =
+      typeof evt.data.args === "object" && evt.data.args !== null
+        ? (evt.data.args as Record<string, unknown>)
+        : {};
+    const resultText = extractToolResultText(evt.data.result) ?? "";
     const transition = resolveCrestodianProposalTransition({ args, resultText });
     if (transition) {
       params.proposalRef.current = transition.proposal;
@@ -281,7 +281,7 @@ async function createCrestodianToolStateMirror(params: {
     if (directive) {
       params.directiveRef.current = directive;
     }
-  };
+  });
 }
 
 /**
@@ -333,26 +333,30 @@ export async function runCrestodianAgentTurnWithDeps(
         delete params.session.cliSessionBackendId;
       }
       const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
-      const onPrivateToolEvent = await createCrestodianToolStateMirror({
+      const stopToolStateMirror = await mirrorCrestodianToolStateFromEvents({
+        runId,
         proposalRef: params.session.proposalRef,
         directiveRef,
       });
-      result = (await runCli({
-        ...shared,
-        provider: plan.provider,
-        model: plan.model,
-        extraSystemPrompt: CRESTODIAN_AGENT_SYSTEM_PROMPT,
-        extraSystemPromptStatic: CRESTODIAN_AGENT_SYSTEM_PROMPT,
-        crestodianTool,
-        onPrivateToolEvent,
-        ...(params.session.cliSessionBinding
-          ? {
-              cliSessionId: params.session.cliSessionBinding.sessionId,
-              cliSessionBinding: params.session.cliSessionBinding,
-            }
-          : {}),
-        cleanupCliLiveSessionOnRunEnd: true,
-      })) as EmbeddedRunResult;
+      try {
+        result = (await runCli({
+          ...shared,
+          provider: plan.provider,
+          model: plan.model,
+          extraSystemPrompt: CRESTODIAN_AGENT_SYSTEM_PROMPT,
+          extraSystemPromptStatic: CRESTODIAN_AGENT_SYSTEM_PROMPT,
+          crestodianTool,
+          ...(params.session.cliSessionBinding
+            ? {
+                cliSessionId: params.session.cliSessionBinding.sessionId,
+                cliSessionBinding: params.session.cliSessionBinding,
+              }
+            : {}),
+          cleanupCliLiveSessionOnRunEnd: true,
+        })) as EmbeddedRunResult;
+      } finally {
+        stopToolStateMirror();
+      }
       // Thread the harness's own session forward so the next turn resumes the
       // native CLI transcript instead of reseeding from scratch.
       const agentMeta = result.meta?.agentMeta;

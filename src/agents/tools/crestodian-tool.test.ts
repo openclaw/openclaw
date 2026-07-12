@@ -6,7 +6,6 @@ import {
   resolveCrestodianDirectiveTransition,
   resolveCrestodianProposalTransition,
   type CrestodianToolDirective,
-  type CrestodianToolProposalRef,
 } from "./crestodian-tool.js";
 
 const mocks = vi.hoisted(() => ({
@@ -47,13 +46,6 @@ function toolText(result: unknown): string {
     .join("\n");
 }
 
-function markProposalRenderedByHost(proposalRef: CrestodianToolProposalRef): void {
-  if (!proposalRef.current) {
-    throw new Error("expected a registered proposal");
-  }
-  proposalRef.current.renderedByHost = true;
-}
-
 describe("crestodian tool", () => {
   it("runs read actions immediately", async () => {
     const tool = createCrestodianTool({ surface: "cli" });
@@ -74,7 +66,7 @@ describe("crestodian tool", () => {
   });
 
   it("refuses mutating actions without the approved assertion", async () => {
-    const proposalRef: CrestodianToolProposalRef = {};
+    const proposalRef: { current?: string } = {};
     const tool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
     const result = await tool.execute("t2", {
       action: "config_set",
@@ -101,6 +93,21 @@ describe("crestodian tool", () => {
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
   });
 
+  it("rejects arbitrary plugin installs before creating an approval proposal", async () => {
+    const proposalRef: { current?: string } = {};
+    const tool = createCrestodianTool({ surface: "cli", proposalRef });
+
+    await expect(
+      tool.execute("plugin-install", {
+        action: "plugin_install",
+        spec: "npm:@example/plugin",
+        approved: true,
+      }),
+    ).rejects.toThrow(/trusted shell/);
+    expect(proposalRef.current).toBeUndefined();
+    expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
+  });
+
   it("executes an approved mutation only through the full proposal handshake", async () => {
     mocks.executeCrestodianOperation.mockImplementationOnce(
       async (_op: unknown, runtime: { log: (m: string) => void }) => {
@@ -108,7 +115,7 @@ describe("crestodian tool", () => {
         return { applied: true };
       },
     );
-    const proposalRef: CrestodianToolProposalRef = {};
+    const proposalRef: { current?: string } = {};
     // Phase 1: unarmed proposal is denied and records the exact operation.
     const proposingTool = createCrestodianTool({ surface: "gateway", proposalRef });
     const denied = await proposingTool.execute("t3a", {
@@ -119,7 +126,6 @@ describe("crestodian tool", () => {
     expect(toolText(denied)).toContain("needs-approval");
     expect(proposalRef.current).toBeDefined();
     expect(mocks.executeCrestodianOperation).not.toHaveBeenCalled();
-    markProposalRenderedByHost(proposalRef);
 
     // Phase 2: the user's yes arms the turn; the identical call executes.
     const armedTool = createCrestodianTool({
@@ -146,50 +152,8 @@ describe("crestodian tool", () => {
     expect(proposalRef.current).toBeUndefined();
   });
 
-  it("shows provenance and carries exact approval for non-ClawHub plugin installs", async () => {
-    const proposalRef: CrestodianToolProposalRef = {};
-    const proposingTool = createCrestodianTool({ surface: "cli", proposalRef });
-    const proposal = await proposingTool.execute("plugin-proposal", {
-      action: "plugin_install",
-      spec: "npm:@example/plugin",
-    });
-
-    expect(toolText(proposal)).toContain("outside ClawHub review and trust metadata");
-    expect(toolText(proposal)).toContain("npm:@example/plugin");
-    markProposalRenderedByHost(proposalRef);
-
-    await createCrestodianTool({
-      surface: "cli",
-      approvalArmed: true,
-      proposalRef,
-    }).execute("plugin-apply", {
-      action: "plugin_install",
-      spec: "npm:@example/plugin",
-      approved: true,
-    });
-
-    expect(mocks.executeCrestodianOperation).toHaveBeenCalledWith(
-      { kind: "plugin-install", spec: "npm:@example/plugin" },
-      expect.anything(),
-      expect.objectContaining({ acknowledgeNonClawHubInstall: true }),
-    );
-  });
-
-  it("rejects terminal controls before registering a plugin proposal", async () => {
-    const proposalRef: CrestodianToolProposalRef = {};
-    const tool = createCrestodianTool({ surface: "cli", proposalRef });
-
-    await expect(
-      tool.execute("plugin-control-sequence", {
-        action: "plugin_install",
-        spec: "clawhub:demo\u001b[2J",
-      }),
-    ).rejects.toThrow("unsupported terminal control characters");
-    expect(proposalRef.current).toBeUndefined();
-  });
-
   it("binds setup approval to the exact ordered inference routes", async () => {
-    const proposalRef: CrestodianToolProposalRef = {};
+    const proposalRef: { current?: string } = {};
     const args = {
       action: "setup",
       workspace: "/tmp/work",
@@ -205,7 +169,7 @@ describe("crestodian tool", () => {
     );
 
     expect(toolText(result)).toContain("needs-approval");
-    expect(proposalRef.current?.operationHash).toBe(
+    expect(proposalRef.current).toBe(
       hashCrestodianOperation({
         kind: "setup",
         workspace: "/tmp/work",
@@ -218,12 +182,10 @@ describe("crestodian tool", () => {
     );
     expect(
       resolveCrestodianProposalTransition({
-        args,
+        args: { action: "setup", workspace: "/tmp/work" },
         resultText: toolText(result),
       }),
-    ).toEqual({
-      proposal: expect.objectContaining({ operationHash: proposalRef.current?.operationHash }),
-    });
+    ).toEqual({ proposal: proposalRef.current });
   });
 
   it("prepares a route-less setup before registering its approval hash", async () => {
@@ -237,7 +199,7 @@ describe("crestodian tool", () => {
         return { applied: false };
       },
     );
-    const proposalRef: CrestodianToolProposalRef = {};
+    const proposalRef: { current?: string } = {};
     const result = await createCrestodianTool({ surface: "gateway", proposalRef }).execute(
       "setup-auto",
       { action: "setup", workspace: "/tmp/work" },
@@ -246,7 +208,7 @@ describe("crestodian tool", () => {
     expect(toolText(result)).toContain(
       'After the user approves, retry with these exact tool arguments: {"action":"setup","workspace":"/tmp/work","model":"openai/gpt-5.5","inferenceRoutes":[{"kind":"codex-cli","model":"openai/gpt-5.5"}],"approved":true}',
     );
-    expect(proposalRef.current?.operationHash).toBe(
+    expect(proposalRef.current).toBe(
       hashCrestodianOperation({
         kind: "setup",
         workspace: "/tmp/work",
@@ -254,7 +216,6 @@ describe("crestodian tool", () => {
         inferenceRoutes: [{ kind: "codex-cli", model: "openai/gpt-5.5" }],
       }),
     );
-    markProposalRenderedByHost(proposalRef);
 
     const armedTool = createCrestodianTool({
       surface: "gateway",
@@ -324,7 +285,7 @@ describe("crestodian tool", () => {
   });
 
   it("binds a captured no-inference result without re-running setup detection", async () => {
-    const proposalRef: CrestodianToolProposalRef = {};
+    const proposalRef: { current?: string } = {};
     const args = {
       action: "setup",
       workspace: "/tmp/work",
@@ -337,7 +298,7 @@ describe("crestodian tool", () => {
 
     expect(toolText(result)).toContain("needs-approval");
     expect(toolText(result)).not.toContain("exact tool arguments");
-    expect(proposalRef.current?.operationHash).toBe(
+    expect(proposalRef.current).toBe(
       hashCrestodianOperation({
         kind: "setup",
         workspace: "/tmp/work",
@@ -352,16 +313,12 @@ describe("crestodian tool", () => {
       { kind: "codex-cli", model: "openai/gpt-5.5" },
       { kind: "openai-api-key", model: "openai/gpt-5.5" },
     ] as const;
-    const proposalRef: CrestodianToolProposalRef = {
-      current: {
-        operationHash: hashCrestodianOperation({
-          kind: "setup",
-          model: "openai/gpt-5.5",
-          inferenceRoutes: [...originalRoutes],
-        }),
-        plan: "captured setup plan",
-        renderedByHost: true,
-      },
+    const proposalRef = {
+      current: hashCrestodianOperation({
+        kind: "setup",
+        model: "openai/gpt-5.5",
+        inferenceRoutes: [...originalRoutes],
+      }),
     };
     const tool = createCrestodianTool({
       surface: "gateway",
@@ -382,7 +339,7 @@ describe("crestodian tool", () => {
   });
 
   it("refuses an armed call that differs from the proposed operation", async () => {
-    const proposalRef: CrestodianToolProposalRef = {};
+    const proposalRef: { current?: string } = {};
     const proposingTool = createCrestodianTool({ surface: "cli", proposalRef });
     await proposingTool.execute("t3c", {
       action: "set_default_model",
@@ -426,14 +383,13 @@ describe("crestodian tool", () => {
       sourceConfig: {},
       issues: [{ path: "gateway.port", message: "Expected number" }],
     } as never);
-    const proposalRef: CrestodianToolProposalRef = {};
+    const proposalRef: { current?: string } = {};
     await createCrestodianTool({ surface: "cli", proposalRef }).execute("t4a", {
       action: "config_set",
       path: "gateway.port",
       value: "banana",
       approved: true,
     });
-    markProposalRenderedByHost(proposalRef);
     const tool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
     const result = await tool.execute("t4", {
       action: "config_set",
@@ -453,33 +409,22 @@ describe("crestodian tool", () => {
         return { applied: true };
       },
     );
-    const proposalRef: CrestodianToolProposalRef = {};
+    const proposalRef: { current?: string } = {};
     await createCrestodianTool({ surface: "cli", proposalRef }).execute("t6a", {
       action: "create_agent",
       agentId: "work",
       workspace: "/tmp/work",
-      model: "openai/gpt-5.5",
       approved: true,
     });
-    expect(proposalRef.current?.plan).toContain(
-      "create agent work with workspace /tmp/work using model openai/gpt-5.5",
-    );
-    markProposalRenderedByHost(proposalRef);
     const tool = createCrestodianTool({ surface: "cli", approvalArmed: true, proposalRef });
     await tool.execute("t6", {
       action: "create_agent",
       agentId: "work",
       workspace: "/tmp/work",
-      model: "openai/gpt-5.5",
       approved: true,
     });
     expect(mocks.executeCrestodianOperation).toHaveBeenCalledWith(
-      {
-        kind: "create-agent",
-        agentId: "work",
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
-      },
+      { kind: "create-agent", agentId: "work", workspace: "/tmp/work" },
       expect.anything(),
       expect.objectContaining({ approved: true }),
     );
@@ -572,21 +517,13 @@ describe("crestodian tool", () => {
         args,
         resultText: "needs-approval: this action changes state.",
       }),
-    ).toEqual({ proposal: undefined });
-    expect(
-      resolveCrestodianProposalTransition({
-        args,
-        resultText: `needs-approval:${"0".repeat(64)}\nThis action changes state.`,
-      }),
-    ).toEqual({ proposal: undefined });
+    ).toEqual({ proposal: hash });
     expect(
       resolveCrestodianProposalTransition({
         args,
         resultText: `needs-approval:${hash}\nThis action changes state.`,
       }),
-    ).toEqual({
-      proposal: expect.objectContaining({ operationHash: hash, renderedByHost: false }),
-    });
+    ).toEqual({ proposal: hash });
     // A voided approval clears it.
     expect(
       resolveCrestodianProposalTransition({
@@ -605,33 +542,5 @@ describe("crestodian tool", () => {
     expect(
       resolveCrestodianProposalTransition({ args: { action: "bogus" }, resultText: "ok" }),
     ).toBeNull();
-  });
-
-  it("reconstructs a route-less setup proposal from its exact retry arguments", () => {
-    const capturedArgs = {
-      action: "setup",
-      workspace: "/tmp/work",
-      model: "openai/gpt-5.5",
-      inferenceRoutes: [{ kind: "codex-cli", model: "openai/gpt-5.5" }],
-      approved: true,
-    };
-    const operationHash = hashCrestodianOperation({
-      kind: "setup",
-      workspace: "/tmp/work",
-      model: "openai/gpt-5.5",
-      inferenceRoutes: [{ kind: "codex-cli", model: "openai/gpt-5.5" }],
-    });
-
-    const transition = resolveCrestodianProposalTransition({
-      args: { action: "setup", workspace: "/tmp/work" },
-      resultText: `needs-approval:${operationHash}\nAfter the user approves, retry with these exact tool arguments: ${JSON.stringify(capturedArgs)}\nPlan: configure Crestodian.`,
-    });
-
-    expect(transition).toEqual({
-      proposal: expect.objectContaining({ operationHash, renderedByHost: false }),
-    });
-    expect(transition?.proposal?.plan).toContain(
-      "test inference routes in this order: Codex app-server (openai/gpt-5.5)",
-    );
   });
 });

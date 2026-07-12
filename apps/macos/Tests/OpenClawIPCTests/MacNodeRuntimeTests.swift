@@ -216,6 +216,23 @@ struct MacNodeRuntimeTests {
         #expect(response.error?.message == "UNAVAILABLE: Codex session catalog is disabled")
     }
 
+    @Test func `handle invoke returns an injected Codex transcript turn page`() async {
+        let payload = #"{"data":[{"id":"item-1","type":"agentMessage","text":"answer"}],"nextCursor":"page-2"}"#
+        let runtime = MacNodeRuntime(
+            codexThreadCatalogEnabled: { true },
+            codexThreadTurnsRequest: { paramsJSON in
+                #expect(paramsJSON == #"{"threadId":"thread-1","limit":50}"#)
+                return payload
+            })
+        let response = await runtime.handleInvoke(BridgeInvokeRequest(
+            id: "req-codex-items",
+            command: MacNodeCodexThreadCatalogContract.turnsCommand,
+            paramsJSON: #"{"threadId":"thread-1","limit":50}"#))
+
+        #expect(response.ok)
+        #expect(response.payloadJSON == payload)
+    }
+
     @Test func `A2UI host capability refresh uses injected node session refresher`() async {
         let probe = CanvasRefreshProbe()
         let runtime = MacNodeRuntime(

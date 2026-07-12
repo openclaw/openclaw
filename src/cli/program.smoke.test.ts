@@ -76,20 +76,6 @@ describe("cli program (smoke)", () => {
     expect(options?.json).toBe(false);
   });
 
-  it("forwards explicit non-ClawHub acknowledgement to Crestodian", async () => {
-    await runProgram([
-      "crestodian",
-      "--message",
-      "plugin install npm:@example/plugin",
-      "--yes",
-      "--acknowledge-non-clawhub-install",
-    ]);
-    const options = firstMockArg(runCrestodian) as {
-      acknowledgeNonClawHubInstall?: boolean;
-    };
-    expect(options.acknowledgeNonClawHubInstall).toBe(true);
-  });
-
   it("warns and ignores invalid tui timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "nope"]);
     expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');

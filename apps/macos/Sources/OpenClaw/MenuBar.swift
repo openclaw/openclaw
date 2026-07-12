@@ -110,6 +110,17 @@ struct OpenClawApp: App {
                 .keyboardShortcut(",", modifiers: .command)
             }
             SidebarCommands()
+            CommandMenu("Navigate") {
+                Button("Back") {
+                    DashboardManager.shared.navigateBack()
+                }
+                .keyboardShortcut("[", modifiers: .command)
+
+                Button("Forward") {
+                    DashboardManager.shared.navigateForward()
+                }
+                .keyboardShortcut("]", modifiers: .command)
+            }
         }
         .onChange(of: self.isMenuPresented) { _, _ in
             self.updateStatusHighlight()

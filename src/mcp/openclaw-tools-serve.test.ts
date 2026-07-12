@@ -4,7 +4,6 @@ import {
   buildCrestodianToolsMcpServerConfig,
   OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV,
   OPENCLAW_TOOLS_MCP_TOOLS_ENV,
-  resolveOpenClawToolsMcpCrestodianApproval,
   resolveOpenClawToolsMcpCrestodianSurface,
   resolveOpenClawToolsMcpToolSelection,
 } from "./openclaw-tools-serve-config.js";
@@ -88,25 +87,6 @@ describe("OpenClaw tools MCP server", () => {
     expect(server.env).toEqual({
       [OPENCLAW_TOOLS_MCP_TOOLS_ENV]: "crestodian",
       [OPENCLAW_TOOLS_MCP_CRESTODIAN_SURFACE_ENV]: "gateway",
-    });
-  });
-
-  it("round-trips host-rendered crestodian proposal state through the stdio env", () => {
-    const proposal = {
-      operationHash: "plugin-install",
-      plan: "Install npm:@example/plugin after reviewing its source.",
-      renderedByHost: true,
-    };
-    const config = buildCrestodianToolsMcpServerConfig({
-      surface: "cli",
-      approvalArmed: true,
-      proposalRef: { current: proposal },
-    });
-    const server = config.mcpServers.openclaw as { env?: Record<string, string> };
-
-    expect(resolveOpenClawToolsMcpCrestodianApproval(server.env)).toEqual({
-      approvalArmed: true,
-      proposalRef: { current: proposal },
     });
   });
 });

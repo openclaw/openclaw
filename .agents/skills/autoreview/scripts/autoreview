@@ -87,7 +87,7 @@ SECRET_VALUE_PATTERNS = [
 MAX_BUNDLE_TEXT_BYTES = 180_000
 DEFAULT_ENGINE_PATHS = ("/usr/local/bin", "/usr/bin", "/bin")
 DEFAULT_MODEL_BY_ENGINE = {
-    "codex": "gpt-5.5",
+    "codex": "gpt-5.6-sol",
     "claude": "claude-fable-5",
 }
 THINKING_LEVELS_BY_ENGINE = {
@@ -3123,12 +3123,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
     parser.add_argument("--engine", choices=ENGINE_CHOICES, default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
-    parser.add_argument("--reviewers", help="Comma-separated review panel, e.g. codex,claude,cursor or codex:gpt-5.5:high.")
+    parser.add_argument("--reviewers", help="Comma-separated review panel, e.g. codex,claude,cursor or codex:gpt-5.6-sol:high.")
     parser.add_argument("--panel", action="store_true", help="Run a Codex/Claude review panel unless --engine changes the first reviewer.")
     parser.add_argument(
         "--model",
         action="append",
-        help="Model for all reviewers or engine=model. Repeatable. Defaults: codex=gpt-5.5, claude=claude-fable-5.",
+        help="Model for all reviewers or engine=model. Repeatable. Defaults: codex=gpt-5.6-sol, claude=claude-fable-5.",
     )
     parser.add_argument("--thinking", action="append", help="Thinking/effort for all reviewers or engine=level. Repeatable. Codex: none, minimal, low, medium, high, xhigh. Claude: low, medium, high, xhigh, max. Droid: off, none, low, medium, high. Pi: off, minimal, low, medium, high, xhigh. OpenCode: minimal, low, medium, high, max. Cursor: none.")
     parser.add_argument(
@@ -3533,7 +3533,7 @@ def self_test_config_defaults() -> None:
     ]
     with preserve_env(keys):
         default_codex = reviewer_args(reviewer_test_args(engine="codex"))[0]
-        if default_codex.model != "gpt-5.5":
+        if default_codex.model != "gpt-5.6-sol":
             raise SystemExit(f"self-test config defaults failed: default codex model={default_codex.model!r}")
         default_claude = reviewer_args(reviewer_test_args(engine="claude"))[0]
         if default_claude.model != "claude-fable-5":

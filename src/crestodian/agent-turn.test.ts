@@ -2,8 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CliPrivateToolEvent } from "../agents/cli-runner/types.js";
-import { hashCrestodianOperation } from "../agents/tools/crestodian-tool.js";
 import {
   cleanupCrestodianAgentSession,
   createCrestodianAgentSession,
@@ -188,62 +186,6 @@ describe("runCrestodianAgentTurn", () => {
     expect(session.localBackendPreference).toBe("codex-app-server");
   });
 
-  it("correlates CLI MCP start arguments with proposal result events", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "crestodian-turn-mcp-proposal-"));
-    tempDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const overview = {
-      defaultModel: undefined,
-      tools: {
-        claude: { command: "claude", found: true },
-        codex: { command: "codex", found: false },
-        gemini: { command: "gemini", found: false },
-      },
-    } as never;
-    const session = createCrestodianAgentSession();
-    const args = { action: "set_default_model", model: "openai/gpt-5.5" };
-    const operationHash = hashCrestodianOperation({
-      kind: "set-default-model",
-      model: "openai/gpt-5.5",
-    });
-    const runCliAgent = vi.fn(async (params: Record<string, unknown>) => {
-      const onPrivateToolEvent = params.onPrivateToolEvent as (event: CliPrivateToolEvent) => void;
-      onPrivateToolEvent({
-        phase: "start",
-        name: "mcp__openclaw__crestodian",
-        toolCallId: "crestodian-call-1",
-        args,
-      });
-      onPrivateToolEvent({
-        phase: "result",
-        name: "mcp__openclaw__crestodian",
-        toolCallId: "crestodian-call-1",
-        isError: false,
-        result: `needs-approval:${operationHash}\nThis action changes state.`,
-      });
-      return { meta: { finalAssistantVisibleText: "I prepared that change." } };
-    });
-
-    await expect(
-      runCrestodianAgentTurnWithDeps(
-        {
-          input: "change the model",
-          overview,
-          surface: "gateway",
-          approvalArmed: false,
-          session,
-        },
-        { runCliAgent: runCliAgent as never },
-      ),
-    ).resolves.toMatchObject({ text: "I prepared that change." });
-
-    expect(session.proposalRef.current).toMatchObject({
-      operationHash,
-      plan: expect.stringContaining("set agents.defaults.model.primary to openai/gpt-5.5"),
-      renderedByHost: false,
-    });
-  });
-
   it.each(["empty reply", "throw"] as const)(
     "does not arm a proposal hidden by a failed %s turn",
     async (failureMode) => {
@@ -259,21 +201,12 @@ describe("runCrestodianAgentTurn", () => {
         },
       } as never;
       const session = createCrestodianAgentSession();
-      const visibleProposal = {
-        operationHash: "previously-shown-proposal",
-        plan: "previously shown plan",
-        renderedByHost: true,
-      };
-      session.proposalRef.current = visibleProposal;
+      session.proposalRef.current = "previously-shown-proposal";
       const runCliAgent = vi.fn(async (params: Record<string, unknown>) => {
         const crestodianTool = params.crestodianTool as {
-          proposalRef: typeof session.proposalRef;
+          proposalRef: { current?: string };
         };
-        crestodianTool.proposalRef.current = {
-          operationHash: "hidden-proposal",
-          plan: "hidden plan",
-          renderedByHost: false,
-        };
+        crestodianTool.proposalRef.current = "hidden-proposal";
         if (failureMode === "throw") {
           throw new Error("CLI failed after the tool call");
         }
@@ -293,7 +226,7 @@ describe("runCrestodianAgentTurn", () => {
         ),
       ).resolves.toBeNull();
 
-      expect(session.proposalRef.current).toBe(visibleProposal);
+      expect(session.proposalRef.current).toBe("previously-shown-proposal");
     },
   );
 

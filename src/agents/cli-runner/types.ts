@@ -40,22 +40,6 @@ import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
-/** Unredacted in-memory tool lifecycle available only to the owning runner. */
-export type CliPrivateToolEvent =
-  | {
-      phase: "start";
-      toolCallId: string;
-      name: string;
-      args: Record<string, unknown>;
-    }
-  | {
-      phase: "result";
-      toolCallId: string;
-      name: string;
-      isError: boolean;
-      result?: unknown;
-    };
-
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
   sessionId: string;
@@ -179,8 +163,6 @@ export type RunCliAgentParams = {
    * surface for the run — the harness still owns its native tools.
    */
   crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
-  /** Private raw lifecycle for exact-operation correlation; never log, persist, or broadcast. */
-  onPrivateToolEvent?: (event: CliPrivateToolEvent) => void;
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;

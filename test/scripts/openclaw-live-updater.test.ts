@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -23,6 +24,7 @@ import {
   maintainMain,
   originMatches,
   parseGatewayLogAudit,
+  verifyGatewayReadiness,
 } from "../../.agents/skills/openclaw-live-updater/scripts/update-main.mjs";
 import {
   BUILD_STAMP_FILE,
@@ -174,6 +176,62 @@ describe("openclaw live updater", () => {
         },
       ],
     });
+  });
+
+  test("audits raw file logs when RPC log retrieval is unavailable", () => {
+    const output = [
+      {
+        "0": '{"subsystem":"gateway"}',
+        "1": "startup warning",
+        time: "2026-07-11T08:00:03.000Z",
+        _meta: { date: "2026-07-11T08:00:03.000Z", logLevelName: "WARN" },
+      },
+      {
+        "0": '{"subsystem":"gateway"}',
+        "1": "startup failed",
+        time: "2026-07-11T08:00:04.000Z",
+        _meta: { date: "2026-07-11T08:00:04.000Z", logLevelName: "ERROR" },
+      },
+    ]
+      .map((entry) => JSON.stringify(entry))
+      .join("\n");
+
+    expect(parseGatewayLogAudit(output, Date.parse("2026-07-11T08:00:02.000Z"))).toMatchObject({
+      entries: 2,
+      errorCount: 1,
+      warningCount: 1,
+      errors: [{ subsystem: "gateway", message: "startup failed" }],
+      warnings: [{ subsystem: "gateway", message: "startup warning" }],
+    });
+  });
+
+  test("retries bounded Gateway readiness after restart", () => {
+    const { mirror } = makeFixture();
+    writeBuild(mirror);
+    const calls: string[] = [];
+    const delays: number[] = [];
+    let statusAttempts = 0;
+
+    verifyGatewayReadiness(
+      (command: string, args: string[]) => {
+        const call = [command, ...args].join(" ");
+        calls.push(call);
+        if (call.includes("gateway status") && ++statusAttempts < 3) {
+          throw new Error("RPC warming up");
+        }
+      },
+      mirror,
+      git(mirror, "rev-parse", "HEAD"),
+      (ms: number) => delays.push(ms),
+    );
+
+    expect(delays).toEqual([5_000, 5_000]);
+    expect(calls).toEqual([
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw gateway status --deep --require-rpc --json",
+      "pnpm openclaw health --verbose --json",
+    ]);
   });
 
   test("accepts supported OpenClaw GitHub origins", () => {
@@ -344,11 +402,12 @@ describe("openclaw live updater", () => {
     });
     expect(commands.calls).toEqual([
       "pnpm install --frozen-lockfile",
+      `${process.execPath} dist/index.js gateway stop`,
       "pnpm build",
       "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
-      "bash scripts/restart-mac.sh --sign --wait --target-only",
+      "env SKIP_TSC=1 SKIP_UI_BUILD=1 bash scripts/restart-mac.sh --sign --wait --target-only",
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
     ]);
@@ -390,11 +449,63 @@ describe("openclaw live updater", () => {
     expect(output.actions.dependencyInstall).toBe(true);
     expect(commands.calls).toEqual([
       "pnpm install --frozen-lockfile",
+      `${process.execPath} dist/index.js gateway stop`,
       "pnpm build",
       "pnpm openclaw gateway restart",
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
     ]);
+  });
+
+  test("preserves the signed Mac bundle while a Gateway build replaces dist", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const appBundle = path.join(mirror, "dist/OpenClaw.app");
+    const appMarker = path.join(appBundle, "Contents/signature-marker");
+    mkdirSync(path.dirname(appMarker), { recursive: true });
+    writeFileSync(appMarker, "signed\n");
+    const commands = fakeCommands(mirror);
+
+    maintainFixture(
+      { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+      {
+        runCommand(command: string, args: string[]) {
+          if (command === "pnpm" && args[0] === "build") {
+            expect(existsSync(appBundle)).toBe(false);
+          }
+          commands.runCommand(command, args);
+        },
+      },
+    );
+
+    expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
+    expect(
+      readdirSync(path.join(mirror, ".git")).filter((entry) =>
+        entry.startsWith(".openclaw-live-mac-"),
+      ),
+    ).toEqual([]);
+  });
+
+  test("restores the Mac bundle when the Gateway build fails", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    const appMarker = path.join(mirror, "dist/OpenClaw.app/Contents/signature-marker");
+    mkdirSync(path.dirname(appMarker), { recursive: true });
+    writeFileSync(appMarker, "signed\n");
+
+    expect(() =>
+      maintainFixture(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          runCommand(command: string, args: string[]) {
+            if (command === "pnpm" && args[0] === "build") {
+              throw new Error("build failed");
+            }
+          },
+        },
+      ),
+    ).toThrow("build failed");
+    expect(readFileSync(appMarker, "utf8")).toBe("signed\n");
   });
 
   test("proves a current exact-SHA Gateway on a no-op heartbeat", () => {
@@ -518,7 +629,41 @@ describe("openclaw live updater", () => {
         },
       ),
     ).toThrow(/build output does not match/u);
-    expect(calls).toEqual(["pnpm install --frozen-lockfile", "pnpm build"]);
+    expect(calls).toEqual([
+      "pnpm install --frozen-lockfile",
+      `${process.execPath} dist/index.js gateway stop`,
+      "pnpm build",
+    ]);
+  });
+
+  test("audits restart-window logs even when deep Gateway verification fails", () => {
+    const { root, mirror } = makeFixture();
+    mkdirSync(path.join(mirror, "node_modules"));
+    writeBuild(mirror);
+    let auditCalls = 0;
+    let statusCalls = 0;
+
+    expect(() =>
+      maintainMain(
+        { checkout: mirror, remote: "origin", lockPath: path.join(root, "maintenance.lock") },
+        {
+          fetchMain: fetchFixtureMain,
+          runCommand(command: string, args: string[]) {
+            if (command === "pnpm" && args.slice(0, 3).join(" ") === "openclaw gateway status") {
+              statusCalls += 1;
+              throw new Error("RPC unavailable");
+            }
+          },
+          auditGatewayLogs() {
+            auditCalls += 1;
+            return { entries: 1, errorCount: 0, warningCount: 0, errors: [], warnings: [] };
+          },
+          sleep() {},
+        },
+      ),
+    ).toThrow("RPC unavailable");
+    expect(statusCalls).toBe(4);
+    expect(auditCalls).toBe(1);
   });
 
   test("retains failed exact-bundle Mac proof for the next heartbeat", () => {
@@ -563,7 +708,7 @@ describe("openclaw live updater", () => {
     expect(retryCommands.calls.slice(0, 3)).toEqual([
       "pnpm openclaw gateway status --deep --require-rpc --json",
       "pnpm openclaw health --verbose --json",
-      "bash scripts/restart-mac.sh --sign --wait --target-only",
+      "env SKIP_TSC=1 SKIP_UI_BUILD=1 bash scripts/restart-mac.sh --sign --wait --target-only",
     ]);
     expect(existsSync(statePath)).toBe(false);
   });

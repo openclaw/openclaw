@@ -1,9 +1,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 // Crestodian operations parse, approve, execute, and audit setup-helper commands.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
-import { looksLikeLocalInstallSpec } from "../cli/install-spec.js";
 import type { DoctorOptions } from "../commands/doctor.types.js";
 import {
   detectInferenceBackends,
@@ -12,12 +10,7 @@ import {
 } from "../commands/onboard-inference.js";
 import { isSensitiveConfigPath } from "../config/sensitive-paths.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import {
-  formatNonClawHubInstallWarning,
-  isOpenClawTrustedPluginInstallSpec,
-  NON_CLAWHUB_INSTALL_ACK_FLAG,
-} from "../plugins/install-provenance.js";
+import { isOpenClawTrustedPluginInstallSpec } from "../plugins/install-provenance.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TuiResult } from "../tui/tui-types.js";
@@ -134,10 +127,6 @@ export type CrestodianOperationResult = {
   followUp?: Extract<CrestodianOperation, { kind: "model-setup" }>;
 };
 
-export type CrestodianPluginInstallOptions = {
-  acknowledgeNonClawHubInstall?: boolean;
-};
-
 /** Injectable command dependencies used by tests and alternate runners. */
 export type CrestodianCommandDeps = {
   formatOverview?: CrestodianOverviewFormatter;
@@ -162,11 +151,7 @@ export type CrestodianCommandDeps = {
   runGatewayRestart?: () => Promise<void>;
   runGatewayStart?: () => Promise<void>;
   runGatewayStop?: () => Promise<void>;
-  runPluginInstall?: (
-    spec: string,
-    runtime: RuntimeEnv,
-    options?: CrestodianPluginInstallOptions,
-  ) => Promise<void>;
+  runPluginInstall?: (spec: string, runtime: RuntimeEnv) => Promise<void>;
   runPluginUninstall?: (pluginId: string, runtime: RuntimeEnv) => Promise<void>;
   runPluginsList?: (runtime: RuntimeEnv) => Promise<void>;
   runPluginsSearch?: (query: string, runtime: RuntimeEnv) => Promise<void>;
@@ -398,12 +383,17 @@ export function parseCrestodianOperation(input: string): CrestodianOperation {
   }
   const pluginInstallMatch = trimmed.match(PLUGIN_INSTALL_RE);
   if (pluginInstallMatch?.groups?.spec?.trim()) {
+    const spec = normalizePluginInstallSpec(
+      pluginInstallMatch.groups.spec.trim(),
+      pluginInstallMatch.groups.source,
+    );
+    const validationError = validateCrestodianPluginInstallSpec(spec);
+    if (validationError) {
+      return { kind: "none", message: validationError };
+    }
     return {
       kind: "plugin-install",
-      spec: normalizePluginInstallSpec(
-        pluginInstallMatch.groups.spec.trim(),
-        pluginInstallMatch.groups.source,
-      ),
+      spec,
     };
   }
   const pluginUninstallMatch = trimmed.match(PLUGIN_UNINSTALL_RE);
@@ -530,42 +520,12 @@ export function validateCrestodianPluginInstallSpec(spec: string): string | null
   if (/\s/.test(trimmed)) {
     return "Crestodian plugin install accepts one npm or ClawHub package spec.";
   }
-  if (sanitizeTerminalText(trimmed) !== trimmed) {
-    return "Crestodian plugin install spec contains unsupported terminal control characters.";
-  }
-  const lower = trimmed.toLowerCase();
-  if (lower.startsWith("clawhub:")) {
-    return null;
-  }
-  if (lower.startsWith("npm:")) {
-    const npmSpec = trimmed.slice("npm:".length).trim();
-    if (!npmSpec) {
-      return "Crestodian plugin install accepts one npm or ClawHub package spec.";
-    }
-    return validateRegistryNpmSpec(npmSpec)
-      ? "Crestodian plugin install accepts npm or ClawHub package specs only."
-      : null;
-  }
   if (/^(?:\.{1,2}\/|\/|~\/|file:|git(?:\+ssh|\+https)?:|https?:)/i.test(trimmed)) {
     // Crestodian does not install local paths or URLs; those can execute arbitrary package code.
     return "Crestodian plugin install accepts npm or ClawHub package specs only.";
   }
-  if (
-    looksLikeLocalInstallSpec(trimmed, [
-      ".ts",
-      ".js",
-      ".mjs",
-      ".cjs",
-      ".tgz",
-      ".tar.gz",
-      ".tar",
-      ".zip",
-    ])
-  ) {
-    return "Crestodian plugin install accepts npm or ClawHub package specs only.";
-  }
-  if (trimmed.includes(":") || validateRegistryNpmSpec(trimmed)) {
-    return "Crestodian plugin install accepts npm or ClawHub package specs only.";
+  if (!isOpenClawTrustedPluginInstallSpec(trimmed)) {
+    return "Crestodian installs only ClawHub, bundled, or official-catalog plugins. Use `openclaw plugins install <spec>` in a trusted shell to review an arbitrary executable source.";
   }
   return null;
 }
@@ -591,14 +551,15 @@ export function isPersistentCrestodianOperation(operation: CrestodianOperation):
   );
 }
 
-function describeCrestodianPersistentOperationUnsafe(operation: CrestodianOperation): string {
+/** Format a user-facing description for an operation requiring approval. */
+export function describeCrestodianPersistentOperation(operation: CrestodianOperation): string {
   switch (operation.kind) {
     case "set-default-model":
       return `set agents.defaults.model.primary to ${operation.model}`;
     case "config-set":
       return `set config ${operation.path} to ${formatConfigSetValueForPlan(operation.path, operation.value)}`;
     case "config-set-ref":
-      return `set config ${operation.path} to ${operation.source} SecretRef ${operation.id} using provider ${operation.provider ?? "default"}`;
+      return `set config ${operation.path} to ${operation.source} SecretRef ${operation.source === "env" ? operation.id : "<redacted>"}`;
     case "setup":
       return formatSetupPlanDescription(operation);
     case "model-setup":
@@ -609,10 +570,8 @@ function describeCrestodianPersistentOperationUnsafe(operation: CrestodianOperat
       return `install plugin ${operation.spec}`;
     case "plugin-uninstall":
       return `uninstall plugin ${operation.pluginId}`;
-    case "create-agent": {
-      const model = operation.model ? ` using model ${operation.model}` : "";
-      return `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}${model}`;
-    }
+    case "create-agent":
+      return `create agent ${operation.agentId} with workspace ${formatCreateAgentWorkspace(operation.workspace)}`;
     case "gateway-start":
       return "start the Gateway";
     case "gateway-stop":
@@ -624,26 +583,9 @@ function describeCrestodianPersistentOperationUnsafe(operation: CrestodianOperat
   }
 }
 
-/** Format a terminal-safe user-facing description for an operation requiring approval. */
-export function describeCrestodianPersistentOperation(operation: CrestodianOperation): string {
-  return sanitizeTerminalText(describeCrestodianPersistentOperationUnsafe(operation));
-}
-
 /** Format the standard approval plan text for a persistent operation. */
 export function formatCrestodianPersistentPlan(operation: CrestodianOperation): string {
-  const plan = `Plan: ${describeCrestodianPersistentOperation(operation)}. Say yes to apply.`;
-  if (operation.kind !== "plugin-install" || isOpenClawTrustedPluginInstallSpec(operation.spec)) {
-    return plan;
-  }
-  return [formatNonClawHubInstallWarning({ sourceClass: "npm", spec: operation.spec }), plan].join(
-    "\n",
-  );
-}
-
-export function requiresNonClawHubPluginInstallAcknowledgement(
-  operation: CrestodianOperation,
-): operation is Extract<CrestodianOperation, { kind: "plugin-install" }> {
-  return operation.kind === "plugin-install" && !isOpenClawTrustedPluginInstallSpec(operation.spec);
+  return `Plan: ${describeCrestodianPersistentOperation(operation)}. Say yes to apply.`;
 }
 
 function formatCreateAgentWorkspace(workspace: string | undefined): string {
@@ -706,13 +648,7 @@ function formatSetupPlanDescription(
 ): string {
   const workspace = shortenHomePath(resolveUserPath(operation.workspace ?? process.cwd()));
   const model = operation.model ? ` and default model ${operation.model}` : "";
-  const routeOrder =
-    operation.inferenceRoutes === undefined
-      ? ""
-      : operation.inferenceRoutes.length === 0
-        ? "; no inference routes were captured"
-        : `; test inference routes in this order: ${formatSetupInferenceRouteOrder(operation.inferenceRoutes)}`;
-  return `bootstrap OpenClaw setup for workspace ${workspace}${model}${routeOrder}`;
+  return `bootstrap OpenClaw setup for workspace ${workspace}${model}`;
 }
 
 async function chooseSetupModel(params: {
@@ -958,8 +894,6 @@ async function resolveTuiAgentId(params: {
 
 type ExecuteOptions = {
   approved?: boolean;
-  /** Source-specific consent collected after showing the non-ClawHub warning. */
-  acknowledgeNonClawHubInstall?: boolean;
   deps?: CrestodianCommandDeps;
   auditDetails?: Record<string, unknown>;
 };
@@ -1218,18 +1152,6 @@ async function executePluginInstall(
     runtime.exit(1);
     return { applied: false };
   }
-  if (
-    opts.approved &&
-    requiresNonClawHubPluginInstallAcknowledgement(operation) &&
-    opts.acknowledgeNonClawHubInstall !== true
-  ) {
-    const message = [
-      formatCrestodianPersistentPlan(operation),
-      `Non-ClawHub plugin installs need separate provenance acknowledgement; rerun with ${NON_CLAWHUB_INSTALL_ACK_FLAG}.`,
-    ].join("\n");
-    runtime.log(message);
-    return { applied: false, message };
-  }
   const result = await applyPersistentOperation({
     auditOperation: "plugin.install",
     operation,
@@ -1238,23 +1160,11 @@ async function executePluginInstall(
     run: async (ctx) => {
       const runPluginInstall =
         ctx.deps?.runPluginInstall ??
-        (async (
-          spec: string,
-          pluginRuntime: RuntimeEnv,
-          installOptions?: CrestodianPluginInstallOptions,
-        ) => {
+        (async (spec: string, pluginRuntime: RuntimeEnv) => {
           const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-          await runPluginInstallCommand({
-            raw: spec,
-            opts: {
-              acknowledgeNonClawHubInstall: installOptions?.acknowledgeNonClawHubInstall === true,
-            },
-            runtime: pluginRuntime,
-          });
+          await runPluginInstallCommand({ raw: spec, opts: {}, runtime: pluginRuntime });
         });
-      await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime), {
-        acknowledgeNonClawHubInstall: opts.acknowledgeNonClawHubInstall === true,
-      });
+      await runPluginInstall(operation.spec, createNoExitRuntime(ctx.runtime));
       return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
     },
   });

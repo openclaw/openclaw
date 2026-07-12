@@ -7,7 +7,6 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { runCrestodianAgentTurnWithDeps } from "./agent-turn.js";
 import { classifyCrestodianApprovalText } from "./approval-intent.js";
 import { CrestodianChatEngine } from "./chat-engine.js";
-import { formatCrestodianPersistentPlan } from "./operations.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({
@@ -157,21 +156,11 @@ describe("CrestodianChatEngine", () => {
   });
 
   it("voids an agent-loop proposal on decline and lets the AI acknowledge", async () => {
-    let observedProposalOnSecondTurn: unknown = "sentinel";
+    let observedProposalOnSecondTurn: string | undefined = "sentinel";
     const runAgentTurn = vi.fn(
-      async (params: {
-        session: {
-          proposalRef: {
-            current?: { operationHash: string; plan: string; renderedByHost: boolean };
-          };
-        };
-      }) => {
+      async (params: { session: { proposalRef: { current?: string } } }) => {
         if (runAgentTurn.mock.calls.length === 1) {
-          params.session.proposalRef.current = {
-            operationHash: "registered-operation",
-            plan: "Change the model.",
-            renderedByHost: false,
-          };
+          params.session.proposalRef.current = "registered-operation";
           return { text: "I can change that after your approval." };
         }
         observedProposalOnSecondTurn = params.session.proposalRef.current;
@@ -408,18 +397,10 @@ describe("CrestodianChatEngine", () => {
     const runAgentTurn = vi.fn(
       async (params: {
         approvalArmed: boolean;
-        session: {
-          proposalRef: {
-            current?: { operationHash: string; plan: string; renderedByHost: boolean };
-          };
-        };
+        session: { proposalRef: { current?: string } };
       }) => {
         armedFlags.push(params.approvalArmed);
-        params.session.proposalRef.current = {
-          operationHash: "op-hash",
-          plan: "Set the default model.",
-          renderedByHost: false,
-        };
+        params.session.proposalRef.current = "op-hash";
         return { text: "ok" };
       },
     );
@@ -436,67 +417,10 @@ describe("CrestodianChatEngine", () => {
     expect(armedFlags).toEqual([false, true]);
   });
 
-  it("renders an agent-loop provenance warning from host-owned proposal state", async () => {
-    const engine = new CrestodianChatEngine({
-      runAgentTurn: async (params) => {
-        params.session.proposalRef.current = {
-          operationHash: "plugin-install",
-          plan: [
-            "Install plugin from npm:@example/plugin.",
-            "WARNING - Installing a plugin outside ClawHub review and trust metadata.",
-          ].join("\n"),
-          renderedByHost: false,
-        };
-        return { text: "I can take care of that." };
-      },
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("install npm:@example/plugin");
-
-    expect(reply.text).toContain("I can take care of that.");
-    expect(reply.text).toContain("outside ClawHub review and trust metadata");
-    expect(reply.text).toContain("Reply yes to approve this exact action");
-  });
-
-  it("renders captured setup routes when the agent reply omits tool details", async () => {
-    const engine = new CrestodianChatEngine({
-      runAgentTurn: async (params) => {
-        params.session.proposalRef.current = {
-          operationHash: "setup",
-          plan: formatCrestodianPersistentPlan({
-            kind: "setup",
-            workspace: "/tmp/work",
-            model: "openai/gpt-5.5",
-            inferenceRoutes: [
-              { kind: "codex-cli", model: "openai/gpt-5.5" },
-              { kind: "openai-api-key", model: "openai/gpt-5.5" },
-            ],
-          }),
-          renderedByHost: false,
-        };
-        return { text: "I prepared setup for approval." };
-      },
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("set it up");
-
-    expect(reply.text).toContain("I prepared setup for approval.");
-    expect(reply.text).toContain(
-      "test inference routes in this order: Codex app-server (openai/gpt-5.5) → OPENAI_API_KEY (openai/gpt-5.5)",
-    );
-    expect(reply.text).toContain("Reply yes to approve this exact action");
-  });
-
   it("clears a stale host proposal once the agent loop owns the conversation", async () => {
     const engine = new CrestodianChatEngine({
       runAgentTurn: async (params) => {
-        params.session.proposalRef.current = {
-          operationHash: "agent-proposal",
-          plan: "agent proposal plan",
-          renderedByHost: false,
-        };
+        params.session.proposalRef.current = "agent-proposal";
         return { text: "loop reply" };
       },
       classifyApproval: async () => "other",
@@ -653,11 +577,7 @@ describe("CrestodianChatEngine", () => {
       runAgentTurn: async (params) => {
         armedFlags.push(params.approvalArmed);
         if (armedFlags.length === 1) {
-          params.session.proposalRef.current = {
-            operationHash: "agent-proposal",
-            plan: "agent proposal plan",
-            renderedByHost: false,
-          };
+          params.session.proposalRef.current = "agent-proposal";
           return {
             text: "Opening setup.",
             directive: { kind: "open-setup" as const, target: "guided" as const },
@@ -911,23 +831,6 @@ describe("CrestodianChatEngine", () => {
 
     expect(reply.text).toContain("deterministic mode");
     expect(reply.text).toContain("connect telegram");
-  });
-
-  it("returns deterministic plugin install validation errors without arming approval", async () => {
-    const engine = new CrestodianChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      deps: { loadOverview: fakeOverviewLoader() },
-    });
-
-    const reply = await engine.handle("plugin install git:https://github.com/acme/demo.git");
-
-    expect(reply.text).toContain(
-      "Crestodian plugin install accepts npm or ClawHub package specs only.",
-    );
-    expect(reply.text).not.toContain("Apply this operation");
-    expect(reply.action).toBe("none");
-    expect(engine.hasPendingProposal()).toBe(false);
   });
 });
 

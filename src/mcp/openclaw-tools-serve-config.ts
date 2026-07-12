@@ -7,11 +7,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import type {
-  CrestodianToolOptions,
-  CrestodianToolProposal,
-  CrestodianToolProposalRef,
-} from "../agents/tools/crestodian-tool.js";
+import type { CrestodianToolOptions } from "../agents/tools/crestodian-tool.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import type { BundleMcpConfig } from "../plugins/bundle-mcp.js";
 
@@ -66,48 +62,18 @@ export function resolveOpenClawToolsMcpCrestodianSurface(
 /**
  * Reconstruct per-turn approval state for the served crestodian tool. The
  * stdio server runs out of process, so the host passes the armed bit and the
- * pending proposal and render state through env; the host mirrors transitions back from
+ * pending proposal hash through env; the host mirrors transitions back from
  * tool events (see mirrorCrestodianProposalFromToolEvents in agent-turn.ts).
  */
 export function resolveOpenClawToolsMcpCrestodianApproval(env: NodeJS.ProcessEnv = process.env): {
   approvalArmed: boolean;
-  proposalRef: CrestodianToolProposalRef;
+  proposalRef: { current?: string };
 } {
-  const pendingProposal = parseCrestodianToolProposal(
-    env[OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV],
-  );
+  const pendingProposal = env[OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV]?.trim();
   return {
     approvalArmed: env[OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV]?.trim() === "1",
     proposalRef: pendingProposal ? { current: pendingProposal } : {},
   };
-}
-
-function parseCrestodianToolProposal(raw: string | undefined): CrestodianToolProposal | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      !parsed ||
-      typeof parsed !== "object" ||
-      !("operationHash" in parsed) ||
-      typeof parsed.operationHash !== "string" ||
-      !("plan" in parsed) ||
-      typeof parsed.plan !== "string" ||
-      !("renderedByHost" in parsed) ||
-      typeof parsed.renderedByHost !== "boolean"
-    ) {
-      return undefined;
-    }
-    return {
-      operationHash: parsed.operationHash,
-      plan: parsed.plan,
-      renderedByHost: parsed.renderedByHost,
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 function resolveTsxImportSpecifier(): string {
@@ -170,9 +136,7 @@ export function buildCrestodianToolsMcpServerConfig(
             ? { [OPENCLAW_TOOLS_MCP_CRESTODIAN_APPROVAL_ARMED_ENV]: "1" }
             : {}),
           ...(pendingProposal
-            ? {
-                [OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV]: JSON.stringify(pendingProposal),
-              }
+            ? { [OPENCLAW_TOOLS_MCP_CRESTODIAN_PROPOSAL_ENV]: pendingProposal }
             : {}),
         },
       },

@@ -285,6 +285,41 @@ describe("chat side result gateway events", () => {
     expect(state.chatSideResultTerminalRuns?.has("btw-run-old")).toBe(true);
   });
 
+  it("keeps this pane's pending card when another run's result arrives", () => {
+    const state = createState();
+    state.chatSideResultPending = { question: "my question", ts: 1, runId: "btw-run-mine" };
+
+    // Same session, different run (e.g. a split pane) that was never retired
+    // here: it must not replace the live pending card, but its terminal chat
+    // event must still be swallowed in this pane.
+    expect(
+      handleChatSideResultGatewayEvent(state, {
+        kind: "btw",
+        runId: "btw-run-other-pane",
+        sessionKey: "main",
+        question: "other pane question",
+        text: "Other pane answer.",
+        ts: 123,
+      }),
+    ).toBe(true);
+
+    expect(state.chatSideResult).toBeNull();
+    expect(state.chatSideResultPending).toMatchObject({ runId: "btw-run-mine" });
+    expect(state.chatSideResultTerminalRuns?.has("btw-run-other-pane")).toBe(true);
+
+    // This pane's own run still resolves its pending card.
+    handleChatSideResultGatewayEvent(state, {
+      kind: "btw",
+      runId: "btw-run-mine",
+      sessionKey: "main",
+      question: "my question",
+      text: "My answer.",
+      ts: 124,
+    });
+    expect(state.chatSideResult).toMatchObject({ runId: "btw-run-mine" });
+    expect(state.chatSideResultPending).toBeNull();
+  });
+
   it("keeps a dismissed pending run's terminal reply out of the transcript", () => {
     const state = createState();
     state.chatSideResultPending = { question: "dismissed question", ts: 1, runId: "btw-run-5" };

@@ -1,5 +1,5 @@
 // Crestodian tests cover main rescue and audit command behavior.
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { runCrestodian } from "./crestodian.js";
 import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
 import type { CrestodianOverview } from "./overview.js";
@@ -33,46 +33,6 @@ const crestodianOverviewDeps = {
 };
 
 describe("runCrestodian", () => {
-  it("does not let generic --yes acknowledge a non-ClawHub plugin source", async () => {
-    const { runtime, lines } = createCrestodianTestRuntime();
-    const runPluginInstall = vi.fn(async () => {});
-
-    await expect(
-      runCrestodian(
-        {
-          message: "plugin install npm:@openclaw/demo",
-          yes: true,
-          deps: { runPluginInstall },
-          ...crestodianOverviewDeps,
-        },
-        runtime,
-      ),
-    ).rejects.toThrow("exit 1");
-
-    expect(runPluginInstall).not.toHaveBeenCalled();
-    expect(lines.join("\n")).toContain("--acknowledge-non-clawhub-install");
-  });
-
-  it("forwards explicit non-ClawHub acknowledgement for one-shot installs", async () => {
-    const { runtime } = createCrestodianTestRuntime();
-    const runPluginInstall = vi.fn(async () => {});
-
-    await runCrestodian(
-      {
-        message: "plugin install npm:@openclaw/demo",
-        yes: true,
-        acknowledgeNonClawHubInstall: true,
-        deps: { runPluginInstall },
-        ...crestodianOverviewDeps,
-      },
-      runtime,
-    );
-
-    expect(runPluginInstall).toHaveBeenCalledWith("npm:@openclaw/demo", expect.any(Object), {
-      acknowledgeNonClawHubInstall: true,
-    });
-  });
-
   it("uses the assistant planner only to choose typed operations", async () => {
     const { runtime, lines } = createCrestodianTestRuntime();
     let runGatewayRestartCalls = 0;

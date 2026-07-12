@@ -27,6 +27,8 @@ TARGET_ONLY=0
 TARGET_APP_BUNDLE="${ROOT_DIR}/dist/OpenClaw.app"
 TARGET_EXECUTABLE="${TARGET_APP_BUNDLE}/${APP_EXECUTABLE_RELATIVE_PATH}"
 INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/${APP_EXECUTABLE_RELATIVE_PATH}"
+STAGED_APP_DIR="${ROOT_DIR}/dist/.openclaw-replacement-${LOCK_KEY}-$$"
+STAGED_APP_BUNDLE="${STAGED_APP_DIR}/OpenClaw.app"
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -43,6 +45,9 @@ run_step() {
 }
 
 cleanup() {
+  if [[ -n "${STAGED_APP_DIR:-}" ]]; then
+    rm -rf "${STAGED_APP_DIR}"
+  fi
   if [[ "${LOCK_HELD}" != "1" || ! -d "${LOCK_DIR}" ]]; then
     return 0
   fi
@@ -314,8 +319,28 @@ elif [ "$SIGN" -eq 1 ]; then
   unset SIGN_IDENTITY
 fi
 
-# 3) Package app (no embedded gateway).
-run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} '${ROOT_DIR}/scripts/package-mac-app.sh'"
+# 3) Package and sign outside the live bundle. A failed package/sign operation
+# must leave the currently running and on-disk app untouched.
+run_step "package app" env \
+  SKIP_TSC="${SKIP_TSC:-1}" \
+  OPENCLAW_PACKAGE_APP_ROOT="${STAGED_APP_BUNDLE}" \
+  "${ROOT_DIR}/scripts/package-mac-app.sh"
+run_step "verify packaged app" /usr/bin/codesign --verify --deep --strict "${STAGED_APP_BUNDLE}"
+
+install_staged_app() {
+  local previous="${ROOT_DIR}/dist/.OpenClaw.app.previous-$$"
+  rm -rf "${previous}"
+  if [[ -d "${TARGET_APP_BUNDLE}" ]]; then
+    mv "${TARGET_APP_BUNDLE}" "${previous}"
+  fi
+  if ! mv "${STAGED_APP_BUNDLE}" "${TARGET_APP_BUNDLE}"; then
+    if [[ -d "${previous}" && ! -d "${TARGET_APP_BUNDLE}" ]]; then
+      mv "${previous}" "${TARGET_APP_BUNDLE}"
+    fi
+    return 1
+  fi
+  rm -rf "${previous}" "${STAGED_APP_DIR}"
+}
 
 choose_app_bundle() {
   if [[ -n "${APP_BUNDLE}" ]]; then
@@ -338,8 +363,6 @@ choose_app_bundle() {
 
   fail "App bundle not found. Set OPENCLAW_APP_BUNDLE to your installed OpenClaw.app"
 }
-
-choose_app_bundle
 
 # When signed, clear any previous launchagent override marker.
 if [[ "$NO_SIGN" -ne 1 && "$ATTACH_ONLY" -ne 1 && -f "${LAUNCHAGENT_DISABLE_MARKER}" ]]; then
@@ -385,6 +408,9 @@ if [[ "$TARGET_ONLY" -eq 1 ]]; then
     fail "Managed OpenClaw instances did not exit after cleanup attempts"
   fi
 fi
+
+run_step "install packaged app" install_staged_app
+choose_app_bundle
 
 # 4) Launch the installed app in the foreground so the menu bar extra appears.
 # LaunchServices can inherit a huge environment from this shell (secrets, prompt vars, etc.).

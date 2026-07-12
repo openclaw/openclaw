@@ -19,7 +19,7 @@ import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createManagedRun, supervisorSpawnMock } from "../cli-runner.test-support.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
-import type { CliPrivateToolEvent, PreparedCliRunContext } from "./types.js";
+import type { PreparedCliRunContext } from "./types.js";
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnInput = Parameters<ProcessSupervisor["spawn"]>[0];
@@ -540,73 +540,6 @@ describe("executePreparedCliRun supervisor output capture", () => {
       }),
     ]);
     expect(JSON.stringify(toolEvents)).not.toContain(secret);
-  });
-
-  it("keeps private tool correlation raw while public events stay redacted", async () => {
-    const secret = "sk-1234567890abcdefXYZ";
-    const privateEvents: CliPrivateToolEvent[] = [];
-    const publicEvents: unknown[] = [];
-    const stop = onAgentEvent((event) => {
-      if (event.runId === "run-jsonl" && event.stream === "tool") {
-        publicEvents.push(event.data);
-      }
-    });
-    const chunks = [
-      `${JSON.stringify({
-        type: "assistant",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "mcp_tool_use",
-              id: "call-private",
-              name: "mcp__openclaw__crestodian",
-              input: { action: "config_set", path: "plugins.demo.apiKey", value: secret },
-            },
-            {
-              type: "mcp_tool_result",
-              tool_use_id: "call-private",
-              content: [{ type: "text", text: `needs-approval:${"a".repeat(64)}` }],
-            },
-          ],
-        },
-      })}\n`,
-      `${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
-    ];
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as SupervisorSpawnInput;
-      for (const chunk of chunks) {
-        input.onStdout?.(chunk);
-      }
-      return createManagedRun({
-        reason: "exit",
-        exitCode: 0,
-        exitSignal: null,
-        durationMs: 50,
-        stdout: "",
-        stderr: "",
-        timedOut: false,
-        noOutputTimedOut: false,
-      });
-    });
-    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
-    context.params.onPrivateToolEvent = (event) => privateEvents.push(event);
-
-    try {
-      await executePreparedCliRun(context);
-    } finally {
-      stop();
-    }
-
-    expect(privateEvents).toEqual([
-      expect.objectContaining({
-        phase: "start",
-        toolCallId: "call-private",
-        args: expect.objectContaining({ value: secret }),
-      }),
-      expect.objectContaining({ phase: "result", toolCallId: "call-private" }),
-    ]);
-    expect(JSON.stringify(publicEvents)).not.toContain(secret);
   });
 
   it.each([

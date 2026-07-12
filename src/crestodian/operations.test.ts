@@ -9,7 +9,6 @@ import { createCrestodianTestRuntime } from "./crestodian.test-helpers.js";
 import {
   describeCrestodianPersistentOperation,
   executeCrestodianOperation,
-  formatCrestodianPersistentPlan,
   isPersistentCrestodianOperation,
   parseCrestodianOperation,
 } from "./operations.js";
@@ -293,9 +292,9 @@ describe("parseCrestodianOperation", () => {
       kind: "plugin-search",
       query: "calendar sync",
     });
-    expect(parseCrestodianOperation("install npm plugin @openclaw/demo")).toEqual({
+    expect(parseCrestodianOperation("install npm plugin @openclaw/discord")).toEqual({
       kind: "plugin-install",
-      spec: "npm:@openclaw/demo",
+      spec: "npm:@openclaw/discord",
     });
     expect(parseCrestodianOperation("plugin install clawhub:openclaw-demo")).toEqual({
       kind: "plugin-install",
@@ -304,6 +303,11 @@ describe("parseCrestodianOperation", () => {
     expect(parseCrestodianOperation("plugin uninstall openclaw-demo")).toEqual({
       kind: "plugin-uninstall",
       pluginId: "openclaw-demo",
+    });
+    expect(parseCrestodianOperation("plugin install npm:@example/plugin")).toEqual({
+      kind: "none",
+      message:
+        "Crestodian installs only ClawHub, bundled, or official-catalog plugins. Use `openclaw plugins install <spec>` in a trusted shell to review an arbitrary executable source.",
     });
   });
 
@@ -352,22 +356,6 @@ describe("parseCrestodianOperation", () => {
         value: "/private/model-cache",
       }),
     ).toBe("set config models.providers.local.localService.env.HF_HOME to <redacted>");
-  });
-
-  it.each([
-    { source: "env" as const, id: "GATEWAY_TOKEN", provider: "vault" },
-    { source: "file" as const, id: "/run/secrets/gateway-token", provider: "default" },
-    { source: "exec" as const, id: "op://OpenClaw/gateway-token", provider: "onepassword" },
-  ])("shows every $source SecretRef selector in the approval plan", ({ source, id, provider }) => {
-    expect(
-      describeCrestodianPersistentOperation({
-        kind: "config-set-ref",
-        path: "gateway.auth.token",
-        source,
-        id,
-        ...(provider === "default" ? {} : { provider }),
-      }),
-    ).toBe(`set config gateway.auth.token to ${source} SecretRef ${id} using provider ${provider}`);
   });
 
   it("parses channel listing and connect requests", () => {
@@ -726,223 +714,22 @@ describe("parseCrestodianOperation", () => {
     );
   });
 
-  it("includes non-ClawHub warning before approval acknowledges npm plugin installs", async () => {
-    const tempDir = opTempDirs.make("crestodian-plugin-install-ack-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime } = createCrestodianTestRuntime();
-    const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`installed ${spec}`);
-    });
+  it("rejects arbitrary plugin sources before proposing or installing them", async () => {
+    const { runtime, lines } = createCrestodianTestRuntime();
+    const runPluginInstall = vi.fn();
 
-    const plan = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "npm:@openclaw/demo" },
-      runtime,
-      { deps: { runPluginInstall } },
-    );
-    expectRecordFields(plan as unknown as Record<string, unknown>, {
-      applied: false,
-      message:
-        "WARNING - Installing plugin from npm registry: npm:@openclaw/demo\nThis source is outside ClawHub review and trust metadata. Only continue if you trust the publisher, package contents, and install source.\nPlan: install plugin npm:@openclaw/demo. Say yes to apply.",
-    });
+    await expect(
+      executeCrestodianOperation(
+        { kind: "plugin-install", spec: "npm:@example/plugin" },
+        runtime,
+        { deps: { runPluginInstall } },
+      ),
+    ).rejects.toThrow("exit 1");
     expect(runPluginInstall).not.toHaveBeenCalled();
-
-    const genericApproval = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "npm:@openclaw/demo" },
-      runtime,
-      {
-        approved: true,
-        deps: { runPluginInstall },
-      },
-    );
-
-    expect(genericApproval.applied).toBe(false);
-    expect(genericApproval.message).toContain("--acknowledge-non-clawhub-install");
-    expect(runPluginInstall).not.toHaveBeenCalled();
-
-    const result = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "npm:@openclaw/demo" },
-      runtime,
-      {
-        approved: true,
-        acknowledgeNonClawHubInstall: true,
-        deps: { runPluginInstall },
-      },
-    );
-
-    expect(result.applied).toBe(true);
-    const installCall = requireFirstMockCall(runPluginInstall, "runPluginInstall");
-    expect(installCall[0]).toBe("npm:@openclaw/demo");
-    expectRuntimeArg(installCall[1]);
-    expect(installCall[2]).toEqual({
-      acknowledgeNonClawHubInstall: true,
-    });
-  });
-
-  it("sanitizes model-supplied fields in host-owned approval plans", () => {
-    const plan = formatCrestodianPersistentPlan({
-      kind: "create-agent",
-      agentId: "demo\u001b[2J",
-      workspace: "/tmp/work\nspoofed approval",
-    });
-
-    expect(plan).not.toContain("\u001b");
-    expect(plan).toContain("create agent demo with workspace");
-    expect(plan).toContain("/tmp/work\\nspoofed approval");
-  });
-
-  it("does not require source acknowledgement for an official catalog plugin", async () => {
-    const tempDir = opTempDirs.make("crestodian-official-plugin-install-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime } = createCrestodianTestRuntime();
-    const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`installed ${spec}`);
-    });
-
-    const result = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "brave" },
-      runtime,
-      { approved: true, deps: { runPluginInstall } },
-    );
-
-    expect(result.applied).toBe(true);
-    expect(requireFirstMockCall(runPluginInstall, "runPluginInstall")[0]).toBe("brave");
-  });
-
-  it("does not require source acknowledgement for an official catalog npm package", async () => {
-    const tempDir = opTempDirs.make("crestodian-official-plugin-package-install-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime } = createCrestodianTestRuntime();
-    const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`installed ${spec}`);
-    });
-
-    const result = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "npm:@openclaw/brave-plugin" },
-      runtime,
-      { approved: true, deps: { runPluginInstall } },
-    );
-
-    expect(result.applied).toBe(true);
-    expect(requireFirstMockCall(runPluginInstall, "runPluginInstall")[0]).toBe(
-      "npm:@openclaw/brave-plugin",
+    expect(lines.join("\n")).toContain(
+      "Crestodian installs only ClawHub, bundled, or official-catalog plugins.",
     );
   });
-
-  it("does not require source acknowledgement for a bundled plugin", async () => {
-    const tempDir = opTempDirs.make("crestodian-bundled-plugin-install-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime } = createCrestodianTestRuntime();
-    const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`installed ${spec}`);
-    });
-
-    const result = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "memory-core" },
-      runtime,
-      { approved: true, deps: { runPluginInstall } },
-    );
-
-    expect(result.applied).toBe(true);
-    expect(requireFirstMockCall(runPluginInstall, "runPluginInstall")[0]).toBe("memory-core");
-  });
-
-  it("does not require source acknowledgement for a bundled npm package", async () => {
-    const tempDir = opTempDirs.make("crestodian-bundled-plugin-package-install-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime } = createCrestodianTestRuntime();
-    const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`installed ${spec}`);
-    });
-
-    const result = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "npm:@openclaw/discord" },
-      runtime,
-      { approved: true, deps: { runPluginInstall } },
-    );
-
-    expect(result.applied).toBe(true);
-    expect(requireFirstMockCall(runPluginInstall, "runPluginInstall")[0]).toBe(
-      "npm:@openclaw/discord",
-    );
-  });
-
-  it("keeps explicit npm package semantics separate from official plugin ids", async () => {
-    const { runtime } = createCrestodianTestRuntime();
-    const runPluginInstall = vi.fn(async () => {});
-
-    const result = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "npm:brave" },
-      runtime,
-      { approved: true, deps: { runPluginInstall } },
-    );
-
-    expect(result.applied).toBe(false);
-    expect(result.message).toContain("Installing plugin from npm registry: npm:brave");
-    expect(result.message).toContain("--acknowledge-non-clawhub-install");
-    expect(runPluginInstall).not.toHaveBeenCalled();
-  });
-
-  it("allows explicit npm package names that look like local plugin suffixes", async () => {
-    const tempDir = opTempDirs.make("crestodian-plugin-install-npm-suffix-");
-    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    const { runtime } = createCrestodianTestRuntime();
-    const runPluginInstall = vi.fn(async (spec: string, pluginRuntime: RuntimeEnv) => {
-      pluginRuntime.log(`installed ${spec}`);
-    });
-
-    const result = await executeCrestodianOperation(
-      { kind: "plugin-install", spec: "npm:foo.js" },
-      runtime,
-      {
-        approved: true,
-        acknowledgeNonClawHubInstall: true,
-        deps: { runPluginInstall },
-      },
-    );
-
-    expect(result.applied).toBe(true);
-    const installCall = requireFirstMockCall(runPluginInstall, "runPluginInstall");
-    expect(installCall[0]).toBe("npm:foo.js");
-    expect(installCall[2]).toEqual({
-      acknowledgeNonClawHubInstall: true,
-    });
-  });
-
-  it.each([
-    ["npm-pack archive", "npm-pack:/tmp/demo.tgz"],
-    ["local archive token", "demo.tgz"],
-    ["git URL", "git:https://github.com/acme/demo.git"],
-  ])(
-    "rejects %s plugin installs before approval can acknowledge provenance",
-    async (_label, spec) => {
-      const { runtime, lines } = createCrestodianTestRuntime();
-      const runPluginInstall = vi.fn(async (installSpec: string, pluginRuntime: RuntimeEnv) => {
-        pluginRuntime.log(`installed ${installSpec}`);
-      });
-
-      await expect(
-        executeCrestodianOperation({ kind: "plugin-install", spec }, runtime, {
-          deps: { runPluginInstall },
-        }),
-      ).rejects.toThrow("exit 1");
-      expect(lines.at(-1)).toBe(
-        "Crestodian plugin install accepts npm or ClawHub package specs only.",
-      );
-      expect(runPluginInstall).not.toHaveBeenCalled();
-
-      lines.length = 0;
-      await expect(
-        executeCrestodianOperation({ kind: "plugin-install", spec }, runtime, {
-          approved: true,
-          deps: { runPluginInstall },
-        }),
-      ).rejects.toThrow("exit 1");
-      expect(lines.at(-1)).toBe(
-        "Crestodian plugin install accepts npm or ClawHub package specs only.",
-      );
-      expect(runPluginInstall).not.toHaveBeenCalled();
-    },
-  );
 
   it("uninstalls plugins only after approval and audits the write", async () => {
     const tempDir = opTempDirs.make("crestodian-plugin-uninstall-");

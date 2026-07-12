@@ -52,7 +52,6 @@ openclaw crestodian --message "models"
 openclaw crestodian --message "validate config"
 openclaw crestodian --message "setup workspace ~/Projects/work model openai/gpt-5.6" --yes
 openclaw crestodian --message "set default model openai/gpt-5.6" --yes
-openclaw crestodian --message "plugin install npm:@example/plugin" --yes --acknowledge-non-clawhub-install
 openclaw onboard --modern
 ```
 
@@ -99,7 +98,9 @@ Read-only operations run immediately: show overview, list agents, list installed
 
 Starting guided channel setup (`connect telegram`) or model-provider setup (`configure model provider`) also runs immediately. Each wizard collects explicit answers and owns the resulting writes.
 
-Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, install or uninstall plugins, run doctor repairs that rewrite config or state. A direct install of an arbitrary npm plugin also requires `--acknowledge-non-clawhub-install`; trusted ClawHub and OpenClaw-catalog packages do not. Generic `--yes` does not acknowledge arbitrary executable code provenance.
+Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, install or uninstall plugins, run doctor repairs that rewrite config or state.
+
+Crestodian installs only ClawHub, bundled, or official-catalog plugins. Install any other executable source from a trusted shell with `openclaw plugins install <spec>`, where the normal source warning and acknowledgement flow applies.
 
 Approval is given in your own words: unambiguous replies ("yes", "sure", "go ahead", "not now") resolve from a closed deterministic list, and anything else is judged by a separate host-run model call that sees only your message and the pending proposal — never by the conversation model itself, which cannot self-approve. Ambiguous replies keep the proposal pending and the conversation asks again. When no model is usable, only the closed deterministic list applies.
 
@@ -251,7 +252,7 @@ OpenClaw: Applied. Audit entry written.
 Agent creation can also be queued locally or via rescue:
 
 ```text
-create agent work workspace ~/Projects/work model openai/gpt-5.5
+create agent work workspace ~/Projects/work model openai/gpt-5.6-sol
 /crestodian create agent work workspace ~/Projects/work
 ```
 

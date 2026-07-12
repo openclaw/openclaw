@@ -114,8 +114,12 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("accepts only Codex harness providers for Codex approval scenarios", () => {
-    expect(() => testing.assertSlackCodexApprovalModelSupported("openai/gpt-5.5")).not.toThrow();
-    expect(() => testing.assertSlackCodexApprovalModelSupported("codex/gpt-5.5")).not.toThrow();
+    expect(() =>
+      testing.assertSlackCodexApprovalModelSupported("openai/gpt-5.6-luna"),
+    ).not.toThrow();
+    expect(() =>
+      testing.assertSlackCodexApprovalModelSupported("codex/gpt-5.6-luna"),
+    ).not.toThrow();
     expect(() =>
       testing.assertSlackCodexApprovalModelSupported("anthropic/claude-sonnet-4-6"),
     ).toThrow(
@@ -176,7 +180,7 @@ describe("Slack live QA runtime helpers", () => {
           list: [
             {
               id: "qa",
-              model: { primary: "openai/gpt-5.5" },
+              model: { primary: "openai/gpt-5.6-luna" },
             },
           ],
         },
@@ -192,7 +196,7 @@ describe("Slack live QA runtime helpers", () => {
           },
           codexApproval: true,
         },
-        primaryModel: "openai/gpt-5.5",
+        primaryModel: "openai/gpt-5.6-luna",
         sutAccountId: "sut",
         sutAppToken: "xapp-sut",
         sutBotToken: "xoxb-sut",
@@ -209,7 +213,7 @@ describe("Slack live QA runtime helpers", () => {
       },
     });
     expect(cfg.tools?.exec?.mode).toBe("ask");
-    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+    expect(cfg.agents?.defaults?.models?.["openai/gpt-5.6-luna"]?.agentRuntime).toEqual({
       id: "codex",
     });
     expect(cfg.approvals?.plugin).toEqual({ enabled: true, mode: "session" });
@@ -924,7 +928,7 @@ describe("Slack live QA runtime helpers", () => {
               approvalKind: "plugin",
               appServerMethod: "item/fileChange/requestApproval",
               channelId: "C123456789",
-              codexModelKey: "openai/gpt-5.5",
+              codexModelKey: "openai/gpt-5.6-luna",
               decision: "allow-once",
               finalCodexTurnStatus: "ok",
               operationVerified: true,
@@ -947,7 +951,7 @@ describe("Slack live QA runtime helpers", () => {
       approvalId: "<redacted>",
       appServerMethod: "item/fileChange/requestApproval",
       channelId: undefined,
-      codexModelKey: "openai/gpt-5.5",
+      codexModelKey: "openai/gpt-5.6-luna",
       finalCodexTurnStatus: "ok",
       operationVerified: true,
       pendingActionValues: undefined,
