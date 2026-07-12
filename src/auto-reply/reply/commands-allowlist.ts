@@ -327,16 +327,20 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   const plugin = getChannelPlugin(channelId);
 
   // Owner authorization upstream (`rejectNonOwnerCommand`) is scoped to the
-  // command's origin channel, but `/allowlist ... --channel <other>` mutates a
-  // different channel's config. An owner *only* via the origin channel's
-  // allowFrom fallback must not gain owner authority over an unrelated target
-  // (#104984). Global owners — gateway-admin scope, wildcard, or an explicit
-  // commands.ownerAllowFrom match (including provider-qualified ids) — keep
-  // cross-channel authority; only origin-fallback owners are re-checked here.
+  // command's origin channel+account, but `/allowlist ... --channel <other>` or
+  // `--account <other>` mutates a different scope's config. An owner *only* via
+  // the origin scope's allowFrom fallback must not gain owner authority over an
+  // unrelated target channel or account (#104984). Global owners — gateway-admin
+  // scope, wildcard, or an explicit commands.ownerAllowFrom match (including
+  // provider-qualified ids) — keep authority; only origin-scoped owners are
+  // re-checked here. A same-scope re-check is harmless (the owner still matches),
+  // so comparing the resolved scopes is safe even for the default account.
+  const targetScopeDiffersFromOrigin =
+    channelId !== originChannelId || accountId !== originAccountId;
   if (
     parsed.action !== "list" &&
     originChannelId &&
-    channelId !== originChannelId &&
+    targetScopeDiffersFromOrigin &&
     !params.command.senderIsGlobalOwner
   ) {
     const bypass = canBypassConfigWritePolicy({

@@ -88,14 +88,31 @@ vi.mock("../command-auth.js", async (importOriginal) => {
   return {
     ...actual,
     resolveCommandAuthorization: vi.fn(
-      (params: { ctx: { Provider?: string; SenderId?: string }; cfg: OpenClawConfig }) => {
+      (params: {
+        ctx: { Provider?: string; SenderId?: string; AccountId?: string };
+        cfg: OpenClawConfig;
+      }) => {
         const target = params.ctx.Provider ?? "";
         const sender = params.ctx.SenderId ?? "";
+        const account = params.ctx.AccountId;
+        const channelSection = (
+          params.cfg.channels as
+            | Record<
+                string,
+                {
+                  allowFrom?: unknown[];
+                  accounts?: Record<string, { allowFrom?: unknown[] }>;
+                }
+              >
+            | undefined
+        )?.[target];
+        // Account-scoped allowFrom when the target names a non-default account.
+        const scopedAllowFrom =
+          account && account !== "default"
+            ? channelSection?.accounts?.[account]?.allowFrom
+            : channelSection?.allowFrom;
         const channelAllow = new Set(
-          (
-            (params.cfg.channels as Record<string, { allowFrom?: unknown[] }> | undefined)?.[target]
-              ?.allowFrom ?? []
-          ).map(String),
+          (scopedAllowFrom ?? channelSection?.allowFrom ?? []).map(String),
         );
         const globalOwners = new Set(
           (params.cfg.commands?.ownerAllowFrom ?? []).map((owner) =>
@@ -504,10 +521,14 @@ describe("handleAllowlistCommand", () => {
       valid: true,
       parsed: structuredClone(cfg),
     });
+    // Sender 123 is a genuine owner of the target "work" account, so the
+    // cross-account owner gate passes and the test isolates the configWrites gate.
     const params = buildAllowlistParams("/allowlist add dm --account work --config 789", cfg, {
       AccountId: "default",
       Provider: "telegram",
       Surface: "telegram",
+      SenderId: "123",
+      From: "123",
     });
     params.command.senderIsOwner = true;
     const result = await handleAllowlistCommand(params, true);
@@ -594,6 +615,42 @@ describe("handleAllowlistCommand", () => {
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks a same-channel cross-account write from an origin-account-only owner (#104984)", async () => {
+    // Owner of the default account must not rewrite another account's allowlist
+    // on the same channel via --account. The target account "work" is owned by
+    // a different id, so the origin-account owner is re-checked and denied.
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: {
+          allowFrom: ["default-owner"],
+          configWrites: true,
+          accounts: {
+            work: { allowFrom: ["work-owner"], configWrites: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    // No readConfigFileSnapshot stub: the guard denies before any config read,
+    // so queuing one would leak to the next test.
+    const params = buildAllowlistParams("/allowlist add dm --account work attacker-id", cfg, {
+      AccountId: "default",
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "default-owner",
+      From: "default-owner",
+    });
+    // Owner of the origin (default) account only — not the "work" account.
+    params.command.senderIsOwner = true;
+    params.command.senderIsGlobalOwner = false;
+
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
   });
