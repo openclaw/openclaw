@@ -33,6 +33,46 @@ describe("resolveSearxngBaseUrl", () => {
     ).toBe("https://ambient.search");
   });
 
+  it("uses ambient env fallback when webSearch config omits baseUrl", () => {
+    const config = {
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {},
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      resolveSearxngBaseUrl(config, {
+        SEARXNG_BASE_URL: "https://ambient.search///",
+      }),
+    ).toBe("https://ambient.search");
+  });
+
+  it("uses ambient env fallback when programmatic config leaves baseUrl undefined", () => {
+    const config = {
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: { baseUrl: undefined },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      resolveSearxngBaseUrl(config, {
+        SEARXNG_BASE_URL: "https://ambient.search///",
+      }),
+    ).toBe("https://ambient.search");
+  });
+
   it("resolves configured env SecretRefs before ambient env fallback", () => {
     const config = {
       plugins: {
@@ -79,11 +119,11 @@ describe("resolveSearxngBaseUrl", () => {
       },
     } as never;
 
-    expect(
+    expect(() =>
       resolveSearxngBaseUrl(config, {
         SEARXNG_BASE_URL: "https://ambient.search",
       }),
-    ).toBeUndefined();
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
   });
 
   it("does not fall back to ambient env when a configured env SecretRef is missing", () => {
@@ -105,14 +145,58 @@ describe("resolveSearxngBaseUrl", () => {
       },
     } as never;
 
-    expect(
+    expect(() =>
       resolveSearxngBaseUrl(config, {
         SEARXNG_BASE_URL: "https://ambient.search",
       }),
-    ).toBeUndefined();
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
   });
 
-  it("treats malformed baseUrl config as missing instead of throwing", () => {
+  it("does not fall back to ambient env when baseUrl config is blank", () => {
+    const config = {
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {
+                baseUrl: "   ",
+              },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(() =>
+      resolveSearxngBaseUrl(config, {
+        SEARXNG_BASE_URL: "https://ambient.search",
+      }),
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
+  });
+
+  it("does not fall back to ambient env when baseUrl config is null", () => {
+    const config = {
+      plugins: {
+        entries: {
+          searxng: {
+            config: {
+              webSearch: {
+                baseUrl: null,
+              },
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(() =>
+      resolveSearxngBaseUrl(config, {
+        SEARXNG_BASE_URL: "https://ambient.search",
+      }),
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
+  });
+
+  it("does not fall back to ambient env when baseUrl config is malformed", () => {
     const config = {
       plugins: {
         entries: {
@@ -127,10 +211,10 @@ describe("resolveSearxngBaseUrl", () => {
       },
     } as never;
 
-    expect(
+    expect(() =>
       resolveSearxngBaseUrl(config, {
         SEARXNG_BASE_URL: "https://ambient.search",
       }),
-    ).toBe("https://ambient.search");
+    ).toThrow("Configured SearXNG base URL is unavailable or invalid.");
   });
 });
