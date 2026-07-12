@@ -28,6 +28,7 @@ import {
 } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
+import { BUNDLE_MCP_TEMP_PREFIX } from "./bundle-mcp-sweep.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -175,7 +176,7 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     };
   }
 
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-mcp-"));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), BUNDLE_MCP_TEMP_PREFIX));
   const mcpConfigPath = path.join(tempDir, "mcp.json");
   const runtimeConfig = resolveOpenClawMcpEnvTemplates(
     params.mergedConfig,

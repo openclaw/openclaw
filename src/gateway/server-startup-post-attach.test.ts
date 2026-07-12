@@ -181,6 +181,10 @@ vi.mock("../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: hoisted.getAcpRuntimeBackend,
 }));
 
+vi.mock("../agents/cli-runner/bundle-mcp-sweep.js", () => ({
+  sweepOrphanedBundleMcpTempDirs: vi.fn(async () => ({ removed: [], kept: [] })),
+}));
+
 vi.mock("./server-restart-sentinel.js", () => ({
   refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
