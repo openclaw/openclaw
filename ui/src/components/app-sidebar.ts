@@ -2366,12 +2366,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           ? html`<button
               type="button"
               class="sidebar-session-pagination__button"
-              aria-label=${t("codexSessions.loadMore")}
+              aria-label=${t("chat.selectors.loadMoreSessions")}
               @click=${() => {
                 this.visibleSessionLimit = visible + SIDEBAR_SESSION_PAGE_SIZE;
               }}
             >
-              ${t("codexSessions.loadMore")}
+              ${t("chat.selectors.loadMoreSessions")}
             </button>`
           : nothing}
         ${canShowLess
