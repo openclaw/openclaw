@@ -1306,14 +1306,12 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const renderPersistedPreview =
       persistedCanvasSource != null &&
       (!searchFiltering || turnHasMatchingAssistant(history, i, props.searchQuery ?? ""));
-    if (persistedCanvasSource) {
-      if (!props.showToolCalls && renderPersistedPreview) {
-        items.push({
-          kind: "message",
-          key: `${messageKey(msg, i)}:canvas`,
-          message: createCanvasAssistantMessage(persistedCanvasSource),
-        });
-      }
+    if (persistedCanvasSource && renderPersistedPreview) {
+      items.push({
+        kind: "message",
+        key: `${messageKey(msg, i)}:canvas`,
+        message: createCanvasAssistantMessage(persistedCanvasSource),
+      });
     }
 
     if (!props.showToolCalls && isToolResult) {
@@ -1333,13 +1331,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       key: messageKey(msg, i),
       message: msg,
     });
-    if (persistedCanvasSource && props.showToolCalls && renderPersistedPreview) {
-      items.push({
-        kind: "message",
-        key: `${messageKey(msg, i)}:canvas`,
-        message: createCanvasAssistantMessage(persistedCanvasSource),
-      });
-    }
   }
   const queuedSends = Array.isArray(props.queue) ? props.queue : [];
   const activeRunQueuedSends = queuedSends.filter((queued) => queued.sendState === "waiting-model");

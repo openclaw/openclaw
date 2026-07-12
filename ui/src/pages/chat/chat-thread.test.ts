@@ -1816,21 +1816,23 @@ describe("buildChatItems", () => {
   });
 
   it("keeps a persisted App preview on an assistant search match", () => {
-    const groups = messageGroups({
-      messages: [
-        { role: "user", content: "Show the App", timestamp: 1_000 },
-        mcpAppResult("mcp-app-persisted-search", "call-persisted-search", 1_001),
-        { role: "assistant", content: "Matching preview", timestamp: 1_002 },
-      ],
-      toolMessages: [],
-      searchOpen: true,
-      searchQuery: "matching",
-      showToolCalls: false,
-    });
+    for (const showToolCalls of [false, true]) {
+      const groups = messageGroups({
+        messages: [
+          { role: "user", content: "Show the App", timestamp: 1_000 },
+          mcpAppResult("mcp-app-persisted-search", "call-persisted-search", 1_001),
+          { role: "assistant", content: "Matching preview", timestamp: 1_002 },
+        ],
+        toolMessages: [],
+        searchOpen: true,
+        searchQuery: "matching",
+        showToolCalls,
+      });
 
-    const assistant = groups.find((group) => group.role === "assistant");
-    expect(assistant).toBeDefined();
-    expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+      const assistant = groups.find((group) => group.role === "assistant");
+      expect(assistant).toBeDefined();
+      expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+    }
   });
 
   it("preserves a metadata-only assistant anchor when lifting canvas previews", () => {

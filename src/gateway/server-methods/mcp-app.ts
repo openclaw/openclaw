@@ -62,6 +62,12 @@ async function requireActiveView(
   const sessionKey = requireString(params, "sessionKey");
   const viewId = requireString(params, "viewId");
   const existingRuntime = peekSessionMcpRuntime({ sessionKey });
+  if (
+    (existingRuntime && existingRuntime.mcpAppsEnabled !== true) ||
+    (cfg && cfg.mcp?.apps?.enabled !== true)
+  ) {
+    throw new Error("MCP App runtime is unavailable");
+  }
   const existingView = existingRuntime ? getMcpAppViewLease(viewId, existingRuntime) : undefined;
   const restored =
     existingRuntime?.mcpAppsEnabled === true && existingView

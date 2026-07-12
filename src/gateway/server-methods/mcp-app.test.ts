@@ -77,7 +77,11 @@ function runtime() {
   };
 }
 
-async function invoke(method: keyof typeof mcpAppHandlers, params: Record<string, unknown>) {
+async function invoke(
+  method: keyof typeof mcpAppHandlers,
+  params: Record<string, unknown>,
+  mcpAppsEnabled = true,
+) {
   const respond = vi.fn();
   await expectDefined(
     mcpAppHandlers[method],
@@ -88,7 +92,7 @@ async function invoke(method: keyof typeof mcpAppHandlers, params: Record<string
     context: {
       getMcpAppSandboxPort: () => 18790,
       getRuntimeConfig: () => ({
-        mcp: { apps: { enabled: true, sandboxOrigin: "https://apps.example.com" } },
+        mcp: { apps: { enabled: mcpAppsEnabled, sandboxOrigin: "https://apps.example.com" } },
       }),
     },
   } as never);
@@ -183,6 +187,19 @@ describe("MCP App gateway bridge", () => {
         viewId: "expired",
       }),
     );
+  });
+
+  it("rejects disabled Apps before attempting transcript reconstruction", async () => {
+    mocks.peekSessionMcpRuntime.mockReturnValue(undefined);
+
+    const respond = await invoke(
+      "mcp.app.view",
+      { sessionKey: "agent:main:main", viewId: "cv_app" },
+      false,
+    );
+
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    expect(mocks.restoreMcpAppView).not.toHaveBeenCalled();
   });
 
   it("restores a transcript-backed view after a Gateway restart", async () => {
