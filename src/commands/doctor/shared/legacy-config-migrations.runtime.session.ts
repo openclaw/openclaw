@@ -18,43 +18,36 @@ function hasLegacyParentForkMaxTokens(value: unknown): boolean {
   return Boolean(session && Object.hasOwn(session, "parentForkMaxTokens"));
 }
 
-/** Returns `true` when `resetArchiveRetention` or its `pruneAfter` fallback evaluates to ≤ 0. */
+/** Returns `true` when `val` normalizes to a string that `parseDurationMs` evaluates to ≤ 0. */
+function parseZeroDuration(val: unknown): boolean {
+  if (val === false) {
+    return false;
+  }
+  const normalized = normalizeStringifiedOptionalString(val);
+  if (!normalized) {
+    return false;
+  }
+  try {
+    return parseDurationMs(normalized, { defaultUnit: "d" }) <= 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Returns `true` when `resetArchiveRetention` or `pruneAfter` evaluates to ≤ 0. */
 function isZeroDurationResetArchiveRetention(raw: unknown): boolean {
   const maintenance = getRecord(raw);
   if (!maintenance) {
     return false;
   }
-  // Explicit resetArchiveRetention — normalise and check.
-  if (Object.hasOwn(maintenance, "resetArchiveRetention")) {
-    const val = maintenance.resetArchiveRetention;
-    if (val === false) {
-      return false;
-    }
-    const normalized = normalizeStringifiedOptionalString(val);
-    if (!normalized) {
-      return false;
-    }
-    try {
-      return parseDurationMs(normalized, { defaultUnit: "d" }) <= 0;
-    } catch {
-      return false;
-    }
+  if (
+    Object.hasOwn(maintenance, "resetArchiveRetention") &&
+    parseZeroDuration(maintenance.resetArchiveRetention)
+  ) {
+    return true;
   }
-  // Fallback: when resetArchiveRetention is absent the resolver uses pruneAfterMs.
-  if (Object.hasOwn(maintenance, "pruneAfter")) {
-    const val = maintenance.pruneAfter;
-    if (val === false) {
-      return false;
-    }
-    const normalized = normalizeStringifiedOptionalString(val);
-    if (!normalized) {
-      return false;
-    }
-    try {
-      return parseDurationMs(normalized, { defaultUnit: "d" }) <= 0;
-    } catch {
-      return false;
-    }
+  if (Object.hasOwn(maintenance, "pruneAfter") && parseZeroDuration(maintenance.pruneAfter)) {
+    return true;
   }
   return false;
 }
@@ -118,41 +111,34 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       if (!maintenance) {
         return;
       }
-      // Target: explicit resetArchiveRetention first, then pruneAfter fallback.
-      const targetKey = Object.hasOwn(maintenance, "resetArchiveRetention")
-        ? "resetArchiveRetention"
-        : Object.hasOwn(maintenance, "pruneAfter")
-          ? "pruneAfter"
-          : null;
-      if (!targetKey) {
-        return;
+      for (const key of ["resetArchiveRetention", "pruneAfter"] as const) {
+        if (!Object.hasOwn(maintenance, key)) {
+          continue;
+        }
+        const val = maintenance[key];
+        const normalized = normalizeStringifiedOptionalString(val);
+        if (!normalized) {
+          continue;
+        }
+        let ms: number;
+        try {
+          ms = parseDurationMs(normalized, { defaultUnit: "d" });
+        } catch {
+          continue;
+        }
+        if (ms > 0) {
+          continue;
+        }
+        delete maintenance[key];
+        const label = typeof val === "number" ? String(val) : val;
+        const fieldPath =
+          key === "resetArchiveRetention"
+            ? "session.maintenance.resetArchiveRetention"
+            : "session.maintenance.pruneAfter";
+        changes.push(
+          `Removed ${fieldPath} "${label}" (zero duration); documented pruneAfter default applies.`,
+        );
       }
-      const val = maintenance[targetKey];
-      if (val === false) {
-        return;
-      }
-      const normalized = normalizeStringifiedOptionalString(val);
-      if (!normalized) {
-        return;
-      }
-      let ms: number;
-      try {
-        ms = parseDurationMs(normalized, { defaultUnit: "d" });
-      } catch {
-        return;
-      }
-      if (ms > 0) {
-        return;
-      }
-      delete maintenance[targetKey];
-      const label = typeof val === "number" ? String(val) : val;
-      const fieldPath =
-        targetKey === "resetArchiveRetention"
-          ? "session.maintenance.resetArchiveRetention"
-          : "session.maintenance.pruneAfter";
-      changes.push(
-        `Removed ${fieldPath} "${label}" (zero duration); documented pruneAfter default applies.`,
-      );
     },
   }),
 ];

@@ -101,6 +101,15 @@ describe("session.maintenance.resetArchiveRetention zero-duration migration", ()
     expect(rule.match?.({ pruneAfter: 30 }, {} as Record<string, unknown>)).toBe(false);
   });
 
+  it("detects zero pruneAfter even when resetArchiveRetention is positive", () => {
+    expect(
+      rule.match?.(
+        { resetArchiveRetention: "30d", pruneAfter: "0h" },
+        {} as Record<string, unknown>,
+      ),
+    ).toBe(true);
+  });
+
   // ── Migration apply (doctor --fix): parser-backed ───────────
 
   it("removes zero-duration strings and reports change", () => {
@@ -187,6 +196,38 @@ describe("session.maintenance.resetArchiveRetention zero-duration migration", ()
       pruneAfter: "30d",
     });
     expect(changes).toHaveLength(0);
+  });
+
+  it("removes only zero pruneAfter when resetArchiveRetention is positive", () => {
+    const changes: string[] = [];
+    const raw = {
+      session: {
+        maintenance: { resetArchiveRetention: "30d", pruneAfter: "0h" },
+      },
+    };
+    migration.apply(raw, changes);
+
+    expect(raw.session?.maintenance).not.toHaveProperty("pruneAfter");
+    expect(raw.session?.maintenance).toHaveProperty("resetArchiveRetention", "30d");
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toContain("pruneAfter");
+    expect(changes[0]).toContain("0h");
+  });
+
+  it("removes both fields when both are zero", () => {
+    const changes: string[] = [];
+    const raw = {
+      session: {
+        maintenance: { resetArchiveRetention: "0h", pruneAfter: 0 },
+      },
+    };
+    migration.apply(raw, changes);
+
+    expect(raw.session?.maintenance).not.toHaveProperty("resetArchiveRetention");
+    expect(raw.session?.maintenance).not.toHaveProperty("pruneAfter");
+    expect(changes).toHaveLength(2);
+    expect(changes[0]).toContain("resetArchiveRetention");
+    expect(changes[1]).toContain("pruneAfter");
   });
 
   it("handles empty maintenance section", () => {
