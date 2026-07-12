@@ -99,7 +99,7 @@ describe("durable wake delivery replay", () => {
     }
   });
 
-  it("dedupes repeated replay scans and does not call the hook twice", async () => {
+  it("dedupes repeated replay scans after a terminal unknown outcome", async () => {
     const { store, cleanup } = tempStore();
     try {
       createPendingWake(store, "dedupe", 100);
@@ -111,7 +111,7 @@ describe("durable wake delivery replay", () => {
         deliveryHook: () => {
           hookCalls += 1;
           return {
-            status: "attempted",
+            status: "unknown",
             evidence: { kind: "in_memory_test_hook" },
           };
         },
@@ -134,6 +134,142 @@ describe("durable wake delivery replay", () => {
       expect(store.listWakeDeliveryAttempts()).toHaveLength(1);
     } finally {
       cleanup();
+    }
+  });
+
+  it("reclaims a persisted pending attempt after a crash before delivery side effects", async () => {
+    const { dbPath, store } = tempStore();
+    try {
+      const wake = createPendingWake(store, "crash-before-side-effect", 100);
+      const first = await replayDurableWakeDeliveryAttempts({
+        store,
+        replayPassId: "pass:before-crash",
+        now: 200,
+      });
+      const [scheduledAttempt] = first.attempts;
+      expect(scheduledAttempt).toMatchObject({
+        wakeId: wake.wakeId,
+        status: "pending",
+      });
+      store.close();
+
+      const reopened = openDurableRuntimeSqliteStore({ path: dbPath });
+      try {
+        let hookCalls = 0;
+        const result = await replayDurableWakeDeliveryAttempts({
+          store: reopened,
+          replayPassId: "pass:after-crash",
+          now: 300,
+          deliveryHook: ({ attempt }) => {
+            hookCalls += 1;
+            expect(attempt.deliveryAttemptId).toBe(scheduledAttempt?.deliveryAttemptId);
+            expect(attempt.status).toBe("pending");
+            return {
+              status: "delivered",
+              evidence: {
+                kind: "delivered_after_pending_reclaim",
+                deliveryAttemptId: attempt.deliveryAttemptId,
+              },
+            };
+          },
+        });
+
+        expect(result).toMatchObject({
+          scanned: 1,
+          recorded: 0,
+          deduped: 0,
+          delivered: 1,
+        });
+        expect(hookCalls).toBe(1);
+        expect(reopened.listWakeDeliveryAttempts({ wakeId: wake.wakeId })).toEqual([
+          expect.objectContaining({
+            deliveryAttemptId: scheduledAttempt?.deliveryAttemptId,
+            status: "delivered",
+            attemptedAt: 300,
+            deliveredAt: 300,
+            evidence: expect.objectContaining({ kind: "delivered_after_pending_reclaim" }),
+          }),
+        ]);
+        expect(reopened.getDurableWake(wake.wakeId)).toMatchObject({
+          status: "delivered",
+          attemptCount: 2,
+          lastAttemptAt: 300,
+        });
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
+    }
+  });
+
+  it("reclaims a persisted attempted attempt after a crash past the side-effect boundary", async () => {
+    const { dbPath, store } = tempStore();
+    try {
+      const wake = createPendingWake(store, "crash-after-side-effect", 100);
+      const first = await replayDurableWakeDeliveryAttempts({
+        store,
+        replayPassId: "pass:side-effect",
+        now: 200,
+        deliveryHook: () => ({
+          status: "attempted",
+          evidence: {
+            kind: "delivery_side_effect_started",
+          },
+        }),
+      });
+      const [attempted] = first.attempts;
+      expect(attempted).toMatchObject({
+        wakeId: wake.wakeId,
+        status: "attempted",
+        attemptedAt: 200,
+      });
+      store.close();
+
+      const reopened = openDurableRuntimeSqliteStore({ path: dbPath });
+      try {
+        const result = await replayDurableWakeDeliveryAttempts({
+          store: reopened,
+          replayPassId: "pass:confirm-side-effect",
+          now: 300,
+          deliveryHook: ({ attempt }) => {
+            expect(attempt.deliveryAttemptId).toBe(attempted?.deliveryAttemptId);
+            expect(attempt.status).toBe("attempted");
+            return {
+              status: "delivered",
+              evidence: {
+                kind: "delivery_side_effect_confirmed",
+                deliveryAttemptId: attempt.deliveryAttemptId,
+              },
+            };
+          },
+        });
+
+        expect(result).toMatchObject({
+          scanned: 1,
+          recorded: 0,
+          deduped: 0,
+          delivered: 1,
+        });
+        expect(reopened.listWakeDeliveryAttempts({ wakeId: wake.wakeId })).toEqual([
+          expect.objectContaining({
+            deliveryAttemptId: attempted?.deliveryAttemptId,
+            status: "delivered",
+            attemptedAt: 300,
+            deliveredAt: 300,
+            evidence: expect.objectContaining({ kind: "delivery_side_effect_confirmed" }),
+          }),
+        ]);
+        expect(reopened.getDurableWake(wake.wakeId)).toMatchObject({
+          status: "delivered",
+          attemptCount: 2,
+          lastAttemptAt: 300,
+        });
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(dbPath), { recursive: true, force: true });
     }
   });
 
