@@ -5,6 +5,7 @@ import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.ui.chat.contextMeterThinkingLabel
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -137,6 +138,8 @@ class AppLanguageTest {
       setAppLanguage(AppLanguage.French)
       assertEquals("Micro désactivé", retained.value)
       assertEquals("Micro désactivé · raw", retainedComposite.value)
+      assertEquals("Élevé", contextMeterThinkingLabel("high"))
+      assertEquals("adaptive", contextMeterThinkingLabel("adaptive"))
       assertEquals("Connexion…", gatewayConnectionStatusForDisplay("Connecting…"))
       assertEquals(
         "Impossible de charger les approbations.",

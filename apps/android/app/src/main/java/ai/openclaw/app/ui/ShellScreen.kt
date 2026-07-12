@@ -1311,12 +1311,17 @@ private fun SectionLabel(
   title: String,
   action: (@Composable () -> Unit)? = null,
 ) {
+  val localizedTitle = nativeString(title)
   Row(
     modifier = Modifier.fillMaxWidth(),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.SpaceBetween,
   ) {
-    Text(text = nativeString(title).uppercase(), style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+    Text(
+      text = localizedUppercase(localizedTitle, currentAppLanguage().languageTag),
+      style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
+      color = ClawTheme.colors.textMuted,
+    )
     action?.invoke()
   }
 }
@@ -1326,6 +1331,7 @@ private fun ModuleListRow(
   row: ModuleRow,
   onClick: () -> Unit,
 ) {
+  val localizedTitle = nativeString(row.title)
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Row(
       modifier =
@@ -1341,7 +1347,7 @@ private fun ModuleListRow(
       Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(
-          text = nativeString(row.title),
+          text = localizedTitle,
           style = ClawTheme.type.body,
           color = ClawTheme.colors.text,
           maxLines = 1,
@@ -1353,7 +1359,7 @@ private fun ModuleListRow(
       }
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = nativeString("Open \${row.title}", row.title),
+        contentDescription = settingsRowDisclosureDescription(localizedTitle, opensRoute = true),
         modifier = Modifier.size(17.dp),
         tint = ClawTheme.colors.textMuted,
       )
@@ -1898,8 +1904,9 @@ internal fun settingsSectionTitleForRoute(route: SettingsRoute): String =
 
 @Composable
 private fun SettingsSectionTitle(title: String) {
+  val localizedTitle = nativeString(title)
   Text(
-    text = nativeString(title).uppercase(),
+    text = localizedUppercase(localizedTitle, currentAppLanguage().languageTag),
     style = ClawTheme.type.caption.copy(fontSize = 12.sp, lineHeight = 16.sp),
     color = ClawTheme.colors.textMuted,
   )
@@ -1984,6 +1991,7 @@ private fun SettingsListRow(
   showDisclosure: Boolean,
   onClick: () -> Unit,
 ) {
+  val localizedTitle = nativeString(row.title)
   Row(
     modifier =
       Modifier
@@ -1996,7 +2004,7 @@ private fun SettingsListRow(
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
-    Text(text = nativeString(row.title), style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
+    Text(text = localizedTitle, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
       if (row.value.isNotBlank()) {
         Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -2007,12 +2015,7 @@ private fun SettingsListRow(
       if (showDisclosure) {
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription =
-            if (row.route != null) {
-              nativeString("Open \${row.title}", row.title)
-            } else {
-              nativeString(row.title)
-            },
+          contentDescription = settingsRowDisclosureDescription(localizedTitle, opensRoute = row.route != null),
           modifier = Modifier.size(17.dp),
           tint = ClawTheme.colors.text,
         )
@@ -2020,6 +2023,11 @@ private fun SettingsListRow(
     }
   }
 }
+
+internal fun settingsRowDisclosureDescription(
+  localizedTitle: String,
+  opensRoute: Boolean,
+): String = if (opensRoute) nativeString("Open \${row.title}", localizedTitle) else localizedTitle
 
 private fun relativeSessionTime(updatedAtMs: Long): String {
   val deltaMs = (System.currentTimeMillis() - updatedAtMs).coerceAtLeast(0L)

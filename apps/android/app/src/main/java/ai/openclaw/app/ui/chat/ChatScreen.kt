@@ -1920,7 +1920,16 @@ internal fun contextMeterLabel(
   return if (thinkingSupported) nativeString("\$contextLabel · \${contextMeterThinkingLabel(thinkingLevel)}", contextLabel, contextMeterThinkingLabel(thinkingLevel)) else contextLabel
 }
 
-internal fun contextMeterThinkingLabel(value: String): String = value.trim().lowercase(Locale.US).ifEmpty { "off" }
+internal fun contextMeterThinkingLabel(value: String): String {
+  val normalized = value.trim().lowercase(Locale.US).ifEmpty { "off" }
+  return when (normalized) {
+    "off" -> nativeString("Off")
+    "low" -> nativeString("Low")
+    "medium" -> nativeString("Medium")
+    "high" -> nativeString("High")
+    else -> normalized
+  }
+}
 
 internal fun chatThinkingSupported(
   selection: ChatThinkingLevelSelection,

@@ -38,6 +38,12 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun settingsDisclosureUsesTheLocalizedTitle() {
+    assertEquals("Open Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = true))
+    assertEquals("Nœuds et appareils", settingsRowDisclosureDescription("Nœuds et appareils", opensRoute = false))
+  }
+
+  @Test
   fun appearanceThemeModeDefaultsToDarkForExistingInstalls() {
     assertEquals(AppearanceThemeMode.Dark, AppearanceThemeMode.fromRawValue(null))
     assertEquals(AppearanceThemeMode.Dark, AppearanceThemeMode.fromRawValue("unknown"))
