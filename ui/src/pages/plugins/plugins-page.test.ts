@@ -299,6 +299,16 @@ describe("PluginsPage", () => {
     page.querySelector<HTMLButtonElement>("#plugins-tab-workshop")?.click();
     expect(context.navigate).toHaveBeenCalledWith("skill-workshop");
     expect(page.activeTab).toBe("installed");
+
+    // Catalog tabs switch locally for instant feedback and keep the URL in
+    // sync with the ?tab=discover deep link.
+    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    expect(page.activeTab).toBe("discover");
+    expect(context.navigate).toHaveBeenCalledWith("plugins", { search: "?tab=discover" });
+    await page.updateComplete;
+    page.querySelector<HTMLButtonElement>("#plugins-tab-installed")?.click();
+    expect(page.activeTab).toBe("installed");
+    expect(context.navigate).toHaveBeenCalledWith("plugins", undefined);
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {

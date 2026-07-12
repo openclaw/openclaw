@@ -297,6 +297,14 @@ function renderSkillWorkshopPage(
             assistantName: context.config.current.assistantIdentity.name,
             workshopAgentName,
             counts: countSkillWorkshopProposals(state.skillWorkshopProposals),
+            onRetry: () => {
+              // Force past the loaded/error latch; the loading guard still
+              // prevents duplicate in-flight requests.
+              void loadSkillWorkshopProposals(state, context, { force: true }).finally(
+                requestUpdate,
+              );
+              requestUpdate();
+            },
             onStatusFilterChange: (status) => {
               state.skillWorkshopStatusFilter = status;
               requestUpdate();

@@ -412,7 +412,13 @@ class PluginsPage extends OpenClawLightDomElement {
 
   private selectHubTab(tab: PluginsHubTab) {
     if (tab === "installed" || tab === "discover") {
+      // Switch locally for instant feedback, then navigate so the URL and
+      // history match the documented ?tab=discover deep link.
       this.changeTab(tab);
+      this.context.navigate(
+        "plugins",
+        tab === "discover" ? { search: "?tab=discover" } : undefined,
+      );
       return;
     }
     this.context.navigate(tab === "skills" ? "skills" : "skill-workshop");
