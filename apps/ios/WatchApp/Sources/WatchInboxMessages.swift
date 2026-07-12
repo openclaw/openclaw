@@ -736,7 +736,7 @@ struct WatchAppSnapshotMessage: Codable, Equatable {
         code: String?,
         text: String?) -> OpenClawWatchAppStatus?
     {
-        let statusCode = switch code {
+        let statusCode: OpenClawWatchAppStatusCode? = switch code {
         case "connectIPhone":
             OpenClawWatchAppStatusCode.chatConnectIPhone
         case "noMessages":
