@@ -1078,10 +1078,17 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       resetCronFormToDefaults(state);
       result = { saved: true, jobId: extractSavedCronJobId(response) };
     }
-    await loadCronJobsPage(state, { tableFilters: true });
-    await loadCronStatus(state);
+    await reloadCronJobsSnapshot(state);
   });
   return result;
+}
+
+// Every mutation reloads the same trio so the table, scheduler status, and
+// the failing-count stat card can never drift apart after add/toggle/remove.
+async function reloadCronJobsSnapshot(state: CronState) {
+  await loadCronJobsPage(state, { tableFilters: true });
+  await loadCronStatus(state);
+  await loadCronFailingCount(state);
 }
 
 export async function toggleCronJob(
@@ -1095,8 +1102,7 @@ export async function toggleCronJob(
   await withCronBusy(state, async (client) => {
     await client.request("cron.update", { id: job.id, patch: { enabled } });
     updated = true;
-    await loadCronJobsPage(state, { tableFilters: true });
-    await loadCronStatus(state);
+    await reloadCronJobsSnapshot(state);
   });
   return updated;
 }
@@ -1118,8 +1124,7 @@ export async function removeCronJob(state: CronState, job: CronJob) {
       state.cronRunsJobId = null;
       clearCronRunsPage(state);
     }
-    await loadCronJobsPage(state, { tableFilters: true });
-    await loadCronStatus(state);
+    await reloadCronJobsSnapshot(state);
   });
 }
 

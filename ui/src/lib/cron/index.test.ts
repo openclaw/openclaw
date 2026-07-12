@@ -6,6 +6,7 @@ import {
   cancelCronEdit,
   loadCronFailingCount,
   loadCronModelSuggestions,
+  toggleCronJob,
   loadCronJobsPage,
   loadCronRuns,
   loadMoreCronRuns,
@@ -1901,6 +1902,28 @@ describe("loadCronFailingCount", () => {
       offset: 0,
     });
     expect(state.cronFailingCount).toBe(4);
+  });
+
+  it("refreshes after job mutations such as pause/resume", async () => {
+    const request = vi.fn(async (method: string, payload?: unknown) => {
+      if (
+        method === "cron.list" &&
+        (payload as { lastRunStatus?: string })?.lastRunStatus === "error"
+      ) {
+        return { jobs: [], total: 1, offset: 0, limit: 1 };
+      }
+      if (method === "cron.list") {
+        return { jobs: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0 };
+      }
+      return {};
+    });
+    const state = createState({ client: { request } as unknown as CronState["client"] });
+    await toggleCronJob(state, { id: "job-1" } as never, false);
+
+    expect(state.cronFailingCount).toBe(1);
   });
 
   it("degrades to null on request failure without touching cronError", async () => {
