@@ -107,37 +107,4 @@ describe("Google Meet calendar URL extraction", () => {
       }),
     ).toBe("https://meet.google.com/abc-defg-hij");
   });
-
-  it("filters Meet-like links in calendar text through the same URL contract", () => {
-    expect(
-      extractGoogleMeetUriFromCalendarEvent({
-        location: "Join https://meet.google.com/not-a-code",
-      }),
-    ).toBeUndefined();
-    expect(
-      extractGoogleMeetUriFromCalendarEvent({
-        location: "Join https://meet.google.com/abc-defg-hijk",
-      }),
-    ).toBeUndefined();
-    expect(
-      extractGoogleMeetUriFromCalendarEvent({
-        location: "Join https://meet.google.com/abc-defg-hij-notes",
-      }),
-    ).toBeUndefined();
-    expect(
-      extractGoogleMeetUriFromCalendarEvent({
-        description: "Join https://meet.google.com/abc-defg-hij.",
-      }),
-    ).toBe("https://meet.google.com/abc-defg-hij");
-    expect(
-      extractGoogleMeetUriFromCalendarEvent({
-        description: "Join https://meet.google.com/abc-defg-hij?authuser=0.",
-      }),
-    ).toBe("https://meet.google.com/abc-defg-hij?authuser=0");
-    expect(
-      extractGoogleMeetUriFromCalendarEvent({
-        description: "Join http://meet.google.com/abc-defg-hij.",
-      }),
-    ).toBe("https://meet.google.com/abc-defg-hij");
-  });
 });

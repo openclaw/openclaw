@@ -93,10 +93,8 @@ function normalizeGoogleMeetCalendarUri(value: string | undefined): string | und
 }
 
 function extractGoogleMeetUriFromText(value: string | undefined): string | undefined {
-  const match = value?.match(
-    /https?:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}(?![a-z0-9-])(?:[/?#][^\s<>"')\]]*)?/i,
-  );
-  return normalizeGoogleMeetCalendarUri(match?.[0]?.replace(/[.,;:!]+$/, ""));
+  const match = value?.match(/https:\/\/meet\.google\.com\/[a-z0-9-]+/i);
+  return match?.[0];
 }
 
 function findFirstGoogleMeetCalendarUri(
