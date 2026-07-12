@@ -314,6 +314,7 @@ export type RunEmbeddedAgentParams = {
   /** Keep an internal continuation prompt from being replaced by the original prepared turn. */
   skipPreparedUserTurnMessage?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onUserMessagePersistenceInvalidated?: () => void;
   onAssistantErrorMessagePersisted?: (
     message: Extract<AgentMessage, { role: "assistant" }>,
   ) => void;

@@ -2875,6 +2875,9 @@ async function runEmbeddedAgentInternal(
               params.suppressTranscriptOnlyAssistantPersistence,
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
             onUserMessagePersisted,
+            onUserMessagePersistenceInvalidated: () => {
+              activePromptPersisted = false;
+            },
             onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
           })
             .catch((err: unknown): never => {
