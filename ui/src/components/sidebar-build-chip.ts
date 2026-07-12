@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -15,7 +16,7 @@ export function formatBuildChipText(info: ControlUiBuildInfo, nowMs: number): st
   }
   const branch =
     info.branch && info.branch !== "main"
-      ? `${info.branch.length > BRANCH_DISPLAY_LENGTH ? `${info.branch.slice(0, BRANCH_DISPLAY_LENGTH)}…` : info.branch}@`
+      ? `${info.branch.length > BRANCH_DISPLAY_LENGTH ? `${truncateUtf16Safe(info.branch, BRANCH_DISPLAY_LENGTH)}…` : info.branch}@`
       : "";
   const commit = `${info.commit.slice(0, 7)}${info.dirty === true ? "*" : ""}`;
   if (!info.builtAt) {

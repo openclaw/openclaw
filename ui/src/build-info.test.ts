@@ -21,6 +21,7 @@ describe("Control UI build info", () => {
     expect(normalizeControlUiBranch("HEAD")).toBeNull();
     expect(normalizeControlUiBranch(" ")).toBeNull();
     expect(normalizeControlUiBranch("x".repeat(101))).toBe("x".repeat(100));
+    expect(normalizeControlUiBranch(`${"x".repeat(99)}😀tail`)).toBe("x".repeat(99));
   });
 
   it("canonicalizes only valid UTC build timestamps", () => {

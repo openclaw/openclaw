@@ -1,5 +1,8 @@
 // Compile-time identity for the Control UI artifact.
 
+// Vite loads this module before source-package aliases exist, so use the canonical source path.
+import { truncateUtf16Safe } from "../../packages/normalization-core/src/utf16-slice.js";
+
 export type ControlUiBuildInfo = Readonly<{
   version: string | null;
   commit: string | null;
@@ -32,7 +35,7 @@ export function normalizeControlUiCommit(value: unknown): string | null {
 
 export function normalizeControlUiBranch(value: unknown): string | null {
   const branch = normalizeOptionalString(value);
-  return branch && branch !== "HEAD" ? branch.slice(0, 100) : null;
+  return branch && branch !== "HEAD" ? truncateUtf16Safe(branch, 100) : null;
 }
 
 export function normalizeControlUiBuildTimestamp(value: unknown): string | null {

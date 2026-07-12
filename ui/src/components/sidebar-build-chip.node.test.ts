@@ -56,6 +56,11 @@ describe("formatBuildChipText", () => {
       expected: "abcdefghijklmn…@e8cbc62",
     },
     {
+      name: "long branch preserves boundary emoji",
+      info: buildInfo({ branch: `${"a".repeat(13)}😀suffix`, builtAt: null }),
+      expected: "aaaaaaaaaaaaa…@e8cbc62",
+    },
+    {
       name: "future build timestamp",
       info: buildInfo({ builtAt: "2026-07-10T12:25:00.000Z" }),
       expected: "e8cbc62 · 0s",
