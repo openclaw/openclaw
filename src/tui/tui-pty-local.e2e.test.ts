@@ -519,86 +519,90 @@ describe("TUI PTY real backends", () => {
     LOCAL_TEST_TIMEOUT_MS,
   );
 
-  it.each(["gateway", "local"] as const)(
-    "renders safe validation-loop abort diagnostics through the real %s backend",
-    async (mode) => {
-      const fixture =
-        mode === "gateway"
-          ? await startGatewayModeTui({
-              queueMode: "followup",
-              invalidEditLoop: true,
-            })
-          : await startLocalModeTui({ invalidEditLoop: true });
-      let eventProbe: GatewayChatClient | undefined;
-      const probedEvents: Array<{ event: string; payload: unknown }> = [];
-      try {
-        if (fixture.kind === "gateway") {
-          let probeConnected = false;
-          eventProbe = new GatewayChatClient({
-            url: fixture.gateway.url,
-            token: fixture.gateway.gatewayToken,
-            allowInsecureLocalOperatorUi: false,
-          });
-          eventProbe.onConnected = () => {
-            probeConnected = true;
-          };
-          eventProbe.onEvent = ({ event, payload }) => {
-            probedEvents.push({ event, payload });
-          };
-          eventProbe.start();
+  function registerValidationLoopTests() {
+    it.each(["gateway", "local"] as const)(
+      "renders safe validation-loop abort diagnostics through the real %s backend",
+      async (mode) => {
+        const fixture =
+          mode === "gateway"
+            ? await startGatewayModeTui({
+                queueMode: "followup",
+                invalidEditLoop: true,
+              })
+            : await startLocalModeTui({ invalidEditLoop: true });
+        let eventProbe: GatewayChatClient | undefined;
+        const probedEvents: Array<{ event: string; payload: unknown }> = [];
+        try {
+          if (fixture.kind === "gateway") {
+            let probeConnected = false;
+            eventProbe = new GatewayChatClient({
+              url: fixture.gateway.url,
+              token: fixture.gateway.gatewayToken,
+              allowInsecureLocalOperatorUi: false,
+            });
+            eventProbe.onConnected = () => {
+              probeConnected = true;
+            };
+            eventProbe.onEvent = ({ event, payload }) => {
+              probedEvents.push({ event, payload });
+            };
+            eventProbe.start();
+            await waitFor({
+              timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+              read: () => (probeConnected ? true : null),
+              onTimeout: () => new Error("Gateway event probe did not connect"),
+            });
+            await eventProbe.subscribeSessionEvents();
+          }
+          await fixture.run.waitForOutput(
+            mode === "gateway" ? "gateway connected" : "local ready",
+            LOCAL_STARTUP_TIMEOUT_MS,
+          );
+          await fixture.run.write("trigger malformed edit calls\r");
           await waitFor({
-            timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
-            read: () => (probeConnected ? true : null),
-            onTimeout: () => new Error("Gateway event probe did not connect"),
-          });
-          await eventProbe.subscribeSessionEvents();
-        }
-        await fixture.run.waitForOutput(
-          mode === "gateway" ? "gateway connected" : "local ready",
-          LOCAL_STARTUP_TIMEOUT_MS,
-        );
-        await fixture.run.write("trigger malformed edit calls\r");
-        await waitFor({
-          timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
-          read: () => (fixture.mockModel.requests().length >= 2 ? true : null),
-          onTimeout: () =>
-            new Error(`model did not repeat the malformed edit call\n${fixture.run.output()}`),
-        });
-        if (eventProbe) {
-          await waitFor({
-            timeoutMs: 30_000,
-            read: () => {
-              const observed = probedEvents.some((event) => {
-                if (event.event !== "session.tool" || !event.payload) {
-                  return false;
-                }
-                const data = (event.payload as { data?: Record<string, unknown> }).data;
-                return typeof data?.toolErrorSummary === "string";
-              });
-              return observed ? true : null;
-            },
+            timeoutMs: LOCAL_OUTPUT_TIMEOUT_MS,
+            read: () => (fixture.mockModel.requests().length >= 2 ? true : null),
             onTimeout: () =>
-              new Error(`Gateway did not project a safe tool diagnostic (${probedEvents.length})`),
+              new Error(`model did not repeat the malformed edit call\n${fixture.run.output()}`),
           });
+          if (eventProbe) {
+            await waitFor({
+              timeoutMs: 30_000,
+              read: () => {
+                const observed = probedEvents.some((event) => {
+                  if (event.event !== "session.tool" || !event.payload) {
+                    return false;
+                  }
+                  const data = (event.payload as { data?: Record<string, unknown> }).data;
+                  return typeof data?.toolErrorSummary === "string";
+                });
+                return observed ? true : null;
+              },
+              onTimeout: () =>
+                new Error(
+                  `Gateway did not project a safe tool diagnostic (${probedEvents.length})`,
+                ),
+            });
+          }
+          await fixture.run.write("\u001b", { delay: false });
+          await fixture.run.waitForOutput(
+            "run aborted: edit tool validation failed:",
+            LOCAL_OUTPUT_TIMEOUT_MS,
+          );
+
+          expect(fixture.mockModel.requests().length).toBeGreaterThan(0);
+          expect(fixture.run.output()).not.toContain("Received arguments");
+
+          await fixture.run.write("/exit\r", { delay: false });
+          expect((await fixture.run.waitForExit()).exitCode).toBe(0);
+        } finally {
+          eventProbe?.stop();
+          await fixture.cleanup();
         }
-        await fixture.run.write("\u001b", { delay: false });
-        await fixture.run.waitForOutput(
-          "run aborted: edit tool validation failed:",
-          LOCAL_OUTPUT_TIMEOUT_MS,
-        );
-
-        expect(fixture.mockModel.requests().length).toBeGreaterThan(0);
-        expect(fixture.run.output()).not.toContain("Received arguments");
-
-        await fixture.run.write("/exit\r", { delay: false });
-        expect((await fixture.run.waitForExit()).exitCode).toBe(0);
-      } finally {
-        eventProbe?.stop();
-        await fixture.cleanup();
-      }
-    },
-    LOCAL_TEST_TIMEOUT_MS,
-  );
+      },
+      LOCAL_TEST_TIMEOUT_MS,
+    );
+  }
 
   it(
     "creates and adopts a fresh session through the real Gateway backend",
@@ -921,4 +925,8 @@ describe("TUI PTY real backends", () => {
     },
     LOCAL_TEST_TIMEOUT_MS,
   );
+
+  // Validation abort can terminalize the TUI before earlier command lanes
+  // finish unwinding. Keep it last so teardown owns that tail.
+  registerValidationLoopTests();
 });
