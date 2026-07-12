@@ -24,6 +24,7 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
+import { publicCronEventSnapshot, publicCronJobSnapshot } from "../cron/public-job.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
@@ -727,7 +728,8 @@ export function buildGatewayCronService(params: {
       // Any job/store change can alter session automation bindings, including
       // in-place enable flips during runs; run/schedule events bump too (cheap).
       bumpSessionAutomationVersion();
-      params.broadcast("cron", evt, { dropIfSlow: true });
+      const publicEvt = publicCronEventSnapshot(evt);
+      params.broadcast("cron", publicEvt, { dropIfSlow: true });
       // Build hook event from CronEvent. The job snapshot is carried on the
       // internal event so it's available even for "removed" actions where
       // getJob() would return undefined. `delivery` and `usage` are
@@ -737,7 +739,8 @@ export function buildGatewayCronService(params: {
       // convenience fields (sessionTarget, agentId) are always populated
       // when the job is known.
       const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
-      const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
+      const publicJobSnapshot = jobSnapshot ? publicCronJobSnapshot(jobSnapshot) : undefined;
+      const pluginJob = publicJobSnapshot ? toPluginCronJob(publicJobSnapshot) : undefined;
       const hookSummary =
         isCommandCronJob(jobSnapshot) && typeof evt.summary === "string"
           ? redactCronCommandSummaryForExternalDelivery(evt.summary)
@@ -749,7 +752,7 @@ export function buildGatewayCronService(params: {
         // Top-level routing fields so plugins don't have to dig into job.
         sessionTarget: jobSnapshot?.sessionTarget,
         agentId: jobSnapshot?.agentId,
-        ...pickDefined(evt, [
+        ...pickDefined(publicEvt, [
           "runAtMs",
           "durationMs",
           "status",
@@ -783,7 +786,7 @@ export function buildGatewayCronService(params: {
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
         dispatchGatewayCronFinishedNotifications({
-          evt,
+          evt: publicEvt,
           job,
           deps: params.deps,
           logger: cronLogger,

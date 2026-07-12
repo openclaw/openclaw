@@ -549,6 +549,51 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("hides internal catch-up deferral marker from cron event job snapshots", async () => {
+    const now = Date.now();
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-event-public-state-",
+      cronEnabled: false,
+      jobs: [
+        {
+          id: "deferred-public-event",
+          name: "deferred public event",
+          enabled: true,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "hello" },
+          state: {
+            nextRunAtMs: now + 5_000,
+            pendingCatchupDeferral: true,
+          },
+        },
+      ],
+    });
+    const cronEvents = createCronEventCollector();
+    const cronState = await createDirectCronState({ broadcast: cronEvents["broadcast"] });
+
+    try {
+      const updatedEvent = cronEvents.wait(
+        (payload) => payload.jobId === "deferred-public-event" && payload.action === "updated",
+      );
+      const updateRes = await directCronReq(cronState, "cron.update", {
+        id: "deferred-public-event",
+        patch: { displayName: "Deferred Public Event" },
+      });
+      expect(updateRes.ok).toBe(true);
+
+      const payload = await updatedEvent;
+      const state = (payload.job as { state?: Record<string, unknown> } | undefined)?.state;
+      expect(state).toMatchObject({ nextRunAtMs: now + 5_000 });
+      expect(state).not.toHaveProperty("pendingCatchupDeferral");
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
   test("routes forced cron runs to the configured session", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-route-",

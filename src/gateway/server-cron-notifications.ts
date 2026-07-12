@@ -14,6 +14,7 @@ import {
   sendCronAnnouncePayloadStrict,
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
+import { publicCronEventSnapshot, publicCronJobSnapshot } from "../cron/public-job.js";
 import type { CronEvent } from "../cron/service.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type { CronJob, CronMessageChannel } from "../cron/types.js";
@@ -67,39 +68,42 @@ function redactOptionalWebhookUrl(url: unknown): string | undefined {
 }
 
 function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob): CronEvent {
+  const publicEvt = publicCronEventSnapshot(evt);
   if (job?.payload.kind !== "command") {
-    return evt;
+    return publicEvt;
   }
-  const summary = redactCronCommandSummaryForExternalDelivery(evt.summary);
-  const diagnosticsSummary = redactCronCommandSummaryForExternalDelivery(evt.diagnostics?.summary);
-  const diagnosticsEntries = evt.diagnostics?.entries.map((entry) => ({
+  const summary = redactCronCommandSummaryForExternalDelivery(publicEvt.summary);
+  const diagnosticsSummary = redactCronCommandSummaryForExternalDelivery(
+    publicEvt.diagnostics?.summary,
+  );
+  const diagnosticsEntries = publicEvt.diagnostics?.entries.map((entry) => ({
     ...entry,
     message: redactCronCommandSummaryForExternalDelivery(entry.message) ?? entry.message,
   }));
   const diagnosticsEntriesChanged = diagnosticsEntries?.some(
-    (entry, index) => entry.message !== evt.diagnostics?.entries[index]?.message,
+    (entry, index) => entry.message !== publicEvt.diagnostics?.entries[index]?.message,
   );
-  const embeddedJobState = evt.job?.state;
+  const embeddedJobState = publicEvt.job?.state;
   const stripEmbeddedJobDiagnostics = Boolean(
     embeddedJobState &&
     ("lastDiagnostics" in embeddedJobState || "lastDiagnosticSummary" in embeddedJobState),
   );
   if (
     summary === evt.summary &&
-    diagnosticsSummary === evt.diagnostics?.summary &&
+    diagnosticsSummary === publicEvt.diagnostics?.summary &&
     !diagnosticsEntriesChanged &&
     !stripEmbeddedJobDiagnostics
   ) {
-    return evt;
+    return publicEvt;
   }
-  const redacted: CronEvent = { ...evt };
+  const redacted: CronEvent = { ...publicEvt };
   if (summary !== undefined) {
     redacted.summary = summary;
   } else {
     delete redacted.summary;
   }
-  if (evt.diagnostics) {
-    redacted.diagnostics = { ...evt.diagnostics };
+  if (publicEvt.diagnostics) {
+    redacted.diagnostics = { ...publicEvt.diagnostics };
     if (diagnosticsSummary !== undefined) {
       redacted.diagnostics.summary = diagnosticsSummary;
     } else {
@@ -109,12 +113,12 @@ function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob
       redacted.diagnostics.entries = diagnosticsEntries;
     }
   }
-  if (stripEmbeddedJobDiagnostics && evt.job) {
-    const state = { ...evt.job.state };
+  if (stripEmbeddedJobDiagnostics && publicEvt.job) {
+    const state = { ...publicEvt.job.state };
     delete state.lastDiagnostics;
     delete state.lastDiagnosticSummary;
     redacted.job = {
-      ...evt.job,
+      ...publicEvt.job,
       state,
     };
   }
@@ -176,18 +180,19 @@ function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }
 }
 
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
-  if (evt.status !== "error") {
-    return evt;
+  const publicEvt = publicCronEventSnapshot(evt);
+  if (publicEvt.status !== "error") {
+    return publicEvt;
   }
-  const { summary: _summary, diagnostics: _diagnostics, ...payload } = evt;
-  if (evt.job) {
-    const state = { ...evt.job.state };
+  const { summary: _summary, diagnostics: _diagnostics, ...payload } = publicEvt;
+  if (publicEvt.job) {
+    const state = { ...publicEvt.job.state };
     delete state.lastDiagnostics;
     delete state.lastDiagnosticSummary;
     return {
       ...payload,
       job: {
-        ...evt.job,
+        ...publicEvt.job,
         state,
       },
     };
@@ -424,7 +429,10 @@ function dispatchCronFailureDestinationNotifications(params: {
   const job = params.job;
   const failureDest = resolveFailureDestination(job, params.globalFailureDestination);
   const deliverySessionKey = resolveCronDeliverySessionKey(job);
-  const failurePayload = buildCronFailureWebhookPayload({ evt: params.evt, job });
+  const failurePayload = buildCronFailureWebhookPayload({
+    evt: publicCronEventSnapshot(params.evt),
+    job: publicCronJobSnapshot(job),
+  });
 
   if (failureDest) {
     if (failureDest.mode === "webhook" && failureDest.to) {

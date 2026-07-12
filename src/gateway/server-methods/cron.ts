@@ -23,6 +23,7 @@ import {
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
+import { publicCronJobState } from "../../cron/public-job.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import {
   isInvalidCronSessionTargetIdError,
@@ -83,11 +84,6 @@ class CronJobConfigRevisionConflictError extends Error {
   ) {
     super("cron job definition no longer matches the loaded version");
   }
-}
-
-function publicCronJobState(job: CronJob): CronJob["state"] {
-  const { pendingCatchupDeferral: _pendingCatchupDeferral, ...state } = job.state;
-  return state;
 }
 
 function cronJobReadView(job: CronJob) {
