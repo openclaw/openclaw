@@ -29,6 +29,29 @@ type HostContext = NonNullable<
 type HostCapabilities = ConstructorParameters<typeof AppBridge>[2];
 type HostSandboxCsp = NonNullable<NonNullable<HostCapabilities["sandbox"]>["csp"]>;
 
+type ScheduleFrame = (callback: FrameRequestCallback) => number;
+type ScheduleFallback = (callback: () => void, delayMs: number) => number;
+
+export async function waitForMcpAppHandlerRegistration(
+  scheduleFrame: ScheduleFrame = window.requestAnimationFrame.bind(window),
+  scheduleFallback: ScheduleFallback = window.setTimeout.bind(window),
+): Promise<void> {
+  // Apps can complete the protocol handshake before framework effects install
+  // their tool notification handlers. Cross a paint boundary before delivering
+  // the initial input/result pair, with a fallback for background tabs where
+  // requestAnimationFrame may be throttled indefinitely.
+  await Promise.race([
+    new Promise<void>((resolve) => {
+      scheduleFrame(() => {
+        scheduleFrame(() => resolve());
+      });
+    }),
+    new Promise<void>((resolve) => {
+      scheduleFallback(resolve, 50);
+    }),
+  ]);
+}
+
 function hostContext(element: Element | undefined, height: number): HostContext {
   const rect = element?.getBoundingClientRect();
   const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;
@@ -317,6 +340,10 @@ export class McpAppView extends LitElement {
           window.setTimeout(() => reject(new Error("MCP App initialization timed out")), 15_000);
         }),
       ]);
+      await waitForMcpAppHandlerRegistration();
+      if (generation !== this.setupGeneration) {
+        return;
+      }
       await bridge.sendToolInput({
         arguments:
           payload.toolInput &&
