@@ -66,6 +66,209 @@ function cloneBigIntStatWith(
 }
 
 describe("embedded attempt session lock lifecycle", () => {
+  it("drains unawaited nested publications before releasing the physical lock", async () => {
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+    let finishNestedWrite!: () => void;
+    const nestedWriteCanFinish = new Promise<void>((resolve) => {
+      finishNestedWrite = resolve;
+    });
+    let markNestedWriteStarted!: () => void;
+    const nestedWriteStarted = new Promise<void>((resolve) => {
+      markNestedWriteStarted = resolve;
+    });
+    let nestedWrite: Promise<void> | undefined;
+    let parentSettled = false;
+    const parentWrite = controller
+      .withSessionWriteLock(async () => {
+        nestedWrite = controller.withSessionWriteLock(async () => {
+          markNestedWriteStarted();
+          await nestedWriteCanFinish;
+          await controller.withSessionWriteLock(async () => {});
+        });
+        void nestedWrite;
+        await nestedWriteStarted;
+      })
+      .finally(() => {
+        parentSettled = true;
+      });
+
+    await nestedWriteStarted;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const settledBeforeNestedWrite = parentSettled;
+    finishNestedWrite();
+    await Promise.all([parentWrite, nestedWrite]);
+
+    expect(settledBeforeNestedWrite).toBe(false);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(1);
+    await expect(controller.withSessionWriteLock(() => "next write")).resolves.toBe("next write");
+    await controller.dispose();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains unawaited nested publications when the parent write rejects", async () => {
+    const releaseInitial = vi.fn(async () => {});
+    const releaseOwned = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releaseInitial })
+      .mockResolvedValueOnce({ release: releaseOwned });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+    await controller.releaseForPrompt();
+    let finishNestedWrite!: () => void;
+    const nestedWriteCanFinish = new Promise<void>((resolve) => {
+      finishNestedWrite = resolve;
+    });
+    let markNestedWriteStarted!: () => void;
+    const nestedWriteStarted = new Promise<void>((resolve) => {
+      markNestedWriteStarted = resolve;
+    });
+    let nestedWrite: Promise<void> | undefined;
+    const parentError = new Error("parent failed");
+    let parentSettled = false;
+    const parentWrite = controller
+      .withSessionWriteLock(async () => {
+        nestedWrite = controller.withSessionWriteLock(async () => {
+          markNestedWriteStarted();
+          await nestedWriteCanFinish;
+        });
+        void nestedWrite;
+        await nestedWriteStarted;
+        throw parentError;
+      })
+      .finally(() => {
+        parentSettled = true;
+      });
+
+    await nestedWriteStarted;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const settledBeforeNestedWrite = parentSettled;
+    const releasedBeforeNestedWrite = releaseOwned.mock.calls.length;
+    finishNestedWrite();
+    await expect(parentWrite).rejects.toBe(parentError);
+    await nestedWrite;
+
+    expect(settledBeforeNestedWrite).toBe(false);
+    expect(releasedBeforeNestedWrite).toBe(0);
+    expect(releaseOwned).toHaveBeenCalledTimes(1);
+    await controller.dispose();
+  });
+
+  it("publishes the final fence after nested transcript writes drain", async () => {
+    const sessionFile = await createTempSessionFile();
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+    let finishNestedWrite!: () => void;
+    const nestedWriteCanFinish = new Promise<void>((resolve) => {
+      finishNestedWrite = resolve;
+    });
+    let markNestedWriteStarted!: () => void;
+    const nestedWriteStarted = new Promise<void>((resolve) => {
+      markNestedWriteStarted = resolve;
+    });
+    let nestedWrite: Promise<void> | undefined;
+    let parentSettled = false;
+    const parentWrite = controller
+      .withSessionWriteLock(
+        async () => {
+          nestedWrite = controller.withSessionWriteLock(
+            async () => {
+              markNestedWriteStarted();
+              await nestedWriteCanFinish;
+              await fs.appendFile(sessionFile, '{"type":"nested"}\n', "utf8");
+            },
+            { publishOwnedWrite: true },
+          );
+          void nestedWrite;
+          await nestedWriteStarted;
+          await fs.appendFile(sessionFile, '{"type":"parent"}\n', "utf8");
+        },
+        { publishOwnedWrite: true },
+      )
+      .finally(() => {
+        parentSettled = true;
+      });
+
+    await nestedWriteStarted;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const settledBeforeNestedWrite = parentSettled;
+    finishNestedWrite();
+    await Promise.all([parentWrite, nestedWrite]);
+
+    expect(settledBeforeNestedWrite).toBe(false);
+    await expect(controller.withSessionWriteLock(() => "next write")).resolves.toBe("next write");
+    await controller.dispose();
+  });
+
+  it("makes late inherited writes wait for physical lock release", async () => {
+    const releaseInitial = vi.fn(async () => {});
+    let finishOwnedRelease!: () => void;
+    const ownedReleaseCanFinish = new Promise<void>((resolve) => {
+      finishOwnedRelease = resolve;
+    });
+    let markOwnedReleaseStarted!: () => void;
+    const ownedReleaseStarted = new Promise<void>((resolve) => {
+      markOwnedReleaseStarted = resolve;
+    });
+    const releaseOwned = vi.fn(async () => {
+      markOwnedReleaseStarted();
+      await ownedReleaseCanFinish;
+    });
+    const releaseLate = vi.fn(async () => {});
+    const acquireSessionWriteLockLocal = vi
+      .fn()
+      .mockResolvedValueOnce({ release: releaseInitial })
+      .mockResolvedValueOnce({ release: releaseOwned })
+      .mockResolvedValueOnce({ release: releaseLate });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocal,
+      lockOptions,
+    });
+    await controller.releaseForPrompt();
+    let startLateWrite!: () => void;
+    const lateWriteCanStart = new Promise<void>((resolve) => {
+      startLateWrite = resolve;
+    });
+    let lateWrite: Promise<string> | undefined;
+    let lateWriteSettled = false;
+    const parentWrite = controller.withSessionWriteLock(async () => {
+      void (async () => {
+        await lateWriteCanStart;
+        lateWrite = controller
+          .withSessionWriteLock(() => "late write")
+          .finally(() => {
+            lateWriteSettled = true;
+          });
+        await lateWrite;
+      })();
+    });
+
+    await ownedReleaseStarted;
+    startLateWrite();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const settledBeforeRelease = lateWriteSettled;
+    const acquisitionsBeforeRelease = acquireSessionWriteLockLocal.mock.calls.length;
+    finishOwnedRelease();
+    await parentWrite;
+    await vi.waitFor(() => expect(lateWrite).toBeDefined());
+    await expect(lateWrite).resolves.toBe("late write");
+
+    expect(settledBeforeRelease).toBe(false);
+    expect(acquisitionsBeforeRelease).toBe(2);
+    expect(acquireSessionWriteLockLocal).toHaveBeenCalledTimes(3);
+    expect(releaseLate).toHaveBeenCalledTimes(1);
+    await controller.dispose();
+  });
+
   it("serializes embedded attempts that share a session file owner", async () => {
     const sessionFile = await createTempSessionFile();
     const firstOwner = await acquireEmbeddedAttemptSessionFileOwner({ sessionFile });

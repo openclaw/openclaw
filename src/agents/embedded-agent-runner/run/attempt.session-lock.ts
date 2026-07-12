@@ -17,7 +17,42 @@ type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
 type ActiveWriteLockState = {
   active: boolean;
+  complete: () => void;
+  completion: Promise<void>;
+  pendingOperations: Set<Promise<void>>;
 };
+
+function createActiveWriteLockState(): ActiveWriteLockState {
+  let complete!: () => void;
+  const completion = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  return { active: true, complete, completion, pendingOperations: new Set() };
+}
+
+function trackActiveWriteLockOperation<T>(
+  state: ActiveWriteLockState,
+  operation: Promise<T>,
+): Promise<T> {
+  const settlement = operation.then(
+    () => undefined,
+    () => undefined,
+  );
+  state.pendingOperations.add(settlement);
+  void settlement.finally(() => state.pendingOperations.delete(settlement));
+  return operation;
+}
+
+async function closeActiveWriteLockOperations(state: ActiveWriteLockState): Promise<void> {
+  // Nested transcript publications may start more owned writes while settling.
+  // Keep the physical lock until the complete publication tree drains.
+  while (state.pendingOperations.size > 0) {
+    await Promise.all(state.pendingOperations);
+  }
+  // Close admission in the same turn as the final empty-set check. Inherited
+  // callbacks arriving later must wait for physical release and reacquire.
+  state.active = false;
+}
 
 type LockOptions = {
   sessionFile: string;
@@ -1021,18 +1056,88 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   }
 
   async function runWithRetainedLock<T>(
-    run: () => Promise<T>,
+    run: (activeLockState: ActiveWriteLockState) => Promise<T>,
     releaseRetainedUse: () => void,
   ): Promise<T> {
+    const activeLockState = createActiveWriteLockState();
     try {
-      const activeLockState: ActiveWriteLockState = { active: true };
-      try {
-        return await activeWriteLock.run(activeLockState, run);
-      } finally {
-        activeLockState.active = false;
-      }
+      return await activeWriteLock.run(activeLockState, () => run(activeLockState));
     } finally {
-      releaseRetainedUse();
+      activeLockState.active = false;
+      try {
+        releaseRetainedUse();
+      } finally {
+        activeLockState.complete();
+      }
+    }
+  }
+
+  async function withSessionWriteLock<T>(
+    run: () => Promise<T> | T,
+    options?: SessionWriteLockRunOptions,
+    ignoreInheritedScope = false,
+  ): Promise<T> {
+    if (takeoverDetected) {
+      throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
+    }
+    const activeLockState = ignoreInheritedScope ? undefined : activeWriteLock.getStore();
+    if (activeLockState?.active === false) {
+      // A detached callback inherited a scope that is already finalizing.
+      // Wait until its physical lock is released, then acquire a new scope.
+      await activeLockState.completion;
+      return await withSessionWriteLock(run, options, true);
+    }
+    if (activeLockState?.active === true) {
+      const operation = (async () => {
+        if (options?.publishOwnedWrite !== true) {
+          return await run();
+        }
+        const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+        try {
+          return await run();
+        } finally {
+          await publishOwnedSessionFileFence(beforeWrite);
+        }
+      })();
+      return await trackActiveWriteLockOperation(activeLockState, operation);
+    }
+    const { lock, owned, releaseRetainedUse } = await acquireWriteLock();
+    let ownedLockState: ActiveWriteLockState | undefined;
+    try {
+      const runLockedOperation = async (rootLockState: ActiveWriteLockState) => {
+        await assertSessionFileFence();
+        const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+        const runWithLock = async () => {
+          try {
+            return await run();
+          } finally {
+            await closeActiveWriteLockOperations(rootLockState);
+            if (options?.publishOwnedWrite === true) {
+              await publishOwnedSessionFileFence(beforeWrite);
+            } else {
+              await refreshSessionFileFence(beforeWrite);
+            }
+          }
+        };
+        return await runWithLock();
+      };
+      if (owned) {
+        const rootLockState = createActiveWriteLockState();
+        ownedLockState = rootLockState;
+        return await activeWriteLock.run(rootLockState, () => runLockedOperation(rootLockState));
+      }
+      return await runWithRetainedLock(runLockedOperation, releaseRetainedUse ?? (() => {}));
+    } finally {
+      if (owned) {
+        if (ownedLockState) {
+          ownedLockState.active = false;
+        }
+        try {
+          await lock.release();
+        } finally {
+          ownedLockState?.complete();
+        }
+      }
     }
   }
 
@@ -1082,57 +1187,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
     },
     waitForSessionEvents: waitForSessionEventQueue,
-    async withSessionWriteLock<T>(
-      run: () => Promise<T> | T,
-      options?: SessionWriteLockRunOptions,
-    ): Promise<T> {
-      if (takeoverDetected) {
-        throw new EmbeddedAttemptSessionTakeoverError(params.lockOptions.sessionFile);
-      }
-      if (activeWriteLock.getStore()?.active === true) {
-        if (options?.publishOwnedWrite !== true) {
-          return await run();
-        }
-        const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-        try {
-          return await run();
-        } finally {
-          await publishOwnedSessionFileFence(beforeWrite);
-        }
-      }
-      const { lock, owned, releaseRetainedUse } = await acquireWriteLock();
-      try {
-        const runLockedOperation = async () => {
-          await assertSessionFileFence();
-          const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-          const runWithLock = async () => {
-            try {
-              return await run();
-            } finally {
-              if (options?.publishOwnedWrite === true) {
-                await publishOwnedSessionFileFence(beforeWrite);
-              } else {
-                await refreshSessionFileFence(beforeWrite);
-              }
-            }
-          };
-          return await runWithLock();
-        };
-        if (owned) {
-          const activeLockState: ActiveWriteLockState = { active: true };
-          try {
-            return await activeWriteLock.run(activeLockState, runLockedOperation);
-          } finally {
-            activeLockState.active = false;
-          }
-        }
-        return await runWithRetainedLock(runLockedOperation, releaseRetainedUse ?? (() => {}));
-      } finally {
-        if (owned) {
-          await lock.release();
-        }
-      }
-    },
+    withSessionWriteLock,
     async acquireForCleanup(cleanupParams?: { session?: unknown }): Promise<SessionLock> {
       if (cleanupParams?.session) {
         await waitForSessionEventQueue(cleanupParams.session);
