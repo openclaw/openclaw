@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayHealthLogsSummary
 import ai.openclaw.app.GatewayLogEntry
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -48,6 +49,11 @@ internal fun HealthLogsSettingsScreen(
   val chatHealthOk by viewModel.chatHealthOk.collectAsState()
   val modelCount by viewModel.modelCatalog.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
+  val voiceCaptureMode by viewModel.voiceCaptureMode.collectAsState()
+  val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
+  val talkModeListening by viewModel.talkModeListening.collectAsState()
+  val talkModeSpeaking by viewModel.talkModeSpeaking.collectAsState()
+  val talkAwaitingAgent by viewModel.talkAwaitingAgent.collectAsState()
   val talkStatus by viewModel.talkModeStatusText.collectAsState()
   val logsSummary by viewModel.healthLogsSummary.collectAsState()
   val logsRefreshing by viewModel.healthLogsRefreshing.collectAsState()
@@ -93,7 +99,14 @@ internal fun HealthLogsSettingsScreen(
       isNodeConnected = isNodeConnected,
       chatHealthOk = chatHealthOk,
       modelsReady = modelCount.isNotEmpty(),
-      voiceReady = talkStatus.lowercase() != "off",
+      voiceReady =
+        voiceRuntimeReady(
+          voiceCaptureMode = voiceCaptureMode,
+          talkModeEnabled = talkModeEnabled,
+          talkModeListening = talkModeListening,
+          talkModeSpeaking = talkModeSpeaking,
+          talkAwaitingAgent = talkAwaitingAgent,
+        ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawSecondaryButton(
@@ -111,6 +124,19 @@ internal fun HealthLogsSettingsScreen(
     GatewayLogsPanel(isConnected = isConnected, summary = logsSummary, onLogClick = { selectedLogEntry = it })
   }
 }
+
+internal fun voiceRuntimeReady(
+  voiceCaptureMode: VoiceCaptureMode,
+  talkModeEnabled: Boolean,
+  talkModeListening: Boolean,
+  talkModeSpeaking: Boolean,
+  talkAwaitingAgent: Boolean,
+): Boolean =
+  voiceCaptureMode != VoiceCaptureMode.Off ||
+    talkModeEnabled ||
+    talkModeListening ||
+    talkModeSpeaking ||
+    talkAwaitingAgent
 
 @Composable
 private fun GatewayLogDetailSettingsScreen(

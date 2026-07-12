@@ -141,6 +141,18 @@ private sealed interface RealtimeToolCompletionDecision {
   ) : RealtimeToolCompletionDecision
 }
 
+private enum class TalkStatusState {
+  Off,
+  Active,
+  TalkFailure,
+}
+
+private data class TalkStatus(
+  val text: NativeText,
+  val state: TalkStatusState,
+  val awaitingAgent: Boolean = false,
+)
+
 class TalkModeManager internal constructor(
   private val context: Context,
   private val scope: CoroutineScope,
@@ -198,7 +210,10 @@ class TalkModeManager internal constructor(
   private val _speechActive = MutableStateFlow(false)
   val speechActive: StateFlow<Boolean> = _speechActive
 
-  private val _statusText = MutableStateFlow<NativeText>(nativeText("Off"))
+  @Volatile
+  private var currentStatus = TalkStatus(text = nativeText("Off"), state = TalkStatusState.Off)
+
+  private val _statusText = MutableStateFlow(currentStatus.text)
   val statusText: StateFlow<String> = _statusText.resolveNativeText()
 
   // Typed "waiting on the agent" signal for the waveform's Thinking phase, so
@@ -209,10 +224,20 @@ class TalkModeManager internal constructor(
 
   private fun setStatus(
     text: NativeText,
+    state: TalkStatusState = TalkStatusState.Active,
     awaitingAgent: Boolean = false,
   ) {
-    _statusText.value = text
-    _awaitingAgent.value = awaitingAgent
+    setStatus(TalkStatus(text = text, state = state, awaitingAgent = awaitingAgent))
+  }
+
+  private fun setStatus(status: TalkStatus) {
+    currentStatus = status
+    _statusText.value = status.text
+    _awaitingAgent.value = status.awaitingAgent
+  }
+
+  private fun setTalkFailure(text: NativeText) {
+    setStatus(text, state = TalkStatusState.TalkFailure)
   }
 
   private val _lastAssistantText = MutableStateFlow<String?>(null)
@@ -864,7 +889,7 @@ class TalkModeManager internal constructor(
     lastTranscript = ""
     lastHeardAtMs = null
     _isListening.value = false
-    setStatus(nativeText("Off"))
+    setStatus(nativeText("Off"), state = TalkStatusState.Off)
     stopRealtimeRelay()
     stopSpeaking()
     pendingRunId = null
@@ -887,9 +912,9 @@ class TalkModeManager internal constructor(
     withTimeout(timeoutMs) {
       while (true) {
         realtimeSessionId?.let { return@withTimeout it }
-        val status = _statusText.value.resolveNativeText()
-        if (!_isEnabled.value && status != "Off") {
-          throw IllegalStateException(status)
+        val status = currentStatus
+        if (!_isEnabled.value && status.state != TalkStatusState.Off) {
+          throw IllegalStateException(status.text.resolveNativeText())
         }
         delay(100L)
       }
@@ -982,16 +1007,24 @@ class TalkModeManager internal constructor(
     message: String,
   ) {
     if (realtimeSessionId != sessionId) return
-    setStatus(nativeText("Talk failed: \$message", message))
+    setTalkFailure(nativeText("Talk failed: \$message", message))
     stopRealtimeRelay(cancelCapture = false, cancelAppend = false, preserveStatus = true)
     disableRealtimeModeAndNotifyOwner()
   }
 
-  private fun realtimeCloseStatusText(reason: String?): NativeText =
+  private fun realtimeCloseStatus(reason: String?): TalkStatus =
     when (reason) {
-      null, "completed" -> nativeText("Off")
-      "error" -> nativeText("Talk failed: Realtime provider closed unexpectedly.")
-      else -> nativeText("Talk failed: Realtime provider closed: \$reason", reason)
+      null, "completed" -> TalkStatus(text = nativeText("Off"), state = TalkStatusState.Off)
+      "error" ->
+        TalkStatus(
+          text = nativeText("Talk failed: Realtime provider closed unexpectedly."),
+          state = TalkStatusState.TalkFailure,
+        )
+      else ->
+        TalkStatus(
+          text = nativeText("Talk failed: Realtime provider closed: \$reason", reason),
+          state = TalkStatusState.TalkFailure,
+        )
     }
 
   /** Caller holds [realtimeCapturePauseLock] so PTT cannot miss newly installed jobs. */
@@ -1149,14 +1182,13 @@ class TalkModeManager internal constructor(
       "toolResult" -> Unit
       "error" -> {
         val message = obj["message"].asStringOrNull() ?: "realtime talk error"
-        setStatus(nativeText("Talk failed: \$message", message))
+        setTalkFailure(nativeText("Talk failed: \$message", message))
         Log.w(tag, "realtime error: $message")
       }
       "close" -> {
         val closeReason = obj["reason"].asStringOrNull()?.trim()?.takeIf(String::isNotEmpty)
-        val currentStatus = _statusText.value
         val closeStatus =
-          if (currentStatus.resolveNativeText().startsWith("Talk failed:")) currentStatus else realtimeCloseStatusText(closeReason)
+          currentStatus.takeIf { it.state == TalkStatusState.TalkFailure } ?: realtimeCloseStatus(closeReason)
         Log.d(tag, "realtime close reason=$closeReason")
         stopRealtimeRelay(closeSession = false, preserveStatus = true)
         if (_isEnabled.value) {
@@ -1333,10 +1365,9 @@ class TalkModeManager internal constructor(
     cancelAppend: Boolean = true,
     preserveStatus: Boolean = false,
   ) {
-    // Capture both halves of the status so a preserved restore cannot split
-    // the user-visible text from the typed awaiting-agent flag.
-    val status = _statusText.value
-    val awaiting = _awaitingAgent.value
+    // Preserve the canonical status as one value so cleanup cannot split its
+    // user-visible text from typed failure and awaiting-agent semantics.
+    val status = currentStatus
     val (sessionId, captureJobs) =
       synchronized(realtimeCapturePauseLock) {
         val currentSessionId = realtimeSessionId
@@ -1369,7 +1400,7 @@ class TalkModeManager internal constructor(
     _inputLevel.value = 0f
     stopRealtimePlayback()
     if (preserveStatus) {
-      setStatus(status, awaitingAgent = awaiting)
+      setStatus(status)
     }
     _isListening.value = false
     if (closeSession && !sessionId.isNullOrBlank()) {
@@ -2086,7 +2117,7 @@ class TalkModeManager internal constructor(
         Log.d(tag, "finalize speech cancelled")
         return
       }
-      setStatus(nativeText("Talk failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
+      setTalkFailure(nativeText("Talk failed: \$message", err.message ?: err::class.simpleName.orEmpty()))
       Log.w(tag, "finalize failed: ${err.message ?: err::class.simpleName}")
     }
 
