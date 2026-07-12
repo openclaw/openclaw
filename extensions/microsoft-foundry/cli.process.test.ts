@@ -1,10 +1,10 @@
 // Microsoft Foundry tests cover real local az substitute process behavior.
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const spawnedChildren = vi.hoisted(() => [] as ChildProcess[]);
 
@@ -23,10 +23,17 @@ vi.mock("node:child_process", async () => {
 import { azLoginDeviceCodeWithOptions } from "./cli.js";
 
 const originalPath = process.env.PATH;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs: string[] = [];
+
+function makeTempDir(prefix: string): string {
+  // openclaw-temp-dir: allow extension proof tests cannot import root test helpers.
+  const dir = mkdtempSync(path.join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 function installFakeAzExecutable(options?: { ignoreSigterm?: boolean; pidFile?: string }): void {
-  const binDir = tempDirs.make("openclaw-foundry-az-");
+  const binDir = makeTempDir("openclaw-foundry-az-");
   const scriptPath = path.join(binDir, "fake-az.mjs");
   const sigtermHandler = options?.ignoreSigterm
     ? "process.on('SIGTERM', () => {});"
@@ -119,6 +126,9 @@ afterEach(() => {
     }
   }
   spawnedChildren.splice(0);
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { force: true, recursive: true });
+  }
   vi.restoreAllMocks();
 });
 
@@ -216,7 +226,7 @@ describe.skipIf(process.platform !== "win32")(
   "azLoginDeviceCodeWithOptions Windows shell-wrapper stream errors",
   () => {
     it("waits for the shell-launched az descendant to exit before rejection", async () => {
-      const pidFile = path.join(tempDirs.make("openclaw-foundry-az-pid-"), "pid");
+      const pidFile = path.join(makeTempDir("openclaw-foundry-az-pid-"), "pid");
       installFakeAzExecutable({ ignoreSigterm: true, pidFile });
       const loginPromise = azLoginDeviceCodeWithOptions({
         tenantId: "tenant-1",
