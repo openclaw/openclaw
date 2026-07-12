@@ -641,13 +641,13 @@ function renderTimeSeriesCompact(
           })}
           <!-- Selection highlight overlay (always visible between handles) -->
           ${svg`
-            <rect 
-              x="${leftHandleX}" 
-              y="${padding.top}" 
-              width="${Math.max(1, rightHandleX - leftHandleX)}" 
-              height="${chartHeight}" 
-              fill="var(--accent)" 
-              opacity="${CHART_SELECTION_OPACITY}" 
+            <rect
+              x="${leftHandleX}"
+              y="${padding.top}"
+              width="${Math.max(1, rightHandleX - leftHandleX)}"
+              height="${chartHeight}"
+              fill="var(--accent)"
+              opacity="${CHART_SELECTION_OPACITY}"
               pointer-events="none"
             />
           `}

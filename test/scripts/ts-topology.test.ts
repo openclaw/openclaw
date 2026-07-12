@@ -160,11 +160,11 @@ describe("ts-topology", () => {
       Production-used exports: 3
       Single-owner shared exports: 2
       Unused public exports: 2
-      
+
       Top 2 candidate-to-move exports:
       - fixture-sdk:aliasedThing -> src/lib/shared.ts:10 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
       - fixture-sdk:singleOwnerHelper -> src/lib/shared.ts:6 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
-      
+
       Top 1 duplicated public exports:
       - fixture-sdk:sharedThing via fixture-sdk, fixture-sdk/extra (src/lib/shared.ts:2)"
     `);
@@ -194,7 +194,7 @@ describe("ts-topology", () => {
     expect(renderTextReport(deriveReportEnvelope("consumer-topology"), 2)).toMatchInlineSnapshot(`
       "Scope: custom
       Records with consumers: 4
-      
+
       Top 2 consumer-topology records:
       - fixture-sdk:sharedThing prod=3 test=0 internal=0
       - fixture-sdk:aliasedThing prod=1 test=0 internal=0"
