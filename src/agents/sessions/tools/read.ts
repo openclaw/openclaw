@@ -91,7 +91,9 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
     return "";
   }
   const startLine = args.offset ?? 1;
-  const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
+  const normalizedLimit =
+    args.limit !== undefined ? normalizePositiveLimit(args.limit, DEFAULT_MAX_LINES) : undefined;
+  const endLine = normalizedLimit !== undefined ? startLine + normalizedLimit - 1 : "";
   return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
 }
 
