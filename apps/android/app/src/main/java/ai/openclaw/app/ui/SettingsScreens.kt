@@ -2251,7 +2251,10 @@ private fun CronJobDetailPanel(
         SettingsMetric(nativeString("Updated"), formatCronTimestamp(job.updatedAtMs)),
         SettingsMetric(nativeString("Running Since"), formatCronTimestamp(job.runningAtMs)),
         SettingsMetric(nativeString("Last Status"), cronJobStatusText(job)),
-        SettingsMetric(nativeString("Last Duration"), job.lastDurationMs?.let { "${it}ms" } ?: nativeString("None")),
+        SettingsMetric(
+          nativeString("Last Duration"),
+          job.lastDurationMs?.let { durationMs -> nativeString("\${durationMs}ms", durationMs) } ?: nativeString("None"),
+        ),
         SettingsMetric(nativeString("Consecutive Errors"), job.consecutiveErrors?.toString() ?: "0"),
         SettingsMetric(nativeString("Consecutive Skips"), job.consecutiveSkipped?.toString() ?: "0"),
         SettingsMetric(nativeString("Delivery Status"), cronJobDeliveryStatusText(job.lastDeliveryStatus)),
