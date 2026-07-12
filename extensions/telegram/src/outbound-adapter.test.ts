@@ -827,6 +827,10 @@ describe("telegramOutbound", () => {
       name: "Eiffel Tower",
       address: "Champ de Mars",
     };
+    const promptContextSource = {
+      transcriptMessageId: "assistant-location",
+      deliverySignature: resolveTelegramPromptContextDeliverySignature({ location }),
+    };
 
     const result = await telegramOutbound.sendPayload!({
       cfg: {} as never,
@@ -834,7 +838,9 @@ describe("telegramOutbound", () => {
       text: "",
       payload: {
         location,
-        channelData: { telegram: { quoteText: "quoted location" } },
+        channelData: {
+          telegram: { quoteText: "quoted location", promptContextSource },
+        },
       },
       accountId: "ops",
       replyToId: "41",
@@ -849,6 +855,12 @@ describe("telegramOutbound", () => {
         buttons: undefined,
         quoteText: "quoted location",
         replyToMessageId: 41,
+        promptContextProjectionPlan: expect.objectContaining({
+          finalPart: true,
+          cursor: expect.objectContaining({
+            source: { transcriptMessageId: "assistant-location" },
+          }),
+        }),
       }),
     );
     expect(sendMessageTelegramMock).not.toHaveBeenCalled();

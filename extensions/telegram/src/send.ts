@@ -181,6 +181,7 @@ type TelegramLocationSendOpts = Pick<
   | "messageThreadId"
   | "buttons"
   | "quoteText"
+  | "promptContextProjectionPlan"
   | "silent"
   | "onDeliveryResult"
 >;
@@ -1688,7 +1689,9 @@ async function sendLocationTelegramWithContext(
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   recordSentMessage(chatId, messageId, cfg);
   await opts.onDeliveryResult?.({ messageId: String(messageId), chatId: resolvedChatId });
-  await recordOutboundMessageForPromptContext({
+  const projectionPlan = opts.promptContextProjectionPlan;
+  const projection = projectionPlan?.cursor.take(projectionPlan.finalPart);
+  const recorded = await recordOutboundMessageForPromptContext({
     cfg,
     account,
     ...(botUserId !== undefined ? { botUserId } : {}),
@@ -1699,7 +1702,11 @@ async function sendLocationTelegramWithContext(
     ...(acceptedParams?.message_thread_id !== undefined
       ? { messageThreadId: acceptedParams.message_thread_id }
       : {}),
+    promptContextProjection: projection,
   });
+  if (projection && !recorded) {
+    projectionPlan?.cursor.invalidate();
+  }
   logTelegramOutboundSendOk({
     accountId: account.accountId,
     chatId: resolvedChatId,

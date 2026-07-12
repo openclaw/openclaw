@@ -204,6 +204,7 @@ export async function sendTelegramPayloadMessages(params: {
     }
     return await params.sendLocation(params.to, payload.location, {
       ...params.baseOpts,
+      ...projectionOptions(true),
       buttons,
       quoteText,
     });

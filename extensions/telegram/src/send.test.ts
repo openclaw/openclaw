@@ -1036,6 +1036,48 @@ describe("sendMessageTelegram", () => {
     expect(cursor.nextPartIndex).toBe(1);
   });
 
+  it("records transcript projection metadata for native locations", async () => {
+    const storePath = `/tmp/openclaw-telegram-location-context-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const cursor = createTelegramPromptContextProjectionCursor({
+      transcriptMessageId: "assistant-location",
+    });
+    const sendLocation = vi.fn().mockResolvedValue({
+      message_id: 1498,
+      date: 1_779_394_746,
+      chat: { id: "123", type: "private" },
+      from: { id: 42, is_bot: true, first_name: "Kelaw" },
+      location: { latitude: 48.858844, longitude: 2.294351 },
+    });
+
+    await sendLocationTelegram(
+      "123",
+      { latitude: 48.858844, longitude: 2.294351 },
+      {
+        cfg,
+        token: "tok",
+        api: { sendLocation } as unknown as TelegramApiOverride,
+        promptContextProjectionPlan: { cursor, finalPart: true },
+      },
+    );
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    const node = await cache.get({
+      accountId: "default",
+      chatId: "123",
+      messageId: "1498",
+    });
+
+    expect(node?.timestamp).toBe(1_779_394_746_000);
+    expect(node?.promptContextProjectionMarker).toEqual({
+      kind: "valid",
+      projection: { ...cursor.source, partIndex: 0, finalPart: true },
+    });
+    expect(cursor.nextPartIndex).toBe(1);
+  });
+
   it("normalizes raw code language HTML before sending", async () => {
     const chatId = "123";
     const text = [
