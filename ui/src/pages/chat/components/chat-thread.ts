@@ -101,6 +101,7 @@ type ChatThreadProps = {
     manualFallback: boolean;
     onLoadOlder: () => void;
   };
+  renderAllLoadedHistory?: boolean;
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -248,8 +249,9 @@ export function resetChatThreadPresentationState(paneId?: string) {
   }
 }
 
-function resolveChatHistoryRenderCap(messageCount: number): number {
-  return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
+function resolveChatHistoryRenderCap(messageCount: number, renderAllLoadedHistory = false): number {
+  const count = Math.max(0, messageCount);
+  return renderAllLoadedHistory ? count : Math.min(count, CHAT_HISTORY_RENDER_LIMIT);
 }
 
 function shouldRenderFullChatHistoryWindow(state: ChatThreadState, messageCount: number): boolean {
@@ -260,11 +262,11 @@ function shouldRenderFullChatHistoryWindow(state: ChatThreadState, messageCount:
 }
 
 function resolveChatHistoryRenderWindow(
-  props: Pick<ChatThreadProps, "paneId" | "sessionKey" | "messages">,
+  props: Pick<ChatThreadProps, "paneId" | "sessionKey" | "messages" | "renderAllLoadedHistory">,
 ) {
   const state = getChatThreadState(props.paneId);
   const messages = Array.isArray(props.messages) ? props.messages : [];
-  const cap = resolveChatHistoryRenderCap(messages.length);
+  const cap = resolveChatHistoryRenderCap(messages.length, props.renderAllLoadedHistory);
   const sessionChanged = state.historyRenderSessionKey !== props.sessionKey;
   const refChanged = state.historyRenderMessagesRef !== messages;
   const previousCount = state.historyRenderMessageCount;
@@ -281,7 +283,7 @@ function resolveChatHistoryRenderWindow(
     return 0;
   }
 
-  if (shouldRenderFullChatHistoryWindow(state, messages.length)) {
+  if (props.renderAllLoadedHistory || shouldRenderFullChatHistoryWindow(state, messages.length)) {
     state.historyRenderSessionKey = props.sessionKey;
     state.historyRenderMessagesRef = messages;
     state.historyRenderMessageCount = messages.length;
@@ -777,6 +779,7 @@ export function renderChatThread(props: ChatThreadProps) {
     searchOpen: state.searchOpen,
     searchQuery: state.searchQuery,
     historyRenderLimit,
+    allowExpandedHistoryRenderLimit: props.renderAllLoadedHistory,
   });
   syncToolCardExpansionState(props.sessionKey, chatItems, Boolean(props.autoExpandToolCalls));
   const expandedToolCards = getExpandedToolCards(props.sessionKey);

@@ -1408,6 +1408,25 @@ describe("buildChatItems", () => {
     expect(groups.map((group) => messageRecord(group).content).at(-1)).toBe("message 104");
   });
 
+  it("renders native history beyond the tail cap after scroll-back expands it", () => {
+    const items = buildChatItems(
+      createProps({
+        allowExpandedHistoryRenderLimit: true,
+        historyRenderLimit: 140,
+        messages: Array.from({ length: 140 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message ${index}`,
+          timestamp: index,
+        })),
+      }),
+    );
+    const groups = items.filter((item) => item.kind === "group");
+
+    expect(groups).toHaveLength(140);
+    expect(messageRecord(groupAt(groups, 0)).content).toBe("message 0");
+    expect(messageRecord(groupAt(groups, 139)).content).toBe("message 139");
+  });
+
   it("honors a smaller history render window and preserves the hidden-count notice", () => {
     const items = buildChatItems(
       createProps({
