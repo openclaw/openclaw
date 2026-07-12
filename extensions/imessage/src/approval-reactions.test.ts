@@ -255,10 +255,11 @@ describe("iMessage approval reactions", () => {
         allowedDecisions: ["allow-once", "deny"],
       }),
     });
-    if (!payload) {
+    if (!payload?.text) {
       throw new Error("Expected typed iMessage approval payload");
     }
-    const bodyIndex = payload.text.indexOf("Approval required.");
+    const visibleText = payload.text;
+    const bodyIndex = visibleText.indexOf("Approval required.");
     if (bodyIndex < 1) {
       throw new Error("Expected approval body after reaction hint");
     }
@@ -274,7 +275,7 @@ describe("iMessage approval reactions", () => {
             messageId: "41",
             meta: {
               imessageMessageGuid: "p:0/chunked-guid-1",
-              imessageVisibleText: payload.text.slice(0, bodyIndex),
+              imessageVisibleText: visibleText.slice(0, bodyIndex),
             },
           },
           {
@@ -282,7 +283,7 @@ describe("iMessage approval reactions", () => {
             messageId: "42",
             meta: {
               imessageMessageGuid: "p:0/chunked-guid-2",
-              imessageVisibleText: payload.text.slice(bodyIndex),
+              imessageVisibleText: visibleText.slice(bodyIndex),
             },
           },
         ],
