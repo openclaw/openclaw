@@ -9,6 +9,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { callGateway } from "../gateway/call.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
 
 type AttachGrant = {
@@ -48,10 +49,10 @@ export async function registerAttachCli(program: Command, _argv: string[] = proc
     .action(async (opts: { session?: string; ttl?: string; bin: string; printConfig: boolean }) => {
       let ttlMs: number | undefined;
       if (opts.ttl !== undefined) {
-        ttlMs = Number(opts.ttl);
-        if (!Number.isFinite(ttlMs) || ttlMs <= 0) {
+        ttlMs = parseStrictPositiveInteger(opts.ttl);
+        if (ttlMs === undefined) {
           defaultRuntime.error(
-            `--ttl must be a positive number of milliseconds. Got: ${JSON.stringify(opts.ttl)}`,
+            `--ttl must be a positive integer of milliseconds. Got: ${JSON.stringify(opts.ttl)}`,
           );
           defaultRuntime.exit(1);
           return;
