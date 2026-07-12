@@ -1727,6 +1727,12 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
+    logVerbose(
+      `[release-debug] reply runner input runId=${runId} payloads=${payloadArray.length} ` +
+        `blockStreamed=${blockReplyPipeline?.didStream() === true ? "yes" : "no"} ` +
+        `blockAborted=${blockReplyPipeline?.isAborted() === true ? "yes" : "no"} ` +
+        `sourceMode=${opts?.sourceReplyDeliveryMode ?? "default"}`,
+    );
 
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
@@ -2065,6 +2071,11 @@ export async function runReplyAgent(params: {
       normalizeMediaPaths: replyMediaContext.normalizePayload,
     });
     const { replyPayloads } = payloadResult;
+    logVerbose(
+      `[release-debug] reply runner output runId=${runId} payloads=${replyPayloads.length} ` +
+        `blockStreamed=${blockReplyPipeline?.didStream() === true ? "yes" : "no"} ` +
+        `blockAborted=${blockReplyPipeline?.isAborted() === true ? "yes" : "no"}`,
+    );
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
