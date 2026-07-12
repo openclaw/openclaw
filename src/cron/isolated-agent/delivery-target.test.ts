@@ -344,6 +344,23 @@ describe("resolveDeliveryTarget", () => {
     expect(result.to).toBe("room-denied");
   });
 
+  it("rejects an explicit Telegram channel without a recipient", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: undefined,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.channel).toBe("telegram");
+    expect(result.to).toBeUndefined();
+    if (result.ok) {
+      throw new Error("expected missing target error");
+    }
+    expect(result.error.message).toContain("Telegram requires target");
+  });
+
   it("does not use pairing-store entries as implicit automation recipients", async () => {
     setMainSessionEntry(undefined);
 

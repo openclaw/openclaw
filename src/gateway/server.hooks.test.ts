@@ -387,7 +387,7 @@ describe("gateway server hooks", () => {
     });
   });
 
-  test("uses explicit hook delivery target only when channel and recipient are supplied", async () => {
+  test("preserves hook delivery intent for explicit channels with or without recipients", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     setMainAndHooksAgents();
 
@@ -404,6 +404,22 @@ describe("gateway server hooks", () => {
       drainSystemEvents(resolveMainKey());
 
       mockIsolatedRunOkOnce();
+      const channelOnly = await postHook(port, "/hooks/agent", {
+        message: "Do it",
+        name: "Channel only",
+        channel: "telegram",
+      });
+      expect(channelOnly.status).toBe(200);
+      await waitForSystemEvent();
+      const channelOnlyCall = cronRunCall();
+      expect(channelOnlyCall?.job?.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: undefined,
+      });
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
       const explicit = await postHook(port, "/hooks/agent", {
         message: "Do it",
         name: "Explicit",
@@ -417,6 +433,39 @@ describe("gateway server hooks", () => {
         mode: "announce",
         channel: "telegram",
         to: "123456",
+      });
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("preserves mapped hook delivery intent for an explicit channel without a recipient", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      mappings: [
+        {
+          match: { path: "mapped-channel-only" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          deliver: true,
+          channel: "telegram",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const response = await postHook(port, "/hooks/mapped-channel-only", {
+        subject: "Do it",
+      });
+      expect(response.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+
+      expect(cronRunCall()?.job?.delivery).toEqual({
+        mode: "announce",
+        channel: "telegram",
+        to: undefined,
       });
       drainSystemEvents(resolveMainKey());
     });

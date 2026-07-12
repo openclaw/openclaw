@@ -51,7 +51,7 @@ function shouldAnnounceHookRunResult(params: {
 }
 
 function hasExplicitHookDeliveryTarget(value: HookAgentDispatchPayload): boolean {
-  return Boolean(value.channel && value.channel !== "last" && value.to);
+  return Boolean((value.channel && value.channel !== "last") || value.to);
 }
 
 function resolveHookRunSummary(result: RunCronAgentTurnResult): string {
