@@ -22,8 +22,10 @@ import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { sleep } from "../utils/sleep.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { formatErrorMessage } from "./errors.js";
 import { writeJson } from "./json-files.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
@@ -759,10 +761,11 @@ async function createStateSqliteBackupPlan(params: {
         // the archive. Load known bundled extensions, but fail closed when an
         // owner schema needs capabilities core cannot safely reproduce.
         await loadSqliteVecExtension({ db: source });
+        assertSqliteIntegrity(source, archiveSourcePath);
         source.prepare("VACUUM INTO ?").run(sourcePath);
       } catch (err) {
         throw new Error(
-          `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. Required SQLite capabilities are unavailable; raw page backup was refused because it can retain deleted data.`,
+          `SQLite database cannot be compacted safely for backup: ${archiveSourcePath}. ${formatErrorMessage(err)}. The source must pass full integrity checks and VACUUM INTO with its required SQLite capabilities; raw page backup was refused because it can retain deleted data.`,
           { cause: err },
         );
       }
@@ -770,13 +773,20 @@ async function createStateSqliteBackupPlan(params: {
       source.close();
     }
     await fs.chmod(sourcePath, 0o600);
-    if (path.resolve(archiveSourcePath) === globalStateSqlitePath) {
-      const snapshot = new sqlite.DatabaseSync(sourcePath);
-      try {
+    const snapshot = new sqlite.DatabaseSync(sourcePath, { allowExtension: true });
+    try {
+      await loadSqliteVecExtension({ db: snapshot });
+      if (path.resolve(archiveSourcePath) === globalStateSqlitePath) {
         sanitizeGlobalStateSqliteSnapshot(snapshot);
-      } finally {
-        snapshot.close();
       }
+      assertSqliteIntegrity(snapshot, sourcePath);
+    } catch (err) {
+      throw new Error(
+        `SQLite backup snapshot failed verification for ${archiveSourcePath}: ${formatErrorMessage(err)}`,
+        { cause: err },
+      );
+    } finally {
+      snapshot.close();
     }
     snapshots.push({
       sourcePath,

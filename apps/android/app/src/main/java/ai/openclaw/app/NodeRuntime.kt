@@ -11,6 +11,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatTranscriptCache
+import ai.openclaw.app.chat.MainSessionBinding
 import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
@@ -599,7 +600,6 @@ class NodeRuntime private constructor(
       prefs = prefs,
       cameraEnabled = { cameraEnabled.value },
       locationMode = { locationMode.value },
-      voiceWakeMode = { VoiceWakeMode.Off },
       motionActivityAvailable = { motionHandler.isActivityAvailable() },
       motionPedometerAvailable = { motionHandler.isPedometerAvailable() },
       sendSmsAvailable = { SensitiveFeatureConfig.smsEnabled && sms.canSendSms() },
@@ -607,7 +607,6 @@ class NodeRuntime private constructor(
       smsSearchPossible = { SensitiveFeatureConfig.smsEnabled && sms.hasTelephonyFeature() },
       callLogAvailable = { SensitiveFeatureConfig.callLogEnabled },
       photosAvailable = { SensitiveFeatureConfig.photosEnabled },
-      hasRecordAudioPermission = { hasRecordAudioPermission() },
       installedAppsSharingEnabled = { installedAppsSharingEnabled.value },
       manualTls = { endpoint ->
         prefs.gatewayRegistry.entries.value
@@ -917,9 +916,11 @@ class NodeRuntime private constructor(
         replaceGatewayMethods(hello.methods)
         _operatorScopes.value = normalizeOperatorScopes(hello.authScopes)
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
-        // Every successful connection refreshes history; reconnects preserve local run ownership.
-        chat.onGatewayConnected()
+        val mainSessionKey =
+          prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+        // Create/adopt before history refresh; this keeps the first connected read on the
+        // device-owned session without changing the shipped key or its existing transcript.
+        chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
         refreshGatewayControlPage()
         updateStatus {
           operatorConnectionProblem = null
@@ -1383,15 +1384,44 @@ class NodeRuntime private constructor(
 
   private fun syncMainSessionKey(agentId: String?) {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
-    // Always push the resolved session key into TalkMode, even when the
-    // state flow value is unchanged, so lazy TalkMode instances do not
-    // stay on the default "main" session key.
     talkMode.setMainSessionKey(resolvedKey)
     if (_mainSessionKey.value == resolvedKey) return
     _mainSessionKey.value = resolvedKey
-    chat.applyMainSessionKey(resolvedKey)
+    if (operatorConnected) {
+      chat.prepareMainSessionKey(resolvedKey)
+      chat.onGatewayConnected(mainSessionBinding(resolvedKey))
+    } else {
+      chat.applyMainSessionKey(resolvedKey)
+    }
     updateHomeCanvasState()
   }
+
+  private fun prepareMainSessionKey(agentId: String?): String {
+    val resolvedKey = resolveNodeMainSessionKey(agentId)
+    // Always push into TalkMode so a lazy instance cannot retain the "main" alias.
+    talkMode.setMainSessionKey(resolvedKey)
+    if (_mainSessionKey.value != resolvedKey) {
+      _mainSessionKey.value = resolvedKey
+      updateHomeCanvasState()
+    }
+    chat.prepareMainSessionKey(resolvedKey)
+    return resolvedKey
+  }
+
+  private fun selectMainSessionKey(agentId: String) {
+    val resolvedKey = resolveNodeMainSessionKey(agentId)
+    talkMode.setMainSessionKey(resolvedKey)
+    _mainSessionKey.value = resolvedKey
+    chat.prepareAndSelectMainSessionKey(resolvedKey)
+    chat.onGatewayConnected(mainSessionBinding(resolvedKey))
+    updateHomeCanvasState()
+  }
+
+  private fun mainSessionBinding(sessionKey: String): MainSessionBinding =
+    MainSessionBinding(
+      key = sessionKey,
+      label = buildAndroidAppSessionLabel(prefs.displayName.value, identityStore.loadOrCreate().deviceId),
+    )
 
   private fun updateStatus(update: () -> Unit = {}) {
     synchronized(gatewayStatusLock) {
@@ -2068,10 +2098,6 @@ class NodeRuntime private constructor(
 
   init {
     if (mode == NodeRuntimeMode.Live) {
-      if (prefs.voiceWakeMode.value != VoiceWakeMode.Off) {
-        prefs.setVoiceWakeMode(VoiceWakeMode.Off)
-      }
-
       if (initialForeground && prefs.voiceMicEnabled.value) {
         setVoiceCaptureMode(VoiceCaptureMode.ManualMic, persistManualMic = false)
       } else if (!initialForeground && prefs.voiceMicEnabled.value) {
@@ -3648,8 +3674,7 @@ class NodeRuntime private constructor(
     // Agent selection owns every main-session consumer; switching chat alone would
     // leave Talk mode and the home canvas bound to the previous agent.
     selectedChatAgentId = normalizedAgentId
-    syncMainSessionKey(normalizedAgentId)
-    chat.switchSession(_mainSessionKey.value)
+    selectMainSessionKey(normalizedAgentId)
   }
 
   suspend fun fetchChatSessionList(

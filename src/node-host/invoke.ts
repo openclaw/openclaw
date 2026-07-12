@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { ContentBlock } from "@modelcontextprotocol/sdk/types.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -32,12 +33,13 @@ import {
   extractShellWrapperCommand,
   isShellWrapperInvocation,
 } from "../infra/exec-wrapper-resolution.js";
+import { listHostDirectories } from "../infra/host-directory-listing.js";
 import {
   inspectHostExecEnvOverrides,
   sanitizeHostExecEnv,
   sanitizeSystemRunEnvOverrides,
 } from "../infra/host-env-security.js";
-import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
+import { NODE_FS_LIST_DIR_COMMAND, NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
@@ -355,7 +357,7 @@ async function runCommand(
     // node result because runner.ts intentionally dispatches invokes with `void`.
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn(argv[0], argv.slice(1), {
+      child = spawn(expectDefined(argv[0], "argv entry at 0"), argv.slice(1), {
         cwd,
         env,
         stdio: ["ignore", "pipe", "pipe"],
@@ -757,6 +759,19 @@ async function dispatchInvoke(
       const env = sanitizeEnv(undefined);
       const payload = await handleSystemWhich(params, env);
       await sendJsonPayloadResult(client, frame, payload);
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
+  }
+
+  if (command === NODE_FS_LIST_DIR_COMMAND) {
+    try {
+      const params = decodeParams<{ path?: unknown }>(frame.paramsJSON);
+      if (params.path !== undefined && typeof params.path !== "string") {
+        throw new Error("INVALID_REQUEST: path must be a string");
+      }
+      await sendJsonPayloadResult(client, frame, await listHostDirectories(params.path));
     } catch (err) {
       await sendInvalidRequestResult(client, frame, err);
     }

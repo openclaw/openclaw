@@ -12,6 +12,7 @@ type NavigationItem = {
 // The sidebar shows a small user-customizable pinned set; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
+// Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
   "sessions",
@@ -19,17 +20,31 @@ export const SIDEBAR_NAV_ROUTES = [
   "cron",
   "tasks",
   "agents",
-  "skills",
   "plugins",
-  "skill-workshop",
   "nodes",
 ] as const satisfies readonly NavigationRouteId[];
 
+// Routes presented as tabs of the Plugins hub. The sidebar highlights the
+// Plugins entry for all of them, mirroring how config covers settings routes.
+const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
+  "plugins",
+  "skills",
+  "skill-workshop",
+]);
+
+export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
+  return PLUGINS_HUB_ROUTES.has(routeId);
+}
+
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
-// Sessions are the sidebar's core content; nothing is pinned by default. Users
-// pin pages via the customize menu.
-export const DEFAULT_SIDEBAR_PINNED_ROUTES = [] as const satisfies readonly SidebarNavRoute[];
+// Keep the highest-value operational destinations visible on first use. Users
+// can still replace this set through the customize menu.
+export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
+  "usage",
+  "cron",
+  "plugins",
+] as const satisfies readonly SidebarNavRoute[];
 
 /**
  * Normalize a persisted pinned-route list. Returns null when the value is not a

@@ -197,8 +197,27 @@ describe("qa suite runtime agent session helpers", () => {
             input: { action: "send", text: "hello" },
           },
         ],
+        stopReason: "toolUse",
       },
     });
+
+    await expect(
+      readSessionTranscriptSummary(
+        {
+          gateway: { tempRoot },
+        } as never,
+        sessionKey,
+      ),
+    ).resolves.toEqual({
+      assistantToolCallCounts: { message: 1 },
+      finalText: "",
+      hasDirectReplySelfMessage: false,
+      lastAssistantContentTypes: ["tool_use"],
+      lastAssistantStopReason: "toolUse",
+      lastAssistantToolNames: ["message"],
+      lastMessageRole: "assistant",
+    });
+
     await appendQaTranscriptMessage({
       tempRoot,
       sessionKey,
@@ -214,8 +233,10 @@ describe("qa suite runtime agent session helpers", () => {
         "agent:qa:webchat",
       ),
     ).resolves.toEqual({
+      assistantToolCallCounts: { message: 1 },
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
+      lastMessageRole: "assistant",
     });
   });
 
@@ -248,7 +269,12 @@ describe("qa suite runtime agent session helpers", () => {
       tempRoot,
       sessionKey,
       sessionId: "session-stream",
-      message: { role: "assistant", content: "Sent." },
+      message: {
+        role: "assistant",
+        content: "Sent.",
+        stopReason: "aborted",
+        errorMessage: "Request was aborted",
+      },
     });
 
     await expect(
@@ -259,8 +285,12 @@ describe("qa suite runtime agent session helpers", () => {
         "agent:qa:stream",
       ),
     ).resolves.toEqual({
+      assistantToolCallCounts: { message: 1 },
       finalText: "Sent.",
       hasDirectReplySelfMessage: true,
+      lastAssistantErrorMessage: "Request was aborted",
+      lastAssistantStopReason: "aborted",
+      lastMessageRole: "assistant",
     });
   });
 

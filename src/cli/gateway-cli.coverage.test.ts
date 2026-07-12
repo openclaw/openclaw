@@ -335,9 +335,12 @@ describe("gateway-cli coverage", () => {
         const costCalls = callGateway.mock.calls.map(
           ([raw]) => raw as { method?: string; timeoutMs?: number },
         );
-        expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
-        expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
-        expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 10_000)).toBe(true);
+        for (const call of costCalls) {
+          expect(call.method).toBe("usage.cost");
+          expect(typeof call.timeoutMs).toBe("number");
+          expect(call.timeoutMs).toBeGreaterThan(0);
+          expect(call.timeoutMs).toBeLessThanOrEqual(10_000);
+        }
         expect(costCalls[0]?.timeoutMs).toBe(10_000);
         expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -372,9 +375,12 @@ describe("gateway-cli coverage", () => {
       const costCalls = callGateway.mock.calls.map(
         ([raw]) => raw as { method?: string; timeoutMs?: number },
       );
-      expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
-      expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
-      expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 50)).toBe(true);
+      for (const call of costCalls) {
+        expect(call.method).toBe("usage.cost");
+        expect(typeof call.timeoutMs).toBe("number");
+        expect(call.timeoutMs).toBeGreaterThan(0);
+        expect(call.timeoutMs).toBeLessThanOrEqual(50);
+      }
       expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
     },
   );

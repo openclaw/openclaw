@@ -4,6 +4,7 @@ import {
   SETTINGS_NAVIGATION_GROUPS,
   SETTINGS_NAVIGATION_ROUTES,
   SIDEBAR_NAV_ROUTES,
+  isPluginsHubRoute,
   navigationIconForRoute,
   subtitleForRoute,
   titleForRoute,
@@ -19,9 +20,18 @@ import {
 } from "./app-routes.ts";
 import { pluginTabKey, pluginTabRefFromSearch, pluginTabSearch } from "./pages/plugin/route.ts";
 
-/** All route identifiers derived from sidebar nav routes plus routed settings slices. */
+/**
+ * All route identifiers derived from sidebar nav routes plus routed settings
+ * slices and the Plugins hub tabs, which route without their own sidebar item.
+ */
 const ALL_ROUTES: RouteId[] = Array.from(
-  new Set<RouteId>(["chat", ...SIDEBAR_NAV_ROUTES, ...SETTINGS_NAVIGATION_ROUTES]),
+  new Set<RouteId>([
+    "chat",
+    ...SIDEBAR_NAV_ROUTES,
+    "skills",
+    "skill-workshop",
+    ...SETTINGS_NAVIGATION_ROUTES,
+  ]),
 );
 
 const SETTINGS_ROUTE_PATHS = [
@@ -110,7 +120,7 @@ describe("titleForRoute", () => {
       connection: "Connection",
       sessions: "Sessions",
       usage: "Usage",
-      cron: "Cron Jobs",
+      cron: "Automations",
       tasks: "Tasks",
       agents: "Agents",
       skills: "Skills",
@@ -146,7 +156,7 @@ describe("subtitleForRoute", () => {
       connection: "Gateway endpoint, credentials, and handshake status.",
       sessions: "Active sessions and defaults.",
       usage: "API usage and costs.",
-      cron: "Wakeups and recurring runs.",
+      cron: "Scheduled tasks and recurring agent runs.",
       tasks: "Background tasks: subagents, cron runs, CLI.",
       agents: "Workspaces, tools, identities.",
       skills: "Skills and API keys.",
@@ -357,6 +367,15 @@ describe("plugin tabs route", () => {
 describe("SIDEBAR_NAV_ROUTES", () => {
   it("all routes are unique", () => {
     expect(new Set(SIDEBAR_NAV_ROUTES).size).toBe(SIDEBAR_NAV_ROUTES.length);
+  });
+
+  it("collapses the plugins hub to a single sidebar entry", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("skills");
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("skill-workshop");
+    expect(isPluginsHubRoute("plugins")).toBe(true);
+    expect(isPluginsHubRoute("skills")).toBe(true);
+    expect(isPluginsHubRoute("skill-workshop")).toBe(true);
+    expect(isPluginsHubRoute("sessions")).toBe(false);
   });
 
   it("keeps detailed settings slices routed but out of the customizable sidebar", () => {
