@@ -1,88 +1,23 @@
 /** Private JSONL worker exposing the CLI node-host runtime to the macOS app. */
 import { createInterface } from "node:readline";
-import type { GatewayClientRequestOptions } from "../gateway/client.js";
 import { VERSION } from "../version.js";
-import type { NodeHostClient } from "./client.js";
 import type { NodeInvokeRequestPayload } from "./invoke.js";
+import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
 import {
-  prepareNodeHostRuntime,
-  type ActiveNodeHostRuntime,
-  type NodeHostInventory,
-} from "./runtime.js";
+  NodeHostWorkerBridgeClient,
+  type NodeHostWorkerGatewayResponse,
+  stopNodeHostWorkerFromSignal,
+} from "./worker-support.js";
 
 type WorkerInput =
   | { type: "invoke"; request: NodeInvokeRequestPayload }
-  | { type: "gateway-response"; id: string; ok: true; result: unknown }
-  | { type: "gateway-response"; id: string; ok: false; error: string }
+  | NodeHostWorkerGatewayResponse
   | { type: "stop" };
-
-type PendingGatewayRequest = {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
-};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
-}
-
-export class NodeHostWorkerBridgeClient implements NodeHostClient {
-  private nextRequestId = 1;
-  private readonly pending = new Map<string, PendingGatewayRequest>();
-
-  constructor(private readonly writeMessage: (message: unknown) => void) {}
-
-  async request<T = Record<string, unknown>>(
-    method: string,
-    params?: unknown,
-    opts?: GatewayClientRequestOptions,
-  ): Promise<T> {
-    if (method === "node.invoke.result") {
-      this.writeMessage({ type: "invoke-result", result: params ?? {} });
-      return {} as T;
-    }
-    if (method === "node.event") {
-      this.writeMessage({ type: "node-event", event: params ?? {} });
-      return {} as T;
-    }
-
-    const id = `gateway-${this.nextRequestId++}`;
-    const timeoutMs = Math.max(1, opts?.timeoutMs ?? 15_000);
-    const response = new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Gateway request timed out: ${method}`));
-      }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
-    });
-    this.writeMessage({ type: "gateway-request", id, method, params: params ?? {}, timeoutMs });
-    return (await response) as T;
-  }
-
-  handleResponse(message: Extract<WorkerInput, { type: "gateway-response" }>): boolean {
-    const pending = this.pending.get(message.id);
-    if (!pending) {
-      return false;
-    }
-    this.pending.delete(message.id);
-    clearTimeout(pending.timer);
-    if (message.ok) {
-      pending.resolve(message.result);
-    } else {
-      pending.reject(new Error(message.error));
-    }
-    return true;
-  }
-
-  close(): void {
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("node-host worker stopped"));
-    }
-    this.pending.clear();
-  }
 }
 
 function writeMessage(message: unknown): void {
@@ -129,20 +64,9 @@ function emitInventory(inventory: NodeHostInventory): void {
   writeMessage({ type: "inventory", inventory });
 }
 
-export async function stopNodeHostWorkerFromSignal(
-  input: Pick<ReturnType<typeof createInterface>, "close">,
-  stop: (exitCode: number) => Promise<void>,
-  exitCode: number,
-): Promise<void> {
-  const stopped = stop(exitCode);
-  input.close();
-  await stopped;
-}
-
 export async function runNodeHostWorker(): Promise<void> {
   const prepared = await prepareNodeHostRuntime();
   const client = new NodeHostWorkerBridgeClient(writeMessage);
-  let runtime: ActiveNodeHostRuntime | undefined;
   let stopping = false;
   let resolveStopped: (() => void) | undefined;
   const stopped = new Promise<void>((resolve) => {
@@ -156,14 +80,14 @@ export async function runNodeHostWorker(): Promise<void> {
     stopping = true;
     try {
       client.close();
-      await runtime?.close();
+      await runtime.close();
       process.exitCode = exitCode;
     } finally {
       resolveStopped?.();
     }
   };
 
-  runtime = prepared.start({ client, onInventoryChanged: emitInventory });
+  const runtime = prepared.start({ client, onInventoryChanged: emitInventory });
   writeMessage({
     type: "ready",
     version: VERSION,
@@ -187,7 +111,7 @@ export async function runNodeHostWorker(): Promise<void> {
       void stop(0);
       return;
     }
-    void runtime?.invoke(message.request);
+    void runtime.invoke(message.request);
   });
   input.on("close", () => void stop(0));
   process.once("SIGINT", () => void stopNodeHostWorkerFromSignal(input, stop, 130));

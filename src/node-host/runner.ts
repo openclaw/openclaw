@@ -17,11 +17,7 @@ import { getMachineDisplayName } from "../infra/machine-name.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { coerceNodeInvokePayload, buildNodeInvokeResultParams } from "./invoke.js";
-import {
-  prepareNodeHostRuntime,
-  type ActiveNodeHostRuntime,
-  type NodeHostInventory,
-} from "./runtime.js";
+import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
 
 export { buildNodeInvokeResultParams };
 export { buildNodeEventParams } from "./invoke.js";
@@ -217,7 +213,6 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       : `/${gateway.contextPath}`
     : "";
   const url = `${scheme}://${host}:${port}${contextPath}`;
-  let activeRuntime: ActiveNodeHostRuntime;
   let inventory: NodeHostInventory = preparedRuntime.initialInventory;
   let gatewayHelloReceived = false;
 
@@ -286,7 +281,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       writeStderrLine(`node host gateway closed (${code}): ${reason}`);
     },
   });
-  activeRuntime = preparedRuntime.start({
+  const activeRuntime = preparedRuntime.start({
     client,
     onInventoryChanged: (nextInventory) => {
       inventory = nextInventory;

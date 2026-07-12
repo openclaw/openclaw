@@ -22,7 +22,7 @@ import { scanNodeHostedSkills } from "./skills.js";
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-export type NodeHostManifest = {
+type NodeHostManifest = {
   caps: string[];
   commands: string[];
   pathEnv: string;
@@ -33,7 +33,7 @@ export type NodeHostInventory = {
   pluginTools: unknown[];
 };
 
-export type PreparedNodeHostRuntime = {
+type PreparedNodeHostRuntime = {
   manifest: NodeHostManifest;
   initialInventory: NodeHostInventory;
   start(params: {
@@ -42,7 +42,7 @@ export type PreparedNodeHostRuntime = {
   }): ActiveNodeHostRuntime;
 };
 
-export type ActiveNodeHostRuntime = {
+type ActiveNodeHostRuntime = {
   invoke(frame: NodeInvokeRequestPayload): Promise<void>;
   close(): Promise<void>;
 };
@@ -142,8 +142,8 @@ function createInventory(params: {
       const a = left as { pluginId?: string; name?: string };
       const b = right as { pluginId?: string; name?: string };
       return (
-        String(a.pluginId ?? "").localeCompare(String(b.pluginId ?? "")) ||
-        String(a.name ?? "").localeCompare(String(b.name ?? ""))
+        (a.pluginId ?? "").localeCompare(b.pluginId ?? "") ||
+        (a.name ?? "").localeCompare(b.name ?? "")
       );
     },
   );

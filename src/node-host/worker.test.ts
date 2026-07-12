@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NodeHostWorkerBridgeClient, stopNodeHostWorkerFromSignal } from "./worker.js";
+import { NodeHostWorkerBridgeClient, stopNodeHostWorkerFromSignal } from "./worker-support.js";
 
 describe("NodeHostWorkerBridgeClient", () => {
   it("forwards invoke results and events without creating gateway request waits", async () => {

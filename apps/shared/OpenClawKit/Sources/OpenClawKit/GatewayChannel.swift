@@ -459,19 +459,10 @@ public actor GatewayChannelActor {
             selectedAuth: selectedAuth)
 
         let reqId = UUID().uuidString
-        var client: [String: ProtoAnyCodable] = [
-            "id": ProtoAnyCodable(clientId),
-            "displayName": ProtoAnyCodable(clientDisplayName),
-            "version": ProtoAnyCodable(
-                Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"),
-            "platform": ProtoAnyCodable(platform),
-            "mode": ProtoAnyCodable(clientMode),
-            "instanceId": ProtoAnyCodable(InstanceIdentity.instanceId),
-        ]
-        client["deviceFamily"] = ProtoAnyCodable(InstanceIdentity.deviceFamily)
-        if let model = InstanceIdentity.modelIdentifier {
-            client["modelIdentifier"] = ProtoAnyCodable(model)
-        }
+        let client = GatewayConnectPayload.makeClient(
+            options: options,
+            displayName: clientDisplayName,
+            platform: platform)
         var params: [String: ProtoAnyCodable] = [
             "minProtocol": ProtoAnyCodable(GATEWAY_MIN_PROTOCOL_VERSION),
             "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
