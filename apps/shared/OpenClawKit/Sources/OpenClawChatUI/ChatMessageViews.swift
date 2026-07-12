@@ -773,10 +773,17 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
     }
 }
 
+private struct OpenClawAssistantBubblesInCleanChromeKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     /// Clients that want iMessage-style assistant bubbles in the clean chrome
     /// (the iOS app) opt in; the default keeps the plain clean look elsewhere.
-    @Entry public var openClawAssistantBubblesInCleanChrome: Bool = false
+    public var openClawAssistantBubblesInCleanChrome: Bool {
+        get { self[OpenClawAssistantBubblesInCleanChromeKey.self] }
+        set { self[OpenClawAssistantBubblesInCleanChromeKey.self] = newValue }
+    }
 }
 
 private struct AssistantBubbleContainerStyle: ViewModifier {
