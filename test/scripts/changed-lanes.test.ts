@@ -28,6 +28,8 @@ import {
   shouldRunPromptSnapshotOwnerTest,
   shouldRunRuntimeSidecarBaselineCheck,
   shouldRunShrinkwrapGuard,
+  shouldRunPluginSdkApiBaselineCheck,
+  shouldRunPluginSdkSurfaceChecks,
   shouldRunSqliteSessionSchemaBaselineCheck,
   shouldRunTestTempCreationReport,
   createShrinkwrapGuardCommand,
@@ -711,7 +713,6 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, {
       core: true,
       coreTests: true,
-      strictRatchet: true,
     });
     expect(plan.commands.map((command) => command.args[0])).toContain(
       "check:database-first-legacy-stores",
@@ -1115,7 +1116,6 @@ describe("scripts/changed-lanes", () => {
 
     expectLanes(result.lanes, {
       coreTests: true,
-      strictRatchet: true,
     });
     expect(createChangedCheckPlan(result).commands.map((command) => command.args[0])).toContain(
       "tsgo:core:test",
@@ -1700,6 +1700,69 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("runs Plugin SDK API checks for transitive public contract changes", () => {
+    expect(
+      shouldRunPluginSdkApiBaselineCheck([
+        "src/config/sessions/session-accessor.ts",
+        "packages/gateway-protocol/src/schema/approvals.ts",
+        "extensions/memory-core/index.ts",
+        "scripts/generate-plugin-sdk-api-baseline.ts",
+        "scripts/lib/plugin-sdk-doc-metadata.ts",
+        "docs/.generated/plugin-sdk-api-baseline.sha256",
+      ]),
+    ).toBe(true);
+    expect(shouldRunPluginSdkApiBaselineCheck(["docs/help/troubleshooting.md"])).toBe(false);
+
+    const result = detectChangedLanes(["src/config/sessions/session-accessor.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.commands).toContainEqual({
+      name: "Plugin SDK API baseline",
+      args: ["plugin-sdk:api:check"],
+    });
+    expect(plan.commands.map((command) => command.args[0])).not.toContain(
+      "plugin-sdk:surface:check",
+    );
+  });
+
+  it("runs Plugin SDK export and surface checks for direct SDK changes", () => {
+    expect(
+      shouldRunPluginSdkSurfaceChecks([
+        "src/plugin-sdk/core.ts",
+        "scripts/plugin-sdk-surface-report.mjs",
+        "scripts/sync-plugin-sdk-exports.mjs",
+        "scripts/lib/plugin-sdk-entrypoints.json",
+        "package.json",
+      ]),
+    ).toBe(true);
+    expect(shouldRunPluginSdkSurfaceChecks(["src/config/sessions/session-accessor.ts"])).toBe(
+      false,
+    );
+
+    const result = detectChangedLanes(["src/plugin-sdk/core.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(plan.commands).toContainEqual({
+      name: "Plugin SDK API baseline",
+      args: ["plugin-sdk:api:check"],
+    });
+    expect(plan.commands).toContainEqual({
+      name: "Plugin SDK package exports",
+      args: ["plugin-sdk:check-exports"],
+    });
+    expect(plan.commands).toContainEqual({
+      name: "Plugin SDK surface budget",
+      args: ["plugin-sdk:surface:check"],
+    });
+
+    const releaseMetadataPlan = createChangedCheckPlan(
+      detectChangedLanes(["CHANGELOG.md", "package.json"]),
+    );
+    expect(releaseMetadataPlan.commands.map((command) => command.args[0])).not.toContain(
+      "plugin-sdk:check-exports",
+    );
+  });
+
   it("guards release metadata package changes to the top-level version field", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-release-metadata-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -2048,7 +2111,6 @@ describe("scripts/changed-lanes", () => {
       extensions: false,
       extensionTests: false,
       scripts: false,
-      strictRatchet: false,
       testRoot: false,
       apps: false,
       docs: false,

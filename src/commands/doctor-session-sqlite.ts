@@ -310,8 +310,12 @@ function resolveFullyCoveredLegacyStorePaths(
     targetsByStore.set(storePath, [...(targetsByStore.get(storePath) ?? []), target]);
   }
   for (const [storePath, storeTargets] of targetsByStore) {
+    const [firstStoreTarget] = storeTargets;
+    if (!firstStoreTarget) {
+      continue;
+    }
     const issues: DoctorSessionSqliteIssue[] = [];
-    const records = readLegacySessionRecords(storeTargets[0], issues);
+    const records = readLegacySessionRecords(firstStoreTarget, issues);
     const coversEveryRecord = records.every((record) =>
       storeTargets.some(
         (target) =>
@@ -446,6 +450,7 @@ async function importLegacySessionRecord(
   report: DoctorSessionSqliteTargetReport,
 ): Promise<void> {
   const result = countTranscriptEvents(record);
+  const transcriptMtimeMs = readLegacyTranscriptMtimeMs(record);
   if (result.status === "missing") {
     if (markAlreadyMigratedTranscript(target, record, report)) {
       return;
@@ -473,6 +478,7 @@ async function importLegacySessionRecord(
       ...(record.transcriptPath
         ? { readTranscriptEvents: createTranscriptEventPrefixReader(record.transcriptPath) }
         : {}),
+      ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
     });
     report.importedEntries += 1;
     report.importedTranscriptEvents += imported.transcriptEvents;
@@ -491,6 +497,7 @@ async function importLegacySessionRecord(
     ...(record.transcriptPath && result.status === "ok"
       ? { readTranscriptEvents: createTranscriptEventReader(record.transcriptPath) }
       : {}),
+    ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
   });
   report.importedEntries += 1;
   report.importedTranscriptEvents += imported.transcriptEvents;
@@ -701,7 +708,11 @@ function archiveImportedLegacySessionStores(
     if (entries.some((entry) => blockingIssueCount(entry.report) > 0)) {
       continue;
     }
-    const archivePath = archiveLegacySessionStore(entries[0].target, entries[0].report, activeRun);
+    const [firstEntry] = entries;
+    if (!firstEntry) {
+      continue;
+    }
+    const archivePath = archiveLegacySessionStore(firstEntry.target, firstEntry.report, activeRun);
     if (!archivePath) {
       continue;
     }
@@ -876,6 +887,18 @@ function countTranscriptEvents(
   | { status: "missing" }
   | { status: "malformed"; message: string } {
   return countTranscriptEventsForPath(record.transcriptPath);
+}
+
+function readLegacyTranscriptMtimeMs(record: LegacySessionRecord): number | undefined {
+  if (!record.transcriptPath) {
+    return undefined;
+  }
+  try {
+    const mtimeMs = Math.floor(fs.statSync(record.transcriptPath).mtimeMs);
+    return Number.isFinite(mtimeMs) && mtimeMs >= 0 ? mtimeMs : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function listUnreferencedJsonlFiles(

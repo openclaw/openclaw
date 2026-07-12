@@ -796,6 +796,90 @@ describe("cron view", () => {
     ).toEqual(["Delete after run", "Clear agent override"]);
   });
 
+  it("renders advanced routing and failure alert copy through the cron form", () => {
+    const container = document.createElement("div");
+    render(
+      renderCron(
+        createProps({
+          cronFormCollapsed: false,
+          form: {
+            ...DEFAULT_CRON_FORM,
+            scheduleKind: "cron",
+            payloadKind: "agentTurn",
+            deliveryMode: "announce",
+            failureAlertMode: "custom",
+          },
+        }),
+      ),
+      container,
+    );
+
+    const field = (label: string) => {
+      const match = Array.from(container.querySelectorAll<HTMLLabelElement>("label.field")).find(
+        (candidate) =>
+          candidate.firstElementChild?.nextElementSibling?.textContent?.trim() === label,
+      );
+      expect(match).toBeInstanceOf(HTMLLabelElement);
+      if (!(match instanceof HTMLLabelElement)) {
+        throw new Error(`Expected field with label "${label}"`);
+      }
+      return match;
+    };
+    const fieldWithDirectLabel = (label: string) => {
+      const match = Array.from(container.querySelectorAll<HTMLLabelElement>("label.field")).find(
+        (candidate) => candidate.firstElementChild?.textContent?.trim() === label,
+      );
+      expect(match).toBeInstanceOf(HTMLLabelElement);
+      if (!(match instanceof HTMLLabelElement)) {
+        throw new Error(`Expected field with label "${label}"`);
+      }
+      return match;
+    };
+
+    const sessionKey = fieldWithDirectLabel("Session key");
+    expect(sessionKey.querySelector("input")?.placeholder).toBe("agent:main:main");
+    expect(sessionKey.querySelector(".cron-help")?.textContent?.trim()).toBe(
+      "Optional routing key for job delivery and wake routing.",
+    );
+
+    const accountId = fieldWithDirectLabel("Account ID");
+    expect(accountId.querySelector("input")?.placeholder).toBe("default");
+    expect(accountId.querySelector(".cron-help")?.textContent?.trim()).toBe(
+      "Optional channel account ID for multi-account setups.",
+    );
+
+    const lightContext = field("Light context");
+    expect(lightContext.querySelector(".cron-help")?.textContent?.trim()).toBe(
+      "Use lightweight bootstrap context for this agent job.",
+    );
+
+    const failureAlerts = fieldWithDirectLabel("Failure alerts");
+    expect(
+      Array.from(failureAlerts.querySelectorAll("option")).map((option) =>
+        option.textContent?.trim(),
+      ),
+    ).toEqual(["Inherit global setting", "Disable for this job", "Custom per-job settings"]);
+    expect(failureAlerts.querySelector(".cron-help")?.textContent?.trim()).toBe(
+      "Control when this job sends repeated-failure alerts.",
+    );
+
+    expect(fieldWithDirectLabel("Alert after").querySelector("input")?.placeholder).toBe("2");
+    expect(fieldWithDirectLabel("Cooldown (seconds)").querySelector("input")?.placeholder).toBe(
+      "3600",
+    );
+    expect(fieldWithDirectLabel("Alert to").querySelector("input")?.placeholder).toBe(
+      "+1555... or chat id",
+    );
+    expect(fieldWithDirectLabel("Alert account ID").querySelector("input")?.placeholder).toBe(
+      "Account ID for multi-account setups",
+    );
+    expect(
+      Array.from(fieldWithDirectLabel("Alert mode").querySelectorAll("option")).map((option) =>
+        option.textContent?.trim(),
+      ),
+    ).toEqual(["Announce (via channel)", "Webhook (HTTP POST)"]);
+  });
+
   it("renders inline validation errors, disabled submit, and required aria bindings", () => {
     const container = document.createElement("div");
     render(

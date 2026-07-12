@@ -15,7 +15,9 @@ import {
 import type { SessionBindingRecord } from "../infra/outbound/session-binding-service.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import {
+  beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
+  markGatewayRestartDraining,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
@@ -3687,6 +3689,114 @@ describe("task-registry", () => {
         status: "cancelled",
       });
       expect(summarizeTaskRecords(listTaskRecords()).active).toBe(0);
+    });
+  });
+
+  it("reattaches the lifecycle listener after recovering from an initial restore failure", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const runId = "run-restore-listener";
+      const storedTask: TaskRecord = {
+        taskId: "task-restore-listener",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId,
+        task: "Resume lifecycle tracking after restore recovery",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: 100,
+        startedAt: 100,
+        lastEventAt: 100,
+      };
+      let restoreShouldFail = true;
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            if (restoreShouldFail) {
+              throw new Error("SQLITE_IOERR: initial task restore failed");
+            }
+            return {
+              tasks: new Map([[storedTask.taskId, storedTask]]),
+              deliveryStates: new Map(),
+            };
+          },
+          saveSnapshot: () => {},
+        },
+      });
+
+      expect(() => getTaskById(storedTask.taskId)).toThrow(
+        "Task registry restore failed: SQLITE_IOERR: initial task restore failed",
+      );
+      restoreShouldFail = false;
+      reloadTaskRegistryFromStore();
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      expectRecordFields(requireTaskByRunId(runId), {
+        status: "succeeded",
+        endedAt: 250,
+      });
+    });
+  });
+
+  it("does not hide a failed reload behind the restart-draining delivery fallback", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const storedTask: TaskRecord = {
+        taskId: "task-reload-failure",
+        runtime: "acp",
+        requesterSessionKey: "agent:main:main",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-reload-failure",
+        task: "Keep restore failures visible",
+        status: "succeeded",
+        deliveryStatus: "pending",
+        notifyPolicy: "done_only",
+        createdAt: 100,
+        endedAt: 200,
+        lastEventAt: 200,
+      };
+      let restoreError: Error | null = null;
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => {
+            if (restoreError) {
+              throw restoreError;
+            }
+            return {
+              tasks: new Map([[storedTask.taskId, storedTask]]),
+              deliveryStates: new Map(),
+            };
+          },
+          saveSnapshot: () => {},
+        },
+      });
+      expect(getTaskById(storedTask.taskId)?.taskId).toBe(storedTask.taskId);
+
+      beginGatewayRestartSignalAdmission();
+      const pendingDelivery = maybeDeliverTaskTerminalUpdate(storedTask.taskId);
+      await Promise.resolve();
+
+      restoreError = new Error("SQLITE_CORRUPT: task reload failed");
+      expect(() => reloadTaskRegistryFromStore()).toThrow(
+        "Task registry restore failed: SQLITE_CORRUPT: task reload failed",
+      );
+      markGatewayRestartDraining();
+
+      await expect(pendingDelivery).rejects.toThrow(
+        "Task registry restore failed: SQLITE_CORRUPT: task reload failed",
+      );
     });
   });
 

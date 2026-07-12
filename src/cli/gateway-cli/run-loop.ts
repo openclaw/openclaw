@@ -918,11 +918,13 @@ export async function runGatewayLoop(params: {
     // SIGTERM/SIGINT still exit after a graceful shutdown.
     let isFirstStart = true;
     for (;;) {
-      await onIteration();
+      // The restart hook reopens admission before reloading durable state. Clear
+      // its local mirror first so a failed reload cannot skip the next drain.
       restartDrainingMarked = false;
-      startupStartedAt = Date.now();
       let startupFailedBeforeServerHandle = false;
       try {
+        await onIteration();
+        startupStartedAt = Date.now();
         await params.beginBoot?.(startupStartedAt);
         server = await params.start({ startupStartedAt });
         startupFailedWithoutServerHandle = false;

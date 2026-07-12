@@ -123,6 +123,12 @@ the Control UI. For example, a base path of `/openclaw` uses
 `/openclaw/settings/plugins`. The page is always available, even when every
 optional plugin is disabled.
 
+Plugins is a hub with four tabs: **Installed** and **Discover** manage plugin
+code at `/settings/plugins`, **Skills** hosts the per-agent skill manager at
+`/skills`, and **Workshop** hosts Skill Workshop proposal review at
+`/skills/workshop`. Each tab keeps its own URL, and the sidebar shows the
+single Plugins entry for all of them.
+
 The **Installed** tab shows the full local inventory grouped by category, with
 overview counts. Each row opens a detail view; its overflow (`…`) menu enables
 or disables the plugin and offers **Remove** for externally installed plugins.
@@ -131,7 +137,13 @@ and removing them inline. The **Discover** tab is the store: featured plugins
 included with OpenClaw, official external plugins, and one-click MCP connectors
 for popular services. Typing in the search box queries
 [ClawHub](https://clawhub.ai/plugins) inline and appends a **From ClawHub**
-section with download counts and source-verification badges.
+section with download counts and source-verification badges. Deep links can
+target the store directly with `/settings/plugins?tab=discover`.
+
+The **Skills** tab keeps the skill status report, enable/disable toggles, API
+key entry, and inline ClawHub skill search, scoped to the selected agent. The
+**Workshop** tab keeps the Skill Workshop board and Today review flow for
+[skill proposals](/tools/skill-workshop).
 
 Included plugins are already present on the Gateway and show **Enable** or
 **Disable** instead of **Install**. For example, Workboard is included with
@@ -310,7 +322,7 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
     - When a session's checkout sits on a non-default branch of a GitHub repository, the chat view pins pull request chips above the composer: PR number, repo, branch, diff counts, a CI pill, and draft/merged/closed state, each linking to the PR. The row shows at most two chips — live (open/draft) PRs first — and a "Show more" button reveals collapsed merged/closed history. The CI pill opens a small CI monitoring popover with passed/failed/running/skipped check counts and a link to the PR's checks page. Detection runs server-side through `controlUi.sessionPullRequests`, which reuses the Gateway's `GH_TOKEN`/`GITHUB_TOKEN` when set. When the GitHub API rate limit is hit, chips keep the last known status and show a warning that the status may be out of date; dismissing a chip hides it for that session in the current browser profile.
     - The session diff panel shows what a session's checkout actually changed: the branch button (in the workspace rail header, the split-pane header, or the floating button in single-pane chat) opens the detail panel with a per-file diff of branch, uncommitted, and untracked work against the checkout's default-branch merge base — status dot, rename arrow, per-file +/− counts, collapsible files, and "N unmodified lines" markers between hunks. Diffs are computed server-side through the `sessions.diff` Gateway method (`operator.read` scope); binary and oversized files degrade to stats-only entries, and the button only appears when the connected Gateway advertises `sessions.diff`.
     - The session workspace rail in each Chat pane lists session files, project files, and artifacts. It docks to the pane's right edge by default; drag its header (or use the dock button) to move it to the bottom, and the choice is stored in the current browser profile. A collapsed rail takes no space at all: reopen it with ⇧⌘B, the files toggle in the split-pane header, or the floating files button in single-pane chat (both carry a changed-file count badge). The separate file, tool, and Canvas detail panel is unaffected.
-    - Clicking a file reference in chat, a file path in an expanded read/edit/write tool card, or a file row in the workspace rail opens the file detail panel: a CodeMirror-based code view with syntax highlighting, line numbers, jump-to-line, in-file search, copy actions, and an open-in-external-editor menu. When the Gateway advertises `sessions.files.set` to an `operator.admin` connection, the panel adds an Edit mode with dirty tracking and Cmd/Ctrl-S save. Saves are compare-and-swap on a content hash returned by `sessions.files.get`: if the file changed on disk since it was loaded (for example because the agent kept working), the panel shows a conflict notice with Reload (take the latest content) and Overwrite (keep the local edit) actions. Writes go through the same fs-safe workspace guards as reads — path containment, symlink/hardlink rejection, and a 256 KB UTF-8 cap — and only overwrite existing files; the editor never creates or deletes them.
+    - Clicking a file reference in chat, a file path in an expanded read/edit/write tool card, or a file row in the workspace rail opens the file detail panel: a CodeMirror-based code view with syntax highlighting, line numbers, jump-to-line, in-file search, copy actions, and an open-in-external-editor menu. When the Gateway advertises `sessions.files.set` to an `operator.admin` connection, the panel adds an Edit mode with dirty tracking and Cmd/Ctrl-S save; unsaved drafts survive file, panel, and session navigation in the current browser tab until explicitly saved or discarded. Saves are compare-and-swap on a content hash returned by `sessions.files.get`: if the file changed on disk since it was loaded (for example because the agent kept working), the panel shows a conflict notice with Reload (take the latest content) and Overwrite (keep the local edit) actions. Writes go through the same fs-safe workspace guards as reads — path containment, symlink/hardlink rejection, and a 256 KB UTF-8 cap — and only overwrite existing files; the editor never creates or deletes them.
     - The background tasks rail in each Chat pane lists the current agent's background tasks and subagents (`tasks.list` scoped by agent, kept live by `task` events): running work shows a live elapsed timer, tool-use count, the tool currently in use, and a stop control; the collapsible finished section adds run durations; and a View transcript link opens the task's child session in the pane. Open it with the activity toggle in the split-pane header or the floating activity button in single-pane chat — the task snapshot loads eagerly, so both carry a running-count badge without opening the rail first. The Tasks page remains the full cross-agent ledger.
     - The workspace rail, background tasks rail, and detail panel adapt to each pane's own width rather than the window: in a narrow pane or compact window both rails present as bottom strips (side-dock controls hide until the pane widens; the workspace rail keeps first claim on the side slot when only one column fits), and the detail panel stacks below the thread with a horizontal resize handle instead of sharing the row with it. Phone-sized viewports still open the detail panel full-screen.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options.
@@ -570,7 +582,14 @@ When gateway auth is configured, assistant local-media previews use a two-step r
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
-## Building the UI
+## Approval links
+
+Operator approval notifications can deep-link to a standalone approval document served under the reserved `${controlUiBasePath}/approve/{approvalId}` namespace (for example `/approve/<approvalId>`, or `/openclaw/approve/<approvalId>` with a configured base path). The URL is stable for the lifetime of the approval and safe to forward between your own devices: it identifies the approval, never authorizes it.
+
+- The one-segment `/approve/<approvalId>` namespace is reserved by the Gateway ahead of plugin HTTP routes for **all** HTTP methods, so a plugin route can never shadow or intercept an approval document.
+- Opening an approval document requires the same gateway auth as the rest of the Control UI (token/password, Tailscale Serve identity, or trusted-proxy identity); credentials are never part of the approval URL.
+- When Control UI serving is disabled, requests to the namespace return `404` instead of falling through to plugin handlers.
+- Signing in on an approval document is ephemeral for that page: it does not overwrite the gateway selection or settings saved by the full Control UI in the same browser.
 
 The Gateway serves static files from `dist/control-ui`:
 

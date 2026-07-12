@@ -1,6 +1,7 @@
 // Gateway exec approval manager.
 // Tracks pending operator decisions and short-lived resolved approval records.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { buildApprovalPresentation } from "../infra/approval-presentation.js";
@@ -11,7 +12,6 @@ import type {
 } from "../infra/exec-approvals.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { resolveApprovalSessionAudience } from "./approval-session-audience.js";
 import {
   consumeOperatorApprovalAllowOnce,
   forceDenyOperatorApproval,
@@ -259,14 +259,14 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
       const source = resolveApprovalSource(record.request);
       let audienceSessionKeys: string[] = [];
       if (source.sessionKey) {
-        try {
-          audienceSessionKeys = (
-            this.options.resolveAudienceSessionKeys ?? resolveApprovalSessionAudience
-          )(source.sessionKey);
-        } catch {
-          // Lineage is routing metadata, not an approval safety prerequisite.
-          // Preserve at least the source audience when session stores are unavailable.
-          audienceSessionKeys = [source.sessionKey];
+        audienceSessionKeys = [source.sessionKey];
+        if (this.options.resolveAudienceSessionKeys) {
+          try {
+            audienceSessionKeys = this.options.resolveAudienceSessionKeys(source.sessionKey);
+          } catch {
+            // Lineage is routing metadata, not an approval safety prerequisite.
+            // Preserve at least the source audience when session stores are unavailable.
+          }
         }
       }
       const inserted = insertOperatorApproval({
@@ -1087,7 +1087,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     }
 
     if (matches.length === 1) {
-      return { kind: "prefix", id: matches[0] };
+      return {
+        kind: "prefix",
+        id: expectDefined(matches[0], "matches capture group 0"),
+      };
     }
     if (matches.length > 1) {
       return { kind: "ambiguous", ids: matches };

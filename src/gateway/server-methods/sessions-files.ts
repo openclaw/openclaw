@@ -16,6 +16,7 @@ import {
   validateSessionsFilesSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveToCwd as resolveSessionToolPathToCwd } from "../../agents/sessions/tools/path-utils.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
@@ -32,10 +33,11 @@ import {
   sortWorkspaceEntries,
   statWorkspacePath,
   toUpdatedAtMs,
+  updateWorkspaceFile,
   WORKSPACE_PREVIEW_MAX_BYTES,
-  writeWorkspaceFile,
   workspaceStatKind,
   type WorkspaceDirEntry,
+  type WorkspaceFileUpdateResult,
 } from "./workspace-fs.js";
 
 type FileKind = "modified" | "read";
@@ -188,7 +190,10 @@ function toDisplayPath(root: string, resolved: string): string {
 
 function isInsideRoot(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return !relative.startsWith("..") && !path.isAbsolute(relative);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 function resolveTouchedFilePath(params: {
@@ -200,9 +205,7 @@ function resolveTouchedFilePath(params: {
     return undefined;
   }
   const base = params.fileRoot ?? params.root;
-  const resolved = path.isAbsolute(params.filePath)
-    ? path.resolve(params.filePath)
-    : path.resolve(base, params.filePath);
+  const resolved = resolveSessionToolPathToCwd(params.filePath, base);
   if (!isInsideRoot(params.root, resolved)) {
     return undefined;
   }
@@ -319,6 +322,7 @@ async function toSessionFileEntry(
       return { ...base, missing: true };
     }
     if (read !== "too-large") {
+      entry.workspacePath = read.canonicalPath;
       entry.size = read.stat.size;
       entry.updatedAtMs = toUpdatedAtMs(read.stat.mtimeMs);
       const text = decodeUtf8Strict(read.buffer);
@@ -545,18 +549,24 @@ async function buildListResult(params: {
   search?: string;
 }): Promise<{ root?: string; files: SessionFileEntry[]; browser?: SessionFileBrowserResult }> {
   const loaded = await loadSessionFiles(params);
+  const root = loaded.root;
+  const workspaceFiles = root
+    ? loaded.files.filter((file) =>
+        Boolean(resolveTouchedFilePath({ root, fileRoot: loaded.fileRoot, filePath: file.path })),
+      )
+    : loaded.files;
   const files = await Promise.all(
-    loaded.files.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
+    workspaceFiles.map((file) => toSessionFileEntry(file, loaded.root, loaded.fileRoot)),
   );
   const browser = await buildBrowserResult({
-    root: loaded.root,
+    root,
     fileRoot: loaded.fileRoot,
     path: params.path,
     search: params.search,
-    files: loaded.files,
+    files: workspaceFiles,
   });
   return {
-    ...(loaded.root ? { root: loaded.root } : {}),
+    ...(root ? { root } : {}),
     files,
     ...(browser ? { browser } : {}),
   };
@@ -679,7 +689,14 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileUnsafe(respond, params.path);
       return;
     }
-    const contentSize = Buffer.byteLength(params.content, "utf8");
+    const contentBuffer = Buffer.from(params.content, "utf8");
+    // Node replaces lone UTF-16 surrogates while encoding. Reject them instead
+    // of reporting a hash for bytes that no longer match the submitted text.
+    if (contentBuffer.toString("utf8") !== params.content) {
+      respondSessionFileUnsafe(respond, params.path);
+      return;
+    }
+    const contentSize = contentBuffer.byteLength;
     if (contentSize > MAX_PREVIEW_BYTES) {
       respond(
         false,
@@ -715,39 +732,14 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileNotFound(respond, params.path);
       return;
     }
-    const current = await readWorkspaceFile(loaded.root, browserPath);
-    if (!current || current === "too-large") {
-      respondSessionFileUnsafe(respond, params.path);
-      return;
-    }
-    // Only strict-UTF-8 text is editable; sessions.files.get never issues a CAS
-    // hash for binary previews, and overwriting binary bytes with re-encoded
-    // text would corrupt the file even when a client computes the hash itself.
-    if (decodeUtf8Strict(current.buffer) === undefined) {
-      respondSessionFileUnsafe(respond, params.path);
-      return;
-    }
-    const currentHash = createHash("sha256").update(current.buffer).digest("hex");
-    if (currentHash !== params.expectedHash) {
-      respond(
-        false,
-        undefined,
-        sessionFilesError("session_file_conflict", "session file changed since it was read", {
-          path: params.path,
-          currentHash,
-        }),
-      );
-      return;
-    }
-    // Check-then-write is intentionally non-atomic: agents edit this tree from
-    // their own processes, so no gateway-side lock can serialize them. The hash
-    // gate exists to reject stale operator loads; the remaining window is the
-    // few milliseconds inside this handler and is accepted.
+    let update: WorkspaceFileUpdateResult;
     try {
-      if (!(await writeWorkspaceFile(loaded.root, browserPath, params.content))) {
-        respondSessionFileUnsafe(respond, params.path);
-        return;
-      }
+      update = await updateWorkspaceFile(
+        loaded.root,
+        browserPath,
+        params.content,
+        params.expectedHash,
+      );
     } catch (err) {
       if (!(err instanceof FsSafeError)) {
         throw err;
@@ -755,24 +747,33 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       respondSessionFileUnsafe(respond, params.path);
       return;
     }
-    const stat = await statWorkspacePath(loaded.root, browserPath);
-    if (!stat || workspaceStatKind(stat) !== "file") {
+    if (update.status === "conflict") {
+      respond(
+        false,
+        undefined,
+        sessionFilesError("session_file_conflict", "session file changed since it was read", {
+          path: params.path,
+          currentHash: update.currentHash,
+        }),
+      );
+      return;
+    }
+    if (update.status === "unsafe") {
       respondSessionFileUnsafe(respond, params.path);
       return;
     }
-    const hash = createHash("sha256").update(params.content, "utf8").digest("hex");
     respond(true, {
       sessionKey: params.sessionKey,
       root: loaded.root,
       file: {
         path: params.path,
-        workspacePath: browserPath,
-        name: displayNameForPath(browserPath),
+        workspacePath: update.canonicalPath,
+        name: displayNameForPath(update.canonicalPath),
         kind: "modified",
         missing: false,
-        size: stat.size,
-        updatedAtMs: toUpdatedAtMs(stat.mtimeMs),
-        hash,
+        size: update.stat.size,
+        updatedAtMs: toUpdatedAtMs(update.stat.mtimeMs),
+        hash: update.hash,
       },
     });
   },

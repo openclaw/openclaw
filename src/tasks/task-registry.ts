@@ -77,7 +77,12 @@ const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSess
 const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
-let restoreAttempted = false;
+type TaskRegistryRestoreState =
+  | { status: "uninitialized" }
+  | { status: "restoring" }
+  | { status: "ready" }
+  | { status: "failed"; error: Error };
+let taskRegistryRestoreState: TaskRegistryRestoreState = { status: "uninitialized" };
 const taskFlowSyncRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 type TaskRegistryDeliveryRuntime = Pick<
   typeof import("./task-registry-delivery-runtime.js"),
@@ -1208,36 +1213,54 @@ function clearTaskFlowSyncRetries(): void {
 }
 
 function restoreTaskRegistryOnce() {
-  if (restoreAttempted) {
-    return;
+  switch (taskRegistryRestoreState.status) {
+    case "ready":
+      return;
+    case "failed":
+      throw taskRegistryRestoreState.error;
+    case "restoring":
+      throw new Error("Task registry restore is already in progress.");
+    case "uninitialized":
+      break;
   }
-  restoreAttempted = true;
+  taskRegistryRestoreState = { status: "restoring" };
   try {
     const restored = getTaskRegistryStore().loadSnapshot();
-    if (restored.tasks.size === 0 && restored.deliveryStates.size === 0) {
-      return;
-    }
+    const restoredTasks = new Map<string, TaskRecord>();
     for (const [taskId, task] of restored.tasks.entries()) {
-      tasks.set(taskId, normalizeTaskTimestamps(task));
+      restoredTasks.set(taskId, normalizeTaskTimestamps(task));
     }
-    for (const [taskId, state] of restored.deliveryStates.entries()) {
+    const restoredDeliveryStates = new Map(restored.deliveryStates);
+
+    clearTaskRegistryMemory();
+    for (const [taskId, task] of restoredTasks.entries()) {
+      tasks.set(taskId, task);
+    }
+    for (const [taskId, state] of restoredDeliveryStates.entries()) {
       taskDeliveryStates.set(taskId, state);
     }
     rebuildRunIdIndex();
     rebuildOwnerKeyIndex();
     rebuildParentFlowIdIndex();
     rebuildRelatedSessionKeyIndex();
-    emitTaskRegistryObserverEvent(() => ({
-      kind: "restored",
-      tasks: snapshotTaskRecords(tasks),
-    }));
+    taskRegistryRestoreState = { status: "ready" };
+    if (restoredTasks.size > 0 || restoredDeliveryStates.size > 0) {
+      emitTaskRegistryObserverEvent(() => ({
+        kind: "restored",
+        tasks: snapshotTaskRecords(tasks),
+      }));
+    }
   } catch (error) {
+    clearTaskRegistryMemory();
     const message = formatErrorMessage(error);
+    const restoreError = new Error(`Task registry restore failed: ${message}`, { cause: error });
+    taskRegistryRestoreState = { status: "failed", error: restoreError };
     // Compact console logs omit structured metadata, so keep the rejected value visible there too.
     log.warn("Failed to restore task registry", {
       error: message,
       consoleMessage: `Failed to restore task registry: ${message}`,
     });
+    throw restoreError;
   }
 }
 
@@ -1248,8 +1271,8 @@ export function ensureTaskRegistryReady() {
 
 export function reloadTaskRegistryFromStore(): void {
   clearTaskRegistryMemory();
-  restoreAttempted = false;
-  restoreTaskRegistryOnce();
+  taskRegistryRestoreState = { status: "uninitialized" };
+  ensureTaskRegistryReady();
 }
 
 function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | null {
@@ -1428,6 +1451,7 @@ async function runTaskDeliveryWithIndependentAdmission(
   taskId: string,
   deliver: () => Promise<TaskRecord | null>,
 ): Promise<TaskRecord | null> {
+  ensureTaskRegistryReady();
   let admitted = false;
   try {
     return await runWithGatewayIndependentRootWorkAdmission(async () => {
@@ -1439,6 +1463,7 @@ async function runTaskDeliveryWithIndependentAdmission(
     // restart closes admission. An already-admitted delivery still reports its
     // own failures instead of hiding them behind a concurrent restart.
     if (!admitted && isGatewayRestartDraining()) {
+      ensureTaskRegistryReady();
       const current = tasks.get(taskId);
       return current ? cloneTaskRecord(current) : null;
     }
@@ -2675,7 +2700,7 @@ export function deleteTaskRecordById(taskId: string): boolean {
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }) {
   clearTaskRegistryMemory();
-  restoreAttempted = false;
+  taskRegistryRestoreState = { status: "uninitialized" };
   resetTaskRegistryRuntimeForTests();
   if (listenerStop) {
     listenerStop();
