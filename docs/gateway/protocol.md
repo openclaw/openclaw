@@ -177,8 +177,8 @@ hash, owner epoch, RPC-set version, expiry, and one nullable session; it
 separately checks the current version and feature set. Success returns minimal
 `worker-hello-ok`; feature negotiation is independent of the general protocol
 version. Frames stay under 64 KiB. The closed allowlist contains
-`worker.heartbeat` and `worker.transcript.commit` for ordered semantic message batches. Transcript
-commits use owner-epoch fencing, a gateway-owned session binding, base-leaf
+`worker.heartbeat`, `worker.transcript.commit`, and `worker.live-event`.
+Transcript commits use owner-epoch fencing, a gateway-owned session binding, base-leaf
 compare-and-swap, and durable sequence replay; the gateway generates transcript
 entry and parent IDs through the normal session writer. Ownership and expiry are
 rechecked on each RPC.
@@ -518,7 +518,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `sessions.preview` returns bounded transcript previews for specific session keys.
     - `sessions.describe` returns one gateway session row for an exact session key.
     - `sessions.resolve` resolves or canonicalizes a session target.
-    - `sessions.create` creates a new session entry. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`).
+    - `sessions.create` creates a new session entry. `worktree: true` provisions a managed worktree; optional `worktreeBaseRef`/`worktreeName` select the base ref and branch name, and `execNode` (`operator.admin`) binds session exec to a node host. The created worktree is echoed in the result and persisted on the session row (`worktree: { id, branch, repoRoot }`). When the entry is created but its nested initial `chat.send` is rejected, the successful result includes `runStarted: false` and `runError`; clients can preserve the prompt and retry against the returned session key.
     - `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` manage the gateway-owned custom session group catalog (names + display order). Membership stays on each session's `category` field; rename and delete update member sessions server-side.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
