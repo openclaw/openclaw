@@ -14574,11 +14574,6 @@
       "translated": "한 번 허용"
     },
     {
-      "id": "native.apple.f99bd9597ad5009a",
-      "source": "Allow Always",
-      "translated": "항상 허용"
-    },
-    {
       "id": "native.apple.3d0f2919840907f5",
       "source": "Deny",
       "translated": "거부"

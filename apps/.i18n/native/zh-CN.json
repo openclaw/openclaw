@@ -14574,11 +14574,6 @@
       "translated": "仅允许一次"
     },
     {
-      "id": "native.apple.f99bd9597ad5009a",
-      "source": "Allow Always",
-      "translated": "始终允许"
-    },
-    {
       "id": "native.apple.3d0f2919840907f5",
       "source": "Deny",
       "translated": "拒绝"

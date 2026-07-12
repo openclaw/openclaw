@@ -12258,7 +12258,7 @@
         "zh-TW": {
           "stringUnit": {
             "state": "new",
-            "value": "永遠允許"
+            "value": "一律允許"
           }
         },
         "pt-BR": {
@@ -12324,7 +12324,7 @@
         "uk": {
           "stringUnit": {
             "state": "new",
-            "value": "Дозволяти завжди"
+            "value": "Дозволити завжди"
           }
         },
         "id": {
