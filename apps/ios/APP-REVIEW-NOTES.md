@@ -188,8 +188,8 @@ Health Summaries is off by default. Under `Privacy & Access`, tap
 `Enable & Share Summaries` to see the disclosure and Apple's Health permission
 sheet. OpenClaw requests read-only access to steps, sleep, resting heart rate,
 and workouts. It performs aggregation on device and shares only a user-requested
-`today`, `7d`, or `30d` summary through the user's Gateway and configured AI
-provider; individual samples, sources, metadata, clinical records, background
+`today` summary through the user's Gateway and configured AI provider;
+individual samples, sources, metadata, clinical records, background
 ingestion, and writes are not supported. The Gateway separately requires
 `health.summary` in `gateway.nodes.allowCommands`.
 

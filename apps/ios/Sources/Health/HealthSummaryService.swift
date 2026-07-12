@@ -64,8 +64,7 @@ actor HealthSummaryService: HealthSummaryServicing {
         }
 
         let now = Date()
-        let range = Self.dateRange(period: params.period, now: now, calendar: .current)
-        try await self.requireAuthorizationCoverage(for: range)
+        let range = Self.dateRange(now: now, calendar: .current)
         let stepCount = try await self.stepCount(in: range)
         let sleepDuration = try await self.sleepDuration(in: range)
         let restingHeartRate = try await self.restingHeartRate(in: range)
@@ -85,18 +84,11 @@ actor HealthSummaryService: HealthSummaryServicing {
     }
 
     static func dateRange(
-        period: OpenClawHealthSummaryPeriod,
         now: Date,
         calendar: Calendar) -> DateInterval
     {
         let startOfToday = calendar.startOfDay(for: now)
-        let priorDays = switch period {
-        case .today: 0
-        case .sevenDays: 6
-        case .thirtyDays: 29
-        }
-        let start = calendar.date(byAdding: .day, value: -priorDays, to: startOfToday) ?? startOfToday
-        return DateInterval(start: start, end: now)
+        return DateInterval(start: startOfToday, end: now)
     }
 
     static func mergedDuration(
@@ -122,47 +114,8 @@ actor HealthSummaryService: HealthSummaryServicing {
         return duration + current.duration
     }
 
-    static func authorizationCovers(
-        startDate: Date,
-        earliestAuthorizedDates: some Sequence<Date>) -> Bool
-    {
-        !earliestAuthorizedDates.contains { $0 > startDate }
-    }
-
     private static func roundedMinutes(_ seconds: TimeInterval) -> Int {
         Int((seconds / 60).rounded())
-    }
-
-    private func requireAuthorizationCoverage(for range: DateInterval) async throws {
-        if #available(iOS 26.0, *) {
-            let dates = try await self.earliestAuthorizedDates()
-            guard Self.authorizationCovers(
-                startDate: range.start,
-                earliestAuthorizedDates: dates)
-            else {
-                throw NSError(domain: "Health", code: 3, userInfo: [
-                    NSLocalizedDescriptionKey: """
-                    HEALTH_HISTORY_LIMITED: requested period predates permitted Health history; grant full history or \
-                    request a shorter period
-                    """,
-                ])
-            }
-        }
-    }
-
-    @available(iOS 26.0, *)
-    private func earliestAuthorizedDates() async throws -> [Date] {
-        try await withCheckedThrowingContinuation { continuation in
-            self.healthStore.getEarliestAuthorizedSampleDate(
-                for: HealthAuthorization.readTypes)
-            { dates, error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume(returning: dates.map { Array($0.values) } ?? [])
-                }
-            }
-        }
     }
 
     private func stepCount(in range: DateInterval) async throws -> Int? {

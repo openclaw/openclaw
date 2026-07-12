@@ -5,10 +5,10 @@ import Testing
 struct HealthCommandsTests {
     @Test func `health summary periods use the node command wire values`() throws {
         #expect(OpenClawHealthCommand.summary.rawValue == "health.summary")
-        #expect(OpenClawHealthSummaryPeriod.allCases.map(\.rawValue) == ["today", "7d", "30d"])
+        #expect(OpenClawHealthSummaryPeriod.allCases.map(\.rawValue) == ["today"])
 
-        let params = OpenClawHealthSummaryParams(period: .sevenDays)
+        let params = OpenClawHealthSummaryParams(period: .today)
         let data = try JSONEncoder().encode(params)
-        #expect(String(decoding: data, as: UTF8.self) == #"{"period":"7d"}"#)
+        #expect(String(decoding: data, as: UTF8.self) == #"{"period":"today"}"#)
     }
 }

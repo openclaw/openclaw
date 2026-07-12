@@ -6,8 +6,6 @@ public enum OpenClawHealthCommand: String, Codable, Sendable {
 
 public enum OpenClawHealthSummaryPeriod: String, Codable, Sendable, CaseIterable {
     case today
-    case sevenDays = "7d"
-    case thirtyDays = "30d"
 }
 
 public struct OpenClawHealthSummaryParams: Codable, Sendable, Equatable {

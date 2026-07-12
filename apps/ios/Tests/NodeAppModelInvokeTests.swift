@@ -704,15 +704,15 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let request = BridgeInvokeRequest(
             id: "health-1",
             command: OpenClawHealthCommand.summary.rawValue,
-            paramsJSON: #"{"period":"7d"}"#)
+            paramsJSON: #"{"period":"today"}"#)
 
         let response = await appModel._test_handleInvoke(request)
         let payload = try decodeTalkPayload(OpenClawHealthSummaryPayload.self, from: response)
 
         #expect(response.ok)
-        #expect(payload.period == .sevenDays)
+        #expect(payload.period == .today)
         #expect(payload.stepCount == 42000)
-        #expect(await service.periods == [.sevenDays])
+        #expect(await service.periods == [.today])
     }
 
     @Test @MainActor func `health summary rejects arbitrary periods before querying`() async {

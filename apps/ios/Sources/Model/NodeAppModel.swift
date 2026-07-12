@@ -2637,7 +2637,7 @@ final class NodeAppModel {
                 ok: false,
                 error: OpenClawNodeError(
                     code: .invalidRequest,
-                    message: "INVALID_REQUEST: period must be today, 7d, or 30d"))
+                    message: "INVALID_REQUEST: period must be today"))
         }
         let payload = try await self.healthSummaryService.summary(params: params)
         let json = try Self.encodePayload(payload)
