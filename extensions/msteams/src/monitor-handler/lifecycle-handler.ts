@@ -20,14 +20,14 @@ type LifecycleResetReason =
   | "installation-remove"
   | "bot-members-removed";
 
-export type MSTeamsLifecycleResetResult = {
+type MSTeamsLifecycleResetResult = {
   handled: boolean;
   reason?: LifecycleResetReason;
   conversationRemoved: boolean;
   sessionsReset: number;
 };
 
-export type MSTeamsDmConversationBoundaryResult = {
+type MSTeamsDmConversationBoundaryResult = {
   handled: boolean;
   previousConversationRemoved: boolean;
   sessionsReset: number;
@@ -241,7 +241,7 @@ function createMSTeamsLifecycleResetEntry<T extends MSTeamsResetCandidateEntry>(
   return next;
 }
 
-export async function rotateMSTeamsSessions(params: {
+async function rotateMSTeamsSessions(params: {
   deps: MSTeamsMessageHandlerDeps;
   routeSessionKey: string;
   agentId: string;
