@@ -30,7 +30,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Agent node calls:** queue runtime-identity verification behind concurrent exec-approval updates so parallel node calls do not reject valid local agent credentials. (#105122)
 - **Installed plugin loading:** make native-module fallback use jiti's transform path instead of retrying the same synchronous ESM load, preventing Node 24 startup races when official plugins import SDK contract modules.
 - **QA profile channel execution:** partition mixed Crabline channel scenarios into one aggregate host suite so taxonomy-backed profile commands and evidence workflows no longer abort before execution.
 - **Plugin SDK API baseline:** cover every public entrypoint, preserve complete declaration shapes without source-line churn, and run baseline and export-surface guards from changed-file validation.
