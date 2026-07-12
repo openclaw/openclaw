@@ -42,6 +42,7 @@ type TestPluginsPage = HTMLElement & {
   result: PluginListResult | null;
   loading: boolean;
   busy: Record<string, boolean>;
+  activeTab: "installed" | "discover";
 };
 
 type RuntimeConfigTestState = {
@@ -182,6 +183,7 @@ function createContext(
     gateway,
     basePath: "",
     runtimeConfig: harness.runtimeConfig,
+    navigate: vi.fn(),
   } as unknown as ApplicationContext;
 }
 
@@ -237,6 +239,7 @@ describe("PluginsPage", () => {
       gatewaySnapshot: harness.gateway.snapshot,
       result,
       error: null,
+      initialTab: null,
     };
 
     const { page } = await mountPage(
@@ -253,6 +256,51 @@ describe("PluginsPage", () => {
     expect(page.querySelector("h1")?.textContent).toBe("Plugins");
   });
 
+  it("applies a ?tab=discover deep link from route data", async () => {
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    const routeData: PluginsRouteData = {
+      gateway: harness.gateway,
+      gatewaySnapshot: harness.gateway.snapshot,
+      result: createResult(),
+      error: null,
+      initialTab: "discover",
+    };
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      routeData,
+    );
+
+    expect(page.activeTab).toBe("discover");
+    expect(page.querySelector("#plugins-tab-discover")?.getAttribute("aria-selected")).toBe("true");
+  });
+
+  it("routes the skills and workshop hub tabs through navigation", async () => {
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    const context = createContext(
+      harness.gateway,
+      vi.fn(async () => undefined),
+    );
+    const routeData: PluginsRouteData = {
+      gateway: harness.gateway,
+      gatewaySnapshot: harness.gateway.snapshot,
+      result: createResult(),
+      error: null,
+      initialTab: null,
+    };
+    const { page } = await mountPage(context, routeData);
+
+    page.querySelector<HTMLButtonElement>("#plugins-tab-skills")?.click();
+    expect(context.navigate).toHaveBeenCalledWith("skills");
+    page.querySelector<HTMLButtonElement>("#plugins-tab-workshop")?.click();
+    expect(context.navigate).toHaveBeenCalledWith("skill-workshop");
+    expect(page.activeTab).toBe("installed");
+  });
+
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {
     const refreshed = createResult(createPlugin({ enabled: true, state: "enabled" }));
     const { client, request } = createClient(async (method) => {
@@ -267,6 +315,7 @@ describe("PluginsPage", () => {
       gatewaySnapshot: harness.gateway.snapshot,
       result: createResult(),
       error: null,
+      initialTab: null,
     };
     const { page } = await mountPage(
       createContext(

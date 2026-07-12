@@ -13,6 +13,7 @@ import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
   DEFAULT_SIDEBAR_PINNED_ROUTES,
+  isPluginsHubRoute,
   isSettingsNavigationRoute,
   navigationIconForRoute,
   scheduleRoutePreload,
@@ -1978,7 +1979,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const active =
       routeId === "config"
         ? this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId)
-        : this.activeRouteId === routeId;
+        : routeId === "plugins"
+          ? this.activeRouteId !== undefined && isPluginsHubRoute(this.activeRouteId)
+          : this.activeRouteId === routeId;
     // Disabled routes (e.g. Workboard with the plugin off) stay hidden rather
     // than rendering an inert nav item.
     if (!this.isRouteEnabled(routeId)) {
