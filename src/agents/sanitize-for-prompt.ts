@@ -16,10 +16,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 export function sanitizeForPromptLiteral(value: string): string {
-  // Preserve tabs (\t) and newlines (\n) — they carry meaningful whitespace
-  // for code and structured data.  Strip all other Cc/Cf control and format
-  // characters plus Unicode line/paragraph separators.
-  return value.replace(/(?![\t\n])[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
+  // Preserve tabs (\t) — they carry meaningful whitespace for indentation layout.
+  // Strip all other Cc/Cf control and format characters (including \n) plus
+  // Unicode line/paragraph separators to keep inline prompt literals single-line.
+  return value.replace(/(?![\t])[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
 }
 
 type PromptDataBlockParams = {
