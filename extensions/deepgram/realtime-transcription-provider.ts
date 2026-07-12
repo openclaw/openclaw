@@ -90,10 +90,27 @@ function normalizeDeepgramEncoding(
 }
 
 function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
-  return (
-    normalizeOptionalString(value ?? process.env.DEEPGRAM_BASE_URL) ??
-    DEFAULT_DEEPGRAM_AUDIO_BASE_URL
-  );
+  const resolved = normalizeOptionalString(value ?? process.env.DEEPGRAM_BASE_URL);
+  if (!resolved) {
+    return DEFAULT_DEEPGRAM_AUDIO_BASE_URL;
+  }
+  // Callers pass the result straight into `new URL(...)`. Reject an explicit
+  // malformed or non-HTTP(S) endpoint here (fail fast) instead of silently
+  // retargeting to the default or letting a downstream `new URL(...)` throw an
+  // opaque TypeError. Errors must not echo the raw value: it may embed userinfo
+  // or credential-bearing query params.
+  let parsed: URL;
+  try {
+    parsed = new URL(resolved);
+  } catch {
+    throw new Error("Invalid Deepgram baseUrl: value is not a valid URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(
+      `Invalid Deepgram baseUrl: unsupported scheme "${parsed.protocol}" (expected http or https)`,
+    );
+  }
+  return resolved;
 }
 
 function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionConfig): string {
@@ -250,6 +267,7 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
 
 export const testing = {
   normalizeProviderConfig,
+  normalizeDeepgramRealtimeBaseUrl,
   toDeepgramRealtimeWsUrl,
 };
 export { testing as __testing };

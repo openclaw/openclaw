@@ -68,3 +68,49 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     );
   });
 });
+
+describe("normalizeDeepgramRealtimeBaseUrl", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("returns the default when no value or env is set", () => {
+    vi.stubEnv("DEEPGRAM_BASE_URL", "");
+    expect(testing.normalizeDeepgramRealtimeBaseUrl(undefined)).toBe("https://api.deepgram.com/v1");
+    expect(testing.normalizeDeepgramRealtimeBaseUrl("   ")).toBe("https://api.deepgram.com/v1");
+  });
+
+  it("accepts a valid explicit http(s) endpoint", () => {
+    expect(testing.normalizeDeepgramRealtimeBaseUrl("https://custom.example.com")).toBe(
+      "https://custom.example.com",
+    );
+  });
+
+  it("rejects an explicit malformed override instead of silently retargeting", () => {
+    // An operator's explicit endpoint must not be swapped for the default, and a
+    // downstream `new URL(...)` must never throw an opaque TypeError.
+    expect(() => testing.normalizeDeepgramRealtimeBaseUrl("not a url")).toThrow(
+      /Invalid Deepgram baseUrl/,
+    );
+  });
+
+  it("rejects a parseable but unsupported (non-HTTP(S)) scheme", () => {
+    expect(() => testing.normalizeDeepgramRealtimeBaseUrl("ftp://files.example.com")).toThrow(
+      /unsupported scheme/,
+    );
+  });
+
+  it("does not leak URL credentials or sensitive query values in validation errors", () => {
+    const nonHttp = "ftp://user:sup3r-secret@files.example.com/x?api_key=leak-me";
+    try {
+      testing.normalizeDeepgramRealtimeBaseUrl(nonHttp);
+      throw new Error("expected rejection");
+    } catch (error) {
+      const message = (error as Error).message;
+      expect(message).toMatch(/unsupported scheme/);
+      expect(message).not.toContain("sup3r-secret");
+      expect(message).not.toContain("leak-me");
+      expect(message).not.toContain("api_key");
+    }
+  });
+});
