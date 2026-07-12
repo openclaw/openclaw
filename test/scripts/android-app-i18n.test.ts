@@ -49,6 +49,8 @@ describe("Android app i18n resources", () => {
           // R.string.kotlin_comment
           /* R.string.block_comment */
           <!-- @string/xml_comment -->
+          val endpoint = "https://example.test"
+          val marker = "/* not a comment */"
           R.string.live
         `,
       ),
