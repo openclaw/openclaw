@@ -4992,6 +4992,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H4: Gateway Canvas Host (recommended for web content)
   - H3: 8. Voice + expanded Android command surface
   - H3: 9. Workspace files (read-only)
+  - H2: Review command approvals
   - H2: Assistant entrypoints
   - H2: Notification forwarding
   - H2: Related
@@ -5030,6 +5031,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Requirements
   - H2: Quick start (pair + connect)
+  - H2: Review command approvals
   - H2: Optional direct Apple Watch node
   - H2: Relay-backed push for official builds
   - H2: Background alive beacons
@@ -9437,6 +9439,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Plugin approval forwarding
   - H3: Same-chat approvals on any channel
   - H3: Native approval delivery
+  - H3: Official mobile operator apps
   - H3: macOS IPC flow
   - H2: FAQ
   - H3: When would accountId and threadId be used on an approval target?
@@ -10139,7 +10142,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Content security policy
   - H2: Avatar route auth
   - H2: Assistant media route auth
-  - H2: Building the UI
+  - H2: Approval links
   - H2: Blank Control UI page
   - H2: Debugging/testing: dev server + remote Gateway
   - H2: Related
