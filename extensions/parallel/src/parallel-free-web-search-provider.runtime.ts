@@ -2,7 +2,7 @@ import {
   DEFAULT_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -47,10 +47,15 @@ export async function executeParallelFreeWebSearchProviderTool(
   if (searchQueries.length === 0) {
     return invalidSearchQueriesPayload();
   }
-  const requestedCount =
-    readNumberParam(args, "count", { integer: true }) ??
-    (typeof searchConfig?.maxResults === "number" ? searchConfig.maxResults : undefined);
-  const count = resolveParallelSearchCount(requestedCount ?? DEFAULT_SEARCH_COUNT);
+  const requestedCount = readPositiveIntegerParam(args, "count", {
+    max: 40,
+    message: "count must be an integer from 1 to 40.",
+  });
+  const configuredCount =
+    typeof searchConfig?.maxResults === "number" ? searchConfig.maxResults : undefined;
+  const count = resolveParallelSearchCount(
+    requestedCount ?? configuredCount ?? DEFAULT_SEARCH_COUNT,
+  );
   const sessionId = normalizeParallelSessionId(
     readStringParam(args, "session_id"),
     PARALLEL_FREE_SESSION_ID_MAX_LENGTH,

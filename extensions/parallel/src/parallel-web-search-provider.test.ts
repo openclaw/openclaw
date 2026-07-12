@@ -421,6 +421,28 @@ describe("parallel web search provider", () => {
     expect(result).toMatchObject({ provider: "parallel" });
   });
 
+  it("rejects invalid counts before calling Parallel", async () => {
+    const provider = createParallelWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: { parallel: { apiKey: "par-secret" } },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    for (const count of [4.5, "3abc", 41]) {
+      await expect(
+        tool.execute({
+          objective: "Count validation",
+          search_queries: ["count validation"],
+          count,
+        }),
+      ).rejects.toThrow("count must be an integer from 1 to 40.");
+    }
+    expect(endpointMockState.calls).toHaveLength(0);
+  });
+
   it("prefers explicit objective+search_queries over the generic `query` fallback when all are present", async () => {
     endpointMockState.responses.push(
       new Response(JSON.stringify({ search_id: "x", session_id: "y", results: [] }), {

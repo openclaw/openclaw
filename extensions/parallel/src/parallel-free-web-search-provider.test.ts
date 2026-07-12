@@ -157,4 +157,23 @@ describe("parallel-free web search provider", () => {
     expect(result.error).toBe("invalid_search_queries");
     expect(endpointMockState.calls).toHaveLength(0);
   });
+
+  it("rejects invalid counts before calling the free MCP", async () => {
+    const provider = createParallelFreeWebSearchProvider();
+    const tool = provider.createTool({ config: {}, searchConfig: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    for (const count of [4.5, "3abc", 41]) {
+      await expect(
+        tool.execute({
+          objective: "Count validation",
+          search_queries: ["count validation"],
+          count,
+        }),
+      ).rejects.toThrow("count must be an integer from 1 to 40.");
+    }
+    expect(endpointMockState.calls).toHaveLength(0);
+  });
 });

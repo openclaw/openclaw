@@ -9,7 +9,7 @@ import {
   mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringArrayParam,
   readStringParam,
@@ -203,12 +203,17 @@ export async function executeParallelWebSearchProviderTool(
   if (searchQueries.length === 0) {
     return invalidSearchQueriesPayload();
   }
-  const requestedCount =
-    readNumberParam(args, "count", { integer: true }) ??
-    (typeof searchConfig?.maxResults === "number" ? searchConfig.maxResults : undefined);
+  const requestedCount = readPositiveIntegerParam(args, "count", {
+    max: 40,
+    message: "count must be an integer from 1 to 40.",
+  });
+  const configuredCount =
+    typeof searchConfig?.maxResults === "number" ? searchConfig.maxResults : undefined;
   // Always pass max_results so Parallel matches the openclaw web_search default
   // of 5 instead of Parallel's own default of 10.
-  const count = resolveParallelSearchCount(requestedCount ?? DEFAULT_SEARCH_COUNT);
+  const count = resolveParallelSearchCount(
+    requestedCount ?? configuredCount ?? DEFAULT_SEARCH_COUNT,
+  );
   const sessionId = normalizeParallelSessionId(
     readStringParam(args, "session_id"),
     PARALLEL_SESSION_ID_MAX_LENGTH,
