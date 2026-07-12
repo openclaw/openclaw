@@ -163,6 +163,7 @@ export type ToolFact = {
   policyAllowed: EvidenceState;
   turnProjected: EvidenceState;
   existingSuccessfulCall?: boolean;
+  existingSuccessfulCallEvidenceRefs?: string[];
   disabled?: boolean;
   derivedRegistryLoaded?: boolean;
   selfReportedCallable?: boolean;
@@ -302,6 +303,7 @@ export function buildCapabilityRecords(facts: ToolFact[]): CapabilityRecord[] {
             ...fact.runtimeLoaded.evidenceRefs,
             ...fact.policyAllowed.evidenceRefs,
             ...fact.turnProjected.evidenceRefs,
+            ...(fact.existingSuccessfulCallEvidenceRefs ?? []),
           ]),
         };
       })

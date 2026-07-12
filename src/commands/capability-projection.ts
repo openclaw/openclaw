@@ -122,7 +122,11 @@ function selectionMode(
   return selection.mode;
 }
 
-function withProjection(facts: ToolFact[], trajectory: TrajectoryCollection): ToolFact[] {
+function withProjection(
+  facts: ToolFact[],
+  trajectory: TrajectoryCollection,
+  resultEvidenceRefs: ReadonlyMap<string, string[]>,
+): ToolFact[] {
   if (!trajectory.compiled) {
     return facts.map((fact) => ({
       ...fact,
@@ -133,6 +137,7 @@ function withProjection(facts: ToolFact[], trajectory: TrajectoryCollection): To
         reasonCode: trajectory.errorCode ?? "MISSING_SESSION_PROJECTION",
       },
       existingSuccessfulCall: false,
+      existingSuccessfulCallEvidenceRefs: [],
     }));
   }
   const projected = new Set(trajectory.compiled.toolNames);
@@ -145,7 +150,46 @@ function withProjection(facts: ToolFact[], trajectory: TrajectoryCollection): To
       evidenceRefs: ["context-compiled"],
     },
     existingSuccessfulCall: successful.has(fact.name),
+    existingSuccessfulCallEvidenceRefs: resultEvidenceRefs.get(fact.name) ?? [],
   }));
+}
+
+function buildExistingResultEvidence(
+  facts: ToolFact[],
+  trajectory: TrajectoryCollection,
+): { records: EvidenceRecord[]; refsByTool: Map<string, string[]> } {
+  const factsByName = new Map(facts.map((fact) => [fact.name, fact]));
+  const refsByTool = new Map<string, string[]>();
+  const results = trajectory.successfulToolResults
+    .filter((result) => factsByName.has(result.toolName))
+    .toSorted(
+      (left, right) =>
+        left.ts.localeCompare(right.ts) ||
+        left.toolName.localeCompare(right.toolName) ||
+        left.runId.localeCompare(right.runId),
+    );
+  const records = results.map<EvidenceRecord>((result, index) => {
+    const id = `existing-tool-result-${index + 1}`;
+    refsByTool.set(result.toolName, [...(refsByTool.get(result.toolName) ?? []), id]);
+    return {
+      id,
+      rank: 1,
+      kind: "existing_tool_result",
+      source: "existing tool result",
+      observedAt: result.ts,
+      periodRelation: "exact_turn",
+      status: "collected",
+      fields: {
+        toolName: result.toolName,
+        runId: result.runId,
+        success: true,
+        operationClass: factsByName.get(result.toolName)?.mutationRisk ?? "unknown",
+      },
+      redactionApplied: true,
+    };
+  });
+  records.forEach(validateEvidenceStrings);
+  return { records, refsByTool };
 }
 
 function safeCollectionError(input: CollectionError): CollectionError {
@@ -282,18 +326,21 @@ export function buildCapabilityProjectionReport(
       };
   validateEvidenceStrings(contextEvidence);
   const sanitizedInputEvidence = input.evidence.map(sanitizeEvidenceRecord);
-  const evidence = [contextEvidence, ...sanitizedInputEvidence].sort(
-    (a, b) =>
-      a.rank - b.rank ||
-      (a.observedAt ?? "~").localeCompare(b.observedAt ?? "~") ||
-      a.id.localeCompare(b.id),
-  );
   const facts = collectToolFactsFromSanitizedEvidence({
     evidence: sanitizedInputEvidence,
     compiled,
     evidenceWindow: input.evidenceWindow,
   });
-  const capabilities = buildCapabilityRecords(withProjection(facts, input.trajectory));
+  const resultEvidence = buildExistingResultEvidence(facts, input.trajectory);
+  const evidence = [contextEvidence, ...resultEvidence.records, ...sanitizedInputEvidence].sort(
+    (a, b) =>
+      a.rank - b.rank ||
+      (a.observedAt ?? "~").localeCompare(b.observedAt ?? "~") ||
+      a.id.localeCompare(b.id),
+  );
+  const capabilities = buildCapabilityRecords(
+    withProjection(facts, input.trajectory, resultEvidence.refsByTool),
+  );
   const lowConfidence = !compiled;
   const hasUnknownRequiredEvidence = capabilities.some((capability) =>
     capability.tools

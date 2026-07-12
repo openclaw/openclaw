@@ -425,8 +425,15 @@ describe("capability projection acceptance fixtures", () => {
         successful: ["memory_get"],
       }),
     );
-    expect(tool(report, "memory", "memory_get").callabilityStatus).toBe(
-      "verified_callable_read_only",
+    const memoryGet = tool(report, "memory", "memory_get");
+    expect(memoryGet.callabilityStatus).toBe("verified_callable_read_only");
+    expect(memoryGet.evidenceRefs).toContain("existing-tool-result-1");
+    expect(report.evidence).toContainEqual(
+      expect.objectContaining({
+        id: "existing-tool-result-1",
+        kind: "existing_tool_result",
+        fields: expect.objectContaining({ toolName: "memory_get", success: true }),
+      }),
     );
   });
 
