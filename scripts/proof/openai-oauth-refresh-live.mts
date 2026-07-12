@@ -54,11 +54,18 @@ async function runCase(
 let allPassed = true;
 console.log("=== #103578 bounded OAuth error proof ===\n");
 
-// Case 1 — secret in error_description is redacted.
+// Case 1 — secret values in OAuth token response fields are redacted.
+// Real OAuth endpoints can echo tokens back in error responses, e.g.:
+// {"error":"invalid_grant","refresh_token":"sk-abc123","access_token":"sk-xyz"}
 const secret = "oauth-refresh-secret-abc123";
 const ok1 = await runCase(
   "Case 1 — secret redacted from error body",
-  JSON.stringify({ error: "invalid_grant", error_description: `Bad token: ${secret}` }),
+  JSON.stringify({
+    error: "invalid_grant",
+    error_description: "Token refresh failed",
+    refresh_token: secret,
+    access_token: `sk-${secret}`,
+  }),
   (detail) =>
     typeof detail === "string" && detail.includes("invalid_grant") && !detail.includes(secret),
 );
