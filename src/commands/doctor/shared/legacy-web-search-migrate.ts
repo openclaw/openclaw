@@ -88,6 +88,9 @@ function resolveLegacySearchConfig(raw: unknown): JsonRecord | undefined {
 }
 
 function copyLegacyProviderConfig(search: JsonRecord, providerKey: string): JsonRecord | undefined {
+  if (!Object.hasOwn(search, providerKey)) {
+    return undefined;
+  }
   const current = search[providerKey];
   return isRecord(current) ? cloneRecord(current) : undefined;
 }
@@ -103,7 +106,9 @@ function hasMappedLegacyWebSearchConfig(
   if (hasOwnKey(search, "apiKey")) {
     return true;
   }
-  return getLegacyWebSearchProviderIds(owners).some((providerId) => isRecord(search[providerId]));
+  return getLegacyWebSearchProviderIds(owners).some(
+    (providerId) => Object.hasOwn(search, providerId) && isRecord(search[providerId]),
+  );
 }
 
 function resolveLegacyGlobalWebSearchMigration(
