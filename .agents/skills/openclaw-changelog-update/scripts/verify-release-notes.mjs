@@ -750,6 +750,12 @@ function contributionRecordMetadataReferences(record) {
   return references;
 }
 
+export function renderedContributionRecordReferences(record, writeLedger) {
+  // Write mode replaces the existing generated record. Validating stale record
+  // references here would make the verifier unable to repair its own output.
+  return writeLedger ? [] : contributionRecordMetadataReferences(record);
+}
+
 export function contaminatingPullRequestReferences({
   noteReferences,
   recordedReferences,
@@ -2155,11 +2161,10 @@ function main() {
     ...source.revertedReferences,
     ...shippedExclusions.pullRequests,
   ]);
-  const effectiveRenderedRecord = options.writeLedger
-    ? withoutExcludedContributionRecords(renderedRecord, excludedRecordedReferences)
-    : renderedRecord;
-  const effectiveRenderedRecordReferences =
-    contributionRecordMetadataReferences(effectiveRenderedRecord);
+  const effectiveRenderedRecordReferences = renderedContributionRecordReferences(
+    renderedRecord,
+    options.writeLedger,
+  );
   let priorRecord = { legacyIssues: new Map(), pullRequests: new Map() };
   if (options.seedRef) {
     const seedChangelog = git(["show", `${options.seedRef}:CHANGELOG.md`]);

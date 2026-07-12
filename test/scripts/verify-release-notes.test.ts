@@ -15,6 +15,7 @@ import {
   highlightCountError,
   persistGithubSnapshot,
   releaseNoteReferences,
+  renderedContributionRecordReferences,
   standardRevertedHash,
   subtractShippedPullRequests,
   withoutExcludedContributionRecords,
@@ -375,6 +376,18 @@ describe("release-note verification", () => {
         seededPullRequests: new Set([97118]),
       }),
     ).toEqual([]);
+  });
+
+  it("ignores the stale generated record while rewriting it", () => {
+    const record = {
+      pullRequests: new Map([
+        [104732, { references: [102289], thanks: ["fuller-stack-dev"] }],
+      ]),
+      legacyIssues: new Map(),
+    };
+
+    expect(renderedContributionRecordReferences(record, true)).toEqual([]);
+    expect(renderedContributionRecordReferences(record, false)).toEqual([104732, 102289]);
   });
 
   it("excludes Unreleased records from a cumulative shipped tag boundary", () => {
