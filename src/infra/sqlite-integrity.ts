@@ -54,23 +54,18 @@ function runSqliteCheck(
 }
 
 function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string): void {
-  let violations: SqliteForeignKeyViolation[];
+  let violationCount = 0;
+  const violations: SqliteForeignKeyViolation[] = [];
   try {
-    const statement = database.prepare(`
-      SELECT "table", rowid, parent, fkid
-      FROM pragma_foreign_key_check
-      ORDER BY
-        "table" COLLATE BINARY,
-        rowid IS NOT NULL,
-        rowid,
-        parent COLLATE BINARY,
-        fkid
-      LIMIT ?
-    `);
+    // Use direct PRAGMA syntax because a real schema object can shadow the
+    // table-valued pragma name and make a corrupt database appear clean.
+    const statement = database.prepare("PRAGMA foreign_key_check;");
     statement.setReadBigInts(true);
-    violations = statement.all(
-      MAX_REPORTED_FOREIGN_KEY_VIOLATIONS + 1,
-    ) as SqliteForeignKeyViolation[];
+    // OpenClaw's Node >=22.19 floor includes iterate(), added in Node 22.13.
+    for (const violation of statement.iterate() as Iterable<SqliteForeignKeyViolation>) {
+      violationCount += 1;
+      retainSortedForeignKeyViolation(violations, violation);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(`SQLite foreign_key_check failed for ${databaseLabel}: ${message}`, {
@@ -81,13 +76,47 @@ function runSqliteForeignKeyCheck(database: DatabaseSync, databaseLabel: string)
     return;
   }
 
-  const details = violations
-    .slice(0, MAX_REPORTED_FOREIGN_KEY_VIOLATIONS)
-    .map(formatSqliteForeignKeyViolation);
-  if (violations.length > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
+  const details = violations.map(formatSqliteForeignKeyViolation);
+  if (violationCount > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
     details.push("additional violations omitted");
   }
   throw new Error(`SQLite foreign_key_check failed for ${databaseLabel}: ${details.join("; ")}`);
+}
+
+function retainSortedForeignKeyViolation(
+  retained: SqliteForeignKeyViolation[],
+  violation: SqliteForeignKeyViolation,
+): void {
+  retained.push(violation);
+  retained.sort(compareSqliteForeignKeyViolations);
+  if (retained.length > MAX_REPORTED_FOREIGN_KEY_VIOLATIONS) {
+    retained.pop();
+  }
+}
+
+function compareSqliteForeignKeyViolations(
+  left: SqliteForeignKeyViolation,
+  right: SqliteForeignKeyViolation,
+): number {
+  const tableOrder = Buffer.compare(Buffer.from(left.table), Buffer.from(right.table));
+  if (tableOrder !== 0) {
+    return tableOrder;
+  }
+  if (left.rowid === null || right.rowid === null) {
+    if (left.rowid !== right.rowid) {
+      return left.rowid === null ? -1 : 1;
+    }
+  } else if (left.rowid !== right.rowid) {
+    return left.rowid < right.rowid ? -1 : 1;
+  }
+  const parentOrder = Buffer.compare(Buffer.from(left.parent), Buffer.from(right.parent));
+  if (parentOrder !== 0) {
+    return parentOrder;
+  }
+  if (left.fkid === right.fkid) {
+    return 0;
+  }
+  return left.fkid < right.fkid ? -1 : 1;
 }
 
 function formatSqliteForeignKeyViolation(violation: SqliteForeignKeyViolation): string {

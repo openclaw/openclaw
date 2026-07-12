@@ -99,6 +99,37 @@ describe("assertSqliteIntegrity", () => {
     }
   });
 
+  it("cannot be bypassed by a schema object shadowing the table-valued pragma", () => {
+    const sqlite = requireNodeSqlite();
+    const database = new sqlite.DatabaseSync(":memory:");
+    try {
+      database.exec(`
+        PRAGMA foreign_keys = OFF;
+        CREATE TABLE parents (id INTEGER PRIMARY KEY);
+        CREATE TABLE children (
+          id INTEGER PRIMARY KEY,
+          parent_id INTEGER NOT NULL REFERENCES parents(id)
+        );
+        INSERT INTO children (id, parent_id) VALUES (1, 99);
+        CREATE TABLE pragma_foreign_key_check (
+          "table" TEXT NOT NULL,
+          rowid INTEGER,
+          parent TEXT NOT NULL,
+          fkid INTEGER NOT NULL
+        );
+      `);
+      expect(
+        database.prepare('SELECT "table", rowid, parent, fkid FROM pragma_foreign_key_check').all(),
+      ).toEqual([]);
+
+      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
+        /foreign_key_check failed for test database: children row 1 references parents \(foreign key 0\)/u,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
   it("identifies violations in WITHOUT ROWID tables", () => {
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(":memory:");
