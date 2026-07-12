@@ -20,10 +20,10 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 
 Agent sessions use Crabbox for tests and computationally intensive work.
 Classify source trust before selecting a backend. Trusted maintainer code uses
-the effective provider selected by Crabbox; the repository default is
-Blacksmith Testbox when the operator has not chosen another provider. Untrusted
-contributor or fork code must use secretless fork CI or sanitized direct AWS
-Crabbox; never sync or run it on the credential-hydrated Blacksmith workflow.
+an explicit provider when requested, then `CRABBOX_PROVIDER`, then the
+repository's Blacksmith Testbox default. Untrusted contributor or fork code
+must use secretless fork CI or sanitized direct AWS Crabbox; never sync or run
+it on the credential-hydrated Blacksmith workflow.
 
 A configured local provider does not turn agent tests into host-local tests.
 When Crabbox selects `local-container`, run the command through the wrapper so

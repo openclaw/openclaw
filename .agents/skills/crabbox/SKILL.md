@@ -42,16 +42,15 @@ Within those constraints, select the provider in this order:
 1. A provider explicitly requested by the user for this task.
 2. `CRABBOX_PROVIDER`, which is Crabbox's documented per-machine provider
    override.
-3. The effective repository/user configuration reported by
-   `crabbox config show --json`; `.crabbox.yaml` defaults this repository to
+3. The repository default in `.crabbox.yaml`, currently
    `blacksmith-testbox`.
 
-For ordinary trusted work, omit `--provider` so Crabbox applies the operator's
-effective preference. Pass `--provider` only when the task requires a specific
-backend, when enforcing an untrusted-source safety route, or when explicitly
-falling back after a provider failure. Do not add another OpenClaw-specific
-provider preference variable or silently claim that one backend proves the
-semantics of another.
+For ordinary trusted work, omit `--provider` so the existing wrapper precedence
+applies `CRABBOX_PROVIDER` before the repository default. Pass `--provider`
+only when the task requires a specific backend, when enforcing an
+untrusted-source safety route, or when explicitly falling back after a provider
+failure. Do not invent a user-config preference above repository config or
+silently claim that one backend proves the semantics of another.
 
 Selecting a local provider still requires the command to run through Crabbox.
 For example, `local-container` means the wrapper must start or reuse its Docker

@@ -85,7 +85,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '      if [ -n "${OPENCLAW_FAKE_CRABBOX_CONFIG_JSON+x}" ]; then',
       '        printf "%s" "$OPENCLAW_FAKE_CRABBOX_CONFIG_JSON"',
       "      else",
-      '        printf "%s" "{\\"provider\\":\\"blacksmith-testbox\\",\\"coordinator\\":\\"configured-broker\\",\\"brokerAuth\\":\\"configured\\"}"',
+      '        printf "%s" "{\\"coordinator\\":\\"configured-broker\\",\\"brokerAuth\\":\\"configured\\"}"',
       "      fi",
       "      exit 0",
       "    fi",
@@ -172,7 +172,7 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "    process.stderr.write('config unavailable\\n');",
     "    process.exit(status);",
     "  }",
-    '  process.stdout.write(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON || \'{"provider":"blacksmith-testbox","coordinator":"configured-broker","brokerAuth":"configured"}\');',
+    '  process.stdout.write(process.env.OPENCLAW_FAKE_CRABBOX_CONFIG_JSON || \'{"coordinator":"configured-broker","brokerAuth":"configured"}\');',
     "  process.exit(0);",
     "}",
     'if (args[0] === "whoami") {',
@@ -682,28 +682,6 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).not.toContain("failed fast; reusable leases expire");
-  });
-
-  it("uses Crabbox's effective configured provider when no override is set", () => {
-    const result = runWrapper(
-      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
-      ["run", "--", "echo ok"],
-      { configJson: { provider: "local-container" } },
-    );
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toContain("provider=local-container");
-  });
-
-  it("fails closed when effective provider config is unavailable", () => {
-    const result = runWrapper(
-      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
-      ["run", "--", "echo ok"],
-      { configStatus: 1 },
-    );
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain("could not resolve the effective provider");
   });
 
   it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
