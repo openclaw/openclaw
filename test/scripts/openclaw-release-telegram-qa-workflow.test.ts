@@ -581,8 +581,9 @@ describe("release Telegram QA workflow", () => {
     expect(captureStep?.run).not.toContain("readline.createInterface");
     expect(captureStep?.run).toContain("while (retained.length > 0");
     expect(captureStep?.run).toContain("redactQaGatewayDebugText");
-    expect(captureStep?.run).toContain("agentDefaultModel: .agents.defaults.model");
-    expect(captureStep?.run).toContain("modelIds: [.value.models[]?.id]");
+    expect(captureStep?.run).toContain("model_config_proofs");
+    expect(captureStep?.run).toContain("proof_bytes > 0 && proof_bytes <= 65536");
+    expect(captureStep?.run).not.toContain("-name openclaw.json");
     expect(
       job?.steps?.findIndex(
         (step) => step.name === "Capture isolated Telegram runtime diagnostics",
@@ -676,6 +677,13 @@ describe("release Telegram QA workflow", () => {
     expect(source).toContain('export HOME="${temp_root}/home"');
     expect(source).toContain('export XDG_CONFIG_HOME="${temp_root}/xdg-config"');
     expect(source).toContain('if [[ "${1:-}" == "--root-terminate-uid" ]]');
+    expect(source).toContain("capture_live_model_config() {");
+    expect(source).toContain('capture_live_model_config "$config_path"');
+    expect(source).toContain('proof_tmp="${RUNTIME_ROOT}/gateway-model-config-${BASHPID}.json"');
+    expect(source).toContain("proof_bytes > 0 && proof_bytes <= 65536");
+    expect(source).toContain("before the QA suite removes its temp config");
+    expect(source).toContain("agentDefaultModel:");
+    expect(source).toContain("modelIds: ([.value.models[]?.id][:128]");
   });
 
   it("keeps the generated SUT launcher valid bash", () => {
@@ -694,6 +702,82 @@ describe("release Telegram QA workflow", () => {
     });
     expect(result.status, result.stderr).toBe(0);
   });
+
+  it.runIf(process.platform === "linux")(
+    "captures only bounded model routing facts before candidate launch",
+    () => {
+      const createSutStep = workflowStep(
+        workflowJob("run_telegram"),
+        "Create isolated Telegram SUT identity and launcher",
+      );
+      const launcherSource = createSutStep.run?.match(
+        /<<'LAUNCHER'\n([\s\S]*?)\nLAUNCHER(?:\n|$)/u,
+      )?.[1];
+      const captureSource = launcherSource?.match(
+        /^capture_live_model_config\(\) \{[\s\S]*?^\}/mu,
+      )?.[0];
+      expect(captureSource).toBeTruthy();
+
+      const workdir = tempDirs.make("openclaw-telegram-model-proof-");
+      const runtimeRoot = join(workdir, "runtime");
+      const evidenceRoot = join(workdir, "evidence");
+      const configPath = join(workdir, "openclaw.json");
+      mkdirSync(runtimeRoot);
+      mkdirSync(evidenceRoot);
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          agents: {
+            defaults: {
+              model: { primary: "mock-openai/gpt-5.5", fallbacks: ["mock-openai/fallback"] },
+              models: { "mock-openai/gpt-5.5": {}, "mock-openai/fallback": {} },
+            },
+          },
+          models: {
+            providers: {
+              "mock-openai": {
+                api: "openai-responses",
+                endpoint: "https://example.invalid",
+                ignoredField: "not-exported",
+                models: [{ id: "gpt-5.5", ignoredField: "not-exported" }],
+              },
+            },
+          },
+        }),
+      );
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail\n${captureSource}\ncapture_live_model_config "$CONFIG_PATH"\nfind "$EVIDENCE_ROOT/trusted-runtime-diagnostics" -type f -name 'gateway-model-config-*.json' -print`,
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            CONFIG_PATH: configPath,
+            EVIDENCE_ROOT: evidenceRoot,
+            RUNTIME_ROOT: runtimeRoot,
+            RUNNER_GID: String(process.getgid?.() ?? 0),
+            RUNNER_UID: String(process.getuid?.() ?? 0),
+          },
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      const proofPath = result.stdout.trim();
+      const proofText = readFileSync(proofPath, "utf8");
+      expect(JSON.parse(proofText)).toEqual({
+        agentDefaultModel: {
+          primary: "mock-openai/gpt-5.5",
+          fallbacks: ["mock-openai/fallback"],
+        },
+        agentModelRefs: ["mock-openai/fallback", "mock-openai/gpt-5.5"],
+        providers: [{ id: "mock-openai", api: "openai-responses", modelIds: ["gpt-5.5"] }],
+      });
+      expect(proofText).not.toContain("not-exported");
+      expect(proofText).not.toContain("example.invalid");
+    },
+  );
 
   it("arms the boundary preload only in the gateway main thread", () => {
     const createSutStep = workflowStep(

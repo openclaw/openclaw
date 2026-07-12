@@ -1493,6 +1493,69 @@ jobs:
               pgrep -u "$SUT_UID" >/dev/null 2>&1
           }
 
+          capture_live_model_config() {
+            local config_path="${1:?}"
+            local config_id diagnostics_dir diagnostics_real proof_bytes proof_path proof_tmp
+            umask 077
+            config_id="$(printf '%s' "$config_path" | sha256sum | awk '{print $1}')"
+            diagnostics_dir="${EVIDENCE_ROOT}/trusted-runtime-diagnostics"
+            install -d -o "$RUNNER_UID" -g "$RUNNER_GID" -m 0700 "$diagnostics_dir"
+            [[ ! -L "$diagnostics_dir" ]]
+            diagnostics_real="$(realpath -e "$diagnostics_dir")"
+            [[ "$diagnostics_real" == "$diagnostics_dir" ]]
+            proof_path="${diagnostics_dir}/gateway-model-config-${config_id}.json"
+            proof_tmp="${RUNTIME_ROOT}/gateway-model-config-${BASHPID}.json"
+
+            # Capture only bounded routing identifiers before the QA suite removes its temp config.
+            jq -c '
+              def bounded_text:
+                if type == "string" then .[0:256] else null end;
+              def bounded_texts:
+                if type == "array" then
+                  [.[:64][] | bounded_text | select(. != null)]
+                else
+                  []
+                end;
+              {
+                agentDefaultModel: (
+                  if (.agents.defaults.model | type) == "string" then
+                    {
+                      primary: (.agents.defaults.model | bounded_text),
+                      fallbacks: []
+                    }
+                  elif (.agents.defaults.model | type) == "object" then
+                    {
+                      primary: (.agents.defaults.model.primary | bounded_text),
+                      fallbacks: (.agents.defaults.model.fallbacks | bounded_texts)
+                    }
+                  else
+                    {primary: null, fallbacks: []}
+                  end
+                ),
+                agentModelRefs: (
+                  ((.agents.defaults.models // {}) | keys | sort)[:128] |
+                  map(bounded_text | select(. != null))
+                ),
+                providers: (
+                  (.models.providers // {}) |
+                  to_entries |
+                  sort_by(.key) |
+                  .[:32] |
+                  map({
+                    id: (.key | bounded_text),
+                    api: (.value.api | bounded_text),
+                    modelIds: ([.value.models[]?.id][:128] | map(bounded_text | select(. != null)))
+                  })
+                )
+              }
+            ' "$config_path" >"$proof_tmp"
+            proof_bytes="$(stat -c '%s' "$proof_tmp")"
+            ((proof_bytes > 0 && proof_bytes <= 65536))
+            chown "$RUNNER_UID:$RUNNER_GID" "$proof_tmp"
+            chmod 0600 "$proof_tmp"
+            mv -f "$proof_tmp" "$proof_path"
+          }
+
           terminate_sut_uid() {
             pkill -TERM -U "$SUT_UID" >/dev/null 2>&1 || true
             pkill -TERM -u "$SUT_UID" >/dev/null 2>&1 || true
@@ -1642,6 +1705,7 @@ jobs:
           config_path="${temp_root}/openclaw.json"
           [[ -f "$config_path" && ! -L "$config_path" ]]
           [[ "$(realpath -e "$config_path")" == "$config_path" ]]
+          capture_live_model_config "$config_path"
 
           export OPENCLAW_QA_TEMP_ROOT="$temp_root"
           export HOME="${temp_root}/home"
@@ -2288,33 +2352,25 @@ jobs:
             sudo cat "$log_path" | node --import tsx "$redactor_script" "$output_path"
           done
 
-          mapfile -t gateway_configs < <(
-            sudo find "$RUNTIME_ROOT/tmp" -xdev -type f -name openclaw.json -print | sort
+          mapfile -t model_config_proofs < <(
+            find "$diagnostics_dir" -maxdepth 1 -type f -name 'gateway-model-config-*.json' -print |
+              sort
           )
-          ((${#gateway_configs[@]} > 0 && ${#gateway_configs[@]} <= 8))
-          for index in "${!gateway_configs[@]}"; do
-            config_path="$(sudo realpath -e "${gateway_configs[$index]}")"
-            case "$config_path" in
-              "$RUNTIME_ROOT"/tmp/*) ;;
-              *) echo "Telegram gateway config escaped the isolated runtime root." >&2; exit 1 ;;
-            esac
-            proof_path="${diagnostics_dir}/gateway-model-config-$((index + 1)).json"
-            sudo jq -e '
-              {
-                agentDefaultModel: .agents.defaults.model,
-                agentModelRefs: ((.agents.defaults.models // {}) | keys),
-                providers: (
-                  (.models.providers // {}) |
-                  to_entries |
-                  map({
-                    id: .key,
-                    api: .value.api,
-                    modelIds: [.value.models[]?.id]
-                  })
-                )
-              }
-            ' "$config_path" >"$proof_path"
-            chmod 0600 "$proof_path"
+          ((${#model_config_proofs[@]} > 0 && ${#model_config_proofs[@]} <= 8))
+          for proof_path in "${model_config_proofs[@]}"; do
+            [[ "$(stat -c '%F:%a' "$proof_path")" == "regular file:600" ]]
+            proof_bytes="$(stat -c '%s' "$proof_path")"
+            ((proof_bytes > 0 && proof_bytes <= 65536))
+            jq -e '
+              (keys | sort) == ["agentDefaultModel", "agentModelRefs", "providers"] and
+              (.agentDefaultModel | keys | sort) == ["fallbacks", "primary"] and
+              ([.agentDefaultModel.primary, .agentDefaultModel.fallbacks[], .agentModelRefs[]] |
+                all(. == null or type == "string")) and
+              (.providers | all(
+                (keys | sort) == ["api", "id", "modelIds"] and
+                ([.id, .api, .modelIds[]] | all(. == null or type == "string"))
+              ))
+            ' "$proof_path" >/dev/null
           done
 
       - name: Finalize trusted Telegram process-boundary evidence
