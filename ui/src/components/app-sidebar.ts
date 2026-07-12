@@ -31,6 +31,7 @@ import {
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import "./session-menu.ts";
+import "./sidebar-attention.ts";
 import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
@@ -773,7 +774,18 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const collapseLabel = t("nav.collapse");
     return html`
       <div class="sidebar-brand">
-        <div class="sidebar-brand__identity">
+        <a
+          class="sidebar-brand__identity"
+          href=${pathForRoute("chat", this.basePath)}
+          aria-label=${t("nav.chat")}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.onNavigate?.("chat");
+          }}
+        >
           <span class="sidebar-brand__logo-slot">
             <img
               class="sidebar-brand__logo ${this.logoVisit ? "sidebar-brand__logo--vacated" : ""}"
@@ -784,7 +796,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ${this.renderLogoStandIn()}
           </span>
           <span class="sidebar-brand__title">OpenClaw</span>
-        </div>
+        </a>
         <div class="sidebar-brand__actions">
           ${this.renderSearch()}
           <openclaw-tooltip .content=${`${collapseLabel} (⌘B)`}>
@@ -2664,6 +2676,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
+            <openclaw-sidebar-attention
+              .onNavigate=${(routeId: NavigationRouteId) => this.onNavigate?.(routeId)}
+            ></openclaw-sidebar-attention>
             <openclaw-sidebar-update-card
               .updateAvailable=${this.updateAvailable}
               .updateRunning=${this.updateRunning}
