@@ -351,11 +351,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   let restartedWithoutServiceManager = false;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
   const configuredPort = await resolveExplicitGatewayConfigPort();
-  const managedRestartContext = await resolveGatewayLifecycleContext(service).catch(async () => ({
+  let managedRestartContext = await resolveGatewayLifecycleContext(service).catch(async () => ({
     port: await resolveGatewayPortFallback(),
     env: process.env,
   }));
-  const managedRestartPort = configuredPort ?? managedRestartContext.port;
+  let managedRestartPort = configuredPort ?? managedRestartContext.port;
   // An unmanaged run loop keeps its lock port across in-process restarts, even
   // when config changes underneath it. Use that port for both the signal and
   // health proof or a valid CLI/env override looks like a failed restart.
@@ -375,8 +375,8 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
     },
     checkTokenDrift: true,
     expectedPort: configuredPort,
-    repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
-      await repairLoadedGatewayServiceForStart({
+    repairLoadedService: async ({ json, stdout, warn, state, issues }) => {
+      const result = await repairLoadedGatewayServiceForStart({
         action: "restart",
         service,
         port: configuredPort,
@@ -385,7 +385,13 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         warn,
         state,
         issues,
-      }),
+      });
+      // Repair rewrites the service definition, so the old command environment
+      // no longer identifies where the restarted gateway publishes readiness.
+      managedRestartContext = await resolveGatewayLifecycleContext(service);
+      managedRestartPort = configuredPort ?? managedRestartContext.port;
+      return result;
+    },
     onNotLoaded: async () => {
       if (process.platform === "darwin") {
         const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });

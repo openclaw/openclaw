@@ -20,6 +20,12 @@ type RestartPostCheckContext = {
 
 type RestartParams = {
   opts?: { json?: boolean };
+  repairLoadedService?: (ctx: {
+    json: boolean;
+    stdout: NodeJS.WritableStream;
+    state: unknown;
+    issues: unknown[];
+  }) => Promise<unknown>;
   postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
 };
 
@@ -350,6 +356,51 @@ describe("runDaemonRestart health checks", () => {
     ) as { env?: NodeJS.ProcessEnv };
     expect(waitParams.env?.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-service-state");
     expect(waitParams.env?.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
+  });
+
+  it("re-reads the installed service environment after restart repair", async () => {
+    service.readCommand
+      .mockResolvedValueOnce({
+        programArguments: ["openclaw", "gateway", "--port", "18789"],
+        environment: { OPENCLAW_STATE_DIR: "/tmp/openclaw-stale-state" },
+      })
+      .mockResolvedValue({
+        programArguments: ["openclaw", "gateway", "--port", "19001"],
+        environment: { OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state" },
+      });
+    repairLoadedGatewayServiceForStart.mockResolvedValue({
+      result: "restarted",
+      message: "Gateway service definition repaired and restarted.",
+      loaded: true,
+    });
+    runServiceRestart.mockImplementation(async (params: RestartParams) => {
+      await params.repairLoadedService?.({
+        json: true,
+        stdout: process.stdout,
+        state: {},
+        issues: [{ code: "version-mismatch", message: "old service" }],
+      });
+      await params.postRestartCheck?.({
+        json: true,
+        stdout: process.stdout,
+        warnings: [],
+        fail: (message: string) => {
+          throw new Error(message);
+        },
+      });
+      return true;
+    });
+
+    await runDaemonRestart({ json: true });
+
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        port: 19_001,
+        env: expect.objectContaining({
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-repaired-state",
+        }),
+      }),
+    );
   });
 
   it("repairs toward an explicitly configured gateway port", async () => {
