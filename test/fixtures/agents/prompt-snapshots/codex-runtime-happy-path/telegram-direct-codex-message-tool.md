@@ -541,7 +541,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
 ```json
 [
   {
-    "description": "Send/delete/manage channel messages. Supports actions: send.",
+    "description": "Send/manage channel messages. Supports actions: send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -559,7 +559,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each entry uses media.",
+          "description": "Attachments; each uses media.",
           "items": {
             "properties": {
               "media": {
@@ -581,7 +581,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "array"
         },
         "buffer": {
-          "description": "Base64 attachment payload; data URL ok.",
+          "description": "Base64/data-URL attachment.",
           "type": "string"
         },
         "caption": {
@@ -601,14 +601,14 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "effectId": {
-          "description": "Effect id/name for sendWithEffect.",
+          "description": "sendWithEffect id/name.",
           "type": "string"
         },
         "filename": {
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF/video as document; avoids compression.",
+          "description": "Send media as document; no compression.",
           "type": "boolean"
         },
         "gatewayToken": {
