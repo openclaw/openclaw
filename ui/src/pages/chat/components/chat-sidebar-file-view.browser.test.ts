@@ -136,6 +136,79 @@ describe.runIf(browserMode)("chat file editor", () => {
     await expect.poll(() => button(panel, "Save").textContent?.trim()).toBe("Save");
     expect(button(panel, "Save").disabled).toBe(false);
     expect(editor.textContent).toContain("newer");
+    await userEvent.click(button(panel, "Discard"));
+  });
+
+  it("restores an unsaved draft after the detail panel is closed", async () => {
+    const edit = { hash: "hash-1", save: vi.fn(), fetchLatest: vi.fn() };
+    const first = await mountFile({
+      kind: "file",
+      draftKey: "session-a\u0000notes.txt",
+      path: "notes.txt",
+      name: "notes.txt",
+      content: "before",
+      edit,
+    });
+
+    await userEvent.click(button(first, "Edit file"));
+    await userEvent.fill(first.querySelector<HTMLElement>(".cm-content")!, "unsaved draft");
+    first.remove();
+
+    const reopened = await mountFile({
+      kind: "file",
+      draftKey: "session-a\u0000notes.txt",
+      path: "notes.txt",
+      name: "notes.txt",
+      content: "before",
+      edit,
+    });
+    await expect
+      .poll(() => reopened.querySelector(".cm-content")?.textContent)
+      .toContain("unsaved");
+    expect(reopened.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("true");
+    expect(button(reopened, "Save").disabled).toBe(false);
+
+    await userEvent.click(button(reopened, "Discard"));
+  });
+
+  it("scopes retained drafts to the session file identity", async () => {
+    const edit = { hash: "hash-1", save: vi.fn(), fetchLatest: vi.fn() };
+    const first = await mountFile({
+      kind: "file",
+      draftKey: "session-a\u0000shared.txt",
+      path: "shared.txt",
+      name: "shared.txt",
+      content: "session a",
+      edit,
+    });
+
+    await userEvent.click(button(first, "Edit file"));
+    await userEvent.fill(first.querySelector<HTMLElement>(".cm-content")!, "session a draft");
+    first.remove();
+
+    const otherSession = await mountFile({
+      kind: "file",
+      draftKey: "session-b\u0000shared.txt",
+      path: "shared.txt",
+      name: "shared.txt",
+      content: "session b",
+      edit,
+    });
+    expect(otherSession.querySelector(".cm-content")?.textContent).toContain("session b");
+    expect(otherSession.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe(
+      "false",
+    );
+
+    const restored = await mountFile({
+      kind: "file",
+      draftKey: "session-a\u0000shared.txt",
+      path: "shared.txt",
+      name: "shared.txt",
+      content: "session a",
+      edit,
+    });
+    await expect.poll(() => restored.querySelector(".cm-content")?.textContent).toContain("draft");
+    await userEvent.click(button(restored, "Discard"));
   });
 
   it("reloads the latest content after a save conflict", async () => {

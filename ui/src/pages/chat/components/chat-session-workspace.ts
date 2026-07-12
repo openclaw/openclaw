@@ -494,6 +494,11 @@ function openFile(
         path: file.workspacePath || file.path || path,
         name,
         content: file.content,
+        draftKey: [
+          result.sessionKey,
+          result.root ?? "",
+          file.workspacePath || file.path || path,
+        ].join("\u0000"),
         root: result.root ?? null,
         language: languageForFile(name),
         line: opts.line ?? null,
