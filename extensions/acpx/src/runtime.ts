@@ -399,11 +399,16 @@ function isEnvAssignment(value: string): boolean {
 }
 
 function unwrapEnvCommand(parts: string[]): string[] {
-  if (!parts.length || basename(parts[0]) !== "env") {
+  const command = parts.at(0);
+  if (!command || basename(command) !== "env") {
     return parts;
   }
   let index = 1;
-  while (index < parts.length && isEnvAssignment(parts[index])) {
+  while (true) {
+    const part = parts.at(index);
+    if (!part || !isEnvAssignment(part)) {
+      break;
+    }
     index += 1;
   }
   return parts.slice(index);

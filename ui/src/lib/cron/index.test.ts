@@ -40,7 +40,7 @@ function createState(overrides: Partial<CronState> = {}): CronState {
     cronStatus: null,
     cronError: null,
     cronForm: { ...DEFAULT_CRON_FORM },
-    cronFormCollapsed: false,
+    cronCreateOpen: false,
     cronFieldErrors: {},
     cronEditingJobId: null,
     cronRunsJobId: null,
@@ -1499,7 +1499,8 @@ describe("cron controller", () => {
 
     expect(state.cronEditingJobId).toBeNull();
     expect(state.cronForm).toEqual({ ...DEFAULT_CRON_FORM });
-    expect(state.cronFieldErrors).toEqual(validateCronForm(DEFAULT_CRON_FORM));
+    // Fresh forms start visually clean; validation re-arms on change/submit.
+    expect(state.cronFieldErrors).toEqual({});
   });
 
   it("cloning a job switches to create mode and applies copy naming", () => {

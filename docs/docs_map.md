@@ -2858,6 +2858,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Further reading
   - H2: Related
 
+## concepts/session-search.md
+
+- Route: /concepts/session-search
+- Headings:
+  - H1: Session search
+  - H2: Visibility and output
+  - H2: Index lifecycle
+  - H2: Session search vs. memory search
+
 ## concepts/session-tool.md
 
 - Route: /concepts/session-tool

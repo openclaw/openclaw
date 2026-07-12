@@ -1263,6 +1263,30 @@
       },
       {
         "deferLoading": true,
+        "description": "Search your own past sessions for matching user and assistant text. Follow up with sessions_history using a returned sessionKey for full context.",
+        "inputSchema": {
+          "properties": {
+            "limit": {
+              "maximum": 25,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "query": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "sessionKey": {
+              "type": "string"
+            }
+          },
+          "required": ["query"],
+          "type": "object"
+        },
+        "name": "sessions_search",
+        "type": "function"
+      },
+      {
+        "deferLoading": true,
         "description": "Send message to visible session by sessionKey/label, or configured agent by agentId; sessionKey wins when redundant label metadata is present. Thread-scoped chats rejected; target parent channel session. Creates missing configured-agent main session; waits for reply when available.",
         "inputSchema": {
           "properties": {

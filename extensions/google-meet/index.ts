@@ -230,6 +230,7 @@ const GoogleMeetToolSchema = Type.Object({
       "join",
       "create",
       "status",
+      "transcript",
       "setup_status",
       "resolve_space",
       "preflight",
@@ -288,6 +289,12 @@ const GoogleMeetToolSchema = Type.Object({
   ),
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
+  sinceIndex: Type.Optional(
+    Type.Integer({
+      description: "For transcript, resume from the previous response's nextIndex.",
+      minimum: 0,
+    }),
+  ),
   message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
   timeoutMs: optionalPositiveIntegerSchema({ description: "Probe timeout in milliseconds" }),
   meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
@@ -400,6 +407,7 @@ type GoogleMeetGatewayToolAction =
   | "join"
   | "create"
   | "status"
+  | "transcript"
   | "recover_current_tab"
   | "setup_status"
   | "leave"
@@ -807,6 +815,38 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.transcript",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const sessionId = normalizeOptionalString(params?.sessionId);
+          if (!sessionId) {
+            sendError(respond, new Error("sessionId required"), ErrorCodes.INVALID_REQUEST);
+            return;
+          }
+          const sinceIndex = (params as { sinceIndex?: unknown } | undefined)?.sinceIndex;
+          if (
+            sinceIndex !== undefined &&
+            (typeof sinceIndex !== "number" || !Number.isSafeInteger(sinceIndex) || sinceIndex < 0)
+          ) {
+            sendError(
+              respond,
+              new Error("sinceIndex must be a non-negative safe integer"),
+              ErrorCodes.INVALID_REQUEST,
+            );
+            return;
+          }
+          const rt = await ensureRuntime();
+          respond(
+            true,
+            await rt.transcript(sessionId, sinceIndex === undefined ? {} : { sinceIndex }),
+          );
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.recoverCurrentTab",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -1120,6 +1160,11 @@ export default definePluginEntry({
               }
               case "status": {
                 return json(await callGoogleMeetGatewayFromTool({ config, action: "status", raw }));
+              }
+              case "transcript": {
+                return json(
+                  await callGoogleMeetGatewayFromTool({ config, action: "transcript", raw }),
+                );
               }
               case "recover_current_tab": {
                 return json(
