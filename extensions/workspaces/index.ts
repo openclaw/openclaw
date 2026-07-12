@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerWorkspaceGatewayMethods } from "./src/gateway.js";
 import { createWidgetHttpRouteHandler, WIDGETS_ROUTE_PREFIX } from "./src/http-route.js";
+import { WorkspaceStoreRouter } from "./src/store-router.js";
 import { WorkspaceStore } from "./src/store.js";
 import { createWorkspaceTools } from "./src/tools.js";
 
@@ -11,7 +12,8 @@ export default definePluginEntry({
   description: "Agent-composable Workspaces document and control-plane backend.",
   register(api) {
     const store = new WorkspaceStore();
-    registerWorkspaceGatewayMethods({ api, store });
+    const stores = new WorkspaceStoreRouter(store);
+    registerWorkspaceGatewayMethods({ api, store, storeForDomain: stores.forDomain });
     api.registerCli(
       async ({ program }) => {
         const { registerWorkspaceCli } = await import("./src/cli.js");
@@ -29,25 +31,32 @@ export default definePluginEntry({
         ],
       },
     );
-    api.registerTool((context) => createWorkspaceTools({ api, context, store }), {
-      names: [
-        "workspace_get",
-        "workspace_tab_create",
-        "workspace_tab_update",
-        "workspace_tab_delete",
-        "workspace_tabs_reorder",
-        "workspace_widget_add",
-        "workspace_widget_update",
-        "workspace_widget_move",
-        "workspace_widget_remove",
-        "workspace_layout_set",
-        "workspace_replace",
-        "workspace_widget_scaffold",
-        "workspace_undo",
-        "workspace_data_read",
-      ],
-      optional: true,
-    });
+    api.registerTool(
+      (context) => createWorkspaceTools({ api, context, store, storeForDomain: stores.forDomain }),
+      {
+        names: [
+          "workspace_get",
+          "workspace_tab_get",
+          "workspace_change_request_create",
+          "workspace_change_request_list",
+          "workspace_change_request_cancel",
+          "workspace_tab_create",
+          "workspace_tab_update",
+          "workspace_tab_delete",
+          "workspace_tabs_reorder",
+          "workspace_widget_add",
+          "workspace_widget_update",
+          "workspace_widget_move",
+          "workspace_widget_remove",
+          "workspace_layout_set",
+          "workspace_replace",
+          "workspace_widget_scaffold",
+          "workspace_undo",
+          "workspace_data_read",
+        ],
+        optional: true,
+      },
+    );
 
     // Declares the Workspaces tab; the Control UI renders its bundled view
     // (BUNDLED_TAB_VIEWS "workspaces/workspaces") only while this plugin is
