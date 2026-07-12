@@ -52,6 +52,8 @@ export type CliSessionReseedReceipt = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Resume with the backend's fork argument once, then clear before process start. */
+  forkNextResume?: true;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
   forceReuse?: boolean;
   authProfileId?: string;
@@ -297,12 +299,14 @@ export type SessionEntry = {
   inheritedToolDeny?: string[];
   /** Session-scoped tool allow entries inherited from the caller that created this session. */
   inheritedToolAllow?: string[];
-  /** Plugin id that created this session through api.runtime.subagent. */
+  /** Plugin id that owns this session through a trusted runtime creation seam. */
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
   restartRecoveryRuns?: RestartRecoveryRun[];
+  /** Keeps automatic restart recovery limited to replay-safe tools until the run terminates. */
+  restartRecoveryForceSafeTools?: true;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */
@@ -375,6 +379,8 @@ export type SessionEntry = {
   execSecurity?: string;
   execAsk?: string;
   execNode?: string;
+  /** Working directory interpreted only by the bound exec node. */
+  execCwd?: string;
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;

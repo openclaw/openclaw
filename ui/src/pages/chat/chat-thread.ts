@@ -4,6 +4,7 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { t } from "../../i18n/index.ts";
 import type {
   ChatItem,
   MessageGroup,
@@ -39,6 +40,8 @@ import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {
   sessionKey: string;
+  /** Invalidates cached display copy when the active UI language changes. */
+  locale?: string;
   messages: unknown[];
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
@@ -46,6 +49,10 @@ export type BuildChatItemsProps = {
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
   showToolCalls: boolean;
+  /** True while the agent is visibly working (isChatRunWorking). */
+  runWorking?: boolean;
+  /** True while chat history is loading (initial load or background reload). */
+  loading?: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
   historyRenderLimit?: number;
@@ -546,7 +553,11 @@ function refreshOpenCallIds(
       openCallIndexes.delete(callId);
     }
   }
-  for (const callId of unresolvedToolCallIds(coalesced[callIndex])) {
+  const item = coalesced[callIndex];
+  if (!item) {
+    return;
+  }
+  for (const callId of unresolvedToolCallIds(item)) {
     openCallIndexes.set(callId, callIndex);
   }
 }
@@ -563,8 +574,9 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     for (const resultItem of resultItems) {
       const callId = resolveToolResultCallId(resultItem);
       const callIndex = callId ? openCallIndexes.get(callId) : undefined;
+      const callItem = callIndex === undefined ? undefined : coalesced[callIndex];
       const merged =
-        callIndex === undefined ? null : mergeToolCallResultPair(coalesced[callIndex], resultItem);
+        callIndex === undefined || !callItem ? null : mergeToolCallResultPair(callItem, resultItem);
       if (!merged || callIndex === undefined) {
         unmatchedResultItems.push(resultItem);
         continue;
@@ -584,10 +596,8 @@ function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
     if (unresolvedCallIds.size === 1) {
       const callId = unresolvedCallIds.values().next().value;
       const previousIndex = callId ? openCallIndexes.get(callId) : undefined;
-      if (
-        previousIndex !== undefined &&
-        unresolvedToolCallIds(coalesced[previousIndex]).size === 1
-      ) {
+      const previous = previousIndex === undefined ? undefined : coalesced[previousIndex];
+      if (previousIndex !== undefined && previous && unresolvedToolCallIds(previous).size === 1) {
         coalesced[previousIndex] = item;
         refreshOpenCallIds(openCallIndexes, coalesced, previousIndex);
         continue;
@@ -629,7 +639,7 @@ function annotateToolTurnOutcome(
   let sawAssistantReply = false;
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
-    if (item.kind !== "group") {
+    if (!item || item.kind !== "group") {
       continue;
     }
     const role = item.role.toLowerCase();
@@ -1142,12 +1152,11 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
           typeof marker.id === "string"
             ? `divider:compaction:${marker.id}`
             : `divider:compaction:${normalized.timestamp}:${i}`,
-        label: "Compacted history",
-        description:
-          "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
+        label: t("chat.compaction.label"),
+        description: t("chat.compaction.description"),
         action: {
           kind: "session-checkpoints",
-          label: "Open checkpoints",
+          label: t("chat.compaction.openCheckpoints"),
         },
         timestamp: normalized.timestamp ?? Date.now(),
       });
@@ -1236,6 +1245,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   for (let i = 0; i < maxLen; i++) {
     if (i < indexedSegments.length) {
       const segment = indexedSegments[i];
+      if (!segment) {
+        continue;
+      }
       const text = sanitizeStreamText(segment.text);
       const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
       const visibleText = usesAccumulatedText
@@ -1300,11 +1312,30 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     }
   }
 
+  // Working spark contract: whenever the agent works with nothing visibly
+  // streaming (pre-first-token, or a queued send in flight), the thread shows
+  // the reading indicator where the reply will materialize. Streaming text
+  // and running tool rows take over as the signal once content flows.
+  // A visible running tool row already signals active work, so the spark is
+  // suppressed rather than stacked under it; hidden tool calls keep the spark.
+  const hasVisibleRunningTool =
+    props.showToolCalls &&
+    tools.some((message) => {
+      const record = asRecord(message);
+      return (
+        record?.["__openclawToolStreamLive"] === true &&
+        record["__openclawToolStreamResultReceived"] !== true
+      );
+    });
+  // The initial-load skeleton owns the empty thread; a background reload with
+  // content still visible keeps the spark (it is the only working signal).
+  const initialHistoryLoad = props.loading === true && items.length === 0;
   const hasPendingResponse =
     props.stream === null &&
-    queuedSends.some(
-      (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
-    );
+    ((props.runWorking === true && !hasVisibleRunningTool && !initialHistoryLoad) ||
+      queuedSends.some(
+        (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
+      ));
   if (hasPendingResponse) {
     items.push({
       kind: "reading-indicator",
@@ -1342,6 +1373,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
+    previous.locale === next.locale &&
     previous.messages === next.messages &&
     previous.toolMessages === next.toolMessages &&
     previous.streamSegments === next.streamSegments &&
@@ -1349,6 +1381,8 @@ function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsP
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
+    previous.runWorking === next.runWorking &&
+    previous.loading === next.loading &&
     previous.searchOpen === next.searchOpen &&
     previous.searchQuery === next.searchQuery &&
     previous.historyRenderLimit === next.historyRenderLimit

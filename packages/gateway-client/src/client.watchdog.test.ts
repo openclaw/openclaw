@@ -152,19 +152,18 @@ describe("GatewayClient", () => {
     client.stop();
   });
 
-  test("prefers connectChallengeTimeoutMs and still honors the legacy alias", () => {
+  test("resolves connectChallengeTimeoutMs with clamping and config fallback", () => {
     expect(resolveGatewayClientConnectChallengeTimeoutMs({})).toBe(
       DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
     );
-    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 0 })).toBe(
+    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectChallengeTimeoutMs: 0 })).toBe(
       MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
     );
-    expect(resolveGatewayClientConnectChallengeTimeoutMs({ connectDelayMs: 20_000 })).toBe(
-      MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
-    );
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({ connectChallengeTimeoutMs: 20_000 }),
+    ).toBe(MAX_CONNECT_CHALLENGE_TIMEOUT_MS);
     expect(
       resolveGatewayClientConnectChallengeTimeoutMs({
-        connectDelayMs: 2_000,
         connectChallengeTimeoutMs: 5_000,
       }),
     ).toBe(5_000);
@@ -275,14 +274,19 @@ describe("GatewayClient", () => {
       });
     });
 
-    let resolveFirstHello!: () => void;
-    let resolveSecondHello!: () => void;
+    const firstHelloResolvers: Array<() => void> = [];
+    const secondHelloResolvers: Array<() => void> = [];
     const firstHello = new Promise<void>((resolve) => {
-      resolveFirstHello = resolve;
+      firstHelloResolvers.push(resolve);
     });
     const secondHello = new Promise<void>((resolve) => {
-      resolveSecondHello = resolve;
+      secondHelloResolvers.push(resolve);
     });
+    const resolveFirstHello = firstHelloResolvers.at(0);
+    const resolveSecondHello = secondHelloResolvers.at(0);
+    if (!resolveFirstHello || !resolveSecondHello) {
+      throw new Error("hello promises did not initialize their resolvers");
+    }
     const closeEvents: Array<{ code: number; reason: string }> = [];
     let helloCount = 0;
     const client = new GatewayClient({

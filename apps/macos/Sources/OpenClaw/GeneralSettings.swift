@@ -1,7 +1,6 @@
 import AppKit
 import Observation
 import OpenClawDiscovery
-import OpenClawIPC
 import OpenClawKit
 import SwiftUI
 
@@ -74,8 +73,11 @@ struct GeneralSettings: View {
             SettingsCardGroup("App") {
                 SettingsCardToggleRow(
                     title: "Launch at login",
-                    subtitle: "Automatically start OpenClaw after you sign in.",
+                    subtitle: self.state.bundleLocationAllowsPersistentIntegration
+                        ? "Automatically start OpenClaw after you sign in."
+                        : "Move OpenClaw to Applications before enabling launch at login.",
                     binding: self.$state.launchAtLogin)
+                    .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
 
                 SettingsCardToggleRow(
                     title: "Show Dock icon",
@@ -124,7 +126,20 @@ struct GeneralSettings: View {
                     showsDivider: false)
                 {
                     Button("Import…") {
-                        BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded(force: true)
+                        Task { @MainActor in
+                            switch await BrowserProfileImportModel.shared.refresh(force: true) {
+                            case .offering:
+                                // The banner lives in the dashboard window; force
+                                // offers must surface it even if that window is closed.
+                                AppNavigationActions.openDashboard()
+                            case let .unavailable(title, message):
+                                let alert = NSAlert()
+                                alert.messageText = title
+                                alert.informativeText = message
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                        }
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)

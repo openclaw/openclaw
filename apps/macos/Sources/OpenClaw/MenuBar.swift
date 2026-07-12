@@ -80,7 +80,7 @@ struct OpenClawApp: App {
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
             if self.controlChannel.state == .connected {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
+                    Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
                 }
             }
         }
@@ -93,6 +93,7 @@ struct OpenClawApp: App {
         .onChange(of: self.state.connectionMode) { _, mode in
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            BrowserProfileImportModel.shared.handleConnectionModeChange()
         }
 
         Window("OpenClaw Settings", id: SettingsWindowOpener.windowID) {
@@ -193,11 +194,11 @@ struct OpenClawApp: App {
         let handler = StatusItemMouseHandlerView()
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
-            HoverHUDController.shared.dismiss(reason: "statusItemClick")
+            HoverHUDController.shared.dismiss()
             self.openDashboardWindow()
         }
         handler.onRightClick = { [self] in
-            HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
+            HoverHUDController.shared.dismiss()
             WebChatManager.shared.closePanel()
             self.isMenuPresented = true
             self.updateStatusHighlight()
@@ -400,6 +401,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.terminate(nil)
             return
         }
+        switch ApplicationRelocator.handleLaunch() {
+        case .terminating:
+            return
+        case let .continueLaunch(startUpdater):
+            if startUpdater {
+                self.updaterController.start()
+            }
+        }
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
         GatewayEndpointStore.admitPrimaryAppLaunch()
@@ -446,7 +455,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
+            Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
         }
 
         #if DEBUG
@@ -670,7 +679,12 @@ protocol UpdaterProviding: AnyObject {
     var automaticallyDownloadsUpdates: Bool { get set }
     var isAvailable: Bool { get }
     var updateStatus: UpdateStatus { get }
+    func start()
     func checkForUpdates(_ sender: Any?)
+}
+
+extension UpdaterProviding {
+    func start() {}
 }
 
 /// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
@@ -703,12 +717,18 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         updaterDelegate: self,
         userDriverDelegate: nil)
     let updateStatus = UpdateStatus()
+    private var started = false
 
     init(savedAutoUpdate: Bool) {
         super.init()
         let updater = self.controller.updater
         updater.automaticallyChecksForUpdates = savedAutoUpdate
         updater.automaticallyDownloadsUpdates = savedAutoUpdate
+    }
+
+    func start() {
+        guard !self.started else { return }
+        self.started = true
         self.controller.startUpdater()
     }
 
@@ -723,10 +743,11 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     }
 
     var isAvailable: Bool {
-        true
+        self.started
     }
 
     func checkForUpdates(_ sender: Any?) {
+        guard self.started else { return }
         self.controller.checkForUpdates(sender)
     }
 

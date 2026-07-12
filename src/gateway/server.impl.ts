@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 // and WebSocket surfaces, config reload hooks, and graceful restart/shutdown.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { WORKER_PROTOCOL_FEATURES } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
 import {
   getActiveEmbeddedRunCount,
@@ -39,6 +40,7 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -72,6 +74,7 @@ import { recordRemoteNodeInfo, removeRemoteNodeInfo } from "../skills/runtime/re
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
+import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
   STARTUP_UNAVAILABLE_GATEWAY_METHODS,
@@ -86,6 +89,7 @@ import {
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
 import { isLoopbackHost } from "./net.js";
+import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import {
@@ -135,10 +139,14 @@ import { loadGatewayTlsRuntime } from "./server/tls.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-origins.js";
 import type { WorkerBundleProducer, WorkerNpmArtifact } from "./worker-environments/bundle.js";
+import { createWorkerLiveEventReceiver } from "./worker-environments/live-events.js";
 import { createWorkerEnvironmentService } from "./worker-environments/service.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
+import { createWorkerTranscriptCommitter } from "./worker-environments/transcript-commit.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
+type LoadGatewayModelCatalogSnapshot =
+  typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
 
 const loadGatewayModelCatalogModule = createLazyRuntimeModule(
   () => import("./server-model-catalog.js"),
@@ -212,6 +220,10 @@ const loadGatewayCloseModule = createLazyRuntimeModule(() => import("./server-cl
 const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
   const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalog(...args);
+};
+const loadGatewayModelCatalogSnapshot: LoadGatewayModelCatalogSnapshot = async (...args) => {
+  const mod = await loadGatewayModelCatalogModule();
+  return mod.loadGatewayModelCatalogSnapshot(...args);
 };
 
 const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
@@ -755,9 +767,14 @@ export async function startGatewayServer(
     hasWorkerEnvironmentRecords;
   let workerBundleProducer: WorkerBundleProducer | undefined;
   let workerNpmArtifact: Promise<WorkerNpmArtifact> | undefined;
+  let resolveWorkerGatewayEndpoint: () =>
+    | { host: "127.0.0.1" | "::1"; port: number }
+    | undefined = () => undefined;
   const prepareWorkerInstallation = async (install: "bundle" | "npm") => {
     const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
-    workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer();
+    workerBundleProducer ??= workerEnvironmentRuntime.createWorkerBundleProducer({
+      protocolFeatures: WORKER_PROTOCOL_FEATURES,
+    });
     const bundle = await workerBundleProducer.prepare();
     if (install === "bundle") {
       return bundle;
@@ -774,6 +791,31 @@ export async function startGatewayServer(
     workerEnvironmentStore && shouldStartWorkerEnvironmentService
       ? (await loadWorkerTunnelRuntimeModule()).createWorkerTunnelManager()
       : undefined;
+  // Freeze restart-owned identities before any new attach can advance its environment.
+  // Only an exact pre-start owner may seed an ephemeral ACK after gateway state loss.
+  const workerEnvironmentRecordsAtStartup = workerEnvironmentStore?.list() ?? [];
+  const workerStartupBindings = workerEnvironmentRecordsAtStartup.flatMap((record) =>
+    record.state === "attached" && record.attachedSessionIds.length === 1
+      ? [
+          {
+            environmentId: record.environmentId,
+            runEpoch: record.ownerEpoch,
+            sessionId: record.attachedSessionIds[0]!,
+          },
+        ]
+      : [],
+  );
+  const workerStartupOwners = new Map(
+    workerStartupBindings.map((binding) => [binding.environmentId, binding.runEpoch] as const),
+  );
+  const workerLiveEvents =
+    workerEnvironmentStore && shouldStartWorkerEnvironmentService
+      ? createWorkerLiveEventReceiver({
+          getConfig: getRuntimeConfig,
+          startupBindings: workerStartupBindings,
+          startupOwners: workerStartupOwners,
+        })
+      : undefined;
   const workerEnvironmentService =
     workerEnvironmentStore && shouldStartWorkerEnvironmentService
       ? createWorkerEnvironmentService({
@@ -782,6 +824,11 @@ export async function startGatewayServer(
           resolveProvider: (providerId) => resolveWorkerProvider(pluginRegistry, providerId),
           prepareInstallation: prepareWorkerInstallation,
           tunnelManager: workerTunnelManager,
+          resolveWorkerGateway: () => resolveWorkerGatewayEndpoint(),
+          applyTranscriptCommit: createWorkerTranscriptCommitter({
+            getConfig: getRuntimeConfig,
+          }).commit,
+          ...(workerLiveEvents ? { liveEvents: workerLiveEvents } : {}),
           resolveSshIdentity: async ({ provider, leaseId, profile, keyRef }) => {
             const workerEnvironmentRuntime = await loadWorkerEnvironmentRuntimeModule();
             return await workerEnvironmentRuntime.resolveWorkerSshIdentity({
@@ -999,6 +1046,8 @@ export async function startGatewayServer(
     chatAbortControllers,
     chatQueuedTurns,
     toolEventRecipients,
+    getWorkerIngressEndpoint,
+    getMcpAppSandboxPort,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
       cfg: cfgAtStart,
@@ -1030,8 +1079,10 @@ export async function startGatewayServer(
       getReadiness,
       handleWatchNodeRequest: async (req, res) =>
         (await watchNodeRequestHandler.current?.(req, res)) ?? false,
+      workerIngressEnabled: Boolean(workerEnvironmentService),
     }),
   );
+  resolveWorkerGatewayEndpoint = getWorkerIngressEndpoint;
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
@@ -1157,6 +1208,7 @@ export async function startGatewayServer(
   };
   const runClosePrelude = async () => {
     markClosePreludeStarted();
+    disposeNodeConnectionNotifications(nodeRegistry);
     watchNodeHttpRuntime.close();
     clearPluginMetadataLifecycleCaches();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
@@ -1176,7 +1228,11 @@ export async function startGatewayServer(
       },
       disposeBrowserAuthRateLimiter: () => browserAuthRateLimiter.dispose(),
       stopModelPricingRefresh: runtimeState.stopModelPricingRefresh,
-      stopChannelHealthMonitor: () => runtimeState?.channelHealthMonitor?.stop(),
+      stopChannelHealthMonitor: async () => {
+        const monitor = runtimeState?.channelHealthMonitor;
+        monitor?.shutdown();
+        await monitor?.waitForIdle();
+      },
       stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
       clearSecretsRuntimeSnapshot,
       closeMcpServer: closeMcpLoopbackServerOnDemand,
@@ -1371,6 +1427,28 @@ export async function startGatewayServer(
     );
     Object.assign(runtimeState, runtimeServices);
 
+    const { createOperatorApprovalSessionEventRuntime } =
+      await import("./operator-approval-session-events.js");
+    // Managers publish through this runtime, while replay routes durable
+    // expiry back through the owning manager to release its parked waiter once.
+    const approvalManagersForReplay: {
+      exec?: ExecApprovalManager;
+      plugin?: ExecApprovalManager<PluginApprovalRequestPayload>;
+    } = {};
+    const approvalSessionEvents = createOperatorApprovalSessionEventRuntime({
+      clients,
+      sessionMessageSubscribers,
+      broadcastToConnIds,
+      controlUiBasePath,
+      reconcileTerminal: (record) => {
+        const manager =
+          record.kind === "exec"
+            ? approvalManagersForReplay.exec
+            : approvalManagersForReplay.plugin;
+        return manager?.reconcileDurableTerminal(record) ?? false;
+      },
+    });
+
     const {
       execApprovalManager,
       forwardPluginApprovalRequest,
@@ -1391,10 +1469,13 @@ export async function startGatewayServer(
           stopChannel,
           getChannelAutostartSuppression: channelManager.getAutostartSuppression,
           logChannels,
+          onApprovalLifecycle: approvalSessionEvents.publish,
         }),
         coreGatewayHandlers: coreGatewayHandlersLocal,
       };
     });
+    approvalManagersForReplay.exec = execApprovalManager;
+    approvalManagersForReplay.plugin = pluginApprovalManager;
     const attachedGatewayExtraHandlers: GatewayRequestHandlers = {
       ...pluginRegistry.gatewayHandlers,
       ...extraHandlers,
@@ -1627,12 +1708,15 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          getMcpAppSandboxPort,
           resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
           isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
           forwardPluginApprovalRequest,
           pluginApprovalManager,
+          listSessionPendingApprovals: approvalSessionEvents.replay,
           loadGatewayModelCatalog,
+          loadGatewayModelCatalogSnapshot,
           getHealthCache,
           refreshHealthSnapshot: refreshGatewayHealthSnapshotWithRuntime,
           logHealth,
@@ -1769,6 +1853,7 @@ export async function startGatewayServer(
         logWsControl,
         extraHandlers: attachedGatewayExtraHandlers,
         getMethodRegistry: () => attachedGatewayMethodRegistry,
+        ...(workerEnvironmentService ? { workerConnectionService: workerEnvironmentService } : {}),
         broadcast,
         context: gatewayRequestContext,
       }),
@@ -1984,7 +2069,10 @@ export async function startGatewayServer(
           (agentId) => terminalLaunchPolicy.resolve(agentId).ok,
         );
       },
-      commitTerminalConfig: terminalLaunchPolicy.commitConfig,
+      commitTerminalConfig: (nextConfig) => {
+        terminalLaunchPolicy.commitConfig();
+        workerLiveEvents?.rebindAll(nextConfig);
+      },
       channelManager,
       activateRuntimeSecrets,
       resolveSharedGatewaySessionGenerationForConfig,

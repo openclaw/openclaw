@@ -4,7 +4,10 @@ import ai.openclaw.app.chat.ChatCacheDatabase
 import ai.openclaw.app.chat.RoomChatCommandOutbox
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.i18n.NativeStringResources
+import ai.openclaw.app.i18n.notifyNativeLocaleChanged
 import android.app.Application
+import android.content.res.Configuration
 import android.os.StrictMode
 import androidx.room.withTransaction
 import kotlinx.coroutines.CoroutineScope
@@ -12,12 +15,17 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Android Application singleton that owns process-wide secure prefs and lazy NodeRuntime startup.
  */
 class NodeApp : Application() {
   val prefs: SecurePrefs by lazy { SecurePrefs(this) }
+
+  // System share senders can create overlapping Activity tasks; keep one bounded process queue.
+  internal val chatShareDraftSeq = AtomicLong()
+  internal val chatShareDraftQueue = ChatShareDraftQueue()
 
   private val runtimeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
   private val runtimeLock = Any()
@@ -97,6 +105,7 @@ class NodeApp : Application() {
 
   override fun onCreate() {
     super.onCreate()
+    NativeStringResources.install(this)
     if (BuildConfig.DEBUG) {
       StrictMode.setThreadPolicy(
         StrictMode.ThreadPolicy
@@ -113,5 +122,13 @@ class NodeApp : Application() {
           .build(),
       )
     }
+  }
+
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(newConfig)
+    // The process runtime survives Activity recreation, so retained text and
+    // serialized Home Canvas state need an explicit locale refresh signal.
+    NativeStringResources.setConfigurationLocales(newConfig)
+    notifyNativeLocaleChanged()
   }
 }

@@ -312,8 +312,10 @@ main model can read the screenshot directly.
   browser processes.
 - On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
   default to headless automatically when neither the environment nor profile/global
-  config explicitly chooses headed mode. `openclaw browser status --json`
-  reports `headlessSource` as `env`, `profile`, `config`,
+  config explicitly chooses headed mode. Use the unambiguous browser-level form
+  `openclaw browser --json status`; trailing `openclaw browser status --json`
+  also works because `status` does not define its own `--json`. The command reports
+  `headlessSource` as `env`, `profile`, `config`,
   `request`, `linux-display-fallback`, or `default`.
 - `OPENCLAW_BROWSER_HEADLESS=1` forces local managed launches headless for the
   current process. `OPENCLAW_BROWSER_HEADLESS=0` forces headed mode for ordinary
@@ -328,7 +330,7 @@ main model can read the screenshot directly.
   browser-level CDP endpoint for renderer, backend, device/driver, feature
   status, driver workarounds, and accelerated video capabilities. The result is
   cached for that browser process and exposed in full by
-  `openclaw browser status --json`. A passive status call does not launch Chrome.
+  `openclaw browser --json status`. A passive status call does not launch Chrome.
   Existing-session, extension, remote CDP, and sandbox browsers remain separate
   and are not inspected through this managed-host path.
 - Headless managed Chrome still uses the conservative `--disable-gpu` default.
@@ -786,7 +788,7 @@ directory.
 Compared to the managed `openclaw` profile, existing-session drivers are more constrained:
 
 - **Screenshots** - page captures and `--ref` element captures work; CSS `--element` selectors do not. Playwright is not required for page or ref-based element screenshots. (`--full-page` cannot combine with `--ref` or `--element` on any profile, not just existing-session.)
-- **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only (no button overrides or modifiers). `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, `fill`, and `evaluate` do not support per-call `timeoutMs` overrides. `select` accepts a single value. `batch` is not supported; send actions individually.
+- **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only (no button overrides or modifiers). `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill` do not support per-call `timeoutMs` overrides; `evaluate` does. `select` accepts a single value. `batch` is not supported; send actions individually.
 - **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - **Managed-only features** - PDF export, download interception, and `responsebody` still require the managed browser path.

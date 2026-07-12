@@ -60,7 +60,13 @@ stay on stable app builds.
 
 In the macOS app's embedded dashboard, clicking an external web link opens it in a resizable browser sidebar. Each link opens in its own tab; clicking the same link again reuses its existing tab. Drag tabs to reorder them, close them with the tab close button or a middle-click, and right-click a tab for **Open in Default Browser**, **Copy Link**, **Reload**, **Close Tab**, and **Close Other Tabs**. The window's titlebar back/forward controls and trackpad swipes navigate dashboard history; the sidebar's own back/forward controls navigate the active tab's history. The sidebar also has reload, open-in-default-browser, and close controls, and it remembers its width.
 
+The titlebar controls follow the app sidebar: while it is expanded, back/forward sit at its right edge next to the sidebar toggle; while it is collapsed, they make way for a search button (opens the command palette) and a new-session button.
+
 Right-click an external link to choose **Open in Sidebar**, **Open in Default Browser**, or **Copy Link**. Modified clicks and user-activated new-window links from the dashboard continue to open in the default browser; new-window links inside the sidebar open as new sidebar tabs. Regular browser-hosted Control UI pages keep the browser's normal link and context-menu behavior.
+
+## Import browser logins
+
+When the app runs against a local Gateway and a Chrome-family profile with cookies exists on the Mac, the dashboard window shows a dismissible banner offering to copy those cookies into an isolated managed profile that agents use for browsing. Choose a profile from the banner's **Import** control (Touch ID may be required); progress and the imported-cookie count appear inline, and only cookies are copied — passwords never leave the source browser. Dismissing the banner records the choice; **Settings → General → Browser login → Import…** re-offers it at any time. See [Browser](/cli/browser) for the underlying import flow and the `browser.allowSystemProfileImport` gate.
 
 ## Choose a Gateway mode
 
@@ -94,6 +100,7 @@ own docs.
 | Debug app discovery and connectivity     | [Gateway on macOS](/platforms/mac/bundled-gateway#debug-app-connectivity)                   |
 | Understand launchd behavior              | [Gateway lifecycle](/platforms/mac/child-process)                                           |
 | Fix permissions or signing/TCC issues    | [macOS permissions](/platforms/mac/permissions)                                             |
+| Detect the Mac you most recently used    | [Active computer presence](/nodes/presence)                                                 |
 | Connect to a remote Gateway              | [Remote control](/platforms/mac/remote)                                                     |
 | Read menu bar status and health checks   | [Menu bar](/platforms/mac/menu-bar), [Health checks](/platforms/mac/health)                 |
 | Use the embedded chat UI                 | [WebChat](/platforms/mac/webchat)                                                           |

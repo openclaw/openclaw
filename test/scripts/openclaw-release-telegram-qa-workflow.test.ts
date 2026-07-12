@@ -207,6 +207,44 @@ function runAdvisoryStatus(overrides: Record<string, string> = {}) {
 }
 
 describe("release Telegram QA workflow", () => {
+  it("attributes GitHub web-flow and unsigned release merges to their exact maintainer merger", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(source.match(/associatedPullRequests\(first:10\)/gu)).toHaveLength(2);
+    expect(source.match(/if \.signature == null then "missing"/gu)).toHaveLength(2);
+    expect(source.match(/\$signature_status" == "invalid"/gu)).toHaveLength(2);
+    expect(
+      source.match(/\$signature_status" == "missing" \|\| "\$signer" == "web-flow"/gu),
+    ).toHaveLength(2);
+    expect(source.match(/\.mergeCommit\.oid == \$sha/gu)).toHaveLength(2);
+    expect(source.match(/\.baseRefName == \$base/gu)).toHaveLength(2);
+    expect(source.match(/\.baseRepository\.nameWithOwner == \$repo/gu)).toHaveLength(2);
+    expect(source.match(/\.mergedBy\.login\] \| unique \| select\(length == 1\)/gu)).toHaveLength(
+      2,
+    );
+    expect(source.match(/collaborators\/\$\{permission_actor\}\/permission/gu)).toHaveLength(2);
+    expect((source.match(/extended-stable\/\[0-9\]/gu) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(source).not.toContain("collaborators/${signer}/permission");
+  });
+
+  it("resolves only candidate-specific provenance refs without fetching histories", () => {
+    const source = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(source.match(/branches-where-head/gu)).toHaveLength(2);
+    expect(source.match(/gh api --paginate/gu)).toHaveLength(2);
+    expect(
+      source.match(/git(?: -C \.candidate)? ls-remote --exit-code --refs origin/gu),
+    ).toHaveLength(2);
+    expect(
+      source.match(/git(?: -C \.candidate)? ls-remote origin 'refs\/tags\/v\*'/gu),
+    ).toHaveLength(2);
+    expect(source).not.toContain("'+refs/heads/release/*:refs/remotes/origin/release/*'");
+    expect(source).not.toContain(
+      "'+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'",
+    );
+    expect(source).not.toContain("'+refs/tags/v*:refs/tags/v*'");
+  });
+
   it("dispatches one accepted trusted-main child from release checks", () => {
     const releaseSource = readFileSync(RELEASE_CHECKS_PATH, "utf8");
     const reusableSource = readFileSync(WORKFLOW_PATH, "utf8");
@@ -310,6 +348,11 @@ describe("release Telegram QA workflow", () => {
   });
 
   it("binds dispatched and legacy reusable OIDC identity to the resolved main SHA", () => {
+    expect(
+      workflowStep(workflowJob("trusted_identity"), "Verify dispatched-main identity").env
+        ?.TARGET_REF,
+    ).toBe("${{ inputs.target_ref }}");
+
     const trustedSha = "b".repeat(40);
     const success = runIdentityVerification({
       expectedTrustedWorkflowSha: trustedSha,
@@ -491,6 +534,11 @@ describe("release Telegram QA workflow", () => {
     expect(runStep?.run).toContain("trap terminate_sut_uid_on_exit EXIT");
     expect(runStep?.run).toContain('"$OPENCLAW_QA_TELEGRAM_SUT_OPENCLAW_COMMAND" --terminate-uid');
     expect(runStep?.run).toContain("run_qa_attempt preflight --scenario channel-canary");
+    expect(runStep?.run).toContain('candidate_telegram_qa="$CANDIDATE_ROOT/extensions/qa-lab');
+    expect(runStep?.run).toContain("grep -Fq '\"openai/gpt-5.5\": {'");
+    expect(runStep?.run).toContain("! grep -Fq '\"openai/gpt-5.6-luna\": {'");
+    expect(runStep?.run).toContain('qa_model="mock-openai/gpt-5.5"');
+    expect(runStep?.run).toContain('--model "$qa_model"');
     expect(runStep?.run).toContain(
       "Telegram channel canary failed; skipping the remaining scenarios.",
     );
@@ -502,6 +550,13 @@ describe("release Telegram QA workflow", () => {
     expect(
       runStep?.run?.indexOf("run_qa_attempt preflight --scenario channel-canary"),
     ).toBeLessThan(runStep?.run?.indexOf("for attempt in 1 2") ?? -1);
+
+    const finalizeStep = job?.steps?.find(
+      (step) => step.name === "Finalize trusted Telegram process-boundary evidence",
+    );
+    expect(finalizeStep?.env?.RUN_LANE_OUTCOME).toBe("${{ steps.run_lane.outcome }}");
+    expect(finalizeStep?.run).toContain('--arg runLaneOutcome "$RUN_LANE_OUTCOME"');
+    expect(finalizeStep?.run).toContain('if $runLaneOutcome == "success" then 2 else 1 end');
   });
 
   it("serializes stderr behind the workflow-command pause", () => {

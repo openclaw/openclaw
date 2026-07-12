@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -516,8 +517,16 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedDeepPluginSdkDeclaration, "export {};\n", "utf8");
       await fs.writeFile(flatPluginSdkDeclaration, "export {};\n", "utf8");
       await fs.writeFile(omittedQaRuntimeChunk, "export {};\n", "utf8");
-      await fs.writeFile(omittedBuildStamp, "{}\n", "utf8");
-      await fs.writeFile(omittedRuntimePostBuildStamp, "{}\n", "utf8");
+      await fs.writeFile(
+        expectDefined(omittedBuildStamp, "omittedBuildStamp test invariant"),
+        "{}\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        expectDefined(omittedRuntimePostBuildStamp, "omittedRuntimePostBuildStamp test invariant"),
+        "{}\n",
+        "utf8",
+      );
       await fs.writeFile(packagedMap, "{}", "utf8");
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([

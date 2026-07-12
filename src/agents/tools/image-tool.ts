@@ -700,7 +700,10 @@ async function runImagePrompt(params: {
       const describeImage =
         imageProvider?.describeImage ?? imageToolProviderDeps.describeImageWithModel;
       if (params.images.length === 1) {
-        const image = params.images[0];
+        const image = params.images.at(0);
+        if (!image) {
+          throw new Error("Image input disappeared during model execution");
+        }
         const described = await describeImage({
           buffer: image.buffer,
           fileName: "image-1",
@@ -806,10 +809,10 @@ export function createImageTool(options?: {
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
   const description = options?.modelHasVision
-    ? "Analyze images with vision model. Use image for one path/URL, images for max 20. Only use this tool when images were NOT already provided; prompt images already visible."
+    ? "Analyze image(s): image one path/URL, images max 20. Prompt images already visible; use only for images not provided."
     : explicitImageModelConfig
-      ? "Analyze images with configured image model. Use image for one path/URL, images for max 20. Prompt says what to inspect."
-      : "Analyze images with available vision model. Use image for one path/URL, images for max 20. Prompt says what to inspect.";
+      ? "Analyze image(s) with configured model: image one path/URL, images max 20; prompt says inspection."
+      : "Analyze image(s) with available vision: image one path/URL, images max 20; prompt says inspection.";
 
   return {
     label: "Image",
@@ -1071,25 +1074,22 @@ export function createImageTool(options?: {
         workspaceDir: options?.workspaceDir,
       });
 
-      const imageDetails =
-        loadedImages.length === 1
-          ? {
-              image: loadedImages[0].resolvedImage,
-              ...(loadedImages[0].rewrittenFrom
-                ? { rewrittenFrom: loadedImages[0].rewrittenFrom }
-                : {}),
-            }
-          : {
-              images: loadedImages.map((img) =>
-                Object.assign(
-                  { image: img.resolvedImage },
-                  img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {},
-                ),
+      const singleImage = loadedImages.length === 1 ? loadedImages.at(0) : undefined;
+      const imageDetails = singleImage
+        ? {
+            image: singleImage.resolvedImage,
+            ...(singleImage.rewrittenFrom ? { rewrittenFrom: singleImage.rewrittenFrom } : {}),
+          }
+        : {
+            images: loadedImages.map((img) =>
+              Object.assign(
+                { image: img.resolvedImage },
+                img.rewrittenFrom ? { rewrittenFrom: img.rewrittenFrom } : {},
               ),
-            };
+            ),
+          };
 
       return buildTextToolResult(result, imageDetails);
     },
   };
 }
-export { testing as __testing };

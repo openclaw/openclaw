@@ -2,11 +2,18 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
+import type {
+  SessionCatalog,
+  SessionCatalogHost,
+  SessionCatalogSession,
+  SessionsCatalogListResult,
+} from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
 import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
   DEFAULT_SIDEBAR_PINNED_ROUTES,
+  isPluginsHubRoute,
   isSettingsNavigationRoute,
   navigationIconForRoute,
   scheduleRoutePreload,
@@ -25,6 +32,7 @@ import {
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import "./session-menu.ts";
+import "./sidebar-attention.ts";
 import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
@@ -41,6 +49,7 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
+import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
 import {
   readSessionDragData,
@@ -75,7 +84,16 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
-import { lobsterPetSeed, resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet.ts";
+import {
+  LOBSTER_LOGO_VISIT_EVENT,
+  LOBSTER_PET_BUILD_MULS,
+  LOBSTER_PET_CLAW_MULS,
+  lobsterPetSeed,
+  renderLobsterSvg,
+  resolveLobsterPetMode,
+  resolveLobsterRunOutcome,
+  type LobsterLogoVisitDetail,
+} from "./lobster-pet.ts";
 import { fetchSessionMenuWork } from "./session-menu-work.ts";
 import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 
@@ -97,6 +115,7 @@ type SidebarRecentSession = {
   channelSession?: boolean;
   workSession?: boolean;
   worktreeId?: string;
+  hasAutomation: boolean;
   unread: boolean;
 };
 
@@ -113,6 +132,7 @@ type SidebarSessionGroupMenuState = {
 };
 
 type SidebarSessionSortMode = "created" | "updated";
+type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
 type SidebarSessionGroupDropTarget = {
   group: string;
   position: "before" | "after";
@@ -120,8 +140,27 @@ type SidebarSessionGroupDropTarget = {
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
 const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
+const SIDEBAR_SESSION_PAGE_SIZE = 10;
+const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
+
+function limitSidebarSessionRows(rows: SidebarRecentSession[], limit: number) {
+  const requiredCount = rows.filter((row) => row.active || row.pinned).length;
+  let optionalSlots = Math.max(0, limit - requiredCount);
+  // Active and pinned sessions remain reachable without changing their
+  // relative order, even when their sort position falls outside the page.
+  return rows.filter((row) => {
+    if (row.active || row.pinned) {
+      return true;
+    }
+    if (optionalSlots === 0) {
+      return false;
+    }
+    optionalSlots -= 1;
+    return true;
+  });
+}
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -174,12 +213,39 @@ function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
+function sessionCatalogHostKey(catalogId: string, hostId: string): string {
+  return `${catalogId}\u0000${hostId}`;
+}
+
+function mergeCatalogSessionRows(
+  first: readonly SessionCatalogSession[],
+  second: readonly SessionCatalogSession[],
+): SessionCatalogSession[] {
+  const seen = new Set(first.map((session) => session.threadId));
+  return [...first, ...second.filter((session) => !seen.has(session.threadId))];
+}
+
+function preserveExpandedCatalogHost(
+  freshHost: SessionCatalogHost,
+  previous: SessionCatalogHost | undefined,
+): SessionCatalogHost {
+  if (!previous) {
+    return freshHost;
+  }
+  const { sessions, nextCursor, ...previousDetails } = previous;
+  const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
+  return {
+    ...previousDetails,
+    ...freshDetails,
+    sessions,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+  };
+}
+
 class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
   @property({ attribute: false }) activePluginTabId = "";
-  @property({ attribute: false }) activePluginHostId = "";
-  @property({ attribute: false }) activePluginThreadId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) canPairDevice = false;
@@ -225,10 +291,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
+  @state() private visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
-  @state() private nativeSessionSidebarReady = false;
+  @state() private sessionsScrollState: SidebarSessionsScrollState = "none";
+  @state() private sessionCatalogs: SessionCatalog[] = [];
+  @state() private loadingMoreSessionCatalogIds: ReadonlySet<string> = new Set();
+  @state() private logoVisit: LobsterLogoVisitDetail | null = null;
 
   private readonly subscriptions = new SubscriptionsController(this);
   private customizeMenuTrigger: HTMLElement | null = null;
@@ -244,7 +314,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private reconnectListRevision: number | null = null;
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
-  private nativeSessionSidebarLoadStarted = false;
+  private sessionsScrollElement: HTMLElement | null = null;
+  private sessionsScrollResizeObserver: ResizeObserver | null = null;
+  private sessionCatalogTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private sessionCatalogGeneration = 0;
+  private sessionCatalogRevision = 0;
+  private sessionCatalogRequestGeneration: number | null = null;
+  private readonly sessionCatalogPageDepths = new Map<string, number>();
+  private readonly sessionCatalogRevisions = new Map<string, number>();
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
@@ -252,6 +329,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   constructor() {
     super();
+    // Host listener: the footer pet announces logo stand-in phases (bubbling
+    // custom event) and the brand slot here renders the swap.
+    this.addEventListener(LOBSTER_LOGO_VISIT_EVENT, this.handleLogoVisit as EventListener);
     this.subscriptions
       .watch(
         () => this.context?.gateway,
@@ -281,24 +361,288 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.dismissTransientMenus();
     this.gatewaySource = null;
     this.gatewayClient = null;
+    this.sessionCatalogGeneration += 1;
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
     this.routePreloadTimers.clear();
+    this.sessionsScrollResizeObserver?.disconnect();
+    this.sessionsScrollResizeObserver = null;
+    this.sessionsScrollElement = null;
+    if (this.sessionCatalogTimer) {
+      globalThis.clearTimeout(this.sessionCatalogTimer);
+      this.sessionCatalogTimer = null;
+    }
     super.disconnectedCallback();
   }
 
   override updated() {
-    const advertised = this.pluginTabs().some(
-      (tab) => tab.id === "sessions" && (tab.pluginId === "codex" || tab.pluginId === "anthropic"),
-    );
-    if (!advertised || this.nativeSessionSidebarReady || this.nativeSessionSidebarLoadStarted) {
+    this.syncSessionsScrollObserver();
+    const snapshot = this.context?.gateway.snapshot;
+    if (
+      !snapshot?.connected ||
+      !snapshot.client ||
+      isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true ||
+      this.sessionCatalogTimer ||
+      this.sessionCatalogRequestGeneration === this.sessionCatalogGeneration
+    ) {
       return;
     }
-    this.nativeSessionSidebarLoadStarted = true;
-    void import("../pages/plugin/codex-sidebar.ts").then(() => {
-      this.nativeSessionSidebarReady = true;
-    });
+    void this.refreshSessionCatalogs();
+  }
+
+  private async refreshSessionCatalogs() {
+    const client = this.context?.gateway.snapshot.client;
+    if (!client || !this.connected) {
+      return;
+    }
+    const generation = this.sessionCatalogGeneration;
+    const revision = this.sessionCatalogRevision;
+    if (this.sessionCatalogRequestGeneration === generation) {
+      return;
+    }
+    this.sessionCatalogRequestGeneration = generation;
+    try {
+      const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        limitPerHost: 40,
+      });
+      if (generation !== this.sessionCatalogGeneration || client !== this.gatewayClient) {
+        return;
+      }
+      const catalogs = await this.refetchSessionCatalogPages({
+        catalogs: result.catalogs,
+        client,
+        generation,
+      });
+      if (
+        generation !== this.sessionCatalogGeneration ||
+        revision !== this.sessionCatalogRevision ||
+        client !== this.gatewayClient
+      ) {
+        return;
+      }
+      const revisedCatalogIds = new Set([
+        ...this.sessionCatalogs.map((catalog) => catalog.id),
+        ...catalogs.map((catalog) => catalog.id),
+      ]);
+      this.sessionCatalogs = catalogs;
+      for (const catalogId of revisedCatalogIds) {
+        this.sessionCatalogRevisions.set(
+          catalogId,
+          (this.sessionCatalogRevisions.get(catalogId) ?? 0) + 1,
+        );
+      }
+      this.sessionCatalogRevision += 1;
+    } catch {
+      // A transient poll failure must not collapse already visible or expanded pages.
+    } finally {
+      if (this.sessionCatalogRequestGeneration === generation) {
+        this.sessionCatalogRequestGeneration = null;
+      }
+      if (
+        generation === this.sessionCatalogGeneration &&
+        client === this.gatewayClient &&
+        this.isConnected
+      ) {
+        this.sessionCatalogTimer = globalThis.setTimeout(() => {
+          this.sessionCatalogTimer = null;
+          void this.refreshSessionCatalogs();
+        }, 30_000);
+      }
+    }
+  }
+
+  private async refetchSessionCatalogPages(params: {
+    catalogs: SessionCatalog[];
+    client: GatewayBrowserClient;
+    generation: number;
+  }): Promise<SessionCatalog[]> {
+    const previousCatalogs = new Map(this.sessionCatalogs.map((catalog) => [catalog.id, catalog]));
+    return Promise.all(
+      params.catalogs.map(async (catalog) => {
+        const previousHosts = new Map(
+          previousCatalogs.get(catalog.id)?.hosts.map((host) => [host.hostId, host]) ?? [],
+        );
+        const hosts = await Promise.all(
+          catalog.hosts.map(async (host) => {
+            const key = sessionCatalogHostKey(catalog.id, host.hostId);
+            const pageDepth = this.sessionCatalogPageDepths.get(key) ?? 0;
+            if (pageDepth === 0) {
+              return host;
+            }
+            const previous = previousHosts.get(host.hostId);
+            if (host.error) {
+              return preserveExpandedCatalogHost(host, previous);
+            }
+            let sessions = host.sessions;
+            let nextCursor = host.nextCursor;
+            let loadedPages = 0;
+            for (; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
+              let result: SessionsCatalogListResult;
+              try {
+                result = await params.client.request<SessionsCatalogListResult>(
+                  "sessions.catalog.list",
+                  { catalogId: catalog.id, cursors: { [host.hostId]: nextCursor } },
+                );
+              } catch {
+                return previous ?? host;
+              }
+              if (
+                params.generation !== this.sessionCatalogGeneration ||
+                params.client !== this.gatewayClient
+              ) {
+                return previous ?? host;
+              }
+              const pageHost = result.catalogs
+                .find((candidate) => candidate.id === catalog.id)
+                ?.hosts.find((candidate) => candidate.hostId === host.hostId);
+              if (!pageHost) {
+                return previous ?? host;
+              }
+              if (pageHost.error) {
+                return preserveExpandedCatalogHost({ ...host, ...pageHost }, previous ?? host);
+              }
+              sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
+              nextCursor = pageHost.nextCursor;
+            }
+            const {
+              nextCursor: _firstPageCursor,
+              sessions: _firstPageSessions,
+              ...freshHost
+            } = host;
+            return {
+              ...freshHost,
+              sessions,
+              ...(nextCursor ? { nextCursor } : {}),
+            };
+          }),
+        );
+        return { ...catalog, hosts };
+      }),
+    );
+  }
+
+  private async loadMoreSessionCatalog(catalogId: string) {
+    if (this.loadingMoreSessionCatalogIds.has(catalogId)) {
+      return;
+    }
+    const catalog = this.sessionCatalogs.find((candidate) => candidate.id === catalogId);
+    const cursors = Object.fromEntries(
+      (catalog?.hosts ?? []).flatMap((host) =>
+        host.nextCursor ? [[host.hostId, host.nextCursor] as const] : [],
+      ),
+    );
+    if (!catalog || Object.keys(cursors).length === 0) {
+      return;
+    }
+    const client = this.context?.gateway.snapshot.client;
+    if (!client || !this.connected) {
+      return;
+    }
+    const generation = this.sessionCatalogGeneration;
+    const revision = this.sessionCatalogRevisions.get(catalogId) ?? 0;
+    this.loadingMoreSessionCatalogIds = new Set([...this.loadingMoreSessionCatalogIds, catalogId]);
+    try {
+      const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+        catalogId,
+        cursors,
+      });
+      if (
+        generation !== this.sessionCatalogGeneration ||
+        revision !== (this.sessionCatalogRevisions.get(catalogId) ?? 0) ||
+        client !== this.gatewayClient
+      ) {
+        return;
+      }
+      const page = result.catalogs.find((candidate) => candidate.id === catalogId);
+      if (!page) {
+        return;
+      }
+      const pageHosts = new Map(page.hosts.map((host) => [host.hostId, host]));
+      const requestedHosts = new Set(Object.keys(cursors));
+      let updated = false;
+      const catalogs = this.sessionCatalogs.map((currentCatalog) => {
+        if (currentCatalog.id !== catalogId) {
+          return currentCatalog;
+        }
+        return {
+          ...currentCatalog,
+          hosts: currentCatalog.hosts.map((host) => {
+            const pageHost = pageHosts.get(host.hostId);
+            if (
+              !requestedHosts.has(host.hostId) ||
+              host.nextCursor !== cursors[host.hostId] ||
+              !pageHost ||
+              pageHost.error
+            ) {
+              return host;
+            }
+            updated = true;
+            const key = sessionCatalogHostKey(catalogId, host.hostId);
+            this.sessionCatalogPageDepths.set(
+              key,
+              (this.sessionCatalogPageDepths.get(key) ?? 0) + 1,
+            );
+            const { nextCursor, sessions, ...pageHostDetails } = pageHost;
+            const { nextCursor: _currentCursor, ...currentHost } = host;
+            return {
+              ...currentHost,
+              ...pageHostDetails,
+              sessions: mergeCatalogSessionRows(host.sessions, sessions),
+              ...(nextCursor ? { nextCursor } : {}),
+            };
+          }),
+        };
+      });
+      if (updated) {
+        this.sessionCatalogs = catalogs;
+        this.sessionCatalogRevisions.set(catalogId, revision + 1);
+        this.sessionCatalogRevision += 1;
+      }
+    } catch {
+      // Keep the current cursor so the user can retry the same page.
+    } finally {
+      if (generation === this.sessionCatalogGeneration) {
+        const loading = new Set(this.loadingMoreSessionCatalogIds);
+        loading.delete(catalogId);
+        this.loadingMoreSessionCatalogIds = loading;
+      }
+    }
+  }
+
+  private syncSessionsScrollObserver() {
+    const element = this.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    if (element !== this.sessionsScrollElement) {
+      this.sessionsScrollResizeObserver?.disconnect();
+      this.sessionsScrollElement = element;
+      this.sessionsScrollResizeObserver = null;
+      if (element && typeof ResizeObserver === "function") {
+        this.sessionsScrollResizeObserver = new ResizeObserver(() =>
+          this.updateSessionsScrollState(element),
+        );
+        this.sessionsScrollResizeObserver.observe(element);
+      }
+    }
+    if (element) {
+      this.updateSessionsScrollState(element);
+    }
+  }
+
+  private updateSessionsScrollState(element: HTMLElement) {
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    let nextState: SidebarSessionsScrollState = "none";
+    if (maxScrollTop > 1) {
+      if (element.scrollTop <= 1) {
+        nextState = "top";
+      } else if (element.scrollTop >= maxScrollTop - 1) {
+        nextState = "bottom";
+      } else {
+        nextState = "middle";
+      }
+    }
+    if (nextState !== this.sessionsScrollState) {
+      this.sessionsScrollState = nextState;
+    }
   }
 
   // The shell calls this before CSS hides the panel or drawer. Mounted menus
@@ -370,8 +714,18 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     this.clearSessionCache();
+    this.sessionCatalogGeneration += 1;
+    this.sessionCatalogRevision += 1;
     this.gatewaySource = gateway;
     this.gatewayClient = client;
+    if (this.sessionCatalogTimer) {
+      globalThis.clearTimeout(this.sessionCatalogTimer);
+      this.sessionCatalogTimer = null;
+    }
+    this.sessionCatalogs = [];
+    this.loadingMoreSessionCatalogIds = new Set();
+    this.sessionCatalogPageDepths.clear();
+    this.sessionCatalogRevisions.clear();
   }
 
   private clearSessionCache() {
@@ -380,26 +734,76 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.sessionsAgentId = null;
     this.sessionRowsByAgent = {};
     this.sessionCreatedOrder.clear();
+    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+  }
+
+  private readonly handleLogoVisit = (event: Event) => {
+    const detail = (event as CustomEvent<LobsterLogoVisitDetail>).detail;
+    this.logoVisit = detail.phase === "out" || !detail.look ? null : detail;
+  };
+
+  // Rare treat: on planned loads the footer pet's first visit perches here
+  // instead, filling in for the brand mark (see lobster-pet.ts logo visits).
+  private renderLogoStandIn() {
+    const visit = this.logoVisit;
+    if (!visit?.look) {
+      return nothing;
+    }
+    const look = visit.look;
+    const classes = [
+      "sidebar-brand__pet",
+      `lobster-pet--palette-${look.palette.id}`,
+      visit.phase === "leaving" ? "sidebar-brand__pet--leaving" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const style = [
+      `--lob-shell:${look.palette.shell}`,
+      `--lob-claw:${look.palette.claw}`,
+      `--lob-blink-delay:${look.blinkDelayS}s`,
+      `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
+      `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
+      `--lob-claw-scale:${LOBSTER_PET_CLAW_MULS[look.clawSize]}`,
+    ].join(";");
+    // Native title tooltip like the ledge sprite's names: no i18n surface.
+    const title = `${visit.name} · filling in for the logo`;
+    return html`
+      <span class=${classes} style=${style} title=${title}>${renderLobsterSvg(look)}</span>
+    `;
   }
 
   private renderBrand() {
     const collapseLabel = t("nav.collapse");
     return html`
       <div class="sidebar-brand">
-        <div class="sidebar-brand__identity">
-          <img
-            class="sidebar-brand__logo"
-            src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
-            alt=""
-            aria-hidden="true"
-          />
+        <a
+          class="sidebar-brand__identity"
+          href=${pathForRoute("new-session", this.basePath)}
+          aria-label=${titleForRoute("new-session")}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.onNavigate?.("new-session");
+          }}
+        >
+          <span class="sidebar-brand__logo-slot">
+            <img
+              class="sidebar-brand__logo ${this.logoVisit ? "sidebar-brand__logo--vacated" : ""}"
+              src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+              alt=""
+              aria-hidden="true"
+            />
+            ${this.renderLogoStandIn()}
+          </span>
           <span class="sidebar-brand__title">OpenClaw</span>
-        </div>
+        </a>
         <div class="sidebar-brand__actions">
           ${this.renderSearch()}
           <openclaw-tooltip .content=${`${collapseLabel} (⌘B)`}>
             <button
-              class="sidebar-brand__icon"
+              class="sidebar-brand__icon sidebar-brand__collapse"
               type="button"
               @click=${() => this.onToggleSidebar?.()}
               aria-label=${collapseLabel}
@@ -494,6 +898,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         channelSession: channelInfo.channelSession,
         workSession: Boolean(row.worktree || row.execNode),
         worktreeId: row.worktree?.id,
+        hasAutomation: row.hasAutomation === true,
         unread: row.unread === true,
       };
     };
@@ -528,10 +933,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       agents.length > 1
         ? this.sidebarRowsForAgent(this.expandedAgentId(), navigationState)
         : navigationState.visibleSessions;
-    const sections = groupSidebarSessionRows(rows, {
-      grouping: this.sessionsGrouping,
-      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
-    });
+    const sections = groupSidebarSessionRows(
+      limitSidebarSessionRows(rows, this.visibleSessionLimit),
+      {
+        grouping: this.sessionsGrouping,
+        knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
+      },
+    );
     return sections.flatMap((section) => {
       // Mirrors renderSessionSection: only headered sections can collapse.
       const showHeader = section.id === "pinned" || this.sessionsGrouping === "category";
@@ -627,6 +1035,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     this.clearSessionSelection();
+    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
     context.agentSelection.set(nextAgentId);
     void context.sessions.refresh({
       agentId: nextAgentId,
@@ -1323,13 +1732,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               aria-checked=${String(pinned)}
               @click=${() => this.togglePinnedRoute(routeId)}
             >
-              <span class="sidebar-customize-menu__check" aria-hidden="true">
-                ${pinned ? icons.check : nothing}
-              </span>
               <span class="nav-item__icon" aria-hidden="true"
                 >${icons[navigationIconForRoute(routeId)]}</span
               >
               <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+              <span class="sidebar-customize-menu__check" aria-hidden="true">
+                ${pinned ? icons.check : nothing}
+              </span>
             </button>
           `;
         })}
@@ -1344,7 +1753,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             this.closeCustomizeMenu({ restoreFocus: true });
           }}
         >
-          <span class="sidebar-customize-menu__check" aria-hidden="true"></span>
           <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
           <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
         </button>
@@ -1573,7 +1981,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const active =
       routeId === "config"
         ? this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId)
-        : this.activeRouteId === routeId;
+        : routeId === "plugins"
+          ? this.activeRouteId !== undefined && isPluginsHubRoute(this.activeRouteId)
+          : this.activeRouteId === routeId;
     // Disabled routes (e.g. Workboard with the plugin off) stay hidden rather
     // than rendering an inert nav item.
     if (!this.isRouteEnabled(routeId)) {
@@ -1690,31 +2100,51 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           title=${`${session.label} · ${session.key}`}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          ${session.unread
+          ${session.hasActiveRun
             ? html`<span
-                class="session-unread-dot sidebar-recent-session__unread"
+                class="session-run-spinner sidebar-recent-session__state"
                 role="img"
-                aria-label=${t("sessionsView.unread")}
+                aria-label=${t("sessionsView.activeRun")}
+                title=${t("sessionsView.activeRun")}
               ></span>`
-            : nothing}
+            : session.unread
+              ? html`<span
+                  class="session-unread-dot sidebar-recent-session__unread"
+                  role="img"
+                  aria-label=${t("sessionsView.unread")}
+                ></span>`
+              : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
             ${session.subtitle && session.workSession && session.subtitle !== session.label
               ? html`<span class="sidebar-recent-session__subtitle">${session.subtitle}</span>`
               : nothing}
           </span>
+          ${session.worktreeId || session.hasAutomation
+            ? html`<span class="session-row-badges">
+                ${session.worktreeId
+                  ? html`<span
+                      class="session-row-badge"
+                      role="img"
+                      aria-label=${t("sessionsView.worktreeSession")}
+                      title=${t("sessionsView.worktreeSession")}
+                      >${icons.gitBranch}</span
+                    >`
+                  : nothing}
+                ${session.hasAutomation
+                  ? html`<span
+                      class="session-row-badge"
+                      role="img"
+                      aria-label=${t("sessionsView.automationAttached")}
+                      title=${t("sessionsView.automationAttached")}
+                      >${icons.clock}</span
+                    >`
+                  : nothing}
+              </span>`
+            : nothing}
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
-          <span class="session-row-trail">
-            ${session.hasActiveRun
-              ? html`<span
-                  class="session-run-spinner"
-                  role="img"
-                  aria-label=${t("sessionsView.activeRun")}
-                  title=${t("sessionsView.activeRun")}
-                ></span>`
-              : session.meta}
-          </span>
+          <span class="session-row-trail">${session.meta}</span>
           <span class="session-row-actions">
             <button
               class="session-action session-action--pin"
@@ -1941,7 +2371,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     rows: SidebarRecentSession[],
     options: { showDraft: boolean; showFallback: boolean },
   ) {
-    const sections = groupSidebarSessionRows(rows, {
+    const visibleRows = limitSidebarSessionRows(rows, this.visibleSessionLimit);
+    const sections = groupSidebarSessionRows(visibleRows, {
       grouping: this.sessionsGrouping,
       // Stored-but-empty groups stay visible as sections so a freshly created
       // group is usable as a move target before its first session arrives.
@@ -1955,6 +2386,45 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           options.showFallback && rows.length === 0 && section.id === "ungrouped",
         ),
       )}
+      ${this.renderSessionPagination(rows, visibleRows.length)}
+    `;
+  }
+
+  private renderSessionPagination(rows: SidebarRecentSession[], visible: number) {
+    const canShowMore = visible < rows.length;
+    const collapsedVisible = limitSidebarSessionRows(rows, SIDEBAR_SESSION_PAGE_SIZE).length;
+    const canShowLess = visible > SIDEBAR_SESSION_SEE_LESS_THRESHOLD && visible > collapsedVisible;
+    if (!canShowMore && !canShowLess) {
+      return nothing;
+    }
+    return html`
+      <div class="sidebar-session-pagination">
+        ${canShowMore
+          ? html`<button
+              type="button"
+              class="sidebar-session-pagination__button"
+              aria-label=${t("chat.selectors.loadMoreSessions")}
+              @click=${() => {
+                this.visibleSessionLimit = visible + SIDEBAR_SESSION_PAGE_SIZE;
+              }}
+            >
+              ${t("chat.selectors.loadMoreSessions")}
+            </button>`
+          : nothing}
+        ${canShowLess
+          ? html`<button
+              type="button"
+              class="sidebar-session-pagination__button"
+              aria-label=${t("usage.details.collapse")}
+              @click=${() => {
+                this.clearSessionSelection();
+                this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+              }}
+            >
+              ${t("usage.details.collapse")}
+            </button>`
+          : nothing}
+      </div>
     `;
   }
 
@@ -2009,7 +2479,13 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const expandedAgentId = this.expandedAgentId();
     return html`
       <section class="sidebar-sessions">
-        <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+        <div
+          class="sidebar-recent-sessions sidebar-recent-sessions--scroll-${this
+            .sessionsScrollState}"
+          aria-label=${titleForRoute("sessions")}
+          @scroll=${(event: Event) =>
+            this.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+        >
           <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
             <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
             <button
@@ -2043,46 +2519,112 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 showDraft: Boolean(this.draftSessionAgentId),
                 showFallback: true,
               })}
+          ${this.renderSessionCatalogs()}
         </div>
       </section>
-      ${this.renderNativeSessionSidebars()}
     `;
   }
 
-  private renderNativeSessionSidebars() {
-    if (!this.nativeSessionSidebarReady) {
-      return nothing;
-    }
-    const tabs = this.pluginTabs().filter(
-      (candidate) =>
-        candidate.id === "sessions" &&
-        (candidate.pluginId === "codex" || candidate.pluginId === "anthropic"),
-    );
-    if (tabs.length === 0) {
-      return nothing;
-    }
-    const open = (pluginId: string, hostId?: string, threadId?: string) => {
-      this.onNavigate?.("plugin", {
-        search: pluginTabSearch({
-          pluginId,
-          id: "sessions",
-          ...(hostId && threadId ? { hostId, threadId } : {}),
-        }),
-      });
-    };
-    return tabs.map((tab) => {
-      const active = this.activePluginTabId === pluginTabKey(tab);
-      return html`<openclaw-codex-sidebar
-        .catalogKind=${tab.pluginId === "anthropic" ? "claude" : "codex"}
-        .client=${this.context?.gateway.snapshot.client ?? null}
-        .connected=${this.connected}
-        .basePath=${this.basePath}
-        .selectedHostId=${active ? this.activePluginHostId : ""}
-        .selectedThreadId=${active ? this.activePluginThreadId : ""}
-        .onOpenSession=${(hostId: string, threadId: string) => open(tab.pluginId, hostId, threadId)}
-        .onViewAll=${() => open(tab.pluginId)}
-      ></openclaw-codex-sidebar>`;
+  // Catalog groups render inside the shared sessions scroller. Sibling
+  // .sidebar-sessions sections would form a second scroll-less region that
+  // flex-squeezes under the shell body's overflow clip and paints rows over
+  // the following section.
+  private renderSessionCatalogs() {
+    return this.sessionCatalogs.map((catalog) => {
+      const sectionId = `catalog:${catalog.id}`;
+      const collapsed = this.collapsedSessionSections.has(sectionId);
+      const hosts = catalog.hosts;
+      const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
+      const loadingMore = this.loadingMoreSessionCatalogIds.has(catalog.id);
+      const hasMore = hosts.some((host) => Boolean(host.nextCursor));
+      return html`
+        <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
+          <div class="sidebar-recent-sessions__head">
+            <button
+              type="button"
+              class="sidebar-session-group-toggle"
+              aria-expanded=${String(!collapsed)}
+              aria-label=${catalog.label}
+              @click=${() => this.toggleSessionSection(sectionId)}
+            >
+              <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
+                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+              >
+              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
+              <span class="sidebar-session-group-count">${rows.length}</span>
+            </button>
+          </div>
+          ${collapsed
+            ? nothing
+            : html`<div class="sidebar-recent-sessions__list">
+                  ${rows.map(({ host, session }) =>
+                    this.renderCatalogSession(catalog, host, session),
+                  )}
+                </div>
+                ${hasMore
+                  ? html`<button
+                      type="button"
+                      class="sidebar-session-catalog-load-more"
+                      data-session-catalog-load-more=${catalog.id}
+                      ?disabled=${loadingMore}
+                      aria-busy=${String(loadingMore)}
+                      @click=${() => void this.loadMoreSessionCatalog(catalog.id)}
+                    >
+                      ${t("chat.selectors.loadMoreSessions")}
+                    </button>`
+                  : nothing}`}
+        </div>
+      `;
     });
+  }
+
+  private renderCatalogSession(
+    catalog: SessionCatalog,
+    host: SessionCatalogHost,
+    session: SessionCatalogSession,
+  ) {
+    const key =
+      session.openClawSessionKey ??
+      buildCatalogSessionKey({
+        catalogId: catalog.id,
+        hostId: host.hostId,
+        threadId: session.threadId,
+      });
+    const href = `${pathForRoute("chat", this.basePath)}${searchForSession(key)}`;
+    const hostSubtitle = catalog.hosts.length > 1 || host.kind === "node" ? host.label : undefined;
+    const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
+    const timestamp =
+      typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
+        ? rawTimestamp * 1000
+        : rawTimestamp;
+    return html`
+      <div class="sidebar-recent-session session-row-host" data-session-key=${key}>
+        <a
+          href=${href}
+          class="sidebar-recent-session__link"
+          title=${`${session.name || session.threadId} · ${host.label}`}
+          @click=${(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            this.onNavigate?.("chat", { search: searchForSession(key) });
+          }}
+        >
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name hover-marquee"
+              >${session.name || session.threadId}</span
+            >
+            ${hostSubtitle
+              ? html`<span class="sidebar-recent-session__subtitle">${hostSubtitle}</span>`
+              : nothing}
+          </span>
+          <span class="sidebar-recent-session__aside session-row-aside">
+            <span class="session-row-trail">${formatSidebarTimestamp(timestamp)}</span>
+          </span>
+        </a>
+      </div>
+    `;
   }
 
   private renderMoreSection() {
@@ -2096,7 +2638,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           aria-expanded=${String(expanded)}
         >
           <span class="nav-section__label-text">${t("nav.more")}</span>
-          <span class="nav-section__chevron"> ${icons.chevronDown} </span>
+          <span class="nav-section__chevron">${icons.chevronDown}</span>
         </button>
         <div class="nav-section__items">
           ${moreRoutes.map((routeId) => this.renderRoute(routeId))}
@@ -2161,6 +2703,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
+            <openclaw-sidebar-attention
+              .onNavigate=${(routeId: NavigationRouteId) => this.onNavigate?.(routeId)}
+            ></openclaw-sidebar-attention>
             <openclaw-sidebar-update-card
               .updateAvailable=${this.updateAvailable}
               .updateRunning=${this.updateRunning}
