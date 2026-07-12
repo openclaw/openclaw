@@ -179,12 +179,14 @@ describeControlUiE2e("MCP App sandbox proxy", () => {
       const url = new URL(route.request().url());
       expect(url.searchParams.get("ticket")).toBe(sandboxTicket);
       const csp = JSON.parse(url.searchParams.get("csp") ?? "{}") as ControlUiMcpAppCsp;
+      const sandboxCsp = buildControlUiMcpAppSandboxCspHeader(csp);
+      expect(sandboxCsp).toContain("frame-src 'none'");
       await route.fulfill({
         body: CONTROL_UI_MCP_APP_SANDBOX_PROXY_HTML,
         contentType: "text/html; charset=utf-8",
         headers: {
           "cache-control": "no-store",
-          "content-security-policy": buildControlUiMcpAppSandboxCspHeader(csp),
+          "content-security-policy": sandboxCsp,
           "x-frame-options": "SAMEORIGIN",
         },
       });
