@@ -972,7 +972,13 @@ describe("TUI PTY real backends", () => {
                 .map((line) => {
                   const row = JSON.parse(line) as Record<string, unknown>;
                   const message = row.message as Record<string, unknown> | undefined;
-                  return `type=${row.type} id=${row.id} parentId=${row.parentId} appendMode=${row.appendMode} role=${message?.role} sessionIdHeader=${row.type === "session" ? row.id : ""}`;
+                  return JSON.stringify({
+                    type: row.type,
+                    id: row.id,
+                    parentId: row.parentId,
+                    appendMode: row.appendMode,
+                    role: message?.role,
+                  });
                 })
                 .join("\n  ");
               return `${file}:\n  ${summary}`;
