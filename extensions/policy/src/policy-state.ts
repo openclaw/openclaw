@@ -25,7 +25,7 @@ const ALLOWLIST_DEFAULT_INGRESS_GROUP_POLICY_CHANNELS = new Set([
 ]);
 const OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS = new Set(["feishu", "qa-channel"]);
 
-export type PolicyAttestation = {
+type PolicyAttestation = {
   readonly checkedAt: string;
   readonly policy?: {
     readonly path: string;
@@ -57,14 +57,14 @@ export type PolicyEvidence = {
   readonly execApprovals?: readonly PolicyExecApprovalEvidence[];
 };
 
-export type PolicyChannelEvidence = {
+type PolicyChannelEvidence = {
   readonly id: string;
   readonly provider: string;
   readonly source: string;
   readonly enabled?: boolean;
 };
 
-export type PolicyMcpServerEvidence = {
+type PolicyMcpServerEvidence = {
   readonly id: string;
   readonly transport: "stdio" | "sse" | "streamable-http" | "unknown";
   readonly source: string;
@@ -72,7 +72,7 @@ export type PolicyMcpServerEvidence = {
   readonly url?: string;
 };
 
-export type PolicyToolEvidence = {
+type PolicyToolEvidence = {
   readonly id: string;
   readonly source: string;
   readonly line: number;
@@ -125,19 +125,19 @@ export type PolicySandboxPostureEvidence = {
   readonly explicit?: boolean;
 };
 
-export type PolicyModelProviderEvidence = {
+type PolicyModelProviderEvidence = {
   readonly id: string;
   readonly source: string;
 };
 
-export type PolicyModelRefEvidence = {
+type PolicyModelRefEvidence = {
   readonly ref: string;
   readonly provider: string;
   readonly model: string;
   readonly source: string;
 };
 
-export type PolicyNetworkEvidence = {
+type PolicyNetworkEvidence = {
   readonly id: string;
   readonly source: string;
   readonly value: boolean;
@@ -158,7 +158,7 @@ export type PolicyIngressEvidence = {
   readonly explicit?: boolean;
 };
 
-export type PolicyGatewayExposureEvidence = {
+type PolicyGatewayExposureEvidence = {
   readonly id: string;
   readonly kind:
     | "auth"
@@ -195,7 +195,7 @@ export type PolicyAgentWorkspaceEvidence = {
   readonly explicit?: boolean;
 };
 
-export type PolicySecretEvidence = {
+type PolicySecretEvidence = {
   readonly id: string;
   readonly kind: "input" | "provider";
   readonly source: string;
@@ -716,7 +716,7 @@ export function scanPolicyMcpServers(
     });
 }
 
-export function scanPolicyModelProviders(
+function scanPolicyModelProviders(
   cfg: Record<string, unknown>,
 ): readonly PolicyModelProviderEvidence[] {
   return Object.keys(configuredModelProviders(cfg))
@@ -727,9 +727,7 @@ export function scanPolicyModelProviders(
     }));
 }
 
-export function scanPolicyModelRefs(
-  cfg: Record<string, unknown>,
-): readonly PolicyModelRefEvidence[] {
+function scanPolicyModelRefs(cfg: Record<string, unknown>): readonly PolicyModelRefEvidence[] {
   const refs: PolicyModelRefEvidence[] = [];
   if (isRecord(cfg.agents)) {
     collectModelRefsFromRecord(refs, cfg.agents, "oc://openclaw.config/agents");
@@ -740,7 +738,7 @@ export function scanPolicyModelRefs(
   );
 }
 
-export function scanPolicyNetwork(cfg: Record<string, unknown>): readonly PolicyNetworkEvidence[] {
+function scanPolicyNetwork(cfg: Record<string, unknown>): readonly PolicyNetworkEvidence[] {
   return [
     networkBooleanEvidence(
       cfg,
@@ -835,7 +833,7 @@ export function scanPolicyIngress(cfg: Record<string, unknown>): readonly Policy
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-export function scanPolicyGatewayExposure(
+function scanPolicyGatewayExposure(
   cfg: Record<string, unknown>,
 ): readonly PolicyGatewayExposureEvidence[] {
   const gateway = isRecord(cfg.gateway) ? cfg.gateway : {};
@@ -959,7 +957,7 @@ export function scanPolicyGatewayExposure(
   return entries.toSorted((a, b) => a.source.localeCompare(b.source));
 }
 
-export function scanPolicyAgentWorkspace(
+function scanPolicyAgentWorkspace(
   cfg: Record<string, unknown>,
 ): readonly PolicyAgentWorkspaceEvidence[] {
   const agents = isRecord(cfg.agents) ? cfg.agents : {};
@@ -1006,7 +1004,7 @@ export function scanPolicyAgentWorkspace(
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-export function scanPolicySandboxPosture(
+function scanPolicySandboxPosture(
   cfg: Record<string, unknown>,
 ): readonly PolicySandboxPostureEvidence[] {
   const agents = isRecord(cfg.agents) ? cfg.agents : {};
@@ -1045,9 +1043,7 @@ export function scanPolicySandboxPosture(
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-export function scanPolicyToolPosture(
-  cfg: Record<string, unknown>,
-): readonly PolicyToolPostureEvidence[] {
+function scanPolicyToolPosture(cfg: Record<string, unknown>): readonly PolicyToolPostureEvidence[] {
   const globalTools = isRecord(cfg.tools) ? cfg.tools : {};
   const agents = isRecord(cfg.agents) ? cfg.agents : {};
   const defaults = isRecord(agents.defaults) ? agents.defaults : {};
@@ -1087,13 +1083,13 @@ export function scanPolicyToolPosture(
   return entries.toSorted((a, b) => a.source.localeCompare(b.source) || a.id.localeCompare(b.id));
 }
 
-export function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
+function scanPolicySecrets(cfg: Record<string, unknown>): readonly PolicySecretEvidence[] {
   return [...scanPolicySecretProviders(cfg), ...scanPolicySecretInputs(cfg)].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
 }
 
-export function scanPolicyAuthProfiles(
+function scanPolicyAuthProfiles(
   cfg: Record<string, unknown>,
 ): readonly PolicyAuthProfileEvidence[] {
   const auth = isRecord(cfg.auth) ? cfg.auth : {};
@@ -1124,7 +1120,7 @@ export function scanPolicyAuthProfiles(
     });
 }
 
-export function scanPolicyDataHandling(
+function scanPolicyDataHandling(
   cfg: Record<string, unknown>,
 ): readonly PolicyDataHandlingEvidence[] {
   const entries: PolicyDataHandlingEvidence[] = [];

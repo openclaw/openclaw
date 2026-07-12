@@ -53,6 +53,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
   result: RunResult;
   touchInteraction?: boolean;
   /**
+   * When false, skip the lastActivityAt bump so heartbeat/internal-event runs
+   * do not re-flag sessions unread; cron and user-facing runs count as activity.
+   */
+  touchActivity?: boolean;
+  /**
    * When true, preserve the pre-existing runtime model fields (model,
    * modelProvider, contextTokens) on the session entry instead of overwriting
    * them with the model used by this run. Used for heartbeat turns so the
@@ -75,6 +80,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   } = params;
   const now = Date.now();
   const touchInteraction = params.touchInteraction !== false;
+  const touchActivity = params.touchActivity !== false;
 
   const usage = result.meta.agentMeta?.usage;
   const promptTokens = result.meta.agentMeta?.promptTokens;
@@ -106,6 +112,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
+  const hadPreExistingEntry = sessionStore[sessionKey] !== undefined;
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
     updatedAt: now,
@@ -117,6 +124,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
+    lastActivityAt: touchActivity ? now : entry.lastActivityAt,
     ...(preserveRuntimeModel
       ? {}
       : {
@@ -272,6 +280,8 @@ export async function updateSessionStoreAfterAgentRun(params: {
   }
   const metadataPatch = preserveUserFacingRunState
     ? {
+        // Preserved-state runs must not alter perceived session state, so the
+        // unread-driving lastActivityAt stays untouched here.
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
@@ -284,13 +294,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
     },
     (currentEntry, context) => {
       if (
+        (!context.existingEntry && hadPreExistingEntry) ||
         (!preserveUserFacingRunState &&
           context.existingEntry &&
-          context.existingEntry.sessionId !== entry.sessionId) ||
-        (!context.existingEntry && sessionStore[sessionKey])
+          context.existingEntry.sessionId !== entry.sessionId)
       ) {
-        // A normal run may rotate its session id, so compare to the pre-run entry.
-        // Do not merge stale finalizer metadata after a delete or a competing reset.
+        // Normal runs may rotate session ids, but stale finalizers must not
+        // recreate rows that were reset/deleted while the run was active.
         return null;
       }
       return preserveUserFacingRunState

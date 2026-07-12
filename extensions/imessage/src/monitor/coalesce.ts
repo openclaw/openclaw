@@ -77,7 +77,7 @@ export function shouldCombineIMessagePayloadBucket(
   return true;
 }
 
-export type CoalescedIMessagePayload = IMessagePayload & {
+type CoalescedIMessagePayload = IMessagePayload & {
   /**
    * Source GUIDs folded into this merged payload, in arrival order. Includes
    * GUIDs from entries that were dropped by the entry cap so downstream

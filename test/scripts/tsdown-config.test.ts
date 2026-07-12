@@ -1,4 +1,5 @@
 // Tsdown config tests protect package artifact build contracts.
+import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import config from "../../tsdown.config.ts";
 
@@ -8,6 +9,14 @@ type TsdownConfig = (typeof configs)[number];
 type OutExtensions = NonNullable<TsdownConfig["outExtensions"]>;
 
 describe("tsdown config", () => {
+  it.each(["tsdown.config.ts", "tsdown.ai.config.ts"])(
+    "keeps %s free of runtime imports from tsdown",
+    (configPath) => {
+      const source = fs.readFileSync(configPath, "utf8");
+      expect(source).not.toMatch(/^import(?!\s+type\b).*from ["']tsdown["'];?$/mu);
+    },
+  );
+
   it("enables declaration output explicitly for package artifact builds", () => {
     expect(configs).not.toHaveLength(0);
     expect(configs.map((entry) => entry.dts)).toEqual(configs.map(() => true));

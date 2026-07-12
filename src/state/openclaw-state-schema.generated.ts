@@ -26,6 +26,157 @@ CREATE TABLE IF NOT EXISTS diagnostic_events (
 CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
   ON diagnostic_events(scope, created_at, event_key);
 
+CREATE TABLE IF NOT EXISTS skill_usage (
+  skill_file TEXT NOT NULL PRIMARY KEY,
+  skill_key TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  skill_source TEXT NOT NULL,
+  first_used_at_ms INTEGER NOT NULL,
+  last_used_at_ms INTEGER NOT NULL,
+  use_count INTEGER NOT NULL,
+  last_agent_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_usage_key
+  ON skill_usage(skill_key, skill_file);
+
+CREATE TABLE IF NOT EXISTS skill_lifecycle (
+  skill_file TEXT NOT NULL PRIMARY KEY,
+  skill_key TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'stale', 'archived')),
+  pinned INTEGER NOT NULL DEFAULT 0,
+  state_changed_at_ms INTEGER NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  archived_reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_lifecycle_key
+  ON skill_lifecycle(skill_key, skill_file);
+
+CREATE INDEX IF NOT EXISTS idx_skill_lifecycle_state
+  ON skill_lifecycle(state, skill_file);
+
+CREATE TABLE IF NOT EXISTS skill_curator_state (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  last_attempt_at_ms INTEGER NOT NULL,
+  last_success_at_ms INTEGER,
+  last_error TEXT,
+  last_result_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL UNIQUE,
+  source_id TEXT NOT NULL UNIQUE,
+  schema_version INTEGER NOT NULL DEFAULT 1,
+  source_sequence INTEGER NOT NULL,
+  occurred_at INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error_code TEXT,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  agent_id TEXT,
+  session_key TEXT,
+  session_id TEXT,
+  run_id TEXT,
+  tool_call_id TEXT,
+  tool_name TEXT,
+  direction TEXT,
+  channel TEXT,
+  conversation_kind TEXT,
+  message_outcome TEXT,
+  reason_code TEXT,
+  delivery_kind TEXT,
+  failure_stage TEXT,
+  duration_ms INTEGER,
+  result_count INTEGER,
+  account_ref TEXT,
+  conversation_ref TEXT,
+  message_ref TEXT,
+  target_ref TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_time
+  ON audit_events(occurred_at DESC, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_agent_sequence
+  ON audit_events(agent_id, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_session_sequence
+  ON audit_events(session_key, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_run_sequence
+  ON audit_events(run_id, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_kind_sequence
+  ON audit_events(kind, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_status_sequence
+  ON audit_events(status, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_channel_sequence
+  ON audit_events(channel, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_audit_events_direction_sequence
+  ON audit_events(direction, sequence DESC);
+
+CREATE TABLE IF NOT EXISTS audit_identity_keys (
+  id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
+  key_id TEXT NOT NULL,
+  key BLOB NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS session_state_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  dedupe_key TEXT UNIQUE,
+  session_key TEXT NOT NULL,
+  session_id TEXT,
+  agent_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT,
+  run_id TEXT,
+  occurred_at INTEGER NOT NULL,
+  summary TEXT NOT NULL,
+  payload_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_state_events_session_sequence
+  ON session_state_events(session_key, sequence DESC);
+
+CREATE INDEX IF NOT EXISTS idx_session_state_events_time
+  ON session_state_events(occurred_at DESC, sequence DESC);
+
+CREATE TABLE IF NOT EXISTS session_state_heads (
+  session_key TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  last_sequence INTEGER NOT NULL,
+  pruned_max_sequence INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (session_key, agent_id)
+);
+
+-- Watcher identity is the bare session key, matching the process-local system-event
+-- queue it feeds. Producers only create rows for agent-qualified watcher keys;
+-- bare keys (session.scope="global") are ambiguous across agents and are excluded
+-- from the notice protocol until watcher identity is agent-scoped end-to-end.
+CREATE TABLE IF NOT EXISTS session_watch_cursors (
+  watcher_session_key TEXT NOT NULL,
+  target_session_key TEXT NOT NULL,
+  last_seen_sequence INTEGER NOT NULL DEFAULT 0,
+  notified_sequence INTEGER NOT NULL DEFAULT 0,
+  material_sequence INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (watcher_session_key, target_session_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_watch_cursors_target
+  ON session_watch_cursors(target_session_key);
+
 CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
   bundle_key TEXT NOT NULL PRIMARY KEY,
   reason TEXT NOT NULL,
@@ -95,7 +246,8 @@ CREATE TABLE IF NOT EXISTS device_pairing_pending (
   remote_ip TEXT,
   silent INTEGER,
   is_repair INTEGER,
-  ts INTEGER NOT NULL
+  ts INTEGER NOT NULL,
+  refreshed_at_ms INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_device_pairing_pending_device
@@ -105,6 +257,7 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   device_id TEXT NOT NULL PRIMARY KEY,
   public_key TEXT NOT NULL,
   display_name TEXT,
+  operator_label TEXT,
   platform TEXT,
   device_family TEXT,
   client_id TEXT,
@@ -115,6 +268,9 @@ CREATE TABLE IF NOT EXISTS device_pairing_paired (
   approved_scopes_json TEXT,
   remote_ip TEXT,
   tokens_json TEXT,
+  approved_via TEXT,
+  node_surface_json TEXT,
+  pending_node_surface_json TEXT,
   created_at_ms INTEGER NOT NULL,
   approved_at_ms INTEGER NOT NULL,
   last_seen_at_ms INTEGER,
@@ -139,56 +295,6 @@ CREATE TABLE IF NOT EXISTS device_bootstrap_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_device_bootstrap_tokens_ts
   ON device_bootstrap_tokens(ts);
-
-CREATE TABLE IF NOT EXISTS node_pairing_pending (
-  request_id TEXT NOT NULL PRIMARY KEY,
-  node_id TEXT NOT NULL,
-  display_name TEXT,
-  platform TEXT,
-  version TEXT,
-  core_version TEXT,
-  ui_version TEXT,
-  device_family TEXT,
-  model_identifier TEXT,
-  client_id TEXT,
-  client_mode TEXT,
-  caps_json TEXT,
-  commands_json TEXT,
-  permissions_json TEXT,
-  remote_ip TEXT,
-  silent INTEGER,
-  ts INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_node_pairing_pending_node
-  ON node_pairing_pending(node_id, ts DESC);
-
-CREATE TABLE IF NOT EXISTS node_pairing_paired (
-  node_id TEXT NOT NULL PRIMARY KEY,
-  token TEXT NOT NULL,
-  display_name TEXT,
-  platform TEXT,
-  version TEXT,
-  core_version TEXT,
-  ui_version TEXT,
-  device_family TEXT,
-  model_identifier TEXT,
-  client_id TEXT,
-  client_mode TEXT,
-  caps_json TEXT,
-  commands_json TEXT,
-  permissions_json TEXT,
-  remote_ip TEXT,
-  bins_json TEXT,
-  created_at_ms INTEGER NOT NULL,
-  approved_at_ms INTEGER NOT NULL,
-  last_connected_at_ms INTEGER,
-  last_seen_at_ms INTEGER,
-  last_seen_reason TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_node_pairing_paired_approved
-  ON node_pairing_paired(approved_at_ms DESC, node_id);
 
 CREATE TABLE IF NOT EXISTS device_identities (
   identity_key TEXT NOT NULL PRIMARY KEY,
@@ -456,6 +562,24 @@ CREATE TABLE IF NOT EXISTS config_health_entries (
   updated_at_ms INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS clawhub_promotions_feed_state (
+  state_key TEXT NOT NULL PRIMARY KEY,
+  etag TEXT,
+  payload_json TEXT,
+  feed_sequence INTEGER,
+  last_checked_at_ms INTEGER,
+  notified_slugs_json TEXT NOT NULL DEFAULT '[]',
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS clawhub_promotion_claims (
+  slug TEXT NOT NULL PRIMARY KEY,
+  provider TEXT,
+  model_keys_json TEXT NOT NULL,
+  ends_at_ms INTEGER NOT NULL,
+  claimed_at_ms INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS installed_plugin_index (
   index_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
@@ -483,6 +607,11 @@ CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
   last_modified TEXT,
   checksum TEXT NOT NULL,
   saved_at TEXT NOT NULL,
+  trust_mode TEXT,
+  trust_key_id TEXT,
+  trust_signature_count INTEGER,
+  trust_threshold INTEGER,
+  trust_verified_at TEXT,
   updated_at_ms INTEGER NOT NULL
 );
 
@@ -542,6 +671,19 @@ CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
 
 CREATE INDEX IF NOT EXISTS idx_gateway_restart_handoff_expiry
   ON gateway_restart_handoff(expires_at, pid);
+
+CREATE TABLE IF NOT EXISTS gateway_boot_lifecycle (
+  boot_id TEXT NOT NULL PRIMARY KEY,
+  pid INTEGER NOT NULL,
+  started_at_ms INTEGER NOT NULL,
+  completed_at_ms INTEGER,
+  outcome TEXT,
+  startup_reason TEXT,
+  reason TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_boot_lifecycle_started
+  ON gateway_boot_lifecycle(started_at_ms);
 
 CREATE TABLE IF NOT EXISTS acp_sessions (
   session_key TEXT NOT NULL PRIMARY KEY,
@@ -872,6 +1014,10 @@ CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
+  declaration_key TEXT,
+  display_name TEXT,
+  owner_agent_id TEXT,
+  owner_session_key TEXT,
   name TEXT NOT NULL,
   description TEXT,
   enabled INTEGER NOT NULL,
@@ -888,6 +1034,8 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   stagger_ms INTEGER,
   session_target TEXT NOT NULL,
   wake_mode TEXT NOT NULL,
+  trigger_script TEXT,
+  trigger_once INTEGER,
   payload_kind TEXT NOT NULL,
   payload_message TEXT,
   payload_model TEXT,
@@ -903,6 +1051,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   delivery_channel TEXT,
   delivery_to TEXT,
   delivery_thread_id TEXT,
+  delivery_thread_id_type TEXT,
   delivery_account_id TEXT,
   delivery_best_effort INTEGER,
   delivery_completion_mode TEXT,
@@ -1228,4 +1377,105 @@ CREATE TABLE IF NOT EXISTS backup_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_backup_runs_created
-  ON backup_runs(created_at DESC, id);\n`;
+  ON backup_runs(created_at DESC, id);
+
+CREATE TABLE IF NOT EXISTS worktrees (
+  id TEXT NOT NULL PRIMARY KEY,
+  repo_fingerprint TEXT NOT NULL,
+  repo_root TEXT NOT NULL,
+  path TEXT NOT NULL,
+  branch TEXT NOT NULL,
+  base_ref TEXT NOT NULL,
+  owner_kind TEXT NOT NULL CHECK (owner_kind IN ('manual', 'workboard', 'session')),
+  owner_id TEXT,
+  snapshot_ref TEXT,
+  created_at INTEGER NOT NULL,
+  last_active_at INTEGER NOT NULL,
+  removed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
+  ON worktrees(repo_fingerprint);
+
+CREATE INDEX IF NOT EXISTS idx_worktrees_removed_at
+  ON worktrees(removed_at);
+
+-- Gateway-owned custom session group catalog (names + display order).
+-- Membership stays on each session entry's category field; this table only
+-- owns which groups exist and how operator UIs order them.
+CREATE TABLE IF NOT EXISTS session_groups (
+  name TEXT NOT NULL PRIMARY KEY,
+  position INTEGER NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+-- Gateway-owned durable cloud worker lifecycle. Provider-specific execution
+-- stays in plugins; this table records only core reconciliation facts.
+CREATE TABLE IF NOT EXISTS worker_environments (
+  environment_id TEXT NOT NULL PRIMARY KEY,
+  provider_id TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  profile_snapshot_json TEXT NOT NULL,
+  provision_operation_id TEXT NOT NULL UNIQUE,
+  lease_id TEXT,
+  ssh_host TEXT,
+  ssh_port INTEGER CHECK (ssh_port IS NULL OR (ssh_port >= 1 AND ssh_port <= 65535)),
+  ssh_user TEXT,
+  ssh_host_key TEXT,
+  ssh_key_ref_json TEXT,
+  state TEXT NOT NULL CHECK (
+    state IN (
+      'requested',
+      'provisioning',
+      'bootstrapping',
+      'ready',
+      'attached',
+      'idle',
+      'draining',
+      'destroying',
+      'destroyed',
+      'failed',
+      'orphaned'
+    )
+  ),
+  bootstrap_bundle_hash TEXT,
+  bootstrap_openclaw_version TEXT,
+  bootstrap_protocol_features_json TEXT,
+  owner_epoch INTEGER NOT NULL DEFAULT 0 CHECK (owner_epoch >= 0),
+  teardown_terminal_state TEXT CHECK (teardown_terminal_state IN ('destroyed', 'failed')),
+  attached_session_ids_json TEXT NOT NULL DEFAULT '[]',
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  state_changed_at_ms INTEGER NOT NULL,
+  idle_since_at_ms INTEGER,
+  destroy_requested_at_ms INTEGER,
+  last_error TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
+  ON worker_environments(provider_id, lease_id)
+  WHERE lease_id IS NOT NULL;
+
+-- One active, opaque admission credential per worker environment. Plaintext
+-- may be retried until delivery acknowledgement but never enters durable state.
+CREATE TABLE IF NOT EXISTS worker_environment_credentials (
+  environment_id TEXT NOT NULL PRIMARY KEY,
+  credential_hash TEXT NOT NULL UNIQUE,
+  bundle_hash TEXT NOT NULL,
+  session_id TEXT,
+  rpc_set_version INTEGER NOT NULL CHECK (rpc_set_version >= 1),
+  owner_epoch INTEGER NOT NULL CHECK (owner_epoch >= 0),
+  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= 0),
+  delivered_at_ms INTEGER CHECK (delivered_at_ms >= 0),
+  FOREIGN KEY (environment_id) REFERENCES worker_environments(environment_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS fleet_cells (
+  tenant_id TEXT NOT NULL PRIMARY KEY,
+  created_at_ms INTEGER NOT NULL,
+  image TEXT NOT NULL,
+  runtime TEXT NOT NULL,
+  host_port INTEGER NOT NULL,
+  container_name TEXT NOT NULL,
+  data_dir TEXT NOT NULL
+);\n`;

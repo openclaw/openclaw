@@ -4,6 +4,7 @@
  * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
  */
 import {
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "@openclaw/normalization-core/string-coerce";
@@ -18,7 +19,9 @@ import {
   hasInboundMetadataSentinel,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -43,6 +46,7 @@ import {
   getBootEchoContextForSession,
   stripBootEchoFromOutboundText,
 } from "../../gateway/boot-echo-guard.js";
+import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import { createAbortError } from "../../infra/abort-signal.js";
 import { sha256Base64UrlPrefix } from "../../infra/crypto-digest.js";
 import {
@@ -81,6 +85,7 @@ import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import {
   readGatewayCallOptions,
   resolveGatewayOptions,
+  resolveMessageActionAgentRuntimeIdentityToken,
   type GatewayCallOptions,
 } from "./gateway.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
@@ -192,6 +197,7 @@ function resolvePollVoteEchoRoute(params: {
   channel?: string | null;
   accountId?: string;
   currentChannelId?: string;
+  currentChatType?: ChatType;
   currentMessagingTarget?: string;
 }): string | undefined {
   const channel = normalizeMessageChannel(params.channel);
@@ -315,11 +321,43 @@ function sanitizePresentationTextFieldsResult(
         return block;
       }
       const sanitizedBlock = { ...(block as Record<string, unknown>) };
-      for (const field of ["text", "placeholder"]) {
+      for (const field of ["text", "placeholder", "title", "xLabel", "yLabel"]) {
         if (typeof sanitizedBlock[field] === "string") {
           const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock[field], bootPrompt);
           sanitizedBlock[field] = sanitized.text;
           suppressionReason ??= sanitized.suppressionReason;
+        }
+      }
+      if (normalizeOptionalLowercaseString(sanitizedBlock.type) === "table") {
+        if (typeof sanitizedBlock.caption === "string") {
+          const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock.caption, bootPrompt);
+          sanitizedBlock.caption = sanitized.text.trim();
+          suppressionReason ??= sanitized.suppressionReason;
+        }
+        if (Array.isArray(sanitizedBlock.headers)) {
+          sanitizedBlock.headers = sanitizedBlock.headers.map((header) => {
+            if (typeof header !== "string") {
+              return header;
+            }
+            const sanitized = sanitizeUserVisibleToolTextResult(header, bootPrompt);
+            suppressionReason ??= sanitized.suppressionReason;
+            return sanitized.text.trim();
+          });
+        }
+        if (Array.isArray(sanitizedBlock.rows)) {
+          sanitizedBlock.rows = sanitizedBlock.rows.map((row) => {
+            if (!Array.isArray(row)) {
+              return row;
+            }
+            return row.map((cell) => {
+              if (typeof cell !== "string") {
+                return cell;
+              }
+              const sanitized = sanitizeUserVisibleToolTextResult(cell, bootPrompt);
+              suppressionReason ??= sanitized.suppressionReason;
+              return sanitized.text.trim();
+            });
+          });
         }
       }
       if (Array.isArray(sanitizedBlock.buttons)) {
@@ -375,6 +413,44 @@ function sanitizePresentationTextFieldsResult(
             suppressionReason ??= sanitized.suppressionReason;
           }
           return sanitizedOption;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.categories)) {
+        sanitizedBlock.categories = sanitizedBlock.categories.map((category) => {
+          if (typeof category !== "string") {
+            return category;
+          }
+          const sanitized = sanitizeUserVisibleToolTextResult(category, bootPrompt);
+          suppressionReason ??= sanitized.suppressionReason;
+          return sanitized.text;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.segments)) {
+        sanitizedBlock.segments = sanitizedBlock.segments.map((segment) => {
+          if (!segment || typeof segment !== "object" || Array.isArray(segment)) {
+            return segment;
+          }
+          const sanitizedSegment = { ...(segment as Record<string, unknown>) };
+          if (typeof sanitizedSegment.label === "string") {
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSegment.label, bootPrompt);
+            sanitizedSegment.label = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
+          }
+          return sanitizedSegment;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.series)) {
+        sanitizedBlock.series = sanitizedBlock.series.map((series) => {
+          if (!series || typeof series !== "object" || Array.isArray(series)) {
+            return series;
+          }
+          const sanitizedSeries = { ...(series as Record<string, unknown>) };
+          if (typeof sanitizedSeries.name === "string") {
+            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedSeries.name, bootPrompt);
+            sanitizedSeries.name = sanitized.text;
+            suppressionReason ??= sanitized.suppressionReason;
+          }
+          return sanitizedSeries;
         });
       }
       return sanitizedBlock;
@@ -473,12 +549,40 @@ const presentationButtonSchema = Type.Object({
   style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger"])),
 });
 
+const presentationChartSegmentSchema = Type.Object({
+  label: Type.String(),
+  value: Type.Number(),
+});
+
+const presentationChartSeriesSchema = Type.Object({
+  name: Type.String(),
+  values: Type.Array(Type.Number(), { minItems: 1 }),
+});
+
+// Keep this flat: some provider tool-schema validators reject an anyOf nested
+// under presentation.blocks.items. Runtime normalization enforces block shapes.
 const presentationBlockSchema = Type.Object({
-  type: stringEnum(["text", "context", "divider", "buttons", "select"]),
+  type: stringEnum(["text", "context", "divider", "buttons", "select", "chart", "table"]),
   text: Type.Optional(Type.String()),
   buttons: Type.Optional(Type.Array(presentationButtonSchema)),
   placeholder: Type.Optional(Type.String()),
   options: Type.Optional(Type.Array(presentationOptionSchema)),
+  chartType: Type.Optional(stringEnum(["pie", "bar", "area", "line"])),
+  title: Type.Optional(Type.String()),
+  segments: Type.Optional(Type.Array(presentationChartSegmentSchema, { minItems: 1 })),
+  categories: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+  series: Type.Optional(Type.Array(presentationChartSeriesSchema, { minItems: 1 })),
+  xLabel: Type.Optional(Type.String()),
+  yLabel: Type.Optional(Type.String()),
+  caption: Type.Optional(Type.String()),
+  headers: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+  rows: Type.Optional(
+    Type.Array(
+      Type.Array(Type.Unsafe<string | number>({ type: ["string", "number"] }), { minItems: 1 }),
+      { minItems: 1 },
+    ),
+  ),
+  rowHeaderColumnIndex: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 const presentationMessageSchema = Type.Object(
@@ -489,7 +593,7 @@ const presentationMessageSchema = Type.Object(
   },
   {
     description:
-      "Rich message payload: text/buttons/selects/context. Unsupported blocks degrade to text.",
+      "Rich message payload: text, charts, tables, buttons, selects, and context. Unsupported blocks degrade to text.",
   },
 );
 
@@ -663,6 +767,9 @@ function buildPollSchema() {
   };
   for (const name of SHARED_POLL_CREATION_PARAM_NAMES) {
     const def = POLL_CREATION_PARAM_DEFS[name];
+    if (!def) {
+      continue;
+    }
     switch (def.kind) {
       case "string":
         props[name] = Type.Optional(Type.String());
@@ -689,7 +796,12 @@ function buildChannelTargetSchema() {
     memberId: Type.Optional(Type.String()),
     memberIdType: Type.Optional(Type.String()),
     guildId: Type.Optional(Type.String()),
-    userId: Type.Optional(Type.String()),
+    userId: Type.Optional(
+      Type.String({
+        description:
+          "User id for member-info and channel-specific moderation or participant actions. For member-info, pass userId directly; the action does not accept target.",
+      }),
+    ),
     openId: Type.Optional(Type.String()),
     unionId: Type.Optional(Type.String()),
     authorId: Type.Optional(Type.String()),
@@ -879,12 +991,15 @@ type MessageToolOptions = {
   resolveCommandSecretRefsViaGateway?: typeof resolveCommandSecretRefsViaGateway;
   runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
+  currentChatType?: ChatType;
   currentMessagingTarget?: string;
+  messageActionTurnCapability?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
   agentThreadId?: string | number;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
+  hasCurrentInboundAudio?: () => boolean;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   sameChannelThreadRequired?: boolean;
@@ -894,6 +1009,7 @@ type MessageToolOptions = {
   inboundEventKind?: InboundEventKind;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
 };
 
 type MessageToolDiscoveryParams = {
@@ -918,6 +1034,7 @@ type MessageActionDiscoveryInput = Omit<ChannelMessageActionDiscoveryInput, "cfg
 type InferredSessionDelivery = {
   accountId?: string;
   channel: string;
+  chatType?: ChatType;
   threadId?: string;
   to: string;
 };
@@ -929,6 +1046,16 @@ function formatSessionDeliveryTarget(channel: string, peerKind: string, to: stri
     USER_PREFIXED_DIRECT_TARGET_CHANNELS.has(channel)
     ? `user:${to}`
     : to;
+}
+
+function resolveSessionDeliveryChatType(peerKind: string): ChatType | undefined {
+  if (peerKind === "direct" || peerKind === "dm") {
+    return "direct";
+  }
+  if (peerKind === "group" || peerKind === "channel") {
+    return peerKind;
+  }
+  return undefined;
 }
 
 function inferDeliveryFromSessionKey(
@@ -946,6 +1073,7 @@ function inferDeliveryFromSessionKey(
   return {
     accountId,
     channel,
+    chatType: resolveSessionDeliveryChatType(route.peerKind),
     threadId: route.threadId,
     to: formatSessionDeliveryTarget(channel, route.peerKind, route.peerId),
   };
@@ -954,6 +1082,7 @@ function inferDeliveryFromSessionKey(
 function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
   accountId?: string;
   currentChannelId?: string;
+  currentChatType?: ChatType;
   currentMessagingTarget?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
@@ -972,6 +1101,7 @@ function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
     return {
       currentChannelProvider,
       currentChannelId,
+      currentChatType: options?.currentChatType,
       currentMessagingTarget: options?.currentMessagingTarget,
     };
   }
@@ -979,6 +1109,7 @@ function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
     accountId: sessionDelivery?.accountId,
     currentChannelProvider: sessionDeliveryChannel,
     currentChannelId: sessionDelivery?.to,
+    currentChatType: sessionDelivery?.chatType,
     currentMessagingTarget: sessionDelivery?.to,
     currentThreadTs: sessionDelivery?.threadId,
   };
@@ -1326,6 +1457,16 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const action = readStringParam(params, "action", {
         required: true,
       }) as ChannelMessageActionName;
+      const trustedTurnContext =
+        resolvedAgentId && options?.agentSessionKey
+          ? resolveMessageActionTurnCapability({
+              token: options.messageActionTurnCapability,
+              agentId: resolvedAgentId,
+              runId: options.runId,
+              sessionKey: options.agentSessionKey,
+              sessionId: options.sessionId,
+            })
+          : undefined;
       if (
         suppressedVisiblePayloadReason &&
         action === "send" &&
@@ -1421,14 +1562,29 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const gatewayResolved = resolveGatewayOptions(gatewayOpts);
-      const gateway = {
-        url: gatewayResolved.url,
-        token: gatewayResolved.token,
-        timeoutMs: gatewayResolved.timeoutMs,
-        clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-        clientDisplayName: "agent",
-        mode: GATEWAY_CLIENT_MODES.BACKEND,
-      };
+      // Direct tool invocations already execute inside the authenticated
+      // Gateway request. Keep their authority operation-local by dispatching
+      // channel actions in-process instead of laundering it through a new
+      // backend connection.
+      const gateway =
+        options?.conversationReadOrigin === "direct-operator"
+          ? undefined
+          : {
+              url: gatewayResolved.url,
+              token: gatewayResolved.token,
+              timeoutMs: gatewayResolved.timeoutMs,
+              clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+              clientDisplayName: "agent",
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+              resolveAgentRuntimeIdentityToken: () =>
+                resolveMessageActionAgentRuntimeIdentityToken({
+                  opts: gatewayOpts,
+                  target: gatewayResolved.target,
+                  turnCapability: options?.messageActionTurnCapability,
+                  runId: options?.runId,
+                  sessionId: options?.sessionId,
+                }),
+            };
       const hasCurrentMessageId =
         typeof options?.currentMessageId === "number" ||
         (typeof options?.currentMessageId === "string" &&
@@ -1436,6 +1592,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       const toolContext =
         effectiveCurrentChannel.currentChannelId ||
+        effectiveCurrentChannel.currentChatType ||
         effectiveCurrentChannel.currentChannelProvider ||
         effectiveCurrentChannel.currentMessagingTarget ||
         currentThreadTs ||
@@ -1445,6 +1602,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.sameChannelThreadRequired
           ? {
               currentChannelId: effectiveCurrentChannel.currentChannelId,
+              currentChatType: effectiveCurrentChannel.currentChatType,
               currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
               currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
               currentThreadTs,
@@ -1487,9 +1645,15 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           action,
           params: actionParams,
           defaultAccountId: accountId ?? undefined,
-          requesterAccountId: agentAccountId,
-          requesterSenderId: options?.requesterSenderId,
+          requesterAccountId: trustedTurnContext?.requesterAccountId,
+          requesterSenderId: trustedTurnContext?.requesterSenderId,
+          messageActionAuthorization: {
+            requesterAccountId: trustedTurnContext?.requesterAccountId,
+            requesterSenderId: trustedTurnContext?.requesterSenderId,
+            toolContext: trustedTurnContext?.toolContext,
+          },
           senderIsOwner: options?.senderIsOwner,
+          conversationReadOrigin: options?.conversationReadOrigin,
           gateway,
           toolContext,
           sessionKey: options?.agentSessionKey,
@@ -1498,7 +1662,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sandboxRoot: options?.sandboxRoot,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
-          inboundAudio: options?.currentInboundAudio,
+          inboundAudio: options?.hasCurrentInboundAudio?.() ?? options?.currentInboundAudio,
           abortSignal: signal,
         });
       } catch (error) {

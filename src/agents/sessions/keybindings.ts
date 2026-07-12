@@ -295,7 +295,7 @@ function toKeybindingsConfig(value: unknown): KeybindingsConfig {
 }
 
 /** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
-export function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
+function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
   config: Record<string, unknown>;
   migrated: boolean;
 } {

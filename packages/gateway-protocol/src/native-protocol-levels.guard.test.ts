@@ -3,7 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, it } from "vitest";
 import { ProtocolSchemas } from "./schema/protocol-schemas.js";
-import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./version.js";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_NODE_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "./version.js";
 
 /**
  * Cross-language guard for Gateway protocol version constants.
@@ -97,6 +102,14 @@ describe("native Gateway protocol levels", () => {
     if (MIN_CLIENT_PROTOCOL_VERSION > PROTOCOL_VERSION) {
       throw new Error(
         `packages/gateway-protocol/src/version.ts: MIN_CLIENT_PROTOCOL_VERSION (${MIN_CLIENT_PROTOCOL_VERSION}) must not exceed PROTOCOL_VERSION (${PROTOCOL_VERSION}).`,
+      );
+    }
+    if (
+      MIN_NODE_PROTOCOL_VERSION !== PROTOCOL_VERSION - 1 ||
+      MIN_PROBE_PROTOCOL_VERSION !== PROTOCOL_VERSION - 1
+    ) {
+      throw new Error(
+        "packages/gateway-protocol/src/version.ts: node and probe compatibility must remain exactly N-1.",
       );
     }
 

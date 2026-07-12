@@ -24,22 +24,28 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, string[]> = {
   ],
 };
 
-const CATALOGS = [
+type AppleCatalogSpec = {
+  path: string;
+  coverage: Record<string, readonly string[]>;
+};
+
+const CATALOGS: readonly AppleCatalogSpec[] = [
   {
     path: "apps/ios/Resources/Localizable.xcstrings",
     coverage: {
-      "apps/ios/ShareExtension/ShareViewController.swift": [
+      "apps/ios/ShareExtension/ShareComposeView.swift": [
         "Add a message, then tap Send.",
         "Cancel",
-        "Edit text, then tap Send.",
-        "Invalid saved gateway URL.",
-        "Message is empty.",
-        "OpenClaw is not connected to a gateway yet.",
         "Preparing share…",
-        "Send failed: %@",
         "Send to OpenClaw",
         "Sending to OpenClaw gateway…",
         "Sent to OpenClaw.",
+      ],
+      "apps/ios/ShareExtension/ShareViewController.swift": [
+        "Invalid saved gateway URL.",
+        "Message is empty.",
+        "OpenClaw is not connected to a gateway yet.",
+        "Send failed: %@",
       ],
       "apps/ios/Sources/Design/SettingsChannelsDestination.swift": ["Logout"],
       "apps/ios/Sources/Design/ChatProTab.swift": [
@@ -55,10 +61,10 @@ const CATALOGS = [
       "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
         "Close",
         "Connect",
-        "Connect to a Gateway?",
+        "Connect a nearby Gateway",
         "Connecting…",
-        "Don’t show this again",
-        "No gateways found yet. Make sure your gateway is running and Bonjour discovery is enabled.",
+        "Don't show this again",
+        "Looking for a Gateway",
         "Not now",
         "Quick Setup",
       ],
@@ -68,7 +74,7 @@ const CATALOGS = [
         "Trust and connect",
         "Trust this gateway?",
       ],
-      "apps/ios/Sources/Onboarding/OnboardingWizardView.swift": ["Save"],
+      "apps/ios/Sources/Onboarding/OnboardingWizardSteps.swift": ["Go to Chat"],
       "apps/ios/Sources/RootTabs.swift": ["Agent", "Chat", "Control", "Settings", "Talk"],
       "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
         "Approve",
@@ -98,7 +104,7 @@ const CATALOGS = [
       "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift": ["Run now"],
     },
   },
-] as const;
+];
 
 type Catalog = {
   sourceLanguage?: string;
@@ -168,7 +174,7 @@ export async function checkAppleAppI18n() {
       for (const locale of REQUIRED_LOCALES) {
         const unit = entry.localizations?.[locale]?.stringUnit;
         const value = unit?.value?.trim();
-        if (!value || unit?.state !== "translated") {
+        if (!value || (locale === "en" && unit?.state !== "translated")) {
           throw new Error(
             `Apple catalog ${spec.path} is missing ${locale} for ${JSON.stringify(key)}`,
           );

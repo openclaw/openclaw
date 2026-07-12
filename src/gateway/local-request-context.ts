@@ -3,7 +3,6 @@
 import { loadManifestModelCatalog } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronServiceContract } from "../cron/service-contract.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -12,6 +11,7 @@ import {
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunEntry, type ChatRunEntry } from "./server-chat-state.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
@@ -26,16 +26,19 @@ function cronUnavailable(): never {
   throw new Error("Cron is unavailable in local embedded agent gateway context.");
 }
 
-const unavailableCron: CronServiceContract = {
+const unavailableCron: GatewayCronServiceContract = {
   start: async () => {
     cronUnavailable();
   },
   stop: () => {},
+  pauseScheduling: () => {},
+  resumeScheduling: () => {},
   status: async () => cronUnavailable(),
   list: async () => cronUnavailable(),
   listPage: async () => cronUnavailable(),
   add: async () => cronUnavailable(),
   update: async () => cronUnavailable(),
+  updateWithPrecondition: async () => cronUnavailable(),
   remove: async () => cronUnavailable(),
   run: async () => cronUnavailable(),
   enqueueRun: async () => cronUnavailable(),
@@ -46,7 +49,7 @@ const unavailableCron: CronServiceContract = {
 };
 
 /** Creates the minimal gateway context used by embedded local agent execution. */
-export function createLocalGatewayRequestContext(
+function createLocalGatewayRequestContext(
   params: LocalGatewayRequestContextParams,
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");

@@ -8,7 +8,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import {
-  recordSessionMetaFromInbound,
+  recordInboundSessionMeta,
   resolveStorePath,
 } from "../../config/sessions/inbound.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,6 +21,8 @@ import type { ResolvedMessagingTarget } from "./target-resolver.js";
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
+  /** Route authority for explicit recipient session selection. */
+  recipientSessionExact?: boolean | "direct-alias" | "delivery-identity";
   peer: RoutePeer;
   chatType: "direct" | "group" | "channel";
   from: string;
@@ -110,12 +112,27 @@ function inferPeerKindFromFallbackPrefixes(targets: readonly string[]): ChatType
   return undefined;
 }
 
+function inferPeerKindFromCapabilities(
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>,
+): ChatType | undefined {
+  const chatTypes: ChatType[] = [];
+  for (const chatType of plugin?.capabilities?.chatTypes ?? []) {
+    if (
+      (chatType === "direct" || chatType === "group" || chatType === "channel") &&
+      !chatTypes.includes(chatType)
+    ) {
+      chatTypes.push(chatType);
+    }
+  }
+  return chatTypes.length === 1 ? chatTypes[0] : undefined;
+}
+
 function inferPeerKind(params: {
   channel: ChannelId;
   plugin?: ChannelPlugin;
   target: string;
   resolvedTarget?: ResolvedMessagingTarget;
-}): ChatType {
+}): ChatType | undefined {
   const resolvedKind = params.resolvedTarget?.kind;
   if (resolvedKind === "user") {
     return "direct";
@@ -140,6 +157,7 @@ function inferPeerKind(params: {
     inferPeerKindFromPlugin({ plugin, targets }) ??
     inferPeerKindFromLegacyParser({ plugin, targets }) ??
     inferPeerKindFromFallbackPrefixes(targets) ??
+    inferPeerKindFromCapabilities(plugin) ??
     "direct"
   );
 }
@@ -157,6 +175,9 @@ function resolveFallbackSession(
     target: params.target,
     resolvedTarget: params.resolvedTarget,
   });
+  if (!peerKind) {
+    return null;
+  }
   const peerId = stripKindPrefix(trimmed);
   if (!peerId) {
     return null;
@@ -178,6 +199,7 @@ function resolveFallbackSession(
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
+    recipientSessionExact: false,
     peer,
     chatType,
     from,
@@ -226,7 +248,7 @@ export async function ensureOutboundSessionEntry(params: {
     OriginatingTo: params.route.to,
   };
   try {
-    await recordSessionMetaFromInbound({
+    await recordInboundSessionMeta({
       storePath,
       sessionKey: params.route.sessionKey,
       ctx,

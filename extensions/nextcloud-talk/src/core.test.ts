@@ -43,7 +43,7 @@ function requireFirstTimingSafeEqualCall(mock: ReturnType<typeof vi.fn>): [unkno
 }
 
 describe("nextcloud talk core", () => {
-  it("builds an outbound session route for normalized room targets", () => {
+  it("marks ambiguous room-token session routes as best-effort", () => {
     const route = resolveNextcloudTalkOutboundSessionRoute({
       cfg: {},
       agentId: "main",
@@ -54,6 +54,7 @@ describe("nextcloud talk core", () => {
     expect(route).toEqual({
       sessionKey: "agent:main:nextcloud-talk:group:room-123",
       baseSessionKey: "agent:main:nextcloud-talk:group:room-123",
+      recipientSessionExact: false,
       peer: {
         kind: "group",
         id: "room-123",
@@ -87,6 +88,7 @@ describe("nextcloud talk core", () => {
 
     expect(looksLikeNextcloudTalkTargetId("nextcloud-talk:room:abc12345")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("nc:opsroom1")).toBe(true);
+    expect(looksLikeNextcloudTalkTargetId("room:opsroom1")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("abc12345")).toBe(true);
     expect(looksLikeNextcloudTalkTargetId("")).toBe(false);
   });

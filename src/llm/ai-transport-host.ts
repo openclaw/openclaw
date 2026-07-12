@@ -6,6 +6,7 @@ import { resolveOpenAIStrictToolSetting } from "../agents/openai-strict-tool-set
 import { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
 
@@ -20,6 +21,16 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
 
 configureAiTransportHost({
   buildModelFetch: buildGuardedModelFetch,
+  resolveSecretSentinel: (value) => {
+    const swapped = swapSecretSentinelsInText(value);
+    const unknown = swapped.unknown[0];
+    if (unknown) {
+      throw new Error(
+        `Secret sentinel ${unknown} is not registered in this process; refusing to construct provider client`,
+      );
+    }
+    return swapped.text;
+  },
   redactSecrets,
   redactToolPayloadText,
   resolveOpenAIStrictToolSetting,

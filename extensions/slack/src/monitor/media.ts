@@ -106,7 +106,7 @@ const SLACK_MEDIA_SSRF_POLICY = {
   allowRfc2544BenchmarkRange: true,
 };
 export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
-export const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
+const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
 type SlackSaveRemoteMediaOptions = Parameters<typeof saveRemoteMedia>[0];
 
 function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
@@ -367,6 +367,7 @@ export async function resolveSlackMedia(params: {
   readIdleTimeoutMs?: number;
   totalTimeoutMs?: number;
   abortSignal?: AbortSignal;
+  preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
 }): Promise<SlackMediaResult[] | null> {
   const files = params.files ?? [];
   const limitedFiles =
@@ -376,6 +377,12 @@ export async function resolveSlackMedia(params: {
     limitedFiles,
     MAX_SLACK_MEDIA_CONCURRENCY,
     async (file) => {
+      // Audio preflight keys the original event file object so admission can
+      // reuse that exact download without turning this into a persistent cache.
+      const preloaded = params.preloadedMedia?.get(file);
+      if (preloaded) {
+        return preloaded;
+      }
       const eventUrl = file.url_private_download ?? file.url_private;
       const url = eventUrl ?? (await fetchFreshSlackFileUrl({ file, client: params.client }));
       if (!url) {

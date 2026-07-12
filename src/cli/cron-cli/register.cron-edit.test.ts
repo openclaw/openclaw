@@ -76,6 +76,28 @@ describe("cron edit command", () => {
     );
   });
 
+  it("does not set delivery mode to announce when disabling best-effort on payload edits", async () => {
+    const program = createCronProgram();
+
+    await program.parseAsync(
+      ["edit", "job-1", "--no-best-effort-deliver", "--message", "new message"],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        payload: {
+          kind: "agentTurn",
+          message: "new message",
+        },
+        delivery: {
+          bestEffort: false,
+        },
+      },
+    });
+  });
+
   it("preserves timezone without copying stale stagger when --cron replaces expression (#92291)", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
       if (method === "cron.get") {
@@ -171,14 +193,10 @@ describe("cron edit command", () => {
 
   it("preserves command payload kind for timeout-only edits", async () => {
     callGatewayFromCli.mockImplementation(async (method: string) => {
-      if (method === "cron.list") {
+      if (method === "cron.get") {
         return {
-          jobs: [
-            {
-              id: "job-1",
-              payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
-            },
-          ],
+          id: "job-1",
+          payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
         };
       }
       return { ok: true };
@@ -187,6 +205,10 @@ describe("cron edit command", () => {
 
     await program.parseAsync(["edit", "job-1", "--timeout-seconds", "12"], { from: "user" });
 
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+      id: "job-1",
+    });
+    expect(callGatewayFromCli.mock.calls.some(([method]) => method === "cron.list")).toBe(false);
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "cron.update",
       expect.objectContaining({ timeoutSeconds: "12" }),
@@ -200,6 +222,68 @@ describe("cron edit command", () => {
         },
       },
     );
+  });
+
+  it("falls back to cron.list when an older Gateway does not support cron.get", async () => {
+    const unknownMethodError = Object.assign(new Error("unknown method: cron.get"), {
+      name: "GatewayClientRequestError",
+      gatewayCode: "INVALID_REQUEST",
+    });
+    callGatewayFromCli.mockImplementation(
+      async (method: string, _opts: unknown, params?: unknown) => {
+        if (method === "cron.get") {
+          throw unknownMethodError;
+        }
+        if (method === "cron.list") {
+          const offset = (params as { offset?: number }).offset ?? 0;
+          if (offset === 0) {
+            return {
+              jobs: [{ id: "other-job", schedule: { kind: "cron", expr: "0 * * * *" } }],
+              hasMore: true,
+              nextOffset: 200,
+            };
+          }
+          return {
+            jobs: [
+              {
+                id: "job-1",
+                schedule: { kind: "cron", expr: "0 */2 * * *", staggerMs: 300_000 },
+              },
+            ],
+            hasMore: false,
+            nextOffset: null,
+          };
+        }
+        return { ok: true, params };
+      },
+    );
+    const program = createCronProgram();
+
+    await program.parseAsync(["edit", "job-1", "--exact"], { from: "user" });
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.get", expect.anything(), {
+      id: "job-1",
+    });
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.list", expect.anything(), {
+      includeDisabled: true,
+      limit: 200,
+      offset: 0,
+    });
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.list", expect.anything(), {
+      includeDisabled: true,
+      limit: 200,
+      offset: 200,
+    });
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        schedule: {
+          kind: "cron",
+          expr: "0 */2 * * *",
+          staggerMs: 0,
+        },
+      },
+    });
   });
 
   it("clears the model override with --clear-model (CLI parity with cron.update model:null)", async () => {

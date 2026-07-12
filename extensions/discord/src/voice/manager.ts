@@ -10,6 +10,7 @@ import {
   type APIVoiceState,
   type Client,
   getGuildVoiceState,
+  isUnknownDiscordVoiceStateError,
   ReadyListener,
   ResumedListener,
   VoiceStateUpdateListener,
@@ -203,20 +204,16 @@ function isFatalAutoJoinFailure(message: string): boolean {
   );
 }
 
-function isUnknownDiscordVoiceStateError(err: unknown): boolean {
-  const status =
-    err && typeof err === "object" && "status" in err && typeof err.status === "number"
-      ? err.status
-      : undefined;
-  return status === 404 || /unknown voice state/i.test(formatErrorMessage(err));
-}
-
 function startAutoJoin(manager: Pick<DiscordVoiceManager, "autoJoin">) {
   void manager
     .autoJoin()
     .catch((err: unknown) =>
       logger.warn(`discord voice: autoJoin failed: ${formatErrorMessage(err)}`),
     );
+}
+
+function resolveVoiceConnectionGroup(accountId: string): string {
+  return `openclaw:${accountId}`;
 }
 
 function resolveDiscordVoiceAgentRoute(params: {
@@ -561,7 +558,8 @@ export class DiscordVoiceManager {
       existingEntry.stop();
       this.sessions.delete(guildId);
     }
-    const staleConnection = voiceSdk.getVoiceConnection(guildId);
+    const voiceConnectionGroup = resolveVoiceConnectionGroup(this.params.accountId);
+    const staleConnection = voiceSdk.getVoiceConnection(guildId, voiceConnectionGroup);
     if (staleConnection) {
       destroyVoiceConnectionSafely({
         connection: staleConnection,
@@ -575,6 +573,7 @@ export class DiscordVoiceManager {
       const joinedConnection = voiceSdk.joinVoiceChannel({
         channelId,
         guildId,
+        group: voiceConnectionGroup,
         adapterCreator,
         selfDeaf: false,
         selfMute: false,
@@ -1002,7 +1001,10 @@ export class DiscordVoiceManager {
       await this.leave({ guildId });
     } else {
       const voiceSdk = loadDiscordVoiceSdk();
-      const connection = voiceSdk.getVoiceConnection(guildId);
+      const connection = voiceSdk.getVoiceConnection(
+        guildId,
+        resolveVoiceConnectionGroup(this.params.accountId),
+      );
       if (connection) {
         destroyVoiceConnectionSafely({
           connection,
@@ -1174,7 +1176,7 @@ export class DiscordVoiceManager {
         ).catch((err: unknown) => {
           if (!isUnknownDiscordVoiceStateError(err)) {
             logger.warn(
-              `discord voice: follow user reconcile skipped transient voice state error guild=${plan.guildId} user=${userId} reason=${reason}: ${formatErrorMessage(err)}`,
+              `follow-user reconcile skipped (transient voice-state error) guild=${plan.guildId} user=${userId} trigger=${reason}: ${formatErrorMessage(err)}`,
             );
             return "transient-error" as const;
           }

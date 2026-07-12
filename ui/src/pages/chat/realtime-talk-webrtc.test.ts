@@ -6,6 +6,8 @@ import {
 } from "./realtime-talk-shared.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./realtime-talk-webrtc.ts";
 
+let getUserMedia: ReturnType<typeof vi.fn>;
+
 class FakeDataChannel extends EventTarget {
   readyState: RTCDataChannelState = "open";
   send = vi.fn();
@@ -80,6 +82,7 @@ function stubAnswerSdpFetch(): void {
 function createOpenAiTransport(
   client: Record<string, unknown> = {},
   callbacks: Record<string, unknown> = {},
+  inputDeviceId?: string,
 ): WebRtcSdpRealtimeTalkTransport {
   return new WebRtcSdpRealtimeTalkTransport(
     {
@@ -91,6 +94,7 @@ function createOpenAiTransport(
       client: client as never,
       sessionKey: "main",
       callbacks: callbacks as never,
+      inputDeviceId,
     },
   );
 }
@@ -179,13 +183,55 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       getAudioTracks: () => [track],
       getTracks: () => [track],
     } as unknown as MediaStream;
+    getUserMedia = vi.fn(async () => stream);
     Object.defineProperty(globalThis.navigator, "mediaDevices", {
       configurable: true,
       value: {
-        getUserMedia: vi.fn(async () => stream),
+        getUserMedia,
       },
     });
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
+  });
+
+  it("captures from the selected microphone with an exact constraint", async () => {
+    stubAnswerSdpFetch();
+    const transport = createOpenAiTransport({}, {}, "usb-mic");
+
+    await transport.start();
+
+    expect(getUserMedia).toHaveBeenCalledWith({
+      audio: { deviceId: { exact: "usb-mic" } },
+    });
+    transport.stop();
+  });
+
+  it("reports microphone activity and resets it when stopped", async () => {
+    stubAnswerSdpFetch();
+    const close = vi.fn(async () => undefined);
+    class MockAudioContext {
+      readonly close = close;
+      createMediaStreamSource() {
+        return { connect: vi.fn(), disconnect: vi.fn() };
+      }
+      createAnalyser() {
+        return {
+          fftSize: 0,
+          smoothingTimeConstant: 0,
+          disconnect: vi.fn(),
+          getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0.25),
+        };
+      }
+    }
+    vi.stubGlobal("AudioContext", MockAudioContext);
+    const onInputLevel = vi.fn();
+    const transport = createOpenAiTransport({}, { onInputLevel });
+
+    await transport.start();
+    transport.stop();
+
+    expect(onInputLevel.mock.calls.some(([level]) => level > 0)).toBe(true);
+    expect(onInputLevel).toHaveBeenLastCalledWith(0);
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("does not continue WebRTC setup when stopped while microphone access is pending", async () => {
@@ -848,6 +894,52 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         output: expect.stringContaining('"mode":"steer"'),
       },
     });
+    transport.stop();
+  });
+
+  it("surfaces OpenAI tool-result send failures without an unhandled rejection", async () => {
+    stubAnswerSdpFetch();
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.steer") {
+        return {
+          ok: true,
+          mode: "status",
+          sessionKey: "main",
+          active: true,
+          message: "Still working.",
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const transport = createOpenAiTransport({ request }, { onStatus, onTalkEvent });
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    peer?.channel.send.mockImplementation(() => {
+      throw new Error("OpenAI data channel rejected the tool result");
+    });
+    dispatchRealtimeEvent(peer, {
+      type: "response.function_call_arguments.done",
+      item_id: "item-control",
+      call_id: "call-control",
+      name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+      arguments: JSON.stringify({ text: "status", mode: "status" }),
+    });
+
+    await vi.waitFor(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "OpenAI data channel rejected the tool result",
+      ),
+    );
+    expect(
+      onTalkEvent.mock.calls.some(
+        ([event]) =>
+          (event.type === "tool.progress" || event.type === "tool.error") && event.final === true,
+      ),
+    ).toBe(false);
     transport.stop();
   });
 });

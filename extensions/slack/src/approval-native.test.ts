@@ -1,9 +1,11 @@
 // Slack tests cover approval native plugin behavior.
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it } from "vitest";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterEach, describe, expect, it } from "vitest";
 import { slackApprovalCapability, testing } from "./approval-native.js";
 
 function buildConfig(
@@ -25,10 +27,19 @@ function buildConfig(
   } as OpenClawConfig;
 }
 
-const STORE_PATH = path.join(os.tmpdir(), "openclaw-slack-approval-native-test.json");
+const tempDirs: string[] = [];
 
-async function writeStore(store: Parameters<typeof saveSessionStore>[1]) {
-  await saveSessionStore(STORE_PATH, store, { skipMaintenance: true });
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+function createTempStorePath(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-approval-native-"));
+  tempDirs.push(dir);
+  return path.join(dir, "sessions.json");
 }
 
 function createExecApprovalRequest(
@@ -60,6 +71,28 @@ async function resolveExecOriginTarget(
     accountId: "default",
     approvalKind: "exec",
     request: createExecApprovalRequest(requestOverrides),
+  });
+}
+
+async function resolvePluginOriginTarget(sessionKey: string) {
+  const storePath = createTempStorePath();
+  return await slackApprovalCapability.native?.resolveOriginTarget?.({
+    cfg: {
+      ...buildConfig({ allowFrom: ["U123OWNER"] }),
+      session: { store: storePath },
+    },
+    accountId: "default",
+    approvalKind: "plugin",
+    request: {
+      id: "plugin:req-session",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+        sessionKey,
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    },
   });
 }
 
@@ -630,8 +663,11 @@ describe("slack native approval adapter", () => {
   });
 
   it("does not route plugin session fallback across Slack accounts", async () => {
-    await writeStore({
-      "agent:main:slack:channel:c999": {
+    const storePath = createTempStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:main:slack:channel:c999",
+      entry: {
         sessionId: "sess",
         updatedAt: Date.now(),
         lastChannel: "slack",
@@ -641,7 +677,7 @@ describe("slack native approval adapter", () => {
 
     const cfg = {
       ...buildConfig({ allowFrom: ["U123OWNER"] }),
-      session: { store: STORE_PATH },
+      session: { store: storePath },
       approvals: {
         plugin: {
           enabled: true,
@@ -773,28 +809,24 @@ describe("slack native approval adapter", () => {
   });
 
   it("falls back to the session-key origin target for plugin approvals when the store is missing", async () => {
-    const target = await slackApprovalCapability.native?.resolveOriginTarget?.({
-      cfg: {
-        ...buildConfig({ allowFrom: ["U123OWNER"] }),
-        session: { store: STORE_PATH },
-      },
-      accountId: "default",
-      approvalKind: "plugin",
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Plugin approval",
-          description: "Allow access",
-          sessionKey: "agent:main:slack:channel:c123:thread:1712345678.123456",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 1000,
-      },
-    });
+    const target = await resolvePluginOriginTarget(
+      "agent:main:slack:channel:c08gqh53ejm:thread:1712345678.123456",
+    );
 
     expect(target).toEqual({
-      to: "channel:C123",
+      to: "channel:C08GQH53EJM",
       threadId: "1712345678.123456",
+    });
+  });
+
+  it("preserves an enterprise-qualified session fallback instead of rewriting its segments", async () => {
+    const target = await resolvePluginOriginTarget(
+      "agent:main:slack:channel:team:T123:channel:C08GQH53EJM",
+    );
+
+    expect(target).toEqual({
+      to: "channel:team:T123:channel:C08GQH53EJM",
+      threadId: undefined,
     });
   });
 

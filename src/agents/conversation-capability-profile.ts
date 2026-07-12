@@ -7,6 +7,8 @@ import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillSnapshot } from "../skills/types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
+import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -166,6 +168,8 @@ export type ResolvedConversationCapabilityProfile = {
     inheritedToolPolicy?: SandboxToolPolicy;
     inheritancePolicies: Array<ToolPolicyLike | undefined>;
     explicitToolAllowlist: string[];
+    /** Explicit config/runtime grants only; excludes built-in profile expansion. */
+    explicitToolOverrideAllowlist: string[];
     explicitToolDenylist: string[];
   };
 };
@@ -204,15 +208,22 @@ export function resolveConversationCapabilityProfile(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
   });
-  const senderPolicy = resolveSenderToolPolicy({
-    config: params.config,
-    agentId: effective.agentId,
-    messageProvider,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  // Owner WebChat intentionally has no external sender identity. Its trusted
+  // owner state must not fall through to the wildcard policy for guests.
+  const isOwnerInternalSession =
+    params.senderIsOwner === true &&
+    normalizeMessageChannel(messageProvider ?? params.messageChannel) === INTERNAL_MESSAGE_CHANNEL;
+  const senderPolicy = isOwnerInternalSession
+    ? undefined
+    : resolveSenderToolPolicy({
+        config: params.config,
+        agentId: effective.agentId,
+        messageProvider,
+        senderId: params.senderId,
+        senderName: params.senderName,
+        senderUsername: params.senderUsername,
+        senderE164: params.senderE164,
+      });
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
   const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
   const subagentSessionKey = params.sandboxSessionKey ?? params.sessionKey;
@@ -236,9 +247,7 @@ export function resolveConversationCapabilityProfile(
       store: subagentStore,
     },
   );
-  const inheritancePolicies = [
-    profilePolicy,
-    providerProfilePolicy,
+  const configuredOverridePolicies = [
     effective.globalPolicy,
     effective.globalProviderPolicy,
     effective.agentPolicy,
@@ -247,8 +256,17 @@ export function resolveConversationCapabilityProfile(
     senderPolicy,
     params.sandboxToolPolicy,
     subagentPolicy,
+  ];
+  const runtimeToolPolicy = params.runtimeToolAllowlist
+    ? { allow: params.runtimeToolAllowlist }
+    : undefined;
+  const explicitOverridePolicies = [...configuredOverridePolicies, runtimeToolPolicy];
+  const inheritancePolicies = [
+    profilePolicy,
+    providerProfilePolicy,
+    ...configuredOverridePolicies,
     inheritedToolPolicy,
-    params.runtimeToolAllowlist ? { allow: params.runtimeToolAllowlist } : undefined,
+    runtimeToolPolicy,
   ];
 
   return {
@@ -345,6 +363,7 @@ export function resolveConversationCapabilityProfile(
       inheritedToolPolicy,
       inheritancePolicies,
       explicitToolAllowlist: collectExplicitAllowlist(inheritancePolicies),
+      explicitToolOverrideAllowlist: collectExplicitAllowlist(explicitOverridePolicies),
       explicitToolDenylist: collectExplicitDenylist(inheritancePolicies),
     },
   };

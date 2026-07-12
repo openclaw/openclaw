@@ -1,5 +1,6 @@
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   type EventSessionRoutingPolicy,
@@ -199,7 +200,7 @@ function emitExecProcessCompleted(params: {
 }
 
 /** Renders a host label for user-facing exec policy messages. */
-export function renderExecHostLabel(host: ExecHost) {
+function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
 }
 
@@ -293,7 +294,7 @@ function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CH
     return normalized;
   }
   const safe = Math.max(1, maxChars - 1);
-  return `${normalized.slice(0, safe)}…`;
+  return `${truncateUtf16Safe(normalized, safe)}…`;
 }
 
 /** Merges shell-discovered PATH entries into an exec environment. */
@@ -402,9 +403,7 @@ export function buildApprovalPendingMessage(params: {
   );
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+    lines.push("Allow Always is unavailable for this command.");
   }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");
@@ -735,6 +734,45 @@ export async function runExecProcess(opts: {
       token: sandboxFinalizeToken,
     });
   };
+  const finalizeAndSettleSession = async (
+    outcome: ExecProcessOutcome,
+  ): Promise<ExecProcessOutcome> => {
+    let finalOutcome = outcome;
+    session.finalizing = true;
+    try {
+      await finalizeSandboxExec({
+        status: outcome.status,
+        exitCode: outcome.exitCode,
+        timedOut: outcome.timedOut,
+      });
+    } catch (error) {
+      if (outcome.status === "completed") {
+        finalOutcome = buildExecRuntimeErrorOutcome({
+          error,
+          aggregated: session.aggregated.trim(),
+          durationMs: Date.now() - startedAt,
+        });
+      } else {
+        logWarn(`exec: sandbox finalize after process failure failed (${String(error)}).`);
+      }
+    } finally {
+      // Finalization can release remote process/session resources. Keep the
+      // background-work blocker until that owner transition has settled.
+      session.finalizing = false;
+      if (!session.exited) {
+        markExited(
+          session,
+          finalOutcome.exitCode,
+          finalOutcome.exitSignal,
+          finalOutcome.status,
+          finalOutcome.exitReason,
+          finalOutcome.noOutputTimedOut,
+        );
+        maybeNotifyOnExit(session, finalOutcome.status);
+      }
+    }
+    return finalOutcome;
+  };
 
   const spawnSpec:
     | {
@@ -944,49 +982,32 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(
-        session,
-        exit.exitCode,
-        exit.exitSignal,
-        outcome.status,
-        exit.reason,
-        exit.noOutputTimedOut,
-      );
-      maybeNotifyOnExit(session, outcome.status);
-      if (!session.child && session.stdin) {
-        session.stdin.destroyed = true;
-      }
-      await finalizeSandboxExec({
-        status: outcome.status,
-        exitCode: exit.exitCode ?? null,
-        timedOut: exit.timedOut,
-      });
+      const finalOutcome = await finalizeAndSettleSession(outcome);
       emitExecProcessCompleted({
         command: opts.command,
         mode: usingPty ? "pty" : "child",
-        outcome,
+        outcome: finalOutcome,
         sessionKey: opts.sessionKey,
         target: diagnosticTarget,
       });
-      return outcome;
+      return finalOutcome;
     })
-    .catch((err: unknown): ExecProcessOutcome => {
+    .catch(async (err: unknown): Promise<ExecProcessOutcome> => {
       updatesDisabled = true;
-      markExited(session, null, null, "failed");
-      maybeNotifyOnExit(session, "failed");
       const outcome = buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
       });
+      const finalOutcome = await finalizeAndSettleSession(outcome);
       emitExecProcessCompleted({
         command: opts.command,
         mode: usingPty ? "pty" : "child",
-        outcome,
+        outcome: finalOutcome,
         sessionKey: opts.sessionKey,
         target: diagnosticTarget,
       });
-      return outcome;
+      return finalOutcome;
     });
 
   return {

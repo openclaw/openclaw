@@ -192,6 +192,22 @@ describe("listInworldVoices", () => {
 
     expect(lastGuardRequest().url).toBe("https://api.inworld.ai/voices/v1/voices?languages=EN_US");
   });
+
+  it("defaults to a bounded timeout for voice list requests", async () => {
+    queueGuardedResponse(new Response(JSON.stringify({ voices: [] }), { status: 200 }));
+
+    await listInworldVoices({ apiKey: "test-key" });
+
+    expect(lastGuardRequest().timeoutMs).toBe(30_000);
+  });
+
+  it("preserves an explicit timeout for voice list requests", async () => {
+    queueGuardedResponse(new Response(JSON.stringify({ voices: [] }), { status: 200 }));
+
+    await listInworldVoices({ apiKey: "test-key", timeoutMs: 5_000 });
+
+    expect(lastGuardRequest().timeoutMs).toBe(5_000);
+  });
 });
 
 describe("inworldTTS", () => {
@@ -228,6 +244,14 @@ describe("inworldTTS", () => {
     );
   });
 
+  it("keeps truncated HTTP error bodies UTF-16 safe", async () => {
+    queueGuardedResponse(new Response(`${"e".repeat(399)}😀tail`, { status: 400 }));
+
+    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toMatchObject({
+      message: `Inworld TTS API error (400): ${"e".repeat(399)}…`,
+    });
+  });
+
   it("throws on in-stream errors", async () => {
     const body = JSON.stringify({
       error: { code: 3, message: "Invalid voice ID" },
@@ -249,11 +273,11 @@ describe("inworldTTS", () => {
   });
 
   it("throws descriptive error on non-JSON line in stream", async () => {
-    queueGuardedResponse(new Response("<html>Rate limited</html>", { status: 200 }));
+    queueGuardedResponse(new Response(`${"p".repeat(79)}😀tail`, { status: 200 }));
 
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
-      "Inworld TTS stream parse error: unexpected non-JSON line:",
-    );
+    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toMatchObject({
+      message: `Inworld TTS stream parse error: unexpected non-JSON line: ${"p".repeat(79)}`,
+    });
   });
 
   it("sends correct request body with defaults", async () => {

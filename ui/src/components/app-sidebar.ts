@@ -1,16 +1,19 @@
 import { consume } from "@lit/context";
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { SessionsListResult } from "../api/types.ts";
+import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../api/gateway.ts";
+import type { SessionsListResult, UpdateAvailable } from "../api/types.ts";
 import {
   cancelRoutePreload,
+  DEFAULT_SIDEBAR_PINNED_ROUTES,
   isSettingsNavigationRoute,
   navigationIconForRoute,
   scheduleRoutePreload,
   type NavigationRouteId,
-  SIDEBAR_SECTIONS,
+  SIDEBAR_NAV_ROUTES,
+  type SidebarNavRoute,
+  sidebarMoreRoutes,
   titleForRoute,
 } from "../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
@@ -20,19 +23,44 @@ import {
   type ApplicationNavigationOptions,
 } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
-import "./theme-mode-toggle.ts";
-import "./session-picker.ts";
-import "./tooltip.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import "./session-menu.ts";
+import "./sidebar-build-chip.ts";
+import "./sidebar-update-card.ts";
+import "./theme-mode-toggle.ts";
+import "./tooltip.ts";
 import { t } from "../i18n/index.ts";
+import { editorOpenUrl } from "../lib/editor-links.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
-import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import {
+  channelDisplayLabel,
+  resolveChannelSessionInfo,
+  resolveSessionDisplayName,
+  resolveSessionWorkSubtitle,
+} from "../lib/session-display.ts";
+import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
+import {
+  readSessionDragData,
+  readSessionGroupDragData,
+  sessionDragActive,
+  sessionGroupDragActive,
+  writeSessionDragData,
+  writeSessionGroupDragData,
+} from "../lib/sessions/drag.ts";
+import {
+  groupSidebarSessionRows,
+  normalizeSidebarSessionsGrouping,
+  type SidebarSessionsGrouping,
+} from "../lib/sessions/grouping.ts";
 import {
   compareSessionRowsByUpdatedAt,
+  filterVisibleSessionRows,
   resolveSessionNavigation,
   searchForSession,
+  type SessionCapability,
 } from "../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
@@ -41,23 +69,100 @@ import {
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import {
-  resolvePreferredSessionForAgent,
-  resolveSessionAgentFilterOptions,
-} from "../lib/sessions/session-options.ts";
-import { icons } from "./icons.ts";
+import { normalizeOptionalString } from "../lib/string-coerce.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
+import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
+import { icons, type IconName } from "./icons.ts";
+import { lobsterPetSeed, resolveLobsterPetMode, resolveLobsterRunOutcome } from "./lobster-pet.ts";
+import { fetchSessionMenuWork } from "./session-menu-work.ts";
+import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 
 type SidebarRecentSession = {
   key: string;
   label: string;
   meta: string;
+  /** Compact repo/branch/node line for work sessions. */
+  subtitle?: string;
   href: string;
   active: boolean;
+  visuallyActive: boolean;
   hasActiveRun: boolean;
+  modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
-  pinnedAt?: number | null;
+  category?: string;
+  channel?: string;
+  channelSession?: boolean;
+  workSession?: boolean;
+  worktreeId?: string;
+  unread: boolean;
 };
+
+type SidebarSessionMenuState = {
+  session: SidebarRecentSession;
+  x: number;
+  y: number;
+};
+
+type SidebarSessionGroupMenuState = {
+  group: string;
+  x: number;
+  y: number;
+};
+
+type SidebarSessionSortMode = "created" | "updated";
+type SidebarSessionsScrollState = "none" | "top" | "middle" | "bottom";
+type SidebarSessionGroupDropTarget = {
+  group: string;
+  position: "before" | "after";
+};
+
+const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
+const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
+const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
+  "openclaw:sidebar:sessions:collapsed-sections";
+
+const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
+  ? "⌘K"
+  : "Ctrl K";
+
+function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
+  return normalizeSidebarSessionsGrouping(
+    getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY),
+  );
+}
+
+function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
+  try {
+    const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return new Set(
+      Array.isArray(parsed)
+        ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+const SIDEBAR_SESSION_SORT_OPTIONS = [
+  { mode: "created", labelKey: "chat.sidebar.sortCreated" },
+  { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
+] as const satisfies ReadonlyArray<{
+  mode: SidebarSessionSortMode;
+  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
+}>;
+
+function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
+  const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
+  if (value === "just now") {
+    return "now";
+  }
+  return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
+}
 
 function shouldHandleNavigationClick(event: MouseEvent): boolean {
   return (
@@ -70,128 +175,334 @@ function shouldHandleNavigationClick(event: MouseEvent): boolean {
   );
 }
 
-export class AppSidebar extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) activeRouteId?: NavigationRouteId;
+  @property({ attribute: false }) activePluginTabId = "";
+  @property({ attribute: false }) activePluginHostId = "";
+  @property({ attribute: false }) activePluginThreadId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
-  @property({ attribute: false }) collapsed = false;
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) sessionKey = "";
-  @property({ attribute: false }) navGroupsCollapsed: Record<string, boolean> = {};
-  @property({ attribute: false }) recentSessionsCollapsed = false;
+  @property({ attribute: false }) sidebarPinnedRoutes: readonly SidebarNavRoute[] =
+    DEFAULT_SIDEBAR_PINNED_ROUTES;
+  @property({ attribute: false }) sidebarMoreExpanded = false;
   @property({ attribute: false }) themeMode: ThemeMode = "system";
-  @property({ attribute: false }) onToggleCollapsed?: () => void;
-  @property({ attribute: false }) onToggleGroup?: (label: string) => void;
-  @property({ attribute: false }) onToggleRecentSessions?: () => void;
+  @property({ attribute: false }) lobsterPetVisits = true;
+  @property({ attribute: false }) lobsterPetSounds = false;
+  @property({ attribute: false }) gatewayVersion: string | null = null;
+  @property({ attribute: false }) devGitBranch: string | null = null;
+  @property({ attribute: false }) updateAvailable: UpdateAvailable | null = null;
+  @property({ attribute: false }) updateRunning = false;
+  @property({ attribute: false }) onUpdate: () => void = () => undefined;
+  @property({ attribute: false }) onOpenPalette?: () => void;
+  @property({ attribute: false }) onToggleSidebar?: () => void;
+  @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
+  /** Agent id of the in-flight new-session draft; renders the draft row. */
+  @property({ attribute: false }) draftSessionAgentId = "";
+  @property({ attribute: false }) onToggleMore?: () => void;
+  @property({ attribute: false }) onUpdatePinnedRoutes?: (routes: SidebarNavRoute[]) => void;
   @property({ attribute: false }) onPairMobile?: () => void;
   @property({ attribute: false })
   onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
-  @consume({ context: applicationContext, subscribe: false })
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
+  @state() private customizeMenuPosition: { x: number; y: number } | null = null;
+  @state() private sessionMenu: SidebarSessionMenuState | null = null;
+  // Multi-select set for batch menu actions; stale keys are dropped lazily by
+  // selectedVisibleSessions() so list refreshes never need to prune here.
+  @state() private selectedSessionKeys: ReadonlySet<string> = new Set();
+  private sessionSelectionAnchor: string | null = null;
+  @state() private sessionMenuWork: SessionMenuWork | null = null;
+  @state() private sessionGroupMenu: SidebarSessionGroupMenuState | null = null;
+  @state() private draggingSessionKey: string | null = null;
+  @state() private draggingSessionGroup: string | null = null;
+  @state() private sessionDropTarget: string | null = null;
+  @state() private sessionGroupDropTarget: SidebarSessionGroupDropTarget | null = null;
+  @state() private collapsedSessionSections = loadStoredCollapsedSessionSections();
+  @state() private sessionSortMode: SidebarSessionSortMode = "created";
+  @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
+  @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
   @state() private sessionsLoading = false;
+  @state() private nativeSessionSidebarReady = false;
+  @state() private sessionsScrollState: SidebarSessionsScrollState = "none";
 
-  private stopSessionsSubscription: (() => void) | undefined;
-  private stopAgentsSubscription: (() => void) | undefined;
-  private stopAgentSelectionSubscription: (() => void) | undefined;
-  private stopGatewaySubscription: (() => void) | undefined;
+  private readonly subscriptions = new SubscriptionsController(this);
+  private customizeMenuTrigger: HTMLElement | null = null;
+  private sessionMenuTrigger: HTMLElement | null = null;
+  // Guards the async work fetch: a menu reopened for another session must not
+  // adopt a stale response.
+  private sessionMenuWorkVersion = 0;
+  private sessionGroupMenuTrigger: HTMLElement | null = null;
+  private sessionSortMenuTrigger: HTMLElement | null = null;
   private sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
+  private sessionCreatedOrder = new Map<string, number>();
+  private sessionsSource: SessionCapability | null = null;
+  private reconnectListRevision: number | null = null;
+  private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
+  private nativeSessionSidebarLoadStarted = false;
+  private sessionsScrollElement: HTMLElement | null = null;
+  private sessionsScrollResizeObserver: ResizeObserver | null = null;
   private readonly routePreloadTimers = new Map<
     EventTarget,
     ReturnType<typeof globalThis.setTimeout>
   >();
 
-  override connectedCallback() {
-    super.connectedCallback();
-    this.style.display = "contents";
-    this.startSubscriptions();
+  constructor() {
+    super();
+    this.subscriptions
+      .watch(
+        () => this.context?.gateway,
+        (gateway, notify) => gateway.subscribe(notify),
+        (gateway) => this.synchronizeGateway(gateway),
+      )
+      .watch(
+        () => this.context?.sessions,
+        (sessions, notify) => sessions.subscribe(notify),
+        (sessions) => this.synchronizeSessions(sessions),
+      )
+      .effect(
+        () => this.context?.sessions,
+        (sessions) => sessions.subscribeCreated((key) => this.promoteCreatedSession(key)),
+      )
+      .watch(
+        () => this.context?.agents,
+        (agents, notify) => agents.subscribe(notify),
+      )
+      .watch(
+        () => this.context?.agentSelection,
+        (agentSelection, notify) => agentSelection.subscribe(notify),
+      );
   }
 
   override disconnectedCallback() {
-    this.stopSessionsSubscription?.();
-    this.stopSessionsSubscription = undefined;
-    this.stopAgentsSubscription?.();
-    this.stopAgentsSubscription = undefined;
-    this.stopAgentSelectionSubscription?.();
-    this.stopAgentSelectionSubscription = undefined;
-    this.stopGatewaySubscription?.();
-    this.stopGatewaySubscription = undefined;
+    this.dismissTransientMenus();
+    this.gatewaySource = null;
     this.gatewayClient = null;
     for (const timer of this.routePreloadTimers.values()) {
       globalThis.clearTimeout(timer);
     }
     this.routePreloadTimers.clear();
+    this.sessionsScrollResizeObserver?.disconnect();
+    this.sessionsScrollResizeObserver = null;
+    this.sessionsScrollElement = null;
     super.disconnectedCallback();
   }
 
-  private startSubscriptions() {
-    const context = this.context;
-    if (
-      !context ||
-      this.stopSessionsSubscription ||
-      this.stopAgentsSubscription ||
-      this.stopAgentSelectionSubscription ||
-      this.stopGatewaySubscription
-    ) {
+  override updated() {
+    this.syncSessionsScrollObserver();
+    const advertised = this.pluginTabs().some(
+      (tab) => tab.id === "sessions" && (tab.pluginId === "codex" || tab.pluginId === "anthropic"),
+    );
+    if (!advertised || this.nativeSessionSidebarReady || this.nativeSessionSidebarLoadStarted) {
       return;
     }
-    this.updateGatewayClient(context.gateway.snapshot);
-    this.updateSessions(context.sessions.state);
-    this.stopSessionsSubscription = context.sessions.subscribe((snapshot) => {
-      this.updateSessions(snapshot);
-    });
-    this.stopAgentsSubscription = context.agents.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopAgentSelectionSubscription = context.agentSelection.subscribe(() => {
-      this.requestUpdate();
-    });
-    this.stopGatewaySubscription = context.gateway.subscribe((snapshot) => {
-      this.updateGatewayClient(snapshot);
-      this.requestUpdate();
+    this.nativeSessionSidebarLoadStarted = true;
+    void import("../pages/plugin/codex-sidebar.ts").then(() => {
+      this.nativeSessionSidebarReady = true;
     });
   }
 
-  override updated() {
-    this.startSubscriptions();
-  }
-
-  private readonly updateSessions = (snapshot: {
-    result: SessionsListResult | null;
-    agentId: string | null;
-    loading: boolean;
-  }) => {
-    this.sessionsResult = snapshot.result;
-    this.sessionsAgentId = snapshot.agentId;
-    this.sessionsLoading = snapshot.loading;
-    if (snapshot.result && snapshot.agentId) {
-      this.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
+  private syncSessionsScrollObserver() {
+    const element = this.querySelector<HTMLElement>(".sidebar-recent-sessions");
+    if (element !== this.sessionsScrollElement) {
+      this.sessionsScrollResizeObserver?.disconnect();
+      this.sessionsScrollElement = element;
+      this.sessionsScrollResizeObserver = null;
+      if (element && typeof ResizeObserver === "function") {
+        this.sessionsScrollResizeObserver = new ResizeObserver(() =>
+          this.updateSessionsScrollState(element),
+        );
+        this.sessionsScrollResizeObserver.observe(element);
+      }
     }
+    if (element) {
+      this.updateSessionsScrollState(element);
+    }
+  }
+
+  private updateSessionsScrollState(element: HTMLElement) {
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight);
+    let nextState: SidebarSessionsScrollState = "none";
+    if (maxScrollTop > 1) {
+      if (element.scrollTop <= 1) {
+        nextState = "top";
+      } else if (element.scrollTop >= maxScrollTop - 1) {
+        nextState = "bottom";
+      } else {
+        nextState = "middle";
+      }
+    }
+    if (nextState !== this.sessionsScrollState) {
+      this.sessionsScrollState = nextState;
+    }
+  }
+
+  // The shell calls this before CSS hides the panel or drawer. Mounted menus
+  // keep their document-level shortcuts alive even when an ancestor is hidden.
+  dismissTransientMenus(): boolean {
+    const hadTransientMenu = Boolean(
+      this.customizeMenuPosition ||
+      this.sessionMenu ||
+      this.sessionGroupMenu ||
+      this.sessionSortMenuPosition,
+    );
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+    return hadTransientMenu;
+  }
+
+  private readonly updateSessions = (sessions: SessionCapability) => {
+    const snapshot = sessions.state;
+    const gateway = this.context?.gateway;
+    const sameClientDisconnected =
+      gateway !== undefined &&
+      gateway === this.gatewaySource &&
+      gateway.snapshot.client !== null &&
+      gateway.snapshot.client === this.gatewayClient &&
+      !gateway.snapshot.connected;
+    if (sameClientDisconnected && this.reconnectListRevision === null) {
+      this.reconnectListRevision = sessions.canonicalListRevision + 1;
+    }
+    const waitingForReconnectList =
+      this.reconnectListRevision !== null &&
+      sessions.canonicalListRevision < this.reconnectListRevision;
+    if (!sameClientDisconnected && !waitingForReconnectList) {
+      // Keep the result and agent scope paired until the first canonical list
+      // after reconnect; chat startup may publish a partial reconciliation first.
+      this.reconnectListRevision = null;
+      this.sessionsResult = snapshot.result;
+      this.sessionsAgentId = snapshot.agentId;
+      if (snapshot.result) {
+        for (const row of snapshot.result.sessions) {
+          if (row.key && !this.sessionCreatedOrder.has(row.key)) {
+            this.sessionCreatedOrder.set(row.key, this.sessionCreatedOrder.size);
+          }
+        }
+      }
+      if (snapshot.result && snapshot.agentId) {
+        this.sessionRowsByAgent[normalizeAgentId(snapshot.agentId)] = snapshot.result.sessions;
+      }
+    }
+    this.sessionsLoading = snapshot.loading;
   };
 
-  private updateGatewayClient(snapshot: {
-    client: GatewayBrowserClient | null;
-    connected: boolean;
-  }) {
-    const client = snapshot.connected ? snapshot.client : null;
-    if (client === this.gatewayClient) {
+  private synchronizeSessions(sessions: SessionCapability) {
+    if (sessions !== this.sessionsSource) {
+      this.clearSessionCache();
+      this.sessionsSource = sessions;
+    }
+    this.updateSessions(sessions);
+    if (this.context?.gateway.snapshot.connected) {
+      // Group catalog hydration is idempotent per connection.
+      void sessions.groupsLoad();
+    }
+  }
+
+  private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
+    const client = gateway.snapshot.client;
+    if (gateway === this.gatewaySource && client === this.gatewayClient) {
       return;
     }
-    this.sessionRowsByAgent = {};
+    this.clearSessionCache();
+    this.gatewaySource = gateway;
     this.gatewayClient = client;
+  }
+
+  private clearSessionCache() {
+    this.reconnectListRevision = null;
+    this.sessionsResult = null;
+    this.sessionsAgentId = null;
+    this.sessionRowsByAgent = {};
+    this.sessionCreatedOrder.clear();
+  }
+
+  private renderBrand() {
+    const collapseLabel = t("nav.collapse");
+    return html`
+      <div class="sidebar-brand">
+        <div class="sidebar-brand__identity">
+          <img
+            class="sidebar-brand__logo"
+            src=${controlUiPublicAssetPath("apple-touch-icon.png", this.basePath)}
+            alt=""
+            aria-hidden="true"
+          />
+          <span class="sidebar-brand__title">OpenClaw</span>
+        </div>
+        <div class="sidebar-brand__actions">
+          ${this.renderSearch()}
+          <openclaw-tooltip .content=${`${collapseLabel} (⌘B)`}>
+            <button
+              class="sidebar-brand__icon sidebar-brand__collapse"
+              type="button"
+              @click=${() => this.onToggleSidebar?.()}
+              aria-label=${collapseLabel}
+              aria-expanded="true"
+            >
+              ${icons.panelLeftClose}
+            </button>
+          </openclaw-tooltip>
+        </div>
+      </div>
+    `;
+  }
+
+  /** Command palette entry point; the palette itself is owned by the shell. */
+  private renderSearch() {
+    const tooltip = `${t("chat.openCommandPalette")} (${PALETTE_SHORTCUT})`;
+    return html`
+      <openclaw-tooltip .content=${tooltip}>
+        <button
+          type="button"
+          class="sidebar-brand__icon sidebar-search"
+          ?disabled=${!this.onOpenPalette}
+          aria-label=${t("chat.openCommandPalette")}
+          @click=${() => this.onOpenPalette?.()}
+        >
+          ${icons.search}
+        </button>
+      </openclaw-tooltip>
+    `;
   }
 
   private getRouteSessionKey(): string {
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
+  }
+
+  private readonly compareSidebarSessionRows = (
+    a: SessionsListResult["sessions"][number],
+    b: SessionsListResult["sessions"][number],
+  ) => {
+    if (this.sessionSortMode === "updated") {
+      return compareSessionRowsByUpdatedAt(a, b);
+    }
+    return (
+      (this.sessionCreatedOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
+      (this.sessionCreatedOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER)
+    );
+  };
+
+  private promoteCreatedSession(sessionKey: string) {
+    const currentOrder = this.sessionCreatedOrder.get(sessionKey);
+    if (currentOrder === 0) {
+      return;
+    }
+    for (const [key, order] of this.sessionCreatedOrder) {
+      if (key !== sessionKey && (currentOrder === undefined || order < currentOrder)) {
+        this.sessionCreatedOrder.set(key, order + 1);
+      }
+    }
+    this.sessionCreatedOrder.set(sessionKey, 0);
+    this.requestUpdate();
   }
 
   private getSessionNavigationState() {
@@ -204,39 +515,43 @@ export class AppSidebar extends LitElement {
       assistantAgentId:
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
       hello: context?.gateway.snapshot.hello,
+      compareSessions: this.compareSidebarSessionRows,
     });
-    const toSidebarSession = (row: SessionsListResult["sessions"][number]) => ({
-      key: row.key,
-      label: resolveSessionDisplayName(row.key, row),
-      meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "",
-      href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
-      active: row.key === navigation.currentSessionKey,
-      hasActiveRun: Boolean(row.hasActiveRun),
-      kind: row.kind,
-      pinned: row.pinned === true,
-      pinnedAt: row.pinnedAt,
-    });
-    const activeSession = navigation.selectedSession
-      ? toSidebarSession(navigation.selectedSession)
-      : null;
-    const recentSessions = navigation.recentSessions
-      .slice(activeSession ? 1 : 0)
-      .toSorted(compareSessionRowsByUpdatedAt)
-      .map(toSidebarSession);
-    const newSessionDisabled =
-      !this.connected || this.sessionsLoading || Boolean(navigation.selectedSession?.hasActiveRun);
+    const highlightCurrentSession = this.activeRouteId === "chat";
+    const toSidebarSession = (row: SessionsListResult["sessions"][number]) => {
+      const channelInfo = resolveChannelSessionInfo(row.key, row.channel);
+      return {
+        key: row.key,
+        label: resolveSessionDisplayName(row.key, row),
+        meta: formatSidebarTimestamp(row.updatedAt),
+        subtitle: resolveSessionWorkSubtitle(row),
+        href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
+        active: row.key === navigation.activeRowKey,
+        visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
+        hasActiveRun: Boolean(row.hasActiveRun),
+        modelSelectionLocked: row.modelSelectionLocked === true,
+        kind: row.kind,
+        pinned: row.pinned === true,
+        category: normalizeOptionalString(row.category),
+        channel: channelInfo.channel,
+        channelSession: channelInfo.channelSession,
+        workSession: Boolean(row.worktree || row.execNode),
+        worktreeId: row.worktree?.id,
+        unread: row.unread === true,
+      };
+    };
+    const visibleSessions = navigation.visibleSessions.map(toSidebarSession);
+    // The dialog always creates a fresh session, so only connectivity gates it.
+    const newSessionDisabled = !this.connected;
     return {
       routeSessionKey: navigation.currentSessionKey,
       selectedAgentId: navigation.selectedAgentId,
-      defaultAgentId: navigation.defaultAgentId,
-      activeSession,
-      recentSessions,
+      visibleSessions,
+      toSidebarSession,
       newSessionDisabled,
-      newSessionTitle: !this.connected
-        ? "Connect to create a new session"
-        : navigation.selectedSession?.hasActiveRun
-          ? "Finish the active run before creating a new session"
-          : "New session",
+      newSessionTitle: this.connected
+        ? t("chat.runControls.newSession")
+        : t("chat.runControls.newSessionDisconnected"),
     };
   }
 
@@ -247,6 +562,94 @@ export class AppSidebar extends LitElement {
     });
   };
 
+  /** Rows in on-screen order (grouped sections, collapsed ones skipped); shift
+      ranges and batch actions both key off this order. */
+  private visibleSessionRowsInOrder(): SidebarRecentSession[] {
+    const navigationState = this.getSessionNavigationState();
+    const agents = this.context?.agents.state.agentsList?.agents ?? [];
+    const rows =
+      agents.length > 1
+        ? this.sidebarRowsForAgent(this.expandedAgentId(), navigationState)
+        : navigationState.visibleSessions;
+    const sections = groupSidebarSessionRows(rows, {
+      grouping: this.sessionsGrouping,
+      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
+    });
+    return sections.flatMap((section) => {
+      // Mirrors renderSessionSection: only headered sections can collapse.
+      const showHeader = section.id === "pinned" || this.sessionsGrouping === "category";
+      return showHeader && this.collapsedSessionSections.has(section.id) ? [] : section.rows;
+    });
+  }
+
+  private selectedVisibleSessions(): SidebarRecentSession[] {
+    if (this.selectedSessionKeys.size === 0) {
+      return [];
+    }
+    return this.visibleSessionRowsInOrder().filter((row) => this.selectedSessionKeys.has(row.key));
+  }
+
+  private handleSessionRowClick(event: MouseEvent, session: SidebarRecentSession) {
+    if (event.defaultPrevented || event.button !== 0) {
+      return;
+    }
+    // Cmd/Ctrl and Shift clicks build the multi-select instead of the browser's
+    // open-in-new-tab default; middle-click still opens the row in a new tab.
+    if (event.metaKey || event.ctrlKey) {
+      event.preventDefault();
+      this.toggleSessionSelected(session.key);
+      return;
+    }
+    if (event.shiftKey) {
+      event.preventDefault();
+      this.extendSessionSelection(session.key);
+      return;
+    }
+    if (event.altKey) {
+      return;
+    }
+    event.preventDefault();
+    this.clearSessionSelection();
+    this.selectSession(session.key);
+  }
+
+  private toggleSessionSelected(key: string) {
+    const next = new Set(this.selectedSessionKeys);
+    if (next.has(key)) {
+      next.delete(key);
+    } else {
+      next.add(key);
+    }
+    this.sessionSelectionAnchor = next.has(key) ? key : null;
+    this.selectedSessionKeys = next;
+  }
+
+  private extendSessionSelection(key: string) {
+    const rows = this.visibleSessionRowsInOrder();
+    const anchor =
+      this.sessionSelectionAnchor ??
+      rows.find((row) => row.visuallyActive || row.active)?.key ??
+      key;
+    const anchorIndex = rows.findIndex((row) => row.key === anchor);
+    const targetIndex = rows.findIndex((row) => row.key === key);
+    if (anchorIndex === -1 || targetIndex === -1) {
+      this.sessionSelectionAnchor = key;
+      this.selectedSessionKeys = new Set([key]);
+      return;
+    }
+    const [start, end] =
+      anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
+    this.sessionSelectionAnchor = anchor;
+    this.selectedSessionKeys = new Set(rows.slice(start, end + 1).map((row) => row.key));
+  }
+
+  private clearSessionSelection() {
+    this.sessionSelectionAnchor = null;
+    if (this.selectedSessionKeys.size > 0) {
+      this.selectedSessionKeys = new Set();
+    }
+  }
+
   private readonly replaceCurrentSession = (sessionKey: string) => {
     this.context?.gateway.setSessionKey(sessionKey);
     if (this.activeRouteId === "chat") {
@@ -256,67 +659,61 @@ export class AppSidebar extends LitElement {
     }
   };
 
-  private readonly selectAgent = (agentId: string) => {
+  /** Browsing another agent's sessions never navigates; only row clicks do. */
+  private readonly expandAgent = (agentId: string) => {
     const context = this.context;
     if (!context) {
       return;
     }
-    const { routeSessionKey, selectedAgentId } = this.getSessionNavigationState();
     const nextAgentId = normalizeAgentId(agentId);
-    if (nextAgentId === normalizeAgentId(selectedAgentId)) {
+    if (nextAgentId === normalizeAgentId(this.expandedAgentId())) {
       return;
     }
-    const nextSessionKey = resolvePreferredSessionForAgent(
-      {
-        agentsList: context.agents.state.agentsList,
-        chatAgentSessionRowsByAgent: this.sessionRowsByAgent,
-        sessionsResult: this.sessionsResult,
-        sessionsResultAgentId: this.sessionsAgentId,
-        sessionKey: routeSessionKey,
-      },
-      nextAgentId,
-    );
+    this.clearSessionSelection();
     context.agentSelection.set(nextAgentId);
-    this.selectSession(nextSessionKey);
+    void context.sessions.refresh({
+      agentId: nextAgentId,
+      limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      force: true,
+    });
   };
 
-  private readonly createSession = async () => {
+  private expandedAgentId(): string {
     const context = this.context;
-    if (!context) {
-      return;
+    const selected = normalizeOptionalString(context?.agentSelection.state.selectedId);
+    if (selected) {
+      return normalizeAgentId(selected);
     }
-    const { routeSessionKey, selectedAgentId, newSessionDisabled } =
-      this.getSessionNavigationState();
-    if (newSessionDisabled) {
-      return;
-    }
-    const nextSessionKey = await context.sessions.create({
-      currentSessionKey: routeSessionKey,
-      agentId: selectedAgentId,
-    });
-    if (nextSessionKey) {
-      this.selectSession(nextSessionKey);
-    }
-  };
+    return normalizeAgentId(this.getSessionNavigationState().selectedAgentId);
+  }
 
   private readonly patchSession = async (
     session: SidebarRecentSession,
-    patch: { archived?: boolean; pinned?: boolean },
+    patch: {
+      archived?: boolean;
+      pinned?: boolean;
+      unread?: boolean;
+      label?: string | null;
+      category?: string | null;
+    },
   ) => {
     const context = this.context;
     if (!context || !this.connected) {
       return;
     }
     const { selectedAgentId } = this.getSessionNavigationState();
-    const agentId = parseAgentSessionKey(session.key)?.agentId;
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId;
     try {
-      const patched = await context.sessions.patch(session.key, patch, agentId ? { agentId } : {});
+      const patched = await context.sessions.patch(session.key, patch, { agentId });
       if (!patched || patch.archived !== true || !session.active) {
         return;
       }
       this.replaceCurrentSession(
         buildAgentMainSessionKey({
-          agentId: agentId ?? selectedAgentId,
+          agentId,
           mainKey: resolveUiConfiguredMainKey({
             agentsList: context.agents.state.agentsList,
             hello: context.gateway.snapshot.hello,
@@ -327,6 +724,90 @@ export class AppSidebar extends LitElement {
       // Session capability publishes the actionable error for the owning page.
     }
   };
+
+  private patchSessions(
+    rows: readonly SidebarRecentSession[],
+    patch: { archived?: boolean; unread?: boolean; category?: string | null },
+  ) {
+    void (async () => {
+      // Sequential like deleteMany: parallel patches would race the shared
+      // session-state publishes inside the capability.
+      for (const row of rows) {
+        await this.patchSession(row, patch);
+      }
+    })();
+  }
+
+  /** Batch delete: one confirm and one preserved-worktrees alert for the whole
+      selection instead of cascading per-session prompts. */
+  private async deleteSessionsBatch(rows: readonly SidebarRecentSession[]) {
+    const context = this.context;
+    if (!context || rows.length === 0) {
+      return;
+    }
+    if (!window.confirm(t("sessionsView.deleteSessionsConfirm", { count: String(rows.length) }))) {
+      return;
+    }
+    const { selectedAgentId } = this.getSessionNavigationState();
+    const result = await context.sessions.deleteMany(
+      rows.map((row) => ({
+        key: row.key,
+        agentId: parseAgentSessionKey(row.key)?.agentId ?? selectedAgentId,
+        deleteTranscript: true,
+      })),
+    );
+    // Dirty/unpushed checkouts survive deletion; point at the Worktrees page
+    // instead of cascading one force-delete confirm per session.
+    if (result.preservedWorktrees.length > 0) {
+      window.alert(
+        t("sessionsView.deletePreservedWorktrees", {
+          count: String(result.preservedWorktrees.length),
+          branches: result.preservedWorktrees.map((worktree) => worktree.branch).join(", "),
+        }),
+      );
+    }
+    const deletedActive = rows.find((row) => row.active && result.deleted.includes(row.key));
+    if (deletedActive) {
+      this.replaceCurrentSession(
+        buildAgentMainSessionKey({
+          agentId: parseAgentSessionKey(deletedActive.key)?.agentId ?? selectedAgentId,
+          mainKey: resolveUiConfiguredMainKey({
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+          }),
+        }),
+      );
+    }
+  }
+
+  private runBatchSessionAction(
+    action: SessionMenuAction,
+    rows: SidebarRecentSession[],
+    allUnread: boolean,
+  ) {
+    switch (action.kind) {
+      case "toggle-unread":
+        this.patchSessions(rows, { unread: !allUnread });
+        break;
+      case "move-to-group":
+        this.patchSessions(
+          rows.filter((row) => (row.category ?? null) !== action.category),
+          { category: action.category },
+        );
+        break;
+      case "new-group":
+        this.createSessionGroup(rows);
+        break;
+      case "toggle-archived":
+        this.patchSessions(rows, { archived: true });
+        break;
+      case "delete":
+        void this.deleteSessionsBatch(rows);
+        break;
+      default:
+        break;
+    }
+  }
 
   private preloadRoute(routeId: NavigationRouteId, event: Event, immediate = false) {
     scheduleRoutePreload(
@@ -347,23 +828,798 @@ export class AppSidebar extends LitElement {
     return this.enabledRouteIds?.includes(routeId) ?? true;
   }
 
+  private readonly openCustomizeMenuFromContext = (event: MouseEvent) => {
+    event.preventDefault();
+    this.openCustomizeMenu(event.clientX, event.clientY);
+  };
+
+  private openCustomizeMenu(x: number, y: number, trigger: HTMLElement | null = null) {
+    // Clamp so the fixed-position menu never overflows the viewport.
+    const menuWidth = 240;
+    const menuMaxHeight = 420;
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+    this.customizeMenuTrigger = trigger;
+    this.customizeMenuPosition = {
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-customize-menu__item")?.focus();
+    });
+  }
+
+  private closeCustomizeMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.customizeMenuTrigger;
+    this.customizeMenuTrigger = null;
+    this.customizeMenuPosition = null;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  /** Row-triggered opens (context menu, "…"): a row outside the current
+      selection retargets the selection before the menu decides batch mode. */
+  private openSessionMenuForRow(
+    session: SidebarRecentSession,
+    x: number,
+    y: number,
+    trigger: HTMLElement | null = null,
+  ) {
+    if (!this.selectedSessionKeys.has(session.key)) {
+      this.clearSessionSelection();
+    }
+    this.openSessionMenu(session, x, y, trigger);
+  }
+
+  private openSessionMenu(
+    session: SidebarRecentSession,
+    x: number,
+    y: number,
+    trigger: HTMLElement | null = null,
+  ) {
+    this.closeCustomizeMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+    this.sessionMenuTrigger = trigger;
+    this.sessionMenu = { session, x, y };
+    this.loadSessionMenuWork(session);
+  }
+
+  private closeSessionMenu() {
+    this.sessionMenuTrigger = null;
+    this.sessionMenu = null;
+    this.sessionMenuWorkVersion += 1;
+    this.sessionMenuWork = null;
+  }
+
+  private loadSessionMenuWork(session: SidebarRecentSession) {
+    const version = ++this.sessionMenuWorkVersion;
+    if (!session.worktreeId) {
+      this.sessionMenuWork = null;
+      return;
+    }
+    this.sessionMenuWork = { loading: true, pullRequestUrl: null, worktreePath: null };
+    const context = this.context;
+    const client = context?.gateway.snapshot.client;
+    if (!context || !client) {
+      this.sessionMenuWork = { loading: false, pullRequestUrl: null, worktreePath: null };
+      return;
+    }
+    const { selectedAgentId } = this.getSessionNavigationState();
+    void fetchSessionMenuWork({
+      client,
+      pullRequestsAvailable:
+        isGatewayMethodAdvertised(context.gateway.snapshot, "controlUi.sessionPullRequests") ===
+        true,
+      sessionKey: session.key,
+      agentId: parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
+      worktreeId: session.worktreeId,
+    }).then((work) => {
+      if (version === this.sessionMenuWorkVersion) {
+        this.sessionMenuWork = { loading: false, ...work };
+      }
+    });
+  }
+
+  private openSessionGroupMenu(group: string, x: number, y: number, trigger: HTMLElement | null) {
+    const menuWidth = 224;
+    const menuMaxHeight = 160;
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.closeSessionSortMenu();
+    this.sessionGroupMenuTrigger = trigger;
+    this.sessionGroupMenu = {
+      group,
+      x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-session-group-menu .session-menu__item")?.focus();
+    });
+  }
+
+  private closeSessionGroupMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.sessionGroupMenuTrigger;
+    this.sessionGroupMenuTrigger = null;
+    this.sessionGroupMenu = null;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private toggleSessionSortMenu(trigger: HTMLElement) {
+    if (this.sessionSortMenuPosition) {
+      this.closeSessionSortMenu();
+      return;
+    }
+    const menuWidth = 200;
+    const menuMaxHeight = 280;
+    const rect = trigger.getBoundingClientRect();
+    this.closeCustomizeMenu();
+    this.closeSessionMenu();
+    this.closeSessionGroupMenu();
+    this.sessionSortMenuTrigger = trigger;
+    this.sessionSortMenuPosition = {
+      x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
+    };
+    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.addEventListener("keydown", this.handleDocumentKeydown, true);
+    void this.updateComplete.then(() => {
+      this.querySelector<HTMLElement>(".sidebar-session-sort-menu__item")?.focus();
+    });
+  }
+
+  private closeSessionSortMenu(options: { restoreFocus?: boolean } = {}) {
+    const trigger = this.sessionSortMenuTrigger;
+    this.sessionSortMenuTrigger = null;
+    this.sessionSortMenuPosition = null;
+    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
+    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
+    if (options.restoreFocus) {
+      trigger?.focus();
+    }
+  }
+
+  private knownSessionGroups(): string[] {
+    const catalog = this.context?.sessions.state.groups ?? [];
+    const catalogSet = new Set(catalog);
+    const discovered = (this.sessionsResult?.sessions ?? [])
+      .map((row) => normalizeOptionalString(row.category))
+      .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
+      .toSorted((a, b) => a.localeCompare(b));
+    return [...catalog, ...new Set(discovered)];
+  }
+
+  private rememberSessionGroup(name: string) {
+    const groups = this.knownSessionGroups();
+    if (!groups.includes(name)) {
+      void this.context?.sessions.groupsPut([...groups, name]);
+    }
+  }
+
+  private renameSession(session: SidebarRecentSession) {
+    const nextLabel = window.prompt(t("sessionsView.renameSessionPrompt"), session.label);
+    if (nextLabel === null) {
+      return;
+    }
+    void this.patchSession(session, { label: normalizeOptionalString(nextLabel) ?? null });
+  }
+
+  private createSessionGroup(sessions: readonly SidebarRecentSession[] = []) {
+    const name = window.prompt(t("sessionsView.newGroupPrompt"))?.trim();
+    if (!name) {
+      return;
+    }
+    this.rememberSessionGroup(name);
+    if (sessions.length > 0) {
+      this.patchSessions(sessions, { category: name });
+    } else {
+      // Header-created groups start empty; re-render so the section shows up.
+      this.requestUpdate();
+    }
+  }
+
+  private renameSessionGroupFromMenu(group: string) {
+    const context = this.context;
+    if (!context || !this.connected) {
+      return;
+    }
+    const next = window.prompt(t("sessionsView.renameGroupPrompt"), group)?.trim();
+    if (!next || next === group) {
+      return;
+    }
+    // The gateway renames the catalog entry and repoints member sessions.
+    void context.sessions.groupsRename(group, next).finally(() => {
+      const from = `category:${group}`;
+      if (this.collapsedSessionSections.has(from)) {
+        const collapsed = new Set(this.collapsedSessionSections);
+        collapsed.delete(from);
+        collapsed.add(`category:${next}`);
+        this.saveCollapsedSessionSections(collapsed);
+      }
+      this.requestUpdate();
+    });
+  }
+
+  private deleteSessionGroupFromMenu(group: string) {
+    const context = this.context;
+    if (!context || !this.connected) {
+      return;
+    }
+    if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
+      return;
+    }
+    void context.sessions.groupsDelete(group).finally(() => {
+      const collapsed = new Set(this.collapsedSessionSections);
+      collapsed.delete(`category:${group}`);
+      this.saveCollapsedSessionSections(collapsed);
+      this.requestUpdate();
+    });
+  }
+
+  private saveCollapsedSessionSections(sections: ReadonlySet<string>) {
+    this.collapsedSessionSections = new Set(sections);
+    try {
+      getSafeLocalStorage()?.setItem(
+        SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY,
+        JSON.stringify([...sections]),
+      );
+    } catch {
+      // Group membership and ordering remain usable without local persistence.
+    }
+  }
+
+  private toggleSessionSection(sectionId: string) {
+    const collapsed = new Set(this.collapsedSessionSections);
+    if (collapsed.has(sectionId)) {
+      collapsed.delete(sectionId);
+    } else {
+      collapsed.add(sectionId);
+    }
+    this.saveCollapsedSessionSections(collapsed);
+  }
+
+  private reorderSessionGroup(source: string, target: string, position: "before" | "after") {
+    const groups = reorderSessionCustomGroups(this.knownSessionGroups(), source, target, position);
+    void this.context?.sessions.groupsPut(groups);
+    this.requestUpdate();
+  }
+
+  private handleSessionSectionDragOver(event: DragEvent, sectionId: string, category?: string) {
+    const dataTransfer = event.dataTransfer;
+    if (
+      category &&
+      sessionGroupDragActive(dataTransfer) &&
+      this.draggingSessionGroup !== category
+    ) {
+      event.preventDefault();
+      if (dataTransfer) {
+        dataTransfer.dropEffect = "move";
+      }
+      const target = event.currentTarget as HTMLElement;
+      const bounds = target.getBoundingClientRect();
+      const position = event.clientY < bounds.top + bounds.height / 2 ? "before" : "after";
+      this.sessionGroupDropTarget = { group: category, position };
+      this.sessionDropTarget = null;
+      return;
+    }
+    if (!sessionDragActive(dataTransfer) || sectionId === "pinned") {
+      return;
+    }
+    event.preventDefault();
+    if (dataTransfer) {
+      dataTransfer.dropEffect = "move";
+    }
+    this.sessionDropTarget = sectionId;
+    this.sessionGroupDropTarget = null;
+  }
+
+  private handleSessionSectionDragLeave(event: DragEvent, sectionId: string, category?: string) {
+    const current = event.currentTarget as HTMLElement;
+    if (event.relatedTarget instanceof Node && current.contains(event.relatedTarget)) {
+      return;
+    }
+    if (this.sessionDropTarget === sectionId) {
+      this.sessionDropTarget = null;
+    }
+    if (category && this.sessionGroupDropTarget?.group === category) {
+      this.sessionGroupDropTarget = null;
+    }
+  }
+
+  private findSidebarSessionByKey(sessionKey: string): SidebarRecentSession | undefined {
+    const navigationState = this.getSessionNavigationState();
+    const active = navigationState.visibleSessions.find(
+      (candidate) => candidate.key === sessionKey,
+    );
+    if (active) {
+      return active;
+    }
+    for (const rows of Object.values(this.sessionRowsByAgent)) {
+      const row = rows.find((candidate) => candidate.key === sessionKey);
+      if (row) {
+        return navigationState.toSidebarSession(row);
+      }
+    }
+    return undefined;
+  }
+
+  private handleSessionSectionDrop(event: DragEvent, category?: string) {
+    event.preventDefault();
+    const sourceGroup = readSessionGroupDragData(event.dataTransfer);
+    if (sourceGroup && category && sourceGroup !== category) {
+      const position =
+        this.sessionGroupDropTarget?.group === category
+          ? this.sessionGroupDropTarget.position
+          : "before";
+      this.reorderSessionGroup(sourceGroup, category, position);
+    } else {
+      const sessionKey = readSessionDragData(event.dataTransfer);
+      // Rows can be dragged out of a browsed (non-active) agent section, so the
+      // lookup must cover every agent's cached rows, not just the active scope.
+      const session = sessionKey ? this.findSidebarSessionByKey(sessionKey) : undefined;
+      const nextCategory = category ?? null;
+      if (session && (session.category !== nextCategory || session.pinned)) {
+        if (category) {
+          this.rememberSessionGroup(category);
+        }
+        void this.patchSession(session, {
+          category: nextCategory,
+          ...(session.pinned ? { pinned: false } : {}),
+        });
+      }
+    }
+    this.draggingSessionKey = null;
+    this.draggingSessionGroup = null;
+    this.sessionDropTarget = null;
+    this.sessionGroupDropTarget = null;
+  }
+
+  private setSessionsGrouping(grouping: SidebarSessionsGrouping) {
+    this.sessionsGrouping = grouping;
+    try {
+      getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY, grouping);
+    } catch {
+      // ignore storage failures
+    }
+  }
+
+  private async forkSession(session: SidebarRecentSession) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const { selectedAgentId } = this.getSessionNavigationState();
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId;
+    const key = await context.sessions.create({
+      parentSessionKey: session.key,
+      fork: true,
+      agentId,
+    });
+    if (key) {
+      this.selectSession(key);
+    }
+  }
+
+  private async deleteSession(session: SidebarRecentSession) {
+    if (!window.confirm(t("sessionsView.deleteSessionConfirm", { session: session.label }))) {
+      return;
+    }
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    const { selectedAgentId } = this.getSessionNavigationState();
+    const agentId = parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId;
+    try {
+      const outcome = await context.sessions.delete(session.key, {
+        agentId,
+        deleteTranscript: true,
+      });
+      // Dirty/unpushed checkouts survive the delete; offer an explicit force
+      // removal instead of silently orphaning them under the state dir.
+      if (outcome.worktreePreserved) {
+        const preserved = outcome.worktreePreserved;
+        if (
+          window.confirm(
+            t("sessionsView.deletePreservedWorktreeConfirm", { branch: preserved.branch }),
+          )
+        ) {
+          try {
+            await context.gateway.snapshot.client?.request("worktrees.remove", {
+              id: preserved.id,
+              force: true,
+            });
+          } catch (error) {
+            window.alert(String(error));
+          }
+        }
+      }
+      if (!outcome.deleted || !session.active) {
+        return;
+      }
+      this.replaceCurrentSession(
+        buildAgentMainSessionKey({
+          agentId,
+          mainKey: resolveUiConfiguredMainKey({
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+          }),
+        }),
+      );
+    } catch {
+      // Session capability publishes the actionable error for the owning page.
+    }
+  }
+
+  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
+    const path = event.composedPath();
+    if (this.sessionSortMenuTrigger && path.includes(this.sessionSortMenuTrigger)) {
+      return;
+    }
+    const menu = this.querySelector(
+      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu",
+    );
+    if (menu && path.includes(menu)) {
+      return;
+    }
+    this.closeCustomizeMenu();
+    this.closeSessionGroupMenu();
+    this.closeSessionSortMenu();
+  };
+
+  // Registered only while one of the transient menus is open. Keeping this
+  // listener lifecycle-bound prevents menu shortcuts from consuming page keys.
+  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      this.closeCustomizeMenu({ restoreFocus: true });
+      this.closeSessionGroupMenu({ restoreFocus: true });
+      this.closeSessionSortMenu({ restoreFocus: true });
+      return;
+    }
+    if (event.key === "Tab") {
+      // Menu items stay outside the page tab order. Restore the durable trigger
+      // before the browser performs its normal forward/backward Tab movement.
+      this.closeCustomizeMenu({ restoreFocus: true });
+      this.closeSessionGroupMenu({ restoreFocus: true });
+      this.closeSessionSortMenu({ restoreFocus: true });
+      return;
+    }
+    this.moveTransientMenuFocus(event);
+  };
+
+  private moveTransientMenuFocus(event: KeyboardEvent) {
+    const menu = this.querySelector<HTMLElement>(
+      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu",
+    );
+    if (!menu) {
+      return;
+    }
+    const items = Array.from(
+      menu.querySelectorAll<HTMLElement>(
+        '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]',
+      ),
+    ).filter((item) => !item.matches(":disabled"));
+    if (items.length === 0) {
+      return;
+    }
+    const activeIndex = items.indexOf(document.activeElement as HTMLElement);
+    let nextIndex: number;
+    if (event.key === "ArrowDown") {
+      nextIndex = (activeIndex + 1) % items.length;
+    } else if (event.key === "ArrowUp") {
+      nextIndex = activeIndex <= 0 ? items.length - 1 : activeIndex - 1;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = items.length - 1;
+    } else {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    items[nextIndex]?.focus();
+  }
+
+  private togglePinnedRoute(routeId: SidebarNavRoute) {
+    const pinned = this.sidebarPinnedRoutes;
+    const next = pinned.includes(routeId)
+      ? pinned.filter((route) => route !== routeId)
+      : [...pinned, routeId];
+    this.onUpdatePinnedRoutes?.(next);
+  }
+
+  private renderCustomizeMenu() {
+    const position = this.customizeMenuPosition;
+    if (!position) {
+      return nothing;
+    }
+    return html`
+      <div
+        class="sidebar-customize-menu"
+        role="menu"
+        aria-label=${t("nav.customize")}
+        style="left: ${position.x}px; top: ${position.y}px;"
+      >
+        <div class="sidebar-customize-menu__title">${t("nav.customize")}</div>
+        ${SIDEBAR_NAV_ROUTES.filter((routeId) => this.isRouteEnabled(routeId)).map((routeId) => {
+          const pinned = this.sidebarPinnedRoutes.includes(routeId);
+          return html`
+            <button
+              type="button"
+              class="sidebar-customize-menu__item"
+              role="menuitemcheckbox"
+              tabindex="-1"
+              aria-checked=${String(pinned)}
+              @click=${() => this.togglePinnedRoute(routeId)}
+            >
+              <span class="nav-item__icon" aria-hidden="true"
+                >${icons[navigationIconForRoute(routeId)]}</span
+              >
+              <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
+              <span class="sidebar-customize-menu__check" aria-hidden="true">
+                ${pinned ? icons.check : nothing}
+              </span>
+            </button>
+          `;
+        })}
+        <div class="sidebar-customize-menu__separator" role="separator"></div>
+        <button
+          type="button"
+          class="sidebar-customize-menu__item"
+          role="menuitem"
+          tabindex="-1"
+          @click=${() => {
+            this.onUpdatePinnedRoutes?.([...DEFAULT_SIDEBAR_PINNED_ROUTES]);
+            this.closeCustomizeMenu({ restoreFocus: true });
+          }}
+        >
+          <span class="nav-item__icon" aria-hidden="true">${icons.refresh}</span>
+          <span class="sidebar-customize-menu__text">${t("nav.customizeReset")}</span>
+        </button>
+      </div>
+    `;
+  }
+
+  private renderSessionMenu() {
+    const menu = this.sessionMenu;
+    if (!menu) {
+      return nothing;
+    }
+    const { session } = menu;
+    const context = this.context;
+    const mainKey = resolveUiConfiguredMainKey({
+      agentsList: context?.agents.state.agentsList,
+      hello: context?.gateway.snapshot.hello,
+    });
+    // Batch mode only when the menu's row is part of a multi-selection; the
+    // menu then acts on the selection and shows aggregated unread/category.
+    const selection = this.selectedVisibleSessions();
+    const batchRows =
+      selection.length > 1 && selection.some((row) => row.key === session.key) ? selection : null;
+    const rows = batchRows ?? [session];
+    const archiveAllowed = rows.every((row) => canArchiveSessionRow(row, mainKey));
+    const allUnread = rows.every((row) => row.unread);
+    const sharedCategory = rows.every(
+      (row) => (row.category ?? null) === (rows[0]?.category ?? null),
+    )
+      ? (rows[0]?.category ?? null)
+      : null;
+    return html`
+      <openclaw-session-menu
+        .session=${{
+          key: session.key,
+          label: session.label,
+          pinned: session.pinned,
+          unread: batchRows ? allUnread : session.unread,
+          archived: false,
+          category: batchRows ? sharedCategory : (session.category ?? null),
+        }}
+        .selectionCount=${rows.length}
+        .x=${menu.x}
+        .y=${menu.y}
+        .trigger=${this.sessionMenuTrigger}
+        .disabled=${!this.connected}
+        .forkDisabled=${this.sessionsLoading || session.modelSelectionLocked}
+        .archiveAllowed=${archiveAllowed}
+        .groups=${this.knownSessionGroups()}
+        .canOpenChat=${true}
+        .work=${batchRows ? null : this.sessionMenuWork}
+        .workboard=${null}
+        .onClose=${() => this.closeSessionMenu()}
+        .onAction=${(action: SessionMenuAction) => {
+          if (batchRows) {
+            this.runBatchSessionAction(action, batchRows, allUnread);
+            return;
+          }
+          switch (action.kind) {
+            case "open-chat":
+              this.selectSession(session.key);
+              break;
+            case "open-pr":
+              window.open(action.url, "_blank", "noopener");
+              break;
+            case "open-in":
+              // A custom-scheme window hands off to the OS without navigating this page.
+              window.open(editorOpenUrl(action.editor, action.path));
+              break;
+            case "toggle-pin":
+              void this.patchSession(session, { pinned: !session.pinned });
+              break;
+            case "toggle-unread":
+              void this.patchSession(session, { unread: !session.unread });
+              break;
+            case "rename":
+              this.renameSession(session);
+              break;
+            case "fork":
+              void this.forkSession(session);
+              break;
+            case "workboard":
+              break;
+            case "move-to-group":
+              if (action.category === null || session.category !== action.category) {
+                void this.patchSession(session, { category: action.category });
+              }
+              break;
+            case "new-group":
+              this.createSessionGroup([session]);
+              break;
+            case "toggle-archived":
+              void this.patchSession(session, { archived: true });
+              break;
+            case "delete":
+              void this.deleteSession(session);
+              break;
+          }
+        }}
+      ></openclaw-session-menu>
+    `;
+  }
+
+  private renderSessionGroupMenu() {
+    const menu = this.sessionGroupMenu;
+    if (!menu) {
+      return nothing;
+    }
+    return html`
+      <div
+        class="session-menu sidebar-session-group-menu"
+        role="menu"
+        aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
+        style="left: ${menu.x}px; top: ${menu.y}px;"
+      >
+        <button
+          type="button"
+          class="session-menu__item"
+          role="menuitem"
+          tabindex="-1"
+          ?disabled=${!this.connected}
+          @click=${() => {
+            this.closeSessionGroupMenu();
+            this.renameSessionGroupFromMenu(menu.group);
+          }}
+        >
+          <span class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
+          <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
+        </button>
+        <button
+          type="button"
+          class="session-menu__item"
+          role="menuitem"
+          tabindex="-1"
+          @click=${() => {
+            this.closeSessionGroupMenu();
+            this.createSessionGroup();
+          }}
+        >
+          <span class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
+          <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
+        </button>
+        <div class="session-menu__separator" role="separator"></div>
+        <button
+          type="button"
+          class="session-menu__item session-menu__item--destructive"
+          role="menuitem"
+          tabindex="-1"
+          ?disabled=${!this.connected}
+          @click=${() => {
+            this.closeSessionGroupMenu();
+            this.deleteSessionGroupFromMenu(menu.group);
+          }}
+        >
+          <span class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
+          <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
+        </button>
+      </div>
+    `;
+  }
+
+  private renderSessionSortMenu() {
+    const position = this.sessionSortMenuPosition;
+    if (!position) {
+      return nothing;
+    }
+    const groupingOptions = [
+      { grouping: "category", label: t("sessionsView.groupByCategory") },
+      { grouping: "none", label: t("sessionsView.groupByNone") },
+    ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;
+    return html`
+      <div
+        class="sidebar-session-sort-menu"
+        role="menu"
+        aria-label=${t("chat.sidebar.sortSessions")}
+        style="left: ${position.x}px; top: ${position.y}px;"
+      >
+        <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
+        ${groupingOptions.map(
+          (option) => html`
+            <button
+              type="button"
+              class="sidebar-session-sort-menu__item"
+              role="menuitemradio"
+              tabindex="-1"
+              aria-checked=${String(this.sessionsGrouping === option.grouping)}
+              @click=${() => {
+                this.setSessionsGrouping(option.grouping);
+                this.closeSessionSortMenu({ restoreFocus: true });
+              }}
+            >
+              <span class="session-menu__check" aria-hidden="true">
+                ${this.sessionsGrouping === option.grouping ? icons.check : nothing}
+              </span>
+              <span class="session-menu__text">${option.label}</span>
+            </button>
+          `,
+        )}
+        <div class="session-menu__separator" role="separator"></div>
+        <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
+        ${SIDEBAR_SESSION_SORT_OPTIONS.map(
+          (option) => html`
+            <button
+              type="button"
+              class="sidebar-session-sort-menu__item"
+              role="menuitemradio"
+              tabindex="-1"
+              aria-checked=${String(this.sessionSortMode === option.mode)}
+              @click=${() => {
+                this.sessionSortMode = option.mode;
+                this.closeSessionSortMenu({ restoreFocus: true });
+              }}
+            >
+              <span class="session-menu__check" aria-hidden="true">
+                ${this.sessionSortMode === option.mode ? icons.check : nothing}
+              </span>
+              <span class="session-menu__text">${t(option.labelKey)}</span>
+            </button>
+          `,
+        )}
+      </div>
+    `;
+  }
+
   private renderRoute(routeId: NavigationRouteId) {
     const active =
       routeId === "config"
         ? this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId)
         : this.activeRouteId === routeId;
-    const enabled = this.isRouteEnabled(routeId);
-    if (!enabled) {
-      return html`
-        <span class="nav-item nav-item--disabled" aria-disabled="true">
-          <span class="nav-item__icon" aria-hidden="true"
-            >${icons[navigationIconForRoute(routeId)]}</span
-          >
-          ${!this.collapsed
-            ? html`<span class="nav-item__text">${titleForRoute(routeId)}</span>`
-            : nothing}
-        </span>
-      `;
+    // Disabled routes (e.g. Workboard with the plugin off) stay hidden rather
+    // than rendering an inert nav item.
+    if (!this.isRouteEnabled(routeId)) {
+      return nothing;
     }
     const routeSessionKey = routeId === "chat" ? this.getRouteSessionKey() : "";
     const href =
@@ -371,7 +1627,7 @@ export class AppSidebar extends LitElement {
         ? `${pathForRoute("chat", this.basePath)}${searchForSession(routeSessionKey)}`
         : pathForRoute(routeId, this.basePath);
     const label = titleForRoute(routeId);
-    const link = html`
+    return html`
       <a
         href=${href}
         class="nav-item ${active ? "nav-item--active" : ""}"
@@ -398,29 +1654,52 @@ export class AppSidebar extends LitElement {
         <span class="nav-item__icon" aria-hidden="true"
           >${icons[navigationIconForRoute(routeId)]}</span
         >
-        ${!this.collapsed ? html`<span class="nav-item__text">${label}</span>` : nothing}
+        <span class="nav-item__text">${label}</span>
       </a>
     `;
-    return this.collapsed
-      ? html`<openclaw-tooltip .content=${label}>${link}</openclaw-tooltip>`
-      : link;
+  }
+
+  /** Dynamic plugin tabs stay in More; only stable static route ids can be persisted as pins. */
+  private pluginTabs(): GatewayControlUiPluginTab[] {
+    const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
+    return ["chat", "control", "agent", "settings"].flatMap((group) =>
+      tabs.filter((tab) => (tab.group ?? "control") === group),
+    );
+  }
+
+  private renderPluginTab(tab: GatewayControlUiPluginTab) {
+    const ref = { pluginId: tab.pluginId, id: tab.id };
+    const search = pluginTabSearch(ref);
+    const href = `${pathForRoute("plugin", this.basePath)}${search}`;
+    const active = this.activeRouteId === "plugin" && this.activePluginTabId === pluginTabKey(ref);
+    const iconName = tab.icon && Object.hasOwn(icons, tab.icon) ? (tab.icon as IconName) : "puzzle";
+    return html`
+      <a
+        href=${href}
+        class="nav-item ${active ? "nav-item--active" : ""}"
+        @click=${(event: MouseEvent) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          this.onNavigate?.("plugin", { search });
+        }}
+      >
+        <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
+        <span class="nav-item__text">${tab.label}</span>
+      </a>
+    `;
   }
 
   private renderRecentSession(session: SidebarRecentSession) {
-    const context = this.context;
-    const archiveAllowed = canArchiveSessionRow(
-      session,
-      resolveUiConfiguredMainKey({
-        agentsList: context?.agents.state.agentsList,
-        hello: context?.gateway.snapshot.hello,
-      }),
-    );
     const rowClass = [
       "sidebar-recent-session",
       "session-row-host",
-      session.active ? "sidebar-recent-session--active" : "",
+      session.visuallyActive ? "sidebar-recent-session--active" : "",
+      this.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
       session.pinned ? "session-row-host--pinned" : "",
       session.hasActiveRun ? "session-row-host--running" : "",
+      this.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -428,22 +1707,44 @@ export class AppSidebar extends LitElement {
       <div
         class=${rowClass}
         data-session-key=${session.key}
+        draggable="true"
+        @dragstart=${(event: DragEvent) => {
+          if (event.dataTransfer) {
+            writeSessionDragData(event.dataTransfer, session.key);
+            this.draggingSessionKey = session.key;
+          }
+        }}
+        @dragend=${() => {
+          this.draggingSessionKey = null;
+          this.sessionDropTarget = null;
+        }}
+        @contextmenu=${(event: MouseEvent) => {
+          event.preventDefault();
+          this.openSessionMenuForRow(session, event.clientX, event.clientY);
+        }}
         @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
         @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
       >
         <a
           href=${session.href}
           class="sidebar-recent-session__link"
+          draggable="false"
           title=${`${session.label} · ${session.key}`}
-          @click=${(event: MouseEvent) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            this.selectSession(session.key);
-          }}
+          @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
+          ${session.unread
+            ? html`<span
+                class="session-unread-dot sidebar-recent-session__unread"
+                role="img"
+                aria-label=${t("sessionsView.unread")}
+              ></span>`
+            : nothing}
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name hover-marquee">${session.label}</span>
+            ${session.subtitle && session.workSession && session.subtitle !== session.label
+              ? html`<span class="sidebar-recent-session__subtitle">${session.subtitle}</span>`
+              : nothing}
+          </span>
         </a>
         <span class="sidebar-recent-session__aside session-row-aside">
           <span class="session-row-trail">
@@ -457,17 +1758,6 @@ export class AppSidebar extends LitElement {
               : session.meta}
           </span>
           <span class="session-row-actions">
-            <button
-              class="session-action"
-              data-sidebar-session-archive="true"
-              type="button"
-              title=${t("sessionsView.archiveSession")}
-              aria-label=${t("sessionsView.archiveSession")}
-              ?disabled=${!this.connected || !archiveAllowed}
-              @click=${() => void this.patchSession(session, { archived: true })}
-            >
-              ${icons.archive}
-            </button>
             <button
               class="session-action session-action--pin"
               data-sidebar-session-pin="true"
@@ -483,6 +1773,27 @@ export class AppSidebar extends LitElement {
             >
               ${icons.pin}
             </button>
+            <button
+              class="session-action"
+              data-session-menu="true"
+              type="button"
+              title=${t("chat.sidebar.openSessionMenu")}
+              aria-label=${t("chat.sidebar.openSessionMenu")}
+              aria-haspopup="menu"
+              aria-expanded=${String(this.sessionMenu?.session.key === session.key)}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                if (this.sessionMenu?.session.key === session.key) {
+                  this.closeSessionMenu();
+                  return;
+                }
+                const trigger = event.currentTarget as HTMLElement;
+                const rect = trigger.getBoundingClientRect();
+                this.openSessionMenuForRow(session, rect.right, rect.bottom + 4, trigger);
+              }}
+            >
+              ${icons.moreHorizontal}
+            </button>
           </span>
         </span>
       </div>
@@ -492,141 +1803,366 @@ export class AppSidebar extends LitElement {
     return keyed(session.key, row);
   }
 
-  private renderSessions() {
-    const context = this.context;
-    const {
-      routeSessionKey,
-      selectedAgentId,
-      defaultAgentId,
-      activeSession,
-      recentSessions,
-      newSessionDisabled,
-      newSessionTitle,
-    } = this.getSessionNavigationState();
-    const newSessionButton = html`
-      <button
-        type="button"
-        class="sidebar-new-session"
-        aria-label=${t("chat.runControls.newSession")}
-        ?disabled=${newSessionDisabled}
-        @click=${this.createSession}
-      >
-        <span class="sidebar-new-session__icon" aria-hidden="true">${icons.plus}</span>
-        ${this.collapsed
-          ? nothing
-          : html`<span class="sidebar-new-session__label"
-              >${t("chat.runControls.newSession")}</span
-            >`}
-      </button>
-    `;
+  private renderSessionSection(
+    section: {
+      id: string;
+      category?: string;
+      channel?: string;
+      work?: boolean;
+      rows: SidebarRecentSession[];
+    },
+    showFallback = false,
+  ) {
+    const group = section.category;
+    const isPinned = section.id === "pinned";
+    const showHeader = isPinned || this.sessionsGrouping === "category";
+    const collapsed = showHeader && this.collapsedSessionSections.has(section.id);
+    const label = isPinned
+      ? t("sessionsView.pinned")
+      : section.channel
+        ? channelDisplayLabel(section.channel)
+        : section.work
+          ? t("chat.sidebar.workSessions")
+          : group
+            ? group
+            : t("chat.sidebar.chats");
+    // Smart channel/work sections classify rows automatically; only custom
+    // groups and Chats accept manual drops (a drop means category assignment).
+    // Custom group headers drag as a whole (mirroring whole-row session drags);
+    // the dot handle inside is a pure visual affordance.
+    const acceptsSessions =
+      !isPinned &&
+      this.sessionsGrouping === "category" &&
+      (section.id === "ungrouped" || Boolean(group));
+    const sectionClass = [
+      "sidebar-recent-sessions__group",
+      collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
+      group && this.draggingSessionGroup === group
+        ? "sidebar-recent-sessions__group--dragging"
+        : "",
+      this.sessionDropTarget === section.id ? "sidebar-recent-sessions__group--session-drop" : "",
+      group && this.sessionGroupDropTarget?.group === group
+        ? `sidebar-recent-sessions__group--group-drop-${this.sessionGroupDropTarget.position}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return html`
-      <section class="sidebar-sessions ${this.collapsed ? "sidebar-sessions--collapsed" : ""}">
-        ${this.collapsed
-          ? html`<openclaw-tooltip .content=${newSessionTitle}
-              >${newSessionButton}</openclaw-tooltip
-            >`
-          : newSessionButton}
-        ${this.collapsed
+      <div
+        class=${sectionClass}
+        data-session-section=${section.id}
+        @dragover=${acceptsSessions || group
+          ? (event: DragEvent) => this.handleSessionSectionDragOver(event, section.id, group)
+          : nothing}
+        @dragleave=${acceptsSessions || group
+          ? (event: DragEvent) => this.handleSessionSectionDragLeave(event, section.id, group)
+          : nothing}
+        @drop=${acceptsSessions || group
+          ? (event: DragEvent) => this.handleSessionSectionDrop(event, group)
+          : nothing}
+      >
+        ${showHeader
+          ? html`
+              <div
+                class="sidebar-recent-sessions__head ${group
+                  ? "sidebar-recent-sessions__head--draggable"
+                  : ""}"
+                draggable=${group ? "true" : "false"}
+                @dragstart=${group
+                  ? (event: DragEvent) => {
+                      if (event.dataTransfer) {
+                        writeSessionGroupDragData(event.dataTransfer, group);
+                        this.draggingSessionGroup = group;
+                      }
+                    }
+                  : nothing}
+                @dragend=${group
+                  ? () => {
+                      this.draggingSessionGroup = null;
+                      this.sessionGroupDropTarget = null;
+                    }
+                  : nothing}
+                @contextmenu=${group
+                  ? (event: MouseEvent) => {
+                      event.preventDefault();
+                      this.openSessionGroupMenu(group, event.clientX, event.clientY, null);
+                    }
+                  : nothing}
+              >
+                ${group
+                  ? html`
+                      <span class="sidebar-session-group-drag-handle" aria-hidden="true"></span>
+                    `
+                  : nothing}
+                <button
+                  type="button"
+                  class="sidebar-session-group-toggle"
+                  aria-expanded=${String(!collapsed)}
+                  aria-label=${label}
+                  @click=${() => this.toggleSessionSection(section.id)}
+                >
+                  <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
+                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+                  >
+                  <span class="sidebar-recent-sessions__label-text">${label}</span>
+                  <span class="sidebar-session-group-count">${section.rows.length}</span>
+                </button>
+                ${group
+                  ? html`
+                      <button
+                        type="button"
+                        class="sidebar-session-group-actions"
+                        title=${t("sessionsView.groupMenu", { group })}
+                        aria-label=${t("sessionsView.groupMenu", { group })}
+                        aria-haspopup="menu"
+                        aria-expanded=${String(this.sessionGroupMenu?.group === group)}
+                        @click=${(event: MouseEvent) => {
+                          event.stopPropagation();
+                          const trigger = event.currentTarget as HTMLElement;
+                          const rect = trigger.getBoundingClientRect();
+                          this.openSessionGroupMenu(group, rect.right, rect.bottom + 4, trigger);
+                        }}
+                      >
+                        ${icons.moreHorizontal}
+                      </button>
+                    `
+                  : nothing}
+              </div>
+            `
+          : nothing}
+        ${collapsed
           ? nothing
           : html`
-              <div
-                class="sidebar-recent-sessions ${this.recentSessionsCollapsed
-                  ? "sidebar-recent-sessions--collapsed"
-                  : ""}"
-                aria-label=${t("overview.cards.recentSessions")}
-              >
-                <div class="sidebar-recent-sessions__head">
-                  <button
-                    class="sidebar-recent-sessions__label"
-                    type="button"
-                    aria-expanded=${String(!this.recentSessionsCollapsed)}
-                    @click=${() => this.onToggleRecentSessions?.()}
-                  >
-                    <span class="sidebar-recent-sessions__label-text"
-                      >${t("usage.sessions.recentShort")}</span
-                    >
-                    <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
-                  </button>
-                  <openclaw-session-picker
-                    .sessions=${context?.sessions}
-                    .sessionsResult=${this.sessionsResult}
-                    .currentSessionKey=${routeSessionKey}
-                    .agentId=${selectedAgentId}
-                    .defaultAgentId=${defaultAgentId}
-                    .mainKey=${resolveUiConfiguredMainKey({
-                      agentsList: context?.agents.state.agentsList,
-                      hello: context?.gateway.snapshot.hello,
-                    })}
-                    .connected=${this.connected}
-                    .onSelectSession=${this.selectSession}
-                    .onReplaceCurrentSession=${this.replaceCurrentSession}
-                  ></openclaw-session-picker>
-                </div>
-                ${this.renderAgentFilter(routeSessionKey, selectedAgentId)}
-                ${activeSession
-                  ? this.renderRecentSession(activeSession)
-                  : this.renderChatFallback()}
-                ${recentSessions.length === 0
-                  ? nothing
-                  : html`
-                      <div class="sidebar-recent-sessions__list">
-                        ${recentSessions.map((session) => this.renderRecentSession(session))}
-                      </div>
-                    `}
-                <a
-                  href=${pathForRoute("sessions", this.basePath)}
-                  class="sidebar-recent-sessions__all"
-                  @click=${(event: MouseEvent) => {
-                    if (!shouldHandleNavigationClick(event)) {
-                      return;
-                    }
-                    event.preventDefault();
-                    this.onNavigate?.("sessions");
-                  }}
-                >
-                  <span>${t("chat.sidebar.allSessions")}</span>
-                  <span class="sidebar-recent-sessions__all-icon" aria-hidden="true"
-                    >${icons.chevronRight}</span
-                  >
-                </a>
+              <div class="sidebar-recent-sessions__list">
+                ${showFallback
+                  ? this.renderChatFallback()
+                  : section.rows.map((session) => this.renderRecentSession(session))}
               </div>
             `}
-      </section>
+      </div>
     `;
   }
 
-  private renderAgentFilter(sessionKey: string, selectedAgentId: string) {
-    const options = resolveSessionAgentFilterOptions({
-      agentsList: this.context?.agents.state.agentsList,
-      sessionsResult: this.sessionsResult,
-      sessionsResultAgentId: this.sessionsAgentId,
-      sessionKey,
+  /** Rows for a non-active agent come from the per-agent cache filled on expand. */
+  private sidebarRowsForAgent(
+    agentId: string,
+    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
+  ): SidebarRecentSession[] {
+    const normalized = normalizeAgentId(agentId);
+    if (normalized === normalizeAgentId(navigationState.selectedAgentId)) {
+      return navigationState.visibleSessions;
+    }
+    const cached = this.sessionRowsByAgent[normalized] ?? [];
+    return filterVisibleSessionRows(cached, {
+      agentId: normalized,
+      defaultAgentId: navigationState.selectedAgentId,
+      filterByAgent: true,
+    })
+      .toSorted(this.compareSidebarSessionRows)
+      .map(navigationState.toSidebarSession);
+  }
+
+  private agentUnreadCount(agentId: string): number {
+    const rows = this.sessionRowsByAgent[normalizeAgentId(agentId)] ?? [];
+    return rows.filter((row) => row.unread === true && row.archived !== true).length;
+  }
+
+  private renderDraftSessionRow() {
+    return html`
+      <div class="sidebar-recent-session sidebar-recent-session--draft">
+        <span class="sidebar-recent-session__link">
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__name">${t("newSession.draftRow")}</span>
+          </span>
+        </span>
+      </div>
+    `;
+  }
+
+  private renderSessionListBody(
+    rows: SidebarRecentSession[],
+    options: { showDraft: boolean; showFallback: boolean },
+  ) {
+    const sections = groupSidebarSessionRows(rows, {
+      grouping: this.sessionsGrouping,
+      // Stored-but-empty groups stay visible as sections so a freshly created
+      // group is usable as a move target before its first session arrives.
+      knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
     });
-    if (options.length <= 1) {
+    return html`
+      ${options.showDraft ? this.renderDraftSessionRow() : nothing}
+      ${sections.map((section) =>
+        this.renderSessionSection(
+          section,
+          options.showFallback && rows.length === 0 && section.id === "ungrouped",
+        ),
+      )}
+    `;
+  }
+
+  private renderAgentSection(
+    agent: { id: string; name?: string; identity?: { name?: string } },
+    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
+  ) {
+    const agentId = normalizeAgentId(agent.id);
+    const expanded = agentId === this.expandedAgentId();
+    const label = agent.identity?.name ?? agent.name ?? agent.id;
+    const unread = expanded ? 0 : this.agentUnreadCount(agentId);
+    const initial = (label || agent.id).slice(0, 1).toUpperCase();
+    return html`
+      <div class="sidebar-agent-section ${expanded ? "sidebar-agent-section--expanded" : ""}">
+        <button
+          type="button"
+          class="sidebar-agent-section__header"
+          aria-expanded=${String(expanded)}
+          @click=${() => this.expandAgent(agentId)}
+        >
+          <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
+            >${expanded ? icons.chevronDown : icons.chevronRight}</span
+          >
+          <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
+          <span class="sidebar-agent-section__name">${label}</span>
+          ${unread > 0
+            ? html`<span
+                class="session-unread-dot sidebar-agent-section__unread"
+                role="img"
+                aria-label=${t("sessionsView.unread")}
+              ></span>`
+            : nothing}
+        </button>
+        ${expanded
+          ? this.renderSessionListBody(this.sidebarRowsForAgent(agentId, navigationState), {
+              showDraft:
+                Boolean(this.draftSessionAgentId) &&
+                normalizeAgentId(this.draftSessionAgentId) === agentId,
+              showFallback: true,
+            })
+          : nothing}
+      </div>
+    `;
+  }
+
+  private renderSessions() {
+    const context = this.context;
+    const navigationState = this.getSessionNavigationState();
+    const { visibleSessions, newSessionDisabled, newSessionTitle } = navigationState;
+    const agents = context?.agents.state.agentsList?.agents ?? [];
+    const multiAgent = agents.length > 1;
+    const expandedAgentId = this.expandedAgentId();
+    return html`
+      <section class="sidebar-sessions">
+        <div
+          class="sidebar-recent-sessions sidebar-recent-sessions--scroll-${this
+            .sessionsScrollState}"
+          aria-label=${titleForRoute("sessions")}
+          @scroll=${(event: Event) =>
+            this.updateSessionsScrollState(event.currentTarget as HTMLElement)}
+        >
+          <div class="sidebar-recent-sessions__head sidebar-recent-sessions__head--root">
+            <span class="sidebar-recent-sessions__label-text">${t("sessionsView.title")}</span>
+            <button
+              type="button"
+              class="sidebar-session-sort"
+              title=${t("chat.sidebar.sortSessions")}
+              aria-label=${t("chat.sidebar.sortSessions")}
+              aria-haspopup="menu"
+              aria-expanded=${String(this.sessionSortMenuPosition !== null)}
+              @click=${(event: MouseEvent) => {
+                const trigger = event.currentTarget as HTMLElement;
+                this.toggleSessionSortMenu(trigger);
+              }}
+            >
+              ${icons.listFilter}
+            </button>
+            <button
+              type="button"
+              class="sidebar-session-sort sidebar-session-new"
+              title=${newSessionTitle}
+              aria-label=${t("chat.runControls.newSession")}
+              ?disabled=${newSessionDisabled}
+              @click=${() => this.onOpenNewSession?.(expandedAgentId)}
+            >
+              ${icons.plus}
+            </button>
+          </div>
+          ${multiAgent
+            ? agents.map((agent) => this.renderAgentSection(agent, navigationState))
+            : this.renderSessionListBody(visibleSessions, {
+                showDraft: Boolean(this.draftSessionAgentId),
+                showFallback: true,
+              })}
+        </div>
+      </section>
+      ${this.renderNativeSessionSidebars()}
+    `;
+  }
+
+  private renderNativeSessionSidebars() {
+    if (!this.nativeSessionSidebarReady) {
       return nothing;
     }
-    const selectedLabel =
-      options.find((option) => option.id === selectedAgentId)?.label ?? selectedAgentId;
+    const tabs = this.pluginTabs().filter(
+      (candidate) =>
+        candidate.id === "sessions" &&
+        (candidate.pluginId === "codex" || candidate.pluginId === "anthropic"),
+    );
+    if (tabs.length === 0) {
+      return nothing;
+    }
+    const open = (pluginId: string, hostId?: string, threadId?: string) => {
+      this.onNavigate?.("plugin", {
+        search: pluginTabSearch({
+          pluginId,
+          id: "sessions",
+          ...(hostId && threadId ? { hostId, threadId } : {}),
+        }),
+      });
+    };
+    return tabs.map((tab) => {
+      const active = this.activePluginTabId === pluginTabKey(tab);
+      return html`<openclaw-codex-sidebar
+        .catalogKind=${tab.pluginId === "anthropic" ? "claude" : "codex"}
+        .client=${this.context?.gateway.snapshot.client ?? null}
+        .connected=${this.connected}
+        .basePath=${this.basePath}
+        .selectedHostId=${active ? this.activePluginHostId : ""}
+        .selectedThreadId=${active ? this.activePluginThreadId : ""}
+        .onOpenSession=${(hostId: string, threadId: string) => open(tab.pluginId, hostId, threadId)}
+        .onViewAll=${() => open(tab.pluginId)}
+      ></openclaw-codex-sidebar>`;
+    });
+  }
+
+  private renderMoreSection() {
+    const moreRoutes = sidebarMoreRoutes(this.sidebarPinnedRoutes);
+    const expanded = this.sidebarMoreExpanded;
     return html`
-      <div class="sidebar-agent-filter">
-        <label class="field chat-controls__session chat-controls__agent">
-          <select
-            data-chat-agent-filter="true"
-            aria-label=${t("chat.selectors.agentFilter")}
-            title=${selectedLabel}
-            .value=${selectedAgentId}
-            ?disabled=${!this.connected}
-            @change=${(event: Event) => this.selectAgent((event.target as HTMLSelectElement).value)}
+      <section class="nav-section nav-section--more ${expanded ? "" : "nav-section--collapsed"}">
+        <button
+          class="nav-section__label"
+          @click=${() => this.onToggleMore?.()}
+          aria-expanded=${String(expanded)}
+        >
+          <span class="nav-section__label-text">${t("nav.more")}</span>
+          <span class="nav-section__chevron">${icons.chevronDown}</span>
+        </button>
+        <div class="nav-section__items">
+          ${moreRoutes.map((routeId) => this.renderRoute(routeId))}
+          ${this.pluginTabs().map((tab) => this.renderPluginTab(tab))}
+          <button
+            type="button"
+            class="nav-item nav-item--action"
+            @click=${(event: MouseEvent) => {
+              const trigger = event.currentTarget as HTMLElement;
+              const rect = trigger.getBoundingClientRect();
+              this.openCustomizeMenu(rect.left, rect.bottom + 4, trigger);
+            }}
           >
-            ${options.map(
-              (option) =>
-                html`<option value=${option.id} ?selected=${option.id === selectedAgentId}>
-                  ${option.label}
-                </option>`,
-            )}
-          </select>
-        </label>
-      </div>
+            <span class="nav-item__icon" aria-hidden="true">${icons.penLine}</span>
+            <span class="nav-item__text">${t("nav.customize")}</span>
+          </button>
+        </div>
+      </section>
     `;
   }
 
@@ -645,7 +2181,7 @@ export class AppSidebar extends LitElement {
           this.onNavigate?.("chat");
         }}
       >
-        <span class="sidebar-recent-session__body">
+        <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name">${t("nav.chat")}</span>
         </span>
       </a>
@@ -656,138 +2192,119 @@ export class AppSidebar extends LitElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
+    const settingsActive =
+      this.activeRouteId !== undefined && isSettingsNavigationRoute(this.activeRouteId);
+    const settingsTooltip = `${titleForRoute("config")} (⇧⌘,)`;
     return html`
-      <aside class="sidebar ${this.collapsed ? "sidebar--collapsed" : ""}">
+      <aside class="sidebar">
         <div class="sidebar-shell">
-          <div class="sidebar-shell__header">
-            <div class="sidebar-brand">
-              ${this.collapsed
-                ? nothing
-                : html`
-                    <img
-                      class="sidebar-brand__logo"
-                      src="${controlUiPublicAssetPath("favicon.svg", this.basePath)}"
-                      alt="OpenClaw"
-                    />
-                    <span class="sidebar-brand__copy">
-                      <span class="sidebar-brand__title">OpenClaw</span>
-                    </span>
-                  `}
-            </div>
-            <openclaw-tooltip .content=${this.collapsed ? t("nav.expand") : t("nav.collapse")}>
-              <button
-                type="button"
-                class="nav-collapse-toggle"
-                @click=${() => this.onToggleCollapsed?.()}
-                aria-label=${this.collapsed ? t("nav.expand") : t("nav.collapse")}
-              >
-                <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                  >${this.collapsed ? icons.panelLeftOpen : icons.panelLeftClose}</span
-                >
-              </button>
-            </openclaw-tooltip>
-          </div>
+          ${this.renderBrand()}
           <div class="sidebar-shell__body">
-            ${this.renderSessions()}
-            <nav class="sidebar-nav">
-              ${SIDEBAR_SECTIONS.filter((group) => this.collapsed || group.label !== "chat").map(
-                (group) => {
-                  const isGroupCollapsed = this.navGroupsCollapsed[group.label] ?? false;
-                  const showItems = this.collapsed || !isGroupCollapsed;
-                  return html`
-                    <section class="nav-section ${!showItems ? "nav-section--collapsed" : ""}">
-                      ${!this.collapsed
-                        ? html`
-                            <button
-                              class="nav-section__label"
-                              @click=${() => this.onToggleGroup?.(group.label)}
-                              aria-expanded=${showItems}
-                            >
-                              <span class="nav-section__label-text"
-                                >${t(`nav.${group.label}`)}</span
-                              >
-                              <span class="nav-section__chevron"> ${icons.chevronDown} </span>
-                            </button>
-                          `
-                        : nothing}
-                      <div class="nav-section__items">
-                        ${group.routes.map((routeId) => this.renderRoute(routeId))}
-                      </div>
-                    </section>
-                  `;
-                },
-              )}
+            <nav class="sidebar-nav" @contextmenu=${this.openCustomizeMenuFromContext}>
+              <div class="nav-section__items">
+                ${this.sidebarPinnedRoutes.map((routeId) => this.renderRoute(routeId))}
+              </div>
+              ${this.renderMoreSection()}
             </nav>
+            ${this.renderSessions()}
           </div>
           <div class="sidebar-shell__footer">
-            <div class="sidebar-utility-group">
-              ${this.collapsed
-                ? html`
-                    <openclaw-tooltip
-                      .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
-                    >
-                      <a
-                        class="nav-item nav-item--external sidebar-utility-link"
-                        href="https://docs.openclaw.ai"
-                        target=${EXTERNAL_LINK_TARGET}
-                        rel=${buildExternalLinkRel()}
-                      >
-                        <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-                      </a>
-                    </openclaw-tooltip>
-                  `
-                : html`
-                    <a
-                      class="nav-item nav-item--external sidebar-utility-link"
-                      href="https://docs.openclaw.ai"
-                      target=${EXTERNAL_LINK_TARGET}
-                      rel=${buildExternalLinkRel()}
-                    >
-                      <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-                      <span class="nav-item__text">${t("common.docs")}</span>
-                      <span class="nav-item__external-icon">${icons.externalLink}</span>
-                    </a>
-                  `}
-              <div class="sidebar-mode-switch">
-                <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
-              </div>
-              <div class="sidebar-footer-row">
-                <div class="sidebar-status">
-                  <openclaw-tooltip .content=${gatewayStatus}>
-                    <span
-                      class="sidebar-status__dot ${this.connected
-                        ? "sidebar-connection-status--online"
-                        : "sidebar-connection-status--offline"}"
-                      role="img"
-                      aria-live="polite"
-                      aria-label=${gatewayStatus}
-                    ></span>
-                  </openclaw-tooltip>
-                  ${this.collapsed
-                    ? nothing
-                    : html`<span class="sidebar-status__text"
-                        >${this.connected ? t("common.online") : t("common.offline")}</span
-                      >`}
-                </div>
-                <openclaw-tooltip
-                  .content=${this.canPairDevice
-                    ? t("nodes.pairing.button")
-                    : t("nodes.pairing.adminRequired")}
-                >
-                  <button
-                    class="sidebar-pair-mobile"
-                    type="button"
-                    aria-label=${t("nodes.pairing.button")}
-                    ?disabled=${!this.canPairDevice}
-                    @click=${() => this.onPairMobile?.()}
+            <openclaw-sidebar-update-card
+              .updateAvailable=${this.updateAvailable}
+              .updateRunning=${this.updateRunning}
+              .onUpdate=${this.onUpdate}
+            ></openclaw-sidebar-update-card>
+            <openclaw-lobster-pet
+              .seed=${lobsterPetSeed(this.sessionKey)}
+              .mode=${resolveLobsterPetMode(this.connected, this.sessionsResult?.sessions)}
+              .runOutcome=${resolveLobsterRunOutcome(this.sessionsResult?.sessions)}
+              .visitsEnabled=${this.lobsterPetVisits}
+              .soundsEnabled=${this.lobsterPetSounds}
+              .gatewayVersion=${this.gatewayVersion}
+            ></openclaw-lobster-pet>
+            ${this.devGitBranch
+              ? html`<div class="sidebar-footer-branch" title=${this.devGitBranch}>
+                  <span class="sidebar-footer-branch__icon" aria-hidden="true"
+                    >${icons.gitBranch}</span
                   >
-                    <span aria-hidden="true">${icons.smartphone}</span>
-                  </button>
-                </openclaw-tooltip>
-              </div>
+                  <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
+                </div>`
+              : nothing}
+            <div class="sidebar-footer-bar">
+              <openclaw-tooltip .content=${gatewayStatus}>
+                <span
+                  class="sidebar-status__dot ${this.connected
+                    ? "sidebar-connection-status--online"
+                    : "sidebar-connection-status--offline"}"
+                  role="img"
+                  aria-live="polite"
+                  aria-label=${gatewayStatus}
+                ></span>
+              </openclaw-tooltip>
+              <openclaw-sidebar-build-chip
+                .basePath=${this.basePath}
+                .gatewayVersion=${this.gatewayVersion}
+                .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
+              ></openclaw-sidebar-build-chip>
+              <span class="sidebar-footer-bar__spacer"></span>
+              <openclaw-tooltip .content=${settingsTooltip}>
+                <a
+                  href=${pathForRoute("config", this.basePath)}
+                  class="sidebar-footer-icon ${settingsActive ? "sidebar-footer-icon--active" : ""}"
+                  aria-label=${titleForRoute("config")}
+                  aria-current=${settingsActive ? "page" : nothing}
+                  @focus=${(event: Event) => this.preloadRoute("config", event)}
+                  @blur=${this.cancelPreload}
+                  @pointerenter=${(event: Event) => this.preloadRoute("config", event)}
+                  @pointerleave=${this.cancelPreload}
+                  @touchstart=${(event: TouchEvent) => this.preloadRoute("config", event, true)}
+                  @click=${(event: MouseEvent) => {
+                    if (!shouldHandleNavigationClick(event)) {
+                      return;
+                    }
+                    event.preventDefault();
+                    this.onNavigate?.("config");
+                  }}
+                >
+                  ${icons.settings}
+                </a>
+              </openclaw-tooltip>
+              <openclaw-tooltip
+                .content=${t("chat.docsOpensInNewTab", { label: t("common.docs") })}
+              >
+                <a
+                  class="sidebar-footer-icon"
+                  href="https://docs.openclaw.ai"
+                  target=${EXTERNAL_LINK_TARGET}
+                  rel=${buildExternalLinkRel()}
+                  aria-label=${t("common.docs")}
+                >
+                  ${icons.book}
+                </a>
+              </openclaw-tooltip>
+              <openclaw-tooltip
+                .content=${this.canPairDevice
+                  ? t("nodes.pairing.button")
+                  : t("nodes.pairing.adminRequired")}
+              >
+                <button
+                  class="sidebar-footer-icon sidebar-pair-mobile"
+                  type="button"
+                  aria-label=${t("nodes.pairing.button")}
+                  ?disabled=${!this.canPairDevice}
+                  @click=${() => this.onPairMobile?.()}
+                >
+                  ${icons.smartphone}
+                </button>
+              </openclaw-tooltip>
+              <span class="sidebar-mode-switch">
+                <openclaw-theme-mode-toggle .mode=${this.themeMode}></openclaw-theme-mode-toggle>
+              </span>
             </div>
           </div>
         </div>
+        ${this.renderCustomizeMenu()} ${this.renderSessionMenu()} ${this.renderSessionGroupMenu()}
+        ${this.renderSessionSortMenu()}
       </aside>
     `;
   }

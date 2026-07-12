@@ -11,7 +11,6 @@ import { WebSocket, WebSocketServer, type RawData } from "ws";
 import {
   QA_EVIDENCE_FILENAME,
   startQaGatewayChild,
-  type QaGatewayChildCommand,
   type QaEvidenceSummaryJson,
   type QaGatewayChildListeningContext,
 } from "../../../../extensions/qa-lab/api.js";
@@ -56,13 +55,6 @@ type GatewayProxy = {
   capture: GatewayFrameCapture;
   stop: () => Promise<void>;
   url: string;
-};
-
-type OpenClawCliInvocation = {
-  argsPrefix: string[];
-  command: string;
-  cwd: string;
-  gatewayCommand: QaGatewayChildCommand;
 };
 
 type ChannelMcpInvocation = {
@@ -220,50 +212,6 @@ function withFixturePlugin(config: OpenClawConfig, pluginDir: string): OpenClawC
   };
 }
 
-function emptyTransport() {
-  return {
-    requiredPluginIds: [] as string[],
-    createGatewayConfig: () => ({}),
-  };
-}
-
-function resolveOpenClawCliInvocation(repoRoot: string): OpenClawCliInvocation {
-  for (const relativePath of ["dist/index.mjs", "dist/index.js"]) {
-    const entryPath = path.join(repoRoot, relativePath);
-    if (existsSync(entryPath)) {
-      const argsPrefix = [entryPath];
-      return {
-        argsPrefix,
-        command: process.execPath,
-        cwd: repoRoot,
-        gatewayCommand: {
-          executablePath: process.execPath,
-          argsPrefix,
-          cwd: repoRoot,
-          usePackagedPlugins: true,
-        },
-      };
-    }
-  }
-
-  const sourceEntryPath = path.join(repoRoot, "src/entry.ts");
-  if (existsSync(sourceEntryPath)) {
-    const argsPrefix = ["--import", "tsx", sourceEntryPath];
-    return {
-      argsPrefix,
-      command: process.execPath,
-      cwd: repoRoot,
-      gatewayCommand: {
-        executablePath: process.execPath,
-        argsPrefix,
-        cwd: repoRoot,
-      },
-    };
-  }
-
-  throw new Error("OpenClaw CLI entry not found: expected dist/index.(m)js or src/entry.ts");
-}
-
 function resolveChannelMcpInvocation(params: {
   gatewayToken: string;
   gatewayUrl: string;
@@ -328,8 +276,10 @@ function resolveChannelMcpInvocation(params: {
 function parseJsonFrame(data: RawData): Record<string, unknown> | null {
   try {
     const text = Array.isArray(data)
-      ? Buffer.concat(data).toString("utf8")
-      : Buffer.from(data).toString("utf8");
+      ? Buffer.concat(data.map((chunk) => Buffer.from(chunk))).toString("utf8")
+      : Buffer.isBuffer(data)
+        ? data.toString("utf8")
+        : Buffer.from(data).toString("utf8");
     const value = JSON.parse(text);
     return value && typeof value === "object" && !Array.isArray(value)
       ? (value as Record<string, unknown>)
@@ -525,8 +475,7 @@ async function approvePendingMcpPairing(gateway: Awaited<ReturnType<typeof start
 async function runGatewaySmokeProof(options: ProducerOptions): Promise<string> {
   const gateway = await startQaGatewayChild({
     repoRoot: options.repoRoot,
-    command: resolveOpenClawCliInvocation(options.repoRoot).gatewayCommand,
-    transport: emptyTransport(),
+    useRepoCli: true,
     transportBaseUrl: "http://127.0.0.1",
     controlUiEnabled: false,
   });
@@ -585,8 +534,7 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
     };
     gateway = await startQaGatewayChild({
       repoRoot: options.repoRoot,
-      command: resolveOpenClawCliInvocation(options.repoRoot).gatewayCommand,
-      transport: emptyTransport(),
+      useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
       onListening,
@@ -767,14 +715,14 @@ async function produceProof(options: ProducerOptions): Promise<ProofResult> {
   }
 }
 
-export async function runGatewayMcpRealTransportProducer(
+async function runGatewayMcpRealTransportProducer(
   options: ProducerOptions,
 ): Promise<QaEvidenceSummaryJson> {
   const scenario = SCENARIOS[options.scenarioId];
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
     logFileName: `${options.scenarioId}.log`,
-    primaryModel: "mock-openai/gpt-5.5",
+    primaryModel: "mock-openai/gpt-5.6-luna",
     providerMode: "mock-openai",
     repoRoot: options.repoRoot,
     target: {
@@ -813,5 +761,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 
 export const testing = {
   resolveChannelMcpInvocation,
-  resolveOpenClawCliInvocation,
 };

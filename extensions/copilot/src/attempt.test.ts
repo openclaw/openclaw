@@ -271,6 +271,12 @@ function makeParams(
     runId: "run-1",
     sessionFile: "session.json",
     sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionTarget: {
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      storePath: "openclaw-agent.sqlite",
+    },
     timeoutMs: 5000,
     workspaceDir: "C:\\workspace",
     ...overrides,
@@ -394,6 +400,11 @@ describe("runCopilotAttempt", () => {
   it("keeps generic compaction hooks attached through asynchronous SDK completion", async () => {
     const beforeCompaction = vi.fn();
     const afterCompaction = vi.fn();
+    let computerContextEpoch: CopilotToolBridgeInput["computerContextEpoch"];
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      computerContextEpoch = input.computerContextEpoch;
+      return { sdkTools: [], sourceTools: [] };
+    });
     initializeGlobalHookRunner(
       createMockPluginRegistry([
         { hookName: "before_compaction", handler: beforeCompaction },
@@ -411,7 +422,10 @@ describe("runCopilotAttempt", () => {
       },
     });
 
-    const attempt = runCopilotAttempt(makeParams(), { pool: makeFakePool(sdk) });
+    const attempt = runCopilotAttempt(makeParams(), {
+      createToolBridge,
+      pool: makeFakePool(sdk),
+    });
     await vi.waitFor(() => {
       expect(activeSession?.sendAndWait).toHaveBeenCalled();
     });
@@ -419,8 +433,15 @@ describe("runCopilotAttempt", () => {
     if (!activeSession) {
       throw new Error("expected Copilot session");
     }
+    expect(computerContextEpoch?.value).toBe(0);
+    if (!computerContextEpoch) {
+      throw new Error("expected computer context epoch");
+    }
+    computerContextEpoch.frameToolCallId = "shot-1";
+    computerContextEpoch.frameImageIdentity = "frame-digest";
     expect(activeSession.disconnect).not.toHaveBeenCalled();
     activeSession.emit("session.compaction_complete", { messagesRemoved: 4, success: true });
+    expect(computerContextEpoch).toEqual({ value: 1 });
 
     await attempt;
 
@@ -1086,7 +1107,7 @@ describe("runCopilotAttempt", () => {
     });
   });
 
-  it("replay-shim: mutating tool side effects make the attempt replay-unsafe", async () => {
+  it("replay-shim: consolidated mutating tool metadata makes the attempt replay-unsafe", async () => {
     const sdk = makeFakeSdk({
       onCreateSession: (session) => {
         session.sendAndWait.mockImplementationOnce(async () => {
@@ -1107,10 +1128,7 @@ describe("runCopilotAttempt", () => {
 
     const result = await runCopilotAttempt(makeParams(), { pool });
 
-    expect(result.toolMetas).toEqual([
-      { toolName: "write" },
-      { meta: "wrote file", toolName: "write" },
-    ]);
+    expect(result.toolMetas).toEqual([{ meta: "wrote file", toolName: "write" }]);
     expect(result.replayMetadata).toEqual({
       hadPotentialSideEffects: true,
       replaySafe: false,
@@ -1268,7 +1286,7 @@ describe("runCopilotAttempt", () => {
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        sessionKey: undefined,
+        sessionKey: "agent:main:session-1",
         workspaceDir: "C:\\workspace",
       }),
     );
@@ -2626,7 +2644,7 @@ describe("runCopilotAttempt", () => {
       dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockResolvedValue(undefined);
     });
 
-    it("invokes dual-write mirror with sessionFile and scoped idempotencyScope when sessionFile is set", async () => {
+    it("invokes dual-write mirror with runtime identity and scoped idempotencyScope", async () => {
       dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
@@ -2635,17 +2653,28 @@ describe("runCopilotAttempt", () => {
       });
       const pool = makeFakePool(sdk);
 
-      await runCopilotAttempt(makeParams(), { pool });
+      await runCopilotAttempt(
+        makeParams({
+          sessionTarget: {
+            sessionId: "session-1",
+            sessionKey: "agent:main:session-1",
+            storePath: "sessions.json",
+          },
+        }),
+        { pool },
+      );
 
       expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).toHaveBeenCalledTimes(1);
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        sessionFile: string;
         sessionId: string;
+        sessionKey: string;
+        storePath?: string;
         messages: Array<{ role: string }>;
         idempotencyScope?: string;
       };
-      expect(args.sessionFile).toBe("session.json");
       expect(args.sessionId).toBe("session-1");
+      expect(args.sessionKey).toBe("agent:main:session-1");
+      expect(args.storePath).toBe("sessions.json");
       expect(args.idempotencyScope).toBe("copilot:sess-1");
       expect(args.messages.length).toBeGreaterThan(0);
       const roles = args.messages.map((m) => m.role);
@@ -2653,7 +2682,7 @@ describe("runCopilotAttempt", () => {
       expect(roles).toContain("assistant");
     });
 
-    it("does not invoke dual-write mirror when sessionFile is absent", async () => {
+    it("does not invoke dual-write mirror when runtime identity is absent", async () => {
       dualWriteMock.dualWriteCopilotTranscriptBestEffort.mockClear();
       const sdk = makeFakeSdk({
         onCreateSession: (session) => {
@@ -2662,7 +2691,7 @@ describe("runCopilotAttempt", () => {
       });
       const pool = makeFakePool(sdk);
       const params = makeParams() as unknown as Record<string, unknown>;
-      delete params.sessionFile;
+      delete params.sessionTarget;
 
       await runCopilotAttempt(params as never, { pool });
 
@@ -2681,7 +2710,11 @@ describe("runCopilotAttempt", () => {
       await runCopilotAttempt(makeParams(), { pool });
 
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{ role: string; __openclaw?: { mirrorIdentity?: string } }>;
+        messages: Array<{
+          role: string;
+          idempotencyKey?: string;
+          __openclaw?: { mirrorIdentity?: string };
+        }>;
       };
       for (const [index, message] of args.messages.entries()) {
         if (
@@ -2692,12 +2725,12 @@ describe("runCopilotAttempt", () => {
           continue;
         }
         const identity = message["__openclaw"]?.mirrorIdentity ?? "";
-        // The terminal assistant carries the turn-stable
-        // `${runId}:assistant:final` identity attached by attempt.ts.
+        // The current user and terminal assistant carry turn-stable identities.
         // Caller-passed history without an identity falls through to
         // the positional `${scope}:role:idx`.
-        // fingerprint that the existing tagging map applies.
-        if (message.role === "assistant" && index === args.messages.length - 1) {
+        if (message.role === "user" && message.idempotencyKey === "run-1:user") {
+          expect(identity).toBe("run-1:prompt");
+        } else if (message.role === "assistant" && index === args.messages.length - 1) {
           expect(identity).toMatch(/:assistant:final$/u);
           expect(identity).toContain("run-1");
         } else {
@@ -2753,12 +2786,14 @@ describe("runCopilotAttempt", () => {
         messages: Array<{
           role: string;
           content: unknown;
+          idempotencyKey?: string;
           __openclaw?: { mirrorIdentity?: string };
         }>;
       };
       expect(args.messages.length).toBe(2);
       expect(args.messages[0]?.role).toBe("user");
       expect(args.messages[0]?.content).toBe("what's my name?");
+      expect(args.messages[0]?.idempotencyKey).toBe("run-A:user");
       expect(args.messages[0]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:prompt");
       expect(args.messages[1]?.role).toBe("assistant");
       expect(args.messages[1]?.["__openclaw"]?.mirrorIdentity).toBe("run-A:assistant:final");
@@ -2778,10 +2813,13 @@ describe("runCopilotAttempt", () => {
       await runCopilotAttempt(makeParams(), { pool });
 
       const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
-        messages: Array<{ role: string }>;
+        messages: Array<{ role: string; idempotencyKey?: string }>;
       };
       const userCount = args.messages.filter((m) => m.role === "user").length;
       expect(userCount).toBe(1);
+      expect(args.messages.find((message) => message.role === "user")?.idempotencyKey).toBe(
+        "run-1:user",
+      );
     });
 
     it("prefers transcriptPrompt over prompt for the synthetic user body", async () => {
@@ -3343,6 +3381,21 @@ describe("runCopilotAttempt", () => {
       ]);
     });
 
+    it("keeps a host-scoped Crestodian create-session surface ring-zero", async () => {
+      const sdk = makeFakeSdk();
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("crestodian")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(makeParams({ toolsAllow: ["crestodian"] }), {
+        createToolBridge,
+        isHostScopedToolActive: (toolName) => toolName === "crestodian",
+        pool,
+      });
+
+      expect(readAvailableTools(sdk.createSession.mock.calls[0])).toEqual(["crestodian"]);
+    });
+
     it("forwards `[]` to the SDK when the bridge returns no tools (disable / raw / fully filtered)", async () => {
       const sdk = makeFakeSdk();
       const pool = makeFakePool(sdk);
@@ -3409,6 +3462,33 @@ describe("runCopilotAttempt", () => {
       const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
       const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
       expect(resumeCfg?.availableTools).toEqual(["read", "builtin:ask_user"]);
+    });
+
+    it("keeps a host-scoped Crestodian resume-session surface ring-zero", async () => {
+      const sdk = makeFakeSdk({
+        onResumeSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("resumed"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+      const sdkTools = [makeFakeSdkTool("crestodian")];
+      const createToolBridge = vi.fn(async () => ({ sdkTools, sourceTools: [] }));
+
+      await runCopilotAttempt(
+        makeParams({
+          initialReplayState: { sdkSessionId: "sess-crestodian" },
+          toolsAllow: ["crestodian"],
+        } as never),
+        {
+          createToolBridge,
+          isHostScopedToolActive: (toolName) => toolName === "crestodian",
+          pool,
+        },
+      );
+
+      const resumeCall = sdk.resumeSession.mock.calls[0] as unknown[] | undefined;
+      const resumeCfg = resumeCall?.[1] as { availableTools?: string[] };
+      expect(resumeCfg?.availableTools).toEqual(["crestodian"]);
     });
 
     it("forwards `[]` to resumeSession when the bridge returns no tools", async () => {

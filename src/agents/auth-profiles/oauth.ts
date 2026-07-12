@@ -201,6 +201,8 @@ async function refreshOAuthCredential(
   }
 
   if (credential.provider === "chutes") {
+    // Chutes refresh shipped before provider hooks and still covers registry-load
+    // windows where the synchronous hook resolver intentionally returns no owner.
     return await refreshChutesTokens({ credential });
   }
 
@@ -449,10 +451,6 @@ export async function resolveApiKeyForProfile(
         : loadAuthProfileStoreForSecretsRuntime(params.agentDir);
     const surfacedCause =
       error instanceof OAuthManagerRefreshError && error.cause ? error.cause : error;
-    const surfacedMessageError =
-      error instanceof OAuthManagerRefreshError && error.code === "refresh_contention"
-        ? error
-        : surfacedCause;
     if (isRefreshTokenReusedError(surfacedCause)) {
       const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
         agentDir: params.agentDir,
@@ -502,7 +500,7 @@ export async function resolveApiKeyForProfile(
       }
     }
 
-    const message = extractErrorMessage(surfacedMessageError);
+    const message = extractErrorMessage(surfacedCause);
     const hint = await formatAuthDoctorHint({
       cfg,
       store: refreshedStore,

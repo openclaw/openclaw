@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -7,10 +8,13 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,24 +22,63 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** Foreground service that keeps the Android node connection and voice capture visible to the OS. */
 class NodeForegroundService : Service() {
   private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
   private var notificationJob: Job? = null
+  private var runtimeRestoreJob: Job? = null
+  private var activeRuntime: NodeRuntime? = null
+  private var latestStartId = 0
   private var voiceCaptureMode = VoiceCaptureMode.Off
+
+  @Volatile private var disconnectRequested = false
 
   override fun onCreate() {
     super.onCreate()
     ensureChannel()
     val initial = buildNotification(title = "OpenClaw Node", text = "Starting…")
     startForegroundWithTypes(notification = initial)
+  }
 
-    val runtime = (application as NodeApp).peekRuntime()
-    if (runtime == null) {
-      stopSelf()
-      return
-    }
+  private fun startRuntimeIfNeeded(startId: Int) {
+    if (activeRuntime != null || runtimeRestoreJob?.isActive == true || disconnectRequested) return
+    val app = application as NodeApp
+    runtimeRestoreJob =
+      scope.launch(Dispatchers.Default) {
+        try {
+          restoreStickyRuntime(
+            createRuntime = app::ensureBackgroundRuntime,
+            disconnectRequested = { disconnectRequested },
+            disconnectRuntime = NodeRuntime::disconnect,
+          ) { restoredRuntime ->
+            withContext(Dispatchers.Main) {
+              runtimeRestoreJob = null
+              if (disconnectRequested) {
+                false
+              } else {
+                activeRuntime = restoredRuntime
+                observeRuntime(restoredRuntime)
+                true
+              }
+            }
+          }
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          Log.e("OpenClawNodeService", "Failed to restore node runtime", err)
+          withContext(Dispatchers.Main) {
+            runtimeRestoreJob = null
+            if (!disconnectRequested && !stopSelfResult(startId)) {
+              startRuntimeIfNeeded(latestStartId)
+            }
+          }
+        }
+      }
+  }
+
+  private fun observeRuntime(runtime: NodeRuntime) {
     // Keep the connection tuple atomic, then split connection and capture work so notification text
     // can update without restarting runtime-owned connection work.
     notificationJob =
@@ -45,7 +88,8 @@ class NodeForegroundService : Service() {
             runtime.gatewayConnectionDisplay,
             runtime.serverName,
             runtime.voiceCaptureMode,
-          ) { connection, server, mode ->
+            runtime.locationMode,
+          ) { connection, server, mode, _ ->
             VoiceNotificationBase(
               status = connection.statusText,
               server = server,
@@ -98,10 +142,16 @@ class NodeForegroundService : Service() {
     flags: Int,
     startId: Int,
   ): Int {
+    latestStartId = maxOf(latestStartId, startId)
     when (intent?.action) {
       ACTION_STOP -> {
-        (application as NodeApp).peekRuntime()?.disconnect()
-        stopSelf()
+        disconnectRequested = true
+        runtimeRestoreJob?.cancel()
+        runtimeRestoreJob = null
+        activeRuntime?.disconnect()
+        activeRuntime = null
+        (application as NodeApp).disconnectRuntimeAsync()
+        stopSelfResult(startId)
         return START_NOT_STICKY
       }
       ACTION_SET_VOICE_CAPTURE_MODE -> {
@@ -115,6 +165,14 @@ class NodeForegroundService : Service() {
         )
       }
     }
+    if (disconnectRequested) {
+      // A STOP can lose stopSelfResult to a newer queued start. Let the newest
+      // start id close the service instead of leaving a disconnected FGS alive.
+      stopSelfResult(startId)
+      return START_NOT_STICKY
+    }
+    // START_STICKY recreates the service in a fresh process and calls this with a null intent.
+    startRuntimeIfNeeded(startId)
     // Keep running; connection is managed by NodeRuntime (auto-reconnect + manual).
     return START_STICKY
   }
@@ -145,17 +203,8 @@ class NodeForegroundService : Service() {
     title: String,
     text: String,
   ): Notification {
-    val launchIntent =
-      Intent(this, MainActivity::class.java).apply {
-        flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-      }
-    val launchPending =
-      PendingIntent.getActivity(
-        this,
-        1,
-        launchIntent,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-      )
+    val launchPending = mainActivityPendingIntent(this, requestCode = 1)
+    val visibleText = text + backgroundLocationNotificationSuffix(isBackgroundLocationActive())
 
     val stopIntent = Intent(this, NodeForegroundService::class.java).setAction(ACTION_STOP)
     val stopPending =
@@ -170,7 +219,7 @@ class NodeForegroundService : Service() {
       .Builder(this, CHANNEL_ID)
       .setSmallIcon(R.mipmap.ic_launcher)
       .setContentTitle(title)
-      .setContentText(text)
+      .setContentText(visibleText)
       .setContentIntent(launchPending)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
@@ -180,8 +229,27 @@ class NodeForegroundService : Service() {
   }
 
   private fun startForegroundWithTypes(notification: Notification) {
-    val serviceTypes = foregroundServiceTypesForVoiceMode(voiceCaptureMode)
+    val serviceTypes =
+      foregroundServiceTypes(
+        voiceMode = voiceCaptureMode,
+        backgroundLocationActive = isBackgroundLocationActive(),
+      )
     ServiceCompat.startForeground(this, NOTIFICATION_ID, notification, serviceTypes)
+  }
+
+  private fun isBackgroundLocationActive(): Boolean {
+    if (!SensitiveFeatureConfig.backgroundLocationEnabled) return false
+    if ((application as NodeApp).prefs.locationMode.value != LocationMode.Always) return false
+    val fineGranted =
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val coarseGranted =
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val backgroundGranted =
+      ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    return (fineGranted || coarseGranted) && backgroundGranted
   }
 
   companion object {
@@ -220,15 +288,56 @@ class NodeForegroundService : Service() {
   }
 }
 
-internal fun foregroundServiceTypesForVoiceMode(mode: VoiceCaptureMode): Int {
-  val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-  return when (mode) {
-    VoiceCaptureMode.Off -> base
-    VoiceCaptureMode.ManualMic,
-    VoiceCaptureMode.TalkMode,
-    -> base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+/** Restores process-local state after Android recreates a sticky service in a fresh process. */
+internal suspend fun <T> restoreStickyRuntime(
+  createRuntime: () -> T,
+  disconnectRequested: () -> Boolean,
+  disconnectRuntime: (T) -> Unit,
+  activateRuntime: suspend (T) -> Boolean,
+) {
+  // A queued recovery may begin after STOP; do not construct process state once
+  // disconnect has already won. The post-create check still closes the race during construction.
+  if (disconnectRequested()) return
+  val runtime = createRuntime()
+  var activated = false
+  try {
+    if (!disconnectRequested()) {
+      activated = activateRuntime(runtime)
+    }
+  } finally {
+    // Ownership transfers only after activation. Stop/cancellation during the
+    // dispatcher hop must disconnect the recovered runtime instead of leaking it.
+    if (!activated) {
+      disconnectRuntime(runtime)
+    }
   }
 }
+
+internal fun foregroundServiceTypes(
+  voiceMode: VoiceCaptureMode,
+  backgroundLocationActive: Boolean,
+): Int {
+  val base = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+  val voiceTypes =
+    when (voiceMode) {
+      VoiceCaptureMode.Off -> base
+      VoiceCaptureMode.ManualMic,
+      VoiceCaptureMode.TalkMode,
+      -> base or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+    }
+  return if (backgroundLocationActive) {
+    voiceTypes or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+  } else {
+    voiceTypes
+  }
+}
+
+internal fun backgroundLocationNotificationSuffix(active: Boolean): String =
+  if (active) {
+    " · Location: Always"
+  } else {
+    ""
+  }
 
 internal fun voiceNotificationSuffix(
   mode: VoiceCaptureMode,

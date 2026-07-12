@@ -448,9 +448,7 @@ enum TalkModeGatewayConfigParser {
         guard let config else { return nil }
         for key in keys {
             let value = config[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if value?.isEmpty == false {
-                return value
-            }
+            if value?.isEmpty == false { return value }
         }
         return nil
     }

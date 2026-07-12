@@ -335,6 +335,16 @@ async function writePreflight(artifactBase: string) {
   );
 }
 
+async function writeSkippedVisualProof(logPath: string) {
+  const startedAt = Date.now();
+  await writeText(logPath, "blocked: --skip-visual-proof was set\n");
+  return {
+    failureReason: "--skip-visual-proof was set",
+    status: "blocked" as const,
+    wallMs: Date.now() - startedAt,
+  };
+}
+
 function isMissingManagedPlaywrightBrowser(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return (
@@ -389,7 +399,11 @@ async function captureControlUiScreenshot(params: {
   logPath: string;
   repoRoot: string;
   screenshotPath: string;
+  skipVisualProof: boolean;
 }) {
+  if (params.skipVisualProof) {
+    return writeSkippedVisualProof(params.logPath);
+  }
   const startedAt = Date.now();
   try {
     const { browser } = await launchUxMatrixChromium();
@@ -519,15 +533,10 @@ async function captureProducerArtifactFixtureProof(params: {
   skipVisualProof: boolean;
   videoPath: string;
 }) {
-  const startedAt = Date.now();
   if (params.skipVisualProof) {
-    await writeText(params.logPath, "blocked: --skip-visual-proof was set\n");
-    return {
-      failureReason: "--skip-visual-proof was set",
-      status: "blocked" as const,
-      wallMs: Date.now() - startedAt,
-    };
+    return writeSkippedVisualProof(params.logPath);
   }
+  const startedAt = Date.now();
   try {
     const videoDir = path.join(path.dirname(params.videoPath), "recording");
     await fs.mkdir(videoDir, { recursive: true });
@@ -638,7 +647,7 @@ async function writeProducerMetadata(params: {
   );
 }
 
-export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
+async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
   await fs.mkdir(options.artifactBase, { recursive: true });
   await writePreflight(options.artifactBase);
 
@@ -671,6 +680,7 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
     logPath: path.join(screenshotCellDir, "logs.txt"),
     repoRoot: options.repoRoot,
     screenshotPath: matrixScreenshotPath,
+    skipVisualProof: options.skipVisualProof,
   });
 
   const initialCells: MatrixCell[] = [
@@ -693,7 +703,10 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
           : []),
       ],
       coverageIds: ["ui.control", "gateway.control-ui-hosting"],
-      failureReason: matrixScreenshotResult.failureReason,
+      failureReason:
+        "failureReason" in matrixScreenshotResult
+          ? matrixScreenshotResult.failureReason
+          : undefined,
       stage: "screenshot-artifact",
       status: matrixScreenshotResult.status,
       surface: "control-ui",
@@ -771,7 +784,8 @@ export async function runUxMatrixEvidenceProducer(options: ProducerOptions) {
           : []),
       ],
       coverageIds: ["qa.artifact-safety", "tools.evidence", "workspace.artifacts"],
-      failureReason: fixtureProofResult.failureReason,
+      failureReason:
+        "failureReason" in fixtureProofResult ? fixtureProofResult.failureReason : undefined,
       stage: "producer-artifact-fixture",
       status: fixtureProofResult.status,
       surface: "qa-lab",

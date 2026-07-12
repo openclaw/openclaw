@@ -317,20 +317,7 @@ export async function runVoyageEmbeddingBatches(
           if (!contentRes.body) {
             return;
           }
-          const reader = createInterface({
-            input: Readable.fromWeb(
-              contentRes.body as unknown as import("stream/web").ReadableStream,
-            ),
-            terminal: false,
-          });
-
-          for await (const rawLine of reader) {
-            if (!rawLine.trim()) {
-              continue;
-            }
-            const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
-            applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
-          }
+          await readBatchOutputContent(contentRes, remaining, errors, byCustomId);
         },
       });
 
@@ -346,8 +333,45 @@ export async function runVoyageEmbeddingBatches(
   });
 }
 
+/**
+ * Stream-read a Voyage batch output file response body line by line, applying
+ * each parsed output line through `applyEmbeddingBatchOutputLine`.
+ *
+ * The response body is an untrusted external stream. This helper wraps the
+ * readline iteration in a try-finally so the readline interface and underlying
+ * Node.js Readable are always closed / destroyed, even when JSON.parse or
+ * applyEmbeddingBatchOutputLine throws.
+ */
+async function readBatchOutputContent(
+  contentRes: Response,
+  remaining: Set<string>,
+  errors: string[],
+  byCustomId: Map<string, number[]>,
+): Promise<void> {
+  if (!contentRes.body) {
+    return;
+  }
+  const inputStream = Readable.fromWeb(
+    contentRes.body as unknown as import("stream/web").ReadableStream,
+  );
+  const reader = createInterface({ input: inputStream, terminal: false });
+  try {
+    for await (const rawLine of reader) {
+      if (!rawLine.trim()) {
+        continue;
+      }
+      const line = JSON.parse(rawLine) as VoyageBatchOutputLine;
+      applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+    }
+  } finally {
+    reader.close();
+    inputStream.destroy();
+  }
+}
+
 export const testing = {
   fetchVoyageBatchStatus,
   readVoyageBatchError,
+  readBatchOutputContent,
   VOYAGE_BATCH_RESPONSE_MAX_BYTES,
 } as const;

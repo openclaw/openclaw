@@ -70,7 +70,7 @@ export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolea
   return sanitizeCopilotReplayResponseIds(input);
 }
 
-export function sanitizeCopilotReplayResponsePayloadIds(payload: unknown): boolean {
+function sanitizeCopilotReplayResponsePayloadIds(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") {
     return false;
   }

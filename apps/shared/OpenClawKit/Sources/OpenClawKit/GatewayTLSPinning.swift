@@ -62,7 +62,8 @@ public struct GatewayTLSValidationError: LocalizedError, Sendable {
         case .pinMismatch:
             let expected = self.failure.expectedFingerprint ?? "unknown"
             let observed = self.failure.observedFingerprint ?? "unknown"
-            return "\(prefix): TLS certificate pin mismatch for \(self.failure.host) (expected \(expected), observed \(observed))"
+            let mismatch = "expected \(expected), observed \(observed)"
+            return "\(prefix): TLS certificate pin mismatch for \(self.failure.host) (\(mismatch))"
         case .certificateUnavailable:
             return "\(prefix): TLS certificate unavailable for \(self.failure.host)"
         case .untrustedCertificate:
@@ -206,7 +207,11 @@ GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Se
     }
 
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        let task = self.session.webSocketTask(with: url)
+        self.makeWebSocketTask(request: URLRequest(url: url))
+    }
+
+    public func makeWebSocketTask(request: URLRequest) -> WebSocketTaskBox {
+        let task = self.session.webSocketTask(with: request)
         task.maximumMessageSize = 16 * 1024 * 1024
         return WebSocketTaskBox(task: task)
     }

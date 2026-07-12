@@ -1,6 +1,9 @@
 // Tests gateway active-run matching by logical session key and backing id.
 import { expect, it } from "vitest";
-import { hasVisibleActiveSessionRun } from "./session-active-runs.js";
+import {
+  hasVisibleActiveSessionRun,
+  resolveVisibleActiveSessionRunState,
+} from "./session-active-runs.js";
 
 it("matches session-id-only gateway runs during archive admission", () => {
   const context = {
@@ -24,4 +27,23 @@ it("matches session-id-only gateway runs during archive admission", () => {
       sessionId: "session-1",
     }),
   ).toBe(true);
+});
+
+it("returns deterministic visible run ids for the selected session", () => {
+  const context = {
+    chatAbortControllers: new Map([
+      ["run-z", { sessionKey: "main" }],
+      ["run-hidden", { sessionKey: "main", controlUiVisible: false }],
+      ["run-other", { sessionKey: "other" }],
+      ["run-a", { sessionKey: "main" }],
+    ]),
+  } as never;
+
+  expect(
+    resolveVisibleActiveSessionRunState({
+      context,
+      requestedKey: "main",
+      canonicalKey: "main",
+    }),
+  ).toEqual({ active: true, runIds: ["run-a", "run-z"] });
 });

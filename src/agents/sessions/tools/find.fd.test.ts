@@ -17,19 +17,25 @@ vi.mock("../../utils/tools-manager.js", () => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-type MockChild = ChildProcessWithoutNullStreams & { stdout: PassThrough; stderr: PassThrough };
+type MockChild = ChildProcessWithoutNullStreams & {
+  stdout: PassThrough;
+  stderr: PassThrough;
+  killMock: ReturnType<typeof vi.fn>;
+};
 
 afterEach(() => {
   vi.clearAllMocks();
 });
 
 function createChild(): MockChild {
+  const kill = vi.fn(() => true);
   return Object.assign(new EventEmitter(), {
     stdin: new PassThrough(),
     stdout: new PassThrough(),
     stderr: new PassThrough(),
     killed: false,
-    kill: vi.fn(() => true),
+    kill,
+    killMock: kill,
   }) as unknown as MockChild;
 }
 
@@ -47,6 +53,23 @@ it("rejects partial fd output when fd exits with an error", async () => {
 
   await expect(result).rejects.toThrow("fd failed while reading subtree");
 });
+
+it.each(["stdout", "stderr"] as const)(
+  "rejects and stops fd when %s emits an error",
+  async (stream) => {
+    const child = createChild();
+    vi.mocked(spawn).mockReturnValue(child);
+    vi.mocked(ensureTool).mockResolvedValue("fd");
+
+    const tool = createFindToolDefinition("/workspace");
+    const result = tool.execute("call-1", { pattern: "*.ts" }, undefined, undefined, {} as never);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+    child[stream].emit("error", new Error(`${stream} EPIPE`));
+
+    await expect(result).rejects.toThrow(`${stream} EPIPE`);
+    expect(child.killMock).toHaveBeenCalledOnce();
+  },
+);
 
 it.each([
   { name: "inside a repository", gitBoundary: true, expected: false },

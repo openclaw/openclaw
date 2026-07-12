@@ -463,7 +463,7 @@ function resolveCronAwarenessText(params: {
         normalizeOptionalString(params.synthesizedText));
 }
 
-export function formatTargetCronDeliveryAwarenessText(text: string): string {
+function formatTargetCronDeliveryAwarenessText(text: string): string {
   return `A scheduled cron job delivered this message to this channel:\n${text}`;
 }
 
@@ -705,7 +705,7 @@ async function resolveCronDeliveryRouteSessionKey(params: {
 }
 
 /** Resolves the transcript mirror session for direct cron delivery. */
-export async function resolveDirectCronDeliverySessionKey(params: {
+async function resolveDirectCronDeliverySessionKey(params: {
   cfg: OpenClawConfig;
   job: CronJob;
   agentId: string;

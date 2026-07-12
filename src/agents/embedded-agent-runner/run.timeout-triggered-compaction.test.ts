@@ -54,6 +54,9 @@ type CompactRuntimeContext = {
   currentMessageId?: string;
   senderId?: string;
   authProfileId?: string;
+  provider?: string;
+  model?: string;
+  modelSelectionLocked?: boolean;
 };
 
 type CompactParams = {
@@ -76,9 +79,11 @@ type HookEvent = {
   compactedCount?: number;
   tokenCount?: number;
   sessionFile?: string;
+  previousSessionId?: string;
 };
 
 type HookContext = {
+  sessionId?: string;
   sessionKey?: string;
 };
 
@@ -162,7 +167,7 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
     const compactParams = compactCallAt(0);
     expect(compactParams.sessionId).toBe("test-session");
-    expect(compactParams.sessionFile).toBe("/tmp/session.json");
+    expect(compactParams.sessionFile).toBeUndefined();
     expect(compactParams.tokenBudget).toBe(200000);
     expect(compactParams.force).toBe(true);
     expect(compactParams.compactionTarget).toBe("budget");
@@ -240,6 +245,8 @@ describe("timeout-triggered compaction", () => {
 
     await runEmbeddedAgent({
       ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
       messageChannel: "slack",
       messageProvider: "slack",
       agentAccountId: "acct-1",
@@ -247,6 +254,11 @@ describe("timeout-triggered compaction", () => {
       currentThreadTs: "thread-1",
       currentMessageId: "message-1",
       senderId: "sender-1",
+      agentHarnessId: "openclaw",
+      modelSelectionLocked: true,
+      config: {
+        agents: { defaults: { compaction: { model: "anthropic/claude-opus-4-6" } } },
+      },
     });
 
     expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
@@ -258,6 +270,9 @@ describe("timeout-triggered compaction", () => {
     expect(compactParams.runtimeContext?.currentThreadTs).toBe("thread-1");
     expect(compactParams.runtimeContext?.currentMessageId).toBe("message-1");
     expect(compactParams.runtimeContext?.senderId).toBe("sender-1");
+    expect(compactParams.runtimeContext?.modelSelectionLocked).toBe(true);
+    expect(compactParams.runtimeContext?.provider).toBe("openai");
+    expect(compactParams.runtimeContext?.model).toBe("gpt-5.5");
   });
 
   it("falls through to normal handling when timeout compaction fails", async () => {
@@ -511,6 +526,8 @@ describe("timeout-triggered compaction", () => {
       result: {
         summary: "engine-owned timeout compaction",
         tokensAfter: 70,
+        sessionId: "rotated-timeout-session",
+        sessionFile: "/tmp/rotated-timeout-session.json",
       },
     });
 
@@ -524,8 +541,10 @@ describe("timeout-triggered compaction", () => {
       messageCount: -1,
       compactedCount: -1,
       tokenCount: 70,
-      sessionFile: "/tmp/session.json",
+      sessionFile: "/tmp/rotated-timeout-session.json",
+      previousSessionId: "test-session",
     });
+    expect(afterContext.sessionId).toBe("rotated-timeout-session");
     expect(afterContext.sessionKey).toBe("test-key");
     expect(mockedRunPostCompactionSideEffects).toHaveBeenCalledTimes(1);
   });

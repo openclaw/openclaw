@@ -561,6 +561,153 @@ describe("createOAuthManager", () => {
     });
   });
 
+  it("force-persists a refreshed credential after a same-identity CAS race", async () => {
+    await withOAuthTempRoot("oauth-manager-cas-same-identity-", async (tempRoot) => {
+      const agentDir = path.join(tempRoot, "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      const profileId = "openai:oauth";
+      const expired = createCredential({
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: Date.now() - 60_000,
+        accountId: "acct-123",
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: expired,
+          },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false },
+      );
+
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        refreshCredential: vi.fn(async () => {
+          saveAuthProfileStore(
+            {
+              version: 1,
+              profiles: {
+                [profileId]: createCredential({
+                  access: "stale-race-access",
+                  refresh: "consumed-race-refresh",
+                  expires: Date.now() + 10 * 60_000,
+                  accountId: "acct-123",
+                }),
+              },
+            },
+            agentDir,
+            { filterExternalAuthProfiles: false },
+          );
+          return {
+            access: "rotated-access",
+            refresh: "rotated-refresh",
+            expires: Date.now() + 60_000,
+          };
+        }),
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
+
+      const result = await manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }),
+        profileId,
+        credential: expired,
+        agentDir,
+      });
+
+      expect(result?.apiKey).toBe("rotated-access");
+      const persisted = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        allowKeychainPrompt: false,
+      });
+      expect(persisted.profiles[profileId]).toMatchObject({
+        type: "oauth",
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+        accountId: "acct-123",
+      });
+    });
+  });
+
+  it("uses a different-identity stored credential after a CAS race", async () => {
+    await withOAuthTempRoot("oauth-manager-cas-different-identity-", async (tempRoot) => {
+      const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+      const agentDir = path.join(tempRoot, "agents", "sub", "agent");
+      await fs.mkdir(mainAgentDir, { recursive: true });
+      await fs.mkdir(agentDir, { recursive: true });
+      const profileId = "openai:oauth";
+      const expired = createCredential({
+        access: "expired-access",
+        refresh: "expired-refresh",
+        expires: Date.now() - 60_000,
+        accountId: "acct-123",
+      });
+      const relogged = createCredential({
+        access: "relogged-access",
+        refresh: "relogged-refresh",
+        expires: Date.now() + 10 * 60_000,
+        accountId: "acct-456",
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: expired,
+          },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false },
+      );
+
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        refreshCredential: vi.fn(async () => {
+          saveAuthProfileStore(
+            {
+              version: 1,
+              profiles: {
+                [profileId]: relogged,
+              },
+            },
+            agentDir,
+            { filterExternalAuthProfiles: false },
+          );
+          return {
+            access: "rotated-access",
+            refresh: "rotated-refresh",
+            expires: Date.now() + 60_000,
+          };
+        }),
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
+
+      const result = await manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }),
+        profileId,
+        credential: expired,
+        agentDir,
+      });
+
+      expect(result?.apiKey).toBe("relogged-access");
+      const persisted = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        allowKeychainPrompt: false,
+      });
+      expect(persisted.profiles[profileId]).toMatchObject({
+        type: "oauth",
+        access: "relogged-access",
+        refresh: "relogged-refresh",
+        accountId: "acct-456",
+      });
+    });
+  });
+
   it("fails closed after managed refresh failure", async () => {
     await withOAuthAgentDirs("oauth-manager-refresh-fail-closed-", async ({ agentDir }) => {
       const profileId = "openai:user@example.com";

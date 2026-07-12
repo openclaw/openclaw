@@ -70,7 +70,7 @@ async function startLoopbackTokenGateway(token: string) {
     bind: "loopback",
     auth: { mode: "token", token },
     controlUiEnabled: false,
-    deferStartupSidecars: true,
+    sidecarStartup: "defer",
   });
   return { port, server };
 }

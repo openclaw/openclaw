@@ -95,7 +95,7 @@ export function resetWebInboundDedupe(): void {
   recentOutboundMessages.clear();
 }
 
-export type RecentInboundMessageClaimKind = "claimed" | "duplicate" | "inflight";
+type RecentInboundMessageClaimKind = "claimed" | "duplicate" | "inflight";
 
 export async function claimRecentInboundMessageDelivery(
   key: string,

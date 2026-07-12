@@ -94,6 +94,12 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml("<sup>1</sup>")).toBe("<sup>1</sup>");
   });
 
+  it("renders bold spans that close before CJK punctuation in rich markdown", () => {
+    expect(markdownToTelegramRichHtml("边界：**社区显示：**Fable 与 **有效**。")).toBe(
+      "边界：<b>社区显示：</b>Fable 与 <b>有效</b>。",
+    );
+  });
+
   it("materializes inline and paragraph newlines as <br> for rich messages", () => {
     // The exact reported symptom: literal "• " bullets (not Markdown list markers)
     // joined by soft breaks, which Bot API 10.1 rich messages collapse without <br>.
@@ -629,8 +635,19 @@ describe("markdownToTelegramHtml", () => {
     expect(containsLoneSurrogate(output)).toBe(false);
   });
 
-  it("fails loudly when tag overhead leaves no room for text", () => {
-    expect(() => splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10)).toThrow(/tag overhead/i);
+  it("delivers content as plain text when tag overhead fills the chunk", () => {
+    const chunks = splitTelegramHtmlChunks("<b><i><u>x</u></i></b>", 10);
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toBe("x");
+  });
+
+  it("keeps later formatting balanced after dropping an oversized tag scope", () => {
+    const oversizedLink = `<a href="https://example.com/${"x".repeat(40)}">first</a>`;
+    const chunks = splitTelegramHtmlChunks(`${oversizedLink}<b>second</b>`, 20);
+
+    expect(chunks).toEqual(["first<b>second</b>"]);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(telegramHtmlToPlainTextFallback(chunks.join(""))).toBe("firstsecond");
   });
 
   it("does not split an astral char across the chunk boundary", () => {

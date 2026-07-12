@@ -21,7 +21,7 @@ import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 const log = createSubsystemLogger("session-suspension");
 
 const DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY = 1;
-export const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
+const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
 const laneResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const deferredSessionSuspension = new AsyncLocalStorage<{
@@ -30,7 +30,7 @@ const deferredSessionSuspension = new AsyncLocalStorage<{
 }>();
 
 export type SessionSuspensionReason = "quota_exhausted" | "manual" | "circuit_open";
-export type SessionSuspensionTarget =
+type SessionSuspensionTarget =
   | { mode: "defer"; defer: (params: SessionSuspensionParams) => void }
   | { mode: "suspend" };
 export type SessionSuspensionParams = {

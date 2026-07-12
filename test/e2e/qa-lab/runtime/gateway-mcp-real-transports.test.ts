@@ -18,36 +18,6 @@ async function writeEntry(root: string, relativePath: string) {
 }
 
 describe("gateway MCP real transport producer", () => {
-  it("uses the source CLI entry when build output is absent", async () => {
-    const root = createRepoRoot();
-    const entryPath = await writeEntry(root, "src/entry.ts");
-
-    const cli = testing.resolveOpenClawCliInvocation(root);
-
-    expect(cli.command).toBe(process.execPath);
-    expect(cli.argsPrefix).toStrictEqual(["--import", "tsx", entryPath]);
-    expect(cli.cwd).toBe(root);
-    expect(cli.gatewayCommand).toMatchObject({
-      executablePath: process.execPath,
-      argsPrefix: ["--import", "tsx", entryPath],
-      cwd: root,
-    });
-  });
-
-  it("prefers built package output when it exists", async () => {
-    const root = createRepoRoot();
-    const distEntry = await writeEntry(root, "dist/index.mjs");
-    await writeEntry(root, "src/entry.ts");
-
-    const cli = testing.resolveOpenClawCliInvocation(root);
-
-    expect(cli.argsPrefix).toStrictEqual([distEntry]);
-    expect(cli.gatewayCommand).toMatchObject({
-      argsPrefix: [distEntry],
-      usePackagedPlugins: true,
-    });
-  });
-
   it("uses the source channel MCP module when build output is absent", async () => {
     const root = createRepoRoot();
     const channelServerPath = await writeEntry(root, "src/mcp/channel-server.ts");

@@ -1,3 +1,4 @@
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
@@ -572,7 +573,7 @@ function redactCaptureScalar(value: string, label?: string): string {
     return "[redacted]";
   }
   if (trimmed.length > 400) {
-    return `${trimmed.slice(0, 280)}\n…\n${trimmed.slice(-80)}`;
+    return `${sliceUtf16Safe(trimmed, 0, 280)}\n…\n${sliceUtf16Safe(trimmed, -80)}`;
   }
   return trimmed;
 }
@@ -1083,15 +1084,15 @@ function renderMessageAttachments(message: Message): string {
 
 const MOCK_MODELS: RunnerModelOption[] = [
   {
-    key: "mock-openai/gpt-5.5",
-    name: "GPT-5.5 (mock)",
+    key: "mock-openai/gpt-5.6-luna",
+    name: "GPT-5.6 Luna (mock)",
     provider: "mock-openai",
     input: "text",
     preferred: true,
   },
   {
-    key: "mock-openai/gpt-5.5-alt",
-    name: "GPT-5.5 Alt (mock)",
+    key: "mock-openai/gpt-5.6-luna-alt",
+    name: "GPT-5.6 Luna Alt (mock)",
     provider: "mock-openai",
     input: "text",
     preferred: false,

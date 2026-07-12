@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
@@ -33,11 +34,13 @@ import type {
   GoogleMeetSession,
 } from "./transports/types.js";
 import {
+  createVoiceCallGateway,
   endMeetVoiceCallGatewayCall,
   getMeetVoiceCallGatewayCall,
   isVoiceCallMissingError,
   joinMeetViaVoiceCallGateway,
   speakMeetViaVoiceCallGateway,
+  type VoiceCallGateway,
 } from "./voice-call-gateway.js";
 
 type ChromeAudioBridgeResult = NonNullable<
@@ -81,8 +84,43 @@ function resolveMode(input: GoogleMeetModeInput | undefined, config: GoogleMeetC
   return input === "realtime" ? "agent" : (input ?? config.defaultMode);
 }
 
+function resolveSessionAgentId(request: GoogleMeetJoinRequest, config: GoogleMeetConfig): string {
+  return normalizeAgentId(request.agentId ?? config.realtime.agentId);
+}
+
+function withSessionAgentConfig(config: GoogleMeetConfig, agentId: string): GoogleMeetConfig {
+  return config.realtime.agentId === agentId
+    ? config
+    : {
+        ...config,
+        realtime: { ...config.realtime, agentId },
+      };
+}
+
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
   return mode === "agent" || mode === "bidi";
+}
+
+function isBrowserTransport(transport: GoogleMeetTransport): boolean {
+  return transport === "chrome" || transport === "chrome-node";
+}
+
+function isReusableMeetSession(
+  session: GoogleMeetSession,
+  params: {
+    url: string;
+    transport: GoogleMeetTransport;
+    mode: GoogleMeetMode;
+    agentId: string;
+  },
+): boolean {
+  return (
+    session.state === "active" &&
+    isSameMeetUrlForReuse(session.url, params.url) &&
+    session.transport === params.transport &&
+    session.mode === params.mode &&
+    session.agentId === params.agentId
+  );
 }
 
 function hasRealtimeAudioOutputAdvanced(
@@ -224,6 +262,7 @@ export class GoogleMeetRuntime {
   readonly #sessionStops = new Map<string, () => Promise<void>>();
   readonly #sessionSpeakers = new Map<string, (instructions?: string) => void>();
   readonly #sessionHealth = new Map<string, () => GoogleMeetChromeHealth>();
+  readonly #voiceCallGateway: VoiceCallGateway;
 
   constructor(
     private readonly params: {
@@ -232,7 +271,9 @@ export class GoogleMeetRuntime {
       runtime: PluginRuntime;
       logger: RuntimeLogger;
     },
-  ) {}
+  ) {
+    this.#voiceCallGateway = createVoiceCallGateway(params);
+  }
 
   list(): GoogleMeetSession[] {
     this.#refreshHealth();
@@ -373,12 +414,26 @@ export class GoogleMeetRuntime {
     const url = normalizeMeetUrl(request.url);
     const transport = resolveTransport(request.transport, this.params.config);
     const mode = resolveMode(request.mode, this.params.config);
-    let reusable = this.list().find(
+    const agentId = resolveSessionAgentId(request, this.params.config);
+    const activeSessions = this.list().filter(
       (session) =>
         session.state === "active" &&
         isSameMeetUrlForReuse(session.url, url) &&
-        session.transport === transport &&
-        session.mode === mode,
+        session.transport === transport,
+    );
+    if (isBrowserTransport(transport) && isGoogleMeetTalkBackMode(mode)) {
+      for (const session of activeSessions) {
+        if (session.agentId === agentId || !isGoogleMeetTalkBackMode(session.mode)) {
+          continue;
+        }
+        // A reused browser tab can only host one live talk-back bridge safely.
+        // End the previous owner before the tab is reused for another agent.
+        await this.leave(session.id);
+        noteSession(session, "Ended before the same Meet tab was reassigned to another agent.");
+      }
+    }
+    let reusable = activeSessions.find((session) =>
+      isReusableMeetSession(session, { url, transport, mode, agentId }),
     );
     if (reusable?.transport === "twilio") {
       await this.#refreshTwilioVoiceCallStatus(reusable);
@@ -405,6 +460,7 @@ export class GoogleMeetRuntime {
       url,
       transport,
       mode,
+      agentId,
       state: "active",
       createdAt,
       updatedAt: createdAt,
@@ -434,11 +490,14 @@ export class GoogleMeetRuntime {
 
     try {
       if (transport === "chrome" || transport === "chrome-node") {
+        // Session ownership must outlive the original request so later bridge
+        // startup and reuse stay on the same workspace and tool policy.
+        const chromeConfig = withSessionAgentConfig(this.params.config, agentId);
         const result =
           transport === "chrome-node"
             ? await launchChromeMeetOnNode({
                 runtime: this.params.runtime,
-                config: this.params.config,
+                config: chromeConfig,
                 fullConfig: this.params.fullConfig,
                 meetingSessionId: session.id,
                 requesterSessionKey: request.requesterSessionKey,
@@ -448,7 +507,7 @@ export class GoogleMeetRuntime {
               })
             : await launchChromeMeet({
                 runtime: this.params.runtime,
-                config: this.params.config,
+                config: chromeConfig,
                 fullConfig: this.params.fullConfig,
                 meetingSessionId: session.id,
                 requesterSessionKey: request.requesterSessionKey,
@@ -491,16 +550,25 @@ export class GoogleMeetRuntime {
           request.dtmfSequence || this.params.config.twilio.defaultDtmfSequence
             ? rawDtmfSequence
             : prefixDtmfWait(rawDtmfSequence, this.params.config.voiceCall.dtmfDelayMs);
+        const hasExplicitDelegatedAgent = Boolean(
+          normalizeOptionalString(request.agentId) ||
+          normalizeOptionalString(this.params.config.realtime.agentId),
+        );
+        const delegatedAgentId = hasExplicitDelegatedAgent ? agentId : undefined;
         const voiceCallResult = this.params.config.voiceCall.enabled
           ? await joinMeetViaVoiceCallGateway({
               config: this.params.config,
+              gateway: this.#voiceCallGateway,
               dialInNumber,
               dtmfSequence,
               logger: this.params.logger,
               ...(request.requesterSessionKey
                 ? { requesterSessionKey: request.requesterSessionKey }
                 : {}),
-              sessionKey: buildTwilioVoiceCallSessionKey(session.id),
+              agentId: delegatedAgentId,
+              sessionKey: delegatedAgentId
+                ? `agent:${delegatedAgentId}:google-meet:${session.id}`
+                : buildTwilioVoiceCallSessionKey(session.id),
               message: isGoogleMeetTalkBackMode(mode)
                 ? (request.message ??
                   this.params.config.voiceCall.introMessage ??
@@ -520,7 +588,7 @@ export class GoogleMeetRuntime {
         if (voiceCallResult?.callId) {
           this.#sessionStops.set(session.id, async () => {
             await endMeetVoiceCallGatewayCall({
-              config: this.params.config,
+              gateway: this.#voiceCallGateway,
               callId: voiceCallResult.callId,
             });
           });
@@ -581,7 +649,7 @@ export class GoogleMeetRuntime {
     if (session.transport === "twilio" && session.twilio?.voiceCallId) {
       try {
         await speakMeetViaVoiceCallGateway({
-          config: this.params.config,
+          gateway: this.#voiceCallGateway,
           callId: session.twilio.voiceCallId,
           message:
             instructions ||
@@ -684,16 +752,13 @@ export class GoogleMeetRuntime {
           : "agent";
     const url = normalizeMeetUrl(request.url);
     const transport = resolveTransport(request.transport, this.params.config);
+    const agentId = resolveSessionAgentId(request, this.params.config);
     const beforeSessions = this.list();
     const before = new Set(beforeSessions.map((session) => session.id));
-    const existingSession = beforeSessions.find(
-      (session) =>
-        session.state === "active" &&
-        isSameMeetUrlForReuse(session.url, url) &&
-        session.transport === transport &&
-        isGoogleMeetTalkBackMode(session.mode),
+    const existingSession = beforeSessions.find((session) =>
+      isReusableMeetSession(session, { url, transport, mode, agentId }),
     );
-    const startOutputBytes = existingSession?.chrome?.health?.lastOutputBytes ?? 0;
+    const existingOutputBytes = existingSession?.chrome?.health?.lastOutputBytes ?? 0;
     const result = await this.join({
       ...request,
       transport,
@@ -701,6 +766,7 @@ export class GoogleMeetRuntime {
       mode,
       message: request.message ?? "Say exactly: Google Meet speech test complete.",
     });
+    const startOutputBytes = existingSession?.id === result.session.id ? existingOutputBytes : 0;
     let health = result.session.chrome?.health;
     const shouldWaitForOutput =
       result.spoken === true &&
@@ -764,16 +830,18 @@ export class GoogleMeetRuntime {
     if (transport === "twilio") {
       throw new Error("test_listen supports chrome or chrome-node transports");
     }
+    const agentId = resolveSessionAgentId(request, this.params.config);
     const beforeSessions = this.list();
     const before = new Set(beforeSessions.map((session) => session.id));
-    const existingSession = beforeSessions.find(
-      (session) =>
-        session.state === "active" &&
-        isSameMeetUrlForReuse(session.url, url) &&
-        session.transport === transport &&
-        session.mode === "transcribe",
+    const existingSession = beforeSessions.find((session) =>
+      isReusableMeetSession(session, {
+        url,
+        transport,
+        mode: "transcribe",
+        agentId,
+      }),
     );
-    const start = transcriptCheckpoint(existingSession?.chrome?.health);
+    const existingStart = transcriptCheckpoint(existingSession?.chrome?.health);
     const result = await this.join({
       ...request,
       transport,
@@ -781,6 +849,8 @@ export class GoogleMeetRuntime {
       mode: "transcribe",
       message: undefined,
     });
+    const start =
+      existingSession?.id === result.session.id ? existingStart : transcriptCheckpoint(undefined);
     let health = result.session.chrome?.health;
     const timeoutMs = resolveProbeTimeoutMs(
       request.timeoutMs,
@@ -856,7 +926,7 @@ export class GoogleMeetRuntime {
     }
     try {
       const status = await getMeetVoiceCallGatewayCall({
-        config: this.params.config,
+        gateway: this.#voiceCallGateway,
         callId,
       });
       if (status.found === false) {
@@ -956,12 +1026,13 @@ export class GoogleMeetRuntime {
     ) {
       return;
     }
+    const sessionConfig = withSessionAgentConfig(this.params.config, session.agentId);
     const result = await launchChromeMeet({
       runtime: this.params.runtime,
       config: {
-        ...this.params.config,
+        ...sessionConfig,
         chrome: {
-          ...this.params.config.chrome,
+          ...sessionConfig.chrome,
           launch: false,
         },
       },

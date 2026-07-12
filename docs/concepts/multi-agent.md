@@ -1,12 +1,12 @@
 ---
-summary: "Multi-agent routing: isolated agents, channel accounts, and bindings"
+summary: "Multi-agent routing: agent boundaries, channel accounts, and bindings"
 title: "Multi-agent routing"
 sidebarTitle: "Multi-agent routing"
-read_when: "You want multiple isolated agents (workspaces + auth) in one gateway process."
+read_when: "You want multiple agents with separate workspaces, auth, and sessions in one Gateway process."
 status: active
 ---
 
-Run multiple _isolated_ agents in one Gateway process, each with its own workspace, state directory (`agentDir`), and session store, plus multiple channel accounts (e.g. two WhatsApp numbers). Inbound messages route to the right agent through **bindings**.
+Run multiple _isolated_ agents in one Gateway process, each with its own workspace, state directory (`agentDir`), and SQLite-backed session history, plus multiple channel accounts (e.g. two WhatsApp numbers). Inbound messages route to the right agent through **bindings**.
 
 An **agent** is the full per-persona scope: workspace files, auth profiles, model registry, and session store. A **binding** maps a channel account (a Slack workspace, a WhatsApp number, etc.) to one of those agents.
 
@@ -16,7 +16,7 @@ Each agent has its own:
 
 - **Workspace**: files, `AGENTS.md`/`SOUL.md`/`USER.md`, local notes, persona rules.
 - **State directory** (`agentDir`): auth profiles, model registry, per-agent config.
-- **Session store**: chat history and routing state under `~/.openclaw/agents/<agentId>/sessions`.
+- **Session store**: chat history and routing state in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
 
 Auth profiles are per-agent, read from:
 
@@ -34,20 +34,26 @@ Never reuse `agentDir` across agents — it causes auth/session state collisions
 
 Skills load from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filter by the effective agent skill allowlist. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for a per-agent replacement (explicit entries replace the default, they do not merge). See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent allowlists](/tools/skills#agent-allowlists).
 
+Plugin-owned storage follows that plugin's configuration; adding a second agent
+does not automatically split every global plugin store. For example, configure
+[Memory Wiki per-agent vaults](/concepts/multi-agent#per-agent-memory-wiki-vaults)
+when personas must not share compiled wiki knowledge.
+
 <Note>
 **Workspace note:** each agent's workspace is the **default cwd**, not a hard sandbox. Relative paths resolve inside the workspace, but absolute paths can reach other host locations unless sandboxing is enabled. See [Sandboxing](/gateway/sandboxing).
 </Note>
 
 ## Paths
 
-| What                      | Default                                                                                | Override                                                                                 |
-| ------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| Config                    | `~/.openclaw/openclaw.json`                                                            | `OPENCLAW_CONFIG_PATH`                                                                   |
-| State dir                 | `~/.openclaw`                                                                          | `OPENCLAW_STATE_DIR`                                                                     |
-| Default agent's workspace | `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set)      | `agents.list[].workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
-| Other agents' workspace   | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.list[].workspace`                                                                |
-| Agent dir                 | `~/.openclaw/agents/<agentId>/agent`                                                   | `agents.list[].agentDir`                                                                 |
-| Sessions                  | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                        |
+| What                             | Default                                                                                | Override                                                                                 |
+| -------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Config                           | `~/.openclaw/openclaw.json`                                                            | `OPENCLAW_CONFIG_PATH`                                                                   |
+| State dir                        | `~/.openclaw`                                                                          | `OPENCLAW_STATE_DIR`                                                                     |
+| Default agent's workspace        | `~/.openclaw/workspace` (or `workspace-<profile>` when `OPENCLAW_PROFILE` is set)      | `agents.list[].workspace`, then `agents.defaults.workspace`, or `OPENCLAW_WORKSPACE_DIR` |
+| Other agents' workspace          | `<stateDir>/workspace-<agentId>` (or `<agents.defaults.workspace>/<agentId>` when set) | `agents.list[].workspace`                                                                |
+| Agent dir                        | `~/.openclaw/agents/<agentId>/agent`                                                   | `agents.list[].agentDir`                                                                 |
+| Sessions and transcripts         | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`                             | —                                                                                        |
+| Legacy/archive session artifacts | `~/.openclaw/agents/<agentId>/sessions`                                                | —                                                                                        |
 
 ### Single-agent mode (default)
 
@@ -114,13 +120,44 @@ openclaw agents list --bindings
 
 ## Multiple agents, multiple personas
 
-Each configured `agentId` is a fully isolated persona:
+Each configured `agentId` is a distinct persona boundary for core agent state:
 
 - Different accounts per channel (per `accountId`).
 - Different personalities (per-agent `AGENTS.md`/`SOUL.md`).
-- Separate auth and sessions, with no cross-talk unless explicitly enabled.
+- Separate auth and sessions, with cross-agent access enabled only through explicit features or plugin configuration.
 
-This lets multiple people share one Gateway while keeping their agent state isolated.
+This lets multiple people share one Gateway while keeping core agent state separate.
+
+## Per-agent Memory Wiki vaults
+
+Memory Wiki uses one global vault by default. To keep a support agent's
+compiled knowledge separate from a marketing agent's, set
+`plugins.entries.memory-wiki.config.vault.scope` to `agent`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "memory-wiki": {
+        enabled: true,
+        config: {
+          vault: {
+            scope: "agent",
+            path: "~/.openclaw/wiki",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The configured path is the parent directory. OpenClaw appends the normalized
+agent id, producing paths such as `~/.openclaw/wiki/support` and
+`~/.openclaw/wiki/marketing`. Agent-scoped CLI and Gateway operations require
+an explicit agent when multiple agents are configured. See
+[Memory Wiki per-agent vaults](/plugins/memory-wiki#per-agent-vaults) for bridge
+filtering, migration, and trust-boundary details.
 
 ## Cross-agent QMD memory search
 

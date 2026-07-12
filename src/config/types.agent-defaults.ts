@@ -352,7 +352,16 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+  thinkingDefault?:
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max"
+    | "ultra";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /**
@@ -510,7 +519,7 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Embedded OpenClaw reserve tokens target before floor enforcement. */
+  /** Embedded OpenClaw reserve target before floor and context-window caps. */
   reserveTokens?: number;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
@@ -553,14 +562,14 @@ export type AgentCompactionConfig = {
    */
   provider?: string;
   /**
-   * Rotate the active session JSONL file after compaction so the next turn
+   * Rotate the active session transcript after compaction so the next turn
    * starts from the compaction summary and unsummarized tail while the old
    * transcript stays archived.
    * Default: false (existing behavior preserved).
    */
   truncateAfterCompaction?: boolean;
   /**
-   * Trigger a normal local compaction when the active session JSONL reaches
+   * Trigger a normal local compaction when the active session transcript reaches
    * this size (bytes, or byte-size string like "20mb"). Set to 0/unset to
    * disable. Requires truncateAfterCompaction so successful compaction can
    * rotate to a smaller successor transcript. This does not split raw
@@ -568,7 +577,9 @@ export type AgentCompactionConfig = {
    */
   maxActiveTranscriptBytes?: number | string;
   /**
-   * Send brief compaction notices to the user when compaction starts and completes.
+   * Send brief context-maintenance notices to the user: when compaction starts
+   * and completes, and when a pre-compaction memory flush is exhausted so the
+   * reply continues in a degraded state.
    * Default: false (silent by default).
    */
   notifyUser?: boolean;

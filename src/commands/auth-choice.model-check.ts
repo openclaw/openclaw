@@ -68,6 +68,37 @@ function hasProfileForProvider(params: {
   });
 }
 
+/**
+ * Resolve the default model ref and whether any usable credentials exist for
+ * it (auth profiles, provider env keys, or custom provider API keys). Shared
+ * by the onboarding model check and the finalize hatch gating.
+ */
+export function resolveDefaultModelAuthStatus(
+  config: OpenClawConfig,
+  options?: { agentId?: string; agentDir?: string },
+): { provider: string; model: string; hasAuth: boolean } {
+  const ref = resolveDefaultModelForAgent({
+    cfg: config,
+    agentId: options?.agentId,
+  });
+  const store = ensureAuthProfileStore(options?.agentDir);
+  const authProviders = resolveAuthProviderCandidates({
+    config,
+    provider: ref.provider,
+    modelId: ref.model,
+    agentId: options?.agentId,
+  });
+  const acceptedTypes = resolveAcceptedAuthProfileTypes({
+    config,
+    provider: ref.provider,
+  });
+  const hasAuth =
+    authProviders.some((provider) => hasProfileForProvider({ store, provider, acceptedTypes })) ||
+    authProviders.some((provider) => resolveEnvApiKey(provider)) ||
+    authProviders.some((provider) => hasUsableCustomProviderApiKey(config, provider));
+  return { provider: ref.provider, model: ref.model, hasAuth };
+}
+
 /** Warn when the selected default model is unknown or has no usable credentials. */
 export async function warnIfModelConfigLooksOff(
   config: OpenClawConfig,
@@ -96,21 +127,10 @@ export async function warnIfModelConfigLooksOff(
     }
   }
 
-  const store = ensureAuthProfileStore(options?.agentDir);
-  const authProviders = resolveAuthProviderCandidates({
-    config,
-    provider: ref.provider,
-    modelId: ref.model,
-    agentId: options?.agentId,
+  const { hasAuth } = resolveDefaultModelAuthStatus(config, {
+    ...(options?.agentId ? { agentId: options.agentId } : {}),
+    ...(options?.agentDir ? { agentDir: options.agentDir } : {}),
   });
-  const acceptedTypes = resolveAcceptedAuthProfileTypes({
-    config,
-    provider: ref.provider,
-  });
-  const hasAuth =
-    authProviders.some((provider) => hasProfileForProvider({ store, provider, acceptedTypes })) ||
-    authProviders.some((provider) => resolveEnvApiKey(provider)) ||
-    authProviders.some((provider) => hasUsableCustomProviderApiKey(config, provider));
   if (!hasAuth) {
     warnings.push(
       `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added. ${buildProviderAuthRecoveryHint(

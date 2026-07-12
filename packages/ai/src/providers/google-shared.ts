@@ -35,7 +35,7 @@ import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-bou
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
-export type GoogleApiType = "google-generative-ai" | "google-vertex";
+type GoogleApiType = "google-generative-ai" | "google-vertex";
 
 /**
  * Thinking level for Gemini 3 models.
@@ -48,9 +48,9 @@ export type GoogleThinkingLevel =
   | "MEDIUM"
   | "HIGH";
 
-export type GoogleToolChoice = "auto" | "none" | "any";
+type GoogleToolChoice = "auto" | "none" | "any";
 
-export type GoogleThinkingOptions = {
+type GoogleThinkingOptions = {
   enabled: boolean;
   budgetTokens?: number;
   level?: GoogleThinkingLevel;
@@ -86,7 +86,7 @@ type ClampedGoogleThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max">;
  *
  * See: https://ai.google.dev/gemini-api/docs/thought-signatures
  */
-export function isThinkingPart(part: Pick<Part, "thought" | "thoughtSignature">): boolean {
+function isThinkingPart(part: Pick<Part, "thought" | "thoughtSignature">): boolean {
   return part.thought === true;
 }
 
@@ -140,11 +140,12 @@ export function requiresToolCallId(modelId: string): boolean {
 }
 
 function getGeminiMajorVersion(modelId: string): number | undefined {
-  const match = modelId.toLowerCase().match(/^gemini(?:-live)?-(\d+)/);
+  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
   if (!match) {
     return undefined;
   }
-  return Number.parseInt(match[1], 10);
+  const majorVersion = match.at(1);
+  return majorVersion === undefined ? undefined : Number.parseInt(majorVersion, 10);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
@@ -552,13 +553,16 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
     useFlashLiteBudgets?: boolean;
   },
 ): GoogleThinkingOptions {
-  if (!options?.reasoning) {
+  if (!options?.reasoning || options.reasoning === "off") {
     return { enabled: false };
   }
 
   const clampedReasoning = clampThinkingLevel(model, options.reasoning);
+  if (clampedReasoning === "off") {
+    return { enabled: false };
+  }
   const effort = (
-    clampedReasoning === "off" || clampedReasoning === "max" ? "high" : clampedReasoning
+    clampedReasoning === "max" ? "high" : clampedReasoning
   ) as ClampedGoogleThinkingLevel;
 
   if (
@@ -615,11 +619,11 @@ export function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean
   return /gemma-?4/.test(model.id.toLowerCase());
 }
 
-export function isGemini3ProModel<T extends GoogleApiType>(model: Model<T>): boolean {
+function isGemini3ProModel<T extends GoogleApiType>(model: Model<T>): boolean {
   return /gemini-3(?:\.\d+)?-pro/.test(model.id.toLowerCase());
 }
 
-export function isGemini3FlashModel<T extends GoogleApiType>(model: Model<T>): boolean {
+function isGemini3FlashModel<T extends GoogleApiType>(model: Model<T>): boolean {
   return /gemini-3(?:\.\d+)?-flash/.test(model.id.toLowerCase());
 }
 

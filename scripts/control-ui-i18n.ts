@@ -102,7 +102,7 @@ type RawCopyBaseline = {
 };
 
 const CONTROL_UI_I18N_WORKFLOW = 1;
-const DEFAULT_OPENAI_MODEL = "gpt-5.5";
+const DEFAULT_OPENAI_MODEL = "gpt-5.6-sol";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -426,7 +426,7 @@ function compareStringArrays(left: string[], right: string[]) {
   return left.every((value, index) => value === right[index]);
 }
 
-export type PlaceholderMismatch = {
+type PlaceholderMismatch = {
   key: string;
   locale: string;
   sourcePlaceholders: string[];
@@ -1497,7 +1497,7 @@ async function translateBatch(
   throw lastError ?? new Error("translation failed");
 }
 
-export type NativeTranslationEntry = {
+type NativeTranslationEntry = {
   id: string;
   source: string;
   sourcePath: string;
@@ -1641,6 +1641,23 @@ async function syncLocale(
       text,
       textHash,
     });
+  }
+
+  // Writing NEW English fallbacks trips the shipped-fallback CI gate
+  // (test/scripts/control-ui-i18n.test.ts), and post-merge translation is owned
+  // by the control-ui-locale-refresh workflow. An unauthenticated local sync
+  // must fail here instead of silently recording fallback bundles; refreshing
+  // already-recorded fallback copy (force mode) stays allowed.
+  if (!allowTranslate && options.write && !options.checkOnly && !isProviderAuthOptional()) {
+    const newFallbackKeys = pending.filter((item) => !previousFallbackKeys.has(item.key));
+    if (newFallbackKeys.length > 0) {
+      throw new Error(
+        `${localeLabel}: ${newFallbackKeys.length} new key(s) need translation but no provider is configured. ` +
+          `Commit only locales/en.ts and let the control-ui-locale-refresh workflow translate after merge, ` +
+          `or export ANTHROPIC_API_KEY/OPENAI_API_KEY and rerun. ` +
+          `Set ${ENV_AUTH_OPTIONAL}=1 to record English fallbacks anyway.`,
+      );
+    }
   }
 
   if (allowTranslate && pending.length > 0) {

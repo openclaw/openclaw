@@ -119,7 +119,7 @@ const SUPPORTED_SANDBOX_MODES = ["off", "non-main", "all"] as const;
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
 
-export type PolicyDoctorRegistrationHost = {
+type PolicyDoctorRegistrationHost = {
   readonly registerHealthCheck: (check: HealthCheck) => void;
 };
 

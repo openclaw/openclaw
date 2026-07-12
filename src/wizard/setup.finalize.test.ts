@@ -28,8 +28,11 @@ const resolveLocalControlUiProbeLinks = vi.hoisted(() =>
 );
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
+const resolveDefaultModelAuthStatus = vi.hoisted(() =>
+  vi.fn(() => ({ provider: "anthropic", model: "claude-opus-4-8", hasAuth: true })),
+);
 const buildGatewayInstallPlan = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (_params?: { warn?: (message: string, title?: string) => void }) => ({
     programArguments: [],
     workingDirectory: "/tmp",
     environment: {},
@@ -205,6 +208,13 @@ vi.mock("../../packages/terminal-core/src/restore.js", () => ({
 
 vi.mock("../tui/tui-launch.js", () => ({
   launchTuiCli,
+}));
+
+vi.mock("../commands/auth-choice.js", () => ({
+  applyAuthChoice: vi.fn(),
+  resolveDefaultModelAuthStatus,
+  resolvePreferredProviderForAuthChoice: vi.fn(),
+  warnIfModelConfigLooksOff: vi.fn(),
 }));
 
 vi.mock("./setup.secret-input.js", () => ({
@@ -613,6 +623,61 @@ describe("finalizeSetupWizard", () => {
     );
   });
 
+  it("skips the doomed hatch seed message and warns when model auth is missing", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    resolveDefaultModelAuthStatus.mockReturnValueOnce({
+      provider: "openai",
+      model: "gpt-5.5",
+      hasAuth: false,
+    });
+    const prompter = buildWizardPrompter({
+      confirm: vi.fn(async () => false),
+    });
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: false,
+      },
+      baseConfig: {},
+      nextConfig: {
+        agents: {
+          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+        },
+      },
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(launchTuiCli).toHaveBeenCalledWith(expect.objectContaining({ message: undefined }), {});
+    expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agents: {
+          list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
+        },
+      }),
+      { agentDir: "/tmp/custom-agent" },
+    );
+    expectNoteContains(
+      prompter,
+      'No credentials are configured for provider "openai"',
+      "Model auth missing",
+    );
+  });
+
   it("does not resend the bootstrap hatch message on setup reruns", async () => {
     vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
     const prompter = buildWizardPrompter({
@@ -855,6 +920,58 @@ describe("finalizeSetupWizard", () => {
         },
       }),
     );
+  });
+
+  it("waits for gateway install warnings before installing the service", async () => {
+    let acknowledgeWarning: (() => void) | undefined;
+    const warningAcknowledged = new Promise<void>((resolve) => {
+      acknowledgeWarning = resolve;
+    });
+    const prompter = buildWizardPrompter({
+      select: vi.fn(async () => "later") as never,
+      confirm: vi.fn(async () => false),
+      note: vi.fn(async (message: string) => {
+        if (message === "Gateway install warning") {
+          await warningAcknowledged;
+        }
+      }),
+    });
+    buildGatewayInstallPlan.mockImplementationOnce(async (params) => {
+      params?.warn?.("Gateway install warning", "Gateway service");
+      return {
+        programArguments: [],
+        workingDirectory: "/tmp",
+        environment: {},
+        environmentValueSources: {},
+      };
+    });
+
+    const finalizePromise = finalizeSetupWizard(
+      createAdvancedFinalizeArgs({ installDaemon: true, prompter }),
+    );
+    await vi.waitFor(() => {
+      expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
+    });
+    expect(gatewayServiceInstall).not.toHaveBeenCalled();
+
+    acknowledgeWarning?.();
+    await finalizePromise;
+
+    expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows gateway install warnings when planning fails", async () => {
+    const prompter = createLaterPrompter();
+    buildGatewayInstallPlan.mockImplementationOnce(async (params) => {
+      params?.warn?.("Gateway install warning", "Gateway service");
+      throw new Error("plan failed");
+    });
+
+    await finalizeSetupWizard(createAdvancedFinalizeArgs({ installDaemon: true, prompter }));
+
+    expect(prompter.note).toHaveBeenCalledWith("Gateway install warning", "Gateway service");
+    expectNoteContains(prompter, "plan failed", "Gateway");
+    expect(gatewayServiceInstall).not.toHaveBeenCalled();
   });
 
   it("suppresses token-bearing onboarding output when requested", async () => {

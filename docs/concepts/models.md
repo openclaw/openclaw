@@ -23,7 +23,7 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-A model ref (`provider/model`) chooses a provider and model. It does not usually choose the low-level agent runtime. OpenAI is the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can be opted into the external GitHub Copilot agent runtime plugin, but that path is always explicit (never selected by `auto`). Runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, `openai/gpt-*` does not imply API-key billing; auth can come from a Codex account or an `openai` OAuth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
+A model ref (`provider/model`) chooses a provider and model. It does not usually choose the low-level agent runtime. OpenAI is the main exception: official `openai/gpt-*` agent refs run through the Codex app-server runtime by default. Subscription Copilot refs (`github-copilot/*`) can be opted into the external GitHub Copilot agent runtime plugin, but that path is always explicit (never selected by `auto`). Runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, `openai/gpt-*` does not imply API-key billing; auth can come from a Codex account or an `openai` OAuth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## Selection order
 
@@ -42,7 +42,7 @@ A model ref (`provider/model`) chooses a provider and model. It does not usually
 Related model-config surfaces:
 
 - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use, plus aliases. Use `provider/*` entries to allow every discovered model from a provider without listing each one.
-- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles and supported channel thread/topic titles. Per-agent `agents.list[].utilityModel` overrides it. When unset, these tasks use the agent's primary model. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
+- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles, supported channel thread/topic titles, and progress narration. Per-agent `agents.list[].utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model; set it to an empty string to disable utility routing. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
 - `agents.defaults.pdfModel` is used by the `pdf` tool. If unset, the tool falls back to `imageModel`, then the resolved session/default model.
 - `agents.defaults.imageGenerationModel`, `musicGenerationModel`, and `videoGenerationModel` back the shared media-generation tools. If unset, each tool infers an auth-backed provider default: current default provider first, then the remaining registered providers for that capability in provider-id order. Set `agents.defaults.mediaGenerationAutoProviderFallback: false` to disable that cross-provider inference while keeping explicit fallbacks.
@@ -82,6 +82,13 @@ openclaw onboard
 ```
 
 Sets up model and auth for common providers without hand-editing config, including OpenAI Codex subscription OAuth and Anthropic (API key or Claude CLI reuse).
+
+With no primary model configured, fresh OpenAI API-key setup selects
+`openai/gpt-5.6`; the bare direct-API id resolves to the Sol tier. Fresh
+ChatGPT/Codex OAuth setup selects the exact `openai/gpt-5.6-sol` catalog ref.
+Reauthentication preserves an existing explicit primary model, including
+`openai/gpt-5.5`. If GPT-5.6 is unavailable to the account, select
+`openai/gpt-5.5` explicitly; OpenClaw does not silently downgrade it.
 
 ## "Model is not allowed" (and why replies stop)
 

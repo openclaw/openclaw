@@ -41,6 +41,8 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
       child.stderr?.removeListener("end", onStderrEnd);
       child.stdout?.removeListener("data", onData);
       child.stderr?.removeListener("data", onData);
+      child.stdout?.removeListener("error", onStreamError);
+      child.stderr?.removeListener("error", onStreamError);
     };
 
     const finalize = (code: number | null) => {
@@ -95,6 +97,11 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
       reject(err);
     };
 
+    const onStreamError = () => {
+      // Stream read errors on stdout/stderr are non-fatal; the child process
+      // error/exit/close handlers report the real outcome.
+    };
+
     const onExit = (code: number | null) => {
       exited = true;
       exitCode = code;
@@ -113,6 +120,8 @@ export function waitForChildProcess(child: ChildProcess): Promise<number | null>
 
     child.stdout?.once("end", onStdoutEnd);
     child.stderr?.once("end", onStderrEnd);
+    child.stdout?.on("error", onStreamError);
+    child.stderr?.on("error", onStreamError);
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
     child.once("error", onError);

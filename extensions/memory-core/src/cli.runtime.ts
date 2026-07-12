@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryDreamingConfig,
@@ -10,7 +11,6 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   colorize,
@@ -74,6 +74,36 @@ type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpos
 
 type MemorySourceName = "memory" | "sessions";
 
+type LlamaCppRuntimeStatus = {
+  state?: string;
+  backend?: string;
+  buildType?: string;
+  deviceNames?: string[];
+  memory?: {
+    totalBytes: number;
+    usedBytes: number;
+    freeBytes: number;
+    unifiedBytes: number;
+    observedAtMs: number;
+  };
+  offload?: {
+    supported: boolean;
+    offloadedLayers?: number;
+    totalLayers?: number;
+  };
+  context?: {
+    requestedSize: number | "auto";
+  };
+  loadError?: string;
+};
+
+function readLlamaCppRuntimeStatus(
+  status: ReturnType<MemoryManager["status"]>,
+): LlamaCppRuntimeStatus | null {
+  const runtime = asRecord(asRecord(status.custom)?.llamaCppRuntime);
+  return runtime?.engine === "llama.cpp" ? (runtime as LlamaCppRuntimeStatus) : null;
+}
+
 function formatMemoryIndexIdentityWarning(
   status: ReturnType<MemoryManager["status"]>,
   agentId: string,
@@ -94,6 +124,20 @@ function formatMemoryIndexIdentityWarning(
     reason,
     fix: `Run: openclaw memory status --index --agent ${agentId}`,
   };
+}
+
+function formatRuntimeBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
 type SourceScan = {
@@ -910,6 +954,43 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
     }
+    const llamaCppRuntime = opts.deep ? readLlamaCppRuntimeStatus(status) : null;
+    if (llamaCppRuntime) {
+      const runtime = llamaCppRuntime;
+      const backend = runtime.backend ?? "unknown";
+      const build = runtime.buildType ? ` (${runtime.buildType})` : "";
+      lines.push(`${label("llama.cpp")} ${info(backend)}${muted(build)}`);
+      if (runtime.deviceNames?.length) {
+        lines.push(`${label("Devices")} ${info(runtime.deviceNames.join(", "))}`);
+      }
+      if (runtime.memory) {
+        const unified =
+          runtime.memory.unifiedBytes > 0
+            ? ` · ${formatRuntimeBytes(runtime.memory.unifiedBytes)} unified`
+            : "";
+        lines.push(
+          `${label("VRAM snapshot")} ${info(`${formatRuntimeBytes(runtime.memory.usedBytes)} used · ${formatRuntimeBytes(runtime.memory.freeBytes)} free · ${formatRuntimeBytes(runtime.memory.totalBytes)} total${unified}`)} ${muted(`(${new Date(runtime.memory.observedAtMs).toISOString()})`)}`,
+        );
+      }
+      if (runtime.offload) {
+        const layers =
+          typeof runtime.offload.offloadedLayers === "number" &&
+          typeof runtime.offload.totalLayers === "number"
+            ? `${runtime.offload.offloadedLayers}/${runtime.offload.totalLayers} layers`
+            : runtime.offload.supported
+              ? "supported"
+              : "unsupported";
+        lines.push(`${label("GPU offload")} ${info(layers)}`);
+      }
+      if (runtime.context) {
+        lines.push(
+          `${label("Requested context")} ${info(`${runtime.context.requestedSize} tokens`)}`,
+        );
+      }
+      if (runtime.loadError) {
+        lines.push(`${label("llama.cpp error")} ${warn(runtime.loadError)}`);
+      }
+    }
     const identityWarning = formatMemoryIndexIdentityWarning(status, agentId);
     if (identityWarning) {
       lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
@@ -1465,7 +1546,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           colorize(
             rich,
             theme.muted,
-            `recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
+            `signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} queries=${candidate.uniqueQueries} age=${candidate.ageDays.toFixed(1)}d consolidate=${candidate.components.consolidation.toFixed(2)} conceptual=${candidate.components.conceptual.toFixed(2)}`,
           ),
         );
         if (candidate.conceptTags.length > 0) {
@@ -1580,7 +1661,8 @@ export async function runMemoryPromoteExplain(
           candidate,
           passes: {
             score: candidate.score >= thresholds.minScore,
-            recallCount: candidate.recallCount >= thresholds.minRecallCount,
+            // Engine gate is aggregate signalCount vs minRecallCount (config name unchanged).
+            recallCount: candidate.signalCount >= thresholds.minRecallCount,
             uniqueQueries: candidate.uniqueQueries >= thresholds.minUniqueQueries,
             maxAge:
               thresholds.maxAgeDays === null ? true : candidate.ageDays <= thresholds.maxAgeDays,
@@ -1606,7 +1688,7 @@ export async function runMemoryPromoteExplain(
         colorize(
           rich,
           theme.muted,
-          `score=${candidate.score.toFixed(3)} recallCount=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
+          `score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} uniqueQueries=${candidate.uniqueQueries} ageDays=${candidate.ageDays.toFixed(1)}`,
         ),
         colorize(
           rich,

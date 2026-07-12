@@ -31,8 +31,24 @@ function expectFileInput(input: Element | null | undefined): HTMLInputElement {
   return input;
 }
 
+function expectStatByLabel(container: Element, text: string): HTMLElement {
+  const stat = Array.from(container.querySelectorAll<HTMLElement>(".qs-stat")).find(
+    (candidate) => candidate.querySelector(".qs-stat__label")?.textContent?.trim() === text,
+  );
+  if (!(stat instanceof HTMLElement)) {
+    throw new Error(`Expected system stat "${text}"`);
+  }
+  return stat;
+}
+
 function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettingsProps {
   return {
+    locale: "en",
+    onLocaleChange: vi.fn(),
+    lobsterPetVisits: true,
+    setLobsterPetVisits: () => {},
+    lobsterPetSounds: false,
+    setLobsterPetSounds: () => {},
     currentModel: "gpt-5.5",
     thinkingLevel: "off",
     fastMode: false,
@@ -65,17 +81,13 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     themeMode: "system",
     hasCustomTheme: false,
     customThemeLabel: null,
-    borderRadius: 50,
     textScale: 100,
     setTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
     setThemeMode: vi.fn(),
-    setBorderRadius: vi.fn(),
     setTextScale: vi.fn(),
     userAvatar: null,
     onUserAvatarChange: vi.fn(),
-    configObject: {},
-    onSelectPreset: vi.fn(),
     connected: true,
     gatewayUrl: "ws://localhost:18789",
     assistantName: "OpenClaw",
@@ -123,25 +135,220 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps()), container);
 
     expect(collectQuickSettingsCardKinds(container)).toEqual([
+      "qs-card--general",
       "qs-card--model",
       "qs-card--channels",
       "qs-card--security",
+      "qs-card--system",
       "qs-card--appearance",
       "qs-card--personal",
       "qs-card--automations",
     ]);
-    expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
+    expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(0);
   });
 
-  it("shows the current bootstrap default when config omits the explicit limit", () => {
+  it("changes the Control UI language from General settings", () => {
+    const onLocaleChange = vi.fn();
     const container = document.createElement("div");
 
-    render(renderQuickSettings(createProps({ configObject: {} })), container);
+    render(renderQuickSettings(createProps({ locale: "pt-BR", onLocaleChange })), container);
 
-    const summary = container.querySelector(".qs-profiles__summary-values");
-    expect(summary?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-      "20,000 chars per file · 60,000 chars total · Every turn",
+    const row = expectRowByLabel(container, "Language");
+    const select = row.querySelector("select");
+    expect(select?.value).toBe("pt-BR");
+    if (!(select instanceof HTMLSelectElement)) {
+      throw new Error("Expected language selector");
+    }
+    select.value = "en";
+    select.dispatchEvent(new Event("change"));
+    expect(onLocaleChange).toHaveBeenCalledWith("en");
+  });
+
+  it("renders Gateway host identity and resources", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          systemInfo: {
+            machineName: "Gateway Mac",
+            hostname: "gateway.local",
+            platform: "darwin",
+            release: "25.5.0",
+            arch: "arm64",
+            osLabel: "macOS 26.5.0",
+            lanAddress: "192.168.1.20",
+            port: 18789,
+            nodeVersion: "v24.1.0",
+            pid: 1234,
+            uptimeMs: 3_600_000,
+            cpuCount: 10,
+            cpuModel: "Apple M4",
+            loadAverage: [1.2, 1.1, 0.9],
+            memoryTotalBytes: 34_359_738_368,
+            memoryFreeBytes: 17_179_869_184,
+            diskTotalBytes: 994_662_584_320,
+            diskAvailableBytes: 497_331_292_160,
+            diskPath: "/Users/operator/.openclaw",
+          },
+        }),
+      ),
+      container,
     );
+
+    const name = container.querySelector(".qs-system__name");
+    expect(name?.textContent?.trim()).toBe("Gateway Mac");
+    expect(name?.getAttribute("title")).toBe("gateway.local");
+    expect(container.querySelector(".qs-system__address")?.textContent?.trim()).toBe(
+      "192.168.1.20:18789",
+    );
+    const metas = Array.from(container.querySelectorAll(".qs-system__meta")).map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(metas).toEqual(["macOS 26.5.0 · arm64", "Node v24.1.0 · PID 1234"]);
+    expect(
+      container.querySelector(".qs-card--system .qs-card__header .qs-badge")?.textContent?.trim(),
+    ).toBe("Up 1h");
+
+    const cpu = expectStatByLabel(container, "CPU");
+    expect(cpu.querySelector(".qs-stat__value")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "1.2 load",
+    );
+    expect(cpu.querySelector(".qs-stat__detail")?.textContent?.trim()).toBe("10 cores");
+    expect(cpu.getAttribute("title")).toBe("Apple M4 · Load average: 1.2 · 1.1 · 0.9");
+    expect(cpu.querySelector(".qs-meter")?.getAttribute("aria-valuenow")).toBe("12");
+
+    const memory = expectStatByLabel(container, "Memory");
+    expect(memory.querySelector(".qs-stat__value")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "50% used",
+    );
+    expect(memory.querySelector(".qs-stat__detail")?.textContent?.trim()).toBe(
+      "16 GB free of 32 GB",
+    );
+
+    const disk = expectStatByLabel(container, "Disk");
+    expect(disk.querySelector(".qs-stat__value")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "50% used",
+    );
+    expect(disk.querySelector(".qs-stat__detail")?.textContent?.trim()).toBe(
+      "463 GB free of 926 GB",
+    );
+    expect(disk.getAttribute("title")).toBe("/Users/operator/.openclaw");
+    for (const fill of container.querySelectorAll(".qs-meter__fill")) {
+      expect([...fill.classList]).toContain("qs-meter__fill--ok");
+    }
+  });
+
+  it("escalates meter tones as resources run hot", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          systemInfo: {
+            machineName: "Gateway Mac",
+            hostname: "gateway.local",
+            platform: "darwin",
+            release: "25.5.0",
+            arch: "arm64",
+            osLabel: "macOS 26.5.0",
+            nodeVersion: "v24.1.0",
+            pid: 1234,
+            uptimeMs: 60_000,
+            cpuCount: 10,
+            loadAverage: [9.8, 9.1, 8.4],
+            memoryTotalBytes: 34_359_738_368,
+            memoryFreeBytes: 2_147_483_648,
+            diskTotalBytes: 994_662_584_320,
+            diskAvailableBytes: 198_932_516_864,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const tone = (label: string) =>
+      expectStatByLabel(container, label).querySelector(".qs-meter__fill")?.classList[1];
+    expect(tone("CPU")).toBe("qs-meter__fill--critical");
+    expect(tone("Memory")).toBe("qs-meter__fill--critical");
+    expect(tone("Disk")).toBe("qs-meter__fill--warn");
+  });
+
+  it("hides Gateway host details when the RPC is unavailable", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ systemInfoUnavailable: true })), container);
+
+    expect(container.querySelector(".qs-card--system")).toBeNull();
+  });
+
+  it("reserves the Gateway host card while its first snapshot loads", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps()), container);
+
+    const systemCard = container.querySelector(".qs-card--system");
+    expect(systemCard).not.toBeNull();
+    expect(systemCard?.querySelector(".qs-system__name")?.textContent).toContain("—");
+    for (const label of ["CPU", "Memory", "Disk"]) {
+      const stat = expectStatByLabel(systemCard ?? container, label);
+      expect(stat.querySelector(".qs-stat__value")?.textContent).toContain("—");
+      expect(stat.querySelector(".qs-meter")).toBeNull();
+    }
+    expect(systemCard?.querySelector(".qs-system__address")).toBeNull();
+  });
+
+  it("hides the pending changes bar when the config is clean", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps()), container);
+
+    expect(container.querySelector(".qs-pending")).toBeNull();
+  });
+
+  it("renders pending config actions and calls their handlers", () => {
+    const onResetConfig = vi.fn();
+    const onSaveConfig = vi.fn();
+    const onApplyConfig = vi.fn();
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          configDirty: true,
+          configReady: true,
+          connected: true,
+          onResetConfig,
+          onSaveConfig,
+          onApplyConfig,
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-pending")).not.toBeNull();
+    const discardButton = expectButtonByText(container, "Discard");
+    const saveButton = expectButtonByText(container, "Save");
+    const applyButton = expectButtonByText(container, "Apply Now");
+    expect(saveButton.disabled).toBe(false);
+
+    discardButton.click();
+    saveButton.click();
+    applyButton.click();
+
+    expect(onResetConfig).toHaveBeenCalledTimes(1);
+    expect(onSaveConfig).toHaveBeenCalledTimes(1);
+    expect(onApplyConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables commit actions until the config is ready", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ configDirty: true, configReady: false })), container);
+
+    expect(expectButtonByText(container, "Save").disabled).toBe(true);
+    expect(expectButtonByText(container, "Apply Now").disabled).toBe(true);
+    expect(expectButtonByText(container, "Discard").disabled).toBe(false);
   });
 
   it("keeps auto as a first-class quick settings fast mode", () => {
@@ -264,7 +471,7 @@ describe("renderQuickSettings", () => {
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe("blob:nova");
   });
 
-  it("renders same-origin assistant avatar routes from IDENTITY.md", () => {
+  it("renders same-origin configured assistant avatar routes", () => {
     const container = document.createElement("div");
 
     render(
@@ -285,7 +492,7 @@ describe("renderQuickSettings", () => {
     );
   });
 
-  it("shows the IDENTITY.md avatar source when the assistant falls back to the logo", () => {
+  it("shows the configured avatar source when the assistant falls back to the logo", () => {
     const container = document.createElement("div");
 
     render(
@@ -306,7 +513,7 @@ describe("renderQuickSettings", () => {
       "/apple-touch-icon.png",
     );
     expect(expectAssistantAvatarSource(container)).toEqual({
-      label: "IDENTITY.md",
+      label: "Configured avatar",
       source: "assets/avatars/nova-portrait.png",
     });
     expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
@@ -317,6 +524,95 @@ describe("renderQuickSettings", () => {
         (label) => label.textContent?.trim() === "Choose image",
       ),
     ).toBe(true);
+  });
+
+  it("renders the gateway fallback without retrying a rejected avatar route", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "A",
+          assistantAvatarUrl: "A",
+          assistantAvatarSource: "assets/avatars/missing.png",
+          assistantAvatarStatus: "none",
+          assistantAvatarReason: "missing",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".qs-assistant-avatar--fallback")?.getAttribute("src")).toBe(
+      "/apple-touch-icon.png",
+    );
+    expect(container.querySelector('.qs-assistant-avatar[src*="/avatar/"]')).toBeNull();
+    expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
+      "File not found",
+    );
+  });
+
+  it("shows unreadable avatar failures without retrying the protected route", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantName: "Nova",
+          assistantAvatar: "A",
+          assistantAvatarUrl: "A",
+          assistantAvatarSource: "assets/avatars/avatar.png",
+          assistantAvatarStatus: "none",
+          assistantAvatarReason: "unreadable",
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector('.qs-assistant-avatar[src*="/avatar/"]')).toBeNull();
+    expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
+      "Cannot render avatar",
+    );
+  });
+
+  it("keeps a bounded avatar source free of lone surrogates", () => {
+    const container = document.createElement("div");
+    const source = `${"a".repeat(33)}😀${"m".repeat(20)}😀${"b".repeat(23)}`;
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: source,
+          assistantAvatarStatus: "none",
+        }),
+      ),
+      container,
+    );
+
+    expect(expectAssistantAvatarSource(container).source).toBe(
+      `${"a".repeat(33)}...${"b".repeat(23)}`,
+    );
+  });
+
+  it("keeps a malformed data-image header free of lone surrogates", () => {
+    const container = document.createElement("div");
+    const source = `data:image/${"a".repeat(20)}😀tail`;
+
+    render(
+      renderQuickSettings(
+        createProps({
+          assistantAvatar: "/avatar/main",
+          assistantAvatarUrl: null,
+          assistantAvatarSource: source,
+          assistantAvatarStatus: "none",
+        }),
+      ),
+      container,
+    );
+
+    expect(expectAssistantAvatarSource(container).source).toBe(`data:image/${"a".repeat(20)},...`);
   });
 
   it("reads assistant image imports into an override", () => {
@@ -382,7 +678,7 @@ describe("renderQuickSettings", () => {
     }
   });
 
-  it("can clear an assistant avatar override back to IDENTITY.md", () => {
+  it("can clear an assistant avatar override back to the configured avatar", () => {
     const onAssistantAvatarClearOverride = vi.fn();
     const container = document.createElement("div");
 
@@ -409,7 +705,7 @@ describe("renderQuickSettings", () => {
     expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
   });
 
-  it("lets the browser-local assistant avatar override stale missing IDENTITY.md metadata", () => {
+  it("lets the browser-local assistant avatar override stale missing source metadata", () => {
     const dataUrl = "data:image/png;base64,bG9jYWwtYXNzaXN0YW50";
     const container = document.createElement("div");
 

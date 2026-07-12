@@ -194,6 +194,7 @@ export async function collectStatusScanOverview(params: {
     allowMissingConfigFastPath: params.allowMissingConfigFastPath,
     readConfigSnapshot: async () =>
       (await loadConfigModule()).readBestEffortConfigSnapshot({
+        observe: false,
         skipPluginValidation: params.skipConfigPluginValidation,
       }),
     resolveConfig: async (loadedConfig) =>
@@ -361,7 +362,6 @@ export async function collectStatusScanOverview(params: {
 /** Resolves the summary object from overview data, preserving cold-start fast-path behavior. */
 export async function resolveStatusSummaryFromOverview(params: {
   overview: Pick<StatusScanOverviewResult, "skipColdStartNetworkChecks" | "cfg" | "sourceConfig">;
-  includeChannelSummary?: boolean;
 }) {
   if (params.overview.skipColdStartNetworkChecks) {
     return buildColdStartStatusSummary();
@@ -370,7 +370,8 @@ export async function resolveStatusSummaryFromOverview(params: {
     getStatusSummary({
       config: params.overview.cfg,
       sourceConfig: params.overview.sourceConfig,
-      includeChannelSummary: params.includeChannelSummary,
+      // CLI scans own channel output separately; skip duplicate plugin discovery in the summary.
+      includeChannelSummary: false,
     }),
   );
 }

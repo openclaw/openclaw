@@ -29,6 +29,7 @@ function createFixture(
   const snapshot: ApplicationGatewaySnapshot = {
     client: { request } as unknown as ApplicationGatewaySnapshot["client"],
     connected: true,
+    reconnecting: false,
     hello: null,
     assistantAgentId: "research",
     sessionKey: "global",
@@ -46,7 +47,7 @@ function createFixture(
       get snapshot() {
         return snapshot;
       },
-      connection: { gatewayUrl: "", token: "", password: "" },
+      connection: { gatewayUrl: "", token: "", bootstrapToken: "", password: "" },
       eventLog: [],
       connect: vi.fn(),
       setSessionKey: vi.fn(),

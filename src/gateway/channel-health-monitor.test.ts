@@ -14,6 +14,8 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     startChannels: vi.fn(async () => {}),
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
+    setAutostartSuppression: vi.fn(),
+    getAutostartSuppression: vi.fn(() => null),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
@@ -248,6 +250,38 @@ describe("channel-health-monitor", () => {
     const monitor = await startAndRunCheck(manager);
     expect(manager.stopChannel).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("treats crash-loop suppressed accounts as expected stopped", async () => {
+    let suppressed = true;
+    const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: managedStoppedAccount("safe mode"),
+        },
+      },
+      {
+        getAutostartSuppression: vi.fn(() => (suppressed ? suppression : null)),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 100,
+      cooldownCycles: 0,
+      maxRestartsPerHour: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(350);
+
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+
+    suppressed = false;
+    await vi.advanceTimersByTimeAsync(101);
+
+    expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
     monitor.stop();
   });
 

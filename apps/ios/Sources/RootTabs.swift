@@ -202,6 +202,9 @@ struct RootTabs: View {
 
             SettingsProTab(
                 initialRoute: self.selectedSettingsRoute,
+                acceptsGatewaySetupRequests: !self.showOnboarding &&
+                    self.selectedTab == .settings &&
+                    self.selectedSettingsRoute == .gateway,
                 onRouteChange: self.handleSettingsRouteChange,
                 gatewaySetupRequest: self.gatewaySetupRequest,
                 onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
@@ -477,6 +480,13 @@ struct RootTabs: View {
             CommandSessionsScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 openChat: { self.selectSidebarDestination(.chat) })
+        case .files:
+            AgentProTab(
+                directRoute: .files,
+                headerLeadingAction: self.sidebarHeaderLeadingAction,
+                headerTitle: "Files",
+                openSettings: { self.selectSidebarDestination(.gateway) })
+                .id(self.selectedSidebarDestination.id)
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
@@ -512,28 +522,29 @@ struct RootTabs: View {
                     directRoute: selectedSettingsRoute,
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
-                    navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange,
+                    navigateToRoute: pushSidebarSettingsRoute,
+                    onRouteChange: handleSettingsRouteChange,
                     gatewaySetupRequest: self.gatewaySetupRequest,
-                    onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
+                    onGatewaySetupRequestHandled: handleGatewaySetupRequest)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
                     ownsNavigationStack: false,
-                    navigateToRoute: self.pushSidebarSettingsRoute,
-                    onRouteChange: self.handleSettingsRouteChange,
+                    navigateToRoute: pushSidebarSettingsRoute,
+                    onRouteChange: handleSettingsRouteChange,
                     gatewaySetupRequest: self.gatewaySetupRequest,
-                    onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
+                    onGatewaySetupRequestHandled: handleGatewaySetupRequest)
             }
         case .gateway:
             SettingsProTab(
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
+                acceptsGatewaySetupRequests: !self.showOnboarding,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 ownsNavigationStack: false,
-                navigateToRoute: self.pushSidebarSettingsRoute,
-                onRouteChange: self.handleSettingsRouteChange,
+                navigateToRoute: pushSidebarSettingsRoute,
+                onRouteChange: handleSettingsRouteChange,
                 gatewaySetupRequest: self.gatewaySetupRequest,
-                onGatewaySetupRequestHandled: self.handleGatewaySetupRequest)
+                onGatewaySetupRequestHandled: handleGatewaySetupRequest)
         }
     }
 
@@ -677,7 +688,7 @@ struct RootTabs: View {
     private var activeGatewayProblemToast: GatewayConnectionProblem? {
         // Operator-scope auth/pairing failures can coexist with a connected node.
         // The problem itself, not aggregate gateway status, owns toast visibility.
-        guard let problem = self.appModel.lastGatewayProblem,
+        guard let problem = appModel.lastGatewayProblem,
               !self.isGatewayToastSwipeDismissed
         else { return nil }
         return problem
@@ -690,7 +701,7 @@ struct RootTabs: View {
     private func gatewayProblemToast(_ problem: GatewayConnectionProblem) -> some View {
         GatewayProblemBanner(
             problem: problem,
-            primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
+            primaryActionTitle: gatewayProblemPrimaryActionTitle(problem),
             onPrimaryAction: {
                 self.handleGatewayProblemPrimaryAction(problem)
             },
@@ -898,10 +909,13 @@ struct RootTabs: View {
             .sheet(item: self.$presentedSheet) { sheet in
                 switch sheet {
                 case .quickSetup:
-                    GatewayQuickSetupSheet()
-                        .environment(self.appModel)
-                        .environment(self.gatewayController)
-                        .openClawSheetChrome()
+                    GatewayQuickSetupSheet(onUseManualSetup: {
+                        self.presentedSheet = nil
+                        self.selectSettingsRoute(.gateway)
+                    })
+                    .environment(self.appModel)
+                    .environment(self.gatewayController)
+                    .openClawSheetChrome()
                 }
             }
             .fullScreenCover(isPresented: self.$showOnboarding) {
@@ -914,14 +928,14 @@ struct RootTabs: View {
                         self.showOnboarding = false
                     },
                     onComplete: {
-                        self.selectSidebarDestination(.chat)
                         self.showOnboarding = false
+                        self.selectSidebarDestination(.chat)
                     })
                     .environment(self.appModel)
                     .environment(self.voiceWake)
                     .environment(self.gatewayController)
             }
-            .gatewayTrustPromptAlert()
+            .gatewayTrustPromptAlert(isEnabled: !self.showOnboarding)
             .deepLinkAgentPromptAlert()
             .execApprovalPromptDialog(
                 suppressedApprovalID: self.activeExecApprovalPromptSuppressionID)
@@ -939,7 +953,9 @@ struct RootTabs: View {
         UIApplication.shared.isIdleTimerDisabled =
             self.scenePhase == .active && (self.preventSleep || self.appModel.talkMode.isEnabled)
     }
+}
 
+extension RootTabs {
     private func updateCanvasState() {
         self.updateHomeCanvasState()
         self.updateCanvasDebugStatus()
@@ -965,8 +981,8 @@ struct RootTabs: View {
     }
 
     private func makeHomeCanvasPayload() -> RootTabsHomeCanvasPayload {
-        let gatewayName = self.normalized(self.appModel.gatewayServerName)
-        let gatewayAddress = self.normalized(self.appModel.gatewayRemoteAddress)
+        let gatewayName = normalized(appModel.gatewayServerName)
+        let gatewayAddress = normalized(appModel.gatewayRemoteAddress)
         let gatewayLabel = gatewayName ?? gatewayAddress ?? "Gateway"
         let activeAgentID = self.resolveActiveAgentID()
         let agents = self.homeCanvasAgents(activeAgentID: activeAgentID)
@@ -1019,7 +1035,7 @@ struct RootTabs: View {
     }
 
     private func resolveActiveAgentID() -> String {
-        let selected = self.normalized(self.appModel.selectedAgentId) ?? ""
+        let selected = normalized(appModel.selectedAgentId) ?? ""
         if !selected.isEmpty {
             return selected
         }
@@ -1027,7 +1043,7 @@ struct RootTabs: View {
     }
 
     private func resolveDefaultAgentID() -> String {
-        self.normalized(self.appModel.gatewayDefaultAgentId) ?? ""
+        normalized(self.appModel.gatewayDefaultAgentId) ?? ""
     }
 
     private func homeCanvasAgents(activeAgentID: String) -> [RootTabsHomeCanvasAgentCard] {
@@ -1052,7 +1068,7 @@ struct RootTabs: View {
     }
 
     private func homeCanvasName(for agent: AgentSummary) -> String {
-        self.normalized(agent.name) ?? agent.id
+        normalized(agent.name) ?? agent.id
     }
 }
 
@@ -1123,7 +1139,7 @@ extension RootTabs {
     }
 
     private func requestPhoneControlNavigation(_ target: PhoneControlNavigationRequest.Target) {
-        let requestID = (self.phoneControlNavigationRequest?.id ?? 0) &+ 1
+        let requestID = (phoneControlNavigationRequest?.id ?? 0) &+ 1
         self.phoneControlNavigationRequest = PhoneControlNavigationRequest(id: requestID, target: target)
     }
 
@@ -1231,13 +1247,15 @@ extension RootTabs {
         if problem.suggestsOnboardingReset {
             // Reset bumps onboarding.requestID, which re-presents the wizard.
             let instanceId = UserDefaults.standard.string(forKey: "node.instanceId") ?? ""
-            GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)
+            Task {
+                await GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)
+            }
         } else if problem.canTrustRotatedCertificate {
             Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
-        } else if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+        } else if GatewayProblemPrimaryAction.handleProtocolMismatchIfNeeded(problem) {
             return
         } else if problem.retryable {
-            Task { await self.gatewayController.connectLastKnown() }
+            Task { await self.gatewayController.connectActiveGateway() }
         } else {
             self.selectSidebarDestination(.gateway)
         }
@@ -1273,7 +1291,7 @@ extension RootTabs {
 
     private func hasExistingGatewayConfig() -> Bool {
         if self.appModel.activeGatewayConnectConfig != nil { return true }
-        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return true }
+        if GatewaySettingsStore.activeGatewayEntry() != nil { return true }
 
         let preferredStableID = self.preferredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         if !preferredStableID.isEmpty { return true }
@@ -1300,7 +1318,9 @@ extension RootTabs {
     private func maybeOpenSettingsForGatewaySetup() {
         let requestID = self.appModel.gatewaySetupRequestID
         guard requestID != 0, requestID != self.gatewaySetupRequest?.id else { return }
-        guard let link = self.appModel.consumePendingGatewaySetupLink() else { return }
+        // The presented onboarding flow owns setup-link staging until it dismisses.
+        guard !self.showOnboarding else { return }
+        guard let link = appModel.consumePendingGatewaySetupLink() else { return }
         self.showOnboarding = false
         self.presentedSheet = nil
         self.didAutoOpenSettings = true

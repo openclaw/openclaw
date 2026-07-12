@@ -85,7 +85,7 @@ describe("operator approval gateway client runtime token source", () => {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
-      deferStartupSidecars: true,
+      sidecarStartup: "defer",
     });
     cleanup.push(() => server.close());
 

@@ -2,6 +2,7 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
 import {
   convertMarkdownTables,
@@ -97,9 +98,10 @@ function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; account
   const listener =
     getRegisteredWhatsAppConnectionController(resolvedAccountId)?.getActiveListener() ?? null;
   if (!listener) {
-    throw new Error(
+    const cause = new Error(
       `No active WhatsApp Web listener (account: ${resolvedAccountId}). Start the gateway, then link WhatsApp with: ${formatCliCommand(`openclaw channels login --channel whatsapp --account ${resolvedAccountId}`)}.`,
     );
+    throw new PlatformMessageNotDispatchedError(cause.message, { cause });
   }
   return { accountId: resolvedAccountId, listener };
 }
@@ -225,6 +227,7 @@ export async function sendMessageWhatsApp(
     outboundLog.info(`Sending message -> ${redactedJid}${hasMedia ? " (media)" : ""}`);
     logger.info({ jid: redactedJid, hasMedia }, "sending message");
     if (!isWhatsAppNewsletterJid(jid)) {
+      await active.assertSendReady?.(to);
       await active.sendComposingTo(to);
     }
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
@@ -293,6 +296,7 @@ export async function sendTypingWhatsApp(
     accountId: options.accountId,
   });
   if (!isWhatsAppNewsletterJid(toWhatsappJid(to))) {
+    await active.assertSendReady?.(to);
     await active.sendComposingTo(to);
   }
 }
@@ -376,6 +380,9 @@ export async function sendPollWhatsApp(
       },
       "sending poll",
     );
+    if (!isWhatsAppNewsletterJid(jid)) {
+      await active.assertSendReady?.(to);
+    }
     const result = await active.sendPoll(to, normalized);
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;

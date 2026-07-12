@@ -150,6 +150,15 @@ export async function sendTelegramText(
       reasons: richPlan.degradationReasons,
       warn: (message) => runtime.log?.(message),
     });
+    if (!richPlan.richMessage.html?.trim()) {
+      if (!hasFallbackText) {
+        throw new Error(
+          "telegram sendRichMessage failed: empty rich text and empty plain fallback",
+        );
+      }
+      runtime.log?.("telegram sendRichMessage rendered empty; falling back to plain text");
+      return await sendPlainFallback();
+    }
     try {
       const res = await sendTelegramWithThreadFallback({
         operation: "sendRichMessage",

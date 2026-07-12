@@ -14,6 +14,9 @@ export const DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS = 30 * 60 * 1000;
  * Periodic checkpoints default to PASSIVE.
  */
 export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = DEFAULT_SQLITE_WAL_CHECKPOINT_INTERVAL_MS;
+// 512 pages (~2MB at 4KB pages) per periodic pass keeps page release strictly
+// bounded so maintenance can never behave like a blocking full VACUUM.
+const INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS = 512;
 const LINUX_NFS_SUPER_MAGIC = 0x6969;
 const LINUX_SMB_SUPER_MAGIC = 0x517b;
 const LINUX_CIFS_SUPER_MAGIC = 0xff534d42;
@@ -274,6 +277,19 @@ function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintena
   }
 }
 
+function enableMacosCheckpointFullfsync(db: DatabaseSync): void {
+  if (process.platform !== "darwin") {
+    return;
+  }
+  try {
+    db.exec("PRAGMA checkpoint_fullfsync = 1;");
+  } catch {
+    // Older SQLite builds may ignore or reject platform-specific pragmas. WAL
+    // setup should still proceed because this is a durability upgrade, not a
+    // prerequisite for opening the store.
+  }
+}
+
 function refuseUnsupportedFilesystem(options: SqliteWalMaintenanceOptions): never {
   const label = options.databaseLabel ?? "sqlite database";
   const location = options.databasePath ? ` at ${options.databasePath}` : "";
@@ -312,6 +328,7 @@ export function configureSqliteWalMaintenance(
     };
   }
   db.exec("PRAGMA journal_mode = WAL;");
+  enableMacosCheckpointFullfsync(db);
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
 
   const runCheckpoint = (mode: SqliteWalCheckpointMode): boolean => {
@@ -324,14 +341,25 @@ export function configureSqliteWalMaintenance(
     }
   };
 
+  // Bounded page release for databases opened with auto_vacuum=INCREMENTAL.
+  // A no-op elsewhere, and never a blocking full VACUUM: unbounded vacuums on
+  // the event loop have starved channel sockets in production (#83712).
+  const runIncrementalVacuum = (): void => {
+    try {
+      db.exec(`PRAGMA incremental_vacuum(${INCREMENTAL_VACUUM_MAX_PAGES_PER_PASS});`);
+    } catch (error) {
+      options.onCheckpointError?.(error);
+    }
+  };
+
   const checkpoint = (): boolean => runCheckpoint(checkpointMode);
 
   let timer: IntervalHandle | null = null;
   if (timerIntervalMs > 0) {
-    timer = setInterval(
-      () => runCheckpoint(periodicCheckpointMode),
-      timerIntervalMs,
-    ) as IntervalHandle;
+    timer = setInterval(() => {
+      runCheckpoint(periodicCheckpointMode);
+      runIncrementalVacuum();
+    }, timerIntervalMs) as IntervalHandle;
     timer.unref?.();
   }
 
@@ -344,6 +372,25 @@ export function configureSqliteWalMaintenance(
       }
       return checkpoint();
     },
+  };
+}
+
+/**
+ * Register a best-effort exit-time close for a SQLite handle cache. Returns an
+ * unregister callback the cache's orderly close path must invoke, so tests and
+ * runtime shutdowns do not accumulate listeners on shared worker processes.
+ */
+export function registerSqliteCacheExitClose(closeAll: () => void): () => void {
+  const closeOnExit = () => {
+    try {
+      closeAll();
+    } catch {
+      // Exit-time close is best-effort; unclean exits rely on WAL recovery.
+    }
+  };
+  process.once("exit", closeOnExit);
+  return () => {
+    process.removeListener("exit", closeOnExit);
   };
 }
 

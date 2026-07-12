@@ -287,6 +287,12 @@ When the current session has no visible linked tasks, `/tasks` falls back to age
 
 For the full operator ledger, use the CLI: `openclaw tasks list`.
 
+### Control UI
+
+The web Control UI has a **Tasks** page in the sidebar with live active and recent background tasks. Use it to inspect progress, open linked sessions, refresh the ledger, or cancel queued and running tasks.
+
+Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent: running tasks and subagents with a stop control, a finished section, and View transcript links into each task's child session. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
+
 ## Status integration (task pressure)
 
 `openclaw status` includes an at-a-glance task line:

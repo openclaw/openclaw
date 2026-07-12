@@ -30,6 +30,10 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TResult
 > & {
   displaySummary?: string;
+  /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
+  catalogMode?: "direct-only";
+  /** Gateway client capabilities required before this tool can be assembled. */
+  requiredClientCaps?: string[];
   prepareBeforeToolCallParams?: (
     params: unknown,
     ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
@@ -50,6 +54,10 @@ type ErasedAgentToolExecute = {
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
     displaySummary?: string;
+    /** Keep this tool model-visible; hidden catalog bridges cannot preserve its result contract. */
+    catalogMode?: "direct-only";
+    /** Gateway client capabilities required before this tool can be assembled. */
+    requiredClientCaps?: string[];
     prepareBeforeToolCallParams?: AgentToolWithMeta<
       TSchema,
       unknown
@@ -301,7 +309,8 @@ export function readFiniteNumberParam(
     strict: true,
   });
   if (value === undefined) {
-    if (readParamRaw(params, key) != null) {
+    const raw = readParamRaw(params, key);
+    if (raw != null && !isBlankParamValue(raw)) {
       throw new ToolInputError(options.message ?? `${key} must be a finite number`);
     }
     return undefined;

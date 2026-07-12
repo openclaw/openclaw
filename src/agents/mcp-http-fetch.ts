@@ -61,10 +61,8 @@ async function ensureGlobalFetchResponse(response: Response): Promise<Response> 
   if (response.status === 204 || response.status === 205 || response.status === 304) {
     return new Response(null, init);
   }
-  if (typeof response.text === "function") {
-    const text = await response.text();
-    return new Response(text, init);
-  }
+  // A body-less foreign Response exposes no bounded reader. Calling text() or
+  // arrayBuffer() can allocate an attacker-controlled body before any cap applies.
   return new Response(null, init);
 }
 

@@ -2,6 +2,21 @@ import Foundation
 import Testing
 
 struct RootTabsSourceGuardTests {
+    @Test func `app applies initial scene phase before gateway admission`() throws {
+        let source = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
+        let startupTask = try Self.extract(
+            source,
+            from: ".task {",
+            to: ".onReceive(")
+        let modelPhase = try #require(startupTask.range(of: "self.appModel.setScenePhase(self.scenePhase)"))
+        let gatewayPhase = try #require(
+            startupTask.range(of: "self.gatewayController.setScenePhase(self.scenePhase)"))
+
+        #expect(source.contains("NodeAppModel(audioAdmissionInitiallyAllowed: false)"))
+        #expect(modelPhase.lowerBound < gatewayPhase.lowerBound)
+        #expect(startupTask.contains("self.appDelegate.scenePhaseChanged(self.scenePhase)"))
+    }
+
     @Test func `hidden sidebar reveal uses destination header without reserved rail`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let componentSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
@@ -251,7 +266,9 @@ struct RootTabsSourceGuardTests {
         #expect(!gatewayStatus.contains("Capsule()"))
         #expect(agentDestinationsSource.contains("List {"))
         #expect(agentDestinationsSource.contains(".searchable(text: self.$agentSearchText"))
-        #expect(agentFilterMenu.contains("Picker(\"Agent status\""))
+        #expect(
+            agentFilterMenu.contains("Picker(selection: self.$agentRosterFilter)")
+                && agentFilterMenu.contains("Text(\"Agent status\")"))
         #expect(!agentFilterMenu.contains(".pickerStyle(.segmented)"))
         #expect(agentFilterMenu.contains("agent-status-filter-menu"))
         #expect(!agentRow.contains("agentMetric"))
@@ -280,6 +297,7 @@ struct RootTabsSourceGuardTests {
 
     @Test func `settings about page shows concise public device details`() throws {
         let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let supportSource = try String(contentsOf: Self.settingsProTabSupportSourceURL(), encoding: .utf8)
         let aboutDestination = try Self.extract(
             settingsSource,
             from: "var aboutDestination: some View",
@@ -291,17 +309,26 @@ struct RootTabsSourceGuardTests {
 
         #expect(!aboutDestination.contains("detailStatusCard("))
         #expect(aboutDestination.contains("detailListCard"))
-        #expect(aboutDestination.contains("self.detailRow(\"OpenClaw app version\""))
-        #expect(aboutDestination.contains("self.detailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
+        #expect(aboutDestination.contains("SettingsBuildMetadataStrip(metadata: DeviceInfoHelper.buildMetadata())"))
+        #expect(!aboutDestination.contains("SettingsDetailRow(\"OpenClaw app version\""))
+        #expect(aboutDestination.contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
         #expect(aboutDestination
-            .contains("self.detailRow(\"iOS\", value: DeviceInfoHelper.iOSVersionStringForDisplay())"))
-        #expect(!aboutDestination.contains("self.detailRow(\"Version\""))
-        #expect(!aboutDestination.contains("self.detailRow(\"Platform\""))
-        #expect(!aboutDestination.contains("self.detailRow(\"Model\""))
-        #expect(diagnosticsDestination.contains("self.detailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
+            .contains("SettingsDetailRow(\"iOS\", value: DeviceInfoHelper.iOSVersionStringForDisplay())"))
+        #expect(!aboutDestination.contains("SettingsDetailRow(\"Version\""))
+        #expect(!aboutDestination.contains("SettingsDetailRow(\"Platform\""))
+        #expect(!aboutDestination.contains("SettingsDetailRow(\"Model\""))
+        #expect(supportSource.contains("title: \"Version\""))
+        #expect(supportSource.contains("title: \"Commit\""))
+        #expect(supportSource.contains("title: \"Built\""))
+        #expect(supportSource.contains("ViewThatFits(in: .horizontal)"))
+        #expect(supportSource.contains("Text(\"Unavailable\")"))
+        #expect(supportSource.contains(".textCase(.uppercase)"))
         #expect(diagnosticsDestination
-            .contains("self.detailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
-        #expect(diagnosticsDestination.contains("self.detailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
+            .contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
+        #expect(diagnosticsDestination
+            .contains("SettingsDetailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
+        #expect(diagnosticsDestination
+            .contains("SettingsDetailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
     }
 
     @Test func `routed headers use shared adaptive layout`() throws {
@@ -380,22 +407,33 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("safeAreaPadding(.bottom"))
     }
 
-    @Test func `phone hub stays task first without duplicating root tabs`() throws {
+    @Test func `phone hub promotes chat and talk while filtering root tabs from its destination list`() throws {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
-        #expect(source.contains("private var gatewayRow: some View"))
-        #expect(source.contains(".accessibilityLabel(\"Gateway \\(self.gatewayStateText),"))
+        #expect(source.contains("private var gatewayHeader: some View"))
+        #expect(source.contains("private var gatewayIdentityTitle: some View"))
+        #expect(source.contains("Text(verbatim: gatewayDisplayLabel)"))
+        #expect(source.contains("Text(\"Gateway\")"))
+        #expect(source.contains(".accessibilityLabel(self.gatewayAccessibilityLabel)"))
+        #expect(source.contains("private var chatTalkRow: some View"))
+        #expect(source.contains(
+            ".listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))"))
+        #expect(source.contains("self.prominentDestinationCard(\n                .chat,"))
+        #expect(source.contains("self.prominentDestinationCard(\n                .talk,"))
+        #expect(source.contains("private var phoneDestinations: [RootTabs.SidebarDestination]"))
+        #expect(source.contains("self.groups.flatMap(\\.destinations).filter { !self.opensRootTab($0) }"))
+        #expect(source.contains("private struct ControlCircleIcon: View"))
+        #expect(source.contains(".foregroundStyle(self.iconForegroundStyle)"))
         #expect(!source.contains("ProValuePill(value: self.gatewayStateText"))
         #expect(!source.contains("destination.subtitle"))
         #expect(source.contains("self.openGatewayDetail()"))
         #expect(!source.contains("self.openPhoneRootDestination(.gateway)"))
-        #expect(source.contains("group.destinations.filter { !self.opensRootTab($0) }"))
         #expect(!source.contains("phoneDetailBackAction"))
         #expect(!source.contains(".navigationBarBackButtonHidden(true)"))
         #expect(!source.contains(".toolbar(.hidden, for: .navigationBar)"))
         #expect(source.matches(of: /usesNativeNavigationChrome: true/).count == 7)
         #expect(!source.contains("directRoute: .agents"))
-        #expect(!source.contains("Image(systemName: \"gearshape\")"))
+        #expect(source.contains("Image(systemName: \"slider.horizontal.3\")"))
         #expect(!source.contains("self.metric(label:"))
         #expect(!source.contains("private func metric(label:"))
     }
@@ -414,7 +452,9 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains("self.navigationPath.append(.gateway)"))
         #expect(clearRange.lowerBound < openRange.lowerBound)
     }
+}
 
+extension RootTabsSourceGuardTests {
     @Test func `workboard uses real gateway methods`() throws {
         let source = try String(contentsOf: Self.iPadWorkboardScreenSourceURL(), encoding: .utf8)
 
@@ -473,21 +513,21 @@ struct RootTabsSourceGuardTests {
 
     @Test func `task scope controls send real gateway params`() throws {
         let source = try Self.iPadTaskFeatureScreensSource()
+        let dispatchPattern =
+            /method: "workboard\.cards\.dispatch"[\s\S]*?IPadWorkboardListParams\(boardId: selectedBoardParam\)/
 
         #expect(source.contains("private var boardScopeMenu: some View"))
         #expect(source.contains("method: \"workboard.boards.list\""))
         #expect(source.contains("IPadWorkboardListParams(boardId: selectedBoardParam)"))
         #expect(source.contains("boardId: selectedBoardParam"))
-        #expect(source
-            .matches(
-                of: /method: "workboard\.cards\.dispatch"[\s\S]*?IPadWorkboardListParams\(boardId: selectedBoardParam\)/)
-            .count == 1)
+        #expect(source.matches(of: dispatchPattern).count == 1)
         #expect(source.contains("private var agentScopeMenu: some View"))
         #expect(source.contains("IPadSkillProposalListParams(agentId: selectedAgentParam)"))
         #expect(source.contains("agentId: selectedAgentParam"))
         #expect(!source
             .contains(
-                "params: EmptyParams(),\n                timeoutSeconds: 20)\n            let response = try JSONDecoder().decode(IPadSkillProposalManifest.self"))
+                "params: EmptyParams(),\n                timeoutSeconds: 20)\n"
+                    + "            let response = try JSONDecoder().decode(IPadSkillProposalManifest.self"))
     }
 
     @Test func `compact task rows keep phone native actions`() throws {
@@ -629,7 +669,9 @@ struct RootTabsSourceGuardTests {
 
         #expect(activitySource.contains("struct IPadActivityScreen: View"))
         #expect(activitySource.contains("self.appModel.makeChatTransport()"))
-        #expect(appModelSource.contains("return IOSGatewayChatTransport(gateway: self.operatorSession)"))
+        #expect(appModelSource.contains("return IOSGatewayChatTransport("))
+        #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
+        #expect(!appModelSource.contains("defaultAgentId: self.gatewayDefaultAgentId"))
         #expect(activitySource.contains("IPadSidebarScreenChrome("))
         #expect(!taskSource.contains("struct IPadActivityScreen"))
         #expect(!taskSource.contains("import OpenClawChatUI"))
@@ -678,6 +720,11 @@ struct RootTabsSourceGuardTests {
         let notificationGuidanceSource = try String(
             contentsOf: Self.notificationPermissionGuidanceDialogSourceURL(),
             encoding: .utf8)
+        let settingsRoutePattern = try Regex(
+            #"case \.settings:[\s\S]*?SettingsProTab\("#
+                + #"[\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,"#
+                + #"[\s\S]*?ownsNavigationStack: false"#
+                + #"[\s\S]*?onRouteChange: handleSettingsRouteChange"#)
 
         #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
         #expect(rootSource.matches(of: /openVoiceSettings: \{ openSettingsRoute\(\.voice\) \}/).count == 1)
@@ -703,10 +750,7 @@ struct RootTabsSourceGuardTests {
         #expect(docsSource.contains(".openClawGlassButton()"))
         #expect(settingsSource.contains("NavigationLink(value: SettingsRoute.gateway)"))
         #expect(rootSource.contains("case .settings:"))
-        #expect(rootSource
-            .matches(
-                of: /case \.settings:[\s\S]*?SettingsProTab\([\s\S]*?headerLeadingAction: self\.sidebarHeaderLeadingAction,[\s\S]*?ownsNavigationStack: false[\s\S]*?onRouteChange: self\.handleSettingsRouteChange/)
-            .count >= 1)
+        #expect(rootSource.matches(of: settingsRoutePattern).count >= 1)
         #expect(rootSource
             .contains(
                 "directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway"))
@@ -727,8 +771,8 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.selectedSettingsRoute = nil"))
         #expect(rootSource.contains("self.selectedSidebarDestination = .settings"))
         #expect(rootSource.contains("self.suppressedExecApprovalPromptIDForNotificationSettings = approvalId"))
-        #expect(rootSource.contains("onRouteChange: self.handleSettingsRouteChange"))
-        #expect(rootSource.contains("navigateToRoute: self.pushSidebarSettingsRoute"))
+        #expect(rootSource.contains("onRouteChange: handleSettingsRouteChange"))
+        #expect(rootSource.contains("navigateToRoute: pushSidebarSettingsRoute"))
         #expect(rootSource.contains("private func pushSidebarSettingsRoute(_ route: SettingsRoute)"))
         #expect(rootSource.contains("self.sidebarNavigationPath.append(route)"))
         #expect(settingsTabSource.contains("let navigateToRoute: ((SettingsRoute) -> Void)?"))
@@ -755,6 +799,7 @@ struct RootTabsSourceGuardTests {
         let modelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
 
         #expect(appSource.contains("PushEnrollmentConsent.disclosureAccepted"))
+        #expect(appSource.contains("NotificationServingPreference.isEnabled()"))
         #expect(appSource.contains("await Self.isNotificationAuthorizationAllowed()"))
         #expect(actionsSource.contains("PushEnrollmentConsent.markDisclosureAccepted()"))
         #expect(actionsSource.contains("self.registerForRemoteNotificationsIfEnrollmentReady()"))
@@ -763,81 +808,231 @@ struct RootTabsSourceGuardTests {
         #expect(modelSource.contains("enrollment_disclosure_not_accepted"))
     }
 
-    @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {
-        let settingsSource = try String(contentsOf: Self.settingsProTabSourceURL(), encoding: .utf8)
+    @Test func `notification preference lives in privacy and keeps system authority separate`() throws {
         let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
         let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
-        let trustSource = try String(contentsOf: Self.gatewayTrustPromptAlertSourceURL(), encoding: .utf8)
-        let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
+        let settingsList = try Self.extract(
+            sectionsSource,
+            from: "@ViewBuilder var settingsListSection: some View",
+            to: "func settingsListRow(")
+        let privacyDestination = try Self.extract(
+            sectionsSource,
+            from: "var privacyDestination: some View",
+            to: "var notificationsDestination: some View")
+        let locationCard = try Self.extract(
+            sectionsSource,
+            from: "var locationModeCard: some View",
+            to: "var agentSelectionCard: some View")
+        let pendingLocationApplication = try Self.extract(
+            actionsSource,
+            from: "func applyPendingLocationModeIfAvailable()",
+            to: "func openLocationSettings()")
+
+        #expect(!settingsList.contains("route: .notifications"))
+        #expect(privacyDestination.contains("self.notificationsSection"))
+        #expect(privacyDestination.contains("title: \"Camera Access\""))
+        #expect(privacyDestination.contains("self.locationModeCard"))
+        #expect(privacyDestination.contains("title: \"Background Listening\""))
+        #expect(!privacyDestination.contains("title: \"Privacy\""))
+        #expect(
+            sectionsSource.contains("Toggle(isOn: self.notificationToggleBinding)")
+                && sectionsSource.contains("Text(\"Notifications\")"))
+        #expect(locationCard.contains("Text(\"Location\")"))
+        #expect(locationCard.contains(".font(OpenClawType.body)"))
+        #expect(locationCard.contains(".accessibilityLabel(\"Location Sharing\")"))
+        #expect(!locationCard.contains("Text(\"Location Sharing\")"))
+        #expect(!locationCard.contains("SettingsIcon("))
+        #expect(locationCard.contains("Text(\"Access Level\")"))
+        #expect(!locationCard.contains("Text(\"Open iOS Settings\")"))
+        #expect(locationCard.contains(".opacity(self.isChangingLocationMode ? 0 : 1)"))
+        #expect(locationCard.contains(".multilineTextAlignment(.trailing)"))
+        #expect(locationCard.contains(".lineLimit(2)"))
+        #expect(locationCard.contains(".accessibilityElement(children: .ignore)"))
+        #expect(locationCard.contains(".accessibilityLabel(\"Access Level\")"))
+        #expect(!locationCard.contains(".minimumScaleFactor("))
+        #expect(locationCard.contains("showLocationAccessDialog"))
+        #expect(locationCard.contains("chevron.up.chevron.down"))
+        #expect(locationCard.contains("Chooses While Using the App or Always"))
+        #expect(!locationCard.contains("Picker(\"Location\""))
+        #expect(!locationCard.contains("Text(\"While Using\")"))
+        #expect(!locationCard.contains("Choose a location mode"))
+        #expect(!actionsSource.contains("Location permission was not granted."))
+        #expect(!actionsSource.contains("presentation.showsOpenSettingsAction"))
+        #expect(actionsSource.contains("func selectLocationAccessLevel"))
+        #expect(actionsSource.contains("presentation.accessLevelAction(mode: mode)"))
+        #expect(actionsSource.contains("self.pendingLocationMode ?? self.selectedLocationMode"))
+        #expect(pendingLocationApplication.contains(
+            "self.locationSettingsPresentation(selectedMode: mode).statusText"))
+        let pendingClear = try #require(pendingLocationApplication.range(of: "self.pendingLocationMode = nil"))
+        let unavailableReturn = try #require(
+            pendingLocationApplication.range(of: "guard summary.effectiveMode != .off else"))
+        #expect(pendingClear.lowerBound < unavailableReturn.lowerBound)
+        #expect(actionsSource.contains("UIApplication.shared.unregisterForRemoteNotifications()"))
+        #expect(actionsSource.contains("UIApplication.openNotificationSettingsURLString"))
+        #expect(actionsSource.contains("UIApplication.openSettingsURLString"))
+    }
+
+    @Test func `gateway settings keeps pairing trust diagnostics and tailscale actions`() throws {
+        try Self.assertGatewaySettingsSurfaceGuards()
+        try Self.assertGatewayOnboardingFlowGuards()
+        try Self.assertGatewayReconnectGuards()
+    }
+
+    @Test func `discovered gateway surfaces share secure connection availability`() throws {
+        let controllerSource = try String(
+            contentsOf: Self.gatewayConnectionControllerSourceURL(),
+            encoding: .utf8)
+        let settingsSource = try String(
+            contentsOf: Self.settingsProTabSectionsSourceURL(),
+            encoding: .utf8)
+        let quickSetupSource = try String(
+            contentsOf: Self.gatewayQuickSetupSourceURL(),
+            encoding: .utf8)
+        let onboardingSource = try Self.onboardingWizardSource()
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let activeProblemToast = try Self.extract(
-            rootSource,
-            from: "private var activeGatewayProblemToast: GatewayConnectionProblem?",
-            to: "private var gatewayToastAnimation: Animation?")
 
-        #expect(sectionsSource.contains("var gatewayDestination: some View"))
-        #expect(sectionsSource.contains("self.gatewayActions"))
-        #expect(sectionsSource.contains("self.manualGatewayCard"))
-        #expect(sectionsSource.contains("self.gatewaySetupCard"))
-        #expect(sectionsSource.contains("self.discoveredGatewaysCard"))
-        #expect(sectionsSource.contains("self.gatewayAdvancedCard"))
-        #expect(sectionsSource.contains("title: \"Reconnect\""))
-        #expect(sectionsSource.contains("Task { await self.reconnectGateway() }"))
-        #expect(sectionsSource.contains("title: \"Diagnose\""))
-        #expect(sectionsSource.contains("Task { await self.runDiagnostics() }"))
-        #expect(sectionsSource.contains("title: \"Scan QR\""))
-        #expect(sectionsSource.contains("self.openGatewayQRScanner()"))
-        #expect(sectionsSource.contains("title: \"Connect\""))
-        #expect(sectionsSource.contains("Task { await self.applySetupCodeAndConnect() }"))
-        #expect(sectionsSource.contains("Task { await self.connect(gateway) }"))
-        #expect(sectionsSource.contains("tailnetWarningText"))
-        // Gateway problems surface once, as the root toast; the settings page must not
-        // embed a second copy of the banner.
-        #expect(!sectionsSource.contains("GatewayProblemBanner("))
-        #expect(rootSource.contains("GatewayProblemBanner("))
-        #expect(rootSource.contains(".gesture(self.gatewayToastSwipeGesture)"))
-        // Operator auth/pairing problems can coexist with a connected node, so the
-        // root's only remediation surface must not depend on aggregate status.
-        #expect(activeProblemToast.contains("self.appModel.lastGatewayProblem"))
-        #expect(!activeProblemToast.contains("gatewayStatus"))
-        // Every problem report re-surfaces a swiped-away toast or shakes the
-        // visible one; value equality alone must not keep the toast hidden.
-        #expect(rootSource.contains("self.appModel.gatewayProblemReportCount"))
-        #expect(rootSource.contains("GatewayToastShakeEffect"))
+        #expect(controllerSource.contains("enum DiscoveredGatewayConnectionAvailability"))
+        #expect(controllerSource.contains("gateway.tlsEnabled || GatewayTLSStore.loadFingerprint"))
+        #expect(controllerSource.contains("enter your Tailscale Serve HTTPS host in Manual Setup"))
+        #expect(settingsSource.contains("discoveredGatewayConnectionAvailability(gateway)"))
+        #expect(quickSetupSource.contains("discoveredGatewayConnectionAvailability(candidate)"))
+        #expect(quickSetupSource.contains("Text(\"Use Manual Setup\")"))
+        #expect(quickSetupSource.contains("self.gatewayController.preferredDiscoveredGateway()"))
+        #expect(onboardingSource.contains("discoveredGatewayConnectionAvailability(gateway)"))
+        #expect(!onboardingSource.contains("gatewayHasResolvableHost"))
+        #expect(rootSource.contains("GatewayQuickSetupSheet(onUseManualSetup:"))
+        #expect(rootSource.contains("self.selectSettingsRoute(.gateway)"))
+    }
 
-        #expect(actionsSource.contains("await self.gatewayController.connectLastKnown()"))
-        #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
-        #expect(actionsSource.contains("self.gatewayController.restartDiscovery()"))
-        #expect(actionsSource.contains("await self.appModel.refreshGatewayOverviewIfConnected()"))
-        #expect(actionsSource
-            .contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
-        #expect(controllerSource.contains("await self.tcpReachabilityProbe("))
-        #expect(controllerSource.contains("Check Tailscale or LAN."))
-        #expect(actionsSource.contains("Tailscale is off on this device. Turn it on, then try again."))
-        #expect(actionsSource.contains("Run /pair approve in your OpenClaw chat"))
-        #expect(settingsSource.contains("self.resetOnboarding()"))
-        #expect(settingsSource.contains(".onChange(of: self.onboardingRequestID)"))
-        #expect(settingsSource.contains("self.syncAfterOnboardingReset()"))
-        #expect(actionsSource.contains("func syncAfterOnboardingReset()"))
-        #expect(actionsSource.contains("self.pendingManualAuthOverride = nil"))
-        // The root toast is the only gateway problem surface outside covers, so it
-        // must keep the reset-onboarding primary action the settings banner had.
-        #expect(rootSource.contains("resetTitle: \"Reset onboarding\""))
-        #expect(rootSource.contains("GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: instanceId)"))
-        #expect(rootSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
-        #expect(rootSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
-        #expect(rootSource.contains("await self.gatewayController.connectLastKnown()"))
+    @Test func `gateway credential fields update before endpoint persistence is available`() throws {
+        let onboardingSource = try Self.onboardingWizardSource()
+        let settingsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
+        for source in [onboardingSource, settingsSource] {
+            let tokenSetter = try Self.extract(
+                source,
+                from: "func persistGatewayToken(_ value: String)",
+                to: "func persistGatewayPassword(_ value: String)")
+            let passwordSetter = try Self.extract(
+                source,
+                from: "func persistGatewayPassword(_ value: String)",
+                to: "func clearManualCredentialFields()")
+            let tokenAssignment = try #require(tokenSetter.range(of: "self.gatewayToken = value"))
+            let tokenEndpointGuard = try #require(
+                tokenSetter.range(of: "let stableID = self.gatewayCredentialTargetStableID"))
+            let passwordAssignment = try #require(passwordSetter.range(of: "self.gatewayPassword = value"))
+            let passwordEndpointGuard = try #require(
+                passwordSetter.range(of: "let stableID = self.gatewayCredentialTargetStableID"))
 
-        #expect(rootSource.contains("GatewayProblemDetailsSheet("))
-        #expect(settingsSource.contains("QRScannerView("))
-        #expect(trustSource.contains("Trust this gateway?"))
-        #expect(trustSource.contains("Trust and connect"))
-        #expect(controllerSource.contains("acceptPendingTrustPrompt()"))
-        #expect(controllerSource.contains("trustRotatedGatewayCertificate(from problem: GatewayConnectionProblem)"))
+            #expect(tokenAssignment.lowerBound < tokenEndpointGuard.lowerBound)
+            #expect(passwordAssignment.lowerBound < passwordEndpointGuard.lowerBound)
+        }
+    }
+
+    @Test func `onboarding mode defaults clear credentials after endpoint changes`() throws {
+        let source = try Self.onboardingWizardSource()
+        let modeDefaults = try Self.extract(
+            source,
+            from: "private func applyModeDefaults(_ mode: OnboardingConnectionMode)",
+            to: "private func connectManual")
+
+        #expect(modeDefaults.contains("let previousStableID = self.currentManualGatewayStableID"))
+        #expect(modeDefaults.contains("previousStableID != self.currentManualGatewayStableID"))
+        #expect(modeDefaults.contains("self.clearManualCredentialFields()"))
+    }
+
+    @Test func `watch snapshot bundle applies owner before approvals and clears old chat`() throws {
+        let receiverSource = try String(contentsOf: Self.watchConnectivityReceiverSourceURL(), encoding: .utf8)
+        let storeSource = try String(contentsOf: Self.watchInboxStoreSourceURL(), encoding: .utf8)
+        let consumePayload = try Self.extract(
+            receiverSource,
+            from: "private func consumeIncomingPayload(_ payload: [String: Any], transport: String)",
+            to: "}\n}")
+        let appSnapshotConsume = try #require(
+            consumePayload.range(of: "self.store.consume(appSnapshot: appSnapshot)"))
+        let approvalSnapshotConsume = try #require(
+            consumePayload.range(of: "self.store.consume(execApprovalSnapshot: execApprovalSnapshot"))
+        let consumeAppSnapshot = try Self.extract(
+            storeSource,
+            from: "func consume(appSnapshot message: WatchAppSnapshotMessage)",
+            to: "func markAppSnapshotRequestStarted()")
+
+        #expect(appSnapshotConsume.lowerBound < approvalSnapshotConsume.lowerBound)
+        #expect(consumeAppSnapshot.contains("if hasExistingAppSnapshot, previousGatewayID == nextGatewayID"))
+        let ownerMatchedMerge = try Self.extract(
+            consumeAppSnapshot,
+            from: "if hasExistingAppSnapshot, previousGatewayID == nextGatewayID",
+            to: "self.appSnapshot = merged")
+        #expect(ownerMatchedMerge.contains("merged.chatItems = self.appSnapshot?.chatItems"))
+        #expect(ownerMatchedMerge.contains("merged.chatStatusText = self.appSnapshot?.chatStatusText"))
+    }
+
+    @Test func `watch generic prompts wait for the active gateway owner`() throws {
+        let receiverSource = try String(contentsOf: Self.watchConnectivityReceiverSourceURL(), encoding: .utf8)
+        let source = try String(contentsOf: Self.watchInboxStoreSourceURL(), encoding: .utf8)
+        let consumeMessage = try Self.extract(
+            source,
+            from: "func consume(message: WatchNotifyMessage, transport: String)",
+            to: "func consume(\n        execApprovalPrompt")
+        let consumeAppSnapshot = try Self.extract(
+            source,
+            from: "func consume(appSnapshot message: WatchAppSnapshotMessage)",
+            to: "func markAppSnapshotRequestStarted()")
+
+        let replay = try Self.extract(
+            source,
+            from: "func replayDeferredGatewayPayloads()",
+            to: "private func clearMessagePrompt()")
+        let routeGatewayPayload = try Self.extract(
+            source,
+            from: "private func routeGatewayPayload(_ payload: DeferredGatewayPayload)",
+            to: "private func acceptsGatewayOwner")
+        let acceptsGatewayOwner = try Self.extract(
+            source,
+            from: "private func acceptsGatewayOwner(_ gatewayStableID: String?)",
+            to: "func replayDeferredGatewayPayloads()")
+
+        #expect(consumeMessage.contains("self.routeGatewayPayload(.notification"))
+        #expect(consumeAppSnapshot.contains("self.clearMessagePrompt()"))
+        #expect(consumeAppSnapshot.contains("if !hasExistingAppSnapshot || previousGatewayID != nextGatewayID"))
+        #expect(source.contains("private var deferredGatewayPayloads: [DeferredGatewayPayload]"))
+        #expect(routeGatewayPayload.contains("guard let activeSnapshot = appSnapshot else { return true }"))
+        #expect(acceptsGatewayOwner.contains("guard let activeSnapshot = appSnapshot else { return true }"))
+        #expect(acceptsGatewayOwner.contains("else { return false }"))
+        #expect(replay.contains("WatchDeferredPayloadOrdering.indicesOldestFirst"))
+        #expect(replay.contains("WatchDeferredPayloadOrdering.isExpired"))
+        #expect(replay.contains("WatchDeferredPayloadOrdering.isNewerThanSnapshot"))
+        #expect(replay.contains("WatchDeferredPayloadOrdering.isAtOrBeforeSnapshot"))
+        #expect(replay.contains("case let .notification(message, transport):"))
+        #expect(replay.contains("approvalSnapshotGatewayID == activeGatewayID"))
+        #expect(replay.contains("payload.isFullyRepresentedByExecApprovalSnapshot"))
+        #expect(replay.contains("let approval = payload.approvalPrompt"))
+        #expect(source.contains("if hasSameSnapshotOwner"))
+        #expect(source.contains("if let sentAtMs = message.sentAtMs"))
+        #expect(receiverSource.contains("self.store.replayDeferredGatewayPayloads()"))
+    }
+
+    @Test func `watch approval notifications include their gateway owner`() throws {
+        let source = try String(contentsOf: Self.watchInboxStoreSourceURL(), encoding: .utf8)
+        let identifier = try Self.extract(
+            source,
+            from: "private static func execApprovalNotificationIdentifier(",
+            to: "private func pruneExpiredExecApprovals")
+        let routeChange = try Self.extract(
+            source,
+            from: "func consume(appSnapshot message: WatchAppSnapshotMessage)",
+            to: "func markAppSnapshotRequestStarted()")
+
+        #expect(identifier.contains("gatewayStableID.utf8.count"))
+        #expect(identifier.contains("gatewayStableID)\\(approvalID)"))
+        #expect(routeChange.contains("removeExecApprovalNotifications(approvals: invalidatedApprovals)"))
+        #expect(!source.contains("identifier: \"watch.execApproval.\\(message.approval.id)\""))
+        #expect(source.contains("let ownerlessApprovals = state.execApprovals.filter"))
+        #expect(source.contains("self.lastExecApprovalSnapshotID = nil"))
+        #expect(source.contains("\"watch.execApproval.\\(approvalID)\""))
     }
 
     @Test func `setup route probes yield to newer manual actions`() throws {
-        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let onboardingSource = try Self.onboardingWizardSource()
         let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
         let sectionsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
 
@@ -869,16 +1064,32 @@ struct RootTabsSourceGuardTests {
     @Test func `local network access is requested from visible gateway flows`() throws {
         let appSource = try String(contentsOf: Self.openClawAppSourceURL(), encoding: .utf8)
         let rootSource = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
-        let onboardingSource = try String(contentsOf: Self.onboardingWizardSourceURL(), encoding: .utf8)
+        let onboardingSource = try Self.onboardingWizardSource()
         let actionsSource = try String(contentsOf: Self.settingsProTabActionsSourceURL(), encoding: .utf8)
-        let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
+        let controllerSource = try Self.gatewayConnectionControllerSource()
+        let onboardingScannerSheet = try Self.extract(
+            onboardingSource,
+            from: "isPresented: self.$showQRScanner,",
+            to: ".sheet(isPresented: self.$showGatewayProblemDetails)")
+        let onboardingOnDismiss = try #require(onboardingScannerSheet.range(of: "onDismiss: {"))
+        let onboardingProcessing = try #require(onboardingScannerSheet.range(of: "self.processQueuedScannerResult()"))
+        let onboardingContent = try #require(onboardingScannerSheet.range(of: "content: {"))
 
         #expect(appSource.contains("deferDiscoveryUntilLocalNetworkRequest: true"))
-        #expect(controllerSource.contains("func requestLocalNetworkAccess(reason: String)"))
+        #expect(appSource.contains("func application(\n        _ app: UIApplication,\n        open url: URL,"))
+        #expect(appSource.contains("self.pendingOpenURLs.append(url)"))
+        #expect(appSource.contains("model.stageGatewaySetupLink(link)"))
+        #expect(appSource.contains(".onOpenURL"))
+        #expect(appSource.contains("self.appDelegate.handleOpenURL(url, model: self.appModel)"))
+        #expect(controllerSource.contains(
+            "func requestLocalNetworkAccess(reason: String, allowAutoReconnect: Bool = true)"))
         #expect(controllerSource.contains("guard self.localNetworkAccessRequested else"))
-        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_manual\")"))
-        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_discovered_gateway\")"))
-        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_last_known\")"))
+        #expect(controllerSource.contains(
+            "self.requestLocalNetworkAccess(reason: \"connect_manual\", allowAutoReconnect: false)"))
+        #expect(controllerSource.contains(
+            "self.requestLocalNetworkAccess(reason: \"connect_discovered_gateway\", allowAutoReconnect: false)"))
+        #expect(controllerSource.contains(
+            "self.requestLocalNetworkAccess(reason: \"connect_active_gateway\", allowAutoReconnect: false)"))
 
         #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"root_appear\")"))
         #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"scene_active\")"))
@@ -889,6 +1100,13 @@ struct RootTabsSourceGuardTests {
 
         #expect(onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
         #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfPastIntro(reason: \"onboarding_appear\")"))
+        #expect(onboardingSource.contains(
+            "self.applyPendingGatewaySetupLinkIfNeeded()\n"
+                + "                self.attemptAutomaticPairingResumeIfNeeded()"))
+        #expect(onboardingOnDismiss.lowerBound < onboardingProcessing.lowerBound)
+        #expect(onboardingProcessing.lowerBound < onboardingContent.lowerBound)
+        #expect(!onboardingSource.contains(".onChange(of: self.showQRScanner)"))
+        #expect(onboardingSource.matches(of: /self\.showQRScanner = true/).count == 1)
         #expect(actionsSource
             .contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }
@@ -913,26 +1131,75 @@ struct RootTabsSourceGuardTests {
         let chatSource = try String(contentsOf: Self.chatProTabSourceURL(), encoding: .utf8)
         let channelsSource = try String(contentsOf: Self.channelsSourceURL(), encoding: .utf8)
         let appModelSource = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let transportSource = try String(contentsOf: Self.iOSGatewayChatTransportSourceURL(), encoding: .utf8)
 
-        #expect(chatSource.matches(of: /self\.appModel\.makeChatTransport\(\)/).count == 2)
-        #expect(appModelSource.contains("return IOSGatewayChatTransport(gateway: self.operatorSession)"))
+        #expect(chatSource.contains(
+            "self.appModel.makeChatTransport(outboxGatewayID: offlineStore?.gatewayID)"))
+        #expect(chatSource.contains("activeAgentId: self.appModel.chatDeliveryAgentId"))
+        #expect(chatSource.contains("Self.requiresViewModelRebuild("))
+        #expect(chatSource.contains("viewModel.syncSessionRoutingContract"))
+        #expect(appModelSource.contains("return IOSGatewayChatTransport("))
+        #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
+        #expect(appModelSource.contains("ifCurrentRoute: operatorRoute"))
+        #expect(transportSource.matches(of: /ifCurrentRoute: expectedRoute/).count == 3)
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))
         #expect(channelsSource.contains("label: \"ClickClack\""))
         #expect(channelsSource.contains("Self-hosted chat bot routing."))
     }
 
-    private static func rootTabsSourceURL() -> URL {
+    @Test func `deferred gateway mutations retain their source gateway`() throws {
+        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let pendingActions = try Self.extract(
+            source,
+            from: "private func resumePendingForegroundNodeActionsIfNeeded(",
+            to: "private func handleWatchQuickReply(")
+        let resolvedState = try Self.extract(
+            source,
+            from: "private func handleExecApprovalResolvedForCurrentGateway(",
+            to: "func handleExecApprovalResolvedRemotePush(")
+        let resolvedPushes = try Self.extract(
+            source,
+            from: "func handleExecApprovalResolvedRemotePush(",
+            to: "func handleSilentPushWake(")
+
+        #expect(pendingActions.contains("ifCurrentRoute: nodeRoute"))
+        #expect(pendingActions.contains("ifCurrentRoute: expectedRoute"))
+        #expect(pendingActions.contains("isCurrentGatewaySessionRoute"))
+        #expect(pendingActions.contains("pendingForegroundActionDrainRequested = true"))
+        #expect(pendingActions.contains("trigger: \"coalesced\""))
+        #expect(pendingActions.contains("pendingForegroundActionDrainInFlight = false"))
+        #expect(pendingActions.contains("completedPendingForegroundActionIDsByGateway"))
+        #expect(pendingActions.contains("presentIn: decoded.actions"))
+        #expect(pendingActions.contains("let currentRoute = await self.nodeGateway.currentRoute()"))
+        #expect(pendingActions.contains("ifCurrentRoute: expectedRoute"))
+        #expect(resolvedState.matches(of: /canApplyExecApprovalResolvedState/).count >= 4)
+        #expect(resolvedState.contains("routeContext: routeContext"))
+        #expect(resolvedPushes.contains("applyValidatedExecApprovalResolvedPush(push, context: context)"))
+        #expect(resolvedPushes.contains("session: self.operatorGateway"))
+        #expect(resolvedPushes.contains("generation: context.routeGeneration"))
+    }
+}
+
+extension RootTabsSourceGuardTests {
+    static func rootTabsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/RootTabs.swift")
     }
 
-    private static func nodeAppModelSourceURL() -> URL {
+    static func nodeAppModelSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Model/NodeAppModel.swift")
+    }
+
+    private static func iOSGatewayChatTransportSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Chat/IOSGatewayChatTransport.swift")
     }
 
     private static func phoneHubSourceURL() -> URL {
@@ -1078,14 +1345,14 @@ struct RootTabsSourceGuardTests {
             .appendingPathComponent("Sources/Design/OpenClawDocsScreen.swift")
     }
 
-    private static func settingsProTabSectionsSourceURL() -> URL {
+    static func settingsProTabSectionsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/SettingsProTabSections.swift")
     }
 
-    private static func settingsProTabSourceURL() -> URL {
+    static func settingsProTabSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -1097,6 +1364,29 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Onboarding/OnboardingWizardView.swift")
+    }
+
+    private static func gatewayQuickSetupSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Gateway/GatewayQuickSetupSheet.swift")
+    }
+
+    static func onboardingWizardSource() throws -> String {
+        let sourceDirectory = self.onboardingWizardSourceURL().deletingLastPathComponent()
+        return try self.sourceContents(at: [
+            self.onboardingWizardSourceURL(),
+            sourceDirectory.appendingPathComponent("OnboardingWizardConnectionSections.swift"),
+            sourceDirectory.appendingPathComponent("OnboardingWizardTypes.swift"),
+        ])
+    }
+
+    static func qrScannerSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Onboarding/QRScannerView.swift")
     }
 
     private static func openClawAppSourceURL() -> URL {
@@ -1113,7 +1403,7 @@ struct RootTabsSourceGuardTests {
             .appendingPathComponent("Sources/Gateway/NotificationPermissionGuidanceDialog.swift")
     }
 
-    private static func settingsProTabActionsSourceURL() -> URL {
+    static func settingsProTabActionsSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -1127,7 +1417,7 @@ struct RootTabsSourceGuardTests {
             .appendingPathComponent("Sources/Design/SettingsProTabSupport.swift")
     }
 
-    private static func gatewayTrustPromptAlertSourceURL() -> URL {
+    static func gatewayTrustPromptAlertSourceURL() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -1139,6 +1429,30 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Gateway/GatewayConnectionController.swift")
+    }
+
+    static func gatewayConnectionControllerSource() throws -> String {
+        let sourceDirectory = self.gatewayConnectionControllerSourceURL().deletingLastPathComponent()
+        return try self.sourceContents(at: [
+            self.gatewayConnectionControllerSourceURL(),
+            sourceDirectory.appendingPathComponent("GatewayConnectionController+Capabilities.swift"),
+            sourceDirectory.appendingPathComponent("GatewayConnectionController+ManualAuth.swift"),
+            sourceDirectory.appendingPathComponent("GatewayTLSFingerprintProbe.swift"),
+        ])
+    }
+
+    private static func watchConnectivityReceiverSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("WatchApp/Sources/WatchConnectivityReceiver.swift")
+    }
+
+    private static func watchInboxStoreSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("WatchApp/Sources/WatchInboxStore.swift")
     }
 
     private static func channelsSourceURL() -> URL {
@@ -1163,10 +1477,16 @@ struct RootTabsSourceGuardTests {
             .appendingPathComponent("OpenClaw.xcodeproj/project.pbxproj")
     }
 
-    private static func extract(_ source: String, from start: String, to end: String) throws -> String {
+    static func extract(_ source: String, from start: String, to end: String) throws -> String {
         let startRange = try #require(source.range(of: start))
         let tail = source[startRange.lowerBound...]
         let endRange = try #require(tail.range(of: end))
         return String(tail[..<endRange.lowerBound])
+    }
+
+    private static func sourceContents(at urls: [URL]) throws -> String {
+        try urls
+            .map { try String(contentsOf: $0, encoding: .utf8) }
+            .joined(separator: "\n")
     }
 }

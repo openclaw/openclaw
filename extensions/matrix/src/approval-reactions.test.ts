@@ -10,6 +10,16 @@ import {
 } from "./approval-reactions.js";
 import { setMatrixRuntime } from "./runtime.js";
 
+function createRuntimeLogger(overrides: { warn?: ReturnType<typeof vi.fn> } = {}) {
+  // Runtime state survives no-isolate workers, so expose every logger method later files may call.
+  return {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: overrides.warn ?? vi.fn(),
+    error: vi.fn(),
+  };
+}
+
 afterEach(() => {
   clearMatrixApprovalReactionTargetsForTest();
   vi.restoreAllMocks();
@@ -124,7 +134,7 @@ describe("matrix approval reactions", () => {
     }));
     setMatrixRuntime({
       state: { openKeyedStore },
-      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+      logging: { getChildLogger: () => createRuntimeLogger() },
     } as never);
 
     registerMatrixApprovalReactionTarget({
@@ -165,7 +175,7 @@ describe("matrix approval reactions", () => {
           throw new Error("sqlite unavailable");
         }),
       },
-      logging: { getChildLogger: () => ({ warn }) },
+      logging: { getChildLogger: () => createRuntimeLogger({ warn }) },
     } as never);
 
     registerMatrixApprovalReactionTarget({

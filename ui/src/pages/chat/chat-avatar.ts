@@ -8,12 +8,9 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
-import {
-  assistantAvatarFallbackUrl,
-  resolveAssistantTextAvatar,
-} from "../../lib/agents/display.ts";
+import { assistantAvatarFallbackUrl } from "../../lib/agents/display.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
-import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
+import { isRenderableControlUiAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -136,7 +133,7 @@ function isAvatarUrl(value: string): boolean {
   return trimmed.startsWith("blob:") || isRenderableControlUiAvatarUrl(trimmed);
 }
 
-export type ChatAvatarHost = {
+type ChatAvatarHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null } | null;
   basePath: string;

@@ -808,7 +808,9 @@ describe("scripts/test-group-report arg parsing", () => {
         flag === "--compare"
           ? [flag, values[0], values[1], flag, values[2], values[3]]
           : [flag, values[0], flag, values[1]];
-      expect(() => parseTestGroupReportArgs(args)).toThrow(`${flag} was provided more than once`);
+      expect(() => parseTestGroupReportArgs(args as string[])).toThrow(
+        `${String(flag)} was provided more than once`,
+      );
     }
     expect(parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]).configs).toEqual([
       "a.ts",
@@ -891,7 +893,7 @@ describe("scripts/test-group-report child process guard", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it("times out a child that ignores SIGTERM", async () => {
+  it.concurrent("times out a child that ignores SIGTERM", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -922,7 +924,7 @@ describe("scripts/test-group-report child process guard", () => {
     expect(result.output).toContain("sending SIGKILL");
   });
 
-  it("kills timed wrapper process groups without orphaning the measured process", async () => {
+  it.concurrent("kills timed wrapper process groups without orphaning the measured process", async () => {
     if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
       return;
     }
@@ -1019,7 +1021,7 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
-  it("cleans process-group descendants before forwarding parent SIGTERM", async () => {
+  it.concurrent("cleans process-group descendants before forwarding parent SIGTERM", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1080,7 +1082,7 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
-  it("finishes promptly when timed process-group descendants exit cleanly", async () => {
+  it.concurrent("finishes promptly when timed process-group descendants exit cleanly", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1138,7 +1140,7 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
-  it("streams large child output to a log path without retaining it", async () => {
+  it.concurrent("streams large child output to a log path without retaining it", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-"));
     const logPath = path.join(tempDir, "child.log");
     try {
@@ -1172,7 +1174,7 @@ describe("scripts/test-group-report child process guard", () => {
     }
   });
 
-  it("keeps no-log child output bounded to a tail", async () => {
+  it.concurrent("keeps no-log child output bounded to a tail", async () => {
     const result = await spawnText(
       process.execPath,
       [
@@ -1198,7 +1200,7 @@ describe("scripts/test-group-report child process guard", () => {
     expect(result.output).toContain("output exceeded 1048576 bytes");
   });
 
-  it("stops streamed child output after the configured log cap", async () => {
+  it.concurrent("stops streamed child output after the configured log cap", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-cap-"));
     const logPath = path.join(tempDir, "child.log");
     try {

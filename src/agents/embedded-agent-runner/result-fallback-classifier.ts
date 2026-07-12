@@ -72,7 +72,7 @@ export function mergeEmbeddedAgentRunResultForModelFallbackExhaustion(params: {
   };
 }
 
-function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
+export function hasDeliberateSilentTerminalReply(result: EmbeddedAgentRunResult): boolean {
   if (result.meta.error?.kind === "hook_block") {
     return true;
   }
@@ -110,6 +110,7 @@ function classifyGenericExternalRunFailurePayload(params: {
     payload?.isReasoning === true ||
     typeof text !== "string" ||
     text.trim() !== GENERIC_EXTERNAL_RUN_FAILURE_TEXT ||
+    !payload ||
     hasNonTextVisiblePayloadContent(payload)
   ) {
     return null;

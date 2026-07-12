@@ -1,6 +1,11 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Control UI module implements custom theme behavior.
 import { z } from "zod";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
+
+// The Control UI CSP forbids dynamic code generation. Zod snapshots this flag
+// when z.object() is constructed, before its eval-backed fast path can probe.
+z.config({ jitless: true });
 
 const TWEAKCN_HOSTS = new Set(["tweakcn.com", "www.tweakcn.com"]);
 const THEME_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
@@ -429,7 +434,7 @@ function describeThemeLabel(value: string | undefined) {
   if (!normalized) {
     return "Custom";
   }
-  return normalized.slice(0, 80);
+  return truncateUtf16Safe(normalized, 80);
 }
 
 export function normalizeTweakcnThemeUrl(input: string): TweakcnThemeResolution {

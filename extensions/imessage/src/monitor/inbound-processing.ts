@@ -329,7 +329,7 @@ function isKnownFromMeIMessageReactionTarget(params: {
  * 2. Otherwise, return the wildcard `groups["*"].systemPrompt` (trimmed; empty
  *    after trim → `undefined`).
  */
-export function resolveIMessageGroupSystemPrompt(params: {
+function resolveIMessageGroupSystemPrompt(params: {
   groupConfig: unknown;
   defaultConfig: unknown;
 }): string | undefined {

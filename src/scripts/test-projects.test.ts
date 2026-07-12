@@ -16,97 +16,7 @@ const {
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
   resolveParallelFullSuiteConcurrency,
-} = (await import("../../scripts/test-projects.test-support.mjs")) as unknown as {
-  applyParallelVitestCachePaths: (
-    specs: Array<{
-      config: string;
-      env: NodeJS.ProcessEnv;
-    }>,
-    params?: {
-      cwd?: string;
-      env?: NodeJS.ProcessEnv;
-    },
-  ) => Array<{
-    config: string;
-    env: NodeJS.ProcessEnv;
-  }>;
-  buildFullSuiteVitestRunPlans: (
-    args: string[],
-    cwd?: string,
-  ) => Array<{
-    config: string;
-    forwardedArgs: string[];
-    includePatterns: string[] | null;
-    watchMode: boolean;
-  }>;
-  buildVitestArgs: (args: string[], cwd?: string) => string[];
-  buildVitestRunPlans: (
-    args: string[],
-    cwd?: string,
-    listChangedPaths?: (baseRef: string, cwd: string) => string[],
-  ) => Array<{
-    config: string;
-    forwardedArgs: string[];
-    includePatterns: string[] | null;
-    watchMode: boolean;
-  }>;
-  createVitestRunSpecs: (
-    args: string[],
-    params?: {
-      baseEnv?: NodeJS.ProcessEnv;
-      cwd?: string;
-      tempDir?: string;
-    },
-  ) => Array<{
-    config: string;
-    env: NodeJS.ProcessEnv;
-    includeFilePath: string | null;
-    includePatterns: string[] | null;
-    pnpmArgs: string[];
-    watchMode: boolean;
-  }>;
-  findUnmatchedExplicitTestTargets: (
-    args: string[],
-    cwd?: string,
-  ) => Array<{
-    target: string;
-    reason: "glob-matched-no-files" | "path-does-not-exist" | "target-matched-no-test-files";
-    includePattern?: string;
-  }>;
-  parseTestProjectsArgs: (
-    args: string[],
-    cwd?: string,
-  ) => {
-    forwardedArgs: string[];
-    targetArgs: string[];
-    watchMode: boolean;
-  };
-  resolveChangedTargetArgs: (
-    args: string[],
-    cwd?: string,
-    listChangedPaths?: (baseRef: string, cwd: string) => string[],
-    options?: {
-      cwd?: string;
-      env?: NodeJS.ProcessEnv;
-      broad?: boolean;
-    },
-  ) => string[] | null;
-  resolveChangedTestTargetPlan: (
-    changedPaths: string[],
-  ) =>
-    | { mode: "none"; targets: string[] }
-    | { mode: "targets"; targets: string[] }
-    | { mode: "broad"; targets: string[] };
-  resolveParallelFullSuiteConcurrency: (
-    specCount: number,
-    env?: NodeJS.ProcessEnv,
-    hostInfo?: {
-      cpuCount?: number;
-      loadAverage1m?: number;
-      totalMemoryBytes?: number;
-    },
-  ) => number;
-};
+} = await import("../../scripts/test-projects.test-support.mjs");
 
 const runVitestModulePath = "../../scripts/run-vitest.mjs";
 const { resolveVitestCliEntry, resolveVitestNodeArgs } = (await import(
@@ -583,7 +493,7 @@ describe("test-projects args", () => {
     ).toBe(3);
   });
 
-  it("uses a bounded local default for full-suite project parallelism", () => {
+  it("uses the global host worker budget for full-suite project parallelism", () => {
     expect(
       resolveParallelFullSuiteConcurrency(
         58,
@@ -596,7 +506,7 @@ describe("test-projects args", () => {
           totalMemoryBytes: 16 * 1024 ** 3,
         },
       ),
-    ).toBe(4);
+    ).toBe(2);
   });
 
   it("gives parallel Vitest shards separate filesystem module caches", () => {

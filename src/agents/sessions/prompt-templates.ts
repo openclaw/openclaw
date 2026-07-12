@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Prompt template discovery and loading.
  *
@@ -43,7 +44,7 @@ function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptT
       const firstLine = body.split("\n").find((line) => line.trim());
       if (firstLine) {
         // Truncate if too long
-        description = firstLine.slice(0, 60);
+        description = truncateUtf16Safe(firstLine, 60);
         if (firstLine.length > 60) {
           description += "...";
         }
@@ -108,7 +109,7 @@ function loadTemplatesFromDir(
   return templates;
 }
 
-export interface LoadPromptTemplatesOptions {
+interface LoadPromptTemplatesOptions {
   /** Working directory for project-local templates. */
   cwd: string;
   /** Agent config directory for global templates. */

@@ -13,6 +13,7 @@ import {
 } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
   isHeartbeat: false,
@@ -134,6 +135,28 @@ describe("buildReplyPayloads media filter integration", () => {
         },
       ]),
     );
+  });
+
+  it("shares first-reply threading across staged payload builds", async () => {
+    const applyReplyToMode = createReplyToModeFilterForChannel("first", "whatsapp");
+    const sharedParams = {
+      ...baseParams,
+      replyToMode: "first" as const,
+      replyToChannel: "whatsapp" as const,
+      currentMessageId: "msg",
+      applyReplyToMode,
+    };
+    const first = await buildReplyPayloads({
+      ...sharedParams,
+      payloads: [{ text: "internal commentary", isCommentary: true }],
+    });
+    const fallback = await buildReplyPayloads({
+      ...sharedParams,
+      payloads: [{ text: "run failed", isError: true }],
+    });
+
+    expect(first.replyPayloads[0]?.replyToId).toBe("msg");
+    expect(fallback.replyPayloads[0]?.replyToId).toBeUndefined();
   });
 
   it("records the reply policy used by dedupe and final delivery", async () => {
@@ -627,6 +650,36 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads.map((payload) => payload.text)).toEqual(["intro", "result"]);
+  });
+
+  it("dedupes against final routes when first-reply state is shared", async () => {
+    const applyReplyToMode = createReplyToModeFilterForChannel("first", "slack");
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      config: {},
+      payloads: [{ text: "intro" }, { text: "result" }],
+      replyToMode: "first",
+      replyToChannel: "slack",
+      currentMessageId: "111.000",
+      applyReplyToMode,
+      messageProvider: "slack",
+      originatingTo: "channel:C1",
+      messagingToolSentTexts: ["result"],
+      messagingToolSentTargets: [
+        {
+          tool: "slack",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "111.000",
+          text: "result",
+        },
+      ],
+    });
+
+    expect(replyPayloads.map((payload) => [payload.text, payload.replyToId])).toEqual([
+      ["intro", "111.000"],
+      ["result", undefined],
+    ]);
   });
 
   it("does not treat a Discord native reply id as a thread route", async () => {

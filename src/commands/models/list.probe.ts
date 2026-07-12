@@ -171,11 +171,14 @@ function catalogProbePriority(provider: string, modelId: string): number {
   if (id === "claude-haiku-4-5") {
     return 1;
   }
-  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
+  if (id === "claude-sonnet-5" || id.startsWith("claude-sonnet-5-")) {
     return 2;
   }
-  if (id.startsWith("claude-sonnet-4-")) {
+  if (id === "claude-sonnet-4-6" || id.startsWith("claude-sonnet-4-6-")) {
     return 3;
+  }
+  if (id.startsWith("claude-sonnet-4-")) {
+    return 4;
   }
   if (id.startsWith("claude-3-")) {
     return 100;

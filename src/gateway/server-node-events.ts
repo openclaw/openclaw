@@ -14,8 +14,8 @@ import {
   resolveEventSessionRoutingPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
-import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
@@ -30,7 +30,7 @@ import {
   enqueueSystemEvent,
   formatForLog,
   getRuntimeConfig,
-  loadOrCreateDeviceIdentity,
+  loadOrCreateProcessDeviceIdentity,
   loadSessionEntry,
   normalizeChannelId,
   normalizeMainKey,
@@ -43,6 +43,7 @@ import {
   resolveOutboundTarget,
   resolveSessionAgentId,
   resolveSessionModelRef,
+  persistInboundImagesForTranscript,
   sanitizeInboundSystemTags,
   sendDurableMessageBatch,
   canonicalizeSessionEntryAliases,
@@ -401,6 +402,9 @@ export const handleNodeEvent = async (
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
       const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
+        return undefined;
+      }
       const now = Date.now();
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
       if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
@@ -476,13 +480,19 @@ export const handleNodeEvent = async (
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
       const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
+      if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
+        return undefined;
+      }
 
       let message = (link?.message ?? "").trim();
+      const transcriptMessage = message;
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
         link?.attachments ?? undefined,
       );
       let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
       let imageOrder: PromptImageOrderEntry[] = [];
+      let offloadedRefs: Awaited<ReturnType<typeof parseMessageWithAttachments>>["offloadedRefs"] =
+        [];
       if (!message && normalizedAttachments.length === 0) {
         return undefined;
       }
@@ -510,6 +520,7 @@ export const handleNodeEvent = async (
           message = parsed.message.trim();
           images = parsed.images;
           imageOrder = parsed.imageOrder;
+          offloadedRefs = parsed.offloadedRefs;
           if (message.length > 20_000) {
             ctx.logGateway.warn(
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
@@ -596,11 +607,22 @@ export const handleNodeEvent = async (
         );
       }
 
+      const transcriptMedia = (
+        await persistInboundImagesForTranscript({
+          images,
+          imageOrder,
+          offloadedRefs,
+          log: ctx.logGateway,
+          logContext: "agent.request",
+        })
+      ).map((media) => ({ path: media.path, contentType: media.contentType }));
+
       dispatchNodeAgentCommand(ctx, nodeId, {
         runId: sessionId,
         message,
         images,
         imageOrder,
+        ...(transcriptMedia.length > 0 ? { transcriptMessage, transcriptMedia } : {}),
         sessionId,
         sessionKey: canonicalKey,
         thinking: link?.thinking ?? undefined,
@@ -631,7 +653,10 @@ export const handleNodeEvent = async (
       }
       const key = sanitizeInboundSystemTags(keyRaw);
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
-      const { canonicalKey: sessionKey } = loadSessionEntry(sessionKeyRaw);
+      const { canonicalKey: sessionKey, entry } = loadSessionEntry(sessionKeyRaw);
+      if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
+        return undefined;
+      }
       const packageNameRaw = normalizeOptionalString(obj.packageName);
       const packageName = packageNameRaw ? sanitizeInboundSystemTags(packageNameRaw) : null;
       const title = compactNotificationEventText(
@@ -819,7 +844,7 @@ export const handleNodeEvent = async (
       try {
         if (transport === "relay") {
           const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
-          const currentGatewayDeviceId = loadOrCreateDeviceIdentity().deviceId;
+          const currentGatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
           if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
             ctx.logGateway.warn(
               `push relay register rejected node=${nodeId}: gateway identity mismatch`,
@@ -869,17 +894,13 @@ export const handleNodeEvent = async (
 
       const lastSeenReason = normalizeNodePresenceAliveReason(obj.trigger);
       try {
-        const [nodeUpdated, deviceUpdated] = await Promise.all([
-          updatePairedNodeMetadata(nodeId, {
-            lastSeenAtMs: now,
-            lastSeenReason,
-          }),
-          updatePairedDeviceMetadata(deviceId, {
-            lastSeenAtMs: now,
-            lastSeenReason,
-          }),
-        ]);
-        if (!nodeUpdated && !deviceUpdated) {
+        // Node last-seen lives on the device record; node.pair.list projects
+        // it from there, so one write covers both surfaces.
+        const deviceUpdated = await updatePairedDeviceMetadata(deviceId, {
+          lastSeenAtMs: now,
+          lastSeenReason,
+        });
+        if (!deviceUpdated) {
           return { ok: true, event: evt.event, handled: false, reason: "unpaired" };
         }
         recentNodePresencePersistAt.set(deviceId, now);

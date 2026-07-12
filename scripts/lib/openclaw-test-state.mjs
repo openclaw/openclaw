@@ -119,7 +119,7 @@ function scenarioConfig(scenario, options = {}) {
       agents: {
         defaults: {
           model: {
-            primary: "openai/gpt-5.5",
+            primary: "openai/gpt-5.6-luna",
           },
           contextTokens: 64000,
           skills: ["memory"],
@@ -131,7 +131,7 @@ function scenarioConfig(scenario, options = {}) {
             name: "Main",
             workspace: "~/workspace",
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "openai/gpt-5.6-luna",
             },
             thinkingDefault: "low",
             skills: ["memory"],
@@ -142,7 +142,7 @@ function scenarioConfig(scenario, options = {}) {
             name: "Ops",
             workspace: "~/workspace/ops",
             model: {
-              primary: "openai/gpt-5.5",
+              primary: "openai/gpt-5.6-luna",
             },
             fastModeDefault: true,
           },
@@ -336,12 +336,12 @@ export async function createState(options = {}) {
 }
 
 /** Render a dotenv-style env file for a created test state plan. */
-export function renderEnvFile(plan) {
+function renderEnvFile(plan) {
   return `${renderExports(plan.env)}\n`;
 }
 
 /** Render shell commands that create and export an isolated OpenClaw test state. */
-export function renderShellSnippet(options = {}) {
+function renderShellSnippet(options = {}) {
   const label = normalizeLabel(options.label);
   const scenario = requireScenario(options.scenario);
   const config = scenarioConfig(scenario, options);
@@ -374,7 +374,7 @@ export function renderShellSnippet(options = {}) {
 }
 
 /** Render a reusable shell function for creating isolated OpenClaw test state. */
-export function renderShellFunction() {
+function renderShellFunction() {
   return `openclaw_test_state_create() {
   local raw_label="\${1:-state}"
   local label="$raw_label"
@@ -466,7 +466,7 @@ OPENCLAW_TEST_STATE_JSON
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openai/gpt-5.5"
+        "primary": "openai/gpt-5.6-luna"
       },
       "contextTokens": 64000,
       "skills": [
@@ -480,7 +480,7 @@ OPENCLAW_TEST_STATE_JSON
         "name": "Main",
         "workspace": "~/workspace",
         "model": {
-          "primary": "openai/gpt-5.5"
+          "primary": "openai/gpt-5.6-luna"
         },
         "thinkingDefault": "low",
         "skills": [
@@ -493,7 +493,7 @@ OPENCLAW_TEST_STATE_JSON
         "name": "Ops",
         "workspace": "~/workspace/ops",
         "model": {
-          "primary": "openai/gpt-5.5"
+          "primary": "openai/gpt-5.6-luna"
         },
         "fastModeDefault": true
       }

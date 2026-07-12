@@ -38,6 +38,9 @@ const CRON_FLAT_SCHEDULE_KEYS = [
 ] as const;
 const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "name",
+  "declarationKey",
+  "displayName",
+  "owner",
   "schedule",
   "sessionTarget",
   "wakeMode",

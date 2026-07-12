@@ -453,6 +453,7 @@ describe("google transport stream", () => {
       "x-goog-api-key": "gemini-api-key",
       "X-Provider": "google",
     });
+    expect(new Headers(init.headers).get("x-goog-api-client")).toMatch(/^openclaw\//u);
 
     const payload = parseRequestJsonBody(init);
     expect(payload.cachedContent).toBe("cachedContents/request-cache");
@@ -1132,9 +1133,38 @@ describe("google transport stream", () => {
 
     expect(googleAuthMock).toHaveBeenCalledWith({
       scopes: ["https://www.googleapis.com/auth/cloud-platform"],
+      clientOptions: { transporterOptions: { timeout: 30_000 } },
     });
     expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(1);
     expect(tokenFetchMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds google-auth-library ADC token resolution at the Vertex owner", async () => {
+    const tempDir = await mkdtemp(
+      path.join(os.tmpdir(), "openclaw-google-vertex-authlib-timeout-"),
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
+    vi.stubEnv("HOME", path.join(tempDir, "home"));
+    vi.stubEnv("APPDATA", "");
+    vi.useFakeTimers();
+    googleAuthGetAccessTokenMock
+      .mockReturnValueOnce(new Promise(() => {}))
+      .mockResolvedValueOnce("ya29.recovered-token");
+
+    const pendingRefresh = resolveGoogleVertexAuthorizedUserHeaders(vi.fn());
+    const refreshError = pendingRefresh.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(googleAuthGetAccessTokenMock).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(refreshError).resolves.toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(vi.fn())).resolves.toEqual({
+      Authorization: "Bearer ya29.recovered-token",
+    });
+    expect(googleAuthMock).toHaveBeenCalledTimes(2);
+    expect(googleAuthGetAccessTokenMock).toHaveBeenCalledTimes(2);
   });
 
   it("does not cache google-auth ADC tokens when fallback expiry would exceed Date range", async () => {
@@ -1313,6 +1343,56 @@ describe("google transport stream", () => {
     expect(result.content).toEqual([{ type: "text", text: "ok" }]);
   });
 
+  it("times out an authorized_user ADC token refresh", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-timeout-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "timeout-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    vi.useFakeTimers();
+
+    let observedSignal: AbortSignal | undefined;
+    const tokenFetchMock = vi.fn((_input: string | URL | Request, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!signal) {
+        throw new Error("expected token refresh deadline signal");
+      }
+      observedSignal = signal;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+        },
+      });
+      return Promise.resolve(new Response(body, { status: 200 }));
+    });
+
+    const pendingRefresh = resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock);
+    // Attach the rejection handler before advancing fake time so the expected
+    // timeout cannot surface as an unhandled rejection between timer ticks.
+    const refreshError = pendingRefresh.catch((error: unknown) => error);
+    await vi.waitFor(() => expect(tokenFetchMock).toHaveBeenCalledOnce());
+    const signal = observedSignal;
+    if (!signal) {
+      throw new Error("expected token refresh deadline signal");
+    }
+    expect(signal.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(signal.aborted).toBe(true);
+    await expect(refreshError).resolves.toMatchObject({
+      name: "TimeoutError",
+      message: "request timed out",
+    });
+  });
+
   it("refreshes authorized_user ADC from a compressed token response", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-gzip-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
@@ -1369,6 +1449,55 @@ describe("google transport stream", () => {
     expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
       Authorization: "Bearer ya29.gzip-token",
     });
+  });
+
+  it("rejects oversized authorized_user ADC token responses", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-large-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "large-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    const tokenFetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response("x".repeat(1024 * 1024 + 1), { status: 200 }));
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).rejects.toThrow(
+      "Google OAuth token response exceeds 1048576 bytes",
+    );
+  });
+
+  it("rejects authorized_user ADC gzip responses that expand past the limit", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-adc-bomb-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "bomb-refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    const tokenFetchMock = vi.fn().mockResolvedValue(
+      new Response(gzipSync("x".repeat(1024 * 1024 + 1)), {
+        status: 200,
+        headers: { "content-encoding": "gzip" },
+      }),
+    );
+
+    await expect(resolveGoogleVertexAuthorizedUserHeaders(tokenFetchMock)).rejects.toThrow(
+      "Google OAuth token response exceeds 1048576 decompressed bytes",
+    );
   });
 
   it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
@@ -1944,6 +2073,35 @@ describe("google transport stream", () => {
     });
   });
 
+  it.each([
+    ["gemini-pro-latest", "Gemini Pro Latest"],
+    ["gemini-flash-latest", "Gemini Flash Latest"],
+    ["gemini-flash-lite-latest", "Gemini Flash Lite Latest"],
+  ])(
+    "adds skip-validator fallback to first-turn unsigned Gemini 3 tool calls for %s",
+    (modelId, modelName) => {
+      const model = buildGeminiModel({ id: modelId, name: modelName });
+      const params = buildGoogleGenerativeAiParams(model, {
+        messages: [
+          googleToolCallAssistantTurn({ model: modelId }),
+          toolResultTurn(),
+          googleToolCallAssistantTurn({ timestamp: 2, model: modelId }),
+        ],
+      } as never);
+
+      const modelTurns = params.contents.filter(isModelTurnWithParts);
+      expect(modelTurns).toHaveLength(2);
+      expect(modelTurns[0]).toMatchObject({
+        parts: [
+          {
+            thoughtSignature: "skip_thought_signature_validator",
+            functionCall: { name: "lookup", args: { q: "hello" } },
+          },
+        ],
+      });
+    },
+  );
+
   it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {
     const model = buildGeminiModel({
       id: "gemini-2.5-pro",
@@ -2500,13 +2658,19 @@ describe("google transport stream", () => {
   });
 
   it.each([
-    ["image first", ["screenshot", "weather"]],
-    ["image last", ["weather", "screenshot"]],
+    ["bare Gemini 2.5 image first", "gemini-2.5-flash", ["screenshot", "weather"]],
+    ["bare Gemini 2.5 image last", "gemini-2.5-flash", ["weather", "screenshot"]],
+    [
+      "provider-prefixed Gemini 2.5 image first",
+      "google/gemini-2.5-pro",
+      ["screenshot", "weather"],
+    ],
+    ["models-prefixed Gemini 2.5 image last", "models/gemini-2.5-pro", ["weather", "screenshot"]],
   ] as const)(
-    "keeps parallel function responses immediate and retains the deferred %s result",
-    (_label, resultOrder) => {
+    "keeps parallel function responses immediate and retains the deferred result for %s",
+    (_label, modelId, resultOrder) => {
       const params = buildGoogleGenerativeAiParams(
-        buildGeminiModel({ id: "gemini-2.5-flash", input: ["text", "image"] }),
+        buildGeminiModel({ id: modelId, input: ["text", "image"] }),
         {
           messages: [
             { role: "user", content: "Screenshot the page and check the weather.", timestamp: 0 },
@@ -2539,6 +2703,33 @@ describe("google transport stream", () => {
           { inlineData: { mimeType: "image/png", data: "png-bytes" } },
         ],
       });
+    },
+  );
+
+  it.each(["google/gemini-3.1-pro-preview", "models/gemini-3.1-pro-preview"])(
+    "keeps image parts inside function responses for prefixed Gemini 3 model %s",
+    (modelId) => {
+      const params = buildGoogleGenerativeAiParams(
+        buildGeminiModel({ id: modelId, input: ["text", "image"] }),
+        {
+          messages: [
+            { role: "user", content: "Take a screenshot.", timestamp: 0 },
+            googleToolCallAssistantTurn({
+              model: modelId,
+              name: "screenshot",
+              args: {},
+            }),
+            googleToolResultMessage("screenshot"),
+          ],
+        } as never,
+      );
+
+      const functionResponse = (params.contents[2] as GoogleTestContentTurn).parts[0]
+        ?.functionResponse as { parts?: unknown };
+      expect(params.contents.map((content) => content.role)).toEqual(["user", "model", "user"]);
+      expect(functionResponse.parts).toEqual([
+        { inlineData: { mimeType: "image/png", data: "png-bytes" } },
+      ]);
     },
   );
 

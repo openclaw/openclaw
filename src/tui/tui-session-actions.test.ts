@@ -302,6 +302,41 @@ describe("tui session actions", () => {
     expect(state.sessionInfo.updatedAt).toBe(200);
   });
 
+  it("applies the runtime-aware thinking projection returned by session patches", () => {
+    const state = createBaseState();
+    const { applySessionInfoFromPatch } = createTestSessionActions({ state });
+
+    applySessionInfoFromPatch({
+      ok: true,
+      path: "/tmp/sessions.json",
+      key: "agent:main:main",
+      entry: { sessionId: "session-1", updatedAt: 200 },
+      resolved: {
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntime: { id: "openclaw", source: "session-key" },
+        thinkingLevel: "ultra",
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "ultra", label: "ultra" },
+        ],
+      },
+    });
+
+    expect(state.sessionInfo).toEqual(
+      expect.objectContaining({
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntime: { id: "openclaw", source: "session-key" },
+        thinkingLevel: "ultra",
+        thinkingLevels: [
+          { id: "off", label: "off" },
+          { id: "ultra", label: "ultra" },
+        ],
+      }),
+    );
+  });
+
   it("clears the footer goal when the current session has no row yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
@@ -1263,13 +1298,14 @@ describe("tui session actions", () => {
       chatLog: chatLog as unknown as import("./components/chat-log.js").ChatLog,
     });
 
-    await runLoadHistory();
+    const result = await runLoadHistory();
 
     expect(chatLog.clearAll).toHaveBeenCalledWith({ preservePendingUsers: true });
     expect(chatLog.reconcilePendingUsers).toHaveBeenCalledWith([
       { text: "persisted", timestamp: 2_000 },
     ]);
     expect(chatLog.restorePendingUsers).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ loaded: true, inFlightRunId: null });
   });
 
   it("force-renders after rebuilding chat history so transient status rows are cleared", async () => {

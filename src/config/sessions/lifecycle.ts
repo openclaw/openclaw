@@ -15,7 +15,10 @@ type SessionLifecycleEntry = Pick<
   "sessionId" | "sessionFile" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
 >;
 
-type SessionWorkStartEntry = Pick<SessionEntry, "archivedAt" | "sessionId">;
+type SessionWorkStartEntry = Pick<
+  SessionEntry,
+  "archivedAt" | "initializationPending" | "sessionId"
+>;
 
 type SessionWorkStartOptions = {
   expectedSessionId?: string;
@@ -46,7 +49,7 @@ export function isSessionWorkStartInvalidatedError(
   );
 }
 
-/** Archived sessions are read-only until the lifecycle owner restores them. */
+/** Lifecycle-owned initializing and archived sessions reject new work. */
 export function resolveSessionWorkStartError(
   sessionKey: string,
   entry: SessionWorkStartEntry | null | undefined,
@@ -57,6 +60,9 @@ export function resolveSessionWorkStartError(
   }
   if (options?.expectedSessionId && entry?.sessionId !== options.expectedSessionId) {
     return `Session "${sessionKey}" changed while starting work. Retry.`;
+  }
+  if (entry?.initializationPending === true) {
+    return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;
   }
   return entry?.archivedAt === undefined
     ? undefined
@@ -121,7 +127,7 @@ function readFirstLine(filePath: string): string | undefined {
 }
 
 /** Reads session start time from a transcript header when store metadata is missing. */
-export function readSessionHeaderStartedAtMs(params: {
+function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
   storePath?: string;
@@ -211,6 +217,11 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
     isTerminalSessionStatus(params.entry.status) ||
     resolvePositiveTimestamp(params.entry.endedAt) !== undefined;
   if (!hasTerminalLifecycle) {
+    return undefined;
+  }
+  if (params.entry.status === "done") {
+    // Successful rows stay reusable: transcript writes can land after registry
+    // updates without making the session stale.
     return undefined;
   }
   if (params.entry.status === "failed") {

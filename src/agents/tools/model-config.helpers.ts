@@ -26,7 +26,6 @@ import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/t
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import {
   hasRuntimeAvailableProviderAuth,
-  hasUsableCustomProviderApiKey,
   resolveProviderEntryApiKeyProfileReference,
   resolveEnvApiKey,
 } from "../model-auth.js";
@@ -134,6 +133,16 @@ export function hasProviderAuthForTool(params: {
   authStore?: AuthProfileStore;
 }): boolean {
   if (
+    hasRuntimeAvailableProviderAuth({
+      provider: params.provider,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      allowPluginSyntheticAuth: false,
+    })
+  ) {
+    return true;
+  }
+  if (
     hasAuthForProvider({
       provider: params.provider,
       cfg: params.cfg,
@@ -144,7 +153,7 @@ export function hasProviderAuthForTool(params: {
   ) {
     return true;
   }
-  return hasUsableCustomProviderApiKey(params.cfg, params.provider);
+  return false;
 }
 
 function formatProviderModelRef(provider: string, model: string): string {

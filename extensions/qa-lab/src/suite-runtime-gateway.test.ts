@@ -42,8 +42,8 @@ function createConfigMutationEnv(
       waitReady,
     },
     providerMode: "mock-openai",
-    primaryModel: "openai/gpt-5.5",
-    alternateModel: "openai/gpt-5.5-mini",
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-mini",
   } as unknown as QaSuiteRuntimeEnv;
   return { env, waitReady };
 }
@@ -105,7 +105,7 @@ describe("qa suite gateway helpers", () => {
         profile: "coding",
       },
       agents: {
-        list: [{ id: "qa", model: { primary: "openai/gpt-5.5" } }],
+        list: [{ id: "qa", model: { primary: "openai/gpt-5.6-luna" } }],
       },
     };
 
@@ -234,6 +234,32 @@ describe("qa suite gateway helpers", () => {
       timeoutMs: expect.any(Number),
     });
     expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
+  });
+
+  it("does not wait for a deferred restart beyond the mutation timeout", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release,
+    });
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: { tools: {} } };
+      }
+      return { ok: true };
+    });
+    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+
+    await patchConfig({
+      env,
+      patch: { tools: { deny: ["read"] } },
+      restartDelayMs: 300_000,
+    });
+
+    expect(waitReady).toHaveBeenCalledWith({
+      gateway: env.gateway,
+      timeoutMs: 180_000,
+    });
   });
 
   it("uses the live timeout profile when config mutation races a restart", async () => {

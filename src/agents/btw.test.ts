@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 
 const streamSimpleMock = vi.fn();
 const readFileMock = vi.fn();
@@ -30,6 +31,7 @@ const prepareCliRunContextMock = vi.fn();
 const executePreparedCliRunMock = vi.fn();
 const diagDebugMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
+const loadTranscriptEventsMock = vi.fn();
 
 vi.mock("../llm/stream.js", async () => {
   const original = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -73,6 +75,7 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  applySecretRefHeaderSentinels: (model: unknown) => model,
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
@@ -173,6 +176,16 @@ vi.mock("../logging/diagnostic.js", () => ({
     debug: (...args: unknown[]) => diagDebugMock(...args),
   },
 }));
+
+vi.mock("../config/sessions/session-accessor.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/sessions/session-accessor.js")>(
+    "../config/sessions/session-accessor.js",
+  );
+  return {
+    ...actual,
+    loadTranscriptEvents: (...args: unknown[]) => loadTranscriptEventsMock(...args),
+  };
+});
 
 const { runBtwSideQuestion } = await import("./btw.js");
 const { clearAgentHarnesses, registerAgentHarness } = await import("./harness/registry.js");
@@ -462,9 +475,11 @@ describe("runBtwSideQuestion", () => {
     executePreparedCliRunMock.mockReset();
     diagDebugMock.mockReset();
     ensureSelectedAgentHarnessPluginMock.mockReset();
+    loadTranscriptEventsMock.mockReset();
     clearAgentHarnesses();
 
     readFileMock.mockResolvedValue("mock transcript");
+    loadTranscriptEventsMock.mockResolvedValue([]);
     parseSessionEntriesMock.mockReturnValue([
       createTranscriptEntry({
         id: "user-1",
@@ -604,7 +619,10 @@ describe("runBtwSideQuestion", () => {
     registerAgentHarness({
       id: "codex",
       label: "Codex test harness",
-      supports: () => ({ supported: true, priority: 100 }),
+      supports: ({ provider }) =>
+        provider === "openai"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "Codex only supports OpenAI providers" },
       runAttempt: vi.fn(),
       runSideQuestion: codexSideQuestionMock,
     });
@@ -681,6 +699,44 @@ describe("runBtwSideQuestion", () => {
     ).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a model-locked session on its persisted harness for BTW", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Locked Codex answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+
+    const result = await runSideQuestion({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      },
+      sessionEntry: createSessionEntry({
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+      }),
+    });
+
+    expect(result).toEqual({ text: "Locked Codex answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledOnce();
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessId: "codex" }),
+    );
+    expect(ensureSelectedAgentHarnessPluginMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ agentHarnessRuntimeOverride: expect.anything() }),
+    );
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(executePreparedCliRunMock).not.toHaveBeenCalled();
   });
 
   it("reselects the Codex hook after resolving legacy openai-codex route state", async () => {
@@ -1341,7 +1397,10 @@ describe("runBtwSideQuestion", () => {
       id: "gpt-5.4",
       baseUrl: "https://api.enterprise.githubcopilot.com",
     });
-    expectRecordFields(streamOptions, { apiKey: "copilot-runtime-token" });
+    const streamKey = (streamOptions as { apiKey?: string }).apiKey ?? "";
+    expect(looksLikeSecretSentinel(streamKey)).toBe(true);
+    expect(streamKey).not.toBe("copilot-runtime-token");
+    expect(resolveSecretSentinel(streamKey)).toBe("copilot-runtime-token");
   });
 
   it("uses the provider's stream fn when registered so provider URL construction runs (#68336)", async () => {
@@ -1621,6 +1680,39 @@ describe("runBtwSideQuestion", () => {
     expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
     expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
+  });
+
+  it("reads SQLite marker transcripts through the accessor when no active snapshot exists", async () => {
+    const userEntry = createTranscriptEntry({
+      id: "user-seed",
+      message: createUserTranscriptMessage(),
+    });
+    const assistantEntry = createTranscriptEntry({
+      id: "assistant-seed",
+      parentId: "user-seed",
+      message: createAssistantTranscriptMessage([{ type: "text", text: "seed answer" }]),
+    });
+    loadTranscriptEventsMock.mockResolvedValue([userEntry, assistantEntry]);
+    readFileMock.mockRejectedValue(new Error("sqlite marker must not be read as a file"));
+    mockDoneAnswer(MATH_ANSWER);
+
+    const result = await runMathSideQuestion({
+      sessionKey: DEFAULT_SESSION_KEY,
+      sessionEntry: createSessionEntry({
+        sessionFile: `sqlite:main:session-1:${DEFAULT_STORE_PATH}`,
+      }),
+    });
+
+    expect(result).toEqual({ text: MATH_ANSWER });
+    expect(readFileMock).not.toHaveBeenCalled();
+    expect(loadTranscriptEventsMock).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: DEFAULT_SESSION_KEY,
+      storePath: DEFAULT_STORE_PATH,
+    });
+    expect(buildSessionContextMock).toHaveBeenCalledTimes(1);
+    expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
   });
 
   it("falls back when the active run snapshot leaf no longer exists", async () => {

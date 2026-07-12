@@ -1,12 +1,13 @@
 // Gateway Protocol schema module defines Crestodian chat payloads.
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
+import { WizardStartResultSchema } from "./wizard.js";
 
 /**
  * Crestodian chat lets clients (macOS app onboarding, future UIs) hold the
- * setup/repair conversation over the gateway. It is configless-safe: the
- * engine answers deterministically before any model is configured. Omitting
- * `message` returns the welcome/greeting for a fresh session without input.
+ * setup/repair conversation over the gateway. The gateway live-tests the
+ * configured inference route before creating a session. Omitting `message`
+ * returns the welcome/greeting for a verified fresh session without input.
  */
 export const CrestodianChatParamsSchema = Type.Object(
   {
@@ -56,6 +57,27 @@ const SetupInferenceKind = Type.Union([
   Type.Literal("gemini-cli"),
 ]);
 
+const SetupInferenceStatus = Type.Union([
+  Type.Literal("ok"),
+  Type.Literal("auth"),
+  Type.Literal("rate_limit"),
+  Type.Literal("billing"),
+  Type.Literal("timeout"),
+  Type.Literal("format"),
+  Type.Literal("unavailable"),
+  Type.Literal("unknown"),
+]);
+
+const SetupInferenceFailureStatus = Type.Union([
+  Type.Literal("auth"),
+  Type.Literal("rate_limit"),
+  Type.Literal("billing"),
+  Type.Literal("timeout"),
+  Type.Literal("format"),
+  Type.Literal("unavailable"),
+  Type.Literal("unknown"),
+]);
+
 export const CrestodianSetupDetectResultSchema = Type.Object(
   {
     candidates: Type.Array(
@@ -72,12 +94,63 @@ export const CrestodianSetupDetectResultSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    /** Text-inference key/token methods exposed by the Gateway provider registry. */
+    manualProviders: Type.Array(
+      Type.Object(
+        {
+          /** Opaque provider-auth choice sent back during activation. */
+          id: NonEmptyString,
+          label: NonEmptyString,
+          hint: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    /** Provider-owned browser and device-code login methods. */
+    authOptions: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            id: NonEmptyString,
+            label: NonEmptyString,
+            hint: Type.Optional(Type.String()),
+            groupLabel: Type.Optional(Type.String()),
+            kind: Type.Union([Type.Literal("oauth"), Type.Literal("device-code")]),
+            featured: Type.Boolean(),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
     workspace: NonEmptyString,
+    codexAppServerDetected: Type.Optional(Type.Boolean()),
     configuredModel: Type.Optional(Type.String()),
     setupComplete: Type.Boolean(),
   },
   { additionalProperties: false },
 );
+
+/** Live verification of the Gateway's current default-agent inference route. */
+export const CrestodianSetupVerifyParamsSchema = Type.Object({}, { additionalProperties: false });
+
+export const CrestodianSetupVerifyResultSchema = Type.Union([
+  Type.Object(
+    {
+      ok: Type.Literal(true),
+      modelRef: NonEmptyString,
+      latencyMs: Type.Number(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      ok: Type.Literal(false),
+      status: SetupInferenceFailureStatus,
+      error: NonEmptyString,
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 export const CrestodianSetupActivateParamsSchema = Type.Object(
   {
@@ -90,9 +163,11 @@ export const CrestodianSetupActivateParamsSchema = Type.Object(
       Type.Literal("gemini-cli"),
       Type.Literal("api-key"),
     ]),
-    /** Manual step only: provider the pasted key belongs to (anthropic/openai/google). */
-    provider: Type.Optional(Type.String()),
-    /** Manual step only: the pasted API key; masked by clients, never echoed. */
+    /** Exact detected model for this route; prevents detect/activate drift. */
+    modelRef: Type.Optional(NonEmptyString),
+    /** Manual step only: opaque provider-auth choice returned by detection. */
+    authChoice: Type.Optional(Type.String()),
+    /** Manual step only: the pasted API key or token; masked by clients, never echoed. */
     apiKey: Type.Optional(Type.String()),
     workspace: Type.Optional(Type.String()),
   },
@@ -108,19 +183,21 @@ export const CrestodianSetupActivateResultSchema = Type.Object(
     /** Human-readable setup summary lines (workspace, model, gateway). */
     lines: Type.Optional(Type.Array(Type.String())),
     /** Present on failure: coarse bucket for client copy + docs links. */
-    status: Type.Optional(
-      Type.Union([
-        Type.Literal("ok"),
-        Type.Literal("auth"),
-        Type.Literal("rate_limit"),
-        Type.Literal("billing"),
-        Type.Literal("timeout"),
-        Type.Literal("format"),
-        Type.Literal("unavailable"),
-        Type.Literal("unknown"),
-      ]),
-    ),
+    status: Type.Optional(SetupInferenceStatus),
     error: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
+
+/** Starts one provider-owned interactive login as a gateway wizard session. */
+export const CrestodianSetupAuthStartParamsSchema = Type.Object(
+  {
+    /** Client-generated so cancellation remains possible if the start reply is lost. */
+    sessionId: NonEmptyString,
+    authChoice: NonEmptyString,
+    workspace: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const CrestodianSetupAuthStartResultSchema = WizardStartResultSchema;

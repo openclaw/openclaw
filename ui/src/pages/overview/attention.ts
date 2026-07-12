@@ -5,7 +5,7 @@ import { icons, type IconName } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 
-export type OverviewAttentionProps = {
+type OverviewAttentionProps = {
   items: AttentionItem[];
 };
 

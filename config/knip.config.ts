@@ -13,10 +13,12 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  "src/audit/audit-event-writer.worker.ts!",
   "src/agents/model-provider-auth.worker.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
+  "src/mcp/codex-supervision-tools-serve.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
@@ -143,6 +145,9 @@ const config = {
         "@mistralai/mistralai",
         "cross-spawn",
         "file-type",
+        // Loaded via createRequire in src/agents/utils/syntax-highlight.ts because its
+        // d.ts force-includes lib.dom; knip cannot see the dynamic require.
+        "highlight.js",
         "playwright-core",
         "partial-json",
         "sqlite-vec",

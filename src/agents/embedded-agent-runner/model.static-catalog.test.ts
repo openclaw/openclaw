@@ -45,6 +45,7 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
 
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
+  canonicalizeManifestModelCatalogProviderAlias,
   createBundledProviderStaticCatalogContextResolver,
   createBundledProviderStaticCatalogModelResolver,
   createBundledStaticCatalogModelResolver,
@@ -135,6 +136,28 @@ beforeEach(() => {
   providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
   providerMocks.runProviderStaticCatalog.mockResolvedValue(undefined);
   providerMocks.normalizePluginDiscoveryResult.mockReturnValue({});
+});
+
+describe("canonicalizeManifestModelCatalogProviderAlias", () => {
+  it("canonicalizes unambiguous manifest-owned aliases", () => {
+    manifestMocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          providers: ["moonshot"],
+          modelCatalog: {
+            aliases: {
+              "moonshot-ai": { provider: "moonshot" },
+              moonshotai: { provider: "moonshot" },
+            },
+          },
+        },
+      ],
+    });
+
+    for (const provider of ["moonshotai", "moonshot-ai"]) {
+      expect(canonicalizeManifestModelCatalogProviderAlias({ provider })).toBe("moonshot");
+    }
+  });
 });
 
 describe("resolveBundledStaticCatalogModel", () => {

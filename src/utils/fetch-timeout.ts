@@ -1,5 +1,6 @@
 // Fetch timeout helpers wrap fetch calls with timeout and abort behavior.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveSafeTimeoutDelayMs } from "./timer-delay.js";
 
@@ -41,7 +42,9 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
     parsed.search = "";
     parsed.hash = "";
     const value = redactSensitiveUrlLikeString(parsed.toString());
-    return value.length > LOG_URL_MAX_CHARS ? `${value.slice(0, LOG_URL_MAX_CHARS)}...` : value;
+    return value.length > LOG_URL_MAX_CHARS
+      ? `${truncateUtf16Safe(value, LOG_URL_MAX_CHARS)}...`
+      : value;
   } catch {
     const withoutQueryOrHash = trimmed.split(URL_SECRET_SUFFIX_PATTERN, 1)[0] ?? "";
     const cleaned = redactSensitiveUrlLikeString(
@@ -55,7 +58,7 @@ function sanitizeTimeoutLogUrl(rawUrl: string | undefined): string | undefined {
       return undefined;
     }
     return cleaned.length > LOG_URL_MAX_CHARS
-      ? `${cleaned.slice(0, LOG_URL_MAX_CHARS)}...`
+      ? `${truncateUtf16Safe(cleaned, LOG_URL_MAX_CHARS)}...`
       : cleaned;
   }
 }
@@ -182,11 +185,18 @@ export async function fetchWithTimeout(
   timeoutMs: number,
   fetchFn: typeof fetch = fetch,
 ): Promise<Response> {
-  const { signal, cleanup } = buildTimeoutAbortSignal({
+  const { signal: timeoutSignal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: Math.max(1, timeoutMs),
     operation: "fetchWithTimeout",
     url,
   });
+  const callerSignal = init.signal ?? undefined;
+  // The wrapper timeout ends once fetch returns headers, but the response body
+  // must keep following caller cancellation (and its reason) after that point.
+  const signal =
+    callerSignal && timeoutSignal
+      ? AbortSignal.any([callerSignal, timeoutSignal])
+      : (callerSignal ?? timeoutSignal);
   try {
     return await fetchFn(url, { ...init, signal });
   } finally {

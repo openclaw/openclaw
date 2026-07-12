@@ -161,6 +161,26 @@ normalizes numeric thread ids the same way core does, so prefer it over ad hoc
 should expose `messaging.resolveOutboundSessionRoute(...)` so core gets
 provider-native session and thread identity without parser shims.
 
+### Account-scoped conversation binding support
+
+Set `conversationBindings.supportsCurrentConversationBinding` when the channel
+supports generic current-conversation bindings. `createChatChannelPlugin(...)`
+sets this static capability to `true` by default.
+
+If support differs by configured account, also implement
+`conversationBindings.isCurrentConversationBindingSupported({ accountId })`.
+Core evaluates this synchronous hook only after the static capability is
+enabled. Returning `false` makes generic current-conversation capability,
+bind, lookup, list, touch, and unbind operations unavailable for that account.
+Omitting the hook applies the static capability to every account.
+
+Resolve the answer from already-loaded account config or runtime state. This
+hook gates only generic current-conversation bindings; it does not replace
+configured binding rules or plugin-owned session routing. Contract tests
+should cover at least one supported and one unsupported account through the
+`ChannelPlugin["conversationBindings"]` contract exported by
+`openclaw/plugin-sdk/channel-core`.
+
 ## Approvals and channel capabilities
 
 Most channel plugins do not need approval-specific code. Core owns same-chat

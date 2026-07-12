@@ -19,7 +19,7 @@ type PluginRuntimeRecord = {
   source: string;
 };
 
-export function readPluginBoundaryConfigSafely() {
+function readPluginBoundaryConfigSafely() {
   try {
     return getRuntimeConfig();
   } catch {

@@ -20,6 +20,7 @@ import {
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
+import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 
 export {
   buildGatewayReloadPlan,
@@ -90,11 +91,6 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
   );
 }
 
-// Hot-reload stays "active" while a watcher is live. It flips to "disabled" only
-// after watcher re-creation fails past the retry budget, so operators/callers
-// can detect silent degradation instead of assuming reloads still fire.
-export type GatewayHotReloadStatus = "active" | "disabled";
-
 type GatewayConfigReloader = {
   stop: () => Promise<void>;
   hotReloadStatus: () => GatewayHotReloadStatus;
@@ -117,8 +113,11 @@ export function startGatewayConfigReloader(opts: {
   readSnapshot: () => Promise<ConfigFileSnapshot>;
   onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  onNoopConfigCommit: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  /** Keeps one accepted config transaction inside the Gateway work fence. */
+  runTransaction?: <T>(run: () => Promise<T>) => Promise<T>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
   initialPluginInstallRecords?: PluginInstallRecords;
   readPluginInstallRecords?: () => Promise<PluginInstallRecords>;
@@ -167,21 +166,21 @@ export function startGatewayConfigReloader(opts: {
   const schedule = () => {
     scheduleAfter(settings.debounceMs);
   };
-  const queueRestart = (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
+  const queueRestart = async (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => {
     if (restartQueued) {
       return;
     }
     restartQueued = true;
-    void (async () => {
-      try {
-        await opts.onRestart(plan, nextConfig);
-      } catch (err) {
-        // Restart checks can fail (for example unresolved SecretRefs). Keep the
-        // reloader alive and allow a future change to retry restart scheduling.
-        restartQueued = false;
-        opts.log.error(`config restart failed: ${String(err)}`);
-      }
-    })();
+    try {
+      // Restart preparation reads secrets and can mutate auth/runtime state.
+      // Keep it inside the accepted config transaction instead of detaching it.
+      await opts.onRestart(plan, nextConfig);
+    } catch (err) {
+      // Restart checks can fail (for example unresolved SecretRefs). Keep the
+      // reloader alive and allow a future change to retry restart scheduling.
+      restartQueued = false;
+      opts.log.error(`config restart failed: ${String(err)}`);
+    }
   };
 
   const handleMissingSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
@@ -287,6 +286,9 @@ export function startGatewayConfigReloader(opts: {
     }
     if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
       await opts.onConfigChange?.(plan, nextConfig);
+      // No-op plans still change the runtime config snapshot. Commit before
+      // marking applied so getRuntimeConfig() readers do not stay stale until restart.
+      await opts.onNoopConfigCommit(plan, nextConfig);
       await opts.onConfigApplied?.(plan, nextConfig);
       return;
     }
@@ -297,12 +299,12 @@ export function startGatewayConfigReloader(opts: {
         restartReasons: [...plan.restartReasons, followUp.reason],
       };
       await opts.onConfigChange?.(restartPlan, nextConfig);
-      queueRestart(restartPlan, nextConfig);
+      await queueRestart(restartPlan, nextConfig);
       return;
     }
     if (settings.mode === "restart") {
       await opts.onConfigChange?.({ ...plan, restartGateway: true }, nextConfig);
-      queueRestart(plan, nextConfig);
+      await queueRestart(plan, nextConfig);
       return;
     }
     if (plan.restartGateway) {
@@ -315,7 +317,7 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       await opts.onConfigChange?.(plan, nextConfig);
-      queueRestart(plan, nextConfig);
+      await queueRestart(plan, nextConfig);
       return;
     }
 
@@ -333,6 +335,14 @@ export function startGatewayConfigReloader(opts: {
     } catch (err) {
       opts.log.warn(`config reload last-known-good promotion failed: ${String(err)}`);
     }
+  };
+
+  const runAcceptedTransaction = async (run: () => Promise<void>) => {
+    if (opts.runTransaction) {
+      await opts.runTransaction(run);
+      return;
+    }
+    await run();
   };
 
   const promoteAcceptedInProcessWrite = async (persistedHash: string) => {
@@ -368,12 +378,14 @@ export function startGatewayConfigReloader(opts: {
         const pendingWrite = pendingInProcessConfig;
         pendingInProcessConfig = null;
         missingConfigRetries = 0;
-        await applySnapshot(
-          pendingWrite.config,
-          pendingWrite.compareConfig,
-          pendingWrite.afterWrite,
-        );
-        await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
+        await runAcceptedTransaction(async () => {
+          await applySnapshot(
+            pendingWrite.config,
+            pendingWrite.compareConfig,
+            pendingWrite.afterWrite,
+          );
+          await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
+        });
         return;
       }
       const snapshot = await opts.readSnapshot();
@@ -390,8 +402,10 @@ export function startGatewayConfigReloader(opts: {
         handleInvalidSnapshot(snapshot);
         return;
       }
-      await applySnapshot(snapshot.config, snapshot.sourceConfig);
-      await promoteAcceptedSnapshot(snapshot, "valid-config");
+      await runAcceptedTransaction(async () => {
+        await applySnapshot(snapshot.config, snapshot.sourceConfig);
+        await promoteAcceptedSnapshot(snapshot, "valid-config");
+      });
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
     } finally {

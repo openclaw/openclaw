@@ -1,18 +1,14 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import {
-  REALTIME_TALK_FALLBACK_PROVIDERS,
-  listSelectableRealtimeTalkProviders,
-  resolveControlUiRealtimeTalkProviderTransports,
-  type RealtimeTalkCatalogProvider,
-} from "../realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "../realtime-talk-conversation.ts";
+import type { RealtimeTalkInputDevice } from "../realtime-talk-input.ts";
 
 type TalkSelectOption = { label: string; value: string };
 
 const TALK_VOICE_OPTIONS: TalkSelectOption[] = [
-  { label: "Default", value: "" },
   { label: "Alloy", value: "alloy" },
   { label: "Ash", value: "ash" },
   { label: "Ballad", value: "ballad" },
@@ -24,66 +20,41 @@ const TALK_VOICE_OPTIONS: TalkSelectOption[] = [
   { label: "Marin", value: "marin" },
   { label: "Cedar", value: "cedar" },
 ];
-const TALK_SENSITIVITY_OPTIONS: TalkSelectOption[] = [
-  { label: "Default", value: "" },
-  { label: "Low", value: "0.65" },
-  { label: "Medium", value: "0.5" },
-  { label: "High", value: "0.35" },
-];
-const TALK_PROVIDER_AUTO_OPTION: TalkSelectOption = { label: "Auto", value: "" };
-const TALK_PROVIDER_FALLBACK_OPTIONS: TalkSelectOption[] = [
-  TALK_PROVIDER_AUTO_OPTION,
-  ...REALTIME_TALK_FALLBACK_PROVIDERS.map((provider) => ({
-    label: provider.label,
-    value: provider.id,
-  })),
-];
-const TALK_TRANSPORT_OPTIONS: TalkSelectOption[] = [
-  { label: "Auto", value: "" },
-  { label: "WebRTC", value: "webrtc" },
-  { label: "Gateway relay", value: "gateway-relay" },
-  { label: "Provider WebSocket", value: "provider-websocket" },
-];
-const TALK_REASONING_OPTIONS: TalkSelectOption[] = [
-  { label: "Default", value: "" },
-  { label: "Minimal", value: "minimal" },
-  { label: "Low", value: "low" },
-  { label: "Medium", value: "medium" },
-  { label: "High", value: "high" },
-];
-
 export type RealtimeTalkOptions = {
-  provider: string;
   model: string;
   voice: string;
-  transport: string;
   vadThreshold: string;
-  silenceDurationMs: string;
-  prefixPaddingMs: string;
-  reasoningEffort: string;
 };
 
 export type ChatRealtimeTalkOptionsProps = {
-  realtimeTalkOptionsOpen?: boolean;
-  realtimeTalkCatalogProviders?: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions?: RealtimeTalkOptions;
+  realtimeTalkInputDevices?: RealtimeTalkInputDevice[];
+  realtimeTalkInputDeviceId?: string;
+  realtimeTalkInputLoading?: boolean;
+  realtimeTalkInputError?: string | null;
   onRealtimeTalkOptionsChange?: (next: Partial<RealtimeTalkOptions>) => void;
+  onRealtimeTalkInputRefresh?: () => void;
+  onRealtimeTalkInputSelect?: (deviceId: string) => void;
+  canOpenRealtimeTalkSettings?: boolean;
+  onOpenRealtimeTalkSettings?: () => void;
+  embedded?: boolean;
 };
 
-export type ChatRealtimeTalkConversationProps = {
+type ChatRealtimeTalkConversationProps = {
   assistantName: string;
   userName?: string | null;
   realtimeTalkConversation?: RealtimeTalkConversationEntry[];
 };
 
 function renderNativeTalkSelect(params: {
+  id: "microphone" | "sensitivity" | "voice";
   label: string;
   value: string;
   options: TalkSelectOption[];
   onSelect: (value: string) => void;
 }) {
   return html`
-    <label class="agent-chat__talk-field" data-talk-select=${params.label.toLowerCase()}>
+    <label class="agent-chat__talk-field" data-talk-select=${params.id}>
       <span>${params.label}</span>
       <select
         .value=${params.value}
@@ -109,147 +80,154 @@ function renderNativeTalkSelect(params: {
   `;
 }
 
+function getTalkVoiceOptions(): TalkSelectOption[] {
+  return [{ label: t("chat.composer.talkDefault"), value: "" }, ...TALK_VOICE_OPTIONS];
+}
+
+function getTalkSensitivityOptions(): TalkSelectOption[] {
+  return [
+    { label: t("chat.composer.talkDefault"), value: "" },
+    { label: t("chat.composer.talkSensitivityLow"), value: "0.65" },
+    { label: t("chat.composer.talkSensitivityMedium"), value: "0.5" },
+    { label: t("chat.composer.talkSensitivityHigh"), value: "0.35" },
+  ];
+}
+
+function renderRealtimeTalkInputSetting(props: ChatRealtimeTalkOptionsProps) {
+  if (!props.onRealtimeTalkInputSelect) {
+    return nothing;
+  }
+  const devices = props.realtimeTalkInputDevices ?? [];
+  const selectedDeviceId = props.realtimeTalkInputDeviceId?.trim() ?? "";
+  const selectedDeviceKnown = devices.some((device) => device.deviceId === selectedDeviceId);
+  const options = [
+    { label: t("chat.composer.systemDefaultMicrophone"), value: "" },
+    ...devices.map((device) => ({ label: device.label, value: device.deviceId })),
+    ...(selectedDeviceId && !selectedDeviceKnown
+      ? [
+          {
+            label: t("chat.composer.microphoneFallback", {
+              number: String(devices.length + 1),
+            }),
+            value: selectedDeviceId,
+          },
+        ]
+      : []),
+  ];
+  const refreshLabel = `${t("common.refresh")}: ${t("chat.composer.microphoneInput")}`;
+  return html`
+    <div class="agent-chat__talk-input-setting">
+      <div class="agent-chat__talk-input-control">
+        ${renderNativeTalkSelect({
+          id: "microphone",
+          label: t("chat.composer.microphoneInput"),
+          value: selectedDeviceId,
+          options,
+          onSelect: props.onRealtimeTalkInputSelect,
+        })}
+        ${props.onRealtimeTalkInputRefresh
+          ? html`
+              <openclaw-tooltip .content=${refreshLabel}>
+                <button
+                  type="button"
+                  class="agent-chat__talk-input-refresh"
+                  aria-label=${refreshLabel}
+                  ?disabled=${props.realtimeTalkInputLoading}
+                  @click=${props.onRealtimeTalkInputRefresh}
+                >
+                  ${props.realtimeTalkInputLoading ? icons.loader : icons.refresh}
+                </button>
+              </openclaw-tooltip>
+            `
+          : nothing}
+      </div>
+      ${props.realtimeTalkInputLoading
+        ? html`
+            <div
+              class="agent-chat__talk-input-message agent-chat__talk-input-message--loading"
+              role="status"
+              aria-live="polite"
+            >
+              <span class="agent-chat__talk-input-spinner" aria-hidden="true">${icons.loader}</span>
+              <span>${t("chat.composer.loadingMicrophones")}</span>
+            </div>
+          `
+        : nothing}
+      ${!props.realtimeTalkInputLoading && devices.length === 0 && !props.realtimeTalkInputError
+        ? html`<div class="agent-chat__talk-input-message" role="status">
+            ${t("chat.composer.noMicrophones")}
+          </div>`
+        : nothing}
+      ${props.realtimeTalkInputError
+        ? html`<div
+            class="agent-chat__talk-input-message agent-chat__talk-input-message--error"
+            role="alert"
+          >
+            <span class="agent-chat__talk-input-message-icon" aria-hidden="true"
+              >${icons.alertTriangle}</span
+            >
+            <span>${props.realtimeTalkInputError}</span>
+          </div>`
+        : nothing}
+    </div>
+  `;
+}
+
 export function renderRealtimeTalkOptions(props: ChatRealtimeTalkOptionsProps) {
   const options = props.realtimeTalkOptions;
   const onChange = props.onRealtimeTalkOptionsChange;
-  if (!props.realtimeTalkOptionsOpen || !options || !onChange) {
+  if (!options || !onChange) {
     return nothing;
   }
-  const catalogProviders = props.realtimeTalkCatalogProviders;
-  const selectableProviders = listSelectableRealtimeTalkProviders(catalogProviders ?? []);
-  const providerOptions: TalkSelectOption[] = catalogProviders
-    ? [
-        TALK_PROVIDER_AUTO_OPTION,
-        ...selectableProviders.map((provider) => ({ label: provider.label, value: provider.id })),
-      ]
-    : TALK_PROVIDER_FALLBACK_OPTIONS;
-  const selectedCatalogProvider = options.provider
-    ? selectableProviders.find((provider) => provider.id === options.provider)
-    : null;
-  const selectedProviderTransports = selectedCatalogProvider
-    ? resolveControlUiRealtimeTalkProviderTransports(selectedCatalogProvider)
-    : undefined;
-  const transportOptions: TalkSelectOption[] = selectedProviderTransports
-    ? [
-        { label: "Auto", value: "" },
-        ...TALK_TRANSPORT_OPTIONS.filter(
-          (opt) => opt.value !== "" && selectedProviderTransports.includes(opt.value),
-        ),
-      ]
-    : TALK_TRANSPORT_OPTIONS;
-  const update = (key: keyof RealtimeTalkOptions) => (event: Event) => {
-    const value = (event.currentTarget as HTMLInputElement | HTMLSelectElement).value;
-    onChange({ [key]: value });
-  };
-  const isDefaultSensitivity = options.vadThreshold === "";
-  const isPresetSensitivity = ["0.65", "0.5", "0.35"].includes(options.vadThreshold);
-  const isCustomSensitivity = !isDefaultSensitivity && !isPresetSensitivity;
-  const sensitivityValue = isDefaultSensitivity
-    ? ""
-    : isPresetSensitivity
-      ? options.vadThreshold
-      : "__custom";
-  const sensitivityOptions = isCustomSensitivity
-    ? [...TALK_SENSITIVITY_OPTIONS, { label: "Custom", value: "__custom" }]
-    : TALK_SENSITIVITY_OPTIONS;
-  const updateSensitivity = (value: string) => {
-    if (value !== "__custom") {
-      onChange({ vadThreshold: value });
-    }
-  };
   return html`
-    <div class="agent-chat__talk-options" aria-label="Talk options">
+    <div
+      class="agent-chat__talk-options ${props.embedded ? "agent-chat__talk-options--settings" : ""}"
+      aria-label=${t("chat.composer.voiceOptions")}
+    >
       <div class="agent-chat__talk-options-primary">
         ${renderNativeTalkSelect({
-          label: "Voice",
+          id: "voice",
+          label: t("chat.composer.talkVoice"),
           value: options.voice,
-          options: TALK_VOICE_OPTIONS,
+          options: getTalkVoiceOptions(),
           onSelect: (voice) => onChange({ voice }),
         })}
         <label class="agent-chat__talk-field">
-          <span>Model</span>
+          <span>${t("chat.composer.talkModel")}</span>
           <input
             .value=${options.model}
-            @input=${update("model")}
-            placeholder="Auto"
+            @input=${(event: Event) =>
+              onChange({ model: (event.currentTarget as HTMLInputElement).value })}
+            placeholder=${t("chat.composer.talkModelAuto")}
             spellcheck="false"
           />
         </label>
         ${renderNativeTalkSelect({
-          label: "Sensitivity",
-          value: sensitivityValue,
-          options: sensitivityOptions,
-          onSelect: updateSensitivity,
+          id: "sensitivity",
+          label: t("chat.composer.talkSensitivity"),
+          value: options.vadThreshold,
+          options: getTalkSensitivityOptions(),
+          onSelect: (vadThreshold) => onChange({ vadThreshold }),
         })}
+        ${renderRealtimeTalkInputSetting(props)}
       </div>
-      <details class="agent-chat__talk-options-advanced">
-        <summary>Advanced</summary>
-        <div class="agent-chat__talk-options-grid">
-          ${renderNativeTalkSelect({
-            label: "Provider",
-            value: options.provider,
-            options: providerOptions,
-            onSelect: (provider) => {
-              const selectedProvider = selectableProviders.find((entry) => entry.id === provider);
-              const transports = selectedProvider
-                ? resolveControlUiRealtimeTalkProviderTransports(selectedProvider)
-                : null;
-              const transport = options.transport;
-              onChange(
-                transports && transport && !transports.includes(transport)
-                  ? { provider, transport: "" }
-                  : { provider },
-              );
-            },
-          })}
-          ${renderNativeTalkSelect({
-            label: "Transport",
-            value: options.transport,
-            options: transportOptions,
-            onSelect: (transport) => onChange({ transport }),
-          })}
-          ${renderNativeTalkSelect({
-            label: "Reasoning",
-            value: options.reasoningEffort,
-            options: TALK_REASONING_OPTIONS,
-            onSelect: (reasoningEffort) => onChange({ reasoningEffort }),
-          })}
-          <label class="agent-chat__talk-field">
-            <span>Exact VAD</span>
-            <input
-              type="number"
-              min="0"
-              max="1"
-              step="0.05"
-              .value=${options.vadThreshold}
-              @input=${update("vadThreshold")}
-              placeholder="0.5"
-            />
-          </label>
-          <label class="agent-chat__talk-field">
-            <span>Pause before send</span>
-            <input
-              type="number"
-              min="1"
-              step="50"
-              .value=${options.silenceDurationMs}
-              @input=${update("silenceDurationMs")}
-              placeholder="500"
-            />
-          </label>
-          <label class="agent-chat__talk-field">
-            <span>Lead-in</span>
-            <input
-              type="number"
-              min="0"
-              step="50"
-              .value=${options.prefixPaddingMs}
-              @input=${update("prefixPaddingMs")}
-              placeholder="300"
-            />
-          </label>
-        </div>
-      </details>
+      ${props.onOpenRealtimeTalkSettings
+        ? html`
+            <button
+              type="button"
+              class="agent-chat__talk-settings-link"
+              @click=${props.onOpenRealtimeTalkSettings}
+              ?disabled=${props.canOpenRealtimeTalkSettings === false}
+              title=${props.canOpenRealtimeTalkSettings === false
+                ? t("chat.composer.talkAdvancedSettingsRequiresAdminTitle")
+                : ""}
+            >
+              ${props.canOpenRealtimeTalkSettings === false
+                ? t("chat.composer.talkAdvancedSettingsRequiresAdmin")
+                : t("chat.composer.talkMoreInSettings")}
+            </button>
+          `
+        : nothing}
     </div>
   `;
 }
@@ -260,7 +238,11 @@ export function renderRealtimeTalkConversation(props: ChatRealtimeTalkConversati
     return nothing;
   }
   return html`
-    <div class="agent-chat__voice-turns" role="log" aria-label=${t("chat.composer.talkTranscript")}>
+    <div
+      class="agent-chat__voice-turns"
+      role="log"
+      aria-label=${t("chat.composer.voiceTranscript")}
+    >
       ${repeat(
         entries,
         (entry) => entry.id,

@@ -7,7 +7,11 @@
 
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
-import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+  stripChannelTargetPrefix,
+} from "openclaw/plugin-sdk/channel-core";
 import {
   createLoggedPairingApprovalNotifier,
   createPairingPrefixStripper,
@@ -44,9 +48,20 @@ import type {
   ChannelResolveResult,
   TwitchAccountConfig,
 } from "./types.js";
-import { isAccountConfigured } from "./utils/twitch.js";
+import { isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
 
 type ResolvedTwitchAccount = TwitchAccountConfig & { accountId?: string | null };
+
+function normalizeTwitchMessagingTarget(target: string): string {
+  const providerTarget = stripChannelTargetPrefix(target, "twitch", "twitch-chat");
+  const kindMatch = /^(user|dm|channel|group|conversation|room):/i.exec(providerTarget);
+  const kind = kindMatch?.[1]?.toLowerCase();
+  if (kind === "user" || kind === "dm") {
+    return "";
+  }
+  const channelTarget = kindMatch ? providerTarget.slice(kindMatch[0].length) : providerTarget;
+  return normalizeTwitchChannel(channelTarget);
+}
 
 /**
  * Twitch channel plugin.
@@ -80,6 +95,25 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
       setupWizard: twitchSetupWizard,
       capabilities: {
         chatTypes: ["group"],
+      },
+      messaging: {
+        resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
+          const channel = normalizeTwitchMessagingTarget(target);
+          if (!channel) {
+            return null;
+          }
+          return buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "twitch",
+            accountId,
+            recipientSessionExact: true,
+            peer: { kind: "group", id: channel },
+            chatType: "group",
+            from: `twitch:channel:${channel}`,
+            to: channel,
+          });
+        },
       },
       message: twitchMessageAdapter,
       configSchema: buildChannelConfigSchema(TwitchConfigSchema),

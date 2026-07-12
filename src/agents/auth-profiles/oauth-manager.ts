@@ -19,6 +19,7 @@ import {
 } from "./oauth-refresh-lock-errors.js";
 import {
   areOAuthCredentialsEquivalent,
+  hasMatchingOAuthIdentity,
   hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   isSafeToAdoptMainStoreOAuthIdentity,
@@ -53,7 +54,7 @@ export type OAuthManagerAdapter = {
   isRefreshTokenReusedError: (error: unknown) => boolean;
 };
 
-export type ResolvedOAuthAccess = {
+type ResolvedOAuthAccess = {
   apiKey: string;
   credential: OAuthCredential;
 };
@@ -77,9 +78,12 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
       typeof params.cause === "object" && params.cause !== null
         ? (params.cause as { code?: unknown; lockPath?: unknown; cause?: unknown })
         : undefined;
-    const delegatedCause =
-      structuredCause?.code === "refresh_contention" && structuredCause.cause
-        ? structuredCause.cause
+    const isRefreshContention = structuredCause?.code === "refresh_contention";
+    // Keep the file-lock cause on structured fields only. Flattening it here
+    // exposes local lock paths in user-facing auth diagnostics.
+    const surfacedCause =
+      isRefreshContention && params.cause instanceof Error
+        ? new Error(params.cause.message)
         : params.cause;
     const storedCredential = params.refreshedStore.profiles[params.profileId];
     const secrets = collectOAuthCredentialSecrets(
@@ -87,12 +91,12 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
       ...(params.attemptedCredentials ?? []),
       storedCredential?.type === "oauth" ? storedCredential : undefined,
     );
-    const causeMessage = formatRedactedOAuthRefreshError(params.cause, secrets);
+    const causeMessage = formatRedactedOAuthRefreshError(surfacedCause, secrets);
     super({
       provider: params.credential.provider,
       profileId: params.profileId,
       message: `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
-      cause: createRedactedOAuthRefreshCause(delegatedCause, secrets),
+      cause: createRedactedOAuthRefreshCause(surfacedCause, secrets),
     });
     this.name = "OAuthManagerRefreshError";
     this.#credential = params.credential;
@@ -463,6 +467,36 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     return result !== null && saved;
   }
 
+  async function resolveOAuthCredentialAfterPersistMiss(params: {
+    agentDir?: string;
+    profileId: string;
+    refreshed: OAuthCredential;
+  }): Promise<OAuthCredential | null> {
+    // Single locked pass decides both outcomes so no relog can slip between a
+    // pre-read and the update: same identity persists the rotation, different
+    // identity adopts the stored (re-logged) credential for this call.
+    let adopted: OAuthCredential | null = null;
+    const result = await updateAuthProfileStoreWithLock({
+      agentDir: params.agentDir,
+      updater: (store) => {
+        const existing = store.profiles[params.profileId];
+        if (existing?.type !== "oauth" || existing.provider !== params.refreshed.provider) {
+          return false;
+        }
+        // Refresh tokens rotate server-side before persist. Same-identity CAS
+        // losers must win the store or the token family is bricked.
+        if (hasMatchingOAuthIdentity(existing, params.refreshed)) {
+          store.profiles[params.profileId] = { ...params.refreshed };
+          adopted = params.refreshed;
+          return true;
+        }
+        adopted = hasUsableOAuthCredential(existing) ? existing : null;
+        return false;
+      },
+    });
+    return result === null ? null : adopted;
+  }
+
   async function doRefreshOAuthTokenWithLock(params: {
     profileId: string;
     provider: string;
@@ -614,7 +648,23 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
           credential: refreshedCredentials,
         });
         if (!persisted) {
-          throw new Error("Failed to persist refreshed OAuth credential");
+          const recovered = await resolveOAuthCredentialAfterPersistMiss({
+            agentDir: ownerAgentDir,
+            profileId: params.profileId,
+            refreshed: refreshedCredentials,
+          });
+          if (!recovered) {
+            throw new Error("Failed to persist refreshed OAuth credential");
+          }
+          if (recovered !== refreshedCredentials) {
+            return {
+              apiKey: await adapter.buildApiKey(recovered.provider, recovered, {
+                cfg: params.cfg,
+                agentDir: params.agentDir,
+              }),
+              credential: recovered,
+            };
+          }
         }
         if (ownerAgentDir) {
           const mainPath = resolveAuthStorePath(undefined);

@@ -1,7 +1,7 @@
 // Provides model selection, usage, and thinking-level utility helpers.
 import {
-  resolveClaudeFable5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  requiresClaudeMandatoryAdaptiveThinking,
 } from "@openclaw/llm-core";
 import type { Api, Model, ModelThinkingLevel, Usage } from "./types.js";
 
@@ -14,6 +14,15 @@ export function calculateCost<TApi extends Api>(model: Model<TApi>, usage: Usage
   usage.cost.total =
     usage.cost.input + usage.cost.output + usage.cost.cacheRead + usage.cost.cacheWrite;
   return usage.cost;
+}
+
+/** Replaces the catalog estimate when the provider reports an authoritative billed total. */
+export function applyProviderReportedUsageCost(usage: Usage, reportedCost: unknown): void {
+  if (typeof reportedCost !== "number" || !Number.isFinite(reportedCost) || reportedCost < 0) {
+    return;
+  }
+  usage.cost.total = reportedCost;
+  usage.cost.totalOrigin = "provider-billed";
 }
 
 const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = [
@@ -36,9 +45,9 @@ function resolveThinkingLevelMap<TApi extends Api>(model: Model<TApi>) {
 export function getSupportedThinkingLevels<TApi extends Api>(
   model: Model<TApi>,
 ): ModelThinkingLevel[] {
-  const fableContract =
-    model.api === "anthropic-messages" && resolveClaudeFable5ModelIdentity(model) !== undefined;
-  if (!model.reasoning && !fableContract) {
+  const mandatoryAdaptiveContract =
+    model.api === "anthropic-messages" && requiresClaudeMandatoryAdaptiveThinking(model);
+  if (!model.reasoning && !mandatoryAdaptiveContract) {
     return ["off"];
   }
   const thinkingLevelMap = resolveThinkingLevelMap(model);
@@ -74,8 +83,7 @@ export function clampThinkingLevel<TApi extends Api>(
   // stronger levels so unsupported xhigh/max requests cannot increase cost.
   const thinkingLevelMap = resolveThinkingLevelMap(model);
   if ((level === "xhigh" || level === "max") && thinkingLevelMap?.[level] === null) {
-    for (let i = requestedIndex - 1; i >= 0; i--) {
-      const candidate = EXTENDED_THINKING_LEVELS[i];
+    for (const candidate of EXTENDED_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
       if (availableLevels.includes(candidate)) {
         return candidate;
       }
@@ -83,14 +91,12 @@ export function clampThinkingLevel<TApi extends Api>(
   }
 
   // Prefer the next stronger available level, then walk down if the request was above the model cap.
-  for (let i = requestedIndex; i < EXTENDED_THINKING_LEVELS.length; i++) {
-    const candidate = EXTENDED_THINKING_LEVELS[i];
+  for (const candidate of EXTENDED_THINKING_LEVELS.slice(requestedIndex)) {
     if (availableLevels.includes(candidate)) {
       return candidate;
     }
   }
-  for (let i = requestedIndex - 1; i >= 0; i--) {
-    const candidate = EXTENDED_THINKING_LEVELS[i];
+  for (const candidate of EXTENDED_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
     if (availableLevels.includes(candidate)) {
       return candidate;
     }

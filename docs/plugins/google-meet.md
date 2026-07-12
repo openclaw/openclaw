@@ -736,7 +736,7 @@ An `openclaw doctor --fix` migration exists for the legacy `realtime.provider: "
     provider: "openai",
     transcriptionProvider: "openai",
     voiceProvider: "google",
-    model: "gemini-2.5-flash-native-audio-preview-12-2025",
+    model: "gemini-3.1-flash-live-preview",
     agentId: "jay",
     toolPolicy: "owner",
     introMessage: "Say exactly: I'm here.",
@@ -804,6 +804,12 @@ Twilio-only config:
 ```
 
 With `voiceCall.enabled: true` (the default) and Twilio transport, Voice Call places the DTMF sequence before opening the realtime media stream, then uses the saved intro text as the initial realtime greeting. If `voice-call` is not enabled, Google Meet can still validate and record the dial plan but cannot place the Twilio call.
+
+Leave `voiceCall.gatewayUrl` unset to use the local trusted Gateway runtime, which preserves the
+invoking agent for the full call. A configured Gateway URL remains an explicit WebSocket target and
+cannot authenticate plugin provenance; non-default agent joins fail closed instead of silently
+using another agent. Run Google Meet and Voice Call in the same Gateway process when per-agent
+routing is required.
 
 ## Tool
 

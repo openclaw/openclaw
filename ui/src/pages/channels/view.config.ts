@@ -89,7 +89,7 @@ function renderExtraChannelFields(value: Record<string, unknown>) {
   `;
 }
 
-export function renderChannelConfigForm(props: ChannelConfigFormProps) {
+function renderChannelConfigForm(props: ChannelConfigFormProps) {
   const analysis = analyzeConfigSchema(props.schema);
   const normalized = analysis.schema;
   if (!normalized) {

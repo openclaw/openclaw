@@ -1,13 +1,9 @@
 // Control UI view renders config screen content.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../../api/types.ts";
-import {
-  BORDER_RADIUS_STOPS,
-  TEXT_SCALE_STOPS,
-  type BorderRadiusStop,
-  type TextScaleStop,
-} from "../../app/settings.ts";
+import { TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import {
@@ -30,14 +26,6 @@ import {
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 
-const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
-  0: "None",
-  25: "Slight",
-  50: "Default",
-  75: "Round",
-  100: "Full",
-};
-
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "Small",
   100: "Default",
@@ -46,7 +34,7 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   140: "XXL",
 };
 
-export type WebPushUiState = {
+type WebPushUiState = {
   supported: boolean;
   permission: NotificationPermission | "unsupported";
   subscribed: boolean;
@@ -148,8 +136,6 @@ export type ConfigProps = {
   onImportCustomTheme: () => void;
   onClearCustomTheme: () => void;
   onOpenCustomThemeImport?: () => void;
-  borderRadius: number;
-  setBorderRadius: (value: number) => void;
   textScale: number;
   setTextScale: (value: number) => void;
   gatewayUrl: string;
@@ -794,7 +780,7 @@ function truncateValue(value: unknown, maxLen = 40): string {
   if (str.length <= maxLen) {
     return str;
   }
-  return str.slice(0, maxLen - 3) + "...";
+  return truncateUtf16Safe(str, maxLen - 3) + "...";
 }
 
 function renderDiffValue(path: ConfigDiffPath, value: unknown, _uiHints: ConfigUiHints): string {
@@ -1158,30 +1144,6 @@ function renderAppearanceSection(props: ConfigProps) {
                 use Share and paste the copied link here.
               </p>
             `}
-      </div>
-
-      <div class="settings-appearance__section">
-        <h3 class="settings-appearance__heading">Roundness</h3>
-        <p class="settings-appearance__hint">Adjust corner radius across the UI.</p>
-        <div class="settings-roundness">
-          <div class="settings-roundness__options">
-            ${BORDER_RADIUS_STOPS.map(
-              (stop) => html`
-                <button
-                  type="button"
-                  class="settings-roundness__btn ${stop === props.borderRadius ? "active" : ""}"
-                  @click=${() => props.setBorderRadius(stop)}
-                >
-                  <span
-                    class="settings-roundness__swatch"
-                    style="border-radius: ${Math.round(10 * (stop / 50))}px"
-                  ></span>
-                  <span class="settings-roundness__label">${BORDER_RADIUS_LABELS[stop]}</span>
-                </button>
-              `,
-            )}
-          </div>
-        </div>
       </div>
 
       <div class="settings-appearance__section">

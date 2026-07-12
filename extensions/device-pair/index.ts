@@ -1,5 +1,6 @@
 // Device Pair plugin entrypoint registers its OpenClaw integration.
 import { rm } from "node:fs/promises";
+import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -189,7 +190,7 @@ function isLoopbackHost(host: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === "localhost" || normalized === "0.0.0.0" || normalized === "::") {
+  if (normalized === "localhost") {
     return true;
   }
   const octets = parseIPv4Octets(normalized);
@@ -242,12 +243,24 @@ function isPrivateIPv4(address: string): boolean {
   return false;
 }
 
+function isPrivateLanIPv6(address: string): boolean {
+  if (isIP(address) !== 6) {
+    return false;
+  }
+  const firstHextet = address.split(":", 1)[0] ?? "";
+  if (!/^[0-9a-f]{4}$/.test(firstHextet)) {
+    return false;
+  }
+  const value = Number.parseInt(firstHextet, 16);
+  return (value & 0xfe00) === 0xfc00 || (value & 0xffc0) === 0xfe80;
+}
+
 function isPrivateLanCleartextHost(host: string): boolean {
   const normalized = normalizeHostForIpCheck(host);
   if (normalized.endsWith(".local")) {
     return true;
   }
-  if (isPrivateIPv4(normalized)) {
+  if (isPrivateIPv4(normalized) || isPrivateLanIPv6(normalized)) {
     return true;
   }
   const octets = parseIPv4Octets(normalized);
@@ -577,8 +590,9 @@ function formatQrInfoMarkdown(params: {
   ].join("\n");
 }
 
-function canSendQrPngToChannel(channel: string): boolean {
-  return channel in QR_CHANNEL_SENDERS;
+function resolveQrChannelSender(channel: string): QrChannelSender | undefined {
+  // Prototype names are not supported channel entries and must take the setup-code fallback.
+  return Object.hasOwn(QR_CHANNEL_SENDERS, channel) ? QR_CHANNEL_SENDERS[channel] : undefined;
 }
 
 function resolveQrReplyTarget(ctx: QrCommandContext): string {
@@ -621,16 +635,13 @@ async function issueSetupPayload(url: string, urls?: string[]): Promise<SetupPay
 async function sendQrPngToSupportedChannel(params: {
   api: OpenClawPluginApi;
   ctx: QrCommandContext;
+  sender: QrChannelSender;
   target: string;
   caption: string;
   qrFilePath: string;
 }): Promise<boolean> {
   const mediaLocalRoots = [path.dirname(params.qrFilePath)];
   const accountId = normalizeOptionalString(params.ctx.accountId) || undefined;
-  const sender = QR_CHANNEL_SENDERS[params.ctx.channel];
-  if (!sender) {
-    return false;
-  }
   const adapter = await params.api.runtime.channel.outbound.loadAdapter(params.ctx.channel);
   const send = adapter?.sendMedia;
   if (!send) {
@@ -640,7 +651,7 @@ async function sendQrPngToSupportedChannel(params: {
     cfg: params.api.config,
     to: params.target,
     text: params.caption,
-    ...sender.createOpts({
+    ...params.sender.createOpts({
       ctx: params.ctx,
       qrFilePath: params.qrFilePath,
       mediaLocalRoots,
@@ -770,6 +781,7 @@ export default definePluginEntry({
 
         if (action === "qr") {
           const channel = ctx.channel;
+          const qrChannelSender = resolveQrChannelSender(channel);
           const target = resolveQrReplyTarget(ctx);
           let autoNotifyArmed = false;
 
@@ -794,7 +806,7 @@ export default definePluginEntry({
             expiresAtMs: payload.expiresAtMs,
           });
 
-          if (target && canSendQrPngToChannel(channel)) {
+          if (target && qrChannelSender) {
             let qrFilePath: string | undefined;
             try {
               const { resolvePreferredOpenClawTmpDir, writeQrPngTempFile } =
@@ -809,6 +821,7 @@ export default definePluginEntry({
               const sent = await sendQrPngToSupportedChannel({
                 api,
                 ctx,
+                sender: qrChannelSender,
                 target,
                 caption: ["Scan this QR code with the OpenClaw iOS app:", "", ...infoLines].join(
                   "\n",

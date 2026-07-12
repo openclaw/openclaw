@@ -33,6 +33,7 @@ type GuardedCurrentTabRouteCase = {
   body?: Record<string, unknown>;
   mockName:
     | "cookiesGetViaPlaywright"
+    | "downloadViaPlaywright"
     | "executeActViaPlaywright"
     | "highlightViaPlaywright"
     | "pdfViaPlaywright"
@@ -43,7 +44,8 @@ type GuardedCurrentTabRouteCase = {
     | "storageGetViaPlaywright"
     | "takeScreenshotViaPlaywright"
     | "traceStartViaPlaywright"
-    | "traceStopViaPlaywright";
+    | "traceStopViaPlaywright"
+    | "waitForDownloadViaPlaywright";
 };
 
 const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
@@ -79,6 +81,18 @@ const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
     path: "/response/body",
     body: { targetId: "abcd1234", url: "**/api/data" },
     mockName: "responseBodyViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/wait/download",
+    body: { targetId: "abcd1234", path: "report.pdf" },
+    mockName: "waitForDownloadViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/download",
+    body: { targetId: "abcd1234", ref: "e12", path: "report.pdf" },
+    mockName: "downloadViaPlaywright",
   },
   {
     method: "POST",

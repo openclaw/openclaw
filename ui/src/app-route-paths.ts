@@ -1,30 +1,36 @@
 import { normalizeRouteBasePath, normalizeRoutePath } from "@openclaw/uirouter";
 import type { RouteLocation } from "@openclaw/uirouter";
 
-export const APP_ROUTE_DEFINITIONS = {
+const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
+  "new-session": { path: "/new" },
   overview: { path: "/overview" },
   activity: { path: "/activity" },
   agents: { path: "/agents" },
-  channels: { path: "/channels" },
-  config: { path: "/config" },
-  communications: { path: "/communications" },
-  appearance: { path: "/appearance" },
-  automation: { path: "/automation" },
-  mcp: { path: "/mcp" },
-  infrastructure: { path: "/infrastructure" },
-  "ai-agents": { path: "/ai-agents" },
+  channels: { path: "/settings/channels", aliases: ["/channels"] },
+  config: { path: "/settings/general", aliases: ["/config"] },
+  profile: { path: "/settings/profile", aliases: ["/profile"] },
+  communications: { path: "/settings/communications", aliases: ["/communications"] },
+  appearance: { path: "/settings/appearance", aliases: ["/appearance"] },
+  automation: { path: "/settings/automation", aliases: ["/automation"] },
+  mcp: { path: "/settings/mcp", aliases: ["/mcp"] },
+  infrastructure: { path: "/settings/infrastructure", aliases: ["/infrastructure"] },
+  about: { path: "/settings/about" },
+  "ai-agents": { path: "/settings/ai-agents", aliases: ["/ai-agents"] },
+  "model-providers": { path: "/settings/model-providers", aliases: ["/model-providers"] },
   workboard: { path: "/workboard" },
-  instances: { path: "/instances" },
+  worktrees: { path: "/settings/worktrees", aliases: ["/worktrees"] },
   sessions: { path: "/sessions" },
   usage: { path: "/usage" },
   debug: { path: "/debug" },
   logs: { path: "/logs" },
   "skill-workshop": { path: "/skills/workshop" },
   skills: { path: "/skills" },
+  plugins: { path: "/settings/plugins" },
   cron: { path: "/cron" },
+  tasks: { path: "/tasks" },
   nodes: { path: "/nodes" },
-  dreams: { path: "/dreaming", aliases: ["/dreams"] },
+  plugin: { path: "/plugin" },
 } as const;
 
 export type RouteId = keyof typeof APP_ROUTE_DEFINITIONS;

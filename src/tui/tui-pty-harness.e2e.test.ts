@@ -83,6 +83,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
+      const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
       const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
@@ -99,6 +100,16 @@ async function writeTuiPtyFixtureScript(dir: string) {
         expiresAtMs: number;
       } | null = null;
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
+      let pendingTaskSuggestion: {
+        id: string;
+        title: string;
+        prompt: string;
+        tldr: string;
+        cwd: string;
+        sessionKey: string;
+        agentId: string;
+        createdAt: number;
+      } | null = null;
 
       function record(method: string, payload?: unknown) {
         if (!actionLogPath) {
@@ -194,6 +205,25 @@ async function writeTuiPtyFixtureScript(dir: string) {
             });
             return { runId };
           }
+          if (opts.message === "task suggestion proof") {
+            pendingTaskSuggestion = {
+              id: "task_pty",
+              title: "Remove stale adapter",
+              prompt: "Delete the stale adapter and update its tests.",
+              tldr: "The adapter is unreachable and adds maintenance cost.",
+              cwd: "/repo/project",
+              sessionKey: opts.sessionKey,
+              agentId: "main",
+              createdAt: Date.now(),
+            };
+            queueMicrotask(() => {
+              this.onEvent?.({
+                event: "task.suggestion",
+                payload: { action: "created", suggestion: pendingTaskSuggestion },
+              });
+            });
+            return { runId };
+          }
           const responseDelayMs =
             opts.message === "slow prompt" || opts.message === "streaming prompt" ? 500 : 20;
           if (opts.message === "streaming prompt") {
@@ -271,6 +301,9 @@ async function writeTuiPtyFixtureScript(dir: string) {
 
         async loadHistory() {
           record("loadHistory");
+          if (startupDelayMs > 0) {
+            await new Promise((resolve) => setTimeout(resolve, startupDelayMs));
+          }
           return { messages: [], fastMode };
         }
 
@@ -370,6 +403,31 @@ async function writeTuiPtyFixtureScript(dir: string) {
           });
           return { ok: true };
         }
+
+        async listTaskSuggestions() {
+          record("listTaskSuggestions", { pending: Boolean(pendingTaskSuggestion) });
+          return pendingTaskSuggestion ? [pendingTaskSuggestion] : [];
+        }
+
+        async acceptTaskSuggestion(taskId: string) {
+          record("acceptTaskSuggestion", { taskId });
+          pendingTaskSuggestion = null;
+          this.onEvent?.({
+            event: "task.suggestion",
+            payload: { action: "resolved", taskId, resolution: "accepted" },
+          });
+          return { taskId, key: "agent:main:task-pty" };
+        }
+
+        async dismissTaskSuggestion(taskId: string) {
+          record("dismissTaskSuggestion", { taskId });
+          pendingTaskSuggestion = null;
+          this.onEvent?.({
+            event: "task.suggestion",
+            payload: { action: "resolved", taskId, resolution: "dismissed" },
+          });
+          return { taskId, dismissed: true };
+        }
       }
 
       async function main() {
@@ -445,8 +503,25 @@ describe.sequential("TUI PTY harness", () => {
     expect(fixture.run.output()).not.toContain("host local");
   });
 
+  it(
+    "shows startup activity while post-connect initialization is pending",
+    async () => {
+      const slow = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_STARTUP_DELAY_MS: "400" },
+      });
+      try {
+        await slow.run.waitForOutput("starting up", STARTUP_TIMEOUT_MS);
+        await slow.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
+      } finally {
+        await slow.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
   it("refreshes pending approvals before loading history", async () => {
     await fixture.waitForLogEntry((entry) => entry.method === "listPluginApprovals");
+    await fixture.waitForLogEntry((entry) => entry.method === "listTaskSuggestions");
     await fixture.waitForLogEntry((entry) => entry.method === "loadHistory");
 
     const entries = await readFixtureLog(fixture.logPath);
@@ -454,9 +529,12 @@ describe.sequential("TUI PTY harness", () => {
       (entry) => entry.method === "listPluginApprovals",
     );
     const historyLoadIndex = entries.findIndex((entry) => entry.method === "loadHistory");
+    const taskRefreshIndex = entries.findIndex((entry) => entry.method === "listTaskSuggestions");
 
     expect(approvalRefreshIndex).toBeGreaterThanOrEqual(0);
     expect(approvalRefreshIndex).toBeLessThan(historyLoadIndex);
+    expect(taskRefreshIndex).toBeGreaterThanOrEqual(0);
+    expect(taskRefreshIndex).toBeLessThan(historyLoadIndex);
   });
 
   it(
@@ -512,6 +590,27 @@ describe.sequential("TUI PTY harness", () => {
           objectFieldEquals(entry, "decision", "allow-once"),
       );
       await fixture.run.waitForOutput("PTY_SKILL_APPROVAL_RESOLVED: allow-once");
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "presents and starts a suggested task in the TUI",
+    async () => {
+      await fixture.run.write("task suggestion proof\r");
+      await fixture.run.waitForOutput("Suggested follow-up: Remove stale adapter");
+      await fixture.run.waitForOutput("Project: /repo/project");
+      await fixture.run.waitForOutput("The adapter is unreachable and adds maintenance cost.");
+
+      await fixture.run.write("\x1b[A", { delay: false });
+      await fixture.run.write("\r", { delay: false });
+      await fixture.run.waitForOutput("Press Enter again to start this task in a worktree.");
+      await fixture.run.write("\r", { delay: false });
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "acceptTaskSuggestion" && objectFieldEquals(entry, "taskId", "task_pty"),
+      );
+      await fixture.run.waitForOutput("session agent:main:task-pty");
     },
     TEST_TIMEOUT_MS,
   );

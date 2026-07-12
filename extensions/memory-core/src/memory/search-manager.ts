@@ -59,7 +59,7 @@ type MemorySearchManagerCacheState =
   | "fallback-builtin"
   | "recent-failure-cooldown";
 
-export type MemorySearchManagerDebug = {
+type MemorySearchManagerDebug = {
   backend?: "builtin" | "qmd";
   purpose?: MemorySearchManagerPurpose;
   managerMs?: number;
