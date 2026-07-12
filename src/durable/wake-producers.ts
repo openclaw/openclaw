@@ -303,7 +303,7 @@ export function recordDurableWakeForRuntimeAttentionFact(params: {
       stepId: params.stepId,
       workerId: params.workerId,
       eventType: params.eventType,
-      ...(params.detail ?? {}),
+      ...params.detail,
     },
     now: params.now,
   });
