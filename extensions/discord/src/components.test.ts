@@ -115,6 +115,34 @@ describe("discord components", () => {
     expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
   });
 
+  it("omits invalid numeric container accent colors", () => {
+    const validSpec = readDiscordComponentSpec({
+      text: "Status",
+      container: { accentColor: 0 },
+    });
+    if (!validSpec) {
+      throw new Error("Expected valid component spec to be parsed");
+    }
+    const validResult = buildDiscordComponentMessage({ spec: validSpec });
+    const validSerialized = validResult.components[0]?.serialize() as
+      | { accent_color?: unknown }
+      | undefined;
+    expect(validSerialized?.accent_color).toBe(0);
+
+    const spec = readDiscordComponentSpec({
+      text: "Status",
+      container: { accentColor: 0x1000000 },
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const result = buildDiscordComponentMessage({ spec });
+    const serialized = result.components[0]?.serialize() as { accent_color?: unknown } | undefined;
+
+    expect(serialized).not.toHaveProperty("accent_color");
+  });
+
   it("serializes disabled link buttons", () => {
     const spec = readDiscordComponentSpec({
       blocks: [
