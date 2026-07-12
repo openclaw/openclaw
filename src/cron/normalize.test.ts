@@ -468,13 +468,13 @@ describe("normalizeCronJobCreate", () => {
       schedule: { kind: "every", everyMs: 60_000 },
       payload: {
         kind: "command",
-        argv: ["printf", "%s", "  padded value  "],
+        argv: ["printf", "%s", "  padded value  ", ""],
       },
     }) as unknown as Record<string, unknown>;
 
     expect(normalized.payload).toMatchObject({
       kind: "command",
-      argv: ["printf", "%s", "  padded value  "],
+      argv: ["printf", "%s", "  padded value  ", ""],
     });
     expect(validateCronAddParams(normalized)).toBe(true);
   });

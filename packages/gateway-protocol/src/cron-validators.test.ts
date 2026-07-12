@@ -140,7 +140,7 @@ describe("cron protocol validators", () => {
         sessionTarget: "isolated",
         payload: {
           kind: "command",
-          argv: ["sh", "-lc", "echo ok"],
+          argv: ["node", "scripts/report.mjs", ""],
           cwd: "/srv/example",
           env: { FOO: "bar" },
           input: "stdin",
@@ -156,7 +156,7 @@ describe("cron protocol validators", () => {
         patch: {
           payload: {
             kind: "command",
-            argv: ["sh", "-lc", "echo updated"],
+            argv: ["sh", "-lc", "echo updated", ""],
           },
         },
       }),

@@ -149,6 +149,13 @@ const CronRunDiagnosticSeveritySchema = Type.Union([
   Type.Literal("warn"),
   Type.Literal("error"),
 ]);
+/** Command argv requires a non-empty executable, but later argv slots may be empty strings. */
+const CommandArgvSchema = Type.Unsafe<string[]>({
+  type: "array",
+  minItems: 1,
+  prefixItems: [{ type: "string", minLength: 1 }],
+  items: { type: "string" },
+});
 const CronRunDiagnosticSourceSchema = Type.Union([
   Type.Literal("cron-preflight"),
   Type.Literal("cron-setup"),
@@ -275,7 +282,7 @@ export const CronPayloadSchema = Type.Union([
     thinking: Type.String(),
   }),
   cronCommandPayloadSchema({
-    argv: Type.Array(NonEmptyString, { minItems: 1 }),
+    argv: CommandArgvSchema,
   }),
 ]);
 
@@ -296,7 +303,7 @@ export const CronPayloadPatchSchema = Type.Union([
     thinking: Type.Union([Type.String(), Type.Null()]),
   }),
   cronCommandPayloadSchema({
-    argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
+    argv: Type.Optional(CommandArgvSchema),
   }),
 ]);
 

@@ -38,9 +38,11 @@ export function parseCronCommandArgv(value: unknown): string[] | undefined {
   if (
     !Array.isArray(parsed) ||
     parsed.length === 0 ||
-    parsed.some((entry) => typeof entry !== "string" || entry.length === 0)
+    typeof parsed[0] !== "string" ||
+    parsed[0].length === 0 ||
+    parsed.some((entry) => typeof entry !== "string")
   ) {
-    throw new Error("--command-argv must be a non-empty JSON array of non-empty strings");
+    throw new Error("--command-argv must be a non-empty JSON array of strings with a command");
   }
   return parsed;
 }

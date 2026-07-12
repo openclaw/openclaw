@@ -105,7 +105,9 @@ export function getInvalidPersistedCronJobReason(
     if (
       !Array.isArray(argv) ||
       argv.length === 0 ||
-      argv.some((value) => typeof value !== "string" || value.length === 0)
+      typeof argv[0] !== "string" ||
+      argv[0].length === 0 ||
+      argv.some((value) => typeof value !== "string")
     ) {
       return "invalid-payload";
     }

@@ -26,7 +26,9 @@ function parseCommandPayloadMessage(
   if (
     !Array.isArray(record.argv) ||
     record.argv.length === 0 ||
-    record.argv.some((value) => typeof value !== "string" || value.length === 0)
+    typeof record.argv[0] !== "string" ||
+    record.argv[0].length === 0 ||
+    record.argv.some((value) => typeof value !== "string")
   ) {
     return null;
   }

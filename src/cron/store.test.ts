@@ -574,7 +574,7 @@ describe("cron store", () => {
     payload.jobs[0].sessionTarget = "isolated";
     payload.jobs[0].payload = {
       kind: "command",
-      argv: ["sh", "-lc", 'printf %s "$1"', "  "],
+      argv: ["sh", "-lc", 'printf %s "$1"', ""],
       cwd: "/srv/example",
       env: { FOO: "bar" },
       input: "stdin",
@@ -587,7 +587,7 @@ describe("cron store", () => {
 
     expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual({
       kind: "command",
-      argv: ["sh", "-lc", 'printf %s "$1"', "  "],
+      argv: ["sh", "-lc", 'printf %s "$1"', ""],
       cwd: "/srv/example",
       env: { FOO: "bar" },
       input: "stdin",

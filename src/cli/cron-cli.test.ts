@@ -1156,14 +1156,14 @@ describe("cron cli", () => {
   it("converts cron edit payloads to command argv", async () => {
     const patch = await runCronEditAndGetPatch([
       "--command-argv",
-      '["node","scripts/report.mjs","  "]',
+      '["node","scripts/report.mjs",""]',
       "--command-cwd",
       "/srv/app",
     ]);
 
     expect(patch?.patch?.payload).toEqual({
       kind: "command",
-      argv: ["node", "scripts/report.mjs", "  "],
+      argv: ["node", "scripts/report.mjs", ""],
       cwd: "/srv/app",
     });
   });

@@ -74,7 +74,11 @@ function normalizeCommandArgv(value: unknown): string[] | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
-  if (value.some((entry) => typeof entry !== "string" || entry.length === 0)) {
+  if (
+    typeof value[0] !== "string" ||
+    value[0].length === 0 ||
+    value.some((entry) => typeof entry !== "string")
+  ) {
     return undefined;
   }
   return [...value];
