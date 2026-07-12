@@ -108,6 +108,34 @@ describe("discord doctor", () => {
     ]);
   });
 
+  it("pins the inherited root mode when migrating account delivery aliases", () => {
+    const normalize = getDiscordCompatibilityNormalizer();
+
+    // Account `streaming` objects replace the root object wholesale on merge,
+    // so the migrated account must carry the root mode it previously inherited.
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            streaming: { mode: "off" },
+            accounts: { work: { chunkMode: "newline" } },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.config.channels?.discord).toEqual({
+      streaming: { mode: "off" },
+      accounts: {
+        work: { streaming: { mode: "off", chunkMode: "newline" } },
+      },
+    });
+    expect(result.changes).toEqual([
+      "Moved channels.discord.accounts.work.chunkMode → channels.discord.accounts.work.streaming.chunkMode.",
+      "Set channels.discord.accounts.work.streaming.mode (off) to keep the previous default while migrating flat streaming keys.",
+    ]);
+  });
+
   it("moves account voice.tts.edge into providers.microsoft", () => {
     const normalize = getDiscordCompatibilityNormalizer();
 
