@@ -489,7 +489,7 @@ describe("agentCommand compaction transcript rotation", () => {
       }),
     );
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
-      pendingTextSeenByCompaction = params.sessionEntry?.pendingFinalDeliveryText;
+      pendingTextSeenByCompaction = params.sessionEntry?.pendingFinalDeliveryText ?? undefined;
       throw new Error(COMPACTION_ERROR);
     });
 
