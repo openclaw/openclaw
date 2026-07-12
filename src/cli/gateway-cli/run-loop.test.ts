@@ -729,8 +729,6 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).not.toHaveBeenCalled();
-      expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "compacting",
         reason: "restart",
@@ -739,6 +737,8 @@ describe("runGatewayLoop", () => {
         mode: "all",
         reason: "restart",
       });
+      expect(waitForActiveTasks).toHaveBeenCalledWith(5_000);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(5_000);
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {
           gateway: {
@@ -752,7 +752,7 @@ describe("runGatewayLoop", () => {
         reason: "gateway restart drain",
       });
       expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledOnce();
-      expectRestartCloseCall(close, 0);
+      expectRestartCloseCall(close, 5_000);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
@@ -794,8 +794,6 @@ describe("runGatewayLoop", () => {
         setImmediate(resolve);
       });
 
-      expect(waitForActiveTasks).not.toHaveBeenCalled();
-      expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
       expect(abortEmbeddedAgentRun).toHaveBeenCalledWith(undefined, {
         mode: "all",
         reason: "restart",
@@ -816,8 +814,10 @@ describe("runGatewayLoop", () => {
         "restart blocked by active background task run(s): taskId=task-force runId=run-force status=running runtime=cron label=forced",
       );
       expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "forced restart requested; skipping active work drain",
+        expect.stringContaining("forced restart requested; allowing"),
       );
+      expect(waitForActiveTasks).toHaveBeenCalledWith(5_000);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(5_000);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
