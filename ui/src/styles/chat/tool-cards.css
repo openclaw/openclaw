@@ -1002,6 +1002,29 @@
   padding: 0 12px 10px 12px;
 }
 
+/* Completed-turn work rollup: slim "Worked for X" disclosure standing in for
+   the turn's intermediate tool/commentary groups. Sits snug above the final
+   reply, aligned with the message column via a gutter matching the avatar. */
+.chat-group--work {
+  padding-bottom: 8px;
+}
+
+.chat-work-group__gutter {
+  flex: 0 0 36px;
+}
+
+.chat-thread--direct .chat-work-group__gutter {
+  display: none;
+}
+
+.chat-work-group .chat-activity-group__label {
+  color: var(--muted);
+}
+
+.chat-work-group .chat-activity-group__summary--error .chat-activity-group__label {
+  color: inherit;
+}
+
 /* Reading indicator = working claw: the brand pincer where the reply will
    materialize while the agent works with nothing visibly streaming. Bubble
    chrome and sizing come from .chat-bubble.chat-reading-indicator

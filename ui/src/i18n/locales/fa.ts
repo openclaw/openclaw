@@ -3345,6 +3345,12 @@ export const fa: TranslationMap = {
         activityErrorMany: "فعالیت: {count} ابزار، شامل خطاها.",
       },
     },
+    workRun: {
+      workedFor: "به‌مدت {duration} کار کرد",
+      worked: "کار کرد",
+      workedForError: "به‌مدت {duration} کار کرد، شامل خطاها.",
+      workedError: "کار کرد، شامل خطاها.",
+    },
     backgroundTasks: {
       label: "وظایف پس‌زمینه",
       title: "وظایف پس‌زمینه",

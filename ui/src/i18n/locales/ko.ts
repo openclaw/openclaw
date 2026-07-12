@@ -3337,6 +3337,12 @@ export const ko: TranslationMap = {
         activityErrorMany: "활동: 도구 {count}개, 오류 포함.",
       },
     },
+    workRun: {
+      workedFor: "{duration} 동안 작업함",
+      worked: "작업함",
+      workedForError: "{duration} 동안 작업했으며, 오류가 포함되어 있습니다.",
+      workedError: "작업했으며, 오류가 포함되어 있습니다.",
+    },
     backgroundTasks: {
       label: "백그라운드 작업",
       title: "백그라운드 작업",

@@ -39,7 +39,11 @@ import {
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { resolveUiHourCycleOptions } from "../../../lib/format.ts";
-import { formatCompactTokenCount, formatTimeAgo } from "../../../lib/format.ts";
+import {
+  formatCompactTokenCount,
+  formatDurationCompact,
+  formatTimeAgo,
+} from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
@@ -627,6 +631,55 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
               </div>
             `
           : nothing}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Collapsed-turn rollup header: one slim "Worked for X" disclosure standing in
+ * for the turn's intermediate work once the run is done. The check/x icon is
+ * the turn's done indicator; the expanded groups render after this row.
+ */
+export function renderWorkGroupSummary(
+  item: { durationMs: number | null; hasError: boolean },
+  opts: { expanded: boolean; onToggle: () => void },
+) {
+  const duration = formatDurationCompact(item.durationMs, { spaced: true });
+  const label = duration ? t("chat.workRun.workedFor", { duration }) : t("chat.workRun.worked");
+  return html`
+    <div class="chat-group tool chat-group--work">
+      <span class="chat-work-group__gutter" aria-hidden="true"></span>
+      <div class="chat-group-messages">
+        <div class="chat-activity-group chat-work-group ${opts.expanded ? "is-open" : ""}">
+          <button
+            class="chat-activity-group__summary ${item.hasError
+              ? "chat-activity-group__summary--error"
+              : ""}"
+            type="button"
+            aria-expanded=${String(opts.expanded)}
+            aria-label=${item.hasError
+              ? duration
+                ? t("chat.workRun.workedForError", { duration })
+                : t("chat.workRun.workedError")
+              : nothing}
+            @click=${(event: MouseEvent) => {
+              if (shouldToggleSelectableDisclosure(event)) {
+                opts.onToggle();
+              }
+            }}
+          >
+            <span class="chat-activity-group__icon">
+              ${item.hasError ? icons.x : icons.check}
+            </span>
+            <span class="chat-activity-group__label" title=${label}>${label}</span>
+            <span
+              class="collapse-chevron ${opts.expanded ? "" : "collapse-chevron--collapsed"}"
+              aria-hidden="true"
+              >${icons.chevronDown}</span
+            >
+          </button>
+        </div>
       </div>
     </div>
   `;

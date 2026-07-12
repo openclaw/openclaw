@@ -3323,6 +3323,12 @@ export const ar: TranslationMap = {
         activityErrorMany: "النشاط: {count} أدوات، يتضمن أخطاء.",
       },
     },
+    workRun: {
+      workedFor: "عمل لمدة {duration}",
+      worked: "عمل",
+      workedForError: "عمل لمدة {duration}، مع وجود أخطاء.",
+      workedError: "عمل، مع وجود أخطاء.",
+    },
     backgroundTasks: {
       label: "المهام في الخلفية",
       title: "المهام في الخلفية",
