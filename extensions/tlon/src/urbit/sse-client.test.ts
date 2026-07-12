@@ -273,7 +273,9 @@ describe("UrbitSSEClient", () => {
 
         await client.processStream(stream);
         expect(handler).toHaveBeenCalledTimes(2);
-        expect((handler.mock.calls[0]?.[0] as { value?: string }).value).toHaveLength(padLen);
+        expect((handler.mock.calls[0]?.[0] as { value?: string } | undefined)?.value).toHaveLength(
+          padLen,
+        );
         expect(handler.mock.calls[1]?.[0]).toEqual({ value: nextValue });
       });
 
