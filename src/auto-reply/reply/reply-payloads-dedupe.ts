@@ -112,7 +112,7 @@ export function filterMessagingToolMediaDuplicates(params: {
   return nextPayloads ?? payloads;
 }
 
-function hasEnabledDeliveryOperation(payload: ReplyPayload): boolean {
+export function hasEnabledDeliveryOperation(payload: ReplyPayload): boolean {
   const pin = payload.delivery?.pin;
   return pin === true || (typeof pin === "object" && pin.enabled === true);
 }

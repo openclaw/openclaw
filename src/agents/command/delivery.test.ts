@@ -1483,6 +1483,40 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     ]);
   });
 
+  it.each([{ delivery: { pin: false } }, { delivery: { pin: { enabled: false } } }])(
+    "dedupes text for disabled delivery metadata: $delivery",
+    async ({ delivery }) => {
+      const delivered = await deliverAgentCommandResult({
+        cfg: {} as OpenClawConfig,
+        deps: {} as CliDeps,
+        runtime: { log: vi.fn(), error: vi.fn() } as never,
+        opts: {
+          message: "completion handoff",
+          deliver: true,
+          replyChannel: "slack",
+          replyTo: "channel:C123",
+        } as AgentCommandOpts,
+        outboundSession: undefined,
+        sessionEntry: undefined,
+        payloads: [{ text: "Ready", delivery }] as never,
+        result: {
+          ...createResult(),
+          messagingToolSentTargets: [
+            {
+              tool: "message",
+              provider: "slack",
+              to: "channel:C123",
+              text: "Ready",
+            },
+          ],
+        } as RunResult,
+      });
+
+      expect(delivered.payloads).toEqual([]);
+      expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not dedupe an explicit send from a different account against the default account", async () => {
     deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
 

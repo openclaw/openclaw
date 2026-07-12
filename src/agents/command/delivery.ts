@@ -12,6 +12,7 @@ import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-med
 import { formatBtwTextForExternalDelivery } from "../../auto-reply/reply/reply-payloads-base.js";
 import {
   filterMessagingToolMediaDuplicates,
+  hasEnabledDeliveryOperation,
   resolveMessagingToolPayloadDedupe,
 } from "../../auto-reply/reply/reply-payloads-dedupe.runtime.js";
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
@@ -442,7 +443,7 @@ async function filterAlreadyDeliveredReplyPayloads(params: {
 
   const filteredPayloads: ReplyPayload[] = [];
   for (const candidate of mediaFiltered) {
-    if (candidate.delivery) {
+    if (hasEnabledDeliveryOperation(candidate)) {
       filteredPayloads.push(candidate);
       continue;
     }
