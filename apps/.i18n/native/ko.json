@@ -17904,16 +17904,6 @@
       "translated": "사용량"
     },
     {
-      "id": "native.apple.386595fa18585dbb",
-      "source": "approvalSource requires matching systemRunPlan",
-      "translated": "approvalSource에는 일치하는 systemRunPlan이 필요합니다"
-    },
-    {
-      "id": "native.apple.014ff905cecd753b",
-      "source": "explicit approval requires matching systemRunPlan",
-      "translated": "명시적 승인에는 일치하는 systemRunPlan이 필요합니다"
-    },
-    {
       "id": "native.apple.7eb0a88b8274ced8",
       "source": "Node pairing approved",
       "translated": "Node 페어링이 승인되었습니다"
@@ -18519,19 +18509,24 @@
       "translated": "준비 중"
     },
     {
-      "id": "native.apple.183aee003b44ede6",
-      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
-      "translated": "OpenClaw가 이 Mac에서 백그라운드 서비스를 설정하고 있습니다. 일반적으로 1분 이내에 완료됩니다 — Terminal이나 관리자 비밀번호가 필요하지 않습니다."
-    },
-    {
       "id": "native.apple.d0b8cf59f852b3d0",
       "source": "Install OpenClaw",
       "translated": "OpenClaw 설치"
     },
     {
+      "id": "native.apple.0b0fc42b8827e01f",
+      "source": "Prepare the Mac node",
+      "translated": "Mac 노드 준비"
+    },
+    {
       "id": "native.apple.0112e18fa97e7c0c",
       "source": "Start the background service",
       "translated": "백그라운드 서비스 시작"
+    },
+    {
+      "id": "native.apple.9230c2a15ba6da94",
+      "source": "Runs inside the app and uses its macOS permissions.",
+      "translated": "앱 내에서 실행되며 앱의 macOS 권한을 사용합니다."
     },
     {
       "id": "native.apple.d1f9f278b55fe9b0",
@@ -18542,6 +18537,11 @@
       "id": "native.apple.0357f1eea66db068",
       "source": "Ready for the next step",
       "translated": "다음 단계 준비 완료"
+    },
+    {
+      "id": "native.apple.b4ba6f183309593d",
+      "source": "Once ready, this Mac connects to your selected Gateway.",
+      "translated": "준비가 완료되면 이 Mac이 선택한 Gateway에 연결됩니다."
     },
     {
       "id": "native.apple.9f58badc863cbf2b",

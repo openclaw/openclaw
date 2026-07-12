@@ -17904,16 +17904,6 @@
       "translated": "Utilizzo"
     },
     {
-      "id": "native.apple.386595fa18585dbb",
-      "source": "approvalSource requires matching systemRunPlan",
-      "translated": "approvalSource richiede un systemRunPlan corrispondente"
-    },
-    {
-      "id": "native.apple.014ff905cecd753b",
-      "source": "explicit approval requires matching systemRunPlan",
-      "translated": "l'approvazione esplicita richiede un systemRunPlan corrispondente"
-    },
-    {
       "id": "native.apple.7eb0a88b8274ced8",
       "source": "Node pairing approved",
       "translated": "Abbinamento del nodo approvato"
@@ -18519,19 +18509,24 @@
       "translated": "Preparazione in corso"
     },
     {
-      "id": "native.apple.183aee003b44ede6",
-      "source": "OpenClaw is setting up its background service on this Mac. This usually takes under a minute — no Terminal, no administrator password.",
-      "translated": "OpenClaw sta configurando il suo servizio in background su questo Mac. Di solito richiede meno di un minuto — niente Terminale, niente password di amministratore."
-    },
-    {
       "id": "native.apple.d0b8cf59f852b3d0",
       "source": "Install OpenClaw",
       "translated": "Installa OpenClaw"
     },
     {
+      "id": "native.apple.0b0fc42b8827e01f",
+      "source": "Prepare the Mac node",
+      "translated": "Prepara il nodo Mac"
+    },
+    {
       "id": "native.apple.0112e18fa97e7c0c",
       "source": "Start the background service",
       "translated": "Avvia il servizio in background"
+    },
+    {
+      "id": "native.apple.9230c2a15ba6da94",
+      "source": "Runs inside the app and uses its macOS permissions.",
+      "translated": "Viene eseguito all'interno dell'app e utilizza le relative autorizzazioni macOS."
     },
     {
       "id": "native.apple.d1f9f278b55fe9b0",
@@ -18542,6 +18537,11 @@
       "id": "native.apple.0357f1eea66db068",
       "source": "Ready for the next step",
       "translated": "Pronto per il passaggio successivo"
+    },
+    {
+      "id": "native.apple.b4ba6f183309593d",
+      "source": "Once ready, this Mac connects to your selected Gateway.",
+      "translated": "Una volta pronto, questo Mac si connette al Gateway selezionato."
     },
     {
       "id": "native.apple.9f58badc863cbf2b",
