@@ -212,6 +212,29 @@ describe("Apple app i18n catalogs", () => {
     );
   });
 
+  it("rejects mixed inflected resources whose placeholder types are ambiguous", () => {
+    const source = "\\(name) has ^[\\(count) entry](inflect: true)";
+    const build = buildIosCatalog(
+      { sourceLanguage: "en", strings: {} },
+      {
+        version: 1,
+        entries: [
+          {
+            id: "native.apple.mixed-count",
+            kind: "ui-localized-call",
+            line: 1,
+            path: "apps/ios/Sources/Example.swift",
+            source,
+            surface: "apple",
+          },
+        ],
+      },
+      [],
+    );
+
+    expect(build.catalog.strings).toEqual({});
+  });
+
   it("keeps custom component text on explicit localized or verbatim paths", async () => {
     const design = await readFile("apps/ios/Sources/Design/OpenClawProComponents.swift", "utf8");
     const agentOverview = await readFile(

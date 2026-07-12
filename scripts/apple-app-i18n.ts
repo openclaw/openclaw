@@ -33,6 +33,8 @@ const REQUIRED_LOCALES = ["en", ...APPLE_I18N_LOCALES];
 const FORMAT_RE = /%(?:%|(?:\d+\$)?(?:lld|ld|[@a-z]))/giu;
 const INFLECTED_COUNT_INTERPOLATION_RE = /\\\([A-Za-z_][A-Za-z0-9_]*\)/gu;
 const INFLECTED_COUNT_INTERPOLATION_EXACT_RE = /^\\\([A-Za-z_][A-Za-z0-9_]*\)$/u;
+const INFLECTED_COUNT_SEGMENT_RE =
+  /\^\[[^\]]*\\\([A-Za-z_][A-Za-z0-9_]*\)[^\]]*\]\(inflect: true\)/gu;
 const INFLECTED_COUNT_MARKER = "](inflect: true)";
 const IOS_CATALOG_PATH = "apps/ios/Resources/Localizable.xcstrings";
 const IOS_CONTRADICTIONS_PATH = "apps/.i18n/apple-translation-contradictions.json";
@@ -513,10 +515,15 @@ function isInflectedCountSource(value: string): boolean {
     return false;
   }
   const interpolations = value.match(/\\\([^)]*\)/gu) ?? [];
+  const segments = [...value.matchAll(INFLECTED_COUNT_SEGMENT_RE)];
   return (
-    interpolations.length > 0 &&
+    segments.length > 0 &&
+    interpolations.length === segments.length &&
     interpolations.every((interpolation) =>
       INFLECTED_COUNT_INTERPOLATION_EXACT_RE.test(interpolation),
+    ) &&
+    segments.every(
+      ([segment]) => (segment.match(INFLECTED_COUNT_INTERPOLATION_RE) ?? []).length === 1,
     )
   );
 }
@@ -525,8 +532,9 @@ function appleCatalogValue(value: string): string {
   if (!isInflectedCountSource(value)) {
     return value;
   }
-  INFLECTED_COUNT_INTERPOLATION_RE.lastIndex = 0;
-  return value.replace(INFLECTED_COUNT_INTERPOLATION_RE, "%lld");
+  return value.replace(INFLECTED_COUNT_SEGMENT_RE, (segment) =>
+    segment.replace(INFLECTED_COUNT_INTERPOLATION_RE, "%lld"),
+  );
 }
 
 function chooseTranslation(source: string, translations: readonly string[]): string {
