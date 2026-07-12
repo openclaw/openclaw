@@ -14,7 +14,7 @@ import type { ImageContent } from "../agents/command/types.js";
 import type { ClientToolDefinition } from "../agents/embedded-agent-runner/run/params.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommand } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -425,7 +425,7 @@ async function runResponsesAgentCommand(params: {
   deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
-  return agentCommandFromIngress(
+  return agentCommand(
     {
       message: params.message,
       images: params.images.length > 0 ? params.images : undefined,
@@ -439,6 +439,8 @@ async function runResponsesAgentCommand(params: {
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
       allowModelOverride: params.modelOverride !== undefined,
+      senderIsOwner: false,
+      emitIngressModelUsageDiagnostic: true,
       abortSignal: params.abortSignal,
     },
     defaultRuntime,

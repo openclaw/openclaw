@@ -12,12 +12,12 @@ import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunAndReadUpdatedAssistantReply } from "../run-wait.js";
 
 type GatewayCaller = typeof callGateway;
-type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
+type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommand;
 
 const defaultAgentStepDeps = {
   agentCommandFromIngress: (async (...args) => {
-    const { agentCommandFromIngress } = await import("../../commands/agent.js");
-    return await agentCommandFromIngress(...args);
+    const { agentCommand } = await import("../../commands/agent.js");
+    return await agentCommand(...args);
   }) as AgentCommandRunner,
   callGateway,
 };
@@ -93,6 +93,8 @@ export async function runAgentStep(params: {
       extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance,
       allowModelOverride: false,
+      senderIsOwner: false,
+      emitIngressModelUsageDiagnostic: true,
     });
     await retireSessionMcpRuntimeForSessionKey({
       sessionKey: params.sessionKey,

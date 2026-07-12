@@ -10,10 +10,11 @@ import {
   normalizeVerboseLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
-import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,11 +40,13 @@ import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import {
   classifySessionKeyShape,
   isUnscopedSessionKeySentinel,
   isSubagentSessionKey,
   normalizeAgentId,
+  parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   scopeLegacySessionKeyToAgent,
 } from "../routing/session-key.js";
@@ -122,7 +125,15 @@ import {
 } from "./command/attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./command/run-context.js";
 import { clearRotatedSessionMetadata, resolveSession } from "./command/session.js";
-import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
+import type {
+  AgentCommandIngressConversationIdentityContext,
+  AgentCommandIngressOpts,
+  AgentCommandOpts,
+} from "./command/types.js";
+import {
+  CONVERSATION_IDENTITY_DENIED_MESSAGE,
+  resolveConversationIdentity,
+} from "./conversation-identity.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
@@ -178,6 +189,8 @@ import { ensureAgentWorkspace } from "./workspace.js";
 import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "./worktrees/run-lease.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+const MISSING_INGRESS_IDENTITY_COMPAT_CODE = "agent-ingress-missing-conversation-identity";
+let warnedMissingIngressIdentity = false;
 
 function hasExactConfiguredProviderModel(params: {
   cfg: OpenClawConfig;
@@ -700,6 +713,9 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     );
   }
 
+  const agentIdOverrideRaw = opts.agentId?.trim();
+  const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
+
   const { cfg } = await resolveAgentRuntimeConfig(runtime, {
     runtimeTargetsChannelSecrets: opts.deliver === true,
     runtimeChannelSecretScope:
@@ -714,8 +730,6 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     groupSpace: opts.groupSpace,
     workspaceDir: opts.workspaceDir,
   });
-  const agentIdOverrideRaw = opts.agentId?.trim();
-  const agentIdOverride = agentIdOverrideRaw ? normalizeAgentId(agentIdOverrideRaw) : undefined;
   if (agentIdOverride) {
     const knownAgents = listAgentIds(cfg);
     if (!knownAgents.includes(agentIdOverride)) {
@@ -724,6 +738,17 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
       );
     }
   }
+  const senderIsOwner = opts.ingressAdmission
+    ? resolveAgentCommandIngressSenderAuthority({
+        opts,
+        cfg: await resolveCurrentIngressRoutingConfig(),
+        agentIdOverride,
+        sessionKey: rawExplicitSessionKey,
+        sessionId: requestedSessionId,
+        to: rawTo,
+      })
+    : opts.senderIsOwner;
+  const { ingressAdmission: _ingressAdmission, ...executionOpts } = opts;
   const shouldScopeDefaultAgentKey = Boolean(
     rawExplicitSessionKey &&
     !agentIdOverride &&
@@ -783,9 +808,11 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   });
   const runTimeoutOverrideMs = hasExplicitTimeoutOption ? timeoutMs : undefined;
 
-  const selectedCommandOpts = toSessionKey
-    ? { ...opts, to: undefined, sessionKey: explicitSessionKey }
-    : opts;
+  const selectedCommandOpts = {
+    ...executionOpts,
+    senderIsOwner,
+    ...(toSessionKey ? { to: undefined, sessionKey: explicitSessionKey } : {}),
+  };
   const explicitRecipientSession =
     shouldResolveExplicitRecipientSession && agentIdOverride && recipientChannel && rawTo
       ? await resolveAgentExplicitRecipientSession({
@@ -2909,10 +2936,11 @@ export async function agentCommand(
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
+  const { emitIngressModelUsageDiagnostic: shouldEmitIngressModelUsage, ...commandOpts } = opts;
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
-  return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+  const result = await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
     withLocalGatewayRequestScope(
       {
         deps: resolvedDeps,
@@ -2921,25 +2949,187 @@ export async function agentCommand(
       async () =>
         await agentCommandInternal(
           {
-            ...opts,
+            ...commandOpts,
             lifecycleGeneration,
             // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
             // Ingress callers must opt into owner identity explicitly via
             // agentCommandFromIngress so network-facing paths cannot inherit this default by accident.
-            senderIsOwner: opts.senderIsOwner ?? true,
+            senderIsOwner: commandOpts.senderIsOwner ?? true,
             // Local/CLI callers are trusted by default for per-run model overrides.
-            allowModelOverride: opts.allowModelOverride ?? true,
+            allowModelOverride: commandOpts.allowModelOverride ?? true,
           },
           runtime,
           resolvedDeps,
         ),
     ),
   );
+  if (result && shouldEmitIngressModelUsage) {
+    emitIngressModelUsageDiagnostic(result, commandOpts);
+  }
+  return result;
 }
 
 /** Resolve the channel label for model.usage diagnostics from ingress run options. */
-function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
+function ingressDiagnosticChannel(opts: AgentCommandOpts): string {
   return opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http";
+}
+
+function normalizeIngressRoutePeer(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const kind = normalizeChatType(typeof record.kind === "string" ? record.kind : undefined);
+  const id = typeof record.id === "string" ? record.id.trim() : "";
+  return kind && id ? { kind, id } : null;
+}
+
+function normalizeOptionalIngressId(value: unknown): string | null | undefined {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return value.trim() || undefined;
+}
+
+function resolveAgentCommandIngressConversationIdentity(params: {
+  cfg: OpenClawConfig;
+  conversationIdentity: AgentCommandIngressConversationIdentityContext | undefined;
+  agentIdOverride?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  to?: string;
+}):
+  | {
+      allowed: true;
+      mode: "personal" | "organization";
+      senderIsOwner: boolean;
+    }
+  | { allowed: false } {
+  const identity = params.conversationIdentity;
+  if (!identity || typeof identity !== "object") {
+    return { allowed: false };
+  }
+  if (identity.origin !== "channel") {
+    return { allowed: false };
+  }
+
+  if (
+    !params.agentIdOverride ||
+    !params.sessionKey ||
+    params.sessionId !== undefined ||
+    params.to !== undefined ||
+    typeof identity.senderIsConfiguredOwner !== "boolean" ||
+    !identity.source ||
+    typeof identity.source !== "object"
+  ) {
+    return { allowed: false };
+  }
+  const source = identity.source as Record<string, unknown>;
+  const channel = typeof source.channel === "string" ? source.channel.trim() : "";
+  const accountId = typeof source.accountId === "string" ? source.accountId.trim() : "";
+  const peer = normalizeIngressRoutePeer(source.peer);
+  const parentPeer =
+    source.parentPeer == null ? null : normalizeIngressRoutePeer(source.parentPeer);
+  const guildId = normalizeOptionalIngressId(source.guildId);
+  const teamId = normalizeOptionalIngressId(source.teamId);
+  const memberRoleIds = source.memberRoleIds;
+  if (
+    !channel ||
+    !accountId ||
+    !peer ||
+    (source.parentPeer != null && !parentPeer) ||
+    guildId === undefined ||
+    teamId === undefined ||
+    (memberRoleIds !== undefined &&
+      (!Array.isArray(memberRoleIds) ||
+        memberRoleIds.some((roleId) => typeof roleId !== "string" || !roleId.trim())))
+  ) {
+    return { allowed: false };
+  }
+  const agentId = normalizeAgentId(params.agentIdOverride);
+  const sessionAgentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== normalizeAgentId(agentId)) {
+    return { allowed: false };
+  }
+  const route = resolveAgentRoute({
+    cfg: params.cfg,
+    channel,
+    accountId,
+    peer,
+    parentPeer,
+    guildId,
+    teamId,
+    memberRoleIds: memberRoleIds as string[] | undefined,
+  });
+  if (normalizeAgentId(route.agentId) !== agentId || route.sessionKey !== params.sessionKey) {
+    return { allowed: false };
+  }
+  const scope =
+    peer.kind === "direct"
+      ? "direct"
+      : peer.kind === "group" || peer.kind === "channel"
+        ? "shared"
+        : "unknown";
+  const resolved = resolveConversationIdentity({
+    config: params.cfg,
+    scope,
+    agentId,
+    staticBindingAgentId: route.matchedBy === "default" ? undefined : route.agentId,
+    senderIsConfiguredOwner: identity.senderIsConfiguredOwner,
+  });
+  if (resolved.mode === "external") {
+    return { allowed: false };
+  }
+  return {
+    allowed: true,
+    mode: resolved.mode,
+    senderIsOwner: identity.senderIsConfiguredOwner,
+  };
+}
+
+function resolveAgentCommandIngressSenderAuthority(params: {
+  opts: AgentCommandOpts;
+  cfg: OpenClawConfig;
+  agentIdOverride?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  to?: string;
+}): boolean {
+  const conversationIdentity = params.opts.ingressAdmission?.conversationIdentity;
+  if (!conversationIdentity) {
+    if (!warnedMissingIngressIdentity) {
+      warnedMissingIngressIdentity = true;
+      log.warn(
+        `agentCommandFromIngress() omitted conversationIdentity (${MISSING_INGRESS_IDENTITY_COMPAT_CODE}); the source-compatible call now fails closed.`,
+      );
+    }
+    throw new Error("conversationIdentity must be explicitly set for ingress agent runs.");
+  }
+  const admission = resolveAgentCommandIngressConversationIdentity({
+    cfg: params.cfg,
+    conversationIdentity,
+    agentIdOverride: params.agentIdOverride,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    to: params.to,
+  });
+  if (!admission.allowed) {
+    throw new Error(CONVERSATION_IDENTITY_DENIED_MESSAGE);
+  }
+  return admission.senderIsOwner;
+}
+
+async function resolveCurrentIngressRoutingConfig(): Promise<OpenClawConfig> {
+  try {
+    const { snapshot } = await readConfigFileSnapshotForWrite();
+    if (snapshot.valid) {
+      return snapshot.resolved;
+    }
+  } catch {}
+  throw new Error(CONVERSATION_IDENTITY_DENIED_MESSAGE);
 }
 
 /**
@@ -2954,7 +3144,7 @@ function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
  */
 function emitIngressModelUsageDiagnostic(
   result: NonNullable<Awaited<ReturnType<typeof agentCommandInternal>>>,
-  opts: AgentCommandIngressOpts,
+  opts: AgentCommandOpts,
 ): void {
   const cfg = getRuntimeConfig();
   if (!isDiagnosticsEnabled(cfg)) {
@@ -3023,14 +3213,26 @@ export async function agentCommandFromIngress(
   if (typeof opts.allowModelOverride !== "boolean") {
     throw new Error("allowModelOverride must be explicitly set for ingress agent runs.");
   }
+  const { conversationIdentity, ...agentOpts } = opts;
+  const ingressAdmission = { conversationIdentity };
+  resolveAgentCommandIngressSenderAuthority({
+    opts: { ...agentOpts, ingressAdmission },
+    cfg: await resolveCurrentIngressRoutingConfig(),
+    agentIdOverride: agentOpts.agentId?.trim()
+      ? normalizeAgentId(agentOpts.agentId.trim())
+      : undefined,
+    sessionKey: agentOpts.sessionKey?.trim(),
+    sessionId: agentOpts.sessionId?.trim() || undefined,
+    to: agentOpts.to?.trim(),
+  });
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
     const result = await agentCommandInternal(
       {
-        ...opts,
+        ...agentOpts,
+        ingressAdmission,
         lifecycleGeneration,
-        senderIsOwner: opts.senderIsOwner === true,
       },
       runtime,
       deps,
@@ -3051,6 +3253,10 @@ export const testing = {
   resolveAgentRunLifecycleEndLogLevel,
   ingressDiagnosticChannel,
   emitIngressModelUsageDiagnostic,
+  resolveAgentCommandIngressSenderAuthority,
+  resetIngressIdentityWarningForTest: () => {
+    warnedMissingIngressIdentity = false;
+  },
 };
 
 /** @deprecated Use `testing`. */

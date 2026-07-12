@@ -20,7 +20,7 @@ import {
   type OpenAiChatCompletionsUsage,
 } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommand } from "../commands/agent.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -179,6 +179,8 @@ function buildAgentCommandInput(params: {
     messageChannel: params.messageChannel,
     bestEffortDeliver: false as const,
     allowModelOverride: params.modelOverride !== undefined,
+    senderIsOwner: false,
+    emitIngressModelUsageDiagnostic: true,
     abortSignal: params.abortSignal,
     streamParams: params.streamParams,
   };
@@ -1082,7 +1084,7 @@ export async function handleOpenAiHttpRequest(
   if (!stream) {
     const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommand(commandInput, defaultRuntime, deps);
 
       if (abortController.signal.aborted) {
         return true;
@@ -1291,7 +1293,7 @@ export async function handleOpenAiHttpRequest(
 
   void (async () => {
     try {
-      const result = await agentCommandFromIngress(commandInput, defaultRuntime, deps);
+      const result = await agentCommand(commandInput, defaultRuntime, deps);
       resultResolved = true;
 
       if (closed) {

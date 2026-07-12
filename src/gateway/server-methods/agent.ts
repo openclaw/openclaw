@@ -70,7 +70,7 @@ import {
   resolveIngressWorkspaceOverrideForSessionRun,
 } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { agentCommandFromIngress } from "../../commands/agent.js";
+import { agentCommand } from "../../commands/agent.js";
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
@@ -480,9 +480,7 @@ function buildBareSessionResetResult(params: {
 
 function buildBareSessionResetResponse(params: {
   runId: string;
-  result:
-    | ReturnType<typeof buildBareSessionResetResult>
-    | Awaited<ReturnType<typeof agentCommandFromIngress>>;
+  result: ReturnType<typeof buildBareSessionResetResult> | Awaited<ReturnType<typeof agentCommand>>;
 }) {
   return {
     runId: params.runId,
@@ -1058,7 +1056,7 @@ function deleteGatewayDedupeEntries(params: {
 }
 
 function dispatchAgentRunFromGateway(params: {
-  ingressOpts: Parameters<typeof agentCommandFromIngress>[0];
+  ingressOpts: Parameters<typeof agentCommand>[0];
   runId: string;
   dedupeKeys: readonly string[];
   /**
@@ -1120,7 +1118,7 @@ function dispatchAgentRunFromGateway(params: {
       return false;
     }
   };
-  void agentCommandFromIngress(params.ingressOpts, defaultRuntime, params.context.deps)
+  void agentCommand(params.ingressOpts, defaultRuntime, params.context.deps)
     .then(async (result) => {
       const aborted = result?.meta?.aborted === true;
       const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
@@ -3952,6 +3950,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               internalEvents: request.internalEvents,
               inputProvenance,
               senderIsOwner: restoredCronContinuation ? true : clientHasAdminScope(client),
+              emitIngressModelUsageDiagnostic: true,
               sessionEffects,
               skipInitialSessionTouch: skipAgentInitialSessionTouch,
               preserveUserFacingSessionModelState:

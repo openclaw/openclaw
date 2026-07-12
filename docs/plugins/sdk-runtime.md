@@ -93,6 +93,48 @@ return {
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
 
+## Raw agent ingress identity
+
+`agentCommandFromIngress(...)` is a low-level compatibility API for channel code that starts an
+agent run without the normal inbound reply pipeline. Every call must include
+`conversationIdentity`. Omitting it remains TypeScript-source-compatible for existing plugins, but
+the host rejects the run before session, workspace, or tool preparation.
+
+Channel plugins pass raw source facts rather than an asserted trust decision. OpenClaw resolves the
+current static route again. The account id and canonical route session key are mandatory; alternate
+`sessionId` and `to` selectors are rejected. The host admits only one of these cases:
+
+- a configured owner in a direct conversation routed to the default personal agent;
+- an audience whose current static binding selects the requested, configured, non-default service
+  agent.
+
+Unknown, unbound shared, non-owner personal, mismatched audiences, and cross-audience session
+targets fail closed. The public API accepts only the `channel` shape at runtime. The trusted
+`agentCommand(...)` entrypoint is host-internal and is no longer exported from the Plugin SDK.
+
+```typescript
+await agentCommandFromIngress({
+  message,
+  agentId: route.agentId,
+  sessionKey: route.sessionKey,
+  allowModelOverride: false,
+  conversationIdentity: {
+    origin: "channel",
+    senderIsConfiguredOwner,
+    source: {
+      channel: "example",
+      accountId,
+      peer: { kind: "channel", id: channelId },
+      teamId,
+      memberRoleIds,
+    },
+  },
+});
+```
+
+This boundary covers raw agent ingress only. Normal message-channel receive paths should continue
+to use the shared inbound runner rather than calling this API directly.
+
 ## Runtime namespaces
 
 <AccordionGroup>

@@ -6,7 +6,7 @@ export { sanitizeInboundSystemTags } from "../auto-reply/reply/inbound-text.js";
 export { normalizeChannelId } from "../channels/plugins/index.js";
 export { sendDurableMessageBatch } from "../channels/message/runtime.js";
 export { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-export { agentCommandFromIngress } from "../commands/agent.js";
+export { agentCommand } from "../commands/agent.js";
 export { getRuntimeConfig } from "../config/io.js";
 export { canonicalizeSessionEntryAliases } from "../config/sessions.js";
 export { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";

@@ -1,7 +1,7 @@
 // Implements the embedded backend used by local TUI sessions.
 import { randomUUID } from "node:crypto";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
-import { agentCommandFromIngress } from "../agents/agent-command.js";
+import { agentCommand } from "../agents/agent-command.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -1254,7 +1254,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       }
       const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
       const { canonicalKey, entry } = loadSessionEntry(params.sessionKey, loadOptions);
-      const result = await agentCommandFromIngress(
+      const result = await agentCommand(
         {
           // The per-message timestamp prefix is applied at the single LLM
           // boundary (normalizeMessagesForLlmBoundary) from each message's own
@@ -1274,6 +1274,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
           runId: params.runId,
           abortSignal: params.controller.signal,
           allowModelOverride: false,
+          senderIsOwner: false,
+          emitIngressModelUsageDiagnostic: true,
         },
         silentRuntime,
         this.deps,

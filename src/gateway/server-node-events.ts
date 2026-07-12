@@ -22,7 +22,7 @@ import {
 } from "../shared/node-presence.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
-  agentCommandFromIngress,
+  agentCommand,
   buildOutboundSessionContext,
   createOutboundSendDeps,
   defaultRuntime,
@@ -69,7 +69,7 @@ export type NodeEventHandleResult = {
   reason?: string;
 };
 
-type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
+type NodeAgentCommandInput = Parameters<typeof agentCommand>[0];
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
@@ -80,7 +80,16 @@ function dispatchNodeAgentCommand(
   nodeId: string,
   input: NodeAgentCommandInput,
 ): void {
-  void agentCommandFromIngress(input, defaultRuntime, ctx.deps).catch((err: unknown) => {
+  void agentCommand(
+    {
+      ...input,
+      // Paired nodes are authenticated remote operators, not channel audiences.
+      senderIsOwner: false,
+      emitIngressModelUsageDiagnostic: true,
+    },
+    defaultRuntime,
+    ctx.deps,
+  ).catch((err: unknown) => {
     ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
   });
 }
@@ -512,7 +521,7 @@ export const handleNodeEvent = async (
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: ctx.logGateway,
             supportsInlineImages,
-            // server-node-events dispatches via agentCommandFromIngress which
+            // server-node-events dispatches via the trusted agent command which
             // has no ctx.MediaPaths wiring; reject non-image attachments
             // explicitly rather than saving them where the agent cannot reach them.
             acceptNonImage: false,
