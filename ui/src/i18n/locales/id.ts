@@ -390,6 +390,14 @@ export const id: TranslationMap = {
     confirmDelete: "Buat snapshot dan hapus {name}?",
     confirmForceDelete: "Snapshot gagal: {error}\n\nHapus tanpa snapshot?",
   },
+  agentChip: {
+    openConversation: "Buka percakapan Anda dengan {name}",
+    menuLabel: "Menu agen",
+    agents: "Agen",
+    working: "Sedang bekerja…",
+    ready: "Siap mengobrol",
+    whatCanAgentDo: "Apa yang dapat dilakukan {name}?",
+  },
   newSession: {
     title: "Sesi baru",
     hint: "Pilih tempat sesi ini bekerja, lalu katakan apa yang harus dilakukan.",

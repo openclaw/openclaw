@@ -386,6 +386,14 @@ export const zh_TW: TranslationMap = {
     confirmDelete: "要建立快照並刪除 {name} 嗎？",
     confirmForceDelete: "快照失敗：{error}\n\n要在沒有快照的情況下刪除嗎？",
   },
+  agentChip: {
+    openConversation: "開啟您與 {name} 的對話",
+    menuLabel: "代理程式選單",
+    agents: "代理程式",
+    working: "處理中…",
+    ready: "可以開始聊天",
+    whatCanAgentDo: "{name} 能做什麼？",
+  },
   newSession: {
     title: "新工作階段",
     hint: "選擇此工作階段的執行位置，然後說明要執行的事項。",

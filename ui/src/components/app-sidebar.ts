@@ -1382,8 +1382,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.closeSessionGroupMenu();
     this.closeSessionSortMenu();
     this.agentMenuTrigger = trigger;
+    // Right-aligned to the toggle so the menu stays over the sidebar column.
     this.agentMenuPosition = {
-      x: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
+      x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
       bottom: Math.max(8, window.innerHeight - rect.top + 4),
     };
     document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);

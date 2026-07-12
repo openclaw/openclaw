@@ -392,6 +392,14 @@ export const nl: TranslationMap = {
     confirmDelete: "Snapshot maken en {name} verwijderen?",
     confirmForceDelete: "Snapshot mislukt: {error}\n\nVerwijderen zonder snapshot?",
   },
+  agentChip: {
+    openConversation: "Open je gesprek met {name}",
+    menuLabel: "Agentmenu",
+    agents: "Agents",
+    working: "Bezig…",
+    ready: "Klaar om te chatten",
+    whatCanAgentDo: "Wat kan {name} doen?",
+  },
   newSession: {
     title: "Nieuwe sessie",
     hint: "Kies waar deze sessie werkt en zeg vervolgens wat er moet gebeuren.",

@@ -386,6 +386,14 @@ export const zh_CN: TranslationMap = {
     confirmDelete: "为 {name} 创建快照并删除？",
     confirmForceDelete: "快照失败：{error}\n\n不创建快照直接删除？",
   },
+  agentChip: {
+    openConversation: "打开你与 {name} 的对话",
+    menuLabel: "智能体菜单",
+    agents: "代理",
+    working: "正在工作…",
+    ready: "可以开始聊天",
+    whatCanAgentDo: "{name} 能做什么？",
+  },
   newSession: {
     title: "新建会话",
     hint: "选择此会话的工作位置，然后说明要执行的操作。",

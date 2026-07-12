@@ -2101,6 +2101,12 @@ openclaw-session-menu[popover] {
   transform: rotate(180deg);
 }
 
+/* The docs row is the menu's only real hyperlink; keep it looking like a row. */
+.sidebar-agent-menu a.sidebar-customize-menu__item {
+  color: inherit;
+  text-decoration: none;
+}
+
 /* Footer menu row: build identity left, theme switch right. */
 .sidebar-agent-menu__footer {
   display: flex;
