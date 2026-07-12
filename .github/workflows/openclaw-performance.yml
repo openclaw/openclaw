@@ -253,7 +253,6 @@ jobs:
           const files = [
             "support/configure-openclaw-mock-auth.mjs",
             "support/configure-openclaw-live-auth.mjs",
-            "support/mock-openai-server.mjs",
             "states/mock-openai-provider.json"
           ];
           for (const rel of files) {

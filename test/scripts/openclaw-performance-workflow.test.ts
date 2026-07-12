@@ -66,6 +66,15 @@ describe("OpenClaw performance workflow", () => {
     expect(installRun).toContain('echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -');
   });
 
+  it("rewrites only Kova files that own the performance model pin", () => {
+    const pinModel = findStep("Pin Kova OpenAI model to GPT 5.5").run ?? "";
+
+    expect(pinModel).toContain('"support/configure-openclaw-mock-auth.mjs"');
+    expect(pinModel).toContain('"support/configure-openclaw-live-auth.mjs"');
+    expect(pinModel).toContain('"states/mock-openai-provider.json"');
+    expect(pinModel).not.toContain('"support/mock-openai-server.mjs"');
+  });
+
   it("keeps manual rehearsal reports artifact-only by default", () => {
     const workflow = readWorkflow();
     const detect = findStep("Detect clawgrit report token");
