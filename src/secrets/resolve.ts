@@ -541,8 +541,9 @@ async function runExecResolver(params: {
     };
 
     const append = (chunk: Buffer | string, target: "stdout" | "stderr") => {
+      outputBytes +=
+        typeof chunk === "string" ? Buffer.byteLength(chunk, "utf8") : chunk.byteLength;
       const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-      outputBytes += Buffer.byteLength(text, "utf8");
       if (outputBytes > params.maxOutputBytes) {
         forceKillChildProcessTree(child);
         if (!settled) {
