@@ -88,6 +88,10 @@ export function createMessageReceiveContext<TMessage>(params: {
       delete ctx.nackErrorMessage;
     },
     nack: async (error) => {
+      // Nack callbacks are idempotent after completion but remain retryable after failure.
+      if (ctx.ackState === "nacked") {
+        return;
+      }
       await params.onNack?.(error);
       ctx.ackState = "nacked";
       ctx.nackErrorMessage = normalizeAckErrorMessage(error);
