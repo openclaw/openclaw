@@ -1803,6 +1803,36 @@ describe("buildChatItems", () => {
     expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
   });
 
+  it("keeps a live App preview on an assistant search match", () => {
+    const groups = messageGroups({
+      messages: [{ role: "assistant", content: "Matching preview", timestamp: 1_000 }],
+      toolMessages: [mcpAppResult("mcp-app-search", "call-search", 1_001)],
+      searchOpen: true,
+      searchQuery: "matching",
+      showToolCalls: false,
+    });
+
+    expect(canvasBlocksIn(groupAt(groups, 0))).toHaveLength(1);
+  });
+
+  it("keeps a persisted App preview on an assistant search match", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "Show the App", timestamp: 1_000 },
+        mcpAppResult("mcp-app-persisted-search", "call-persisted-search", 1_001),
+        { role: "assistant", content: "Matching preview", timestamp: 1_002 },
+      ],
+      toolMessages: [],
+      searchOpen: true,
+      searchQuery: "matching",
+      showToolCalls: false,
+    });
+
+    const assistant = groups.find((group) => group.role === "assistant");
+    expect(assistant).toBeDefined();
+    expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+  });
+
   it("preserves a metadata-only assistant anchor when lifting canvas previews", () => {
     const groups = messageGroups({
       messages: [
@@ -1840,6 +1870,146 @@ describe("buildChatItems", () => {
     expect(
       groups.some((group) => firstMessageContent(group).some((block) => isCanvasBlock(block))),
     ).toBe(true);
+  });
+
+  it("creates an assistant anchor for a silent App turn", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "First request", timestamp: 1_000 },
+        { role: "assistant", content: "First response", timestamp: 1_001 },
+        { role: "user", content: "Show the App", timestamp: 2_000 },
+      ],
+      toolMessages: [mcpAppResult("mcp-app-silent", "call-silent", 2_001)],
+      queue: [
+        {
+          id: "queued-next-turn",
+          text: "Next request",
+          createdAt: 2_100,
+          sendSubmittedAtMs: 2_100,
+          sendState: "sending",
+        },
+      ],
+      showToolCalls: false,
+    });
+
+    const assistants = groups.filter((group) => group.role === "assistant");
+    expect(assistants).toHaveLength(2);
+    expect(canvasBlocksIn(groupAt(assistants, 0))).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(assistants, 1))).toHaveLength(1);
+  });
+
+  it("keeps an earlier silent App preview before the next user turn", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "Show the App", timestamp: 1_000 },
+        { role: "user", content: "Next request", timestamp: 2_000 },
+      ],
+      toolMessages: [mcpAppResult("mcp-app-earlier", "call-earlier", 1_001)],
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user"]);
+    expect(canvasBlocksIn(groupAt(groups, 1))).toHaveLength(1);
+  });
+
+  it("places an App preview after its queued user prompt", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "First request", timestamp: 1_000 },
+        { role: "assistant", content: "First response", timestamp: 1_001 },
+      ],
+      queue: [
+        {
+          id: "queued-app-turn",
+          text: "Show the App",
+          createdAt: 2_000,
+          sendSubmittedAtMs: 2_000,
+          sendState: "waiting-model",
+        },
+        {
+          id: "queued-future-turn",
+          text: "Later request",
+          createdAt: 2_001,
+          sendSubmittedAtMs: 2_001,
+          sendState: "waiting-reconnect",
+        },
+      ],
+      toolMessages: [mcpAppResult("mcp-app-queued", "call-queued", 2_002)],
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
+  });
+
+  it("restores a persisted App preview without the live tool cache", () => {
+    for (const showToolCalls of [false, true]) {
+      const groups = messageGroups({
+        messages: [
+          { role: "user", content: "Show the App", timestamp: 1_000 },
+          mcpAppResult("mcp-app-persisted", "call-persisted", 1_001),
+        ],
+        toolMessages: [],
+        showToolCalls,
+      });
+
+      const assistant = groups.find((group) => group.role === "assistant");
+      expect(assistant).toBeDefined();
+      expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+    }
+  });
+
+  it("deduplicates persisted and live copies of an App preview", () => {
+    const result = mcpAppResult("mcp-app-overlap", "call-overlap", 1_001);
+    const groups = messageGroups({
+      messages: [{ role: "user", content: "Show the App", timestamp: 1_000 }, result],
+      toolMessages: [result],
+      showToolCalls: false,
+    });
+
+    const assistant = groups.find((group) => group.role === "assistant");
+    expect(assistant).toBeDefined();
+    expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+  });
+
+  it("keeps a persisted App preview with its history-cutoff assistant", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "Show the App", timestamp: 1_000 },
+        mcpAppResult("mcp-app-cutoff", "call-cutoff", 1_001),
+        { role: "assistant", content: "Done", timestamp: 1_002 },
+      ],
+      toolMessages: [],
+      showToolCalls: false,
+      historyRenderLimit: 1,
+    });
+
+    const assistant = groups.find((group) => group.role === "assistant");
+    expect(assistant).toBeDefined();
+    expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+  });
+
+  it("does not expand a persisted preview across a cutoff user turn", () => {
+    const firstResult = mcpAppResult("mcp-app-first", "call-first", 1_001);
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "First request", timestamp: 1_000 },
+        firstResult,
+        { role: "user", content: "Second request", timestamp: 2_000 },
+        { role: "assistant", content: "Second response", timestamp: 2_001 },
+      ],
+      toolMessages: [firstResult],
+      showToolCalls: false,
+      historyRenderLimit: 2,
+    });
+
+    expect(groups.flatMap((group) => canvasBlocksIn(group))).toStrictEqual([]);
   });
 
   it("does not lift generic view handles from non-canvas payloads", () => {
@@ -2066,6 +2236,30 @@ function createAssistantCanvasBlock(params: { suffix: string }) {
       url: `/__openclaw__/canvas/documents/${viewId}/index.html`,
       preferredHeight: 360,
     },
+  };
+}
+
+function mcpAppResult(viewId: string, toolCallId: string, timestamp: number) {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "demo__show",
+    content: [{ type: "text", text: "ok" }],
+    details: {
+      mcpAppPreview: {
+        kind: "canvas",
+        view: { id: viewId, title: "Demo App" },
+        presentation: { target: "assistant_message", sandbox: "scripts" },
+        mcpApp: {
+          viewId,
+          serverName: "demo",
+          toolName: "show",
+          uiResourceUri: "ui://demo/app.html",
+          toolCallId,
+        },
+      },
+    },
+    timestamp,
   };
 }
 
