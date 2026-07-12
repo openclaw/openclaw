@@ -114,7 +114,7 @@ type QaGatewayLike = {
 type QaSuiteScenarioLike = {
   details?: string;
   status: "pass" | "fail";
-  steps?: Array<{ details?: string }>;
+  steps?: Array<{ details?: string; status?: "pass" | "fail" }>;
 };
 
 type RuntimeParityCaptureParams = {
@@ -770,21 +770,23 @@ function hasMissingToolResult(toolCalls: readonly RuntimeParityToolCall[]) {
   return toolCalls.some((toolCall) => toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS);
 }
 
-const SUCCESSFUL_MEDIA_RESULT_HASH = stableHash({ kind: "media", status: "success" });
-
-function normalizeSuccessfulMediaToolResults(toolCalls: RuntimeParityToolCall[]) {
-  return toolCalls.map((toolCall) =>
-    toolCall.tool === "image_generate" && !toolCall.errorClass
-      ? { ...toolCall, resultHash: SUCCESSFUL_MEDIA_RESULT_HASH }
-      : toolCall,
+function hasProvenTerminalImageResult(scenarioResult: QaSuiteScenarioLike) {
+  return (
+    scenarioResult.status === "pass" &&
+    (scenarioResult.steps ?? []).some(
+      (step) =>
+        step.status === "pass" &&
+        /(?:^|\n)image_generate=true\r?\nMEDIA:\S+/u.test(step.details ?? ""),
+    )
   );
 }
+
+const PROVEN_TERMINAL_IMAGE_RESULT_HASH = stableHash({ kind: "media", status: "success" });
 
 function resolveRuntimeParityToolCalls(params: {
   mockToolCalls: RuntimeParityToolCall[] | null;
   transcriptToolCalls: RuntimeParityToolCall[];
-  scenarioEvidence?: string;
-  scenarioPassed?: boolean;
+  terminalImageResultProven?: boolean;
 }): RuntimeParityToolCall[] {
   let selected: RuntimeParityToolCall[];
   if (!params.mockToolCalls) {
@@ -798,35 +800,24 @@ function resolveRuntimeParityToolCalls(params: {
   } else {
     selected = params.mockToolCalls;
   }
-  const mediaEvidence = params.scenarioEvidence?.match(/\bMEDIA:\S+/giu) ?? [];
   const imageCalls = selected.filter((toolCall) => toolCall.tool === "image_generate");
-  const missingImageCalls = imageCalls.filter(
-    (toolCall) => toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS,
-  );
-  if (
-    params.scenarioPassed &&
-    mediaEvidence.length === 1 &&
-    imageCalls.length === 1 &&
-    missingImageCalls.length === 1
-  ) {
-    let resolvedMissingImage = false;
+  if (params.terminalImageResultProven && imageCalls.length === 1) {
     selected = selected.map((toolCall) => {
       if (
-        resolvedMissingImage ||
         toolCall.tool !== "image_generate" ||
-        toolCall.errorClass !== TOOL_RESULT_MISSING_ERROR_CLASS
+        (toolCall.errorClass !== undefined &&
+          toolCall.errorClass !== TOOL_RESULT_MISSING_ERROR_CLASS)
       ) {
         return toolCall;
       }
-      resolvedMissingImage = true;
       return {
         ...toolCall,
-        resultHash: SUCCESSFUL_MEDIA_RESULT_HASH,
+        resultHash: PROVEN_TERMINAL_IMAGE_RESULT_HASH,
         errorClass: undefined,
       };
     });
   }
-  return normalizeSuccessfulMediaToolResults(selected);
+  return selected;
 }
 
 function filterMockRequestsForParentPrompt(
@@ -1120,20 +1111,14 @@ export async function captureRuntimeParityCell(
       ? classifyScenarioError(params.scenarioResult.details)
       : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
-  const scenarioEvidence = [
-    params.scenarioResult.details,
-    ...(params.scenarioResult.steps ?? []).map((step) => step.details),
-  ]
-    .filter((value): value is string => Boolean(value))
-    .join("\n");
+  const terminalImageResultProven = hasProvenTerminalImageResult(params.scenarioResult);
   return {
     runtime: params.runtime,
     transcriptBytes,
     toolCalls: resolveRuntimeParityToolCalls({
       mockToolCalls,
       transcriptToolCalls,
-      scenarioEvidence,
-      scenarioPassed: params.scenarioResult.status === "pass",
+      terminalImageResultProven,
     }),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
@@ -1174,6 +1159,7 @@ export async function runRuntimeParityScenario(params: {
 export const testing = {
   classifyRuntimeParityCells,
   filterMockRequestsForParentPrompt,
+  hasProvenTerminalImageResult,
   resolveRuntimeParityToolCalls,
   resolveToolCallOrderFromMockRequests,
 };
