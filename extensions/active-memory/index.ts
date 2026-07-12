@@ -3440,36 +3440,39 @@ async function runRecallSubagent(params: {
     }
     throw error;
   } finally {
-    if (runtimeSessionCreated) {
-      if (params.config.persistTranscripts && !transcriptArtifactPersisted) {
-        await persistActiveMemoryTranscriptArtifact({
-          sources: transcriptSources,
-          sessionFile: artifactSessionFile,
+    try {
+      if (runtimeSessionCreated) {
+        if (params.config.persistTranscripts && !transcriptArtifactPersisted) {
+          await persistActiveMemoryTranscriptArtifact({
+            sources: transcriptSources,
+            sessionFile: artifactSessionFile,
+          }).catch((error: unknown) => {
+            const message = toSingleLineLogValue(
+              error instanceof Error ? error.message : String(error),
+            );
+            params.api.logger.debug?.(
+              `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
+            );
+          });
+        }
+        await cleanupActiveMemoryRecallSession({
+          agentId: params.agentId,
+          sessionId: subagentSessionId,
+          sessionKey: subagentSessionKey,
+          storePath,
         }).catch((error: unknown) => {
           const message = toSingleLineLogValue(
             error instanceof Error ? error.message : String(error),
           );
-          params.api.logger.debug?.(
-            `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
+          params.api.logger.warn?.(
+            `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
           );
+          throw error;
         });
       }
-      await cleanupActiveMemoryRecallSession({
-        agentId: params.agentId,
-        sessionId: subagentSessionId,
-        sessionKey: subagentSessionKey,
-        storePath,
-      }).catch((error: unknown) => {
-        const message = toSingleLineLogValue(
-          error instanceof Error ? error.message : String(error),
-        );
-        params.api.logger.warn?.(
-          `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
-        );
-        throw error;
-      });
+    } finally {
+      await transientWorkspace?.cleanup();
     }
-    await transientWorkspace?.cleanup();
   }
 }
 

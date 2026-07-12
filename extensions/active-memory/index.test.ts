@@ -752,6 +752,33 @@ describe("active-memory plugin", () => {
     );
   });
 
+  it("cleans the transient workspace when SQLite recall cleanup retries are exhausted", async () => {
+    const rmSpy = vi.spyOn(fs, "rm");
+    hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValue(
+      new Error("session store remains busy"),
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? cleanup failure", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(3);
+    expect(rmSpy).toHaveBeenCalledWith(expect.stringMatching(/openclaw-active-memory-.*/), {
+      recursive: true,
+      force: true,
+    });
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to clean up recall session"),
+    );
+  });
+
   it("registers a session-scoped active-memory toggle command", async () => {
     const command = registeredCommands["active-memory"];
     const sessionKey = "agent:main:active-memory-toggle";
