@@ -14,7 +14,7 @@ export type DirectChildSessionEntry = {
 };
 
 /** Returns true when a session store row is a direct child of the parent key. */
-export function isDirectChildSessionEntry(params: {
+function isDirectChildSessionEntry(params: {
   sessionKey: string;
   entry: SessionEntry | undefined;
   parentKey: string;

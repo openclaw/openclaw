@@ -36,6 +36,12 @@ export const pluginSdkDocMetadata = {
   "approval-delivery-runtime": {
     category: "runtime",
   },
+  "approval-gateway-runtime": {
+    category: "runtime",
+  },
+  "approval-reference-runtime": {
+    category: "runtime",
+  },
   "approval-native-runtime": {
     category: "runtime",
   },
@@ -108,10 +114,16 @@ export const pluginSdkDocMetadata = {
   "message-tool-delivery-hints": {
     category: "runtime",
   },
+  "tool-results": {
+    category: "utilities",
+  },
   "provider-selection-runtime": {
     category: "provider",
   },
   "provider-catalog-live-runtime": {
+    category: "provider",
+  },
+  "provider-model-types": {
     category: "provider",
   },
   "runtime-store": {
@@ -130,6 +142,9 @@ export const pluginSdkDocMetadata = {
     category: "utilities",
   },
   "agent-runtime": {
+    category: "runtime",
+  },
+  "agent-harness-runtime": {
     category: "runtime",
   },
   "speech-core": {

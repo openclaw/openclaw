@@ -62,7 +62,7 @@ export function createOxlintShards({
 /**
  * Splits core oxlint targets into smaller source/package/UI shards.
  */
-export function createCoreOxlintShards({ cwd = process.cwd(), readDir = fs.readdirSync } = {}) {
+function createCoreOxlintShards({ cwd = process.cwd(), readDir = fs.readdirSync } = {}) {
   const sourceShards = listSourceRootTargetGroups({ cwd, readDir }).map((targets) => ({
     name: targets.length === 1 ? `core:${targets[0].replaceAll("/", ":")}` : "core:src:root",
     args: ["--tsconfig", CORE_TS_CONFIG, ...targets],

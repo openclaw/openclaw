@@ -28,6 +28,7 @@ export async function repairLoadedGatewayServiceForStart(params: {
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const existingEnvironment = params.state.command?.environment;
+  const existingEnvironmentValueSources = params.state.command?.environmentValueSources;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv: existingEnvironment,
@@ -58,20 +59,22 @@ export async function repairLoadedGatewayServiceForStart(params: {
     }
   }
 
-  const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan({
-    env: installEnv,
-    port,
-    runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
-    wrapperPath,
-    existingEnvironment,
-    config: cfg,
-    warn: (message) => {
-      warnings.push(message);
-      if (!params.json) {
-        defaultRuntime.log(`- ${message}`);
-      }
-    },
-  });
+  const { programArguments, workingDirectory, environment, environmentValueSources } =
+    await buildGatewayInstallPlan({
+      env: installEnv,
+      port,
+      runtime: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+      wrapperPath,
+      existingEnvironment,
+      existingEnvironmentValueSources,
+      config: cfg,
+      warn: (message) => {
+        warnings.push(message);
+        if (!params.json) {
+          defaultRuntime.log(`- ${message}`);
+        }
+      },
+    });
 
   await params.service.install({
     env: installEnv as GatewayServiceEnv,
@@ -80,6 +83,7 @@ export async function repairLoadedGatewayServiceForStart(params: {
     programArguments,
     workingDirectory,
     environment,
+    environmentValueSources,
   });
 
   let loaded;

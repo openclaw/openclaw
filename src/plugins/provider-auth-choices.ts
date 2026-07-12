@@ -29,6 +29,8 @@ export type ProviderAuthChoiceMetadata = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
+  appGuidedSecret?: boolean;
+  appGuidedAuth?: "oauth" | "device-code";
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
@@ -53,6 +55,7 @@ type ManifestProviderAuthChoiceParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  includeWorkspacePlugins?: boolean;
 };
 
 const PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
@@ -105,6 +108,8 @@ function toProviderAuthChoiceCandidate(params: {
     ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
     ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
     ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
+    ...(choice.appGuidedSecret ? { appGuidedSecret: true } : {}),
+    ...(choice.appGuidedAuth ? { appGuidedAuth: choice.appGuidedAuth } : {}),
     ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
   };
 }
@@ -186,6 +191,7 @@ function resolveManifestProviderAuthChoiceCandidates(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  includeWorkspacePlugins?: boolean;
 }): ProviderAuthChoiceCandidate[] {
   const metadataSnapshot = loadManifestMetadataSnapshot({
     config: params?.config ?? {},
@@ -195,6 +201,9 @@ function resolveManifestProviderAuthChoiceCandidates(params?: {
   const registry = metadataSnapshot.manifestRegistry;
   const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
   return registry.plugins.flatMap((plugin) => {
+    if (plugin.origin === "workspace" && params?.includeWorkspacePlugins === false) {
+      return [];
+    }
     if (
       plugin.origin === "workspace" &&
       params?.includeUntrustedWorkspacePlugins === false &&

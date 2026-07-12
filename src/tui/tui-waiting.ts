@@ -26,7 +26,7 @@ export function pickWaitingPhrase(tick: number, phrases = defaultWaitingPhrases)
 }
 
 /** Applies a moving highlight window to status text. */
-export function shimmerText(theme: MinimalTheme, text: string, tick: number) {
+function shimmerText(theme: MinimalTheme, text: string, tick: number) {
   const width = 6;
   const hi = (ch: string) => theme.bold(theme.accentSoft(ch));
 
@@ -36,7 +36,7 @@ export function shimmerText(theme: MinimalTheme, text: string, tick: number) {
 
   let out = "";
   for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
+    const ch = text.charAt(i);
     out += i >= start && i <= end ? hi(ch) : theme.dim(ch);
   }
   return out;

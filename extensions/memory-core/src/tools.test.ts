@@ -111,6 +111,83 @@ describe("memory_search unavailable payloads", () => {
     expect(seenMinScore).toBe(0.8);
   });
 
+  it("preserves manager ranking when public scores omit path precedence", async () => {
+    setMemorySearchImpl(async () => [
+      {
+        path: "memory/z/body/foo.md",
+        startLine: 1,
+        endLine: 2,
+        score: 1,
+        textScore: 0.9,
+        snippet: "exact basename with body relevance",
+        source: "memory" as const,
+      },
+      {
+        path: "memory/a/path/foo.md",
+        startLine: 1,
+        endLine: 2,
+        score: 1,
+        textScore: 0,
+        snippet: "exact path-only basename",
+        source: "memory" as const,
+      },
+      {
+        path: "memory/b/foo.md.bak",
+        startLine: 1,
+        endLine: 2,
+        score: 1,
+        textScore: 0,
+        snippet: "lower-specificity stem match",
+        source: "memory" as const,
+      },
+      {
+        path: "memory/semantic.md",
+        startLine: 1,
+        endLine: 2,
+        score: 2,
+        textScore: 1,
+        snippet: "strong non-exact semantic match",
+        source: "memory" as const,
+      },
+    ]);
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+    });
+
+    const result = await tool.execute("ranked-stream", { query: "foo.md", corpus: "memory" });
+    const details = result.details as { results: Array<{ path: string; score: number }> };
+
+    expect(details.results.map((entry) => entry.path)).toEqual([
+      "memory/z/body/foo.md",
+      "memory/a/path/foo.md",
+      "memory/b/foo.md.bak",
+      "memory/semantic.md",
+    ]);
+    expect(details.results.map((entry) => entry.score)).toEqual([1, 1, 1, 2]);
+  });
+
+  it("passes the host local-service hook to tool memory managers", async () => {
+    const acquireLocalService = vi.fn(async () => undefined);
+    const tool = createMemorySearchTool({
+      config: asOpenClawConfig({
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      acquireLocalService,
+    });
+    if (!tool) {
+      throw new Error("tool missing");
+    }
+
+    await tool.execute("local-service-hook", { query: "hello" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({ acquireLocalService }),
+    ]);
+  });
+
   it("returns explicit unavailable metadata for quota failures", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");
@@ -382,47 +459,14 @@ describe("memory_search unavailable payloads", () => {
     expect(searchCalls).toBe(2);
   });
 
-  it("merges qmd runtime debug across zero-hit retry attempts", async () => {
+  it("keeps the zero-hit bootstrap retry for one-shot qmd searches", async () => {
     setMemoryBackend("qmd");
     let searchCalls = 0;
-    setMemorySearchImpl(async (opts) => {
+    setMemorySearchImpl(async () => {
       searchCalls += 1;
       if (searchCalls === 1) {
-        opts?.onDebug?.({
-          backend: "qmd",
-          configuredMode: "search",
-          effectiveMode: "search",
-          qmd: {
-            collectionValidation: {
-              cacheState: "hit",
-              elapsedMs: 2,
-              collectionCount: 2,
-              listCalls: 0,
-              showCalls: 0,
-            },
-            multiCollectionProbe: {
-              cacheState: "hit",
-              elapsedMs: 1,
-              supported: true,
-            },
-          },
-        });
         return [];
       }
-      opts?.onDebug?.({
-        backend: "qmd",
-        configuredMode: "search",
-        effectiveMode: "query",
-        fallback: "unsupported-search-flags",
-        qmd: {
-          searchPlan: {
-            command: "query",
-            collectionCount: 2,
-            groupCount: 2,
-            sources: ["memory", "sessions"],
-          },
-        },
-      });
       return [
         {
           path: "MEMORY.md",
@@ -440,8 +484,59 @@ describe("memory_search unavailable payloads", () => {
         agents: { list: [{ id: "main", default: true }] },
         memory: { backend: "qmd", citations: "off" },
       },
+      oneShotCliRun: true,
     });
-    const result = await tool.execute("zero-hit-debug-retry", {
+    const result = await tool.execute("qmd-zero-hit-cli", {
+      query: "hidden thread codename",
+    });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
+      "MEMORY.md",
+    );
+    expect(searchCalls).toBe(2);
+    expect(getMemorySyncMockCalls()).toBe(1);
+  });
+
+  it("returns qmd runtime debug without forcing a zero-hit retry", async () => {
+    setMemoryBackend("qmd");
+    let searchCalls = 0;
+    setMemorySearchImpl(async (opts) => {
+      searchCalls += 1;
+      opts?.onDebug?.({
+        backend: "qmd",
+        configuredMode: "search",
+        effectiveMode: "search",
+        qmd: {
+          collectionValidation: {
+            cacheState: "hit",
+            elapsedMs: 2,
+            collectionCount: 2,
+            listCalls: 0,
+            showCalls: 0,
+          },
+          multiCollectionProbe: {
+            cacheState: "hit",
+            elapsedMs: 1,
+            supported: true,
+          },
+          searchPlan: {
+            command: "search",
+            collectionCount: 2,
+            groupCount: 2,
+            sources: ["memory", "sessions"],
+          },
+        },
+      });
+      return [];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd", citations: "off" },
+      },
+    });
+    const result = await tool.execute("zero-hit-debug-single", {
       query: "hidden thread codename",
     });
     const details = result.details as {
@@ -452,9 +547,11 @@ describe("memory_search unavailable payloads", () => {
       };
     };
 
-    expect(searchCalls).toBe(2);
-    expect(details.debug?.effectiveMode).toBe("query");
-    expect(details.debug?.fallback).toBe("unsupported-search-flags");
+    expect((result.details as { results?: Array<unknown> }).results).toEqual([]);
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+    expect(details.debug?.effectiveMode).toBe("search");
+    expect(details.debug?.fallback).toBeUndefined();
     expect(details.debug?.qmd?.collectionValidation).toMatchObject({
       cacheState: "hit",
       collectionCount: 2,
@@ -464,7 +561,7 @@ describe("memory_search unavailable payloads", () => {
       supported: true,
     });
     expect(details.debug?.qmd?.searchPlan).toEqual({
-      command: "query",
+      command: "search",
       collectionCount: 2,
       groupCount: 2,
       sources: ["memory", "sessions"],

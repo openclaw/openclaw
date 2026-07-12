@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 // Memory Core plugin module implements search manager behavior.
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createSubsystemLogger,
   resolveAgentContextLimits,
@@ -24,6 +25,10 @@ import {
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  resolveMemoryCoreLocalServiceHostIdentity,
+  type MemoryCoreAcquireLocalService,
+} from "./embedding-local-service.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type Maybe<T> = T | null;
@@ -58,7 +63,7 @@ type MemorySearchManagerCacheState =
   | "fallback-builtin"
   | "recent-failure-cooldown";
 
-export type MemorySearchManagerDebug = {
+type MemorySearchManagerDebug = {
   backend?: "builtin" | "qmd";
   purpose?: MemorySearchManagerPurpose;
   managerMs?: number;
@@ -112,18 +117,10 @@ const {
   pendingQmdManagerCreates: PENDING_QMD_MANAGER_CREATES,
   qmdManagerOpenFailures: QMD_MANAGER_OPEN_FAILURES,
 } = getMemorySearchManagerCacheStore();
-let managerRuntimePromise: Promise<typeof import("../../manager-runtime.js")> | null = null;
-let qmdManagerModulePromise: Promise<typeof import("./qmd-manager.js")> | null = null;
+const managerRuntimeLoader = createLazyRuntimeModule(() => import("../../manager-runtime.js"));
+const loadManagerRuntime = managerRuntimeLoader;
 
-function loadManagerRuntime() {
-  managerRuntimePromise ??= import("../../manager-runtime.js");
-  return managerRuntimePromise;
-}
-
-function loadQmdManagerModule() {
-  qmdManagerModulePromise ??= import("./qmd-manager.js");
-  return qmdManagerModulePromise;
-}
+const loadQmdManagerModule = createLazyRuntimeModule(() => import("./qmd-manager.js"));
 
 export type MemorySearchManagerResult = {
   manager: Maybe<MemorySearchManager>;
@@ -132,6 +129,12 @@ export type MemorySearchManagerResult = {
 };
 
 export type MemorySearchManagerPurpose = "default" | "status" | "cli";
+type MemorySearchManagerParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  purpose?: MemorySearchManagerPurpose;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
+};
 
 function getActiveQmdManagerOpenFailure(
   scopeKey: string,
@@ -189,11 +192,9 @@ function applyManagerDebug(
   };
 }
 
-export async function getMemorySearchManager(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemorySearchManagerPurpose;
-}): Promise<MemorySearchManagerResult> {
+export async function getMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
   const acquireStartedAt = Date.now();
   const purpose = params.purpose ?? "default";
   const finish = (
@@ -213,7 +214,12 @@ export async function getMemorySearchManager(params: {
     const { workspaceDir } = runtimeConfig;
     const transient = params.purpose === "status" || params.purpose === "cli";
     const scopeKey = buildQmdManagerScopeKey(normalizedAgentId);
-    const identityKey = buildQmdManagerIdentityKey(normalizedAgentId, qmdResolved, runtimeConfig);
+    const identityKey = buildQmdManagerIdentityKey(
+      normalizedAgentId,
+      qmdResolved,
+      runtimeConfig,
+      params.acquireLocalService,
+    );
     const debugIdentityHash = hashQmdManagerIdentity(identityKey);
 
     const createPrimaryQmdManager = async (
@@ -421,11 +427,7 @@ export async function getMemorySearchManager(params: {
 }
 
 async function getBuiltinMemorySearchManagerAfterQmdFailure(
-  params: {
-    cfg: OpenClawConfig;
-    agentId: string;
-    purpose?: MemorySearchManagerPurpose;
-  },
+  params: MemorySearchManagerParams,
   qmdFailureReason: string | undefined,
 ): Promise<MemorySearchManagerResult> {
   const fallback = await getBuiltinMemorySearchManager(params);
@@ -441,11 +443,9 @@ async function getBuiltinMemorySearchManagerAfterQmdFailure(
   };
 }
 
-async function getBuiltinMemorySearchManager(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  purpose?: MemorySearchManagerPurpose;
-}): Promise<MemorySearchManagerResult> {
+async function getBuiltinMemorySearchManager(
+  params: MemorySearchManagerParams,
+): Promise<MemorySearchManagerResult> {
   try {
     const { MemoryIndexManager } = await loadManagerRuntime();
     const manager = await MemoryIndexManager.get(params);
@@ -522,7 +522,7 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
       log.warn(`failed to close qmd memory manager: ${String(err)}`);
     }
   }
-  if (managerRuntimePromise !== null) {
+  if (managerRuntimeLoader.peek()) {
     const { closeAllMemoryIndexManagers } = await loadManagerRuntime();
     await closeAllMemoryIndexManagers();
   }
@@ -548,7 +548,7 @@ export async function closeMemorySearchManager(params: {
       log.warn(`failed to close qmd memory manager for agent ${normalizedAgentId}: ${String(err)}`);
     }
   }
-  if (managerRuntimePromise !== null) {
+  if (managerRuntimeLoader.peek()) {
     const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
     await closeMemoryIndexManagersForAgent({ cfg: params.cfg, agentId: normalizedAgentId });
   }
@@ -767,10 +767,12 @@ function buildQmdManagerIdentityKey(
   agentId: string,
   config: ResolvedQmdConfig,
   runtimeConfig: QmdManagerRuntimeConfig,
+  acquireLocalService: MemoryCoreAcquireLocalService | undefined,
 ): string {
   // ResolvedQmdConfig is assembled in a stable field order in resolveMemoryBackendConfig.
   // Fast stringify avoids deep key-sorting overhead on this hot path.
-  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}`;
+  const localServiceHostId = resolveMemoryCoreLocalServiceHostIdentity(acquireLocalService);
+  return `${agentId}:${JSON.stringify(config)}:${JSON.stringify(runtimeConfig.syncSettings ?? null)}:${JSON.stringify(runtimeConfig.contextLimits ?? null)}:${runtimeConfig.workspaceDir}:${localServiceHostId}`;
 }
 
 function resolveQmdManagerRuntimeConfig(

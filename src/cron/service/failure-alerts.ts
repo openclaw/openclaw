@@ -1,7 +1,7 @@
 /** Resolves and emits cron failure-alert notifications. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
-import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
 

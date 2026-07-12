@@ -138,13 +138,14 @@ type SecretsReloadHarnessParams = {
   clients?: GatewayAuxHandlerParams["clients"];
   startChannel?: GatewayAuxHandlerParams["startChannel"];
   stopChannel?: GatewayAuxHandlerParams["stopChannel"];
+  getChannelAutostartSuppression?: GatewayAuxHandlerParams["getChannelAutostartSuppression"];
   logChannelsInfo?: GatewayAuxHandlerParams["logChannels"]["info"];
   respond?: ReturnType<typeof vi.fn>;
 };
 
 function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
   const respond = params.respond ?? vi.fn();
-  const { extraHandlers } = createGatewayAuxHandlers({
+  const gatewayAux = createGatewayAuxHandlers({
     log: {},
     activateRuntimeSecrets: params.activateRuntimeSecrets,
     buildReloadPlan: params.buildReloadPlan,
@@ -157,10 +158,13 @@ function createSecretsReloadHarness(params: SecretsReloadHarnessParams) {
     clients: params.clients ?? [],
     startChannel: params.startChannel ?? (async () => {}),
     stopChannel: params.stopChannel ?? (async () => {}),
+    getChannelAutostartSuppression: params.getChannelAutostartSuppression,
     logChannels: { info: params.logChannelsInfo ?? vi.fn() },
   });
+  const { extraHandlers } = gatewayAux;
 
   return {
+    ...gatewayAux,
     extraHandlers,
     respond,
     reload: () => invokeSecretsReload({ handlers: extraHandlers, respond }),
@@ -201,6 +205,45 @@ afterEach(() => {
 });
 
 describe("gateway aux handlers", () => {
+  it("shares one approval epoch per gateway lifetime and rotates it on restart", () => {
+    const first = createSecretsReloadHarness({
+      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+    });
+    const second = createSecretsReloadHarness({
+      activateRuntimeSecrets: mockResolvedSecrets(asConfig({})),
+    });
+
+    expect(first.execApprovalManager.runtimeEpoch).toBe(first.pluginApprovalManager.runtimeEpoch);
+    expect(second.execApprovalManager.runtimeEpoch).toBe(second.pluginApprovalManager.runtimeEpoch);
+    expect(first.execApprovalManager.runtimeEpoch).not.toBe(
+      second.execApprovalManager.runtimeEpoch,
+    );
+  });
+
+  it("refuses secrets.reload channel restarts while crash-loop safe mode suppresses autostart", async () => {
+    const buildReloadPlan = buildRestartChannelsPlan("slack");
+    activateSnapshot(slackConfig("old-slack-secret"));
+    const activateRuntimeSecrets = mockResolvedSecrets(slackConfig("new-slack-secret"));
+    const { reload, respond, startChannel, stopChannel } =
+      createSecretsReloadHarnessWithChannelMocks({
+        activateRuntimeSecrets,
+        buildReloadPlan,
+        getChannelAutostartSuppression: () => ({
+          reason: "crash-loop-breaker",
+          message: "safe mode",
+        }),
+      });
+
+    await reload();
+
+    expect(stopChannel).not.toHaveBeenCalled();
+    expect(startChannel).not.toHaveBeenCalled();
+    const [okFlag, successPayload, errorPayload] = firstRespondCall(respond);
+    expect(okFlag).toBe(false);
+    expect(successPayload).toBeUndefined();
+    expect(errorPayload?.message ?? "").toBe("secrets.reload failed");
+  });
+
   it("restarts only channels whose resolved secret-backed config changed on secrets.reload", async () => {
     const buildReloadPlanCalls: string[][] = [];
     const buildReloadPlan = (changedPaths: string[]) => {

@@ -1,0 +1,253 @@
+/* Full-page new-session draft: the start-screen welcome centers in the pane
+   with the draft block (clean target row + composer) between the hero and the
+   recent chats, so the draft reads as the start screen plus "where to start"
+   controls. */
+openclaw-new-session-page {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.new-session-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Mirrors .chat-thread: the top inset doubles as the native macOS titlebar
+   drag band (see the scroll container's mousedown handler). */
+.new-session-page__scroll {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: clamp(44px, 5vh, 52px) clamp(6px, 1vw, 12px) 6px;
+}
+
+/* The shared welcome stretches (flex: 1) and centers via justify-content,
+   which clips overflow above the scroll origin once the draft content is
+   taller than the pane (short window, open folder browser). Content-size it
+   here; its margin: auto still centers whenever there is spare room. */
+.new-session-page .agent-chat__welcome {
+  flex: 0 0 auto;
+  min-height: auto;
+}
+
+/* Draft block inside the centered welcome column; the welcome centers text,
+   so reset alignment for the controls and composer. */
+.new-session-page__draft {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin-top: 6px;
+  text-align: left;
+}
+
+/* Cursor-style quiet target row: plain muted text controls with the native
+   select chevrons, no chip borders; hover/focus restores full contrast. */
+.new-session-page__targets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  padding: 0 2px;
+}
+
+.new-session-page__target {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.new-session-page__target:hover,
+.new-session-page__target:focus-within {
+  color: var(--text);
+}
+
+.new-session-page__target select,
+.new-session-page__target input[type="text"] {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  outline: none;
+  cursor: pointer;
+}
+
+.new-session-page__target input[type="text"] {
+  cursor: text;
+}
+
+.new-session-page__target input[type="text"]::placeholder {
+  color: inherit;
+}
+
+/* Compact by default so the browse button hugs the path; grows only as far
+   as a long path needs, then ellipsizes via the input's own scroll. */
+.new-session-page__target--folder {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.new-session-page__target--folder input {
+  width: 150px;
+  max-width: 40vw;
+  min-width: 0;
+  field-sizing: content;
+}
+
+.new-session-page__target-icon {
+  display: inline-flex;
+  color: var(--muted);
+}
+
+.new-session-page__target-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__branch {
+  width: 140px;
+}
+
+.new-session-page__browse,
+.new-session-page__browser-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.new-session-page__browse:hover,
+.new-session-page__browser-nav:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  color: var(--text);
+}
+
+.new-session-page__browse svg,
+.new-session-page__browser-nav svg {
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__browser-nav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.new-session-page__browser {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+}
+
+.new-session-page__browser-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.new-session-page__browser-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.new-session-page__browser-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  padding: 4px;
+  overflow-y: auto;
+}
+
+.new-session-page__browser-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.new-session-page__browser-entry:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.new-session-page__browser-entry:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.new-session-page__browser-entry:disabled:hover {
+  background: transparent;
+}
+
+.new-session-page__browser-entry--hidden {
+  color: var(--muted);
+}
+
+.new-session-page__browser-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.new-session-page__browser-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border);
+}
+
+.new-session-page__error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.new-session-page__browser-use {
+  padding: 6px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.new-session-page__browser-use:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

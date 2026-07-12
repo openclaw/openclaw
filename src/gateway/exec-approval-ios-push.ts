@@ -2,6 +2,7 @@
 // Sends APNs request/resolution wakes to paired operator devices.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import {
   hasEffectivePairedDeviceRole,
   listDevicePairing,
@@ -25,9 +26,11 @@ import {
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 
 // iOS exec-approval push delivery targets paired operator devices with APNs
-// registrations. Request pushes require approval scope; cleanup/resolved pushes
-// reuse the original targets so badges can clear even after scope changes.
+// registrations. Request pushes require approval scope plus identity-read access
+// so the client can validate gateway ownership before presenting or resolving.
+// Cleanup pushes reuse original targets so badges can clear after scope changes.
 const APPROVALS_SCOPE = "operator.approvals";
+const READ_SCOPE = "operator.read";
 const OPERATOR_ROLE = "operator";
 
 type GatewayLikeLogger = {
@@ -82,14 +85,14 @@ function resolveActiveOperatorToken(device: PairedDevice): DeviceAuthToken | nul
   return operatorToken;
 }
 
-function canApproveExecRequests(device: PairedDevice): boolean {
+function canReceiveExecApprovalRequests(device: PairedDevice): boolean {
   const operatorToken = resolveActiveOperatorToken(device);
   if (!operatorToken) {
     return false;
   }
   return roleScopesAllow({
     role: OPERATOR_ROLE,
-    requestedScopes: [APPROVALS_SCOPE],
+    requestedScopes: [APPROVALS_SCOPE, READ_SCOPE],
     allowedScopes: operatorToken.scopes,
   });
 }
@@ -107,7 +110,7 @@ function shouldTargetDevice(params: {
   if (!params.requireApprovalScope) {
     return true;
   }
-  return canApproveExecRequests(params.device);
+  return canReceiveExecApprovalRequests(params.device);
 }
 
 async function loadRegisteredTargets(params: {
@@ -231,6 +234,7 @@ async function sendRequestedPushes(params: {
   plan: DeliveryPlan;
   log: GatewayLikeLogger;
 }): Promise<{ attempted: number; delivered: number }> {
+  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
   return await sendApprovalPushes({
     approvalId: params.request.id,
     plan: params.plan,
@@ -243,12 +247,14 @@ async function sendRequestedPushes(params: {
             registration: target.registration,
             nodeId: target.nodeId,
             approvalId,
+            gatewayDeviceId,
             auth: plan.directAuth!,
           })
         : await sendApnsExecApprovalAlert({
             registration: target.registration,
             nodeId: target.nodeId,
             approvalId,
+            gatewayDeviceId,
             relayConfig: plan.relayConfig!,
           }),
   });
@@ -301,6 +307,7 @@ async function sendResolvedPushes(params: {
   plan: DeliveryPlan;
   log: GatewayLikeLogger;
 }): Promise<void> {
+  const gatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
   await sendApprovalPushes({
     approvalId: params.approvalId,
     plan: params.plan,
@@ -313,12 +320,14 @@ async function sendResolvedPushes(params: {
             registration: target.registration,
             nodeId: target.nodeId,
             approvalId,
+            gatewayDeviceId,
             auth: plan.directAuth!,
           })
         : await sendApnsExecApprovalResolvedWake({
             registration: target.registration,
             nodeId: target.nodeId,
             approvalId,
+            gatewayDeviceId,
             relayConfig: plan.relayConfig!,
           }),
   });

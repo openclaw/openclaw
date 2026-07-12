@@ -37,21 +37,34 @@ describe("shared/subagents-format", () => {
 
   it("truncates lines only when needed", () => {
     expect(truncateLine("short", 10)).toBe("short");
-    expect(truncateLine("trim me   ", 7)).toBe("trim me...");
+    expect(truncateLine("abc   ", 5)).toBe("abc");
+    expect(truncateLine("trim me   ", 7)).toBe("trim me");
+    expect(truncateLine("abcdefghij", 5)).toBe("ab...");
+  });
+
+  it("keeps truncated lines within the requested max length", () => {
+    for (const maxLength of [0, 1, 2, 3, 4, 5, 7, 12]) {
+      const result = truncateLine("abcdefghij", maxLength);
+      expect(result.length).toBeLessThanOrEqual(maxLength);
+    }
+    expect(truncateLine("abcdefghij", 0)).toBe("");
+    expect(truncateLine("abcdefghij", 1)).toBe(".");
+    expect(truncateLine("abcdefghij", 2)).toBe("..");
+    expect(truncateLine("abcdefghij", 3)).toBe("...");
   });
 
   it("truncates without breaking surrogate pairs", () => {
     // Emoji at the cut point: the surrogate pair must not be split.
-    expect(truncateLine("AB🤖CD", 3)).toBe("AB...");
+    expect(truncateLine("AB🤖CDEF", 6)).toBe("AB...");
     // Cut point in the middle of a 3-emoji string.
-    expect(truncateLine("🤖🤖🤖", 5)).toBe("🤖🤖...");
+    expect(truncateLine("🤖🤖🤖", 5)).toBe("🤖...");
     // CJK Extension B (surrogate pair) at boundary: character stays intact.
-    expect(truncateLine("AB𠮷CD", 5)).toBe("AB𠮷C...");
+    expect(truncateLine("AB𠮷CDEF", 7)).toBe("AB𠮷...");
     // No broken surrogates in output.
     for (const result of [
-      truncateLine("AB🤖CD", 3),
+      truncateLine("AB🤖CDEF", 6),
       truncateLine("🤖🤖🤖", 5),
-      truncateLine("AB𠮷CD", 5),
+      truncateLine("AB𠮷CDEF", 7),
     ]) {
       expect(result).not.toMatch(
         /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/,

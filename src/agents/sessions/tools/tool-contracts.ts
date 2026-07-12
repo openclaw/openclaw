@@ -16,6 +16,10 @@ export interface BashToolDetails {
   fullOutputPath?: string;
 }
 
+export function formatFullOutputFooter(path: string): string {
+  return `Full output: ${path}`;
+}
+
 export interface EditToolInput {
   path: string;
   edits: Edit[];

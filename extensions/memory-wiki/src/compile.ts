@@ -34,15 +34,17 @@ import {
   isUnmanagedRawSourceSummary,
   parseWikiMarkdown,
   renderWikiMarkdown,
-  toWikiPageSummary,
+  scanWikiPageSummary,
   type WikiClaim,
   type WikiClaimEvidence,
+  type WikiPageFrontmatterError,
   type WikiPageKind,
   type WikiPageSummary,
   type WikiRelationship,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
+import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -352,6 +354,7 @@ export type CompileMemoryWikiResult = {
   vaultRoot: string;
   pageCounts: Record<WikiPageKind, number>;
   pages: WikiPageSummary[];
+  frontmatterErrors: WikiPageFrontmatterError[];
   claimCount: number;
   updatedFiles: string[];
 };
@@ -377,7 +380,10 @@ async function collectMarkdownFiles(rootDir: string, relativeDir: string): Promi
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
+async function readPageSummaries(rootDir: string): Promise<{
+  pages: WikiPageSummary[];
+  frontmatterErrors: WikiPageFrontmatterError[];
+}> {
   const filePaths = (
     await Promise.all(COMPILE_PAGE_GROUPS.map((group) => collectMarkdownFiles(rootDir, group.dir)))
   ).flat();
@@ -389,7 +395,7 @@ async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
         () => fs.readFile(absolutePath, "utf8"),
         `read wiki page ${absolutePath}`,
       );
-      return toWikiPageSummary({ absolutePath, relativePath, raw });
+      return scanWikiPageSummary({ absolutePath, relativePath, raw });
     }),
     limit: READ_PAGE_SUMMARIES_CONCURRENCY,
     errorMode: "stop",
@@ -398,9 +404,14 @@ async function readPageSummaries(rootDir: string): Promise<WikiPageSummary[]> {
     throw readResult.firstError;
   }
 
-  return readResult.results
-    .flatMap((page) => (page ? [page] : []))
-    .toSorted((left, right) => left.title.localeCompare(right.title));
+  return {
+    pages: readResult.results
+      .flatMap((result) => (result.status === "valid" ? [result.page] : []))
+      .toSorted((left, right) => left.title.localeCompare(right.title)),
+    frontmatterErrors: readResult.results.flatMap((result) =>
+      result.status === "invalid-frontmatter" ? [result.error] : [],
+    ),
+  };
 }
 
 function buildPageCounts(pages: WikiPageSummary[]): Record<WikiPageKind, number> {
@@ -910,6 +921,9 @@ async function writeManagedMarkdownFile(params: {
 }): Promise<boolean> {
   const root = await fsRoot(params.rootDir);
   const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
+  // Generated indexes bypass page discovery. Parse existing content here so
+  // managed-block updates cannot rewrite malformed frontmatter.
+  parseWikiMarkdown(original);
   const updated = replaceManagedMarkdownBlock({
     original,
     heading: "## Generated",
@@ -1371,7 +1385,7 @@ async function writeAgentDigestArtifacts(params: {
   return updatedFiles;
 }
 
-export async function compileMemoryWikiVault(
+async function compileMemoryWikiVaultUnlocked(
   config: ResolvedMemoryWikiConfig,
 ): Promise<CompileMemoryWikiResult> {
   await initializeMemoryWikiVault(config);
@@ -1380,10 +1394,12 @@ export async function compileMemoryWikiVault(
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
-  let pages = await readPageSummaries(rootDir);
+  let scan = await readPageSummaries(rootDir);
+  let pages = scan.pages;
   const updatedFiles = await refreshPageRelatedBlocks({ config, pages });
   if (updatedFiles.length > 0) {
-    pages = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir);
+    pages = scan.pages;
   }
   const dashboardUpdatedFiles = await refreshDashboardPages({
     config,
@@ -1393,7 +1409,8 @@ export async function compileMemoryWikiVault(
   });
   updatedFiles.push(...dashboardUpdatedFiles);
   if (dashboardUpdatedFiles.length > 0) {
-    pages = await readPageSummaries(rootDir);
+    scan = await readPageSummaries(rootDir);
+    pages = scan.pages;
   }
   const counts = buildPageCounts(pages);
   const digestUpdatedFiles = await writeAgentDigestArtifacts({
@@ -1449,9 +1466,18 @@ export async function compileMemoryWikiVault(
     vaultRoot: rootDir,
     pageCounts: counts,
     pages,
+    frontmatterErrors: scan.frontmatterErrors,
     claimCount: pages.reduce((total, page) => total + page.claims.length, 0),
     updatedFiles,
   };
+}
+
+export async function compileMemoryWikiVault(
+  config: ResolvedMemoryWikiConfig,
+): Promise<CompileMemoryWikiResult> {
+  return await withMemoryWikiVaultMutation(config.vault.path, () =>
+    compileMemoryWikiVaultUnlocked(config),
+  );
 }
 
 async function hasMissingWikiIndexes(rootDir: string): Promise<boolean> {

@@ -37,30 +37,36 @@ const STATUS_DIRECTIVE_PATTERN = compileDirectivePattern(["status"], `(?:\\s*:\\
 const matchLevelDirective = (
   body: string,
   pattern: RegExp,
+  normalize: (raw?: string) => unknown,
 ): { start: number; end: number; rawLevel?: string } | null => {
   const match = body.match(pattern);
   if (!match || match.index === undefined) {
     return null;
   }
   const start = match.index;
-  let end = match.index + match[0].length;
-  let i = end;
-  while (i < body.length && /\s/.test(body[i])) {
+  const directiveEnd = match.index + match[0].length;
+  let i = directiveEnd;
+  while (i < body.length && /\s/.test(body.charAt(i))) {
     i += 1;
   }
   if (body[i] === ":") {
     i += 1;
-    while (i < body.length && /\s/.test(body[i])) {
+    while (i < body.length && /\s/.test(body.charAt(i))) {
       i += 1;
     }
   }
   const argStart = i;
-  while (i < body.length && /[A-Za-z-]/.test(body[i])) {
+  while (i < body.length && /[A-Za-z-]/.test(body.charAt(i))) {
     i += 1;
   }
-  const rawLevel = i > argStart ? body.slice(argStart, i) : undefined;
-  end = i;
-  return { start, end, rawLevel };
+  const candidate = i > argStart ? body.slice(argStart, i) : undefined;
+  if (
+    candidate !== undefined &&
+    (normalize(candidate) !== undefined || body.slice(i).trim().length === 0)
+  ) {
+    return { start, end: i, rawLevel: candidate };
+  }
+  return { start, end: argStart };
 };
 
 const extractLevelDirective = <T>(
@@ -68,7 +74,7 @@ const extractLevelDirective = <T>(
   pattern: RegExp,
   normalize: (raw?: string) => T | undefined,
 ): ExtractedLevel<T> => {
-  const match = matchLevelDirective(body, pattern);
+  const match = matchLevelDirective(body, pattern, normalize);
   if (!match) {
     return { cleaned: body.trim(), hasDirective: false };
   }

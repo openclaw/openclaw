@@ -778,4 +778,33 @@ describe("tool-policy-pipeline", () => {
     );
     expect(toolPolicyAuditDebug).not.toHaveBeenCalled();
   });
+
+  test("truncates audit fields without splitting surrogate pairs", () => {
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+    const labelPrefix = "a".repeat(159);
+
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["read"] },
+          label: `${labelPrefix}😀suffix`,
+        },
+      ],
+    });
+
+    const rule = `${labelPrefix}...`;
+    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+      `tool policy removed 1 tool(s) via ${rule}: exec`,
+      {
+        rule,
+        ruleKind: "allow",
+        removedToolCount: 1,
+        removedTools: ["exec"],
+        removedToolsTruncated: false,
+      },
+    );
+  });
 });

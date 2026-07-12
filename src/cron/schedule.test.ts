@@ -249,7 +249,18 @@ describe("coerceFiniteScheduleNumber", () => {
     expect(coerceFiniteScheduleNumber("0x10")).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Number.NaN)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(Infinity)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
+    expect(coerceFiniteScheduleNumber(String(Number.MAX_SAFE_INTEGER + 1))).toBeUndefined();
     expect(coerceFiniteScheduleNumber(null)).toBeUndefined();
     expect(coerceFiniteScheduleNumber(undefined)).toBeUndefined();
+  });
+});
+
+describe("computeNextRunAtMs on-exit", () => {
+  it("never reports a time-due run for on-exit schedules (event-driven)", () => {
+    expect(computeNextRunAtMs({ kind: "on-exit", command: "sleep 1" }, Date.now())).toBeUndefined();
+    expect(
+      computeNextRunAtMs({ kind: "on-exit", command: "make build", cwd: "/repo" }, 0),
+    ).toBeUndefined();
   });
 });

@@ -2,7 +2,6 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
-import ai.openclaw.app.VoiceWakeMode
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
@@ -124,6 +123,20 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun resolveTlsParamsForEndpoint_manualMdnsRespectsManualTlsToggle() {
+    val endpoint = GatewayEndpoint.manual(host = "gateway.local", port = 18789)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
   fun resolveTlsParamsForEndpoint_manualPrivateLanCleartextCanOverrideStoredPin() {
     val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
 
@@ -168,6 +181,30 @@ class ConnectionManagerTest {
         stableId = "_openclaw-gw._tcp.|local.|Test",
         name = "Test",
         host = "192.168.1.20",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryMdnsWithoutHintsStillRequiresTls() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "gateway.local",
         port = 18789,
         tlsEnabled = false,
         tlsFingerprintSha256 = null,
@@ -258,9 +295,16 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun isLocalCleartextGatewayHost_acceptsLanIpsButRejectsMdnsAndTailnetHosts() {
+  fun isLocalCleartextGatewayHost_acceptsLanIpsAndMdnsButRejectsRemoteHosts() {
     assertTrue(isLocalCleartextGatewayHost("192.168.1.20"))
-    assertFalse(isLocalCleartextGatewayHost("gateway.local"))
+    assertTrue(isLocalCleartextGatewayHost("gateway.local"))
+    assertTrue(isLocalCleartextGatewayHost("GATEWAY.LOCAL."))
+    assertFalse(isLocalCleartextGatewayHost("gateway.local.evil.com"))
+    assertFalse(isLocalCleartextGatewayHost("gatewaylocal"))
+    assertFalse(isLocalCleartextGatewayHost("local"))
+    assertFalse(isLocalCleartextGatewayHost(".local"))
+    assertFalse(isLocalCleartextGatewayHost("gateway..local"))
+    assertFalse(isLocalCleartextGatewayHost("gateway.local%25wlan0"))
     assertFalse(isLocalCleartextGatewayHost("100.64.0.9"))
     assertFalse(isLocalCleartextGatewayHost("gateway.tailnet.ts.net"))
   }
@@ -382,16 +426,36 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun buildOperatorConnectOptions_requestsQrBootstrapHandoffScopes() {
+  fun buildOperatorConnectOptions_requestsNativeClientOperatorScopes() {
     val options = newManager().buildOperatorConnectOptions()
 
     assertEquals(
       listOf(
+        "operator.admin",
         "operator.approvals",
         "operator.read",
+        "operator.talk.secrets",
         "operator.write",
       ),
       options.scopes,
+    )
+  }
+
+  @Test
+  fun operatorScopesForStoredDeviceToken_preservesRecordedScopes() {
+    assertEquals(
+      listOf("operator.read", "operator.write"),
+      ConnectionManager.operatorScopesForStoredDeviceToken(
+        listOf("operator.read", "operator.write", "operator.read", " "),
+      ),
+    )
+  }
+
+  @Test
+  fun operatorScopesForStoredDeviceToken_fallsBackToLegacyScopesWhenMetadataMissing() {
+    assertEquals(
+      ConnectionManager.legacyOperatorScopes,
+      ConnectionManager.operatorScopesForStoredDeviceToken(emptyList()),
     )
   }
 
@@ -456,11 +520,9 @@ class ConnectionManagerTest {
       newManager(
         cameraEnabled = true,
         locationMode = LocationMode.WhileUsing,
-        voiceWakeMode = VoiceWakeMode.Always,
         motionActivityAvailable = true,
         callLogAvailable = true,
         photosAvailable = true,
-        hasRecordAudioPermission = true,
       ).buildNodeConnectOptions()
 
     assertTrue(options.commands.contains(OpenClawCameraCommand.List.rawValue))
@@ -473,7 +535,7 @@ class ConnectionManagerTest {
     assertTrue(options.caps.contains(OpenClawCapability.Motion.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.CallLog.rawValue))
     assertTrue(options.caps.contains(OpenClawCapability.Photos.rawValue))
-    assertTrue(options.caps.contains(OpenClawCapability.VoiceWake.rawValue))
+    assertFalse(options.caps.contains("voiceWake"))
   }
 
   @Test
@@ -483,17 +545,6 @@ class ConnectionManagerTest {
 
     assertFalse(disabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
     assertTrue(enabled.commands.contains(OpenClawDeviceCommand.Apps.rawValue))
-  }
-
-  @Test
-  fun buildNodeConnectOptions_omitsVoiceWakeWithoutMicrophonePermission() {
-    val options =
-      newManager(
-        voiceWakeMode = VoiceWakeMode.Always,
-        hasRecordAudioPermission = false,
-      ).buildNodeConnectOptions()
-
-    assertFalse(options.caps.contains(OpenClawCapability.VoiceWake.rawValue))
   }
 
   @Test
@@ -547,7 +598,6 @@ class ConnectionManagerTest {
   private fun newManager(
     cameraEnabled: Boolean = false,
     locationMode: LocationMode = LocationMode.Off,
-    voiceWakeMode: VoiceWakeMode = VoiceWakeMode.Off,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
     sendSmsAvailable: Boolean = false,
@@ -555,7 +605,6 @@ class ConnectionManagerTest {
     smsSearchPossible: Boolean = false,
     callLogAvailable: Boolean = false,
     photosAvailable: Boolean = false,
-    hasRecordAudioPermission: Boolean = false,
     installedAppsSharingEnabled: Boolean = false,
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
@@ -569,7 +618,6 @@ class ConnectionManagerTest {
       prefs = prefs,
       cameraEnabled = { cameraEnabled },
       locationMode = { locationMode },
-      voiceWakeMode = { voiceWakeMode },
       motionActivityAvailable = { motionActivityAvailable },
       motionPedometerAvailable = { motionPedometerAvailable },
       sendSmsAvailable = { sendSmsAvailable },
@@ -577,7 +625,6 @@ class ConnectionManagerTest {
       smsSearchPossible = { smsSearchPossible },
       callLogAvailable = { callLogAvailable },
       photosAvailable = { photosAvailable },
-      hasRecordAudioPermission = { hasRecordAudioPermission },
       installedAppsSharingEnabled = { installedAppsSharingEnabled },
       manualTls = { false },
     )

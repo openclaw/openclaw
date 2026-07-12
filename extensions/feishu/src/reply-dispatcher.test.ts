@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type StreamingSessionStub = {
   active: boolean;
+  credentials: unknown;
   start: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
@@ -79,6 +80,7 @@ vi.mock("./streaming-card.js", () => {
     mergeStreamingText,
     FeishuStreamingSession: class {
       active = false;
+      credentials: unknown;
       start = vi.fn(async () => {
         this.active = true;
       });
@@ -92,7 +94,8 @@ vi.mock("./streaming-card.js", () => {
       });
       isActive = vi.fn(() => this.active);
 
-      constructor() {
+      constructor(_client: unknown, credentials: unknown) {
+        this.credentials = credentials;
         streamingInstances.push(this);
       }
     },
@@ -148,6 +151,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       config: {
         renderMode: "auto",
         streaming: true,
+        httpTimeoutMs: 45_000,
       },
     });
 
@@ -192,6 +196,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   }
 
+  function useNonStreamingBlockAccount() {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+        blockStreaming: true,
+      },
+    });
+  }
+
   function setupNonStreamingAutoDispatcher() {
     useNonStreamingAutoAccount();
 
@@ -200,6 +218,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: { log: vi.fn(), error: vi.fn() } as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     return firstMockArg(createReplyDispatcherWithTypingMock, "reply dispatcher options");
@@ -215,6 +234,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       ...overrides,
     });
 
@@ -338,6 +358,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
     });
 
@@ -353,6 +374,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 3 * 60_000,
     });
@@ -369,6 +391,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Math.floor((Date.now() - 3 * 60_000) / 1000),
     });
@@ -385,6 +408,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 30_000,
     });
@@ -419,12 +443,30 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("routes visible sends to sendTarget while keeping chatId separate", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+      replyToMessageId: "om_direct",
+      skipReplyToInMessages: true,
+    });
+
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      to: "user:ou_sender",
+      replyToMessageId: undefined,
+    });
+  });
+
   it("streams auto mode plain final text when streaming is enabled", async () => {
     const { options } = createDispatcherHarness();
     await options.deliver({ text: "plain text" }, { kind: "final" });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].credentials).toMatchObject({ httpTimeoutMs: 45_000 });
     expect(streamingInstances[0].close).toHaveBeenCalledWith("plain text", {
       note: "Agent: agent",
     });
@@ -613,6 +655,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
@@ -641,6 +684,58 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledWith("plain block", {
       note: "Agent: agent",
     });
+  });
+
+  it("sends complete chunked blocks to the DM target", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkTextWithMode.mockImplementation((text: string) =>
+      text === "First paragraph." ? ["First ", "paragraph."] : [text],
+    );
+    const mentions = [{ openId: "ou_target", name: "Target User", key: "@_user_1" }];
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+      mentionTargets: mentions,
+    });
+
+    await options.deliver({ text: "First paragraph." }, { kind: "block" });
+    await options.deliver(
+      { text: "Second paragraph.", mediaUrl: "https://example.com/block.png" },
+      { kind: "block" },
+    );
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expectMockArgFields(sendMessageFeishuMock, "first block chunk", {
+      to: "user:ou_sender",
+      text: "First ",
+      mentions,
+    });
+    expectMockArgFields(sendMessageFeishuMock, "second block chunk", { text: "paragraph." }, 1);
+    expectMockArgFields(sendMessageFeishuMock, "second block", { text: "Second paragraph." }, 2);
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]).not.toHaveProperty("mentions");
+    expect(sendMessageFeishuMock.mock.calls[2]?.[0]).not.toHaveProperty("mentions");
+    expectMockArgFields(sendMediaFeishuMock, "block media", {
+      to: "user:ou_sender",
+      mediaUrl: "https://example.com/block.png",
+    });
+    expect(streamingInstances).toHaveLength(0);
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("delivers a final message when it differs from independently sent blocks", async () => {
+    useNonStreamingBlockAccount();
+    const { options } = createDispatcherHarness();
+
+    await options.deliver({ text: "partial block" }, { kind: "block" });
+    await options.deliver({ text: "final answer" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    expectMockArgFields(sendMessageFeishuMock, "block message", { text: "partial block" });
+    expectMockArgFields(sendMessageFeishuMock, "final message", { text: "final answer" }, 1);
   });
 
   it("does not prepend automatic mentions to streaming card closes", async () => {
@@ -676,6 +771,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
@@ -2108,6 +2204,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         agentId: "agent",
         runtime: { log: vi.fn(), error: errorMock } as never,
         chatId: "oc_chat",
+        sendTarget: "oc_chat",
       });
 
       const options = firstTypingDispatcherOptions();

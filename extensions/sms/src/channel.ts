@@ -5,7 +5,12 @@ import {
   createHybridChannelConfigAdapter,
   createScopedDmSecurityResolver,
 } from "openclaw/plugin-sdk/channel-config-helpers";
-import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  buildChannelOutboundSessionRoute,
+  createChatChannelPlugin,
+  type ChannelOutboundSessionRouteParams,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -190,6 +195,24 @@ const smsMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
+function resolveSmsOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
+  const to = normalizeSmsPhoneNumber(params.resolvedTarget?.to ?? params.target);
+  if (!looksLikeSmsPhoneNumber(to)) {
+    return null;
+  }
+  return buildChannelOutboundSessionRoute({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    channel: CHANNEL_ID,
+    accountId: params.accountId,
+    recipientSessionExact: true,
+    peer: { kind: "direct", id: to },
+    chatType: "direct",
+    from: `sms:${to}`,
+    to: `sms:${to}`,
+  });
+}
+
 export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChatChannelPlugin({
   base: {
     id: CHANNEL_ID,
@@ -235,6 +258,7 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     messaging: {
       targetPrefixes: ["twilio-sms"],
       normalizeTarget: (target) => normalizeSmsPhoneNumber(target),
+      resolveOutboundSessionRoute: (params) => resolveSmsOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: looksLikeSmsPhoneNumber,
         hint: "<+15551234567>",

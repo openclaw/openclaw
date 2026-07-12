@@ -23,8 +23,11 @@ export type UserTurnInput = {
   media?: readonly PersistedUserTurnMediaInput[] | null;
   timestamp?: number;
   idempotencyKey?: string;
+  senderIsOwner?: boolean;
   provenance?: InputProvenance;
   mediaOnlyText?: string;
+  /** Durable participant attribution. Callers must opt in at the product boundary. */
+  sender?: { id?: string | null; name?: string | null; username?: string | null } | null;
 };
 
 export type UserTurnTranscriptUpdateMode = "inline" | "none";
@@ -35,8 +38,9 @@ export type UserTurnBeforeMessageWrite = (params: {
   sessionKey?: string;
 }) => AgentMessage | null;
 
-type UserTurnTranscriptPersistenceTarget = {
+export type UserTurnTranscriptPersistenceTarget = {
   sessionId: string;
+  expectedSessionId?: string;
   sessionKey: string;
   sessionEntry: UserTurnSessionEntry | undefined;
   sessionStore?: Record<string, UserTurnSessionEntry>;
@@ -48,18 +52,7 @@ type UserTurnTranscriptPersistenceTarget = {
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
-export type UserTurnTranscriptFileTarget = {
-  transcriptPath: string;
-  sessionId?: string;
-  agentId?: string;
-  sessionKey?: string;
-  cwd?: string;
-  config?: unknown;
-};
-
-export type UserTurnTranscriptTarget =
-  | UserTurnTranscriptPersistenceTarget
-  | UserTurnTranscriptFileTarget;
+export type UserTurnTranscriptTarget = UserTurnTranscriptPersistenceTarget;
 
 export type UserTurnTranscriptPersistResult = {
   sessionFile: string;
@@ -75,6 +68,7 @@ export type UserTurnTranscriptTargetResolver =
 export type UserTurnTranscriptRecorder = {
   readonly message: PersistedUserTurnMessage | undefined;
   resolveMessage: () => Promise<PersistedUserTurnMessage | undefined>;
+  markSentToProvider?: () => void;
   markRuntimePersistencePending: (pending: Promise<void>) => void;
   markRuntimePersisted: (message?: PersistedUserTurnMessage) => void;
   markBlocked: () => void;
@@ -85,9 +79,19 @@ export type UserTurnTranscriptRecorder = {
   persistApproved: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    cwd?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
+  persistBlocked: (
+    message: PersistedUserTurnMessage,
+    params?: {
+      target?: UserTurnTranscriptTargetResolver;
+      updateMode?: UserTurnTranscriptUpdateMode;
+      cwd?: string;
+    },
+  ) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistFallback: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    cwd?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };

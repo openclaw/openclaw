@@ -18,6 +18,7 @@ const DEFAULT_CHECK_INTERVAL_MS = 5 * 60_000;
 const DEFAULT_MONITOR_STARTUP_GRACE_MS = 60_000;
 const DEFAULT_COOLDOWN_CYCLES = 2;
 const DEFAULT_MAX_RESTARTS_PER_HOUR = 10;
+const CHANNEL_HEALTH_MONITOR_HANDOFF_TIMEOUT_MS = 5_000;
 const ONE_HOUR_MS = 60 * 60_000;
 
 /**
@@ -49,6 +50,8 @@ type ChannelHealthMonitorDeps = {
 
 export type ChannelHealthMonitor = {
   stop: () => void;
+  shutdown: () => void;
+  waitForIdle: () => Promise<void>;
 };
 
 type RestartRecord = {
@@ -91,8 +94,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   const restartRecords = new Map<string, RestartRecord>();
   const startedAt = Date.now();
   let stopped = false;
-  let checkInFlight = false;
+  let abandonInFlightRestart = false;
+  let activeCheck: Promise<void> | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  const suppressedAccounts = new Set<string>();
 
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
 
@@ -100,12 +105,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     record.restartsThisHour = record.restartsThisHour.filter((r) => now - r.at < ONE_HOUR_MS);
   }
 
-  async function runCheck() {
-    if (stopped || checkInFlight) {
-      return;
-    }
-    checkInFlight = true;
-
+  async function runCheckWork() {
     try {
       const now = Date.now();
       if (now - startedAt < timing.monitorStartupGraceMs) {
@@ -113,12 +113,21 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       }
 
       const snapshot = channelManager.getRuntimeSnapshot();
+      const autostartSuppression = channelManager.getAutostartSuppression();
+      if (!autostartSuppression) {
+        suppressedAccounts.clear();
+      }
 
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
         if (!accounts) {
           continue;
         }
         for (const [accountId, status] of Object.entries(accounts)) {
+          // A replacement monitor owns future accounts. The retired monitor may
+          // only finish the restart it had already begun.
+          if (stopped) {
+            return;
+          }
           if (!status) {
             continue;
           }
@@ -128,6 +137,17 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (channelManager.isManuallyStopped(channelId as ChannelId, accountId)) {
             continue;
           }
+          const key = rKey(channelId, accountId);
+          if (autostartSuppression) {
+            if (status.running !== true && !suppressedAccounts.has(key)) {
+              log.info?.(
+                `[${channelId}:${accountId}] health-monitor: channel autostart suppressed; treating as expected stopped`,
+              );
+              suppressedAccounts.add(key);
+            }
+            continue;
+          }
+          suppressedAccounts.delete(key);
           const healthPolicy: ChannelHealthPolicy = {
             channelId,
             now,
@@ -138,8 +158,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           if (health.healthy) {
             continue;
           }
+          if (health.reason === "terminal-disconnect") {
+            log.info?.(
+              `[${channelId}:${accountId}] health-monitor: skipping restart, terminal disconnect`,
+            );
+            continue;
+          }
 
-          const key = rKey(channelId, accountId);
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
             restartsThisHour: [],
@@ -181,6 +206,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
                 manual: false,
               });
             }
+            // Shutdown owns channel teardown, so a stop that completes after the
+            // shutdown handoff must not resurrect the channel.
+            if (abandonInFlightRestart) {
+              return;
+            }
             channelManager.resetRestartAttempts(channelId as ChannelId, accountId);
             await channelManager.startChannel(channelId as ChannelId, accountId);
           } catch (err) {
@@ -192,24 +222,75 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       }
     } catch (err) {
       log.error?.(`health-monitor: check failed: ${String(err)}`);
-    } finally {
-      checkInFlight = false;
     }
   }
 
-  function stop() {
+  function runCheck(): Promise<void> {
+    if (stopped) {
+      return Promise.resolve();
+    }
+    if (activeCheck) {
+      return activeCheck;
+    }
+    const check = runCheckWork().finally(() => {
+      if (activeCheck === check) {
+        activeCheck = null;
+      }
+      if (stopped) {
+        abortSignal?.removeEventListener("abort", shutdown);
+      }
+    });
+    activeCheck = check;
+    return check;
+  }
+
+  function retire(abandonRestart: boolean) {
     stopped = true;
+    abandonInFlightRestart ||= abandonRestart;
     if (timer) {
       clearInterval(timer);
       timer = null;
     }
-    abortSignal?.removeEventListener("abort", stop);
+    if (!activeCheck) {
+      abortSignal?.removeEventListener("abort", shutdown);
+    }
   }
+
+  const stop = () => retire(false);
+  const shutdown = () => retire(true);
+  const waitForIdle = async () => {
+    const check = activeCheck;
+    if (!check) {
+      return;
+    }
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      check.then(() => "idle" as const),
+      new Promise<"timeout">((resolve) => {
+        timeout = setTimeout(() => resolve("timeout"), CHANNEL_HEALTH_MONITOR_HANDOFF_TIMEOUT_MS);
+        if (typeof timeout === "object" && "unref" in timeout) {
+          timeout.unref();
+        }
+      }),
+    ]);
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    if (outcome === "timeout") {
+      // A late provider stop must not block lifecycle ownership or restart after
+      // the replacement/shutdown handoff has already continued.
+      shutdown();
+      log.warn?.(
+        `health-monitor handoff exceeded ${CHANNEL_HEALTH_MONITOR_HANDOFF_TIMEOUT_MS}ms; abandoning delayed restart`,
+      );
+    }
+  };
 
   if (abortSignal?.aborted) {
     stopped = true;
+    abandonInFlightRestart = true;
   } else {
-    abortSignal?.addEventListener("abort", stop, { once: true });
+    abortSignal?.addEventListener("abort", shutdown, { once: true });
     timer = setInterval(() => void runCheck(), checkIntervalMs);
     if (typeof timer === "object" && "unref" in timer) {
       timer.unref();
@@ -219,5 +300,5 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
     );
   }
 
-  return { stop };
+  return { stop, shutdown, waitForIdle };
 }

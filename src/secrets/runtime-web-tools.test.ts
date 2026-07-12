@@ -71,19 +71,12 @@ let createResolverContext: typeof import("./runtime-shared.js").createResolverCo
 let resolveRuntimeWebTools: typeof import("./runtime-web-tools.js").resolveRuntimeWebTools;
 let restoreResolveSecretRefValuesSpy: (() => void) | undefined;
 
-vi.mock("./runtime-web-tools-fallback.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./runtime-web-tools-fallback.runtime.js")>(
-    "./runtime-web-tools-fallback.runtime.js",
-  );
-  return {
-    ...actual,
-    runtimeWebToolsFallbackProviders: {
-      ...actual.runtimeWebToolsFallbackProviders,
-      resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
-      resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
-    },
-  };
-});
+vi.mock("./runtime-web-tools-fallback.runtime.js", () => ({
+  runtimeWebToolsFallbackProviders: {
+    resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
+    resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
+  },
+}));
 
 vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts:
@@ -106,15 +99,9 @@ vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
     resolveManifestContractPluginIdsByCompatibilityRuntimePathMock,
 }));
 
-vi.mock("../plugins/installed-plugin-index-records.js", async () => {
-  const actual = await vi.importActual<
-    typeof import("../plugins/installed-plugin-index-records.js")
-  >("../plugins/installed-plugin-index-records.js");
-  return {
-    ...actual,
-    loadInstalledPluginIndexInstallRecordsSync: loadInstalledPluginIndexInstallRecordsSyncMock,
-  };
-});
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecordsSync: loadInstalledPluginIndexInstallRecordsSyncMock,
+}));
 
 function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
@@ -391,6 +378,8 @@ describe("runtime web tools resolution", () => {
     secretResolve = await import("./resolve.js");
     ({ createResolverContext } = await import("./runtime-shared.js"));
     ({ resolveRuntimeWebTools } = await import("./runtime-web-tools.js"));
+    // The managed-index branch lazily loads this stable runtime once per process.
+    await import("./runtime-web-tools-fallback.runtime.js");
   });
 
   beforeEach(() => {

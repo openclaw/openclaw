@@ -96,7 +96,12 @@ function resolveChunkModeForProvider(
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
     const direct = resolveAccountEntry(accounts, normalizedAccountId);
-    const directMode = resolveChannelStreamingChunkMode(direct);
+    // Flat `chunkMode` is the canonical schema shape for channels without a
+    // nested streaming config (signal, irc, googlechat, whatsapp, SDK plugins),
+    // so it stays a first-class read here, not legacy compat. Core must not
+    // hardcode per-channel gating; nested-only channels reject flat keys in
+    // their strict schemas, so validated runtime config never carries them.
+    const directMode = resolveChannelStreamingChunkMode(direct) ?? direct?.chunkMode;
     if (directMode) {
       return directMode;
     }
@@ -472,7 +477,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     }
 
     let rawChunk = `${reopenPrefix}${rawContent}`;
-    const brokeOnSeparator = breakIdx < text.length && /\s/.test(text[breakIdx]);
+    const brokeOnSeparator = breakIdx < text.length && /\s/.test(text.charAt(breakIdx));
     let nextStart = Math.min(text.length, breakIdx + (brokeOnSeparator ? 1 : 0));
 
     if (fenceToSplit) {
@@ -531,7 +536,7 @@ function scanParenAwareBreakpoints(
     if (!isAllowed(i)) {
       continue;
     }
-    const char = text[i];
+    const char = text.charAt(i);
     if (char === "(") {
       depth += 1;
       continue;

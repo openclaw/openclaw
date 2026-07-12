@@ -32,6 +32,24 @@ export type ChannelInboundMediaPayload = {
   MediaTranscribedIndexes?: number[];
 };
 
+/**
+ * Replaces an optimistic media placeholder, or appends to real caption text,
+ * when transport media could not be materialized for the agent turn.
+ */
+export function formatInboundMediaUnavailableText(params: {
+  body?: string | null;
+  mediaPlaceholder?: string | null;
+  notice: string;
+}): string {
+  const body = params.body?.trim() ?? "";
+  const placeholder = params.mediaPlaceholder?.trim() ?? "";
+  const notice = params.notice.trim();
+  if (!body || (placeholder && body === placeholder)) {
+    return notice;
+  }
+  return `${body}\n\n${notice}`;
+}
+
 function alignedStrings(values: Array<string | undefined>): string[] | undefined {
   if (!values.some(Boolean)) {
     return undefined;

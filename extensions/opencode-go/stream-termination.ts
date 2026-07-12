@@ -7,7 +7,7 @@ import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-ent
 
 type ProviderStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
 
-export interface OpencodeGoStalledStreamWrapperOptions {
+interface OpencodeGoStalledStreamWrapperOptions {
   /**
    * Provider id this wrapper applies to. Calls whose model.provider does not
    * match are forwarded untouched so the wrapper stays provider-scoped.
@@ -68,11 +68,12 @@ function combineAbortSignals(signals: (AbortSignal | undefined)[]): {
   cleanup(): void;
 } {
   const present = signals.filter((signal): signal is AbortSignal => Boolean(signal));
-  if (present.length === 0) {
+  const [firstSignal] = present;
+  if (!firstSignal) {
     return { signal: new AbortController().signal, cleanup: () => undefined };
   }
   if (present.length === 1) {
-    return { signal: present[0], cleanup: () => undefined };
+    return { signal: firstSignal, cleanup: () => undefined };
   }
   const anyFn = (
     AbortSignal as unknown as {
@@ -245,6 +246,10 @@ export function createOpencodeGoStalledStreamWrapper(
     ]);
     const wrappedOptions = {
       ...callOptions,
+      // This provider owns the raw SSE stall policy. Preserve that longer first
+      // event window when delegating to OpenAI-compatible streams so the generic
+      // embedded-runner default cannot shorten opencode-go prompt evaluation.
+      firstEventTimeoutMs,
       signal: combinedSignal.signal,
     };
     let idleTimer: ReturnType<typeof setTimeout> | undefined;

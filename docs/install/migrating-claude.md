@@ -79,7 +79,7 @@ OpenClaw refuses to execute hooks, trust permission allowlists, or decode opaque
 
 Without `--from`, OpenClaw inspects the default Claude Code home at `~/.claude`, the sampled Claude Code `~/.claude.json` state file, and the Claude Desktop MCP config on macOS.
 
-When `--from` points at a project root, OpenClaw imports only that project's Claude files such as `CLAUDE.md`, `.claude/settings.json`, `.claude/commands/`, `.claude/skills/`, and `.mcp.json`. It does not read your global Claude home during a project-root import.
+When `--from` points at a project root, OpenClaw imports only that project's Claude files, such as `CLAUDE.md`, `.claude/settings.json`, `.claude/commands/`, `.claude/skills/`, and `.mcp.json`. It does not read your global Claude home during a project-root import.
 
 ## Recommended flow
 
@@ -136,7 +136,7 @@ openclaw migrate claude --dry-run --json
 openclaw migrate apply claude --json --yes
 ```
 
-With `--json` and no `--yes`, apply prints the plan and does not mutate state. This is the safest mode for CI and shared scripts.
+`--yes` is required for `migrate apply` outside an interactive terminal; without it OpenClaw errors instead of applying, so scripts and CI must pass `--yes` explicitly. Preview first with `--dry-run --json`, then apply with `--json --yes` once the plan looks right.
 
 ## Troubleshooting
 

@@ -400,6 +400,20 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files).toStrictEqual([]);
   });
 
+  it("excludes HEARTBEAT.md from commitment-only context", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "global work", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      runKind: "commitment-only",
+    });
+
+    expect(files.map((file) => file.name)).not.toContain("HEARTBEAT.md");
+    expect(files.map((file) => file.name)).toContain("SOUL.md");
+  });
+
   it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {
     const workspaceDir = await createHeartbeatAgentsWorkspace();
 
@@ -477,6 +491,12 @@ describe("hasCompletedBootstrapTurn", () => {
 
   it("returns false when session file does not exist", async () => {
     expect(await hasCompletedBootstrapTurn(path.join(tmpDir, "missing.jsonl"))).toBe(false);
+  });
+
+  it("returns false for SQLite transcript markers", async () => {
+    expect(
+      await hasCompletedBootstrapTurn("sqlite:main:session-1:/tmp/openclaw/sessions.json"),
+    ).toBe(false);
   });
 
   it("returns false for empty session files", async () => {

@@ -40,6 +40,15 @@ const mockChatCommands: ChatCommandDefinition[] = [
     category: "session",
   },
   {
+    key: "login",
+    nativeName: "login",
+    nativeProviders: ["telegram"],
+    description: "Pair Codex login",
+    textAliases: ["/login"],
+    scope: "both",
+    category: "management",
+  },
+  {
     key: "commands",
     description: "List commands",
     textAliases: ["/commands"],
@@ -390,6 +399,22 @@ describe("commands.list handler", () => {
     expect(commands.find((c) => c.name === "model")).toBeUndefined();
   });
 
+  it("limits provider-specific native commands while keeping login text-visible", () => {
+    expect(listCommands({ provider: "discord" }).find((c) => c.name === "login")).toBeUndefined();
+    expect(
+      listCommands({ provider: "slack", scope: "native" }).find((c) => c.name === "login"),
+    ).toBeUndefined();
+    expect(requireCommand(listCommands({ provider: "telegram" }), "login").nativeName).toBe(
+      "login",
+    );
+    expect(requireCommand(listCommands({ provider: "discord", scope: "text" }), "login")).toEqual(
+      expect.objectContaining({
+        name: "login",
+        textAliases: ["/login"],
+      }),
+    );
+  });
+
   it("normalizes mixed-case provider", () => {
     const commands = listCommands({ provider: "Discord" });
     expect(requireCommand(commands, "set_model").name).toBe("set_model");
@@ -492,7 +517,8 @@ describe("commands.list handler", () => {
     const originalCommands = [...mockChatCommands];
     const longToken = "x".repeat(COMMAND_NAME_MAX_LENGTH + 50);
     const aliasBase = "alias".repeat(20);
-    const longDescription = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH + 50);
+    const descriptionPrefix = "d".repeat(COMMAND_DESCRIPTION_MAX_LENGTH - 1);
+    const longDescription = `${descriptionPrefix}😀tail`;
     const oversizedArgs = Array.from({ length: COMMAND_ARGS_MAX_ITEMS + 5 }, (_, argIndex) => ({
       name: `${longToken}-${argIndex}`,
       description: longDescription,
@@ -529,6 +555,7 @@ describe("commands.list handler", () => {
       expect((first.description as string).length).toBeLessThanOrEqual(
         COMMAND_DESCRIPTION_MAX_LENGTH,
       );
+      expect(first.description).toBe(descriptionPrefix);
       expect((first.textAliases as unknown[]).length).toBeLessThanOrEqual(COMMAND_ALIAS_MAX_ITEMS);
       expect(first.args as unknown[]).toHaveLength(COMMAND_ARGS_MAX_ITEMS);
       const firstArg = (first.args as Array<Record<string, unknown>>)[0];

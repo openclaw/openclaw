@@ -1,6 +1,17 @@
 // Discord tests cover gateway supervisor plugin behavior.
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+
+const { gatewayLogError } = vi.hoisted(() => ({ gatewayLogError: vi.fn() }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: () => ({ error: gatewayLogError }),
+  };
+});
+
 import {
   classifyDiscordGatewayEvent,
   DiscordGatewayLifecycleError,
@@ -115,44 +126,29 @@ describe("createDiscordGatewaySupervisor", () => {
     supervisor.dispose();
   });
 
-  it("keeps suppressing late gateway errors after dispose", () => {
+  it("keeps a single late error guard after repeated dispose", () => {
     const emitter = new EventEmitter();
-    const runtime = { error: vi.fn() };
-    const supervisor = createDiscordGatewaySupervisor({
-      gateway: { emitter },
-      isDisallowedIntentsError: () => false,
-      runtime: runtime as never,
-    });
+    gatewayLogError.mockClear();
 
-    supervisor.dispose();
+    for (let index = 0; index < 3; index += 1) {
+      const supervisor = createDiscordGatewaySupervisor({
+        gateway: { emitter },
+        isDisallowedIntentsError: () => false,
+        runtime: { error: vi.fn() } as never,
+      });
 
-    emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1005"));
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(String(firstErrorArg(runtime))).toContain(
-      "suppressed late gateway reconnect-exhausted error after dispose",
-    );
-  });
+      expect(emitter.listenerCount("error")).toBe(1);
+      supervisor.dispose();
+      expect(emitter.listenerCount("error")).toBe(1);
+      const error = new Error(`late gateway error ${index}`);
+      expect(() => emitter.emit("error", error)).not.toThrow();
+      emitter.emit("error", error);
+    }
 
-  it("dedupes identical late gateway errors after dispose", () => {
-    const emitter = new EventEmitter();
-    const runtime = { error: vi.fn() };
-    const supervisor = createDiscordGatewaySupervisor({
-      gateway: { emitter },
-      isDisallowedIntentsError: () => false,
-      runtime: runtime as never,
-    });
-
-    supervisor.dispose();
-    const first = new TypeError();
-    first.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
-    const second = new TypeError();
-    second.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
-    emitter.emit("error", first);
-    emitter.emit("error", second);
-
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(String(firstErrorArg(runtime))).toContain(
-      "suppressed late gateway fatal error after dispose: TypeError @ gatewayCrash (discord-gateway.js:12:34)",
+    expect(emitter.listenerCount("error")).toBe(1);
+    expect(gatewayLogError).toHaveBeenCalledTimes(3);
+    expect(gatewayLogError).toHaveBeenLastCalledWith(
+      "suppressed late gateway error after dispose: Error: late gateway error 2",
     );
   });
 });

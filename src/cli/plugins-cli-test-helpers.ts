@@ -624,6 +624,10 @@ vi.mock("../plugins/git-install.js", () => ({
 }));
 
 vi.mock("../hooks/install.js", () => ({
+  HOOK_INSTALL_ERROR_CODE: {
+    MISSING_OPENCLAW_HOOKS: "missing_openclaw_hooks",
+    EMPTY_OPENCLAW_HOOKS: "empty_openclaw_hooks",
+  },
   installHooksFromNpmSpec: ((
     ...args: Parameters<(typeof import("../hooks/install.js"))["installHooksFromNpmSpec"]>
   ) =>

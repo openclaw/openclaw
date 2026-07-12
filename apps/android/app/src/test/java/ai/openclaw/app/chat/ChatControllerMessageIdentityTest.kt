@@ -1,5 +1,8 @@
 package ai.openclaw.app.chat
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
@@ -38,6 +41,43 @@ class ChatControllerMessageIdentityTest {
 
     assertEquals(listOf(ChatMessageContent(type = "text", text = "Hi there")), content)
   }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveHistoryDropsInternalRoleRows() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """
+              {
+                "messages": [
+                  { "role": "user", "content": "hello" },
+                  { "role": "toolResult", "content": "private tool output" },
+                  { "role": "internal", "text": "private reasoning" },
+                  { "role": "custom", "content": "visible plugin notice" },
+                  { "role": "Assistant", "content": "reply" }
+                ]
+              }
+              """.trimIndent()
+            } else {
+              "{}"
+            }
+          },
+        )
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      assertEquals(listOf("user", "custom", "assistant"), controller.messages.value.map { it.role })
+      assertEquals(
+        listOf("hello", "visible plugin notice", "reply"),
+        controller.messages.value.map { it.content.single().text },
+      )
+    }
 
   @Test
   fun reconcileMessageIdsReusesMatchingIdsAcrossHistoryReload() {
@@ -111,6 +151,63 @@ class ChatControllerMessageIdentityTest {
     assertEquals("msg-1", reconciled[0].id)
     assertEquals("new-2", reconciled[1].id)
     assertNotEquals(reconciled[0].id, reconciled[1].id)
+  }
+
+  @Test
+  fun reconcileMessageIdsPreservesOptimisticVoiceNoteDuration() {
+    val previous =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content =
+          listOf(
+            ChatMessageContent(type = "text", text = "See attached."),
+            ChatMessageContent(type = "audio", mimeType = "audio/mp4", fileName = "voice-note.m4a", durationMs = 4_321L),
+          ),
+        timestampMs = 1_000L,
+        idempotencyKey = "run:user",
+      )
+    val incoming =
+      previous.copy(
+        id = "gateway-user",
+        content = previous.content.map { it.copy(durationMs = null) },
+      )
+
+    val reconciled = reconcileMessageIds(previous = listOf(previous), incoming = listOf(incoming)).single()
+
+    assertEquals("local-user", reconciled.id)
+    assertEquals(4_321L, reconciled.content[1].durationMs)
+  }
+
+  @Test
+  fun reconcileMessageIdsPreservesMultipleVoiceNoteDurationsInOrder() {
+    val previous =
+      ChatMessage(
+        id = "local-user",
+        role = "user",
+        content =
+          listOf(
+            ChatMessageContent(type = "text", text = "See attached."),
+            ChatMessageContent(type = "audio", mimeType = "audio/mp4", fileName = "first.m4a", durationMs = 1_000L),
+            ChatMessageContent(type = "audio", mimeType = "audio/mp4", fileName = "second.m4a", durationMs = 2_000L),
+          ),
+        timestampMs = 1_000L,
+        idempotencyKey = "run:user",
+      )
+    val incoming =
+      previous.copy(
+        id = "gateway-user",
+        content =
+          listOf(
+            ChatMessageContent(type = "text", text = "See attached."),
+            ChatMessageContent(type = "audio", mimeType = "audio/x-m4a", fileName = "stored-a.m4a"),
+            ChatMessageContent(type = "audio", mimeType = "audio/x-m4a", fileName = "stored-b.m4a"),
+          ),
+      )
+
+    val reconciled = reconcileMessageIds(previous = listOf(previous), incoming = listOf(incoming)).single()
+
+    assertEquals(listOf(1_000L, 2_000L), reconciled.content.drop(1).map { it.durationMs })
   }
 
   @Test

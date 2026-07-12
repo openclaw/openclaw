@@ -252,8 +252,9 @@ export function inspectTelegramAccount(params: {
   accountId?: string | null;
   envToken?: string | null;
 }): InspectedTelegramAccount {
+  const resolvedAccountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   return resolveAccountWithDefaultFallback({
-    accountId: params.accountId,
+    accountId: resolvedAccountId,
     normalizeAccountId,
     resolvePrimary: (accountId) =>
       inspectTelegramAccountPrimary({

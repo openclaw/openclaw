@@ -16,7 +16,7 @@ function isOpencodeGoDeepSeekV4ModelId(modelId: unknown): boolean {
   return modelId === "deepseek-v4-flash" || modelId === "deepseek-v4-pro";
 }
 
-export function createOpencodeGoDeepSeekV4Wrapper(
+function createOpencodeGoDeepSeekV4Wrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
 ): ProviderWrapStreamFnContext["streamFn"] {
@@ -32,7 +32,7 @@ function stripReasoningParams(payloadObj: Record<string, unknown>): void {
   stripOpencodeGoKimiReasoningPayload(payloadObj);
 }
 
-export function createOpencodeGoKimiNoReasoningWrapper(
+function createOpencodeGoKimiNoReasoningWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
 ): ProviderWrapStreamFnContext["streamFn"] {
   if (!baseStreamFn) {

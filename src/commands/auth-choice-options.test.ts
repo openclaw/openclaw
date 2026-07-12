@@ -37,6 +37,7 @@ vi.mock("../flows/provider-flow.js", () => ({
         ...resolveManifestProviderAuthChoices()
           .filter((choice) => includesOnboardingScope(choice.onboardingScopes, scope))
           .map((choice) => ({
+            providerId: choice.providerId,
             option: {
               value: choice.choiceId,
               label: choice.choiceLabel,
@@ -62,6 +63,7 @@ vi.mock("../flows/provider-flow.js", () => ({
         ...resolveProviderWizardOptions()
           .filter((option) => includesOnboardingScope(option.onboardingScopes, scope))
           .map((option) => ({
+            providerId: option.groupId,
             option: {
               value: option.value,
               label: option.label,
@@ -625,6 +627,7 @@ describe("buildAuthChoiceOptions", () => {
       "openai-chatgpt-device-code",
       "openai-api-key",
     ]);
+    expect(openAIGroup.providerIds).toEqual(["openai"]);
     expect(openAIGroup.options[0]?.onboardingFeatured).toBe(true);
   });
 

@@ -11,6 +11,7 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../plugins/types.js";
 import { joinPresentTextSegments } from "../../shared/text/join-segments.js";
+import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import { wrapPluginSystemContextSection } from "../hook-system-context-boundary.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
@@ -32,6 +33,7 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   messages: unknown[];
   ctx: AgentHarnessHookContext;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  bootstrapContextRunKind?: BootstrapContextRunKind;
 }): Promise<AgentHarnessPromptBuildResult> {
   const hookRunner = getGlobalHookRunner();
   const hasPrecomputedBeforeAgentStartResult = "beforeAgentStartResult" in params;
@@ -39,7 +41,8 @@ export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   // (e.g. the Codex app-server) build the prompt through this helper rather than
   // the embedded runner's resolvePromptBuildHookResult, so the hook must run from
   // here too — otherwise it never fires on those runtimes.
-  const isHeartbeatTurn = params.ctx.trigger === "heartbeat";
+  const isHeartbeatTurn =
+    params.ctx.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only";
   const hasHeartbeatContribution =
     isHeartbeatTurn && Boolean(hookRunner?.hasHooks("heartbeat_prompt_contribution"));
   if (

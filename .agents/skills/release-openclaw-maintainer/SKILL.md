@@ -1,11 +1,15 @@
 ---
 name: release-openclaw-maintainer
-description: Prepare or verify OpenClaw stable/beta releases, changelogs, release notes, publish commands, and artifacts.
+description: Prepare or verify OpenClaw stable, beta, and extended-stable releases, including backport discovery, changelogs, release notes, publish commands, and artifacts.
 ---
 
 # OpenClaw Release Maintainer
 
-Use this skill for release and publish-time workflow. Load `$release-private` if it exists before resolving Peter-owned credential locators or private host topology. Keep ordinary development changes and GHSA-specific advisory work outside this skill.
+Use this skill for release and publish-time workflow, including preparing the
+approved backport set for an extended-stable maintenance release. Load
+`$release-private` if it exists before resolving Peter-owned credential
+locators or private host topology. Keep ordinary development changes and
+GHSA-specific advisory work outside this skill.
 
 ## Respect release guardrails
 
@@ -13,7 +17,11 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 - Versions use `YYYY.M.PATCH`, where `PATCH` is the sequential release-train number within the month, not the calendar day.
 - Choose a new beta train from stable and beta releases only. Alpha-only tags do not consume or advance the beta/stable patch number. Continue the highest existing unpublished/published beta train with the next `beta.N` when appropriate; otherwise increment the highest stable/beta patch by one and start at `beta.1`.
 - Example: after stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even if automated alpha-only tags such as `2026.6.10-alpha.1` exist.
-- Ask permission before any npm publish or release step.
+- Obtain explicit operator approval before the first irreversible publish
+  action. Instructions to cut, ship, publish, or get a named release out carry
+  through that release's validated publish and verification steps; do not ask
+  again at final dispatch. Reconfirm only if the target version, tag, channel,
+  publish scope, or a material risk changes.
 - This skill should be sufficient to drive the normal release flow end-to-end.
 - Use the private maintainer release docs for credentials, recovery steps, and mac signing/notary specifics, and use `docs/reference/RELEASING.md` for public policy.
 - Core `openclaw` publish is manual `workflow_dispatch`; creating or pushing a tag does not publish by itself.
@@ -30,9 +38,11 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   green. Then branch from that commit so regular development can continue on
   `main` while release validation runs.
 - Before release branching, commit any dirty files in coherent groups, push,
-  pull/rebase, then generate `CHANGELOG.md` on `main` from merged PRs and all
-  direct commits since the last reachable release tag. Commit/push/pull that
-  changelog rewrite immediately before creating the release branch.
+  pull/rebase, and create the release branch from the intended `main` head.
+  Finish version preparation, backports, release-only fixes, and their required
+  forward-ports before generating `CHANGELOG.md`. The changelog rewrite is the
+  final candidate source mutation; freeze the candidate SHA immediately after
+  it and do not restart completed evidence for metadata-only reruns.
 - During release planning, inspect both `src/plugins/compat/registry.ts` and
   `src/commands/doctor/shared/deprecation-compat.ts` before branching and again
   before final publish. For every deprecated or removal-pending compatibility
@@ -119,12 +129,16 @@ target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
   cancelled, or been skipped. Then rerun `OPENCLAW_TESTBOX=1 scripts/pr
 prepare-run <PR>`.
 - Generate the changelog before every beta, beta rerun, stable release, or
-  stable rerun, before version/tag preparation. Use
+  stable rerun, after version preparation and all source/backport work. Use
   `$openclaw-changelog-update` for the rewrite. Do not continue release prep if
   the target `CHANGELOG.md` section does not have `### Highlights`,
   `### Changes`, and `### Fixes`, grouped by user-facing surface while
   preserving every relevant PR/issue ref and every human `Thanks @...`
   attribution in the grouped bullet.
+- Changelog PR provenance follows `origin/main`, not the release integration
+  PR. Cite the original merged main PR for equivalent backports. Keep a
+  release-branch PR only when the change landed there first and has not yet
+  been forward-ported to `main`.
 - Do not create beta-specific `CHANGELOG.md` headings. Beta releases use the
   stable base version section, for example `v2026.4.20-beta.1` uses
   `## 2026.4.20` release notes.
@@ -134,9 +148,66 @@ prepare-run <PR>`.
 - When asked to announce on X, use `~/Projects/bird/bird` and follow the
   release tweet style below.
 
+## Prepare extended-stable backports
+
+When asked to create the initial `.33` extended-stable line or a later
+maintenance patch, read
+`references/extended-stable-backports.md` and follow it before version, tag, or
+publication work. Treat backport discovery and preparation as an ability of
+this release skill, not as a separate release workflow.
+
+The backport ability owns the complete mainline inventory, private-security
+reconciliation, candidate decisions, maintainer approval, coordinated staging
+PR, and proof handoff. After that PR lands, use the dedicated npm-only sequence
+below. Never route `.33+` through the regular beta/stable release sequence.
+
+## Publish extended-stable releases
+
+Use this path only for the trailing completed month's `.33+` line. Treat
+`docs/reference/RELEASING.md`,
+`scripts/openclaw-npm-extended-stable-release.mjs`, and the release workflows
+on pinned current `main` as the exact command and validation contract.
+
+1. Check out the canonical `extended-stable/YYYY.M.33` branch after the
+   approved backport PR lands. Require its tip, root package version, every
+   publishable official plugin version, and intended immutable `vYYYY.M.P` tag
+   to identify one exact release commit.
+2. Create and push `vYYYY.M.P` at that exact branch tip only after version prep
+   and focused backport proof are complete.
+3. Dispatch `openclaw-npm-release.yml` with `preflight_only=true` and
+   `npm_dist_tag=extended-stable` from the canonical branch. Save the successful
+   npm preflight run ID.
+4. Dispatch `full-release-validation.yml` from the same branch with
+   `ref=extended-stable/YYYY.M.33` and `release_profile=stable`. Save the
+   successful exact-head validation run ID and its exact `run_attempt` from
+   `gh api repos/openclaw/openclaw/actions/runs/<run-id> --jq .run_attempt`.
+5. Dispatch `plugin-npm-release.yml` from the same branch with
+   `publish_scope=all-publishable`, the full release SHA as `ref`, and
+   `npm_dist_tag=extended-stable`. Require complete exact-version and selector
+   readback, then save the successful plugin run ID.
+6. Dispatch the real `openclaw-npm-release.yml` publish from the same branch
+   with the intended tag, `npm_dist_tag=extended-stable`, all three saved run
+   IDs, and `full_release_validation_run_attempt=<saved-attempt>`. The workflow
+   must publish the exact prepared core tarball and prove the referenced runs
+   match the canonical branch and release SHA.
+7. Independently verify the exact core package, every official plugin package,
+   and all `extended-stable` selectors. If only the core selector readback
+   fails, use the `openclaw` repair command generated by the core workflow. If
+   an official-plugin selector is missing or stale for an already-published
+   version, use the approved credential-isolated release tooling for manual
+   plugin tag repair; the OIDC source workflow cannot mutate that tag. Never
+   republish an immutable version.
+8. Do not create a GitHub Release or publish macOS, Windows, Docker, mobile,
+   website, ClawHub, or private dist-tag artifacts from this path.
+
 ## Keep release channel naming aligned
 
-- `stable`: tagged releases only, published to npm `beta` by default; operators may target npm `latest` explicitly or promote later
+- `stable`: user updates resolve npm `latest`; tagged regular releases publish
+  to npm `beta` by default, then operators may target or promote to `latest`
+  explicitly
+- `extended-stable`: user updates resolve npm `extended-stable`; operators
+  publish the trailing completed month's `.33+` line from
+  `extended-stable/YYYY.M.33`
 - `beta`: prerelease tags like `vYYYY.M.PATCH-beta.N`, with npm dist-tag `beta`
 - Prefer `-beta.N`; do not mint new `-1` or `-2` beta suffixes
 - `dev`: moving head on `main`
@@ -171,6 +242,19 @@ Stable publication is not complete until `main` carries the actual shipped relea
    private rollback commands remain in the maintainer-only runbook.
 
 ## Handle versions and release files consistently
+
+Use the release preparation controller before manual version edits:
+
+```bash
+pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --shadow
+pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --write
+pnpm release:prepare -- --version YYYY.M.PATCH-beta.N --check
+```
+
+Shadow mode is the default and never runs mutating commands. Write mode aligns
+the root and macOS versions, optionally Android with `--android`, then runs only
+the version-owned generated metadata DAG. Every mode writes an exact
+HEAD/worktree-bound manifest under git metadata for cutover review.
 
 - Version locations include:
   - `package.json`
@@ -246,10 +330,11 @@ Stable publication is not complete until `main` carries the actual shipped relea
 
 - `CHANGELOG.md` is release-owned. Normal PRs and direct `main` fixes should
   not edit it.
-- Before release branching or tagging, rewrite the target `CHANGELOG.md`
-  section from history, not existing notes. Use the last reachable stable or
-  beta release tag as the base, then inspect every commit through the target
-  release SHA.
+- After release preparation and all intended backports/fixes are complete,
+  rewrite the target `CHANGELOG.md` section from history, not existing notes.
+  Use the last reachable stable or beta release tag as the base, then inspect
+  every commit through the target release SHA. This rewrite is the final source
+  task before freezing the candidate SHA and starting or reusing evidence.
 - Generate `$openclaw-changelog-update`'s full contribution manifest before
   the editorial rewrite. It is the required source for `### Highlights`,
   `### Changes`, and `### Fixes`; do not preserve old grouped prose without
@@ -257,7 +342,10 @@ Stable publication is not complete until `main` carries the actual shipped relea
   unlinked commits.
 - The changelog rewrite is not optional for beta reruns: any `beta.N` after a
   rebase or backport must refresh the same stable-base `## YYYY.M.PATCH` section
-  before the new version/tag commit.
+  after the new version/backport work and before the candidate SHA freezes.
+- Always fetch and pass current `origin/main` as the canonical main ref.
+  Equivalent release/backport PRs are omitted in favor of the original merged
+  main PR. A release-branch PR remains only until that change is forward-ported.
 - Include both merged PR commits and direct commits on `main`. Direct commits
   matter: infer notes from their subject, body, touched files, linked issues,
   tests, and nearby code when no PR body exists.
@@ -297,18 +385,38 @@ Stable publication is not complete until `main` carries the actual shipped relea
   When grouped prose names a PR, keep every contributor and linked-reporter
   credit from that PR's record on the same bullet.
 - Changelog entries should be user-facing, not internal release-process notes.
-- GitHub release and prerelease bodies must use the full matching
-  `CHANGELOG.md` version section, not highlights or an excerpt. When creating
-  or editing a release, extract from `## YYYY.M.PATCH` through the line before the
-  next level-2 heading and use that complete block as the release notes.
-- GitHub limits release bodies to 125,000 characters. If a historical
-  `### Release verification` tail would exceed that cap, omit the tail and keep
-  the complete changelog section; do not truncate the contribution record.
+- GitHub release and prerelease bodies use
+  `scripts/render-github-release-notes.mjs`. When the full matching
+  `CHANGELOG.md` version section fits GitHub's 125,000-character limit and
+  the renderer's matching 125,000-byte safety ceiling, publish the exact
+  `## YYYY.M.PATCH` block through the line before the next level-2 heading,
+  including the version heading.
+- When that complete body exceeds either limit, keep the exact grouped
+  editorial notes through the line before `### Complete contribution record`,
+  then replace the oversized record with the canonical tag-pinned
+  `CHANGELOG.md` link emitted by the renderer. Never truncate bullets or emit a
+  partial contribution record. Candidate validation, publish, and
+  `verify-release-notes.mjs` must share this renderer so the compact form cannot
+  drift.
+- Choose the full or compact changelog body before adding
+  `### Release verification`. Append that proof only when the final body still
+  fits; otherwise leave the immutable evidence assets attached and omit the
+  body tail. Do not discard a fitting full contribution record to make room
+  for proof.
 - Before publishing or closing a release, run
   `$openclaw-changelog-update`'s `verify-release-notes.mjs` with every stable
   and beta release tag in the train. Do not publish or leave a page live when
   it is missing a source-history reference, eligible human credit, or the
   complete matching changelog body.
+- Treat the selected `--base` as a strict history boundary: it must be an
+  ancestor of the target, and existing changelog prose or contribution rows
+  cannot pull older PRs into the new release. Use `--seed-ref` only for an
+  intentional historical backfill. When a divergent prior release tag or later
+  forward-port re-associates already-shipped PRs, pass repeatable explicit
+  `--shipped-ref <tag>` values. They subtract only explicit PR rows in complete
+  contribution records from numbered sections of those tag snapshots, ignore
+  `Unreleased`, and retain the exact excluded PR inventory and count in
+  manifest/provenance for candidate checks.
 - To update an existing GitHub Release body, resolve the numeric release id and
   patch that resource with the notes file as the `body` field:
   `gh api repos/openclaw/openclaw/releases/tags/vYYYY.M.PATCH --jq .id`, then
@@ -466,6 +574,33 @@ pnpm test:install:smoke
   `npm view <package-name> version dist-tags --json --prefer-online`; a 404 for
   a package newly added to the release is a release-prep blocker, not something
   to discover from the publish job.
+- Bootstrap a new ClawHub package only from the trusted workflow source:
+  `gh workflow run plugin-clawhub-new.yml --ref main -f plugins=@openclaw/name -f ref=<full-release-sha> -f pretag_validation=true -f dry_run=true`.
+  The workflow source stays on `main`; `ref` is the exact release target. A
+  pre-tag dry run rejects tag/parent-approval inputs and requires the target to be
+  reachable from `main` or `release/*`. It must still resolve the live registry
+  plan, pack every candidate, upload and download the exact artifact ID, rehash
+  the inventory, reject ambiguous TAR paths locally with the pinned CLI's USTAR
+  canonicalization, and validate each tarball with the pinned CLI publish
+  dry-run. It never loads credentials or changes package/trusted-publisher
+  state. Approve the `clawhub-plugin-bootstrap` environment only after the
+  secretless pack jobs finish; the protected validation job itself has no
+  credentials or mutation commands. For an
+  existing version missing trusted-publisher configuration, pack the target
+  bytes too and require its tag plus exact registry byte/metadata equality
+  before allowing configuration-only repair. The credential-job prefilter
+  enforces the ClawHub 120 MiB compressed and 50 MiB total-payload limits, plus
+  64 MiB expanded-TAR and 10,000-TAR-entry parser-safety limits. A mismatch
+  requires a new version; never bless unrelated immutable bytes. A real run
+  publishes the exact downloaded tarball, bounds each CLI attempt, and records
+  byte-identical registry readback. Final release verification must consume the
+  unique terminal readback artifact and bind its main-only workflow SHA/attempt,
+  target SHA, requested packages, package artifact ID/name/digest, and
+  per-package SHA-256/size/npm integrity metadata. The parent approval attests a
+  separate exact trusted-main child workflow SHA; the child run and protected
+  approval must match it. Rerun-failed recovery may reuse a prior package
+  artifact only when the exact producer job succeeded. Final evidence must also
+  preserve the locked ClawHub version, lock SHA-256, and npm integrity.
 - Use `pnpm qa:otel:smoke` when release validation needs telemetry coverage.
   It starts a local OTLP/HTTP trace receiver, runs QA-lab's
   `otel-trace-smoke`, and checks span names plus content/identifier redaction
@@ -643,10 +778,10 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - The npm workflow and the release-ops mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
   public release assets.
-- Real npm publish requires a prior successful npm preflight run id and the
-  successful Full Release Validation run id for the same tag/SHA so the publish
-  job promotes the prepared tarball instead of rebuilding it and attaches the
-  correct release evidence.
+- Real npm publish requires a prior successful npm preflight run id plus the
+  successful Full Release Validation run id and exact run attempt for the same
+  tag/SHA so the publish job promotes the prepared tarball instead of rebuilding
+  it and attaches the correct release evidence.
 - Real release-ops mac publish requires a prior successful release-ops mac
   preflight run id so the publish job promotes the prepared artifacts instead of
   rebuilding or renotarizing them again.
@@ -667,8 +802,9 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   and release proof manually. Never rerun the publish workflow for that
   already-published version.
 - npm validation-only preflight may still be dispatched from ordinary branches
-  when testing workflow changes before merge. Release checks and real publish
-  use only `main` or `release/YYYY.M.PATCH`.
+  when testing workflow changes before merge. Regular beta and stable release
+  checks and publish orchestration use trusted `main` against the exact target
+  tag; Tideclaw alpha keeps its matching alpha branch.
 - `.github/workflows/macos-release.yml` in `openclaw/openclaw` is now a
   public validation-only handoff. It validates the tag/release state and points
   operators to the release-ops repo. It still rebuilds the JS outputs needed for
@@ -692,10 +828,14 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   Full Release Validation must pass before npm publish unless the operator
   explicitly waives the full gate; mac beta validation is still only required
   when requested.
-- Real publish runs may be dispatched from `main` or from a
-  `release/YYYY.M.PATCH` branch. For release-branch runs, the tag must be contained
-  in that release branch, and the real publish must reuse a successful preflight
-  from the same branch.
+- Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
+  package list. `all-publishable` plugin runs require complete immutable npm
+  preflight and Full Release Validation evidence even when core npm publication
+  is disabled.
+- Dispatch regular beta and stable `OpenClaw Release Publish` runs from trusted
+  `main`; the tag still selects the exact release commit, including a commit on
+  `release/YYYY.M.PATCH`. Tideclaw alpha publish runs remain on their matching
+  alpha branch. Reuse the successful preflight for that exact release SHA.
 - The release workflows stay tag-based; rely on the documented release sequence
   rather than workflow-level SHA pinning.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
@@ -758,17 +898,24 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 
 ## Run the release sequence
 
-1. Confirm the operator explicitly wants to cut a release.
+1. Confirm release intent once. Treat prior explicit instructions to cut, ship,
+   publish, or complete the named release as continuing authorization through
+   publish and verification. Reconfirm only if the release identity, channel,
+   publish scope, or material risk changes.
 2. Choose the exact target version and git tag.
 3. Commit any dirty files in coherent groups, push, pull/rebase, and verify the
    worktree is clean.
 4. Pull latest `main` and confirm current `main` CI is green.
-5. Run `/changelog` for the stable base target version on `main`, commit the
-   changelog rewrite immediately, push, and pull/rebase. For beta releases,
-   keep the changelog heading as `## YYYY.M.PATCH`, not `## YYYY.M.PATCH-beta.N`.
-6. Create `release/YYYY.M.PATCH` from that post-changelog `main` commit.
-7. Make every repo version location match the beta tag before creating it.
-8. Commit release preparation changes on the release branch and push the branch.
+5. Create `release/YYYY.M.PATCH` from the intended `main` commit.
+6. Make every repo version location match the beta tag and finish all intended
+   backports or release-only fixes. Forward-port fixes to `main` where required.
+7. Run `/changelog` for the stable base target version on the release branch as
+   the final candidate source task, using current `origin/main` for canonical PR
+   provenance. Keep the heading as `## YYYY.M.PATCH`, not
+   `## YYYY.M.PATCH-beta.N`.
+8. Commit the changelog rewrite, push the release branch, and freeze that exact
+   candidate SHA. Any later source change must finish first, then rerun only
+   this final changelog step before freezing the replacement candidate.
 9. Immediately dispatch Actions > `OpenClaw Performance` from `main` with
    `target_ref=<release-sha>`, `profile=release`, `repeat=3`, deep profiling
    off, live OpenAI off, and regression failure off. Let it run in parallel
@@ -818,11 +965,12 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     where npm did not publish the beta version, delete/recreate the same beta
     tag and any accidental draft/incomplete prerelease at the fixed commit
     instead of skipping a prerelease number.
-22. Start `.github/workflows/openclaw-release-publish.yml` from the same branch with
-    the same tag for the real publish, choose `npm_dist_tag` (`beta` default,
+22. Start `.github/workflows/openclaw-release-publish.yml` from trusted `main`
+    with the same tag for the real beta or stable publish, choose `npm_dist_tag` (`beta` default,
     `latest` only when you intentionally want direct stable publish), keep it
     the same as the preflight run, and pass the successful npm
-    `preflight_run_id` plus the successful `full_release_validation_run_id`.
+    `preflight_run_id` plus the successful `full_release_validation_run_id` and
+    its exact `full_release_validation_run_attempt`.
     For stable publish, also pass the exact non-prerelease
     `openclaw/openclaw-windows-node` tag as `windows_node_tag` and its
     candidate-approved installer digest map as `windows_node_installer_digests`.

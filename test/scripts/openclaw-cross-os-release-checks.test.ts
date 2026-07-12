@@ -8,11 +8,12 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join, resolve as resolvePath, win32 } from "node:path";
+import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -31,6 +32,7 @@ import {
   buildWindowsFreshShellVersionCheckScript,
   buildInstalledBrowserOverrideImportProbeScript,
   buildNpmGlobalInstallArgs,
+  appendLatestNpmDebugLogTail,
   buildGatewayStatusArgsFromHelpText,
   buildWindowsPathBootstrapScript,
   canConnectToLoopbackPort,
@@ -74,6 +76,9 @@ import {
   resolveInstalledCliInvocation,
   resolveInstalledPackageRootFromCliPath,
   resolveNpmPackTarballFileName,
+  resolveNpmDebugLogDirs,
+  resolvePackDestinationTarball,
+  resolvePackageCandidatePackCommand,
   resolveProviderConfig,
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
@@ -218,7 +223,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       ["http://127.0.0.1:18789/assets/index.css", "http://127.0.0.1:18789/assets/index.js"],
       async (url) =>
         new Response("", {
-          status: String(url).endsWith(".js") ? 404 : 200,
+          status: (url instanceof Request ? url.url : url.toString()).endsWith(".js") ? 404 : 200,
         }),
     );
 
@@ -548,10 +553,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         OPENCLAW_CROSS_OS_MODEL: "openai/gpt-5.4-nano",
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
-    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.5");
+    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.6-luna");
   });
 
-  it("keeps release cross-OS OpenAI smoke on GPT-5.5", () => {
+  it("keeps release cross-OS OpenAI smoke on GPT-5.6 Luna", () => {
     const workflow = readFileSync(
       ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
       "utf8",
@@ -559,9 +564,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const releaseChecks = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
 
     expect(workflow).toContain(
-      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.5' }}",
+      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}",
     );
-    expect(releaseChecks).toContain("openai_model: openai/gpt-5.5");
+    expect(releaseChecks).toContain("openai_model: openai/gpt-5.6-luna");
   });
 
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
@@ -616,6 +621,71 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       expect(() => resolveNpmPackTarballFileName(filename)).toThrow(
         "npm pack did not report a safe .tgz filename.",
       );
+    }
+  });
+
+  it("accepts pnpm pack tarballs reported under the requested destination", () => {
+    const packDir = resolvePath("/tmp/openclaw-pack");
+
+    expect(resolvePackDestinationTarball("openclaw-2026.6.17.tgz", packDir, "pnpm pack")).toEqual({
+      fileName: "openclaw-2026.6.17.tgz",
+      path: resolvePath(packDir, "openclaw-2026.6.17.tgz"),
+    });
+    expect(
+      resolvePackDestinationTarball(
+        resolvePath(packDir, "openclaw-2026.6.17.tgz"),
+        packDir,
+        "pnpm pack",
+      ),
+    ).toEqual({
+      fileName: "openclaw-2026.6.17.tgz",
+      path: resolvePath(packDir, "openclaw-2026.6.17.tgz"),
+    });
+  });
+
+  it("rejects pnpm pack tarballs outside the requested destination", () => {
+    const packDir = resolvePath("/tmp/openclaw-pack");
+    const unsafeFilenames = [
+      "../openclaw.tgz",
+      "nested/openclaw.tgz",
+      "nested\\openclaw.tgz",
+      resolvePath(dirname(packDir), "openclaw.tgz"),
+      resolvePath(packDir, "nested", "openclaw.tgz"),
+      "openclaw\u0000.tgz",
+      "openclaw.tar.gz",
+    ];
+
+    for (const filename of unsafeFilenames) {
+      expect(() => resolvePackDestinationTarball(filename, packDir, "pnpm pack")).toThrow(
+        "pnpm pack did not report a safe .tgz filename.",
+      );
+    }
+  });
+
+  it("falls back to pnpm pack for historical refs without the Docker package helper", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-pack-command-"));
+    try {
+      const packDir = join(dir, "out");
+      const fallback = resolvePackageCandidatePackCommand(dir, packDir);
+
+      expect(fallback).toMatchObject({
+        args: ["pack", "--config.ignore-scripts=true", "--json", "--pack-destination", packDir],
+        command: process.platform === "win32" ? "pnpm.cmd" : "pnpm",
+        kind: "pnpm-pack",
+      });
+
+      const helperPath = join(dir, "scripts", "package-openclaw-for-docker.mjs");
+      mkdirSync(dirname(helperPath), { recursive: true });
+      writeFileSync(helperPath, "export {};\n");
+      const helper = resolvePackageCandidatePackCommand(dir, packDir);
+
+      expect(helper).toMatchObject({
+        args: [helperPath, "--skip-build", "--output-dir", packDir],
+        command: process.execPath,
+        kind: "docker-helper",
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -799,7 +869,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const topLevelImports = source.slice(0, source.indexOf("const SCRIPT_PATH"));
 
     expect(topLevelImports).not.toContain("package-dist-inventory");
-    expect(source).toContain("function assertNoLegacyPluginDependencyStagingDebris(packageRoot)");
+    expect(source).toMatch(
+      /function assertNoLegacyPluginDependencyStagingDebris\(packageRoot: string\)/u,
+    );
   });
 
   it("filters the cross-OS runner matrix to a focused OS suite", () => {
@@ -974,6 +1046,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         socket.once("connect", resolve);
         socket.once("error", reject);
       });
+      // Subscribe before shutdown because the one-shot client close event may
+      // arrive before the server close callback resolves.
+      const socketClosePromise = new Promise<void>((resolve) => {
+        socket.once("close", resolve);
+      });
       socket.write(`GET ${url.pathname} HTTP/1.1\r\nHost: ${url.host}\r\n\r\n`);
       await Promise.race([
         server.close(),
@@ -982,9 +1059,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         }),
       ]);
       await Promise.race([
-        new Promise<void>((resolve) => {
-          socket.once("close", resolve);
-        }),
+        socketClosePromise,
         delay(1_000).then(() => {
           throw new Error("socket close timed out");
         }),
@@ -1291,6 +1366,97 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
+  it("reads npm debug logs from the Windows cache root", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-npm-debug-"));
+    try {
+      const homeDir = join(dir, "home");
+      const localAppData = join(homeDir, "AppData", "Local");
+      const logsDir = join(localAppData, "npm-cache", "_logs");
+      const logPath = join(dir, "install.log");
+      mkdirSync(logsDir, { recursive: true });
+      writeFileSync(join(logsDir, "2026-07-05T00_00_00_000Z-debug-0.log"), "windows log\n");
+      writeFileSync(logPath, "install failed\n");
+
+      expect(resolveNpmDebugLogDirs(homeDir, { LOCALAPPDATA: localAppData }, "win32")).toContain(
+        logsDir,
+      );
+      expect(
+        appendLatestNpmDebugLogTail(homeDir, logPath, { LOCALAPPDATA: localAppData }, "win32"),
+      ).toContain("windows log");
+      expect(readFileSync(logPath, "utf8")).toContain("windows log");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prefers npm configured log directories over cache defaults", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-npm-logs-dir-"));
+    try {
+      const homeDir = join(dir, "home");
+      const logsDir = join(dir, "custom-logs");
+      const logPath = join(dir, "install.log");
+      mkdirSync(logsDir, { recursive: true });
+      mkdirSync(join(homeDir, ".npm", "_logs"), { recursive: true });
+      writeFileSync(
+        join(homeDir, ".npm", "_logs", "2026-07-05T00_00_00_000Z-debug-0.log"),
+        "old fallback log\n",
+      );
+      utimesSync(
+        join(homeDir, ".npm", "_logs", "2026-07-05T00_00_00_000Z-debug-0.log"),
+        new Date("2020-01-01T00:00:00Z"),
+        new Date("2020-01-01T00:00:00Z"),
+      );
+      writeFileSync(join(logsDir, "2026-07-05T00_00_00_000Z-debug-0.log"), "custom log\n");
+      writeFileSync(logPath, "install failed\n");
+
+      expect(resolveNpmDebugLogDirs(homeDir, { npm_config_logs_dir: logsDir })).toContain(logsDir);
+      expect(
+        appendLatestNpmDebugLogTail(homeDir, logPath, { npm_config_logs_dir: logsDir }),
+      ).toContain("custom log");
+      expect(readFileSync(logPath, "utf8")).toContain("custom log");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps npm debug log collection best-effort", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-npm-debug-best-effort-"));
+    try {
+      const homeDir = join(dir, "home");
+      const logPath = join(dir, "install.log");
+      const logsDir = join(dir, "not-a-directory");
+      writeFileSync(logPath, "install failed\n");
+      writeFileSync(logsDir, "not a directory\n");
+
+      expect(appendLatestNpmDebugLogTail(homeDir, logPath, { npm_config_logs_dir: logsDir })).toBe(
+        "",
+      );
+      expect(readFileSync(logPath, "utf8")).toBe("install failed\n");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves relative npm log config from the install working directory", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-npm-relative-logs-"));
+    try {
+      const homeDir = join(dir, "home");
+      const logsDir = join(homeDir, "relative-logs");
+      const cacheLogsDir = join(homeDir, "relative-cache", "_logs");
+      mkdirSync(logsDir, { recursive: true });
+      mkdirSync(cacheLogsDir, { recursive: true });
+
+      expect(resolveNpmDebugLogDirs(homeDir, { npm_config_logs_dir: "relative-logs" })).toContain(
+        logsDir,
+      );
+      expect(resolveNpmDebugLogDirs(homeDir, { npm_config_cache: "relative-cache" })).toContain(
+        cacheLogsDir,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("kills timed-out command process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -1515,14 +1681,14 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(await canConnectToLoopbackPort(1234.5)).toBe(false);
 
     const server = createNetServer();
-    await new Promise((resolvePromise) => {
+    await new Promise<void>((resolvePromise) => {
       server.listen(0, "127.0.0.1", resolvePromise);
     });
     const address = server.address();
     const port = typeof address === "object" && address ? address.port : 0;
     expect(await canConnectToLoopbackPort(port)).toBe(true);
-    await new Promise((resolvePromise) => {
-      server.close(resolvePromise);
+    await new Promise<void>((resolvePromise) => {
+      server.close(() => resolvePromise());
     });
     for (let attempt = 0; attempt < 20; attempt += 1) {
       if (!(await canConnectToLoopbackPort(port, 100))) {
@@ -1560,11 +1726,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(init).toMatchObject({
       method: "POST",
       body: "{}",
-      headers: {
-        Authorization: "Bot discord-token",
-        "Content-Type": "application/json",
-      },
     });
+    const headers = new Headers(init.headers);
+    expect(headers.get("Authorization")).toBe("Bot discord-token");
+    expect(headers.get("Content-Type")).toBe("application/json");
     expect(init.signal).toBeInstanceOf(AbortSignal);
   });
 

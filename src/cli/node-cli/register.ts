@@ -17,6 +17,7 @@ import {
   runNodeDaemonStop,
   runNodeDaemonUninstall,
 } from "./daemon.js";
+import { runNodeIdentityShow } from "./identity.js";
 
 function parsePortOption(value: unknown, fallback: number): number | null {
   // Undefined keeps config/default port; invalid explicit input returns null for CLI errors.
@@ -50,9 +51,11 @@ export function registerNodeCli(program: Command) {
     .description("Run the headless node host (foreground)")
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
+    .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
     .option("--tls", "Use TLS for the gateway connection")
+    .option("--no-tls", "Disable TLS for the gateway connection")
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override node id (clears pairing token)")
+    .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
     .action(async (opts) => {
       const existing = await loadNodeHostConfig();
@@ -67,8 +70,17 @@ export function registerNodeCli(program: Command) {
         return;
       }
       const retargetedGateway = opts.host !== undefined || opts.port !== undefined;
+      const explicitContextPath = opts.contextPath !== undefined;
+      const explicitTlsDisabled = opts.tls === false;
+      if (explicitTlsDisabled && opts.tlsFingerprint !== undefined) {
+        defaultRuntime.error("--no-tls cannot be combined with --tls-fingerprint");
+        defaultRuntime.exit(1);
+        return;
+      }
       const tlsFingerprint =
-        opts.tlsFingerprint ?? (retargetedGateway ? undefined : existing?.gateway?.tlsFingerprint);
+        explicitTlsDisabled || retargetedGateway
+          ? opts.tlsFingerprint
+          : (opts.tlsFingerprint ?? existing?.gateway?.tlsFingerprint);
       const inheritedTls = retargetedGateway ? undefined : existing?.gateway?.tls;
       await runNodeHost({
         gatewayHost: host,
@@ -76,6 +88,9 @@ export function registerNodeCli(program: Command) {
         gatewayTls:
           typeof opts.tls === "boolean" ? opts.tls : Boolean(tlsFingerprint) || inheritedTls,
         gatewayTlsFingerprint: tlsFingerprint,
+        gatewayContextPath:
+          normalizeOptionalString(opts.contextPath as string | undefined) ??
+          (explicitContextPath || retargetedGateway ? undefined : existing?.gateway?.contextPath),
         nodeId: opts.nodeId,
         displayName: opts.displayName,
       });
@@ -90,13 +105,22 @@ export function registerNodeCli(program: Command) {
     });
 
   node
+    .command("identity")
+    .description("Print the node host device identity (device id + public key)")
+    .option("--json", "Output JSON", false)
+    .action((opts) => {
+      runNodeIdentityShow(opts);
+    });
+
+  node
     .command("install")
     .description("Install the node host service (launchd/systemd/schtasks)")
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
+    .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override node id (clears pairing token)")
+    .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
     .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
     .option("--force", "Reinstall/overwrite if already installed", false)

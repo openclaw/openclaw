@@ -180,10 +180,13 @@ const qaEvidenceResultSchema = z
   })
   .strict();
 
-export const qaEvidenceSummaryEntrySchema = z
+const qaEvidencePostureSchema = z.enum(["direct-gateway", "native-approval", "user-path"]);
+
+const qaEvidenceSummaryEntrySchema = z
   .object({
     test: qaEvidenceTestSchema,
     coverage: z.array(qaEvidenceCoverageSchema),
+    posture: qaEvidencePostureSchema.optional(),
     refs: z.array(qaEvidenceRefSchema).optional(),
     runtimeParityTier: nonEmptyStringSchema.optional(),
     execution: qaEvidenceExecutionSchema.optional(),
@@ -191,7 +194,7 @@ export const qaEvidenceSummaryEntrySchema = z
   })
   .strict();
 
-export const qaEvidenceSummarySchema = z
+const qaEvidenceSummarySchema = z
   .object({
     kind: z.literal(QA_EVIDENCE_SUMMARY_KIND),
     schemaVersion: z.literal(QA_EVIDENCE_SUMMARY_SCHEMA_VERSION),
@@ -203,7 +206,7 @@ export const qaEvidenceSummarySchema = z
   })
   .strict();
 
-export type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
+type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
 export type QaEvidencePackageSource = z.infer<typeof qaEvidencePackageSourceSchema>;
@@ -245,6 +248,7 @@ type QaEvidenceLiveTransportCheckInput = {
   title: string;
   status: QaEvidenceStatusInput;
   details: string;
+  posture?: z.infer<typeof qaEvidencePostureSchema>;
   timing?: QaEvidenceTiming;
   rttMs?: number;
   rttMeasurement?: {
@@ -797,6 +801,7 @@ export function buildLiveTransportEvidenceSummary(
         title: check.title,
       },
       coverage,
+      posture: check.posture,
       execution: {
         runner,
         environment,

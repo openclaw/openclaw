@@ -1,11 +1,12 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Resolves system.run allowlist matches, argv plans, and truncated command output. */
 import {
   analyzeArgvCommand,
   evaluateExecAllowlist,
   evaluateShellAllowlistWithAuthorization,
   resolvePlannedSegmentArgv,
-  resolveExecApprovals,
   type ExecAllowlistEntry,
+  type ExecApprovalsResolved,
   type ExecCommandSegment,
   type ExecSegmentSatisfiedBy,
   type ExecSecurity,
@@ -37,6 +38,7 @@ type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   allowlistSatisfied: boolean;
+  allowlistAuthorizationSatisfied: boolean;
   segments: ExecCommandSegment[];
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
@@ -47,7 +49,7 @@ type SystemRunAllowlistAnalysis = {
 export async function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
   argv: string[];
-  approvals: ReturnType<typeof resolveExecApprovals>;
+  approvals: ExecApprovalsResolved;
   security: ExecSecurity;
   safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
   safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
@@ -77,6 +79,7 @@ export async function evaluateSystemRunAllowlist(params: {
         params.security === "allowlist" && allowlistEval.analysisOk
           ? allowlistEval.allowlistSatisfied
           : false,
+      allowlistAuthorizationSatisfied: allowlistEval.analysisOk && allowlistEval.allowlistSatisfied,
       segments: allowlistEval.segments,
       segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
       segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
@@ -102,6 +105,7 @@ export async function evaluateSystemRunAllowlist(params: {
     allowlistMatches: allowlistEval.allowlistMatches,
     allowlistSatisfied:
       params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
+    allowlistAuthorizationSatisfied: analysis.ok && allowlistEval.allowlistSatisfied,
     segments: analysis.segments,
     segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
     segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
@@ -129,7 +133,9 @@ export function resolvePlannedAllowlistArgv(params: {
   ) {
     return undefined;
   }
-  const plannedAllowlistArgv = resolvePlannedSegmentArgv(params.segments[0]);
+  const plannedAllowlistArgv = resolvePlannedSegmentArgv(
+    expectDefined(params.segments[0], "segments entry at 0"),
+  );
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 
@@ -138,7 +144,7 @@ export async function resolveSystemRunExecArgv(params: {
   plannedAllowlistArgv: string[] | undefined;
   argv: string[];
   security: ExecSecurity;
-  approvals: ReturnType<typeof resolveExecApprovals>;
+  approvals: ExecApprovalsResolved;
   safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
   safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
   trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
@@ -165,11 +171,17 @@ export async function resolveSystemRunExecArgv(params: {
     params.shellCommand &&
     params.policy.analysisOk &&
     params.policy.allowlistSatisfied &&
-    params.segments.length === 1 &&
-    params.segments[0]?.argv.length > 0
+    params.segments.length === 1
   ) {
-    // Windows shell transports expose a parsed argv segment that is safer than the wrapper argv.
-    execArgv = params.segments[0].argv;
+    // Exact-path matches stay bound to the resolved executable, while the bare
+    // wildcard contract can still authorize unresolved Windows commands.
+    const plannedArgv = resolvePlannedSegmentArgv(
+      expectDefined(params.segments[0], "segments entry at 0"),
+    );
+    if (!plannedArgv) {
+      return null;
+    }
+    execArgv = plannedArgv;
   }
   if (
     params.security === "allowlist" &&

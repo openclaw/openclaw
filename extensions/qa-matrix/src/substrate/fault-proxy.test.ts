@@ -1,11 +1,15 @@
 // Qa Matrix tests cover fault proxy plugin behavior.
 import { createServer } from "node:http";
+import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { startMatrixQaFaultProxy, type MatrixQaFaultProxy } from "./fault-proxy.js";
 
 const servers: Array<{ close(): Promise<void> }> = [];
 
-async function startTargetServer(params?: { responseBody?: string }) {
+async function startTargetServer(params?: {
+  responseBody?: Buffer | string;
+  responseHeaders?: Record<string, string>;
+}) {
   const requests: Array<{
     authorization?: string;
     body: string;
@@ -24,7 +28,7 @@ async function startTargetServer(params?: { responseBody?: string }) {
         method: req.method ?? "GET",
         url: req.url ?? "/",
       });
-      res.writeHead(200, { "content-type": "application/json" });
+      res.writeHead(200, { "content-type": "application/json", ...params?.responseHeaders });
       res.end(params?.responseBody ?? JSON.stringify({ forwarded: true }));
     })();
   });
@@ -128,6 +132,24 @@ describe("Matrix QA fault proxy", () => {
     ]);
   });
 
+  it("strips stale content-encoding after buffering decoded bodies", async () => {
+    const body = Buffer.from(JSON.stringify({ forwarded: true }));
+    const target = await startTargetServer({
+      responseBody: gzipSync(body),
+      responseHeaders: {
+        "content-encoding": "gzip",
+        "content-length": String(gzipSync(body).byteLength),
+      },
+    });
+    proxy = await startMatrixQaFaultProxy({ targetBaseUrl: target.baseUrl, rules: [] });
+
+    const response = await fetch(`${proxy.baseUrl}/encoded`);
+
+    expect(response.headers.get("content-encoding")).toBeNull();
+    expect(response.headers.get("content-length")).toBeNull();
+    await expect(response.json()).resolves.toEqual({ forwarded: true });
+  });
+
   it("mutates matching forwarded Matrix responses", async () => {
     const target = await startTargetServer();
     proxy = await startMatrixQaFaultProxy({
@@ -187,6 +209,7 @@ describe("Matrix QA fault proxy", () => {
     });
 
     expect(rejected.status).toBe(413);
+    expect(rejected.headers.get("connection")).toBe("close");
     await expect(rejected.json()).resolves.toMatchObject({
       errcode: "MATRIX_QA_FAULT_PROXY_REQUEST_TOO_LARGE",
     });

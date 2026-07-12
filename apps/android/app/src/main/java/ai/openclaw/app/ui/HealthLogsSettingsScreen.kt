@@ -41,10 +41,10 @@ internal fun HealthLogsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  val isConnected by viewModel.isConnected.collectAsState()
+  val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
+  val isConnected = gatewayConnectionDisplay.isConnected
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
   val chatHealthOk by viewModel.chatHealthOk.collectAsState()
-  val statusText by viewModel.statusText.collectAsState()
   val modelCount by viewModel.modelCatalog.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val talkStatus by viewModel.talkModeStatusText.collectAsState()
@@ -82,7 +82,7 @@ internal fun HealthLogsSettingsScreen(
         ),
     )
     HealthStatusPanel(
-      gateway = statusText,
+      gateway = gatewayConnectionDisplay.statusText,
       node = if (isNodeConnected) "Online" else "Waiting",
       chat = if (chatHealthOk) "Ready" else "Needs connection",
       models = "${modelCount.size} available",

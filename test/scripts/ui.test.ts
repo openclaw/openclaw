@@ -296,7 +296,7 @@ describe("scripts/ui windows spawn behavior", () => {
         await waitFor(() => fs.existsSync(descendantPidFile), "UI runner descendant readiness");
         descendantPid = Number(fs.readFileSync(descendantPidFile, "utf8"));
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, 300);
+          setTimeout(resolve, 25);
         });
 
         wrapper.kill("SIGTERM");

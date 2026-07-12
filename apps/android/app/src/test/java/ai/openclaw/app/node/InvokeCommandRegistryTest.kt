@@ -38,7 +38,6 @@ class InvokeCommandRegistryTest {
       OpenClawCapability.Location.rawValue,
       OpenClawCapability.Sms.rawValue,
       OpenClawCapability.CallLog.rawValue,
-      OpenClawCapability.VoiceWake.rawValue,
       OpenClawCapability.Motion.rawValue,
       OpenClawCapability.Photos.rawValue,
     )
@@ -98,7 +97,6 @@ class InvokeCommandRegistryTest {
           smsSearchPossible = true,
           callLogAvailable = true,
           photosAvailable = true,
-          voiceWakeEnabled = true,
           motionActivityAvailable = true,
           motionPedometerAvailable = true,
         ),
@@ -157,7 +155,6 @@ class InvokeCommandRegistryTest {
           smsSearchPossible = false,
           callLogAvailable = false,
           photosAvailable = false,
-          voiceWakeEnabled = false,
           motionActivityAvailable = true,
           motionPedometerAvailable = false,
           installedAppsSharingEnabled = false,
@@ -237,23 +234,26 @@ class InvokeCommandRegistryTest {
   }
 
   @Test
-  fun advertisedCapabilities_includesVoiceWakeWithoutAdvertisingCommands() {
-    val capabilities = InvokeCommandRegistry.advertisedCapabilities(defaultFlags(voiceWakeEnabled = true))
-    val commands = InvokeCommandRegistry.advertisedCommands(defaultFlags(voiceWakeEnabled = true))
-
-    assertTrue(capabilities.contains(OpenClawCapability.VoiceWake.rawValue))
-    assertFalse(commands.any { it.contains("voice", ignoreCase = true) })
-  }
-
-  @Test
   fun find_returnsForegroundMetadataForCameraCommands() {
     val list = InvokeCommandRegistry.find(OpenClawCameraCommand.List.rawValue)
     val location = InvokeCommandRegistry.find(OpenClawLocationCommand.Get.rawValue)
+    val pttStart = InvokeCommandRegistry.find(OpenClawTalkCommand.PttStart.rawValue)
+    val pttStop = InvokeCommandRegistry.find(OpenClawTalkCommand.PttStop.rawValue)
+    val pttCancel = InvokeCommandRegistry.find(OpenClawTalkCommand.PttCancel.rawValue)
+    val pttOnce = InvokeCommandRegistry.find(OpenClawTalkCommand.PttOnce.rawValue)
 
     assertNotNull(list)
     assertEquals(true, list?.requiresForeground)
     assertNotNull(location)
     assertEquals(false, location?.requiresForeground)
+    assertNotNull(pttStart)
+    assertEquals(false, pttStart?.requiresForeground)
+    assertNotNull(pttStop)
+    assertEquals(false, pttStop?.requiresForeground)
+    assertNotNull(pttCancel)
+    assertEquals(false, pttCancel?.requiresForeground)
+    assertNotNull(pttOnce)
+    assertEquals(true, pttOnce?.requiresForeground)
   }
 
   @Test
@@ -269,7 +269,6 @@ class InvokeCommandRegistryTest {
     smsSearchPossible: Boolean = false,
     callLogAvailable: Boolean = false,
     photosAvailable: Boolean = false,
-    voiceWakeEnabled: Boolean = false,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
     installedAppsSharingEnabled: Boolean = false,
@@ -283,7 +282,6 @@ class InvokeCommandRegistryTest {
       smsSearchPossible = smsSearchPossible,
       callLogAvailable = callLogAvailable,
       photosAvailable = photosAvailable,
-      voiceWakeEnabled = voiceWakeEnabled,
       motionActivityAvailable = motionActivityAvailable,
       motionPedometerAvailable = motionPedometerAvailable,
       installedAppsSharingEnabled = installedAppsSharingEnabled,

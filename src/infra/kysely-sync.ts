@@ -32,7 +32,7 @@ export function getNodeSqliteKysely<Database>(db: DatabaseSync): Kysely<Database
 }
 
 /** Execute a compiled Kysely query synchronously against node:sqlite. */
-export function executeCompiledSqliteQuerySync<Row>(
+function executeCompiledSqliteQuerySync<Row>(
   db: DatabaseSync,
   compiledQuery: CompiledQuery<Row>,
 ): QueryResult<Row> {
@@ -63,6 +63,20 @@ export function executeSqliteQuerySync<Row>(
   query: CompilableQuery<Row>,
 ): QueryResult<Row> {
   return executeCompiledSqliteQuerySync<Row>(db, query.compile());
+}
+
+/** Compile and lazily iterate a Kysely query synchronously against node:sqlite. */
+export function* iterateSqliteQuerySync<Row>(
+  db: DatabaseSync,
+  query: CompilableQuery<Row>,
+): IterableIterator<Row> {
+  const compiledQuery = query.compile();
+  const statement = db.prepare(compiledQuery.sql);
+  if (statement.columns().length === 0) {
+    return;
+  }
+  const parameters = compiledQuery.parameters as SQLInputValue[];
+  yield* statement.iterate(...parameters) as Iterable<Row>;
 }
 
 /** Execute a Kysely query synchronously and return its first row. */

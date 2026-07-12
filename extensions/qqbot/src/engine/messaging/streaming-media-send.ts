@@ -5,8 +5,10 @@
  * 拆分、路径编码修复，以及统一的发送队列执行器。
  */
 
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { GatewayAccount } from "../types.js";
 import { normalizePath } from "../utils/platform.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendPhoto,
   sendVoice,
@@ -40,7 +42,7 @@ function createMediaTagRegex(): RegExp {
 }
 
 /** 媒体发送上下文（统一的，供流式和普通模式共用） */
-export interface MediaSendContext {
+export interface MediaSendContext extends OutboundMediaAccessContext {
   /** 媒体目标上下文（用于 sendPhoto/sendVoice 等） */
   mediaTarget: MediaTargetContext;
   /** qualifiedTarget（格式 "qqbot:c2c:xxx" 或 "qqbot:group:xxx"，用于 sendMediaAuto） */
@@ -101,7 +103,7 @@ function fixPathEncoding(
         if (code <= 0xff) {
           bytes.push(code);
         } else {
-          const charBytes = Buffer.from(decoded[i], "utf8");
+          const charBytes = Buffer.from(decoded.charAt(i), "utf8");
           bytes.push(...charBytes);
         }
       }
@@ -139,7 +141,11 @@ function isInsideCodeBlock(text: string, position: number): boolean {
   let openFence: { pos: number; ticks: number } | null = null;
 
   while ((fenceMatch = fenceRegex.exec(text)) !== null) {
-    const ticks = fenceMatch[1].length;
+    const ticksText = fenceMatch[1];
+    if (ticksText === undefined) {
+      continue;
+    }
+    const ticks = ticksText.length;
     if (!openFence) {
       openFence = { pos: fenceMatch.index, ticks };
     } else if (ticks >= openFence.ticks) {
@@ -204,7 +210,11 @@ export function findFirstClosedMediaTag(
     }
 
     const textBefore = text.slice(0, match.index);
-    const tagName = match[1].toLowerCase();
+    const rawTagName = match[1];
+    if (rawTagName === undefined) {
+      continue;
+    }
+    const tagName = rawTagName.toLowerCase();
     let mediaPath = match[2]?.trim() ?? "";
 
     mediaPath = normalizePath(mediaPath);
@@ -249,7 +259,16 @@ export async function executeSendQueue(
     skipInterTagText?: boolean;
   } = {},
 ): Promise<void> {
-  const { mediaTarget, qualifiedTarget, account, replyToId, log } = ctx;
+  const {
+    mediaTarget,
+    qualifiedTarget,
+    account,
+    replyToId,
+    log,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+  } = ctx;
   const prefix = mediaTarget.logPrefix ?? `[qqbot:${account.accountId}]`;
 
   /** 媒体发送失败时的兜底：通过 onSendText 发送错误文本给用户 */
@@ -285,7 +304,7 @@ export async function executeSendQueue(
       }
 
       log?.info(
-        `${prefix} executeSendQueue: sending ${item.type}: ${item.content.slice(0, 80)}...`,
+        `${prefix} executeSendQueue: sending ${item.type}: ${truncateUtf16Safe(item.content, 80)}...`,
       );
 
       if (item.type === "image") {
@@ -338,6 +357,9 @@ export async function executeSendQueue(
           accountId: account.accountId,
           replyToId,
           account,
+          ...(mediaAccess ? { mediaAccess } : {}),
+          ...(mediaLocalRoots ? { mediaLocalRoots } : {}),
+          ...(mediaReadFile ? { mediaReadFile } : {}),
         });
         if (result.error) {
           log?.error(`${prefix} sendMedia(auto) error: ${result.error}`);
@@ -432,7 +454,7 @@ export function stripIncompleteMediaTag(text: string): [safeText: string, hasInc
   let fallbackPos = -1; // 最右边触发回溯的 < 的位置
 
   for (let i = lastLine.length - 1; i >= 0; i--) {
-    const ch = lastLine[i];
+    const ch = lastLine.charAt(i);
     if (ch !== "<" && ch !== "\uFF1C") {
       continue;
     }
@@ -447,7 +469,11 @@ export function stripIncompleteMediaTag(text: string): [safeText: string, hasInc
       if (!nameMatch || isClosing) {
         continue;
       }
-      const cand = nameMatch[1].toLowerCase();
+      const candidateName = nameMatch[1];
+      if (candidateName === undefined) {
+        continue;
+      }
+      const cand = candidateName.toLowerCase();
       if (!isMedia(cand)) {
         continue;
       }
@@ -491,6 +517,9 @@ export function stripIncompleteMediaTag(text: string): [safeText: string, hasInc
     }
 
     const tag = nameMatch[1];
+    if (tag === undefined) {
+      continue;
+    }
     const restAfterName = nameStr.slice(tag.length);
     const hasGT = /[>＞]/.test(restAfterName);
 

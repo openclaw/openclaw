@@ -6,7 +6,6 @@
  * to keep the two modes cleanly isolated.
  */
 
-import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
@@ -19,15 +18,17 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import WebSocket from "ws";
 
-export type ContainerRpcOptions = {
+type ContainerRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  maxAttachmentBytes?: number;
 };
 
-export type ContainerWebSocketMessage = {
+type ContainerWebSocketMessage = {
   envelope?: {
     syncMessage?: unknown;
     dataMessage?: {
@@ -54,6 +55,13 @@ export type ContainerWebSocketMessage = {
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
+// Receive envelopes contain JSON metadata; attachment bytes are fetched separately.
+// Keep the ws pre-buffer limit narrow so a container cannot force 100 MiB frames.
+const SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES = 1024 * 1024;
+// Outbound file paths are converted to base64 before posting to the container. Cap
+// reads to the same default the native signal send path uses (8 MiB) so a path to a
+// huge or symlinked file cannot OOM the gateway before encoding.
+const DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
   BOLD: "**",
   ITALIC: "*",
@@ -176,7 +184,7 @@ function containerReceiveCheck(
       resolve(result);
     };
     try {
-      ws = new WebSocket(wsUrl);
+      ws = new WebSocket(wsUrl, { maxPayload: SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES });
     } catch (err) {
       settle({
         ok: false,
@@ -259,7 +267,11 @@ export async function containerRestRequest<T = unknown>(
     return undefined as T;
   }
 
-  return JSON.parse(text) as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Signal REST returned malformed JSON");
+  }
 }
 
 /**
@@ -324,7 +336,7 @@ export async function streamContainerEvents(params: {
     };
 
     try {
-      ws = new WebSocket(wsUrl);
+      ws = new WebSocket(wsUrl, { maxPayload: SIGNAL_CONTAINER_WS_MAX_PAYLOAD_BYTES });
     } catch (err) {
       logError(
         `[signal-ws] failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`,
@@ -385,10 +397,20 @@ export async function streamContainerEvents(params: {
  * Convert local file paths to base64 data URIs for the container REST API.
  * The bbernhard container /v2/send only accepts `base64_attachments` (not file paths).
  */
-async function filesToBase64DataUris(filePaths: string[]): Promise<string[]> {
+async function filesToBase64DataUris(
+  filePaths: string[],
+  maxAttachmentBytes: number,
+): Promise<string[]> {
   const results: string[] = [];
+  let remainingBytes = maxAttachmentBytes;
   for (const filePath of filePaths) {
-    const buffer = await fs.readFile(filePath);
+    // One send owns one raw-byte budget. A per-file cap would let attachment
+    // count multiply the memory consumed before the container request starts.
+    const { buffer } = await readRegularFile({
+      filePath,
+      maxBytes: remainingBytes,
+    });
+    remainingBytes -= buffer.byteLength;
     const mime = (await detectMime({ buffer, filePath })) ?? "application/octet-stream";
     const filename = nodePath.basename(filePath);
     const b64 = buffer.toString("base64");
@@ -428,8 +450,7 @@ function renderContainerStyledText(
     ...new Set([0, text.length, ...spans.flatMap((span) => [span.start, span.end])]),
   ].toSorted((a, b) => a - b);
   let rendered = "";
-  for (let i = 0; i < positions.length; i += 1) {
-    const pos = positions[i];
+  for (const [index, pos] of positions.entries()) {
     for (const span of spans
       .filter((candidate) => candidate.end === pos)
       .toSorted((a, b) => b.start - a.start)) {
@@ -440,7 +461,7 @@ function renderContainerStyledText(
       .toSorted((a, b) => b.end - a.end)) {
       rendered += span.marker;
     }
-    const next = positions[i + 1];
+    const next = positions[index + 1];
     if (next !== undefined && next > pos) {
       rendered += escapeContainerStyledText(text.slice(pos, next));
     }
@@ -459,6 +480,14 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
   return timestamp;
 }
 
+function normalizeContainerQuoteTimestamp(raw: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(raw) ?? undefined;
+}
+
+function normalizeContainerQuoteText(raw: unknown): string | undefined {
+  return typeof raw === "string" ? raw : undefined;
+}
+
 /**
  * Send message via bbernhard container REST API.
  */
@@ -469,6 +498,10 @@ export async function containerSendMessage(params: {
   message: string;
   textStyles?: Array<{ start: number; length: number; style: string }>;
   attachments?: string[];
+  maxAttachmentBytes?: number;
+  quoteTimestamp?: number;
+  quoteAuthor?: string;
+  quoteMessage?: string;
   timeoutMs?: number;
 }): Promise<{ timestamp?: number }> {
   const payload: Record<string, unknown> = {
@@ -484,7 +517,22 @@ export async function containerSendMessage(params: {
 
   if (params.attachments && params.attachments.length > 0) {
     // Container API only accepts base64-encoded attachments, not file paths.
-    payload.base64_attachments = await filesToBase64DataUris(params.attachments);
+    const configuredMaxBytes = params.maxAttachmentBytes;
+    const maxAttachmentBytes =
+      typeof configuredMaxBytes === "number" &&
+      Number.isFinite(configuredMaxBytes) &&
+      configuredMaxBytes >= 0
+        ? Math.floor(configuredMaxBytes)
+        : DEFAULT_SIGNAL_CONTAINER_MAX_ATTACHMENT_BYTES;
+    payload.base64_attachments = await filesToBase64DataUris(
+      params.attachments,
+      maxAttachmentBytes,
+    );
+  }
+  if (params.quoteTimestamp !== undefined && params.quoteAuthor) {
+    payload.quote_timestamp = params.quoteTimestamp;
+    payload.quote_author = params.quoteAuthor;
+    payload.quote_message = params.quoteMessage ?? "";
   }
 
   const result = await containerRestRequest<{ timestamp?: unknown }>(
@@ -656,11 +704,18 @@ export async function containerRpcRequest<T = unknown>(
               : [];
 
       const textStylesRaw = p["text-style"] as string[] | undefined;
-      const textStyles = textStylesRaw?.map((s) => {
+      const textStyles = textStylesRaw?.flatMap((s) => {
         const [start, length, style] = s.split(":");
-        return { start: Number(start), length: Number(length), style };
+        if (start === undefined || length === undefined || style === undefined) {
+          return [];
+        }
+        return [{ start: Number(start), length: Number(length), style }];
       });
 
+      const quoteTimestamp = normalizeContainerQuoteTimestamp(
+        p.quoteTimestamp ?? p["quote-timestamp"],
+      );
+      const quoteAuthor = normalizeContainerQuoteText(p.quoteAuthor ?? p["quote-author"]);
       const result = await containerSendMessage({
         baseUrl: opts.baseUrl,
         account: (p.account as string) ?? "",
@@ -668,6 +723,10 @@ export async function containerRpcRequest<T = unknown>(
         message: (p.message as string) ?? "",
         textStyles,
         attachments: p.attachments as string[] | undefined,
+        maxAttachmentBytes: opts.maxAttachmentBytes,
+        quoteTimestamp,
+        quoteAuthor: quoteAuthor ? stripUuidPrefix(quoteAuthor) : undefined,
+        quoteMessage: normalizeContainerQuoteText(p.quoteMessage ?? p["quote-message"]),
         timeoutMs: opts.timeoutMs,
       });
       return result as T;

@@ -53,11 +53,13 @@ function mergeMigrationProviders(
 export function ensureStandaloneMigrationProviderRegistryLoaded(
   params: {
     cfg?: OpenClawConfig;
+    providerId?: string;
   } = {},
 ): void {
   const resolution = resolveManifestContractRuntimePluginResolution({
     cfg: params.cfg,
     contract: "migrationProviders",
+    ...(params.providerId ? { value: params.providerId } : {}),
   });
   if (resolution.pluginIds.length === 0) {
     return;

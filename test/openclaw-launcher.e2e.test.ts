@@ -163,75 +163,67 @@ describe("openclaw launcher", () => {
     cleanupTempDirs(fixtureRoots);
   });
 
-  it("keeps the bootstrap Node floor aligned with package and runtime guards", async () => {
-    const [launcher, runtimeGuard, packageJsonRaw] = await Promise.all([
-      fs.readFile(path.resolve(process.cwd(), "openclaw.mjs"), "utf8"),
-      fs.readFile(path.resolve(process.cwd(), "src/infra/runtime-guard.ts"), "utf8"),
-      fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"),
-    ]);
+  it("keeps the bootstrap Node range aligned with the package engine", async () => {
+    const packageJsonRaw = await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8");
     const packageJson = JSON.parse(packageJsonRaw) as { engines?: { node?: string } };
-    const launcherMatch = launcher.match(
-      /const MIN_NODE_MAJOR = (\d+);\s+const MIN_NODE_MINOR = (\d+);/u,
-    );
-    const runtimeMatch = runtimeGuard.match(
-      /const MIN_NODE: Semver = \{ major: (\d+), minor: (\d+), patch: (\d+) \};/u,
-    );
-    const engineMatch = packageJson.engines?.node?.match(/^>=(\d+)\.(\d+)\.(\d+)$/u);
-
-    if (!launcherMatch) {
-      throw new Error("openclaw.mjs MIN_NODE_* constants were not found");
-    }
-    if (!runtimeMatch) {
-      throw new Error("src/infra/runtime-guard.ts MIN_NODE constant was not found");
-    }
-    if (!engineMatch) {
-      throw new Error("package.json engines.node must use >=<major>.<minor>.<patch>");
-    }
-    const [engineMajor, engineMinor, enginePatch] = engineMatch.slice(1, 4).map(Number);
-    const launcherMinimumLabel = `${engineMajor}.${engineMinor}`;
-
-    expect(
-      [Number(launcherMatch[1]), Number(launcherMatch[2]), 0],
-      "openclaw.mjs MIN_NODE_* must match package.json engines.node",
-    ).toEqual([engineMajor, engineMinor, enginePatch]);
-    expect(
-      runtimeMatch.slice(1, 4).map(Number),
-      "src/infra/runtime-guard.ts MIN_NODE must match package.json engines.node",
-    ).toEqual([engineMajor, engineMinor, enginePatch]);
+    expect(packageJson.engines?.node).toBe(">=22.19.0 <23 || >=23.11.0");
 
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
-    const mockedNodeVersion =
-      engineMinor > 0 ? `${engineMajor}.${engineMinor - 1}.0` : `${engineMajor - 1}.999.0`;
-    const mockNodeVersionPath = path.join(fixtureRoot, "mock-node-version.mjs");
     await fs.writeFile(
-      mockNodeVersionPath,
-      [
-        "Object.defineProperty(process.versions, 'node', {",
-        `  value: ${JSON.stringify(mockedNodeVersion)},`,
-        "});",
-      ].join("\n"),
+      path.join(fixtureRoot, "dist", "entry.js"),
+      'process.stdout.write("runtime-loaded\\n");\n',
       "utf8",
     );
 
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--import",
-        pathToFileURL(mockNodeVersionPath).href,
-        path.join(fixtureRoot, "openclaw.mjs"),
-        "--help",
-      ],
-      {
-        cwd: fixtureRoot,
-        env: launcherEnv(),
-        encoding: "utf8",
-      },
-    );
+    const cases = [
+      { version: "22.18.9", supported: false },
+      { version: "22.19.0", supported: true },
+      { version: "23.7.0", supported: false },
+      { version: "23.10.9", supported: false },
+      { version: "23.11.0", supported: true },
+      { version: "24.0.0", supported: true },
+    ] as const;
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(
-      `openclaw: Node.js v${launcherMinimumLabel}+ is required (current: v${mockedNodeVersion}).`,
-    );
+    for (const testCase of cases) {
+      const mockNodeVersionPath = path.join(
+        fixtureRoot,
+        `mock-node-version-${testCase.version}.mjs`,
+      );
+      await fs.writeFile(
+        mockNodeVersionPath,
+        [
+          "Object.defineProperty(process.versions, 'node', {",
+          `  value: ${JSON.stringify(testCase.version)},`,
+          "});",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          pathToFileURL(mockNodeVersionPath).href,
+          path.join(fixtureRoot, "openclaw.mjs"),
+          "--help",
+        ],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv(),
+          encoding: "utf8",
+        },
+      );
+
+      if (testCase.supported) {
+        expect(result.status, testCase.version).toBe(0);
+        expect(result.stdout, testCase.version).toContain("runtime-loaded");
+      } else {
+        expect(result.status, testCase.version).toBe(1);
+        expect(result.stderr, testCase.version).toContain(
+          `openclaw: Node.js >=22.19.0 <23 or >=23.11.0 is required (current: v${testCase.version}).`,
+        );
+      }
+    }
   });
 
   it("surfaces transitive entry import failures instead of masking them as missing dist", async () => {

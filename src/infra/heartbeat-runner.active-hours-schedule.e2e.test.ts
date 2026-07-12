@@ -112,6 +112,46 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     runner.stop();
   });
 
+  it("runs a bounded real scheduler with active-hours enabled", async () => {
+    const startedAt = Date.now();
+    let resolveRun: (() => void) | undefined;
+    const ran = new Promise<void>((resolve) => {
+      resolveRun = resolve;
+    });
+    const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
+      resolveRun?.();
+      return { status: "ran", durationMs: 1 };
+    });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig({
+        every: "50ms",
+        activeHours: { start: "00:00", end: "24:00", timezone: "UTC" },
+      }),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      await Promise.race([
+        ran,
+        new Promise<never>((_, reject) => {
+          timeout = setTimeout(
+            () => reject(new Error("real heartbeat scheduler did not fire")),
+            2_000,
+          );
+        }),
+      ]);
+      expect(runSpy).toHaveBeenCalled();
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      runner.stop();
+    }
+  });
+
   it("seeks forward correctly with a non-UTC timezone (e.g. America/New_York)", async () => {
     // 09:00–17:00 ET (EDT = UTC-4 in June) → 13:00–21:00 UTC.
     // Start at 21:30 UTC (17:30 ET = outside window).
@@ -284,6 +324,35 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     expect(firstCall.getUTCHours()).toBe(16);
     expect(firstCall.getUTCDate()).toBe(15);
 
+    runner.stop();
+  });
+
+  it("reaches a narrow active window with a sub-minute interval", async () => {
+    const startMs = Date.parse("2026-06-15T17:00:00.000Z");
+    useFakeHeartbeatTime(startMs);
+
+    const callTimes: number[] = [];
+    const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
+      callTimes.push(Date.now());
+      return { status: "ran", durationMs: 1 };
+    });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig({
+        every: "30s",
+        activeHours: { start: "09:00", end: "09:01", timezone: "UTC" },
+      }),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    await vi.advanceTimersByTimeAsync(16 * 60 * 60_000 + 60_000);
+
+    expect(callTimes.length).toBeGreaterThan(0);
+    for (const callTime of callTimes) {
+      const call = new Date(callTime);
+      expect(call.getUTCHours()).toBe(9);
+      expect(call.getUTCMinutes()).toBe(0);
+    }
     runner.stop();
   });
 });

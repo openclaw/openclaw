@@ -12,6 +12,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 import {
+  callZaloApi,
   deleteWebhook,
   getMe,
   getWebhookInfo,
@@ -68,6 +69,7 @@ async function expectPostJsonRequest(run: (token: string, fetcher: ZaloFetch) =>
 
 describe("Zalo API request methods", () => {
   beforeEach(() => {
+    vi.unstubAllEnvs();
     resolvePinnedHostnameWithPolicyMock.mockReset();
     resolvePinnedHostnameWithPolicyMock.mockResolvedValue({
       hostname: "example.com",
@@ -75,6 +77,97 @@ describe("Zalo API request methods", () => {
       lookup: vi.fn(),
     });
   });
+
+  it("accepts the native Zalo getMe identity fields", async () => {
+    const fetcher: ZaloFetch = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        result: {
+          account_name: "bot.example",
+          account_type: "BASIC",
+          can_join_groups: false,
+          id: "1459232241454765289",
+        },
+      }),
+    );
+
+    await expect(getMe("test-token", undefined, fetcher)).resolves.toMatchObject({
+      result: {
+        account_name: "bot.example",
+        account_type: "BASIC",
+        can_join_groups: false,
+      },
+    });
+  });
+
+  it("uses the production API root by default", async () => {
+    const fetcher = createOkFetcher();
+
+    await callZaloApi("getMe", "test-token", undefined, { fetch: fetcher });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://bot-api.zaloplatforms.com/bottest-token/getMe",
+      expect.any(Object),
+    );
+  });
+
+  it("uses ZALO_API_URL for provider-compatible alternate endpoints", async () => {
+    vi.stubEnv("ZALO_API_URL", " http://127.0.0.1:49152/zalo/ ");
+    const fetcher = createOkFetcher();
+
+    await callZaloApi("getMe", "test-token", undefined, { fetch: fetcher });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://127.0.0.1:49152/zalo/bottest-token/getMe",
+      expect.any(Object),
+    );
+  });
+
+  it("prefers an explicit API URL over ZALO_API_URL", async () => {
+    vi.stubEnv("ZALO_API_URL", "http://127.0.0.1:49152/env");
+    const fetcher = createOkFetcher();
+
+    await callZaloApi("getMe", "test-token", undefined, {
+      apiUrl: "http://127.0.0.1:49153/explicit/",
+      fetch: fetcher,
+    });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      "http://127.0.0.1:49153/explicit/bottest-token/getMe",
+      expect.any(Object),
+    );
+  });
+
+  it("rejects an explicitly empty API URL instead of falling back to ZALO_API_URL", async () => {
+    vi.stubEnv("ZALO_API_URL", "http://127.0.0.1:49152/env");
+
+    await expect(
+      callZaloApi("getMe", "test-token", undefined, {
+        apiUrl: "   ",
+        fetch: createOkFetcher(),
+      }),
+    ).rejects.toThrow("ZALO_API_URL must not be empty.");
+  });
+
+  it("rejects invalid alternate API URLs", async () => {
+    vi.stubEnv("ZALO_API_URL", "file:///tmp/zalo");
+
+    await expect(
+      callZaloApi("getMe", "test-token", undefined, { fetch: createOkFetcher() }),
+    ).rejects.toThrow("ZALO_API_URL must use http:// or https://.");
+  });
+
+  it.each(["https://proxy.example/zalo?tenant=1", "https://proxy.example/zalo#provider"])(
+    "rejects an API root with URL suffix components: %s",
+    async (apiUrl) => {
+      await expect(
+        callZaloApi("getMe", "test-token", undefined, {
+          apiUrl,
+          fetch: createOkFetcher(),
+        }),
+      ).rejects.toThrow("ZALO_API_URL must not include a query string or fragment.");
+    },
+  );
 
   it("uses POST for getWebhookInfo", async () => {
     await expectPostJsonRequest(getWebhookInfo);
