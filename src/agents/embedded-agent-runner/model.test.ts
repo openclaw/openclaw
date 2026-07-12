@@ -263,6 +263,25 @@ function resolveModelForTest(
   });
 }
 
+function mockDiscoveredGroqModel() {
+  mockDiscoveredModel(discoverModels, {
+    provider: "groq",
+    modelId: "llama-3.3-70b-versatile",
+    templateModel: {
+      provider: "groq",
+      id: "llama-3.3-70b-versatile",
+      name: "Llama 3.3 70B",
+      api: "openai-completions",
+      baseUrl: "https://api.groq.com/openai/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131_072,
+      maxTokens: 32_768,
+    },
+  });
+}
+
 function resolveModelAsyncForTest(
   provider: string,
   modelId: string,
@@ -1396,12 +1415,66 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
     expect(model.contextWindow).toBe(1_048_576);
     expect(model.maxTokens).toBe(32_000);
+    expectRecordFields(model, { maxTokensSource: "discovered" });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "xiaomi-token-plan",
       modelId: "mimo-v2.5-pro",
       cfg,
       workspaceDir: expect.any(String),
       includeRuntimeDiscovery: true,
+    });
+  });
+
+  it("marks a provider-level maxTokens override as configured", () => {
+    mockDiscoveredGroqModel();
+    const cfg = {
+      models: {
+        providers: {
+          groq: {
+            baseUrl: "https://api.groq.com/openai/v1",
+            api: "openai-completions",
+            maxTokens: 2_048,
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("groq", "llama-3.3-70b-versatile", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      maxTokens: 2_048,
+      maxTokensSource: "configured",
+    });
+  });
+
+  it("marks a configured-model top-level maxTokens override as configured", () => {
+    mockDiscoveredGroqModel();
+    const cfg = {
+      models: {
+        providers: {
+          groq: {
+            baseUrl: "https://api.groq.com/openai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "llama-3.3-70b-versatile",
+                name: "Llama 3.3 70B",
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("groq", "llama-3.3-70b-versatile", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
+
+    expectRecordFields(model, {
+      maxTokens: 4_096,
+      maxTokensSource: "configured",
     });
   });
 
