@@ -91,6 +91,11 @@ function resolveGatewayPortFallback(): Promise<number> {
     .catch(() => resolveGatewayPort(undefined, process.env));
 }
 
+async function resolveExplicitGatewayConfigPort(): Promise<number | undefined> {
+  const cfg = await readBestEffortConfig().catch(() => undefined);
+  return cfg?.gateway?.port;
+}
+
 async function assertUnmanagedGatewayRestartEnabled(port: number): Promise<void> {
   const cfg = await readBestEffortConfig().catch(() => undefined);
   const tlsEnabled = Boolean(cfg?.gateway?.tls?.enabled);
@@ -274,6 +279,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 /** Start the managed Gateway service, repairing stale service definitions when possible. */
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
   const service = resolveGatewayService();
+  const expectedPort = await resolveExplicitGatewayConfigPort();
   return await runServiceStart({
     serviceNoun: "Gateway",
     service,
@@ -285,12 +291,14 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
     repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
       await repairLoadedGatewayServiceForStart({
         service,
+        port: expectedPort,
         json,
         stdout,
         warn,
         state,
         issues,
       }),
+    expectedPort,
     opts,
   });
 }
@@ -325,9 +333,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
   const restartIntent = resolveGatewayRestartIntentOptions(opts);
-  const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
-    resolveGatewayPortFallback(),
-  );
+  const configuredPort = await resolveExplicitGatewayConfigPort();
+  const restartPort =
+    configuredPort ??
+    (await resolveGatewayLifecyclePort(service).catch(() => resolveGatewayPortFallback()));
   const restartHealthAttempts = postRestartHealthAttempts();
   const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);
@@ -341,6 +350,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       ...(restartIntent ? { restartIntent } : {}),
     },
     checkTokenDrift: true,
+    expectedPort: configuredPort,
+    repairLoadedService: async ({ json, stdout, warn, state, issues }) =>
+      await repairLoadedGatewayServiceForStart({
+        action: "restart",
+        service,
+        port: configuredPort,
+        json,
+        stdout,
+        warn,
+        state,
+        issues,
+      }),
     onNotLoaded: async () => {
       if (process.platform === "darwin") {
         const recovered = await recoverInstalledLaunchAgent({ result: "restarted" });
