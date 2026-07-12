@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
+  SessionCatalogTranscriptItem,
   SessionsCatalogListResult,
   SessionsCatalogReadResult,
   TaskSuggestion,
@@ -37,6 +38,13 @@ type TestChatPane = HTMLElement & {
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
   catalogSession: SessionCatalogSession | null;
+  catalogItemMessage: (
+    item: SessionCatalogTranscriptItem,
+    index: number,
+  ) => Record<string, unknown> | null;
+  handleTranscriptScroll: (event: Event) => void;
+  historyAutoLoadBlocked: boolean;
+  syncHistoryObserver: () => void;
   loadCatalogSession: (key: CatalogSessionKey, older: boolean) => Promise<void>;
 };
 
@@ -347,6 +355,56 @@ describe("chat pane catalog session lifecycle", () => {
       limit: 50,
     });
     expect(pane.catalogSession).toEqual(selectedSession);
+  });
+
+  it.each([
+    {
+      name: "uses a raw command for an empty tool call",
+      item: { type: "toolCall", raw: { command: "git status --short" } },
+      expected: "Tool call\n\ngit status --short",
+    },
+    {
+      name: "uses aggregated output for an empty tool result",
+      item: { type: "toolResult", raw: { aggregatedOutput: "working tree clean" } },
+      expected: "Tool result\n\nworking tree clean",
+    },
+    {
+      name: "renders an empty reasoning item as its label alone",
+      item: { type: "reasoning" },
+      expected: "Thinking",
+    },
+  ])("$name", ({ item, expected }) => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+
+    const message = pane.catalogItemMessage(item as SessionCatalogTranscriptItem, 0) as {
+      content: Array<{ text: string }>;
+    };
+
+    expect(message.content[0]?.text).toBe(expected);
+    expect(message.content[0]?.text).not.toContain("Unsupported external session item");
+  });
+
+  it("skips an empty unknown catalog item", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+
+    expect(pane.catalogItemMessage({ type: "other" }, 0)).toBeNull();
+  });
+
+  it("re-arms a failed older-page load only after another user scroll", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.handleChatScroll = vi.fn();
+    pane.historyAutoLoadBlocked = true;
+    pane.syncHistoryObserver = vi.fn();
+    const event = new Event("scroll");
+
+    pane.handleTranscriptScroll(event);
+
+    expect(pane.historyAutoLoadBlocked).toBe(false);
+    expect(pane.syncHistoryObserver).toHaveBeenCalledOnce();
+    expect(state.handleChatScroll).toHaveBeenCalledWith(event);
   });
 });
 
