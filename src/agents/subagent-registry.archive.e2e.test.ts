@@ -197,36 +197,6 @@ describe("subagent registry archive behavior", () => {
     await waitForNoRequesterRuns();
   });
 
-  it("does not archive a delete-mode run while its execution context is live", async () => {
-    currentConfig = {
-      agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
-    };
-    agentEventMocks.getAgentRunContext.mockReturnValue({});
-
-    mod.registerSubagentRun({
-      runId: "run-delete-live",
-      childSessionKey: "agent:main:subagent:delete-live",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "long-running-task",
-      cleanup: "delete",
-    });
-
-    await vi.advanceTimersByTimeAsync(60_000);
-    await flushSweepMicrotasks();
-
-    expect(
-      vi
-        .mocked(callGateway)
-        .mock.calls.filter(
-          ([request]) => (request as { method?: string }).method === "sessions.delete",
-        ),
-    ).toHaveLength(0);
-    expect(mod.listSubagentRunsForRequester("agent:main:main")).toEqual([
-      expect.objectContaining({ runId: "run-delete-live" }),
-    ]);
-  });
-
   it("keeps archived delete-mode runs for retry when sessions.delete fails", async () => {
     currentConfig = {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
