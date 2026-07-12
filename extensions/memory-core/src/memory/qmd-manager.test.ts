@@ -204,7 +204,10 @@ import {
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  formatSqliteSessionFileMarker,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -240,13 +243,23 @@ async function seedQmdSessionTranscript(params: {
   const timestamp =
     typeof params.timestamp === "number"
       ? params.timestamp
-      : Date.parse(params.timestamp ?? "2026-04-07T15:25:04.113Z");
+      : params.timestamp
+        ? Date.parse(params.timestamp)
+        : Date.now();
   await fs.mkdir(sessionsDir, { recursive: true });
   await upsertSessionEntry({
     agentId: params.agentId,
     sessionKey,
     storePath,
-    entry: { sessionId: params.sessionId, updatedAt: timestamp },
+    entry: {
+      sessionId: params.sessionId,
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        storePath,
+      }),
+      updatedAt: timestamp,
+    },
   });
   await appendSessionTranscriptMessageByIdentity({
     agentId: params.agentId,
