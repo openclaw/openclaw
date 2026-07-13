@@ -295,6 +295,14 @@ private struct SkillRow: View {
         self.skill.missing.bins
     }
 
+    private var missingAnyBins: [String] {
+        self.skill.missing.anyBins
+    }
+
+    private var missingOS: [String] {
+        self.skill.missing.os
+    }
+
     private var missingEnv: [String] {
         self.skill.missing.env
     }
@@ -465,6 +473,11 @@ private struct SkillRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if !self.missingAnyBins.isEmpty {
+                Text("Needs any binary: \(self.missingAnyBins.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             if !self.missingEnv.isEmpty {
                 Text("Missing env: \(self.missingEnv.joined(separator: ", "))")
                     .font(.caption)
@@ -472,6 +485,11 @@ private struct SkillRow: View {
             }
             if !self.missingConfig.isEmpty {
                 Text("Requires config: \(self.missingConfig.joined(separator: ", "))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !self.missingOS.isEmpty {
+                Text("Requires OS: \(self.missingOS.joined(separator: ", "))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
