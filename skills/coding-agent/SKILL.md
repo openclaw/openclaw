@@ -48,18 +48,18 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - If user asked for a specific agent, use that agent.
 - If worker fails/hangs, respawn or ask; do not silently hand-code instead.
 - Never checkout branches or run background coding agents in `~/Projects/openclaw`; use an isolated checkout.
-- Treat contributor-controlled refs as untrusted code. Never launch a permission-bypassed worker in them; use the repository's approved untrusted-PR sandbox/review workflow or stop.
+- Classify the source ref as trusted or untrusted before any checkout or worktree creation. Never materialize a contributor-controlled ref outside the repository's approved untrusted-PR sandbox/review workflow, and never launch a permission-bypassed worker in it.
 - For tasks that modify a Git-backed project, prepare and verify the Git worktree before launch, then include the exact Git preparation block below in the worker prompt.
 
 ## Mandatory Git preparation
 
 Before launching Codex, Claude Code, or OpenCode for work that modifies a Git-backed project:
 
-1. Establish the intended target repository, then select its canonical remote. Prefer `upstream` when it exists and matches that target; otherwise verify `origin`. Resolve the selected remote's default branch dynamically, and stop if the target or remote cannot be proven.
-2. For new work, run `git fetch --prune <canonical>` immediately before creating a new isolated worktree and branch from `<canonical>/<default>`.
-3. For new work, verify the worktree's initial `HEAD` equals the fetched canonical base SHA. Record the canonical remote, default branch, base SHA, worktree path, and branch.
-4. For an existing PR or shared branch, fetch canonical and the contributor branch immediately before creating an isolated worktree from the fetched contributor branch. Record that source ref and starting SHA, report its divergence from the refreshed canonical default, and do not automatically rebase, merge, reset, force-push, or otherwise rewrite contributor history.
-5. Classify the prepared ref as trusted or untrusted. An isolated worktree is not a security sandbox; contributor-controlled refs require the repository's approved untrusted-PR sandbox/review workflow and must not use a permission-bypassed worker.
+1. Establish the intended target repository, then select its canonical remote. Prefer `upstream` when it exists and matches that target; otherwise verify `origin`. Resolve the selected remote's default branch dynamically. Determine the target base from an explicit task branch or authoritative existing-PR metadata; for other shared branches, prove the configured/tracked base or ask. Use the canonical default only for new work with no other specified base. Stop if the repository, remote, or target base cannot be proven.
+2. Classify the source ref as trusted or untrusted before any checkout or worktree creation. For contributor-controlled refs, use the repository's approved untrusted-PR sandbox/review workflow, which must own ref materialization inside the sandbox, or stop. The remaining steps and launch forms are for trusted refs only.
+3. For trusted new work, run `git fetch --prune <canonical>` immediately before creating a new isolated worktree and branch from `<canonical>/<targetBaseBranch>`.
+4. For trusted new work, verify the worktree's initial `HEAD` equals the fetched target-base SHA. Record the canonical remote, canonical default branch, target base branch, base SHA, worktree path, and branch.
+5. For a trusted existing PR or shared branch, fetch the canonical target base and source branch immediately before creating an isolated worktree from the fetched source branch. Record that source ref and starting SHA, report its divergence from the refreshed target base, and do not automatically rebase, merge, reset, force-push, or otherwise rewrite shared history.
 6. Launch the worker in the isolated worktree, never the primary checkout. For OpenClaw, the primary checkout under `~/Projects/openclaw` remains forbidden.
 
 For tasks that modify a Git-backed project, append this block to the worker prompt with real values:
@@ -68,20 +68,21 @@ For tasks that modify a Git-backed project, append this block to the worker prom
 Git preparation (mandatory before edits):
 - canonical remote: <canonicalRemote>
 - canonical default branch: <canonicalDefaultBranch>
-- fetched canonical base SHA: <canonicalBaseSha>
+- target base branch: <targetBaseBranch>
+- fetched target base SHA: <targetBaseSha>
 - preparation mode: <new work | existing PR/shared branch>
-- checkout trust: <trusted | untrusted contributor ref>
-- prepared source ref: <canonicalRemote/canonicalDefaultBranch | fetched contributor ref>
+- checkout trust: trusted
+- prepared source ref: <canonicalRemote/targetBaseBranch | fetched trusted source ref>
 - prepared start SHA: <preparedStartSha>
 - isolated worktree: <worktreePath>
 - working branch: <branch>
-- preparation receipt: <new work: `git fetch --prune <canonicalRemote>` ran immediately before creation from `<canonicalRemote>/<canonicalDefaultBranch>` | existing branch: canonical and the contributor ref were fetched immediately before the worktree was created from `<preparedSourceRef>` at `<preparedStartSha>`>
+- preparation receipt: <new work: `git fetch --prune <canonicalRemote>` ran immediately before creation from `<canonicalRemote>/<targetBaseBranch>` | existing branch: the canonical target base and trusted source ref were fetched immediately before the worktree was created from `<preparedSourceRef>` at `<preparedStartSha>`>
 
-Before editing, verify the current directory is the isolated worktree and its initial HEAD equals <preparedStartSha>. For new work, that SHA must equal <canonicalBaseSha>. Never edit the primary checkout. For existing PR/shared-branch work, report divergence and do not rebase, merge, reset, force-push, or otherwise rewrite contributor history unless explicitly asked.
-Immediately before the final push or PR for newly authored work, run `git fetch --prune <canonicalRemote>` and `git merge-base --is-ancestor <canonicalRemote>/<canonicalDefaultBranch> HEAD`. If the ancestry check fails, update the new branch onto the latest canonical base, rerun the relevant proof, and only then push without force. For existing PR/shared-branch work, report a failed ancestry check and follow the repository workflow without rewriting the branch.
+Before editing, verify the current directory is the isolated worktree and its initial HEAD equals <preparedStartSha>. For new work, that SHA must equal <targetBaseSha>. Never edit the primary checkout. For existing PR/shared-branch work, report divergence and do not rebase, merge, reset, force-push, or otherwise rewrite shared history unless explicitly asked.
+Immediately before the final push or PR for newly authored work, run `git fetch --prune <canonicalRemote>` and `git merge-base --is-ancestor <canonicalRemote>/<targetBaseBranch> HEAD`. If the ancestry check fails, update the new branch onto the latest target base, rerun the relevant proof, and only then push without force. For existing PR/shared-branch work, report a failed ancestry check and follow the repository workflow without rewriting the branch.
 ```
 
-The launcher must create and verify the worktree before starting the editing worker; do not delegate worktree creation to that worker. Never start it in `~/Projects/openclaw`. Read-only tasks and non-project scratch work do not require the Git preparation block.
+For trusted refs, the launcher must create and verify the worktree before starting the editing worker; do not delegate worktree creation to that worker. The approved untrusted-PR workflow must instead own checkout and worktree materialization inside its sandbox. Never start a worker in `~/Projects/openclaw`. Read-only tasks and non-project scratch work do not require the Git preparation block.
 
 ## Notification block
 
@@ -140,7 +141,7 @@ bash pty:true background:true workdir:/path/isolated-worktree command:"opencode 
 ## Long issue-to-PR work
 
 1. Create/reuse a GitHub issue as durable spec.
-2. Include issue URL, repo, canonical remote/default/base SHA, isolated worktree, working branch, expected PR, proof, and notification route.
+2. Include issue URL, repo, canonical remote/default branch, target base branch/SHA, isolated worktree, working branch, expected PR, proof, and notification route.
 3. Include the mandatory Git preparation block, then tell the worker to implement, test, run review until no accepted actionable findings, and open the PR.
 4. Return issue URL and `sessionId` immediately.
 5. Monitor with `process`; cancel through Task Registry if mirrored there.
