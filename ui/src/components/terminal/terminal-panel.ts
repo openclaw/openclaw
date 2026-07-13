@@ -10,6 +10,11 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import {
+  isTerminalPanelShortcut,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+  type TerminalPanelToggleDetail,
+} from "../panel-toggle-contract.ts";
 import { TerminalConnection, type TerminalGatewayClient } from "./terminal-connection.ts";
 import { createIsolatedGhosttyTerminal } from "./terminal-runtime.ts";
 import { terminalTheme } from "./terminal-theme.ts";
@@ -22,11 +27,6 @@ const DOCK_BOTTOM_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fi
 const DOCK_RIGHT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3"><rect x="2" y="2.5" width="12" height="11" rx="1.5" /><path d="M10 2.5v11" /></svg>`;
 
 type TerminalDock = DockPanelSide;
-type TerminalToggleDetail = {
-  dock?: TerminalDock;
-  open?: boolean;
-};
-
 type TerminalTabState = {
   id: string;
   sequence: number;
@@ -93,7 +93,6 @@ const panelLayout = createDockPanelLayout({
 // ids and steal each other's live shells. Per-tab storage survives exactly the
 // cases reattach is for (reload, laptop sleep, transient disconnect).
 const SESSIONS_KEY = "openclaw.terminal.sessions.v1";
-const TOGGLE_EVENT = "openclaw:terminal-toggle";
 const TERMINAL_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
 const TERMINAL_INPUT_DECODER = new TextDecoder();
@@ -176,7 +175,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       // Only restore the open state when the surface is actually available.
       this.open = layout.open && this.available;
       window.addEventListener("keydown", this.onGlobalKeyDown);
-      window.addEventListener(TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
       window.addEventListener("resize", this.onViewportResize);
     } else {
       // Fullscreen documents have no toggle/dock chrome; the panel is simply
@@ -191,7 +190,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   override disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("keydown", this.onGlobalKeyDown);
-    window.removeEventListener(TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener("resize", this.onViewportResize);
     // Release the content-area reservation so the shell reflows to full size.
     document.documentElement.style.setProperty("--oc-terminal-reserve-bottom", "0px");
@@ -325,10 +324,10 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
     }
   }
 
-  private handleToggleRequest(event: Event): void {
+  handleToggleRequest(event: Event): void {
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
-        ? (event.detail as TerminalToggleDetail)
+        ? (event.detail as TerminalPanelToggleDetail)
         : null;
     const dock = detail?.dock === "right" || detail?.dock === "bottom" ? detail.dock : null;
     if (dock) {
@@ -355,7 +354,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
 
   private handleGlobalKey(event: KeyboardEvent): void {
     // Ctrl+` toggles the terminal, matching common IDE shells.
-    if (event.ctrlKey && !event.metaKey && !event.altKey && event.code === "Backquote") {
+    if (isTerminalPanelShortcut(event)) {
       event.preventDefault();
       this.toggle();
     }
