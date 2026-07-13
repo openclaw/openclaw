@@ -3949,6 +3949,15 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
   });
 
+  it("validates the macOS release handoff before the GitHub release page exists", () => {
+    const macosRelease = readWorkflow(".github/workflows/macos-release.yml");
+    const validateJob = workflowJob(".github/workflows/macos-release.yml", "validate_macos_release_request");
+    const stepNames = validateJob.steps?.map((step) => step.name) ?? [];
+
+    expect(stepNames).not.toContain("Ensure matching GitHub release exists");
+    expect(macosRelease.jobs?.validate_macos_release_request).toBeDefined();
+  });
+
   it("keeps every tracked repository skill visible to Git-aware syncs", () => {
     const gitignore = readFileSync(".gitignore", "utf8");
     const skillFiles = execFileSync("git", ["ls-files", ".agents/skills/*/SKILL.md"], {
