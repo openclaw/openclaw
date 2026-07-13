@@ -395,7 +395,6 @@ export const tr: TranslationMap = {
       "Anlık görüntü başarısız oldu: {error}\n\nAnlık görüntü olmadan silinsin mi?",
   },
   agentChip: {
-    openConversation: "{name} ile konuşmanızı açın",
     menuLabel: "Ajan menüsü",
     agents: "Ajanlar",
     working: "Çalışıyor…",

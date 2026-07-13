@@ -1882,34 +1882,6 @@ export async function updateSessionStoreEntry(params: {
   });
 }
 
-export async function applySessionStoreEntryPatch(params: {
-  storePath: string;
-  sessionKey: string;
-  patch: Partial<SessionEntry>;
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-}): Promise<SessionEntry | null> {
-  const { storePath, sessionKey, patch } = params;
-  return await runExclusiveSessionStoreWrite(storePath, async () => {
-    const store = loadMutableSessionStoreForWriter(storePath);
-    const resolved = resolveSessionStoreEntry({ store, sessionKey });
-    const existing = resolved.existing;
-    if (!existing) {
-      return null;
-    }
-    const next = mergeSessionEntry(existing, patch);
-    return await persistResolvedSessionEntry({
-      storePath,
-      store,
-      resolved,
-      next,
-      skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership ?? true,
-      returnDetached: params.takeCacheOwnership !== true,
-    });
-  });
-}
-
 type SessionEntryPatchParams = SessionEntryWorkflowOptions & {
   sessionKey: string;
   fallbackEntry?: SessionEntry;
