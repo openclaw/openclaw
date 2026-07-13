@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
-import { icons, type IconName } from "../../components/icons.ts";
+import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
   LOBSTER_PET_PALETTES,
@@ -17,6 +17,7 @@ import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import "../../styles/about.css";
+import { brandIcons } from "./brand-icons.ts";
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 
@@ -33,18 +34,22 @@ const SHORT_COMMIT_LENGTH = 12;
 
 // Docs-first where a docs page exists; GitHub/Discord match the native
 // macOS/iOS About screens (AboutSettings.swift, SettingsProTabSections.swift).
-const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () => string }> = [
-  { href: "https://openclaw.ai", icon: "globe", label: () => t("aboutPage.linkWebsite") },
-  { href: "https://docs.openclaw.ai", icon: "book", label: () => t("aboutPage.linkDocs") },
+const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: () => string }> = [
+  { href: "https://openclaw.ai", icon: icons.globe, label: () => t("aboutPage.linkWebsite") },
+  { href: "https://docs.openclaw.ai", icon: icons.book, label: () => t("aboutPage.linkDocs") },
   {
     href: "https://github.com/openclaw/openclaw",
-    icon: "github",
+    icon: brandIcons.github,
     label: () => t("aboutPage.linkGitHub"),
   },
-  { href: "https://discord.gg/clawd", icon: "discord", label: () => t("aboutPage.linkDiscord") },
+  {
+    href: "https://discord.gg/clawd",
+    icon: brandIcons.discord,
+    label: () => t("aboutPage.linkDiscord"),
+  },
   {
     href: "https://docs.openclaw.ai/releases",
-    icon: "scrollText",
+    icon: icons.scrollText,
     label: () => t("aboutPage.linkChangelog"),
   },
 ];
@@ -151,7 +156,7 @@ function renderHero(props: AboutProps) {
               target=${EXTERNAL_LINK_TARGET}
               rel=${buildExternalLinkRel()}
             >
-              <span class="about-hero__link-icon" aria-hidden="true">${icons[link.icon]}</span>
+              <span class="about-hero__link-icon" aria-hidden="true">${link.icon}</span>
               <span>${link.label()}</span>
             </a>
           `,
