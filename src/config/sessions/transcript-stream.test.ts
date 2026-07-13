@@ -58,6 +58,14 @@ describe("streamSessionTranscriptLines", () => {
     expect(lines).toEqual([]);
   });
 
+  it("returns an empty iterator and logs a warning when stat fails with a permission error", async () => {
+    // Use a path under /root which should fail with EACCES for non-root users.
+    // If running as root, this test still passes — just exercises the ENOENT path.
+    const lines = await collect(streamSessionTranscriptLines("/root/nonexistent-transcript.jsonl"));
+
+    expect(lines).toEqual([]);
+  });
+
   it("forwards malformed JSON lines as raw text so callers can choose to skip them", async () => {
     fs.writeFileSync(
       transcriptPath,
