@@ -414,6 +414,8 @@ export type SessionTranscriptTurnLifecyclePatch = {
   restartRecoveryDeliveryContext?: SessionEntry["restartRecoveryDeliveryContext"];
   restartRecoveryDeliveryRunId?: SessionEntry["restartRecoveryDeliveryRunId"];
   restartRecoveryDeliverySourceRunId?: SessionEntry["restartRecoveryDeliverySourceRunId"];
+  /** Durable tombstones merged with the fresh row inside the SQLite write transaction. */
+  restartRecoveryTerminalRunIds?: SessionEntry["restartRecoveryTerminalRunIds"];
   runtimeMs?: SessionEntry["runtimeMs"];
   startedAt?: SessionEntry["startedAt"];
   status?: SessionEntry["status"];

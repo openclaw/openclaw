@@ -27,6 +27,19 @@ export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[]
   return bounded.length > 0 ? bounded : undefined;
 }
 
+/** Appends new terminal ids without refreshing or evicting existing members. */
+export function mergeRestartRecoveryTerminalRunIds(
+  current: unknown,
+  appended: unknown,
+): string[] | undefined {
+  const currentRunIds = normalizeRestartRecoveryTerminalRunIds(current) ?? [];
+  const currentSet = new Set(currentRunIds);
+  const appendedRunIds = (normalizeRestartRecoveryTerminalRunIds(appended) ?? []).filter(
+    (runId) => !currentSet.has(runId),
+  );
+  return normalizeRestartRecoveryTerminalRunIds([...currentRunIds, ...appendedRunIds]);
+}
+
 export function hasRestartRecoveryTerminalRun(
   entry: SessionEntry | undefined,
   runId: string,
@@ -49,9 +62,7 @@ export function buildRestartRecoveryClaimCleanupPatch(params: {
     normalizeRunId(params.entry.restartRecoveryDeliverySourceRunId);
   const terminalRunIds =
     params.recordTerminalSource && sourceRunId
-      ? normalizeRestartRecoveryTerminalRunIds([
-          ...(normalizeRestartRecoveryTerminalRunIds(params.entry.restartRecoveryTerminalRunIds) ??
-            []),
+      ? mergeRestartRecoveryTerminalRunIds(params.entry.restartRecoveryTerminalRunIds, [
           sourceRunId,
         ])
       : undefined;

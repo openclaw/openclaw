@@ -55,6 +55,7 @@ import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import type { SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
+import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import type {
   ExactSessionEntry,
   ForkSessionEntryFromParentTargetParams,
@@ -1888,6 +1889,7 @@ type SessionTranscriptTurnLifecyclePatch = {
   restartRecoveryDeliveryContext?: SessionEntry["restartRecoveryDeliveryContext"];
   restartRecoveryDeliveryRunId?: SessionEntry["restartRecoveryDeliveryRunId"];
   restartRecoveryDeliverySourceRunId?: SessionEntry["restartRecoveryDeliverySourceRunId"];
+  restartRecoveryTerminalRunIds?: SessionEntry["restartRecoveryTerminalRunIds"];
   runtimeMs?: SessionEntry["runtimeMs"];
   startedAt?: SessionEntry["startedAt"];
   status?: SessionEntry["status"];
@@ -1956,8 +1958,18 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
       const appendedCount = appendedMessages.filter((message) => message.appended).length;
       const touchUpdatedAt =
         options.touchSessionEntry === true && appendedCount > 0 ? Date.now() : undefined;
+      const restartRecoveryTerminalRunIds = options.sessionLifecyclePatch
+        ?.restartRecoveryTerminalRunIds
+        ? mergeRestartRecoveryTerminalRunIds(
+            fresh.entry.restartRecoveryTerminalRunIds,
+            options.sessionLifecyclePatch.restartRecoveryTerminalRunIds,
+          )
+        : undefined;
       const sessionPatch: Partial<SessionEntry> = {
         ...(appendedCount > 0 ? options.sessionLifecyclePatch : undefined),
+        ...(appendedCount > 0 && restartRecoveryTerminalRunIds
+          ? { restartRecoveryTerminalRunIds }
+          : {}),
         ...(fresh.entry.sessionFile === options.sessionFile
           ? {}
           : { sessionFile: options.sessionFile }),

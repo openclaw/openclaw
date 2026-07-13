@@ -2384,6 +2384,83 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send preserves a terminal source claim before admitting the next turn", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const dispatchRelease = createDeferred();
+    const priorRunId = "idem-prior-terminal-claim";
+    const nextRunId = "idem-after-terminal-claim";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            abortedLastRun: false,
+            restartRecoveryDeliveryRunId: priorRunId,
+            restartRecoveryDeliverySourceRunId: priorRunId,
+            restartRecoveryTerminalRunIds: ["idem-older-terminal-claim"],
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
+      let snapshotAtAck: ReturnType<typeof loadSessionEntry>;
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: nextRunId,
+        message: "admit after terminal claim",
+        respond: ((ok, payload) => {
+          if (ok && (payload as { status?: unknown } | undefined)?.status === "started") {
+            snapshotAtAck = loadSessionEntry({
+              sessionKey: "agent:main:main",
+              storePath,
+            });
+          }
+        }) as RespondFn,
+      });
+
+      expect(snapshotAtAck).toMatchObject({
+        restartRecoveryDeliveryRunId: nextRunId,
+        restartRecoveryDeliverySourceRunId: nextRunId,
+        restartRecoveryTerminalRunIds: ["idem-older-terminal-claim", priorRunId],
+        status: "running",
+      });
+
+      const retryResponses: Array<{ ok: boolean; payload?: unknown; meta?: unknown }> = [];
+      await sendControlUiChat({
+        context,
+        idempotencyKey: priorRunId,
+        message: "must not execute again",
+        respond: ((ok, payload, _error, meta) =>
+          retryResponses.push({ ok, payload, meta })) as RespondFn,
+      });
+      expect(retryResponses).toEqual([
+        {
+          ok: true,
+          payload: { runId: priorRunId, status: "ok" },
+          meta: { cached: true, runId: priorRunId },
+        },
+      ]);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      dispatchRelease.resolve(undefined);
+      await vi.waitFor(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+    } finally {
+      dispatchRelease.resolve(undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.send terminalizes a restart-safe turn aborted during SQLite admission", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const storePath = path.join(sessionDir, "sessions.json");

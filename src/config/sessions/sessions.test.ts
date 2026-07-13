@@ -18,6 +18,7 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import { loadSessionEntry } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
@@ -32,6 +33,16 @@ import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
 type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
+
+it("merges bounded restart tombstones without evicting fresh-only ids", () => {
+  const existing = Array.from({ length: 64 }, (_, index) => `run-${index}`);
+
+  expect(mergeRestartRecoveryTerminalRunIds(existing, [...existing.slice(1), "run-new"])).toEqual([
+    ...existing.slice(1),
+    "run-new",
+  ]);
+  expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
+});
 
 function requireWriteTextAtomicCall(
   spy: { mock: { calls: WriteTextAtomicCall[] } },
