@@ -27,7 +27,6 @@ import {
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
-  clearCronJobActive,
   isCronActiveJobMarkerCurrent,
   markCronJobActive,
   type CronActiveJobMarker,
@@ -92,6 +91,13 @@ import {
   tryFinishCronTaskRunWithoutHistory,
 } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
+import {
+  clearActiveMarkersForOutcomes,
+  filterCurrentCronRunOutcomes,
+  finishPersistedQuietCronTaskRuns,
+  finishRetiredCronTaskRuns,
+  releaseUnstartedStartupCatchupReservations,
+} from "./timer-outcome-finalization.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
 const HEARTBEAT_SKIP_DISABLED = "disabled";
@@ -125,7 +131,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     triggerEval?: CronTriggerEvalOutcome;
   };
 
-type CronTriggerEvalOutcome = {
+export type CronTriggerEvalOutcome = {
   fired: boolean;
   stateChanged: boolean;
   state?: unknown;
@@ -1186,62 +1192,6 @@ function applyOutcomeToStoredJob(
     return job;
   }
   return undefined;
-}
-
-function finishPersistedQuietCronTaskRuns(
-  state: CronServiceState,
-  outcomes: readonly TimedCronRunOutcome[],
-): void {
-  for (const outcome of outcomes) {
-    if (outcome.status === "ok" && outcome.triggerEval && !outcome.triggerEval.fired) {
-      tryFinishCronTaskRunWithoutHistory(state, outcome);
-    }
-  }
-}
-
-function clearActiveMarkersForOutcomes(outcomes: readonly TimedCronRunOutcome[]): void {
-  for (const outcome of outcomes) {
-    clearCronJobActive(outcome.jobId, outcome.activeJobMarker);
-  }
-}
-
-function filterCurrentCronRunOutcomes(
-  outcomes: readonly TimedCronRunOutcome[],
-): TimedCronRunOutcome[] {
-  return outcomes.filter((outcome) => isCronActiveJobMarkerCurrent(outcome.activeJobMarker));
-}
-
-function finishRetiredCronTaskRuns(
-  state: CronServiceState,
-  outcomes: readonly TimedCronRunOutcome[],
-  currentOutcomes: readonly TimedCronRunOutcome[],
-): void {
-  const current = new Set(currentOutcomes);
-  for (const outcome of outcomes) {
-    if (!current.has(outcome)) {
-      tryFinishCronTaskRunWithoutHistory(state, outcome);
-    }
-  }
-}
-
-function releaseUnstartedStartupCatchupReservations(
-  state: CronServiceState,
-  plan: StartupCatchupPlan,
-  outcomes: readonly TimedCronRunOutcome[],
-): boolean {
-  let changed = false;
-  const startedJobIds = new Set(outcomes.map((outcome) => outcome.jobId));
-  for (const candidate of plan.candidates) {
-    if (startedJobIds.has(candidate.jobId)) {
-      continue;
-    }
-    const job = state.store?.jobs.find((entry) => entry.id === candidate.jobId);
-    if (job?.state && job.state.runningAtMs === candidate.reservedAtMs) {
-      delete job.state.runningAtMs;
-      changed = true;
-    }
-  }
-  return changed;
 }
 
 /** Arms the cron timer for the next wake or a maintenance recheck. */

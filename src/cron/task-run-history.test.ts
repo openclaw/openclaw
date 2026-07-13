@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
 import { saveTaskRegistryStateToSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -116,7 +117,7 @@ describe("cron task run history", () => {
               legacyWrites.push(
                 appendCronRunLog({
                   storePath,
-                  entry: cronRunLogEntryFromEvent(event, Date.now()),
+                  entry: cronRunLogEntryFromEvent({ ...event, action: "finished" }, Date.now()),
                 }),
               );
             }
@@ -357,7 +358,7 @@ describe("cron task run history", () => {
             [
               "missing-store-key",
               {
-                ...taskFromEntry(entries[0], 6, storeKey),
+                ...taskFromEntry(expectDefined(entries[0], "history entry"), 6, storeKey),
                 taskId: "missing-store-key",
                 detail: { kind: "cron-run", status: "ok" },
               },

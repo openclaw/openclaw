@@ -4,7 +4,9 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedRunningTaskCreateParams,
+  DetachedTaskCompleteParams,
   DetachedTaskCreateParams,
+  DetachedTaskFailParams,
   DetachedTaskFinalizeParams,
 } from "./detached-task-runtime-contract.js";
 import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
@@ -36,15 +38,12 @@ import {
 } from "./task-flow-runtime-internal.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
-  JsonValue,
   TaskDeliveryState,
   TaskDeliveryStatus,
   TaskNotifyPolicy,
   TaskRecord,
   TaskRegistrySummary,
   TaskRuntime,
-  TaskStatus,
-  TaskTerminalOutcome,
 } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/executor");
@@ -172,20 +171,7 @@ export function recordTaskRunProgressByRunId(params: {
   return recordTaskProgressByRunId(params);
 }
 
-export function completeTaskRunByRunId(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  childSessionKey?: string | null;
-  endedAt: number;
-  lastEventAt?: number;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  preserveTerminalSummary?: boolean;
-  terminalOutcome?: TaskTerminalOutcome | null;
-  detail?: JsonValue;
-  suppressDelivery?: boolean;
-}) {
+export function completeTaskRunByRunId(params: DetachedTaskCompleteParams) {
   return finalizeTaskRunByRunId({
     ...params,
     status: "succeeded",
@@ -196,21 +182,7 @@ export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams) {
   return finalizeTaskRunByRunIdInRegistry(params);
 }
 
-export function failTaskRunByRunId(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  childSessionKey?: string | null;
-  status?: Extract<TaskStatus, "failed" | "timed_out" | "cancelled">;
-  endedAt: number;
-  lastEventAt?: number;
-  error?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  preserveTerminalSummary?: boolean;
-  detail?: JsonValue;
-  suppressDelivery?: boolean;
-}) {
+export function failTaskRunByRunId(params: DetachedTaskFailParams) {
   return finalizeTaskRunByRunId({
     ...params,
     status: params.status ?? "failed",

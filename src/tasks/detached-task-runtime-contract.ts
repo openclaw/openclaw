@@ -63,7 +63,7 @@ type DetachedTaskProgressParams = {
   eventSummary?: string | null;
 };
 
-type DetachedTaskCompleteParams = {
+type DetachedTaskFinalizeCommonParams = {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -73,43 +73,24 @@ type DetachedTaskCompleteParams = {
   progressSummary?: string | null;
   terminalSummary?: string | null;
   preserveTerminalSummary?: boolean;
+  detail?: JsonValue;
+  suppressDelivery?: boolean;
+};
+
+export type DetachedTaskCompleteParams = DetachedTaskFinalizeCommonParams & {
   terminalOutcome?: TaskTerminalOutcome | null;
-  detail?: JsonValue;
-  suppressDelivery?: boolean;
 };
 
-type DetachedTaskFailParams = {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  childSessionKey?: string | null;
+export type DetachedTaskFailParams = DetachedTaskFinalizeCommonParams & {
   status?: Extract<TaskStatus, "failed" | "timed_out" | "cancelled">;
-  endedAt: number;
-  lastEventAt?: number;
   error?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  preserveTerminalSummary?: boolean;
-  detail?: JsonValue;
-  suppressDelivery?: boolean;
 };
 
-export type DetachedTaskFinalizeParams = {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  childSessionKey?: string | null;
+export type DetachedTaskFinalizeParams = DetachedTaskFinalizeCommonParams & {
   status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
-  endedAt: number;
-  lastEventAt?: number;
   error?: string;
   clearError?: boolean;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  preserveTerminalSummary?: boolean;
   terminalOutcome?: TaskTerminalOutcome | null;
-  detail?: JsonValue;
-  suppressDelivery?: boolean;
 };
 
 export type DetachedTaskTerminalState = Omit<

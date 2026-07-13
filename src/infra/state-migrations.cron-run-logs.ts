@@ -60,7 +60,7 @@ function collectMirroredTasks(db: DatabaseSync): Map<string, MirroredIdentity[]>
     const identities = bySource.get(key) ?? [];
     identities.push({
       endedAt: row.ended_at,
-      ...(typeof detail.runId === "string" ? { runId: detail.runId } : {}),
+      ...(typeof detail?.runId === "string" ? { runId: detail.runId } : {}),
     });
     bySource.set(key, identities);
   }
