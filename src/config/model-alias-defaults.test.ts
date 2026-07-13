@@ -481,4 +481,99 @@ describe("applyModelDefaults", () => {
     const model = next.models?.providers?.myproxy?.models?.[0];
     expect(model?.api).toBe("openai-completions");
   });
+
+  it("inherits provider-level contextWindow when model omits it", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            contextWindow: 50_000,
+            maxTokens: 4_096,
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(50_000);
+    expect(model?.maxTokens).toBe(4_096);
+  });
+
+  it("lets per-model contextWindow override provider-level default", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            contextWindow: 50_000,
+            maxTokens: 4_096,
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 120_000,
+                maxTokens: 8_192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(120_000);
+    expect(model?.maxTokens).toBe(8_192);
+  });
+
+  it("clamps provider-level maxTokens to the resolved contextWindow", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            contextWindow: 32_768,
+            maxTokens: 40_960,
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(32_768);
+    expect(model?.maxTokens).toBe(32_768);
+  });
 });
