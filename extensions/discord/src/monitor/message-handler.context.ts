@@ -24,6 +24,7 @@ import {
   createDiscordSupplementalContextAccessChecker,
 } from "./inbound-context.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import { removeDiscordReplayHistoryEntry } from "./message-handler.retry.js";
 import {
   resolveReferencedReplyMediaList,
   resolveDiscordMessageText,
@@ -44,24 +45,6 @@ function normalizeDiscordDmOwnerEntry(entry: string): string | undefined {
 
 function isContextAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
-}
-
-function removeReplayedMessageFromPendingHistory(params: {
-  historyMap: DiscordMessagePreflightContext["guildHistories"];
-  historyKey: string;
-  messageId: string;
-}): void {
-  const history = params.historyMap.get(params.historyKey);
-  if (!history) {
-    return;
-  }
-  // An exhausted dispatch can release its replay claim after pending history
-  // was recorded. Remove that copy before rebuilding the same inbound turn.
-  for (let index = history.length - 1; index >= 0; index -= 1) {
-    if (history[index]?.messageId === params.messageId) {
-      history.splice(index, 1);
-    }
-  }
 }
 
 export async function buildDiscordMessageProcessContext(params: {
@@ -129,7 +112,6 @@ export async function buildDiscordMessageProcessContext(params: {
     Boolean(threadChannelId && isForumParent && forumParentSlug) && message.id === threadChannelId;
   const forumContextLine = isForumStarter ? `[Forum parent: #${forumParentSlug}]` : null;
   const groupChannel = isGuildMessage && displayChannelSlug ? `#${displayChannelSlug}` : undefined;
-  const groupSubject = isDirectMessage ? undefined : groupChannel;
   const senderName = sender.isPluralKit
     ? (sender.name ?? author.username)
     : (data.member?.nickname ?? author.globalName ?? author.username);
@@ -172,7 +154,6 @@ export async function buildDiscordMessageProcessContext(params: {
     sessionKey: route.sessionKey,
   });
   const channelHistory = createChannelHistoryWindow({ historyMap: guildHistories });
-  const isRoomEvent = ctx.inboundEventKind === "room_event";
   let combinedBody = formatInboundEnvelope({
     channel: "Discord",
     from: fromLabel,
@@ -185,13 +166,10 @@ export async function buildDiscordMessageProcessContext(params: {
   });
   const shouldIncludeChannelHistory =
     !isDirectMessage &&
-    (isRoomEvent || !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
+    (ctx.inboundEventKind === "room_event" ||
+      !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
   if (shouldIncludeChannelHistory) {
-    removeReplayedMessageFromPendingHistory({
-      historyMap: guildHistories,
-      historyKey: messageChannelId,
-      messageId: message.id,
-    });
+    removeDiscordReplayHistoryEntry(guildHistories, messageChannelId, message.id);
     combinedBody = channelHistory.buildPendingContext({
       historyKey: messageChannelId,
       limit: historyLimit,
@@ -292,7 +270,7 @@ export async function buildDiscordMessageProcessContext(params: {
     message,
     messageChannelId,
     isGuildMessage,
-    channelConfig: isRoomEvent ? null : channelConfig,
+    channelConfig: ctx.inboundEventKind === "room_event" ? null : channelConfig,
     threadChannel,
     channelType: channelInfo?.type,
     channelName: channelInfo?.name,
@@ -358,9 +336,7 @@ export async function buildDiscordMessageProcessContext(params: {
       tag: sender.tag,
       roles: memberRoleIds,
       displayLabel: senderLabel,
-      // PluralKit proxies post under a bot author but represent a human member,
-      // whose identity already replaced the sender fields here; only mark
-      // genuine (non-PluralKit) bot authors as bots.
+      // PluralKit replaces bot authors with human identity; mark only genuine non-PluralKit bots.
       isBot: author.bot && !sender.isPluralKit ? true : undefined,
     },
     conversation: {
@@ -450,7 +426,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     extra: {
       ...(preflightAudioTranscript !== undefined ? { Transcript: preflightAudioTranscript } : {}),
-      GroupSubject: groupSubject,
+      GroupSubject: isDirectMessage ? undefined : groupChannel,
       GroupChannel: groupChannel,
       ...(isGuildMessage ? { GroupRequireMention: ctx.groupRequireMention } : {}),
       UntrustedStructuredContext: untrustedContext,
@@ -458,7 +434,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
   });
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
-  if (isRoomEvent && shouldIncludeChannelHistory) {
+  if (ctx.inboundEventKind === "room_event" && shouldIncludeChannelHistory) {
     await channelHistory.recordWithMedia({
       historyKey: messageChannelId,
       limit: historyLimit,
