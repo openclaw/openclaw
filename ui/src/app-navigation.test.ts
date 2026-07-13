@@ -53,6 +53,7 @@ const SETTINGS_ROUTE_PATHS = [
     alias: "/infrastructure",
   },
   { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
+  { routeId: "sessions", path: "/settings/sessions", alias: "/sessions" },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
   {
     routeId: "model-providers",
@@ -237,7 +238,7 @@ describe("pathForRoute", () => {
 
   it("prepends base path", () => {
     expect(pathForRoute("chat", "/ui")).toBe("/ui/chat");
-    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/sessions");
+    expect(pathForRoute("sessions", "/apps/openclaw")).toBe("/apps/openclaw/settings/sessions");
   });
 });
 
