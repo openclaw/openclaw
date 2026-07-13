@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -16,7 +17,7 @@ import { clearHealthChecksForTest } from "./health-check-registry.js";
 import type { HealthCheck, HealthFinding, HealthRepairEffect } from "./health-checks.js";
 
 const mocks = vi.hoisted(() => ({
-  loadModelCatalog: vi.fn(async () => []),
+  loadModelCatalog: vi.fn(async (): Promise<ModelCatalogEntry[]> => []),
   detectExtraGatewayServiceIssues: vi.fn(async (): Promise<readonly { label: string }[]> => []),
   extraGatewayServiceToHealthFinding: vi.fn(
     (service: { label: string }): HealthFinding => ({
@@ -745,6 +746,101 @@ describe("CORE_HEALTH_CHECKS", () => {
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
         target: "mockplugin",
+      }),
+    );
+  });
+
+  it("does not report runtime catalog model refs just because models.providers is empty", async () => {
+    mocks.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/orphan-model-refs");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("reports and repairs stale model refs through the runtime catalog", async () => {
+    mocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+    ]);
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/orphan-model-refs");
+    if (typeof check.repair !== "function") {
+      throw new Error("expected orphan model ref check repair");
+    }
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["ghostprovider/foo", "openai/gpt-5.5"],
+          },
+          models: {
+            "ghostprovider/foo": {},
+            "openai/gpt-5.5": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg,
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/orphan-model-refs",
+        severity: "warning",
+        path: "agents.defaults.model.fallbacks.0",
+      }),
+      expect.objectContaining({
+        checkId: "core/doctor/orphan-model-refs",
+        severity: "warning",
+        path: "agents.defaults.models.ghostprovider/foo",
+      }),
+    ]);
+
+    await expect(
+      check.repair(
+        {
+          mode: "fix",
+          runtime,
+          cfg,
+        },
+        findings,
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        config: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai/gpt-5.5",
+                fallbacks: ["openai/gpt-5.5"],
+              },
+              models: {
+                "openai/gpt-5.5": {},
+              },
+            },
+          },
+        },
+        changes: [
+          "Removed stale model reference ghostprovider/foo at agents.defaults.model.fallbacks.0.",
+          "Removed stale model reference ghostprovider/foo at agents.defaults.models.ghostprovider/foo.",
+        ],
       }),
     );
   });

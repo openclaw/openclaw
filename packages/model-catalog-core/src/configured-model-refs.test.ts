@@ -74,6 +74,21 @@ describe("configured model refs", () => {
 });
 
 describe("pruneOrphanModelRefs", () => {
+  const catalogOptions = (modelRefs: readonly string[], fallbackModelRef?: string) => {
+    const knownProviderIds = new Set<string>();
+    for (const modelRef of modelRefs) {
+      const provider = extractProviderFromModelRef(modelRef);
+      if (provider) {
+        knownProviderIds.add(provider);
+      }
+    }
+    return {
+      knownProviderIds,
+      knownModelRefs: new Set(modelRefs),
+      ...(fallbackModelRef ? { fallbackModelRef } : {}),
+    };
+  };
+
   it("removes allowlist map entries for missing providers", () => {
     const result = pruneOrphanModelRefs(
       {
@@ -87,7 +102,7 @@ describe("pruneOrphanModelRefs", () => {
           },
         },
       },
-      new Set(["openai", "anthropic"]),
+      catalogOptions(["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"]),
     );
     expect(result.config).toEqual({
       agents: {
@@ -120,7 +135,7 @@ describe("pruneOrphanModelRefs", () => {
           },
         },
       },
-      new Set(["openai", "anthropic"]),
+      catalogOptions(["openai/gpt-5.5", "openai/gpt-5.4", "anthropic/claude-sonnet-4-6"]),
     );
     expect(result.config).toEqual({
       agents: {
@@ -151,7 +166,7 @@ describe("pruneOrphanModelRefs", () => {
           list: [{ id: "agent-a", model: { primary: "ghostprovider/model-x" } }],
         },
       },
-      new Set(["openai"]),
+      catalogOptions(["openai/gpt-5.5"]),
     );
     expect(result.config).toEqual({
       agents: {
@@ -165,12 +180,13 @@ describe("pruneOrphanModelRefs", () => {
       {
         path: "agents.list.0.model.primary",
         value: "ghostprovider/model-x",
-        reason: "rewritten",
+        reason: "missing-provider",
+        replacement: "openai/gpt-5.5",
       },
     ]);
   });
 
-  it("rewrites primary refs to first provider when defaults.model.primary is also orphan", () => {
+  it("rewrites primary refs to a concrete configured fallback when defaults.model.primary is also orphan", () => {
     const result = pruneOrphanModelRefs(
       {
         agents: {
@@ -180,13 +196,62 @@ describe("pruneOrphanModelRefs", () => {
           list: [{ id: "agent-a", model: { primary: "ghostprovider/model-x" } }],
         },
       },
-      new Set(["openai", "anthropic"]),
+      catalogOptions(
+        ["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"],
+        "anthropic/claude-sonnet-4-6",
+      ),
     );
     const config = result.config as any;
-    expect(config.agents.defaults.model.primary).toMatch(/^(openai|anthropic)\/default$/);
-    expect(config.agents.list[0].model.primary).toMatch(/^(openai|anthropic)\/default$/);
-    expect(result.pruned).toHaveLength(2);
-    expect(result.pruned.every((p) => p.reason === "rewritten")).toBe(true);
+    expect(config.agents.defaults.model.primary).toBe("anthropic/claude-sonnet-4-6");
+    expect(config.agents.list[0].model.primary).toBe("anthropic/claude-sonnet-4-6");
+    expect(result.pruned).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        value: "ghostprovider/model-y",
+        reason: "missing-provider",
+        replacement: "anthropic/claude-sonnet-4-6",
+      },
+      {
+        path: "agents.list.0.model.primary",
+        value: "ghostprovider/model-x",
+        reason: "missing-provider",
+        replacement: "anthropic/claude-sonnet-4-6",
+      },
+    ]);
+  });
+
+  it("deletes stale scalar refs instead of inventing provider/default fallbacks", () => {
+    const result = pruneOrphanModelRefs(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "ghostprovider/model-y" },
+          },
+          list: [{ id: "agent-a", model: "ghostprovider/model-x" }],
+        },
+      },
+      catalogOptions(["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"]),
+    );
+    expect(result.config).toEqual({
+      agents: {
+        defaults: {
+          model: {},
+        },
+        list: [{ id: "agent-a" }],
+      },
+    });
+    expect(result.pruned).toEqual([
+      {
+        path: "agents.defaults.model.primary",
+        value: "ghostprovider/model-y",
+        reason: "missing-provider",
+      },
+      {
+        path: "agents.list.0.model",
+        value: "ghostprovider/model-x",
+        reason: "missing-provider",
+      },
+    ]);
   });
 
   it("prunes from agents.list entries", () => {
@@ -202,7 +267,7 @@ describe("pruneOrphanModelRefs", () => {
           ],
         },
       },
-      new Set(["openai"]),
+      catalogOptions(["openai/gpt-5.5"]),
     );
     expect(result.config).toEqual({
       agents: {
@@ -228,7 +293,7 @@ describe("pruneOrphanModelRefs", () => {
           },
         },
       },
-      new Set(["openai"]),
+      catalogOptions(["openai/gpt-5.5"]),
     );
     expect(result.config).toEqual({
       agents: {
@@ -250,7 +315,7 @@ describe("pruneOrphanModelRefs", () => {
           },
         },
       },
-      new Set(["openai", "anthropic"]),
+      catalogOptions(["openai/gpt-5.5", "anthropic/claude-sonnet-4-6"]),
     );
     expect(result.config).toEqual({
       agents: {
@@ -260,6 +325,60 @@ describe("pruneOrphanModelRefs", () => {
       },
     });
     expect(result.pruned).toEqual([]);
+  });
+
+  it("removes allowlist map entries for provider refs missing from the runtime catalog", () => {
+    const result = pruneOrphanModelRefs(
+      {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.5": {}, "openai/retired-model": {} },
+          },
+        },
+      },
+      catalogOptions(["openai/gpt-5.5"]),
+    );
+    expect(result.config).toEqual({
+      agents: {
+        defaults: {
+          models: { "openai/gpt-5.5": {} },
+        },
+      },
+    });
+    expect(result.pruned).toEqual([
+      {
+        path: "agents.defaults.models.openai/retired-model",
+        value: "openai/retired-model",
+        reason: "missing-model",
+      },
+    ]);
+  });
+
+  it("preserves provider wildcard allowlist entries for known runtime catalog providers", () => {
+    const result = pruneOrphanModelRefs(
+      {
+        agents: {
+          defaults: {
+            models: { "openai/*": {}, "ghostprovider/*": {} },
+          },
+        },
+      },
+      catalogOptions(["openai/gpt-5.5"]),
+    );
+    expect(result.config).toEqual({
+      agents: {
+        defaults: {
+          models: { "openai/*": {} },
+        },
+      },
+    });
+    expect(result.pruned).toEqual([
+      {
+        path: "agents.defaults.models.ghostprovider/*",
+        value: "ghostprovider/*",
+        reason: "missing-provider",
+      },
+    ]);
   });
 
   it("handles compaction.model and subagents.model rewriting", () => {
@@ -273,14 +392,38 @@ describe("pruneOrphanModelRefs", () => {
           },
         },
       },
-      new Set(["openai"]),
+      catalogOptions(["openai/gpt-5.5"]),
     );
     const config = result.config as any;
     expect(config.agents.defaults.compaction.model).toBe("openai/gpt-5.5");
     expect(config.agents.defaults.compaction.memoryFlush.model).toBe("openai/gpt-5.5");
     expect(config.agents.defaults.subagents.model.primary).toBe("openai/gpt-5.5");
     expect(config.agents.defaults.subagents.model.fallbacks).toEqual([]);
-    expect(result.pruned).toHaveLength(4);
+    expect(result.pruned).toEqual([
+      {
+        path: "agents.defaults.subagents.model.primary",
+        value: "ghostprovider/c",
+        reason: "missing-provider",
+        replacement: "openai/gpt-5.5",
+      },
+      {
+        path: "agents.defaults.subagents.model.fallbacks.0",
+        value: "ghostprovider/d",
+        reason: "missing-provider",
+      },
+      {
+        path: "agents.defaults.compaction.model",
+        value: "ghostprovider/a",
+        reason: "missing-provider",
+        replacement: "openai/gpt-5.5",
+      },
+      {
+        path: "agents.defaults.compaction.memoryFlush.model",
+        value: "ghostprovider/b",
+        reason: "missing-provider",
+        replacement: "openai/gpt-5.5",
+      },
+    ]);
   });
 
   it("prunes hooks.mappings and hooks.gmail model refs", () => {
@@ -292,13 +435,12 @@ describe("pruneOrphanModelRefs", () => {
           gmail: { model: "ghostprovider/hook-b" },
         },
       },
-      new Set(["openai"]),
+      catalogOptions(["openai/gpt-5.5"]),
     );
     const config = result.config as any;
     expect(config.hooks.mappings[0].model).toBe("openai/gpt-5.5");
     expect(config.hooks.gmail.model).toBe("openai/gpt-5.5");
-    expect(result.pruned).toHaveLength(2);
-    expect(result.pruned.every((p) => p.reason === "rewritten")).toBe(true);
+    expect(result.pruned.every((p) => p.replacement === "openai/gpt-5.5")).toBe(true);
   });
 
   it("prunes messages.tts.summaryModel", () => {
@@ -307,7 +449,7 @@ describe("pruneOrphanModelRefs", () => {
         agents: { defaults: { model: "anthropic/claude-sonnet-4-6" } },
         messages: { tts: { summaryModel: "ghostprovider/tts-model" } },
       },
-      new Set(["anthropic"]),
+      catalogOptions(["anthropic/claude-sonnet-4-6"]),
     );
     const config = result.config as any;
     expect(config.messages.tts.summaryModel).toBe("anthropic/claude-sonnet-4-6");
@@ -315,7 +457,8 @@ describe("pruneOrphanModelRefs", () => {
       {
         path: "messages.tts.summaryModel",
         value: "ghostprovider/tts-model",
-        reason: "rewritten",
+        reason: "missing-provider",
+        replacement: "anthropic/claude-sonnet-4-6",
       },
     ]);
   });
@@ -332,7 +475,7 @@ describe("pruneOrphanModelRefs", () => {
           discord: { voice: { model: "ghostprovider/voice-model" } },
         },
       },
-      new Set(["openai"]),
+      catalogOptions(["openai/gpt-5.5", "openai/gpt-5.4"]),
     );
     const config = result.config as any;
     expect(config.channels.modelByChannel.discord.guild).toBe("openai/gpt-5.5");

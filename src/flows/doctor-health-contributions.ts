@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { orphanModelRefsCheck } from "./doctor-core-checks.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
@@ -1244,8 +1245,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:orphan-model-refs",
       label: "Orphan model refs",
-      healthCheckIds: ["core/doctor/orphan-model-refs"],
-      run: async () => {},
+      healthChecks: orphanModelRefsCheck,
     }),
     createDoctorHealthContribution({
       id: "doctor:structured-health-repairs",
