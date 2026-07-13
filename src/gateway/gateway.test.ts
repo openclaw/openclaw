@@ -813,7 +813,7 @@ module.exports = {
             message: "channel",
             options: [{ value: opts.channel ?? "none", label: opts.channel ?? "none" }],
           });
-          opts.onConfigured?.([String(choice)]);
+          opts.onConfigured?.([choice]);
           await prompter.outro(`configured ${choice}`);
         },
       });
