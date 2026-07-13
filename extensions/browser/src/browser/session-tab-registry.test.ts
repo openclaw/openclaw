@@ -31,6 +31,7 @@ function trackSessionBrowserTab(params: Parameters<typeof trackSessionBrowserTab
 describe("session tab registry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    resetTrackedSessionBrowserTabsForTests();
     clientMocks.browserCloseTabByRawTargetId.mockClear();
     trackedSessionKeys.clear();
   });
