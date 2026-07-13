@@ -26,6 +26,7 @@ let selectedGatewayRunEnvironment: GatewayRunEnvironmentSelection | undefined;
 let appliedGatewayRunConfigEnvironment: GatewayRunEnvironmentSelection | undefined;
 let lastGuardedGatewayRunSnapshot: ConfigFileSnapshot | undefined;
 let preparedGatewayRunBootstrapSnapshot: ConfigFileSnapshot | undefined;
+let preparedGatewayRunStateWasPristine = false;
 let preparedGatewayRunReset: PreparedGatewayRunReset | undefined;
 let gatewayRunTargetSelectedByConfig = false;
 
@@ -621,6 +622,11 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
 
 export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams): Promise<boolean> {
   preparedGatewayRunReset = undefined;
+  preparedGatewayRunStateWasPristine = false;
+  const pristineSelectionSignature = resolveGatewayConfigSelectionSignature(process.env);
+  const { canSkipPristineStartupStateMigrations } =
+    await import("../../commands/doctor/shared/pristine-startup-state.js");
+  const selectedStateWasPristine = canSkipPristineStartupStateMigrations(process.env);
   // Stop the early proxy before recovery can select another config/state target. Its lifecycle
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
@@ -637,6 +643,11 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
         recoverSuspicious: true,
         restoreSuspicious: true,
       });
+  preparedGatewayRunStateWasPristine =
+    guarded &&
+    !params.opts.reset &&
+    selectedStateWasPristine &&
+    resolveGatewayConfigSelectionSignature(process.env) === pristineSelectionSignature;
   await pinGatewayRunRuntimePaths();
   // Dev reset deletes the state directory before recreating config. Migrating first would
   // archive legacy state and then delete its imported SQLite rows.
@@ -650,6 +661,11 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
     };
   }
   return shouldBootstrap;
+}
+
+/** Prepared fact captured before Gateway bootstrap can create runtime state. */
+export function wasPreparedGatewayRunStatePristine(): boolean {
+  return preparedGatewayRunStateWasPristine;
 }
 
 export async function recheckGatewayRunBootstrap(
