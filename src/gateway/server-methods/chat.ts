@@ -37,7 +37,6 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -55,8 +54,6 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import type { SavedMedia } from "../../media/store.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import {
   retainGatewayRootWorkAdmissionContinuation,
@@ -64,7 +61,6 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import {
   parseInlineDirectives,
   stripInlineDirectiveTagsForDelivery,
@@ -78,11 +74,6 @@ import {
   resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "../chat-abort.js";
-import {
-  type ChatImageContent,
-  type OffloadedRef,
-  persistInboundImagesForTranscript,
-} from "../chat-attachments.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
@@ -157,7 +148,6 @@ import {
 } from "./chat-history-pages.js";
 import {
   hasGatewayAdminScope,
-  isAcpBridgeClient,
   resolveRequestedChatAgentId,
   validateChatSelectedAgent,
 } from "./chat-origin-routing.js";
@@ -171,6 +161,7 @@ import {
 } from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
+import { applyChatSendManagedMediaFields, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
   emitOperatorChatSendServerTiming,
@@ -482,73 +473,6 @@ function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
     })
     .filter(Boolean);
   return chunks.join("\n\n").trim();
-}
-
-async function persistChatSendImages(params: {
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  offloadedRefs: OffloadedRef[];
-  client: GatewayRequestHandlerOptions["client"];
-  logGateway: GatewayRequestContext["logGateway"];
-}): Promise<SavedMedia[]> {
-  if (
-    (params.images.length === 0 && params.offloadedRefs.length === 0) ||
-    isAcpBridgeClient(params.client)
-  ) {
-    return [];
-  }
-  return await persistInboundImagesForTranscript({
-    images: params.images,
-    imageOrder: params.imageOrder,
-    offloadedRefs: params.offloadedRefs,
-    log: params.logGateway,
-    logContext: "chat.send",
-  });
-}
-
-type ChatSendManagedMediaFields = Partial<
-  Pick<MsgContext, "MediaPath" | "MediaPaths" | "MediaType" | "MediaTypes">
->;
-
-function resolveChatSendManagedMediaFields(savedImages: SavedMedia[]): ChatSendManagedMediaFields {
-  const mediaPaths = savedImages.map((entry) => entry.path);
-  if (mediaPaths.length === 0) {
-    return {};
-  }
-  const mediaTypes = savedImages.map((entry) => entry.contentType ?? "application/octet-stream");
-  return {
-    MediaPath: mediaPaths[0],
-    MediaPaths: mediaPaths,
-    MediaType: mediaTypes[0],
-    MediaTypes: mediaTypes,
-  };
-}
-
-function applyChatSendManagedMediaFields(ctx: MsgContext, fields: ChatSendManagedMediaFields) {
-  if (!ctx.MediaStaged) {
-    Object.assign(ctx, fields);
-    return;
-  }
-
-  if (ctx.MediaPath === undefined && fields.MediaPath !== undefined) {
-    ctx.MediaPath = fields.MediaPath;
-  }
-  if (ctx.MediaPaths === undefined && fields.MediaPaths !== undefined) {
-    ctx.MediaPaths = fields.MediaPaths;
-  }
-  if (ctx.MediaType === undefined && fields.MediaType !== undefined) {
-    ctx.MediaType = fields.MediaType;
-  }
-  if (ctx.MediaTypes === undefined && fields.MediaTypes !== undefined) {
-    ctx.MediaTypes = fields.MediaTypes;
-  }
-}
-
-function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserTurnInput["media"]> {
-  return savedMedia.map((entry) => ({
-    path: entry.path,
-    contentType: entry.contentType,
-  }));
 }
 
 function resolveChatHistoryNextOffset(params: {
@@ -1119,9 +1043,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       supportsTaskSuggestions,
       p,
       systemInputProvenance,
-      systemProvenanceReceipt,
-      suppressCommandInterpretation,
-      normalizedAttachments,
       rawMessage,
       reconnectResumeRequested,
     } = normalizedRequest.value;
@@ -1180,7 +1101,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       finishAbortedChatSend,
       gatewayWorkAdmission,
       lifecycleGeneration,
-      originatingRoute,
       restartSafeAdmission,
       setReleaseGatewayRootContinuation,
     } = admitted.value;
@@ -1207,17 +1127,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       respondChatSessionRoutingChanged(respond);
       return;
     }
-    const {
-      explicitOriginTargetsPlugin,
-      imageOrder,
-      mediaPathOffloadPaths,
-      mediaPathOffloadTypes,
-      mediaPathOffloadWorkspaceDir,
-      offloadedRefs,
-      parsedImages,
-      parsedMessage,
-      prepareAttachmentsMs,
-    } = preparedAttachments.value;
+    const { imageOrder, prepareAttachmentsMs } = preparedAttachments.value;
 
     const admissionStartedAt = Date.now();
     const terminalizeRestartSafeAdmission = async (terminalState: {
@@ -1251,7 +1161,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         warn: (message) => context.logGateway.warn(message),
       });
       const {
-        baseInput: baseUserTurnInput,
         persist: persistGatewayUserTurnTranscript,
         persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
         recorder: userTurnRecorder,
@@ -1371,134 +1280,22 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         });
       }
-      const persistedImagesPromise = persistChatSendImages({
-        images: parsedImages,
-        imageOrder,
-        offloadedRefs,
+      const {
+        accountId,
+        ctx,
+        isInternalTextSlashCommandTurn,
+        pluginBoundMediaFieldsPromise,
+        queuedFollowupOwnerKey,
+        replyOptionImages,
+      } = prepareChatSendUserTurn({
+        request: normalizedRequest.value,
+        session: preparedSession.value,
+        admission: admitted.value,
+        attachments: preparedAttachments.value,
         client,
         logGateway: context.logGateway,
+        userTurn,
       });
-      let persistedMediaForTranscript: SavedMedia[] | undefined;
-      const getPersistedMediaForTranscript = async () => {
-        if (!persistedMediaForTranscript) {
-          persistedMediaForTranscript = await persistedImagesPromise;
-        }
-        return persistedMediaForTranscript;
-      };
-      const preparedUserTurnMediaPromise =
-        normalizedAttachments.length > 0 ? getPersistedMediaForTranscript() : Promise.resolve([]);
-      const userTurnMediaPromise = preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia);
-      userTurn.setInputPromise(
-        userTurnMediaPromise.then((media) => ({
-          ...baseUserTurnInput,
-          ...(media.length > 0
-            ? {
-                media,
-                mediaOnlyText: "[User sent media without caption]",
-              }
-            : {}),
-        })),
-      );
-      const pluginBoundMediaFieldsPromise =
-        explicitOriginTargetsPlugin && parsedImages.length > 0
-          ? preparedUserTurnMediaPromise.then(resolveChatSendManagedMediaFields)
-          : Promise.resolve({});
-
-      const trimmedMessage = parsedMessage.trim();
-      const commandBody = parsedMessage;
-      const commandSource =
-        !suppressCommandInterpretation && trimmedMessage.startsWith("/") ? "text" : undefined;
-      const messageForAgent = systemProvenanceReceipt
-        ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
-        : parsedMessage;
-      const queuedFollowupOwnerDeviceId = normalizeOptionalText(client?.connect?.device?.id);
-      const queuedFollowupOwnerConnId = normalizeOptionalText(client?.connId);
-      const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
-        ? `device:${queuedFollowupOwnerDeviceId}`
-        : queuedFollowupOwnerConnId
-          ? `connection:${queuedFollowupOwnerConnId}`
-          : undefined;
-      const {
-        originatingChannel,
-        originatingTo,
-        accountId,
-        messageThreadId,
-        explicitDeliverRoute,
-      } = originatingRoute;
-      // The per-message timestamp prefix is now applied at the single LLM
-      // boundary (normalizeMessagesForLlmBoundary), derived from each message's
-      // own timestamp, so the current turn and all historical turns carry
-      // identical bytes on the wire. BodyForAgent uses the same bare text as
-      // Body; the transient gateway stamp is removed (stamping the live turn
-      // here would diverge from bare stored history and bust the prompt cache).
-      // See: https://github.com/openclaw/openclaw/issues/3658
-      const ctx: MsgContext = {
-        Body: messageForAgent,
-        BodyForAgent: messageForAgent,
-        BodyForCommands: commandBody,
-        RawBody: parsedMessage,
-        CommandBody: commandBody,
-        InputProvenance: systemInputProvenance,
-        SessionKey: sessionKey,
-        AgentId: agentId,
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
-        OriginatingChannel: originatingChannel,
-        OriginatingTo: originatingTo,
-        ExplicitDeliverRoute: explicitDeliverRoute,
-        AccountId: accountId,
-        MessageThreadId: messageThreadId,
-        ChatType: "direct",
-        ...(commandSource ? { CommandSource: commandSource } : {}),
-        CommandAuthorized: !suppressCommandInterpretation,
-        CommandTurn: commandSource
-          ? {
-              kind: "text-slash",
-              source: commandSource,
-              authorized: true,
-              body: commandBody,
-            }
-          : {
-              kind: "normal",
-              source: "message",
-              authorized: false,
-              body: commandBody,
-            },
-        MessageSid: clientRunId,
-        ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
-        ...(!isOperatorUiClient(clientInfo)
-          ? {
-              SenderId: clientInfo?.id,
-              SenderName: clientInfo?.displayName,
-              SenderUsername: clientInfo?.displayName,
-            }
-          : {}),
-        GatewayClientScopes: client?.connect?.scopes ?? [],
-        GatewayClientCaps: client?.connect?.caps ?? [],
-      };
-      const isInternalTextSlashCommandTurn =
-        ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
-      if (mediaPathOffloadPaths.length > 0) {
-        // Inject offloads via the same MsgContext fields the channel
-        // path uses so buildInboundMediaNote renders a real `[media attached:
-        // <workspace-relative-path>]` line into the agent prompt. Marker
-        // blocks the dispatch pipeline from re-running stageSandboxMedia; see
-        // prestageMediaPathOffloads.
-        ctx.MediaPath = mediaPathOffloadPaths[0];
-        ctx.MediaPaths = mediaPathOffloadPaths;
-        ctx.MediaType = mediaPathOffloadTypes[0];
-        ctx.MediaTypes = mediaPathOffloadTypes;
-        ctx.MediaWorkspaceDir = mediaPathOffloadWorkspaceDir;
-        ctx.MediaStaged = true;
-      }
-      const mediaPathOffloadsIncludeImages = mediaPathOffloadTypes.some((type) =>
-        type.startsWith("image/"),
-      );
-      const replyOptionImages = mediaPathOffloadsIncludeImages
-        ? undefined
-        : parsedImages.length > 0
-          ? parsedImages
-          : undefined;
 
       const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
         cfg,
