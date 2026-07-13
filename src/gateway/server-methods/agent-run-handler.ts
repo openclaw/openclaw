@@ -194,6 +194,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     const assertGatewayWorkAdmissionAllowed = admissionController.assertAllowed;
     const acquireGatewayWorkAdmission = admissionController.acquire;
     const respondToGatewayAdmissionOutcome = admissionController.respondToOutcome;
+    releaseGatewayAdmission = admissionController.release;
     const resetPhase = await runAgentResetPhase({
       request,
       cfg,
@@ -237,7 +238,6 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
         preAttachmentSession,
         respond,
       });
-      releaseGatewayAdmission = admissionController.release;
       if (!preparedSession) {
         return;
       }
