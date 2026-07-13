@@ -37,19 +37,23 @@ let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").re
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
 let prepareGatewaySuspend: typeof import("../infra/gateway-suspend-coordinator.js").prepareGatewaySuspend;
-let resetGatewaySuspendCoordinatorForTest: typeof import("../infra/gateway-suspend-coordinator.js").resetGatewaySuspendCoordinatorForTest;
+let resetGatewaySuspendCoordinatorForLifecycleRestart: typeof import("../infra/gateway-suspend-coordinator.js").resetGatewaySuspendCoordinatorForLifecycleRestart;
 let resumeGatewaySuspend: typeof import("../infra/gateway-suspend-coordinator.js").resumeGatewaySuspend;
 
 beforeAll(async () => {
   ({ getActiveBackgroundExecSessionCount, markBackgrounded, resetProcessRegistryForTests } =
     await import("./bash-process-registry.js"));
   ({ resolveExecTarget, runExecProcess } = await import("./bash-tools.exec-runtime.js"));
-  ({ prepareGatewaySuspend, resetGatewaySuspendCoordinatorForTest, resumeGatewaySuspend } =
+  ({
+    prepareGatewaySuspend,
+    resetGatewaySuspendCoordinatorForLifecycleRestart,
+    resumeGatewaySuspend,
+  } =
     await import("../infra/gateway-suspend-coordinator.js"));
 });
 
 beforeEach(() => {
-  resetGatewaySuspendCoordinatorForTest();
+  resetGatewaySuspendCoordinatorForLifecycleRestart();
   resetProcessRegistryForTests();
   requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
@@ -57,7 +61,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetGatewaySuspendCoordinatorForTest();
   resetProcessRegistryForTests();
 });
 

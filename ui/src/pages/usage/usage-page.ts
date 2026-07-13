@@ -14,6 +14,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -677,7 +678,7 @@ class UsagePage extends OpenClawLightDomElement {
           selection: this.context.agentSelection,
         })}
       </section>
-      ${renderUsage(props)}
+      ${renderSettingsWorkspace(renderUsage(props))}
     `;
   }
 }

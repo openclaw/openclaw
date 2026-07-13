@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -290,7 +291,9 @@ func (t *docSyntaxMaskingTranslator) Translate(_ context.Context, text, _, _ str
 
 func (t *docSyntaxMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
 	t.rawInputs = append(t.rawInputs, text)
-	return strings.ReplaceAll(text, "Visible prose", "Видимый текст"), nil
+	translated := strings.ReplaceAll(text, "Visible prose", "Видимый текст")
+	translated = regexp.MustCompile(`(?m)^\s+(__OC_I18N_\d+__)`).ReplaceAllString(translated, "$1")
+	return translated, nil
 }
 
 func (t *docSyntaxMaskingTranslator) Close() {}
@@ -770,6 +773,21 @@ func TestValidateDocChunkTranslationRejectsChangedTripleBacktickCodeSpan(t *test
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsChangedLineStartTripleBacktickCodeSpan(t *testing.T) {
+	t.Parallel()
+
+	source := "```foo``` is the value.\n```\ncode\n```\n"
+	translated := "```bar``` es el valor.\n```\ncode\n```\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected changed line-start triple-backtick code span to be rejected")
+	}
+	if !strings.Contains(err.Error(), "inline code mismatch") {
+		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsChangedMultilineCodeSpan(t *testing.T) {
 	t.Parallel()
 
@@ -890,6 +908,20 @@ func TestValidateDocChunkTranslationRejectsCodeAfterComponentFence(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "inline code mismatch") {
 		t.Fatalf("expected inline code mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationAllowsTranslatedProseInIsolatedIndentedFence(t *testing.T) {
+	t.Parallel()
+
+	source := "            ```json5\n                    provider: \"firecrawl\", // optional; omit for auto-detect\n            ```\n"
+	translated := "            ```json5\n                    provider: \"firecrawl\", // необязательно; опустите для автоопределения\n            ```\n"
+
+	if values := extractMarkdownInlineCodeValues(source); len(values) != 0 {
+		t.Fatalf("expected custom indented fence to be excluded from inline code, got %q", values)
+	}
+	if err := validateDocChunkTranslation(source, translated); err != nil {
+		t.Fatalf("expected translated fence prose to validate, got %v", err)
 	}
 }
 
@@ -2109,6 +2141,9 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 	body := strings.Join([]string{
 		"- Visible prose uses `openclaw config`.",
 		"  1. Visible prose keeps ``nested `ticks` `` exact.",
+		"- Channel configs:",
+		"  - Telegram: Visible prose.",
+		"  - WhatsApp: Visible prose.",
 		"> - Visible prose inside a quote.",
 		"",
 		"```md",
@@ -2134,12 +2169,16 @@ func TestTranslateDocBodyChunkedMasksInlineCodeAndListMarkers(t *testing.T) {
 			t.Fatalf("expected inline code outside fences to be masked:\n%s", input)
 		}
 		if strings.Contains(input, "- Visible prose uses") || strings.Contains(input, "1. Visible prose keeps") || strings.Contains(input, "> - Visible prose inside a quote.") {
-			t.Fatalf("expected list markers outside fences to be masked:\n%s", input)
+			t.Fatalf("expected list prefixes outside fences to be masked:\n%s", input)
+		}
+		if regexp.MustCompile(`(?m)^(?:\s+|>\s*)__OC_I18N_\d+__`).MatchString(input) {
+			t.Fatalf("expected list indentation and quote containers to be masked with their markers:\n%s", input)
 		}
 	}
 	for _, exact := range []string{
 		"- Видимый текст uses `openclaw config`.",
 		"  1. Видимый текст keeps ``nested `ticks` `` exact.",
+		"- Channel configs:\n  - Telegram: Видимый текст.\n  - WhatsApp: Видимый текст.",
 		"> - Видимый текст inside a quote.",
 		"```md\n- Видимый текст and `fenced example` stay exposed.\n```",
 		"> ```md\n> - Видимый текст and `quoted fenced example` stay exposed.\n> ```",
@@ -2286,8 +2325,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 22") {
-		t.Fatalf("expected prompt version 22 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 24") {
+		t.Fatalf("expected prompt version 24 in output metadata:\n%s", text)
 	}
 }
 

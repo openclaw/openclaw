@@ -38,11 +38,13 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { resolveRuntimeThinkingCatalog } from "./runtime-agent-thinking.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
 type RuntimeSessionStoreReadParams = {
   agentId?: string;
+
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   sessionKey: string;
@@ -88,16 +90,6 @@ type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
 const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
   () => import("./runtime-embedded-agent.runtime.js"),
 );
-
-function resolveRuntimeThinkingCatalog(
-  params: Parameters<PluginRuntime["agent"]["resolveThinkingPolicy"]>[0],
-) {
-  if (params.catalog) {
-    return params.catalog;
-  }
-  const configuredCatalog = buildConfiguredModelCatalog({ cfg: getRuntimeConfig() });
-  return configuredCatalog.length > 0 ? configuredCatalog : undefined;
-}
 
 function toSessionAccessScope(params: RuntimeSessionStoreReadParams): SessionAccessScope {
   // Keep plugin runtime parameters aligned with the public SDK wrapper while
@@ -247,6 +239,8 @@ async function createSessionEntry(
         let created: { key: string; agentId: string; entry: SessionEntry };
         if (matchingEntry) {
           const expectedSpawnedCwd = params.spawnedCwd?.trim() || undefined;
+          const expectedExecNode = params.execNode?.trim() || undefined;
+          const expectedExecCwd = params.execCwd?.trim() || undefined;
           const initialEntryMatches =
             matchingEntry.initializationPending === true &&
             matchingEntry.agentHarnessId === harnessInitial?.agentHarnessId &&
@@ -260,6 +254,8 @@ async function createSessionEntry(
                   cliInitial.cliSessionBinding,
                 ))) &&
             matchingEntry.spawnedCwd === expectedSpawnedCwd &&
+            matchingEntry.execNode === expectedExecNode &&
+            matchingEntry.execCwd === expectedExecCwd &&
             isDeepStrictEqual(matchingEntry.pluginExtensions, params.initialEntry.pluginExtensions);
           if (!initialEntryMatches) {
             throw new Error(
@@ -286,6 +282,8 @@ async function createSessionEntry(
             ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
             ...(params.label !== undefined ? { label: params.label } : {}),
             ...(params.spawnedCwd !== undefined ? { spawnedCwd: params.spawnedCwd } : {}),
+            ...(params.execNode !== undefined ? { execNode: params.execNode } : {}),
+            ...(params.execCwd !== undefined ? { execCwd: params.execCwd } : {}),
             initialEntry: {
               ...(harnessInitial ? { agentHarnessId: harnessInitial.agentHarnessId } : {}),
               ...(cliInitial
@@ -487,7 +485,9 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
       const profile = resolveThinkingProfile({
         ...params,
         agentRuntime: effectiveRuntime,
-        catalog: resolveRuntimeThinkingCatalog(params),
+        catalog: resolveRuntimeThinkingCatalog(params, () =>
+          buildConfiguredModelCatalog({ cfg: getRuntimeConfig() }),
+        ),
       });
       const policy: Omit<
         ReturnType<PluginRuntime["agent"]["resolveThinkingPolicy"]>,

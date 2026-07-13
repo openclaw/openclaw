@@ -41,7 +41,7 @@ import {
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 
-export type SlashCommandResult = {
+type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content: string;
   /** Side-effect action the caller should perform after displaying the result. */
@@ -58,7 +58,7 @@ export type SlashCommandResult = {
   failed?: boolean;
 };
 
-export type SlashCommandContext = {
+type SlashCommandContext = {
   sessions: SessionCapability;
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];

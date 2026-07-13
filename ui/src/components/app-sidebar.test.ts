@@ -7,7 +7,7 @@ import type {
   SessionCatalog,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import {
@@ -17,7 +17,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
-import type { SessionCapability, SessionState } from "../lib/sessions/index.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-sidebar.ts";
 import {
@@ -25,6 +25,10 @@ import {
   createLobsterPetLook,
   type LobsterLogoVisitDetail,
 } from "./lobster-pet.ts";
+
+type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
+type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
+type SessionState = SessionCapability["state"];
 
 // Keep the attention widget inert: it fires its own health RPCs (cron.list,
 // models.authStatus) on connect, which would interleave with the nth-call
@@ -58,10 +62,12 @@ type SidebarLifecycleState = HTMLElement & {
   sessionCreatedOrder: Map<string, number>;
   sessionsAgentId: string | null;
   sessionsResult: SessionsListResult | null;
+  requestUpdate: () => void;
   updateComplete: Promise<boolean>;
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
 
@@ -135,14 +141,45 @@ function createSessionState(agentId: string, keys: string[]): SessionState {
   };
 }
 
+function successfulSessionPatch(key: string) {
+  return {
+    ok: true as const,
+    path: "",
+    key,
+    entry: { sessionId: key },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
   const groupsPut = vi.fn(() => Promise.resolve());
-  const patch = vi.fn(() => Promise.resolve(null));
+  const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
+  const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
+  const create = vi.fn(() => Promise.resolve("agent:main:fork"));
+  const patch = vi.fn((key: string, _patch: Parameters<SessionCapability["patch"]>[1]) =>
+    Promise.resolve(successfulSessionPatch(key)),
+  );
+  const deleteSession = vi.fn(
+    (): Promise<SessionDeleteResult> => Promise.resolve({ deleted: false }),
+  );
   const deleteMany = vi.fn(() =>
-    Promise.resolve({ deleted: [] as string[], errors: [], preservedWorktrees: [] }),
+    Promise.resolve({
+      deleted: [] as string[],
+      errors: [] as string[],
+      preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
+    }),
   );
   const sessions = {
     get state() {
@@ -158,7 +195,11 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     subscribeCreated: () => () => undefined,
     groupsLoad: () => Promise.resolve(),
     groupsPut,
+    groupsRename,
+    groupsDelete,
+    create,
     patch,
+    delete: deleteSession,
     deleteMany,
     refresh: () => Promise.resolve(),
   } as unknown as SessionCapability;
@@ -171,7 +212,11 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   return {
     sessions,
     groupsPut,
+    groupsRename,
+    groupsDelete,
+    create,
     patch,
+    deleteSession,
     deleteMany,
     publish,
     publishList(statePatch: Partial<SessionState>) {
@@ -406,9 +451,11 @@ describe("AppSidebar agent chip", () => {
       TWO_AGENTS,
     );
     const onNavigate = vi.fn();
+    const onOpenNewSession = vi.fn();
     sidebar.connected = true;
     sidebar.canPairDevice = true;
     sidebar.onNavigate = onNavigate;
+    sidebar.onOpenNewSession = onOpenNewSession;
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
@@ -450,7 +497,24 @@ describe("AppSidebar agent chip", () => {
 
     const agentRows = [...(menu?.querySelectorAll('[role="menuitemradio"]') ?? [])];
     expect(agentRows).toHaveLength(2);
-    const researchRow = agentRows.find((row) => row.textContent?.includes("research"));
+    const researchAgentRow = [
+      ...(menu?.querySelectorAll(".sidebar-agent-menu__agent-row") ?? []),
+    ].find((row) => row.textContent?.includes("research"));
+    expect(researchAgentRow).toBeDefined();
+    const newSessionButton = researchAgentRow?.querySelector<HTMLButtonElement>(
+      ".sidebar-agent-menu__new",
+    );
+    expect(newSessionButton).toBeInstanceOf(HTMLButtonElement);
+    newSessionButton?.click();
+    await sidebar.updateComplete;
+    expect(onOpenNewSession).toHaveBeenCalledWith("research");
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const researchRow = [...sidebar.querySelectorAll('[role="menuitemradio"]')].find((row) =>
+      row.textContent?.includes("research"),
+    );
     expect(researchRow).toBeDefined();
     (researchRow as HTMLButtonElement).click();
     await sidebar.updateComplete;
@@ -689,6 +753,149 @@ describe("AppSidebar session catalog pagination", () => {
     ],
   });
 
+  it("opens a catalog-targeted draft from its new-session action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "global",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ],
+      },
+    );
+    const onOpenNewSession = vi.fn();
+    sidebar.connected = true;
+    sidebar.onOpenNewSession = onOpenNewSession;
+    sidebar.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: {
+          continueSession: true,
+          archive: false,
+          createSession: { model: "anthropic/claude-opus-4-8" },
+        },
+        hosts: [],
+      },
+    ];
+    await sidebar.updateComplete;
+
+    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-catalog-new");
+    expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
+    button?.click();
+
+    expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
+  });
+
+  it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const backingSessionKey = "agent:main:claude-bound";
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", backingSessionKey]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "global",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ],
+      },
+    );
+    sidebar.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: { continueSession: true, archive: false },
+        hosts: [
+          {
+            hostId: "gateway:local",
+            label: "Local Claude",
+            kind: "gateway",
+            connected: true,
+            sessions: [
+              {
+                threadId: "claude-thread",
+                name: "Claude session",
+                status: "stored",
+                archived: false,
+                openClawSessionKey: backingSessionKey,
+                canContinue: true,
+                canArchive: false,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const backingRows = (sidebar.sessionsResult?.sessions ?? []).map((row) =>
+      row.key === backingSessionKey ? Object.assign({}, row, { unread: true }) : row,
+    );
+    sidebar.sessionsResult = { ...sidebar.sessionsResult!, sessions: backingRows };
+    sidebar.sessionRowsByAgent = { main: backingRows };
+    await sidebar.updateComplete;
+
+    expect(
+      sidebar.querySelectorAll(
+        `.sidebar-agent-section__body [data-session-key="${backingSessionKey}"]`,
+      ),
+    ).toHaveLength(0);
+    expect(
+      sidebar.querySelectorAll(
+        `[data-session-section="catalog:claude"] [data-session-key="${backingSessionKey}"]`,
+      ),
+    ).toHaveLength(1);
+    expect(sidebar.querySelectorAll(`[data-session-key="${backingSessionKey}"]`)).toHaveLength(1);
+    const catalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+    const linkedRow = catalogSection?.querySelector<HTMLElement>(
+      `[data-session-key="${backingSessionKey}"]`,
+    );
+    expect(linkedRow?.getAttribute("draggable")).toBe("true");
+    expect(linkedRow?.querySelector('[data-sidebar-session-pin="true"]')).not.toBeNull();
+    expect(linkedRow?.querySelector('[data-session-menu="true"]')).not.toBeNull();
+    linkedRow?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    const linkedMenu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await linkedMenu?.updateComplete;
+    expect(linkedMenu?.querySelector('[data-shortcut="a"]')).not.toBeNull();
+    expect(linkedMenu?.querySelector('[data-shortcut="d"]')).not.toBeNull();
+    expect(
+      catalogSection?.querySelector(
+        `[data-session-key="${backingSessionKey}"] .session-unread-dot`,
+      ),
+    ).not.toBeNull();
+    expect(
+      catalogSection?.querySelector(".sidebar-recent-sessions__head .session-unread-dot"),
+    ).not.toBeNull();
+
+    const runningRows = backingRows.map((row) =>
+      row.key === backingSessionKey
+        ? Object.assign({}, row, { unread: false, hasActiveRun: true })
+        : row,
+    );
+    sidebar.sessionsResult = { ...sidebar.sessionsResult, sessions: runningRows };
+    sidebar.sessionRowsByAgent = { main: runningRows };
+    await sidebar.updateComplete;
+
+    const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+    expect(
+      runningCatalogSection?.querySelector(
+        `[data-session-key="${backingSessionKey}"].session-row-host--running .session-run-spinner`,
+      ),
+    ).not.toBeNull();
+    expect(
+      runningCatalogSection?.querySelector(".sidebar-recent-sessions__head .session-run-spinner"),
+    ).not.toBeNull();
+  });
+
   it("renders catalog groups inside the shared sessions scroller", async () => {
     vi.useFakeTimers();
     try {
@@ -716,6 +923,55 @@ describe("AppSidebar session catalog pagination", () => {
         sidebar.querySelector('.sidebar-recent-sessions [data-session-section="catalog:codex"]'),
       ).not.toBeNull();
       expect(sidebar.querySelectorAll(".sidebar-sessions")).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refreshes catalog creation capability for the expanded agent", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi.fn().mockResolvedValue(catalogPage([]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar, context } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+        "panel",
+        {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+          agents: [{ id: "main" }, { id: "research" }],
+        },
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
+        agentId: "main",
+        limitPerHost: 40,
+      });
+
+      const selection = context.agentSelection.state as {
+        selectedId: string | null;
+        scopeId: string | null;
+      };
+      selection.selectedId = "research";
+      selection.scopeId = "research";
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        agentId: "research",
+        limitPerHost: 40,
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -837,6 +1093,127 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
+  it("shows a rejected load-more request and clears it after a successful retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+        .mockRejectedValueOnce(
+          new GatewayRequestError({ code: "UNAVAILABLE", message: "Second page unavailable" }),
+        )
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      const section = () => sidebar.querySelector('[data-session-section="catalog:codex"]');
+      const loadMore = () =>
+        sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(section()?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+      expect(
+        section()?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+      ).toContain("Second page unavailable");
+      expect(sidebar.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
+      expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+      expect(loadMore()?.disabled).toBe(false);
+
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        agentId: "main",
+        catalogId: "codex",
+        cursors: { "gateway:local": "page-2" },
+      });
+      expect(section()?.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
+      expect(sidebar.textContent).toContain("Older");
+      expect(loadMore()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["catalog", "host"] as const)(
+    "preserves the current page while exposing a structured %s load-more error",
+    async (errorOwner) => {
+      vi.useFakeTimers();
+      try {
+        const structuredError =
+          errorOwner === "catalog"
+            ? {
+                catalogs: [
+                  {
+                    id: "codex",
+                    label: "Codex",
+                    capabilities: { continueSession: true, archive: true },
+                    hosts: [],
+                    error: { code: "catalog_error", message: "Catalog page failed" },
+                  },
+                ],
+              }
+            : catalogErrorPage("Host page failed");
+        const request = vi
+          .fn()
+          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+          .mockResolvedValueOnce(structuredError)
+          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]));
+        const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+        gateway.publish({
+          hello: {
+            features: { methods: ["sessions.catalog.list"] },
+          } as ApplicationGatewaySnapshot["hello"],
+        });
+        const { sidebar } = await mountSidebar(
+          gateway.gateway,
+          createSessions("main", ["agent:main:main"]),
+        );
+        sidebar.connected = true;
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+
+        const loadMore = () =>
+          sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
+        loadMore()?.click();
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+
+        const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
+        expect(section?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+        expect(
+          section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+        ).toContain(errorOwner === "catalog" ? "Catalog page failed" : "Host page failed");
+        expect(sidebar.textContent).toContain("Newest");
+        expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+
+        loadMore()?.click();
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+        expect(sidebar.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
+        expect(sidebar.textContent).toContain("Older");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("appends host pages and keeps them through the next poll refresh", async () => {
     vi.useFakeTimers();
     try {
@@ -878,6 +1255,7 @@ describe("AppSidebar session catalog pagination", () => {
       await sidebar.updateComplete;
 
       expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-2" },
       });
@@ -887,9 +1265,11 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        agentId: "main",
         limitPerHost: 40,
       });
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-2" },
       });
@@ -902,6 +1282,7 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(5, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-3" },
       });
@@ -959,6 +1340,7 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "replacement-page" },
       });
@@ -1560,6 +1942,210 @@ describe("AppSidebar session source lifecycle", () => {
   });
 });
 
+describe("AppSidebar session mutation feedback", () => {
+  async function mountMutationHarness(client: GatewayBrowserClient = {} as GatewayBrowserClient) {
+    const gateway = createGatewayHarness(client);
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:a",
+      "agent:main:b",
+    ]);
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    return { gateway, harness, sidebar };
+  }
+
+  async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
+    const button = sidebar.querySelector<HTMLButtonElement>(
+      `[data-session-key="${key}"] [data-session-menu="true"]`,
+    );
+    if (!button) {
+      throw new Error(`expected menu button for ${key}`);
+    }
+    button.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("expected session menu");
+    }
+    await menu.updateComplete;
+    return menu;
+  }
+
+  function selectSession(sidebar: SidebarLifecycleState, key: string) {
+    const link = sidebar.querySelector<HTMLAnchorElement>(
+      `[data-session-key="${key}"] .sidebar-recent-session__link`,
+    );
+    if (!link) {
+      throw new Error(`expected row link for ${key}`);
+    }
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+  }
+
+  it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
+    const { harness, sidebar } = await mountMutationHarness();
+    harness.patch.mockRejectedValueOnce(new Error("rename rejected by Gateway"));
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Rejected rename");
+    try {
+      const menu = await openSessionMenu(sidebar, "agent:main:a");
+      menu.querySelector<HTMLButtonElement>('[data-shortcut="r"]')?.click();
+
+      await vi.waitFor(() => {
+        expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
+          "rename rejected by Gateway",
+        );
+      });
+      const error = sidebar.querySelector("[data-sidebar-session-error]");
+      expect(error?.parentElement?.classList.contains("sidebar-sessions")).toBe(true);
+      expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
+
+      error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
+    } finally {
+      promptSpy.mockRestore();
+    }
+  });
+
+  it("surfaces partial batch-delete errors", async () => {
+    const { harness, sidebar } = await mountMutationHarness();
+    harness.deleteMany.mockResolvedValueOnce({
+      deleted: ["agent:main:a"],
+      errors: ["agent:main:b: permission denied"],
+      preservedWorktrees: [],
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      selectSession(sidebar, "agent:main:a");
+      selectSession(sidebar, "agent:main:b");
+      await sidebar.updateComplete;
+      const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
+      row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+      await menu?.updateComplete;
+      menu?.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+
+      await vi.waitFor(() => {
+        expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
+          "agent:main:b: permission denied",
+        );
+      });
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it("suppresses a late rejection after a same-client reconnect", async () => {
+    const { gateway, harness, sidebar } = await mountMutationHarness();
+    const pending = deferred<ReturnType<typeof successfulSessionPatch>>();
+    harness.patch.mockImplementationOnce(() => pending.promise);
+    const menu = await openSessionMenu(sidebar, "agent:main:a");
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="p"]')?.click();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+
+    gateway.publish({ connected: false, reconnecting: true });
+    gateway.publish({ connected: true, reconnecting: false });
+    pending.reject(new Error("late old-connection rejection"));
+    await pending.promise.catch(() => undefined);
+    await Promise.resolve();
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
+  });
+
+  it("does not continue a batch patch on a reconnected Gateway", async () => {
+    const { gateway, harness, sidebar } = await mountMutationHarness();
+    const pending = deferred<ReturnType<typeof successfulSessionPatch>>();
+    harness.patch.mockImplementationOnce(() => pending.promise);
+    selectSession(sidebar, "agent:main:a");
+    selectSession(sidebar, "agent:main:b");
+    await sidebar.updateComplete;
+    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await menu?.updateComplete;
+    menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+
+    gateway.publish({ connected: false, reconnecting: true });
+    gateway.publish({ connected: true, reconnecting: false });
+    pending.resolve(successfulSessionPatch("agent:main:a"));
+    await pending.promise;
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
+
+    expect(harness.patch).toHaveBeenCalledOnce();
+  });
+
+  it("does not truncate a pending batch when another mutation starts", async () => {
+    const { harness, sidebar } = await mountMutationHarness();
+    const firstPatch = deferred<ReturnType<typeof successfulSessionPatch>>();
+    harness.patch.mockImplementationOnce(() => firstPatch.promise);
+    selectSession(sidebar, "agent:main:a");
+    selectSession(sidebar, "agent:main:b");
+    await sidebar.updateComplete;
+    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
+
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    let menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await menu?.updateComplete;
+    menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await menu?.updateComplete;
+    menu?.querySelector<HTMLButtonElement>('[data-shortcut="u"]')?.click();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(3));
+
+    firstPatch.resolve(successfulSessionPatch("agent:main:a"));
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(4));
+    expect(harness.patch.mock.calls.map(([, patch]) => patch)).toEqual(
+      expect.arrayContaining([
+        { archived: true },
+        { archived: true },
+        { unread: true },
+        { unread: true },
+      ]),
+    );
+  });
+
+  it("never force-removes a preserved worktree through a reconnected client", async () => {
+    const request = vi.fn(() => Promise.resolve({}));
+    const { gateway, harness, sidebar } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    harness.deleteSession.mockResolvedValueOnce({
+      deleted: true,
+      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+    });
+    let confirmations = 0;
+    const confirmSpy = vi.spyOn(window, "confirm").mockImplementation(() => {
+      confirmations += 1;
+      if (confirmations === 2) {
+        gateway.publish({ connected: false, reconnecting: true });
+        gateway.publish({ connected: true, reconnecting: false });
+      }
+      return true;
+    });
+    try {
+      const menu = await openSessionMenu(sidebar, "agent:main:a");
+      menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+      await vi.waitFor(() => expect(confirmations).toBe(2));
+
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+});
+
 function createDataTransferStub() {
   const data = new Map<string, string>();
   return {
@@ -1758,6 +2344,7 @@ describe("AppSidebar custom group reordering", () => {
     const gateway = createGateway(client);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    sidebar.connected = true;
     harness.publish({ groups });
     await sidebar.updateComplete;
     return { sidebar, harness };
@@ -1794,7 +2381,6 @@ describe("AppSidebar custom group reordering", () => {
     expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
   });
 });
-
 describe("AppSidebar catalog session rows", () => {
   const catalogList = (
     sessions: Array<Record<string, unknown>>,
@@ -1977,5 +2563,132 @@ describe("AppSidebar catalog session rows", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+describe("AppSidebar group mutation collapsed state", () => {
+  const COLLAPSED_STORAGE_KEY = "openclaw:sidebar:sessions:collapsed-sections";
+
+  async function mountCollapsedGroup(options: {
+    groupsRename?: () => Promise<SessionGroupMutationResult>;
+    groupsDelete?: () => Promise<SessionGroupMutationResult>;
+  }) {
+    localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(["category:Alpha"]));
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    if (options.groupsRename) {
+      harness.groupsRename.mockImplementation(options.groupsRename);
+    }
+    if (options.groupsDelete) {
+      harness.groupsDelete.mockImplementation(options.groupsDelete);
+    }
+    const { sidebar } = await mountSidebar(gatewayHarness.gateway, harness.sessions);
+    sidebar.connected = true;
+    harness.publish({ groups: ["Alpha"] });
+    await sidebar.updateComplete;
+    return { sidebar, harness, gatewayHarness };
+  }
+
+  async function openGroupMenu(sidebar: SidebarLifecycleState) {
+    const actions = sidebar.querySelector<HTMLButtonElement>(
+      '[data-session-section="category:Alpha"] .sidebar-session-group-actions',
+    );
+    if (!actions) {
+      throw new Error("expected group actions trigger");
+    }
+    actions.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector(".sidebar-session-group-menu");
+    if (!menu) {
+      throw new Error("expected group menu");
+    }
+    return menu;
+  }
+
+  it("keeps collapsed keys when group rename is rejected", async () => {
+    const { sidebar, harness } = await mountCollapsedGroup({
+      groupsRename: () => Promise.reject(new Error("rename failed")),
+    });
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
+    const menu = await openGroupMenu(sidebar);
+    const rename = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0];
+    rename?.click();
+    await vi.waitFor(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
+    promptSpy.mockRestore();
+  });
+
+  it("rewrites collapsed keys only after group rename succeeds", async () => {
+    const { sidebar, harness } = await mountCollapsedGroup({
+      groupsRename: () => Promise.resolve("completed"),
+    });
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
+    const menu = await openGroupMenu(sidebar);
+    menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
+    await vi.waitFor(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([
+      "category:Beta",
+    ]);
+    promptSpy.mockRestore();
+  });
+
+  it("ignores a stale group rename after its Gateway reconnects with the same client", async () => {
+    let resolveRename!: (result: SessionGroupMutationResult) => void;
+    const rename = new Promise<SessionGroupMutationResult>((resolve) => {
+      resolveRename = resolve;
+    });
+    const { sidebar, harness, gatewayHarness } = await mountCollapsedGroup({
+      groupsRename: () => rename,
+    });
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Beta");
+    const menu = await openGroupMenu(sidebar);
+    menu.querySelectorAll<HTMLButtonElement>(".session-menu__item")[0]?.click();
+    await vi.waitFor(() => expect(harness.groupsRename).toHaveBeenCalledWith("Alpha", "Beta"));
+
+    gatewayHarness.publish({ connected: false });
+    gatewayHarness.publish({ connected: true });
+    resolveRename("stale");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
+    promptSpy.mockRestore();
+  });
+
+  it("keeps collapsed keys when group delete is rejected", async () => {
+    const { sidebar, harness } = await mountCollapsedGroup({
+      groupsDelete: () => Promise.reject(new Error("delete failed")),
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const menu = await openGroupMenu(sidebar);
+    const items = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item");
+    items[items.length - 1]?.click();
+    await vi.waitFor(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(localStorage.getItem(COLLAPSED_STORAGE_KEY)).toBe(JSON.stringify(["category:Alpha"]));
+    confirmSpy.mockRestore();
+  });
+
+  it("drops collapsed keys only after group delete succeeds", async () => {
+    const { sidebar, harness } = await mountCollapsedGroup({
+      groupsDelete: () => Promise.resolve("completed"),
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const menu = await openGroupMenu(sidebar);
+    const items = menu.querySelectorAll<HTMLButtonElement>(".session-menu__item");
+    items[items.length - 1]?.click();
+    await vi.waitFor(() => expect(harness.groupsDelete).toHaveBeenCalledWith("Alpha"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(JSON.parse(localStorage.getItem(COLLAPSED_STORAGE_KEY) ?? "[]")).toEqual([]);
+    confirmSpy.mockRestore();
   });
 });

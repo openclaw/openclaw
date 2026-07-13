@@ -11,7 +11,7 @@ type OpenClawVersion = {
 };
 
 /** Parses stable, prerelease, and legacy dot-beta OpenClaw versions. */
-export function parseOpenClawVersion(raw: string | null | undefined): OpenClawVersion | null {
+function parseOpenClawVersion(raw: string | null | undefined): OpenClawVersion | null {
   if (!raw) {
     return null;
   }
@@ -44,7 +44,7 @@ export function normalizeOpenClawVersionBase(raw: string | null | undefined): st
   return `${parsed.major}.${parsed.minor}.${parsed.patch}`;
 }
 
-export function isSameOpenClawStableFamily(
+function isSameOpenClawStableFamily(
   a: string | null | undefined,
   b: string | null | undefined,
 ): boolean {

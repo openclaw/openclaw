@@ -2,7 +2,11 @@
  * Server channel lifecycle tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelGatewayContext, ChannelId, ChannelPlugin } from "../channels/plugins/types.js";
+import type {
+  ChannelGatewayContext,
+  ChannelId,
+  ChannelPlugin,
+} from "../channels/plugins/types.public.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,

@@ -3929,11 +3929,6 @@
       "translated": "正在加载 cron 作业…"
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "代理"
-    },
-    {
       "id": "native.android.0f33ca43db97b2a9",
       "source": "Choose and inspect the assistants available on this gateway.",
       "translated": "选择并检查此 gateway 上可用的助手。"
@@ -4434,6 +4429,31 @@
       "translated": "地址"
     },
     {
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "已发现"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "默认智能体"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "代理"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "实例 ID"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "扫描二维码以配对"
+    },
+    {
       "id": "native.android.6926684139f297b5",
       "source": "Limited Gateway access",
       "translated": "Gateway 访问受限"
@@ -4447,6 +4467,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "断开连接"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "诊断"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "添加 Gateway"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "扫描或粘贴设置代码以添加另一个 Gateway。"
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "扫描二维码"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "设置码"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "如何获取设置代码？"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android 可以扫描或粘贴现有设置码，但此 gateway 目前尚未向应用开放设置码生成功能。请在 gateway 主机上使用 openclaw qr 生成二维码/代码，然后在此扫描或在下方粘贴设置码。"
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "尚未找到 Gateway。如果发现功能受阻，请使用手动设置。"
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "连接"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4529,9 @@
       "translated": "忘记"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "Gateway 设置"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "扫描或粘贴设置代码以添加另一个 Gateway。"
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "添加 Gateway"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "设置码"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android 可以扫描或粘贴现有设置码，但此 gateway 目前尚未向应用开放设置码生成功能。请在 gateway 主机上使用 openclaw qr 生成二维码/代码，然后在此扫描或在下方粘贴设置码。"
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "连接设置"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "设置码"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "手动配置 Gateway"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -5007,6 +5042,11 @@
       "id": "native.android.b3185067fb7fa30e",
       "source": "Default",
       "translated": "默认"
+    },
+    {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
     },
     {
       "id": "native.android.f154617fd2233082",
@@ -17569,9 +17609,9 @@
       "translated": "启用 Peekaboo Bridge"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "允许已签名工具（例如 `peekaboo`）通过 PeekabooBridge 驱动 UI 自动化。"
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "允许已签名的工具（例如 `peekaboo`）通过 PeekabooBridge 驱动 UI 自动化。需要 Computer Control；否则请运行 Peekaboo 自己的 Mac 应用。"
     },
     {
       "id": "native.apple.72b24ed86295d6fa",
@@ -19332,6 +19372,16 @@
       "id": "native.apple.7a62dc7bc8d3fab9",
       "source": "Mac",
       "translated": "Mac"
+    },
+    {
+      "id": "native.apple.fb09a404bfd12fa9",
+      "source": "Device",
+      "translated": "设备"
+    },
+    {
+      "id": "native.apple.7ed2af81aa7647fb",
+      "source": "Node",
+      "translated": "节点"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

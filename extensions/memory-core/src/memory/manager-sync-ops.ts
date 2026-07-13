@@ -277,7 +277,7 @@ function shouldIgnoreMemoryWatchPath(
   return classifyMemoryMultimodalPath(normalized, multimodalSettings) === null;
 }
 
-export function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
+function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "watch") {
   void sync().catch((err: unknown) => {
     log.warn(`memory sync failed (${reason}): ${String(err)}`);
   });
