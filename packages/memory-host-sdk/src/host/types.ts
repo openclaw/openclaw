@@ -51,8 +51,8 @@ export type MemorySyncParams = {
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
 
-/** Runtime backend/mode diagnostics for memory search. */
-type MemorySearchRuntimeQmdCollectionValidationDebug = {
+/** @public Runtime backend/mode diagnostics for memory search. */
+export type MemorySearchRuntimeQmdCollectionValidationDebug = {
   cacheState?: "hit" | "miss" | "write" | "bypass-force" | "error";
   elapsedMs: number;
   collectionCount: number;
@@ -60,20 +60,20 @@ type MemorySearchRuntimeQmdCollectionValidationDebug = {
   showCalls?: number;
 };
 
-type MemorySearchRuntimeQmdMultiCollectionProbeDebug = {
+/** @public */ export type MemorySearchRuntimeQmdMultiCollectionProbeDebug = {
   cacheState?: "hit" | "miss" | "write" | "error";
   elapsedMs: number;
   supported: boolean;
 };
 
-type MemorySearchRuntimeQmdSearchPlanDebug = {
+/** @public */ export type MemorySearchRuntimeQmdSearchPlanDebug = {
   command?: "query" | "search" | "vsearch";
   collectionCount?: number;
   groupCount?: number;
   sources?: MemorySource[];
 };
 
-type MemorySearchRuntimeQmdDebug = {
+/** @public */ export type MemorySearchRuntimeQmdDebug = {
   collectionValidation?: MemorySearchRuntimeQmdCollectionValidationDebug;
   multiCollectionProbe?: MemorySearchRuntimeQmdMultiCollectionProbeDebug;
   searchPlan?: MemorySearchRuntimeQmdSearchPlanDebug;

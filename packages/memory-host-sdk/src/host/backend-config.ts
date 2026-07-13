@@ -63,14 +63,14 @@ export type ResolvedMemoryBackendConfig = {
   qmd?: ResolvedQmdConfig;
 };
 
-type ResolvedQmdCollection = {
+/** @public */ export type ResolvedQmdCollection = {
   name: string;
   path: string;
   pattern: string;
   kind: "memory" | "custom" | "sessions";
 };
 
-type ResolvedQmdUpdateConfig = {
+/** @public */ export type ResolvedQmdUpdateConfig = {
   intervalMs: number;
   debounceMs: number;
   onBoot: boolean;
@@ -83,14 +83,14 @@ type ResolvedQmdUpdateConfig = {
   embedTimeoutMs: number;
 };
 
-type ResolvedQmdLimitsConfig = {
+/** @public */ export type ResolvedQmdLimitsConfig = {
   maxResults: number;
   maxSnippetChars: number;
   maxInjectedChars: number;
   timeoutMs: number;
 };
 
-type ResolvedQmdSessionConfig = {
+/** @public */ export type ResolvedQmdSessionConfig = {
   enabled: boolean;
   exportDir?: string;
   retentionDays?: number;
