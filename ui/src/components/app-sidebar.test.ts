@@ -7,7 +7,7 @@ import type {
   SessionCatalog,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import {
@@ -1094,6 +1094,126 @@ describe("AppSidebar session catalog pagination", () => {
       vi.useRealTimers();
     }
   });
+
+  it("shows a rejected load-more request and clears it after a successful retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+        .mockRejectedValueOnce(
+          new GatewayRequestError({ code: "UNAVAILABLE", message: "Second page unavailable" }),
+        )
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      const section = () => sidebar.querySelector('[data-session-section="catalog:codex"]');
+      const loadMore = () =>
+        sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(section()?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+      expect(
+        section()?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+      ).toContain("Second page unavailable");
+      expect(sidebar.sessionCatalogs[0]?.error?.code).toBe("UNAVAILABLE");
+      expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+      expect(loadMore()?.disabled).toBe(false);
+
+      loadMore()?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        catalogId: "codex",
+        cursors: { "gateway:local": "page-2" },
+      });
+      expect(section()?.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
+      expect(sidebar.textContent).toContain("Older");
+      expect(loadMore()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["catalog", "host"] as const)(
+    "preserves the current page while exposing a structured %s load-more error",
+    async (errorOwner) => {
+      vi.useFakeTimers();
+      try {
+        const structuredError =
+          errorOwner === "catalog"
+            ? {
+                catalogs: [
+                  {
+                    id: "codex",
+                    label: "Codex",
+                    capabilities: { continueSession: true, archive: true },
+                    hosts: [],
+                    error: { code: "catalog_error", message: "Catalog page failed" },
+                  },
+                ],
+              }
+            : catalogErrorPage("Host page failed");
+        const request = vi
+          .fn()
+          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2"))
+          .mockResolvedValueOnce(structuredError)
+          .mockResolvedValueOnce(catalogPage([{ threadId: "thread-2", name: "Older" }]));
+        const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+        gateway.publish({
+          hello: {
+            features: { methods: ["sessions.catalog.list"] },
+          } as ApplicationGatewaySnapshot["hello"],
+        });
+        const { sidebar } = await mountSidebar(
+          gateway.gateway,
+          createSessions("main", ["agent:main:main"]),
+        );
+        sidebar.connected = true;
+        await sidebar.updateComplete;
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+
+        const loadMore = () =>
+          sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
+        loadMore()?.click();
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+
+        const section = sidebar.querySelector('[data-session-section="catalog:codex"]');
+        expect(section?.querySelector('[data-session-catalog-error="codex"]')).not.toBeNull();
+        expect(
+          section?.querySelector(".sidebar-session-group-toggle")?.getAttribute("aria-label"),
+        ).toContain(errorOwner === "catalog" ? "Catalog page failed" : "Host page failed");
+        expect(sidebar.textContent).toContain("Newest");
+        expect(sidebar.sessionCatalogs[0]?.hosts[0]?.nextCursor).toBe("page-2");
+
+        loadMore()?.click();
+        await vi.advanceTimersByTimeAsync(0);
+        await sidebar.updateComplete;
+        expect(sidebar.querySelector('[data-session-catalog-error="codex"]')).toBeNull();
+        expect(sidebar.textContent).toContain("Older");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("appends host pages and keeps them through the next poll refresh", async () => {
     vi.useFakeTimers();
