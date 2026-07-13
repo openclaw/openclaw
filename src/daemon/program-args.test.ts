@@ -24,15 +24,7 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return {
-    ...actual,
-    execFileSync: childProcessMocks.execFileSync,
-  };
-});
-
-import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
+import { resolveGatewayProgramArguments } from "./program-args.js";
 
 const originalArgv = [...process.argv];
 
