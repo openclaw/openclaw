@@ -82,6 +82,7 @@ export const vi: TranslationMap = {
     relink: "Liên kết lại",
     waitForScan: "Chờ quét",
     logout: "Đăng xuất",
+    skipToMainContent: "Chuyển đến nội dung chính",
   },
   nativeLinkMenu: {
     label: "Hành động liên kết",
@@ -1122,6 +1123,7 @@ export const vi: TranslationMap = {
     settingsView: "Chế độ xem cài đặt",
     simple: "Đơn giản",
     advanced: "Nâng cao",
+    content: "Nội dung cài đặt",
     themeImported: "Đã nhập {name}.",
     themeRemoved: "Đã xóa chủ đề tùy chỉnh.",
     channels: {
@@ -1476,6 +1478,8 @@ export const vi: TranslationMap = {
     platforms: "Nền tảng: {platforms}",
     installNamed: "Cài đặt {name}",
     notFound: "Không tìm thấy skill.",
+    openDetails: "Mở thông tin chi tiết về {name}",
+    enabledNamed: "Đã bật {name}",
     invalidLink: "Liên kết ClawHub không hợp lệ",
     overview: "Tổng quan",
     skillCard: "Thẻ Skill",
@@ -3522,11 +3526,13 @@ export const vi: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Trạng thái tự động hóa",
       all: "Tất cả",
       active: "Đang hoạt động",
       paused: "Đã tạm dừng",
     },
     list: {
+      viewLabel: "Chế độ xem tự động hóa",
       searchPlaceholder: "Tìm kiếm tác vụ theo lịch",
       newTask: "Tác vụ mới",
       filters: "Bộ lọc",
@@ -3597,6 +3603,7 @@ export const vi: TranslationMap = {
       nextWake: "Lần chạy tiếp theo",
     },
     detail: {
+      tabsLabel: "Chi tiết tự động hóa",
       newTitle: "Tác vụ theo lịch mới",
       newSubtitle: "Mô tả những gì OpenClaw nên làm, sau đó chọn thời điểm chạy.",
       back: "Tất cả tác vụ tự động",

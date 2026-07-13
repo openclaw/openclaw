@@ -82,6 +82,7 @@ export const id: TranslationMap = {
     relink: "Tautkan ulang",
     waitForScan: "Tunggu pemindaian",
     logout: "Keluar",
+    skipToMainContent: "Lewati ke konten utama",
   },
   nativeLinkMenu: {
     label: "Tindakan tautan",
@@ -1121,6 +1122,7 @@ export const id: TranslationMap = {
     settingsView: "Tampilan pengaturan",
     simple: "Sederhana",
     advanced: "Lanjutan",
+    content: "Konten pengaturan",
     themeImported: "Mengimpor {name}.",
     themeRemoved: "Tema kustom dihapus.",
     channels: {
@@ -1476,6 +1478,8 @@ export const id: TranslationMap = {
     platforms: "Platform: {platforms}",
     installNamed: "Pasang {name}",
     notFound: "Skill tidak ditemukan.",
+    openDetails: "Buka detail {name}",
+    enabledNamed: "{name} diaktifkan",
     invalidLink: "Tautan ClawHub tidak valid",
     overview: "Ikhtisar",
     skillCard: "Kartu Skill",
@@ -3530,11 +3534,13 @@ export const id: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Status otomatisasi",
       all: "Semua",
       active: "Aktif",
       paused: "Dijeda",
     },
     list: {
+      viewLabel: "Tampilan otomatisasi",
       searchPlaceholder: "Cari tugas terjadwal",
       newTask: "Tugas baru",
       filters: "Filter",
@@ -3606,6 +3612,7 @@ export const id: TranslationMap = {
       nextWake: "Bangun berikutnya",
     },
     detail: {
+      tabsLabel: "Detail otomatisasi",
       newTitle: "Tugas terjadwal baru",
       newSubtitle: "Jelaskan apa yang harus dilakukan OpenClaw, lalu pilih kapan ia berjalan.",
       back: "Semua otomatisasi",

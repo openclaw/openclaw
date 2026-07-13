@@ -82,6 +82,7 @@ export const zh_TW: TranslationMap = {
     relink: "重新連結",
     waitForScan: "等待掃描",
     logout: "登出",
+    skipToMainContent: "跳至主要內容",
   },
   nativeLinkMenu: {
     label: "連結動作",
@@ -1110,6 +1111,7 @@ export const zh_TW: TranslationMap = {
     settingsView: "設定檢視",
     simple: "簡易",
     advanced: "進階",
+    content: "設定內容",
     themeImported: "已匯入 {name}。",
     themeRemoved: "已移除自訂佈景主題。",
     channels: {
@@ -1456,6 +1458,8 @@ export const zh_TW: TranslationMap = {
     platforms: "平台：{platforms}",
     installNamed: "安裝 {name}",
     notFound: "找不到 skill。",
+    openDetails: "開啟 {name} 詳細資料",
+    enabledNamed: "{name} 已啟用",
     invalidLink: "ClawHub 連結無效",
     overview: "總覽",
     skillCard: "Skill 卡片",
@@ -3461,11 +3465,13 @@ export const zh_TW: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "自動化狀態",
       all: "全部",
       active: "進行中",
       paused: "已暫停",
     },
     list: {
+      viewLabel: "自動化檢視",
       searchPlaceholder: "搜尋排程工作",
       newTask: "新工作",
       filters: "篩選條件",
@@ -3536,6 +3542,7 @@ export const zh_TW: TranslationMap = {
       nextWake: "下次喚醒",
     },
     detail: {
+      tabsLabel: "自動化詳細資料",
       newTitle: "新排程任務",
       newSubtitle: "描述 OpenClaw 應執行的內容，然後選擇執行時間。",
       back: "所有自動化",

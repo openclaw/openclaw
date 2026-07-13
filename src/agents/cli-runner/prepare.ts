@@ -106,6 +106,7 @@ import { getClaudeLiveSessionGenerationForOwner } from "./claude-live-session.js
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
+import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, resolveNodeClaudePlacement } from "./prepare-claude.js";
 import {
   buildCliSessionHistoryPrompt,
   hasCliSessionTranscript,
@@ -115,6 +116,11 @@ import {
 } from "./session-history.js";
 import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
+function resolveClaudeCliContextModelId(modelId: string): string {
+  const trimmed = modelId.trim();
+  const lower = trimmed.toLowerCase();
+  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
+}
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the Crestodian orchestrator. */
   crestodianTool?: import("../tools/crestodian-tool.js").CrestodianToolOptions;
@@ -411,26 +417,6 @@ async function resolveCliSkillsPrompt(params: {
   });
 }
 
-const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
-  opus: "claude-opus-4-8",
-  "opus-4.8": "claude-opus-4-8",
-  "opus-4-8": "claude-opus-4-8",
-  "opus-4.7": "claude-opus-4-7",
-  "opus-4-7": "claude-opus-4-7",
-  "opus-4.6": "claude-opus-4-6",
-  "opus-4-6": "claude-opus-4-6",
-  sonnet: "claude-sonnet-5",
-  "sonnet-5": "claude-sonnet-5",
-  "sonnet-4.6": "claude-sonnet-4-6",
-  "sonnet-4-6": "claude-sonnet-4-6",
-};
-
-function resolveClaudeCliContextModelId(modelId: string): string {
-  const trimmed = modelId.trim();
-  const lower = trimmed.toLowerCase();
-  return CLAUDE_CLI_CONTEXT_MODEL_ALIASES[lower] ?? trimmed;
-}
-
 /** Overrides preparation dependencies for CLI runner tests. */
 export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
   Object.assign(prepareDeps, overrides);
@@ -498,6 +484,11 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  const nodeClaudePlacement = resolveNodeClaudePlacement({
+    backendId: backendResolved.id,
+    execHost: params.sessionEntry?.execHost,
+    execNode: params.sessionEntry?.execNode,
+  });
   if (
     params.cliToolAvailability !== undefined &&
     (backendResolved.nativeToolMode !== "selectable" || !backendResolved.resolveExecutionArgs)
@@ -791,6 +782,7 @@ export async function prepareCliRunContext(
     ? buildCrestodianToolsMcpServerConfig(internalParams.crestodianTool)
     : undefined;
   const bundleMcpEnabled =
+    !nodeClaudePlacement &&
     !isSideQuestion &&
     !crestodianMcpConfig &&
     backendResolved.bundleMcp &&
@@ -905,19 +897,21 @@ export async function prepareCliRunContext(
       executionMode,
       env: preparedBackend.env,
     } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
-    preparedExecution = await backendResolved.prepareExecution?.(
-      (backendResolved.id === "google-gemini-cli"
-        ? {
-            ...prepareExecutionContext,
-            // Private bridge for bundled Gemini CLI. This is intentionally not
-            // part of the public Plugin SDK until a credential-forwarding
-            // contract exists.
-            authCredential,
-          }
-        : prepareExecutionContext) as typeof prepareExecutionContext & {
-        authCredential?: AuthProfileCredential;
-      },
-    );
+    preparedExecution = nodeClaudePlacement
+      ? undefined
+      : await backendResolved.prepareExecution?.(
+          (backendResolved.id === "google-gemini-cli"
+            ? {
+                ...prepareExecutionContext,
+                // Private bridge for bundled Gemini CLI. This is intentionally not
+                // part of the public Plugin SDK until a credential-forwarding
+                // contract exists.
+                authCredential,
+              }
+            : prepareExecutionContext) as typeof prepareExecutionContext & {
+            authCredential?: AuthProfileCredential;
+          },
+        );
     const preparedBackendCleanup =
       cleanupPreparedBackend || preparedExecution?.cleanup
         ? async () => {
@@ -962,12 +956,13 @@ export async function prepareCliRunContext(
             await preparedExecution?.beforeExecution?.();
           }
         : undefined;
-    const claudeSkillsPlugin = isSideQuestion
-      ? { args: [], cleanup: async () => {} }
-      : await prepareDeps.prepareClaudeCliSkillsPlugin({
-          backendId: backendResolved.id,
-          skillsSnapshot: params.skillsSnapshot,
-        });
+    const claudeSkillsPlugin =
+      isSideQuestion || nodeClaudePlacement
+        ? { args: [], cleanup: async () => {} }
+        : await prepareDeps.prepareClaudeCliSkillsPlugin({
+            backendId: backendResolved.id,
+            skillsSnapshot: params.skillsSnapshot,
+          });
     const preparedCleanup =
       preparedBackendCleanup || claudeSkillsPlugin.args.length > 0
         ? async () => {
@@ -1094,7 +1089,9 @@ export async function prepareCliRunContext(
     const candidateClaudeCliSessionId =
       resolveReusableCliSessionId(backendReusableCliSession)?.trim() || undefined;
     const hasClaudeCliCandidate =
-      candidateClaudeCliSessionId !== undefined && isClaudeCliProvider(params.provider);
+      !nodeClaudePlacement &&
+      candidateClaudeCliSessionId !== undefined &&
+      isClaudeCliProvider(params.provider);
     const claudeCliTranscriptMissing =
       hasClaudeCliCandidate &&
       !(await prepareDeps.claudeCliSessionTranscriptHasContent({
@@ -1168,7 +1165,7 @@ export async function prepareCliRunContext(
           moduleUrl: import.meta.url,
         });
     const systemPromptSkillsPrompt =
-      isSideQuestion || claudeSkillsPlugin.args.length > 0
+      isSideQuestion || nodeClaudePlacement || claudeSkillsPlugin.args.length > 0
         ? ""
         : await resolveCliSkillsPrompt({
             skillsSnapshot: params.skillsSnapshot,
@@ -1306,6 +1303,9 @@ export async function prepareCliRunContext(
     const allowRawTranscriptReseed =
       backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
     const rawTranscriptReseedReason = reusableCliSessionId ? "session-expired" : invalidatedReason;
+    // Node placement keeps this: the history prompt is built from the
+    // gateway-side OpenClaw transcript, so a fresh remote CLI session still
+    // receives prior conversation context via stdin.
     const shouldPrepareOpenClawHistoryPrompt =
       !isSideQuestion && (!reusableCliSessionId || allowRawTranscriptReseed);
     const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt

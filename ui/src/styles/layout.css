@@ -27,6 +27,25 @@
   overflow: hidden;
 }
 
+.shell-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  z-index: 250;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-md), var(--focus-ring);
+  text-decoration: none;
+  transform: translate(-50%, -160%);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.shell-skip-link:focus {
+  transform: translate(-50%, 0);
+}
+
 @supports (height: 100dvh) {
   .shell {
     height: 100dvh;
@@ -1206,6 +1225,24 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   min-height: 0;
   padding: 0 8px;
   margin-top: 10px;
+}
+
+.sidebar-session-error {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sidebar-session-error .callout__content {
+  max-height: 72px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-session-error .callout__dismiss {
+  width: 22px;
+  height: 22px;
 }
 
 /* min-height: 0 down this chain lets the recent list shrink and scroll instead
