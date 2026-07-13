@@ -46,7 +46,7 @@ import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
-import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
+import { compareValidSemver } from "../infra/semver.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -317,7 +317,7 @@ function compareNpmSemver(a: string, b: string): number {
   if (releaseCmp !== null) {
     return releaseCmp;
   }
-  return compareComparableSemver(parseComparableSemver(a), parseComparableSemver(b)) ?? 0;
+  return compareValidSemver(a, b) ?? 0;
 }
 
 type TrustedOfficialPrereleaseResolution =

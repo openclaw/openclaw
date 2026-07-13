@@ -1657,7 +1657,7 @@ describe("registerPolicyDoctorChecks", () => {
       tools: { elevated: { enabled: true } },
       gateway: {
         mode: "remote",
-        remote: { enabled: true, url: "wss://remote.example.test:18789" },
+        remote: { url: "wss://remote.example.test:18789" },
         controlUi: {
           allowInsecureAuth: true,
           dangerouslyDisableDeviceAuth: true,
@@ -1725,9 +1725,7 @@ describe("registerPolicyDoctorChecks", () => {
       tools: { elevated: { enabled: false } },
       gateway: {
         mode: "local",
-        remote: {
-          enabled: true,
-        },
+        remote: {},
         controlUi: {
           allowInsecureAuth: false,
           dangerouslyDisableDeviceAuth: false,
@@ -7943,7 +7941,6 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy(),
       gateway: {
         remote: {
-          enabled: true,
           url: "wss://remote.example.test:18789",
         },
       },

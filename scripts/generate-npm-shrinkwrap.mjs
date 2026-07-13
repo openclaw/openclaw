@@ -47,7 +47,23 @@ function normalizeOverrides(overrides) {
   if (!overrides || typeof overrides !== "object" || Array.isArray(overrides)) {
     return {};
   }
-  return normalizeOverrideValue(overrides);
+  const normalized = {};
+  for (const [key, value] of Object.entries(overrides)) {
+    const scopedSeparator = key.indexOf(">");
+    if (scopedSeparator > 0) {
+      const parentSelector = key.slice(0, scopedSeparator).trim();
+      const dependencyName = key.slice(scopedSeparator + 1).trim();
+      if (parentSelector && dependencyName) {
+        const current = normalized[parentSelector];
+        const nested = isPlainObject(current) ? current : {};
+        nested[dependencyName] = normalizeOverrideValue(value);
+        normalized[parentSelector] = nested;
+        continue;
+      }
+    }
+    normalized[key] = normalizeOverrideValue(value);
+  }
+  return normalized;
 }
 
 function isPlainObject(value) {
@@ -1454,6 +1470,7 @@ export {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   mergeOverrides,
+  normalizeOverrides,
   applyPackageExtensionPeerMetadata,
   normalizeNpmVersionDrift,
   packageJsonForShrinkwrap,

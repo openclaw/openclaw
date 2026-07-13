@@ -84,6 +84,7 @@ export function disableShrinkwrappedOverrideConflictSources(
 ): string[];
 export function exactOverrideRulesFromOverrides(overrides: unknown): unknown;
 export function exactVersionFromOverrideSpec(spec: unknown): string | null;
+export function normalizeOverrides(overrides: unknown): Record<string, unknown>;
 export function mergeOverrides(
   packageOverrides: unknown,
   workspaceOverrides: unknown,
