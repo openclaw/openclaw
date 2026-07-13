@@ -215,11 +215,11 @@ function normalizeUsageCostCache(raw: unknown, pricingFingerprint: string): Usag
   };
 }
 
-async function readUsageCostCache(
+function readUsageCostCache(
   agentId: string | undefined,
   pricingFingerprint: string,
   databasePath?: string,
-): Promise<UsageCostCacheFile> {
+): UsageCostCacheFile {
   try {
     const raw = readSessionCostUsageCacheJson(agentId, databasePath);
     if (!raw) {
@@ -231,11 +231,11 @@ async function readUsageCostCache(
   }
 }
 
-async function writeUsageCostCache(
+function writeUsageCostCache(
   agentId: string | undefined,
   cache: UsageCostCacheFile,
   databasePath?: string,
-): Promise<void> {
+): void {
   const valueJson = JSON.stringify(cache);
   writeSessionCostUsageCacheJson({
     agentId,
@@ -1694,7 +1694,7 @@ async function refreshCostUsageCacheForAgent(params?: {
   }
   try {
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
-    const cache = await readUsageCostCache(params?.agentId, pricingFingerprint, databasePath);
+    const cache = readUsageCostCache(params?.agentId, pricingFingerprint, databasePath);
     const files = await listUsageCountedTranscriptFiles(params?.agentId, {
       sessionsDir: params?.sessionsDir,
     });
@@ -1758,7 +1758,7 @@ async function refreshCostUsageCacheForAgent(params?: {
         now - lastCheckpointMs >= USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
       ) {
         cache.updatedAt = now;
-        await writeUsageCostCache(params?.agentId, cache, databasePath);
+        writeUsageCostCache(params?.agentId, cache, databasePath);
         dirtyCount = 0;
         lastCheckpointMs = Date.now();
       }
@@ -1766,7 +1766,7 @@ async function refreshCostUsageCacheForAgent(params?: {
 
     if (cacheMutated || dirtyCount > 0) {
       cache.updatedAt = Date.now();
-      await writeUsageCostCache(params?.agentId, cache, databasePath);
+      writeUsageCostCache(params?.agentId, cache, databasePath);
     }
     return "refreshed";
   } finally {
@@ -1796,10 +1796,8 @@ export async function loadCostUsageSummaryFromCache(params: {
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   const refreshKey = databasePath;
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  let [cache, files] = await Promise.all([
-    readUsageCostCache(params.agentId, pricingFingerprint, databasePath),
-    listUsageCountedTranscriptFiles(params.agentId),
-  ]);
+  let cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+  let files = await listUsageCountedTranscriptFiles(params.agentId);
   const staleFiles = getUsageCostStaleFiles({
     cache,
     files,
@@ -1815,10 +1813,8 @@ export async function loadCostUsageSummaryFromCache(params: {
         agentId: params.agentId,
         startMs: params.startMs,
       });
-      [cache, files] = await Promise.all([
-        readUsageCostCache(params.agentId, pricingFingerprint, databasePath),
-        listUsageCountedTranscriptFiles(params.agentId),
-      ]);
+      cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+      files = await listUsageCountedTranscriptFiles(params.agentId);
       if (result === "refreshed") {
         const remainingStaleFiles = getUsageCostStaleFiles({
           cache,
@@ -1858,10 +1854,8 @@ export async function loadSessionCostSummaryFromCache(params: {
   const databasePath = resolveUsageCostCacheDatabasePath(params.agentId);
   const refreshKey = databasePath;
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  let [cache, file] = await Promise.all([
-    readUsageCostCache(params.agentId, pricingFingerprint, databasePath),
-    resolveUsageCostTranscriptFile(params.sessionFile),
-  ]);
+  let cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+  let file = await resolveUsageCostTranscriptFile(params.sessionFile);
   let entry = cache.files[params.sessionFile];
   let stale =
     !file ||
@@ -1879,10 +1873,8 @@ export async function loadSessionCostSummaryFromCache(params: {
         sessionFiles: [params.sessionFile],
       });
       if (result === "refreshed") {
-        [cache, file] = await Promise.all([
-          readUsageCostCache(params.agentId, pricingFingerprint, databasePath),
-          resolveUsageCostTranscriptFile(params.sessionFile),
-        ]);
+        cache = readUsageCostCache(params.agentId, pricingFingerprint, databasePath);
+        file = await resolveUsageCostTranscriptFile(params.sessionFile);
         entry = cache.files[params.sessionFile];
         stale =
           !file ||
