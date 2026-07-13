@@ -7,7 +7,13 @@ import type {
 } from "../../plugins/hook-types.js";
 import type { SourcePromptPolicy, SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { FinalizedMsgContext } from "../templating.js";
+import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
+import {
+  resolveHarnessSourceVisibleRepliesDefault,
+  resolveTurnModelOverride,
+} from "./dispatch-from-config.harness-defaults.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { isExplicitSourceReplyCommand } from "./source-reply-delivery-mode.js";
 
 type HarnessSourceVisibleRepliesDefault = "automatic" | "message_tool";
 
@@ -46,58 +52,95 @@ export function resolveSourcePromptInput(
 }
 
 type SourcePolicyResolution = {
+  chatType: ReturnType<typeof normalizeChatType>;
   deliveryMode?: SourceReplyDeliveryMode;
+  harnessDefaultVisibleReplies?: HarnessSourceVisibleRepliesDefault;
+  prefersMessageToolDelivery: boolean;
   promptPolicy?: SourcePromptPolicy;
 };
 
 /** Run source policy and translate its restrictive result to reply options. */
 export async function resolveSourcePolicy(params: {
+  cfg: OpenClawConfig;
   hookContext: CanonicalInboundMessageHookContext;
   inboundClaimContext: PluginHookInboundClaimContext;
   ctx: FinalizedMsgContext;
   sessionKey?: string;
+  acpDispatchSessionKey?: string;
+  sessionAgentId: string;
+  sessionStoreEntry: {
+    entry?: SessionEntry;
+    sessionKey?: string;
+    store?: Record<string, SessionEntry>;
+  };
   replyOptions?: DispatchFromConfigParams["replyOptions"];
-  configuredVisibleReplies?: HarnessSourceVisibleRepliesDefault;
-  defaultVisibleReplies?: HarnessSourceVisibleRepliesDefault;
   sendPolicy: "allow" | "deny";
-  runHook?: (
-    event: PluginHookSourcePolicyEvent,
-    context: PluginHookSourcePolicyContext,
-  ) => Promise<PluginHookSourcePolicyResult | undefined>;
+  isInternalWebchatTurn: boolean;
+  abortSignal?: AbortSignal;
+  hookRunner?: {
+    hasHooks(hookName: "source_policy"): boolean;
+    runSourcePolicy(
+      event: PluginHookSourcePolicyEvent,
+      context: PluginHookSourcePolicyContext,
+    ): Promise<PluginHookSourcePolicyResult | undefined>;
+  };
+  traceReplyPhase<T>(phase: string, run: () => Promise<T>): Promise<T>;
 }): Promise<SourcePolicyResolution> {
-  const result = await params.runHook?.(
-    {
-      content: params.hookContext.content,
-      body: params.hookContext.bodyForAgent ?? params.hookContext.body,
-      channel: params.hookContext.channelId,
-      accountId: params.hookContext.accountId,
-      conversationId: params.inboundClaimContext.conversationId,
-      sessionKey: params.sessionKey,
-      runId: params.replyOptions?.runId,
-      senderId: params.hookContext.senderId,
-      replyToId: params.hookContext.replyToId,
-      replyToBody: params.hookContext.replyToBody,
-      replyToSender: params.hookContext.replyToSender,
-      isGroup: params.hookContext.isGroup,
-      chatType: params.ctx.ChatType,
-      inboundEventKind: params.ctx.InboundEventKind,
-      requestedSourceReplyDeliveryMode: params.replyOptions?.sourceReplyDeliveryMode,
-      configuredVisibleReplies: params.configuredVisibleReplies,
-      defaultVisibleReplies: params.defaultVisibleReplies,
-      sendPolicy: params.sendPolicy,
-    },
-    {
-      channelId: params.hookContext.channelId,
-      accountId: params.hookContext.accountId,
-      conversationId: params.inboundClaimContext.conversationId,
-      sessionKey: params.sessionKey,
-      runId: params.replyOptions?.runId,
-      senderId: params.hookContext.senderId,
-      replyToId: params.hookContext.replyToId,
-      replyToBody: params.hookContext.replyToBody,
-      replyToSender: params.hookContext.replyToSender,
-    },
-  );
+  const chatType = normalizeChatType(params.ctx.ChatType);
+  const configuredVisibleReplies =
+    chatType === "group" || chatType === "channel"
+      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+      : params.cfg.messages?.visibleReplies;
+  const harnessDefaultVisibleReplies =
+    configuredVisibleReplies === undefined && chatType !== "group" && chatType !== "channel"
+      ? resolveHarnessSourceVisibleRepliesDefault({
+          cfg: params.cfg,
+          ctx: params.ctx,
+          entry: params.sessionStoreEntry.entry,
+          sessionAgentId: params.sessionAgentId,
+          sessionKey: params.acpDispatchSessionKey,
+          sessionStore: params.sessionStoreEntry.store,
+          turnModelOverride: resolveTurnModelOverride(params.replyOptions),
+        })
+      : undefined;
+  const event: PluginHookSourcePolicyEvent = {
+    content: params.hookContext.content,
+    body: params.hookContext.bodyForAgent ?? params.hookContext.body,
+    channel: params.hookContext.channelId,
+    accountId: params.hookContext.accountId,
+    conversationId: params.inboundClaimContext.conversationId,
+    sessionKey: params.sessionKey,
+    runId: params.replyOptions?.runId,
+    senderId: params.hookContext.senderId,
+    replyToId: params.hookContext.replyToId,
+    replyToBody: params.hookContext.replyToBody,
+    replyToSender: params.hookContext.replyToSender,
+    isGroup: params.hookContext.isGroup,
+    chatType: params.ctx.ChatType,
+    inboundEventKind: params.ctx.InboundEventKind,
+    requestedSourceReplyDeliveryMode: params.replyOptions?.sourceReplyDeliveryMode,
+    configuredVisibleReplies,
+    defaultVisibleReplies: harnessDefaultVisibleReplies,
+    sendPolicy: params.sendPolicy,
+  };
+  const context: PluginHookSourcePolicyContext = {
+    channelId: params.hookContext.channelId,
+    accountId: params.hookContext.accountId,
+    conversationId: params.inboundClaimContext.conversationId,
+    sessionKey: params.sessionKey,
+    runId: params.replyOptions?.runId,
+    senderId: params.hookContext.senderId,
+    replyToId: params.hookContext.replyToId,
+    replyToBody: params.hookContext.replyToBody,
+    replyToSender: params.hookContext.replyToSender,
+  };
+  const result = params.hookRunner?.hasHooks("source_policy")
+    ? await params.traceReplyPhase("reply.source_policy_hooks", () =>
+        runWithDispatchAbortSignal(params.abortSignal, () =>
+          params.hookRunner!.runSourcePolicy(event, context),
+        ),
+      )
+    : undefined;
   const deliveryMode =
     result?.sourceReplyDeliveryMode === "message_tool_only"
       ? "message_tool_only"
@@ -117,5 +160,21 @@ export async function resolveSourcePolicy(params: {
           : {}),
       }
     : params.replyOptions?.sourcePromptPolicy;
-  return { deliveryMode, promptPolicy };
+  const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
+  return {
+    chatType,
+    deliveryMode,
+    harnessDefaultVisibleReplies,
+    prefersMessageToolDelivery:
+      deliveryMode === "message_tool_only" ||
+      (params.ctx.InboundEventKind === "room_event" && !params.isInternalWebchatTurn) ||
+      (deliveryMode === undefined &&
+        !isExplicitSourceReplyCommand(params.ctx, params.cfg) &&
+        (configuredVisibleReplies === "message_tool" ||
+          (!params.isInternalWebchatTurn && effectiveVisibleReplies === "message_tool"))),
+    promptPolicy,
+  };
 }
+import { normalizeChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";

@@ -35,7 +35,6 @@ import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
 } from "../../bindings/records.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import {
   type AgentPlanStep,
@@ -121,11 +120,7 @@ import {
   resolveRoutedPolicyConversationType,
   resolveSessionStoreLookup,
 } from "./dispatch-from-config.context.js";
-import {
-  createShouldEmitVerboseProgress,
-  resolveHarnessSourceVisibleRepliesDefault,
-  resolveTurnModelOverride,
-} from "./dispatch-from-config.harness-defaults.js";
+import { createShouldEmitVerboseProgress } from "./dispatch-from-config.harness-defaults.js";
 import { createDispatchReplyOperationCoordinator } from "./dispatch-from-config.lifecycle.js";
 import {
   createFinalizationAwareTtsPayloadApplier,
@@ -962,7 +957,6 @@ async function dispatchReplyFromConfigInner(
     sessionKey: acpDispatchSessionKey,
     agentId: sessionAgentId,
   });
-  const chatType = normalizeChatType(ctx.ChatType);
   const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
   const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
   const emptyFinalAllowedAsSilent =
@@ -974,50 +968,28 @@ async function dispatchReplyFromConfigInner(
         ? cfg.surfaces?.[silentReplySurface]?.silentReply
         : undefined,
     }) === "allow";
-  const configuredVisibleReplies =
-    chatType === "group" || chatType === "channel"
-      ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
-      : cfg.messages?.visibleReplies;
-  const harnessDefaultVisibleReplies =
-    configuredVisibleReplies === undefined && chatType !== "group" && chatType !== "channel"
-      ? resolveHarnessSourceVisibleRepliesDefault({
-          cfg,
-          ctx,
-          entry: sessionStoreEntry.entry,
-          sessionAgentId,
-          sessionKey: acpDispatchSessionKey,
-          sessionStore: sessionStoreEntry.store,
-          turnModelOverride: resolveTurnModelOverride(params.replyOptions),
-        })
-      : undefined;
-  const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
-  const sourcePolicy = await resolveSourcePolicy({
+  const {
+    chatType,
+    deliveryMode: sourcePolicyDeliveryMode,
+    harnessDefaultVisibleReplies,
+    prefersMessageToolDelivery,
+    promptPolicy: sourcePromptPolicy,
+  } = await resolveSourcePolicy({
+    cfg,
     hookContext,
     inboundClaimContext,
     ctx,
     sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
+    acpDispatchSessionKey,
+    sessionAgentId,
+    sessionStoreEntry,
     replyOptions: params.replyOptions,
-    configuredVisibleReplies,
-    defaultVisibleReplies: harnessDefaultVisibleReplies,
     sendPolicy,
-    runHook: hookRunner?.hasHooks("source_policy")
-      ? (event, context) =>
-          traceReplyPhase("reply.source_policy_hooks", () =>
-            runWithDispatchAbortSignal(getPreDispatchAbortSignal(), () =>
-              hookRunner.runSourcePolicy(event, context),
-            ),
-          )
-      : undefined,
+    isInternalWebchatTurn,
+    abortSignal: getPreDispatchAbortSignal(),
+    hookRunner: hookRunner ?? undefined,
+    traceReplyPhase,
   });
-  const sourcePolicyDeliveryMode = sourcePolicy.deliveryMode;
-  const sourcePromptPolicy = sourcePolicy.promptPolicy;
-  const prefersMessageToolDelivery =
-    sourcePolicyDeliveryMode === "message_tool_only" ||
-    (ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn) ||
-    (sourcePolicyDeliveryMode === undefined &&
-      !isExplicitSourceReplyCommand(ctx, cfg) &&
-      (configuredVisibleReplies === "message_tool" ||
-        (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
     ...(profileAlsoAllow ?? []),
