@@ -569,13 +569,13 @@ function renderNumberInput(params: {
 
   // Touch devices and some browsers hide native number spinners; keep explicit
   // one-step adjust buttons so single-step edits stay possible without typing.
-  const step = (value: number) => {
+  const step = (delta: number) => {
     if (disabled) {
       return;
     }
     const current = Number(displayValue);
     const base = Number.isFinite(current) ? current : 0;
-    onPatch(path, base + value);
+    onPatch(path, base + delta);
   };
   const control = html`
     <button
