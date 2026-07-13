@@ -11,7 +11,10 @@ import {
   resolveGatewayAgentAuthorizationSubject,
   revokeAuthorizationAgentSessionBinding,
 } from "./agent-session-bindings.js";
-import { createAuthorizationDelegation, revokeAuthorizationDelegation } from "./delegations.js";
+import {
+  createAuthorizationDelegation,
+  revokeAuthorizationDelegation,
+} from "./delegations.test-support.js";
 import { createStateGatewayAuthorizationRuntime } from "./state-provider.js";
 import {
   addIsolationDomainMember,

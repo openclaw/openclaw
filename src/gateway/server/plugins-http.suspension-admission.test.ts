@@ -245,6 +245,7 @@ describe("plugin HTTP suspension admission", () => {
       getSuspensionBlockerCount: vi.fn(() => 0),
     };
     const context = {
+      authorization: { mode: "legacy" },
       cron,
       logGateway: { warn: vi.fn() },
       chatAbortControllers: new Map(),

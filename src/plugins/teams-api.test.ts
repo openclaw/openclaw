@@ -6,7 +6,7 @@ import {
   revokeAuthorizationAgentSessionBinding,
 } from "../gateway/authorization/agent-session-bindings.js";
 import { bindGatewayClientAuthorizationDomain } from "../gateway/authorization/client-domain.js";
-import { createAuthorizationDelegation } from "../gateway/authorization/delegations.js";
+import { createAuthorizationDelegation } from "../gateway/authorization/delegations.test-support.js";
 import { withGatewayAuthorizationContext } from "../gateway/authorization/request-context.js";
 import { createStateGatewayAuthorizationRuntime } from "../gateway/authorization/state-provider.js";
 import {

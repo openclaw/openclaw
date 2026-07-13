@@ -1,3 +1,4 @@
+// Test-only delegation fixtures. Production provisioning is atomic in teams-bootstrap.ts.
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,

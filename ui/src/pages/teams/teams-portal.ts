@@ -1,5 +1,6 @@
 import { html, render, type TemplateResult } from "lit";
 import { GatewayBrowserClient, type GatewayBrowserClientOptions } from "../../api/gateway.ts";
+import { i18n, t } from "../../i18n/index.ts";
 
 export type TeamsPortalRoute = "login" | "invite";
 export type TeamsPortalMode = "read" | "request" | "write";
@@ -180,7 +181,7 @@ function responseError(payload: unknown): string {
       return message;
     }
   }
-  return "Unable to complete the Teams request.";
+  return t("workspaces.teams.errors.requestFailed");
 }
 
 function requestParam(value: string | null | undefined): string | null {
@@ -258,7 +259,7 @@ function readPortalTabResult(
     !tab ||
     tab.id !== expected.tabId
   ) {
-    throw new Error("The requested Teams tab is unavailable.");
+    throw new Error(t("workspaces.teams.errors.tabUnavailable"));
   }
   return { workspaceId: expected.workspaceId, capabilityMode: result.capabilityMode, tab };
 }
@@ -273,7 +274,7 @@ function readPortalTabUpdateResult(
       : {};
   const tab = readPortalTab(result.tab);
   if (result.workspaceId !== expected.workspaceId || !tab || tab.id !== expected.tabId) {
-    throw new Error("The updated Teams tab is unavailable.");
+    throw new Error(t("workspaces.teams.errors.updatedTabUnavailable"));
   }
   return tab;
 }
@@ -556,7 +557,7 @@ export class TeamsPortalStore {
     this.inviteCode = null;
     this.update({ invitePending: false });
     if (!code) {
-      this.update({ status: "error", error: "An invite link is required." });
+      this.update({ status: "error", error: t("workspaces.teams.errors.inviteRequired") });
       return;
     }
     await this.authenticate("/api/teams/invites/accept", {
@@ -634,7 +635,7 @@ export class TeamsPortalStore {
       const code =
         payload && typeof payload === "object" ? (payload as { code?: unknown }).code : undefined;
       if (typeof code !== "string" || !code.trim()) {
-        throw new Error("The invite could not be created.");
+        throw new Error(t("workspaces.teams.errors.inviteCreateFailed"));
       }
       const created = readOwnerInvites(
         payload && typeof payload === "object"
@@ -648,7 +649,7 @@ export class TeamsPortalStore {
         created.state !== "active"
       ) {
         if (this.isCurrent(generation)) {
-          throw new Error("The invite could not be created.");
+          throw new Error(t("workspaces.teams.errors.inviteCreateFailed"));
         }
         return;
       }
@@ -802,13 +803,17 @@ export class TeamsPortalStore {
       if (path === "/api/teams/invites/accept") {
         const destination = readInviteDestination(payload);
         if (!destination) {
-          throw new Error("The invite destination is unavailable.");
+          throw new Error(t("workspaces.teams.errors.inviteDestinationUnavailable"));
         }
         this.update({ workspaceId: destination.workspaceId, tabId: destination.tabId });
       }
       const session = responseSession(payload);
       if (!session.authenticated) {
-        this.update({ status: "signed-out", session, error: "Authentication was not accepted." });
+        this.update({
+          status: "signed-out",
+          session,
+          error: t("workspaces.teams.errors.authenticationRejected"),
+        });
         return;
       }
       await this.useSession(session, generation);
@@ -972,18 +977,18 @@ export class TeamsPortalStore {
         }
         if (!helloComplete) {
           helloComplete = true;
-          rejectHello?.(new Error("The Teams connection could not be established."));
+          rejectHello?.(new Error(t("workspaces.teams.errors.connectionFailed")));
           return;
         }
         this.invalidateLifecycle();
-        this.update({ status: "error", error: "The Teams connection was lost." });
+        this.update({ status: "error", error: t("workspaces.teams.errors.connectionLost") });
       },
     }) as TeamsPortalGateway;
     gateway = createdGateway;
     this.gateway = gateway;
     if (closeBeforeAssignment && !helloComplete) {
       helloComplete = true;
-      rejectHello?.(new Error("The Teams connection could not be established."));
+      rejectHello?.(new Error(t("workspaces.teams.errors.connectionFailed")));
     } else if (helloBeforeAssignment) {
       resolveHello?.();
     }
@@ -1117,21 +1122,40 @@ function formValues(event: SubmitEvent): {
 } {
   const values = new FormData(event.currentTarget as HTMLFormElement);
   return {
-    loginLabel: String(values.get("loginLabel") ?? ""),
-    password: String(values.get("password") ?? ""),
-    domainId: String(values.get("domainId") ?? ""),
+    loginLabel: formDataString(values, "loginLabel"),
+    password: formDataString(values, "password"),
+    domainId: formDataString(values, "domainId"),
   };
+}
+
+function formDataString(values: FormData, name: string): string {
+  const value = values.get(name);
+  return typeof value === "string" ? value : "";
 }
 
 function renderWidget(widget: TeamsPortalWidget): TemplateResult {
   if (!["builtin:markdown", "builtin:stat-card", "builtin:table"].includes(widget.kind)) {
-    return html`<li data-teams-widget="restricted">Restricted content</li>`;
+    return html`<li data-teams-widget="restricted">${t("workspaces.teams.restrictedContent")}</li>`;
   }
-  return html`<li data-teams-widget=${widget.kind}>${widget.title ?? "Untitled widget"}</li>`;
+  return html`<li data-teams-widget=${widget.kind}>
+    ${widget.title ?? t("workspaces.teams.untitledWidget")}
+  </li>`;
 }
 
 function presetLabel(preset: TeamsInvitePreset): string {
-  return preset === "read" ? "Read" : preset === "request" ? "Request changes" : "Write";
+  return preset === "read"
+    ? t("workspaces.teams.accessRead")
+    : preset === "request"
+      ? t("workspaces.teams.accessRequest")
+      : t("workspaces.teams.accessWrite");
+}
+
+function inviteStateLabel(state: TeamsOwnerInvite["state"]): string {
+  return state === "active"
+    ? t("workspaces.teams.inviteStateActive")
+    : state === "redeemed"
+      ? t("workspaces.teams.inviteStateRedeemed")
+      : t("workspaces.teams.inviteStateRevoked");
 }
 
 export function renderTeamsPortal(
@@ -1139,7 +1163,10 @@ export function renderTeamsPortal(
   actions: TeamsPortalActions = {},
 ): TemplateResult {
   const editable = snapshot.mode === "request" || snapshot.mode === "write";
-  const submitLabel = snapshot.mode === "request" ? "Request change" : "Save change";
+  const submitLabel =
+    snapshot.mode === "request"
+      ? t("workspaces.teams.requestChange")
+      : t("workspaces.teams.saveChange");
   const visibleInvites = (snapshot.ownerInvites ?? []).filter(
     (invite) => invite.tabId === snapshot.selectedShareTabId,
   );
@@ -1148,13 +1175,13 @@ export function renderTeamsPortal(
   return html`
     <main class="teams-portal" aria-live="polite">
       <header>
-        <h1>Teams</h1>
+        <h1>${t("workspaces.teams.title")}</h1>
         ${snapshot.session?.authenticated
-          ? html`<button @click=${actions.onLogout}>Log out</button>`
+          ? html`<button @click=${actions.onLogout}>${t("workspaces.teams.logout")}</button>`
           : ""}
       </header>
       ${snapshot.error ? html`<p role="alert">${snapshot.error}</p>` : ""}
-      ${snapshot.status === "loading" ? html`<p>Loading…</p>` : ""}
+      ${snapshot.status === "loading" ? html`<p>${t("workspaces.teams.loading")}</p>` : ""}
       ${snapshot.status === "signed-out" && snapshot.route === "invite" && snapshot.invitePending
         ? html`<form
             @submit=${(event: SubmitEvent) => {
@@ -1166,11 +1193,15 @@ export function renderTeamsPortal(
               });
             }}
           >
-            <label>Email <input name="loginLabel" autocomplete="username" required /></label>
             <label
-              >Password <input name="password" type="password" autocomplete="new-password" required
+              >${t("workspaces.teams.email")}
+              <input name="loginLabel" autocomplete="username" required
             /></label>
-            <button type="submit">Accept invite</button>
+            <label
+              >${t("workspaces.teams.password")}
+              <input name="password" type="password" autocomplete="new-password" required
+            /></label>
+            <button type="submit">${t("workspaces.teams.acceptInvite")}</button>
           </form>`
         : ""}
       ${snapshot.status === "signed-out" && (!snapshot.invitePending || snapshot.route === "login")
@@ -1181,13 +1212,16 @@ export function renderTeamsPortal(
               actions.onLogin?.(values);
             }}
           >
-            <label>Email <input name="loginLabel" autocomplete="username" required /></label>
             <label
-              >Password
+              >${t("workspaces.teams.email")}
+              <input name="loginLabel" autocomplete="username" required
+            /></label>
+            <label
+              >${t("workspaces.teams.password")}
               <input name="password" type="password" autocomplete="current-password" required
             /></label>
-            <label>Domain <input name="domainId" required /></label>
-            <button type="submit">Log in</button>
+            <label>${t("workspaces.teams.domain")} <input name="domainId" required /></label>
+            <button type="submit">${t("workspaces.teams.login")}</button>
           </form>`
         : ""}
       ${snapshot.tab
@@ -1198,7 +1232,7 @@ export function renderTeamsPortal(
             </ul>
             ${editable
               ? html`<label
-                    >Title
+                    >${t("workspaces.teams.editTitle")}
                     <input
                       data-teams-draft
                       .value=${snapshot.draftTitle}
@@ -1211,8 +1245,11 @@ export function renderTeamsPortal(
                   </button>`
               : ""}
             ${snapshot.ownerSharing
-              ? html`<section data-teams-owner-sharing aria-label="Share this tab">
-                  <h3>Share this tab</h3>
+              ? html`<section
+                  data-teams-owner-sharing
+                  aria-label=${t("workspaces.teams.shareThisTab")}
+                >
+                  <h3>${t("workspaces.teams.shareThisTab")}</h3>
                   <form
                     @submit=${(event: SubmitEvent) => {
                       event.preventDefault();
@@ -1221,7 +1258,7 @@ export function renderTeamsPortal(
                       if (!isInvitePreset(preset)) {
                         return;
                       }
-                      const recipientLabel = String(values.get("recipientLabel") ?? "").trim();
+                      const recipientLabel = formDataString(values, "recipientLabel").trim();
                       actions.onCreateOwnerInvite?.({
                         preset,
                         ...(recipientLabel ? { recipientLabel } : {}),
@@ -1229,7 +1266,7 @@ export function renderTeamsPortal(
                     }}
                   >
                     <label
-                      >Access
+                      >${t("workspaces.teams.access")}
                       <select name="preset" required>
                         ${(snapshot.invitePresets ?? []).map(
                           (preset) => html`<option value=${preset}>${presetLabel(preset)}</option>`,
@@ -1237,7 +1274,7 @@ export function renderTeamsPortal(
                       </select>
                     </label>
                     <label
-                      >Tab
+                      >${t("workspaces.teams.tab")}
                       <select
                         data-teams-share-tab
                         .value=${snapshot.selectedShareTabId ?? ""}
@@ -1250,40 +1287,51 @@ export function renderTeamsPortal(
                       </select>
                     </label>
                     <label
-                      >Recipient (optional) <input name="recipientLabel" autocomplete="off"
+                      >${t("workspaces.teams.recipientOptional")}
+                      <input name="recipientLabel" autocomplete="off"
                     /></label>
-                    <button type="submit">Create invite</button>
+                    <button type="submit">${t("workspaces.teams.createInvite")}</button>
                   </form>
                   ${visibleOneTimeInviteLink
                     ? html`<label
-                        >One-time invite link
+                        >${t("workspaces.teams.oneTimeInviteLink")}
                         <input
                           readonly
                           .value=${visibleOneTimeInviteLink}
-                          aria-label="One-time invite link"
+                          aria-label=${t("workspaces.teams.oneTimeInviteLink")}
                         />
                       </label>`
                     : ""}
                   <ul>
                     ${visibleInvites.map(
                       (invite) => html`<li>
-                        ${`${presetLabel(invite.preset)} ${invite.state}`}${invite.recipientLabel
-                          ? ` for ${invite.recipientLabel}`
-                          : ""}
+                        ${invite.recipientLabel
+                          ? t("workspaces.teams.inviteSummaryFor", {
+                              access: presetLabel(invite.preset),
+                              state: inviteStateLabel(invite.state),
+                              recipient: invite.recipientLabel,
+                            })
+                          : t("workspaces.teams.inviteSummary", {
+                              access: presetLabel(invite.preset),
+                              state: inviteStateLabel(invite.state),
+                            })}
                         ${invite.state === "active"
                           ? html`<button @click=${() => actions.onRevokeOwnerInvite?.(invite.id)}>
-                              Revoke
+                              ${t("workspaces.teams.revoke")}
                             </button>`
                           : ""}
                       </li>`,
                     )}
                   </ul>
                   ${(snapshot.pendingChangeRequests ?? []).length
-                    ? html`<h4>Pending changes</h4>
+                    ? html`<h4>${t("workspaces.teams.pendingChanges")}</h4>
                         <ul>
                           ${(snapshot.pendingChangeRequests ?? []).map(
                             (request) => html`<li>
-                              ${request.requester} requested “${request.proposedTitle}”
+                              ${t("workspaces.teams.requestedChange", {
+                                requester: request.requester,
+                                title: request.proposedTitle,
+                              })}
                               <button
                                 @click=${() =>
                                   actions.onDecideChangeRequest?.({
@@ -1291,7 +1339,7 @@ export function renderTeamsPortal(
                                     decision: "approved",
                                   })}
                               >
-                                Approve
+                                ${t("workspaces.teams.approve")}
                               </button>
                               <button
                                 @click=${() =>
@@ -1300,7 +1348,7 @@ export function renderTeamsPortal(
                                     decision: "rejected",
                                   })}
                               >
-                                Reject
+                                ${t("workspaces.teams.reject")}
                               </button>
                             </li>`,
                           )}
@@ -1340,7 +1388,8 @@ export function mountTeamsPortal(params: {
       params.host,
     );
   };
-  const unsubscribe = store.subscribe(redraw);
+  const unsubscribeStore = store.subscribe(redraw);
+  const unsubscribeI18n = i18n.subscribe(redraw);
   redraw();
   const inviteCode =
     params.route === "invite" ? consumeInviteCodeFromFragment(location, history) : null;
@@ -1354,7 +1403,8 @@ export function mountTeamsPortal(params: {
   window.addEventListener("pagehide", clearOneTimeInviteLink);
   window.addEventListener("popstate", clearOneTimeInviteLink);
   return () => {
-    unsubscribe();
+    unsubscribeStore();
+    unsubscribeI18n();
     window.removeEventListener("pagehide", clearOneTimeInviteLink);
     window.removeEventListener("popstate", clearOneTimeInviteLink);
     store.dispose();
@@ -1365,5 +1415,5 @@ export function mountTeamsPortal(params: {
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message
     ? error.message
-    : "Unable to load the Teams portal.";
+    : t("workspaces.teams.errors.portalLoadFailed");
 }

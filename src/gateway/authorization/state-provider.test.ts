@@ -6,7 +6,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { GatewayAuthorizationRequest, GatewayResourceRef } from "./contracts.js";
-import { createAuthorizationDelegation, revokeAuthorizationDelegation } from "./delegations.js";
+import {
+  createAuthorizationDelegation,
+  revokeAuthorizationDelegation,
+} from "./delegations.test-support.js";
 import { createStateGatewayAuthorizationRuntime } from "./state-provider.js";
 import {
   addIsolationDomainMember,

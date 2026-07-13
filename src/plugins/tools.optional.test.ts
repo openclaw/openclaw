@@ -715,8 +715,14 @@ describe("resolvePluginTools optional tools", () => {
       },
     ]);
 
-    const [first] = resolvePluginTools(createResolveToolsParams({ context: firstContext }));
-    const [second] = resolvePluginTools(createResolveToolsParams({ context: secondContext }));
+    const first = expectDefined(
+      resolvePluginTools(createResolveToolsParams({ context: firstContext }))[0],
+      "first resolved tool test invariant",
+    );
+    const second = expectDefined(
+      resolvePluginTools(createResolveToolsParams({ context: secondContext }))[0],
+      "second resolved tool test invariant",
+    );
     expect(first).not.toBe(second);
     first.prepareArguments?.({});
     await first.execute("call-1", {}, undefined);
@@ -788,7 +794,10 @@ describe("resolvePluginTools optional tools", () => {
         },
       },
     ]);
-    const [tool] = resolvePluginTools(createResolveToolsParams({ context }));
+    const tool = expectDefined(
+      resolvePluginTools(createResolveToolsParams({ context }))[0],
+      "resolved abort-ignoring tool test invariant",
+    );
     const controller = new AbortController();
     const pending = tool.execute("call-abort", {}, controller.signal);
     await vi.waitFor(() => expect(releaseRetainedCallback).toBeTypeOf("function"));
