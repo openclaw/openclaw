@@ -155,13 +155,14 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(page.client).toBe(client);
     expect(page.agentsList).toBe(preloadedAgents);
     expect(page.agentsSelectedId).toBe("main");
-    expect(page.requestGeneration).toBe(0);
+    const initialRequestGeneration = page.requestGeneration;
+    expect(initialRequestGeneration).toBeGreaterThan(0);
 
     page.context = { gateway: gateway(snapshot(client, false)) } as unknown as ApplicationContext;
     page.subscriptions.hostUpdate();
     expect(page.agentsList).toBeNull();
     expect(page.agentsSelectedId).toBeNull();
-    expect(page.requestGeneration).toBeGreaterThan(0);
+    expect(page.requestGeneration).toBeGreaterThan(initialRequestGeneration);
     page.subscriptions.hostDisconnected();
   });
 

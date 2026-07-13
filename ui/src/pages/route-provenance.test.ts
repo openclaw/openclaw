@@ -28,6 +28,10 @@ const loaderOptions: RouteLoaderOptions = {
   cause: "preload",
 };
 
+const allAgentsSelection = {
+  state: { selectedId: null, scopeId: null },
+} as ApplicationContext["agentSelection"];
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -79,7 +83,10 @@ describe("route preload gateway provenance", () => {
     const agentsGateway = mutableGateway(snapshot(null, false));
     const agentsData = await loadRoute<AgentsRouteData>(agentsPage, {
       gateway: agentsGateway.gateway,
-      agents: { state: { agentsList: null, agentsError: null } },
+      agents: {
+        state: { agentsList: null, agentsError: null },
+        ensureList: vi.fn(async () => null),
+      },
     } as unknown as ApplicationContext);
     expect(agentsData.gateway).toBe(agentsGateway.gateway);
     expect(agentsData.gatewaySnapshot).toBe(agentsGateway.gateway.snapshot);
@@ -102,6 +109,7 @@ describe("route preload gateway provenance", () => {
       gateway,
       sessions: { list: vi.fn(() => list.promise) },
       runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
+      agentSelection: allAgentsSelection,
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(client, false));
@@ -121,6 +129,7 @@ describe("route preload gateway provenance", () => {
     const gateway = mutable.gateway;
     const request = loadRoute<UsageRouteData>(usagePage, {
       gateway,
+      agentSelection: allAgentsSelection,
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(client, false));
