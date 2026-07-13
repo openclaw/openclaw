@@ -1,8 +1,8 @@
-// Azure Speech voice list live timeout proof.
-// Uses a local node:http server that accepts the connection but never responds,
-// proving that listAzureSpeechVoices aborts within the configured timeout.
+// Azure Speech voice list timeout integration proof.
+// A loopback server accepts the connection but never responds so this exercises
+// the real fetch abort path without depending on Azure latency.
 import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { listAzureSpeechVoices } from "./tts.js";
 
@@ -14,10 +14,8 @@ async function listenLocal(server: Server): Promise<number> {
   return (server.address() as AddressInfo).port;
 }
 
-async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> {
-  for (const socket of sockets) {
-    socket.destroy();
-  }
+async function closeServer(server: Server): Promise<void> {
+  server.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
       if (error) {
@@ -29,7 +27,7 @@ async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> 
   });
 }
 
-describe("listAzureSpeechVoices live timeout", () => {
+describe("listAzureSpeechVoices timeout", () => {
   const originalFetch = globalThis.fetch;
 
   afterEach(() => {
@@ -37,14 +35,9 @@ describe("listAzureSpeechVoices live timeout", () => {
   });
 
   it("aborts a hanging voice list request within the configured timeout", async () => {
-    const sockets = new Set<Socket>();
     let requestCount = 0;
     const server = createServer((_req, _res) => {
       requestCount += 1;
-    });
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      socket.on("close", () => sockets.delete(socket));
     });
 
     const port = await listenLocal(server);
@@ -74,7 +67,7 @@ describe("listAzureSpeechVoices live timeout", () => {
       expect(Date.now() - startedAt).toBeLessThan(2_000);
       expect(requestCount).toBe(1);
     } finally {
-      await closeServer(server, sockets);
+      await closeServer(server);
     }
   });
 });
