@@ -144,6 +144,63 @@ describe("agent steering queue", () => {
     expect(runs.get("retry")?.cleanupHandled).toBe(false);
   });
 
+  it("releases finalized items for immediate steering retry", () => {
+    const runs = runMap([
+      makeRun({
+        runId: "finalized",
+        cleanup: "keep",
+        cleanupCompletedAt: 2_500,
+      }),
+    ]);
+
+    expect(
+      leasePendingAgentSteeringItemsFromSubagentRuns({
+        runs,
+        requesterSessionKey,
+        leaseId: "lease-1",
+        now: 3_000,
+      })?.runIds,
+    ).toEqual(["finalized"]);
+
+    expect(
+      releaseLeasedAgentSteeringItemsFromSubagentRuns({
+        runs,
+        runIds: ["finalized"],
+        leaseId: "stale-lease",
+      }),
+    ).toBe(0);
+    expect(runs.get("finalized")?.delivery).toMatchObject({
+      status: "in_progress",
+      steeringLeaseId: "lease-1",
+    });
+    expect(runs.get("finalized")?.cleanupHandled).toBe(true);
+
+    expect(
+      releaseLeasedAgentSteeringItemsFromSubagentRuns({
+        runs,
+        runIds: ["finalized"],
+        leaseId: "lease-1",
+        error: "prompt submission failed",
+      }),
+    ).toBe(1);
+    expect(runs.get("finalized")?.delivery).toMatchObject({
+      status: "pending",
+      steeringLeaseId: undefined,
+      steeringLeasedAt: undefined,
+      lastError: "prompt submission failed",
+    });
+    expect(runs.get("finalized")?.cleanupHandled).toBe(false);
+
+    expect(
+      leasePendingAgentSteeringItemsFromSubagentRuns({
+        runs,
+        requesterSessionKey,
+        leaseId: "lease-2",
+        now: 3_001,
+      })?.runIds,
+    ).toEqual(["finalized"]);
+  });
+
   it("preserves suspended payloads across prompt submission failures", () => {
     const runs = runMap([
       makeRun({

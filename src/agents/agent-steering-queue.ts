@@ -248,8 +248,9 @@ export function releaseLeasedAgentSteeringItemsFromSubagentRuns(params: {
 }): number {
   let updated = 0;
   for (const runId of params.runIds) {
-    const delivery = params.runs.get(runId)?.delivery;
-    if (!delivery || delivery.steeringLeaseId !== params.leaseId) {
+    const entry = params.runs.get(runId);
+    const delivery = entry?.delivery;
+    if (!entry || !delivery || delivery.steeringLeaseId !== params.leaseId) {
       continue;
     }
     delivery.status = typeof delivery.suspendedAt === "number" ? "suspended" : "pending";
@@ -257,11 +258,9 @@ export function releaseLeasedAgentSteeringItemsFromSubagentRuns(params: {
     delivery.steeringLeasedAt = undefined;
     delivery.steeringInjectedAt = undefined;
     delivery.lastError = params.error ?? delivery.lastError ?? null;
-    const entry = params.runs.get(runId);
-    if (entry && typeof entry.cleanupCompletedAt !== "number") {
-      // Non-finalized runs can be retried by cleanup/delivery after release.
-      entry.cleanupHandled = false;
-    }
+    // The matching steering lease acquired this in-process cleanup lock.
+    // Release must relinquish it so the pending result can be leased again.
+    entry.cleanupHandled = false;
     updated += 1;
   }
   return updated;
