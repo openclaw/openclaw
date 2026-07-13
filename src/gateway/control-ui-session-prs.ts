@@ -151,6 +151,7 @@ function branchCreateUrl(context: SessionPullRequestGitContext): string {
   return `https://github.com/${owner}/${repo}/pull/new/${branch}`;
 }
 
+const SHORTSTAT_FILES = /(\d+) files? changed/;
 const SHORTSTAT_INSERTIONS = /(\d+) insertion/;
 const SHORTSTAT_DELETIONS = /(\d+) deletion/;
 // Matches sessions-diff's untracked scan bound; stats degrade to an
@@ -193,28 +194,31 @@ async function untrackedFileAdditions(root: string, filePath: string): Promise<n
   }
 }
 
-async function untrackedAdditions(root: string): Promise<number> {
+async function untrackedStats(root: string): Promise<{ additions: number; files: number }> {
   const listing = await gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
   if (!listing) {
-    return 0;
+    return { additions: 0, files: 0 };
   }
   const paths = listing.split("\0").filter(Boolean);
   let additions = 0;
   for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
     additions += await untrackedFileAdditions(root, filePath);
   }
-  return additions;
+  return { additions, files: paths.length };
 }
+
+type BranchDiffStats = { additions: number; deletions: number; changedFiles: number };
 
 /**
  * Working-tree diff counts vs the merge base with the remote default branch,
  * untracked files included: the size the PR would have if the current work
- * were committed and pushed.
+ * were committed and pushed. changedFiles stays server-side and decides
+ * whether an unpushed branch still gets a row for its local changes.
  */
 async function loadBranchDiffStats(
   root: string,
   defaultBranch: string,
-): Promise<{ additions: number; deletions: number } | null> {
+): Promise<BranchDiffStats | null> {
   const mergeBase = await gitOutput(root, [
     "merge-base",
     `refs/remotes/origin/${defaultBranch}`,
@@ -238,10 +242,11 @@ async function loadBranchDiffStats(
     }
     // Empty output means an empty diff, not a failure.
     const summary = result.stdout.trim();
+    const untracked = await untrackedStats(root);
     return {
-      additions:
-        Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0) + (await untrackedAdditions(root)),
+      additions: Number(SHORTSTAT_INSERTIONS.exec(summary)?.[1] ?? 0) + untracked.additions,
       deletions: Number(SHORTSTAT_DELETIONS.exec(summary)?.[1] ?? 0),
+      changedFiles: Number(SHORTSTAT_FILES.exec(summary)?.[1] ?? 0) + untracked.files,
     };
   } catch {
     return null;
@@ -251,9 +256,9 @@ async function loadBranchDiffStats(
 /**
  * GitHub's pull/new page only has something to offer once the pushed branch
  * carries commits the default branch lacks; unpushed or fully-merged remote
- * branches get "nothing to compare" (or a 404), so the row stays hidden.
- * Rename-only or zero-line-delta commits still count — visibility keys on
- * commits, not on line counts.
+ * branches get "nothing to compare" (or a 404), so createUrl stays hidden and
+ * the row degrades to reporting local changed files. Rename-only or
+ * zero-line-delta commits still count — this gate keys on commits, not lines.
  */
 async function branchHasCreatablePullRequest(
   root: string,
@@ -281,21 +286,29 @@ async function branchHasCreatablePullRequest(
 async function resolveSessionBranch(
   context: SessionPullRequestGitContext,
 ): Promise<ControlUiSessionBranch | undefined> {
-  // Stubbed test contexts without a root skip the local-git gate.
-  if (context.root && !(await branchHasCreatablePullRequest(context.root, context))) {
-    return undefined;
-  }
+  // Stubbed test contexts without a root skip the local-git gates.
+  const creatable = !context.root || (await branchHasCreatablePullRequest(context.root, context));
   const stats =
     context.root && context.defaultBranch
       ? await loadBranchDiffStats(context.root, context.defaultBranch)
       : null;
-  return {
+  // Not yet pushed (or nothing to compare): the row still surfaces local
+  // changed files so the session shows its pending work, but createUrl is
+  // withheld because GitHub's pull/new page would 404 or offer nothing.
+  if (!creatable && !(stats && stats.changedFiles > 0)) {
+    return undefined;
+  }
+  const branch: ControlUiSessionBranch = {
     owner: context.owner,
     repo: context.repo,
     branch: context.branch,
-    createUrl: branchCreateUrl(context),
-    ...stats,
+    ...(creatable ? { createUrl: branchCreateUrl(context) } : {}),
   };
+  if (stats) {
+    branch.additions = stats.additions;
+    branch.deletions = stats.deletions;
+  }
+  return branch;
 }
 
 function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRequest["state"] {
