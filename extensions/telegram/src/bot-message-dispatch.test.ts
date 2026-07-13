@@ -5280,7 +5280,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       context: createReasoningStreamContext(),
       streamMode: "progress",
       telegramCfg: {
-        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
       },
     });
 
@@ -5346,7 +5346,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       context: createReasoningStreamContext(),
       streamMode: "progress",
       telegramCfg: {
-        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
       },
     });
 
@@ -5360,7 +5360,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(lastPreview?.text).not.toMatch(/<(h[1-6]|hr|ul|ol|li|p|div)\b/u);
   });
 
-  it("renders the Telegram preamble headline with commentary enabled", async () => {
+  it("hands preambles to the interleaved commentary lane when it is enabled", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
@@ -5384,12 +5384,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    expect(draftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview(
-        "Shelling\n\nChecking recent context",
-        "<b>Shelling</b>\nChecking recent context",
-      ),
-    );
+    // The opt-in 💬 lane owns preambles; the status headline stays out of the
+    // way so the documented interleaved lines keep rendering.
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(lastPreview?.text).toContain("💬");
+    expect(lastPreview?.text).toContain("Checking recent context");
   });
 
   it("renders the Telegram preamble headline when commentary is disabled", async () => {

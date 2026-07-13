@@ -320,6 +320,24 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
   });
 
+  it("hands preambles to the commentary lane when it is enabled", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    // The opt-in 💬 lane renders every preamble as an interleaved line; the
+    // headline must decline so it cannot replace those documented lines.
+    expect(await progress.pushPreambleHeadline("Reading the workspace.")).toBe(false);
+    expect(progress.hasStatusHeadline).toBe(false);
+  });
+
   it("holds a preamble headline until the gate starts and hides the implicit label", async () => {
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({

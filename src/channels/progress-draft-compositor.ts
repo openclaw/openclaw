@@ -309,6 +309,12 @@ export function createChannelProgressDraftCompositor(params: {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
         return false;
       }
+      // The opt-in commentary lane already renders every preamble as an
+      // interleaved 💬 line; letting the headline also consume it would
+      // replace those documented lines with a duplicate status paragraph.
+      if (commentaryProgressEnabled) {
+        return false;
+      }
       if (finalReplyStarted || finalReplyDelivered) {
         return false;
       }

@@ -3165,7 +3165,9 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenLastCalledWith("Checking route impacts.");
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "💬 Checking the current weather source before summarizing clearly.\n💬 Checking route impacts.",
+    );
     const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
     expect(updates).not.toContain("Exec");
     expect(updates).not.toContain("curl weather api");
@@ -3259,6 +3261,7 @@ describe("processDiscordMessage draft streaming", () => {
   );
 
   it("keeps the preamble headline when its commentary item retracts", async () => {
+    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -3273,6 +3276,7 @@ describe("processDiscordMessage draft streaming", () => {
         progressText: "",
       });
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await elapseProgressDraftStartDelay();
       return createNoQueuedDispatchResult();
     });
 
@@ -3282,7 +3286,6 @@ describe("processDiscordMessage draft streaming", () => {
           mode: "progress",
           progress: {
             label: false,
-            commentary: true,
           },
         },
       },
@@ -3331,7 +3334,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["Checking source data."]);
+    expect(updates).toEqual(["💬 Checking source data."]);
     expectFinalWithProgressReceipt("done");
   });
 

@@ -57,7 +57,7 @@ migration, see [Streaming and chunking](/concepts/streaming).
 
 | Part            | Purpose                                                                           |
 | --------------- | --------------------------------------------------------------------------------- |
-| Status headline | On Discord and Telegram, the model preamble or optional utility filler.           |
+| Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler.       |
 | Label           | Optional starter/status line such as `Working` or `Shelling`.                     |
 | Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
 
@@ -261,22 +261,25 @@ pre-tool commentary/preamble narration (💬, for example "I'll check... then
 [Streaming and chunking](/concepts/streaming#commentary-progress-lane) for the
 shared config shape across channels.
 
-On Discord and Telegram, the latest preamble still supplies the status headline
-when this interleaved commentary lane is off.
+With the commentary lane enabled, preambles render only as those interleaved
+💬 lines; the status headline below stays out of the way so the lane keeps its
+documented shape.
 
 ### Status headline
 
 On Discord and Telegram in progress mode, the model's typed pre-tool preamble
 becomes the draft's status headline whenever it is available. Other
-progress-mode channels keep their existing status behavior. This headline is
-always on: it does not depend on `streaming.progress.commentary`, and it does
-not bypass the normal activity gate for short turns.
+progress-mode channels keep their existing status behavior. The headline is on
+by default and does not bypass the normal activity gate for short turns;
+enabling `streaming.progress.commentary` hands preambles to the interleaved
+commentary lane instead.
 
-When a utility model resolves for the agent — an explicit
+On Discord, when a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents#utilitymodel), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,
 Anthropic → `claude-haiku-4-5`) — it supplies a short plain-language filler
-when the model emits no preamble or has been quiet for about 20 seconds:
+when the model emits no preamble or has been quiet for about 20 seconds
+(Telegram's headline is preamble-only today):
 
 ```text
 Updating the default model in your config, then restarting the gateway to pick
