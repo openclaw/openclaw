@@ -370,6 +370,8 @@ enum class GatewayMethod(
   SessionsSearch("sessions.search"),
   SessionsDispatch("sessions.dispatch"),
   ModelsProbe("models.probe"),
+  MigrationsMemoryPlan("migrations.memory.plan"),
+  MigrationsMemoryApply("migrations.memory.apply"),
 }
 
 enum class GatewayEvent(
