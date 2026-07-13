@@ -1,4 +1,8 @@
 /** Shared command implementation for text and image model fallback lists. */
+import {
+  resolveAgentModelFallbacksOverride,
+  setAgentEffectiveModelFallbacks,
+} from "../../agents/agent-scope.js";
 import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -12,6 +16,7 @@ import {
   ensureFlagCompatibility,
   mergePrimaryFallbackConfig,
   modelKey,
+  resolveKnownAgentId,
   resolveModelTarget,
   resolveModelKeysFromEntries,
   upsertCanonicalModelConfigEntry,
@@ -20,43 +25,93 @@ import {
 
 type DefaultsFallbackKey = "model" | "imageModel";
 
+/**
+ * Options shared by fallback subcommands; `agent` scopes text-model fallback
+ * reads/writes to one agent. Image model fallbacks are global defaults only,
+ * so the image commands never pass an agent id.
+ */
+type FallbackScopeOpts = { agent?: string };
+
 function listCommandForFallbackKey(key: DefaultsFallbackKey): string {
   return key === "imageModel"
     ? "openclaw models image-fallbacks list"
     : "openclaw models fallbacks list";
 }
 
-function getFallbacks(cfg: OpenClawConfig, key: DefaultsFallbackKey): string[] {
+/** True when the named agent carries its own text-model fallbacks override. */
+function agentHasFallbacksOverride(cfg: OpenClawConfig, agentId: string): boolean {
+  return resolveAgentModelFallbacksOverride(cfg, agentId) !== undefined;
+}
+
+/**
+ * Resolves the fallback chain for the selected key. When an agent id is given
+ * and that agent has its own text-model override, its chain is returned
+ * (mirroring `openclaw models status --agent <id>`); otherwise the global
+ * defaults apply.
+ */
+function getFallbacks(cfg: OpenClawConfig, key: DefaultsFallbackKey, agentId?: string): string[] {
+  if (agentId && key === "model") {
+    const override = resolveAgentModelFallbacksOverride(cfg, agentId);
+    if (override !== undefined) {
+      return override;
+    }
+  }
   return resolveAgentModelFallbackValues(cfg.agents?.defaults?.[key]);
 }
 
-function patchDefaultsFallbacks(
+function patchFallbacks(
   cfg: OpenClawConfig,
-  params: { key: DefaultsFallbackKey; fallbacks: string[]; models?: Record<string, unknown> },
+  params: {
+    key: DefaultsFallbackKey;
+    agentId?: string;
+    fallbacks: string[];
+    models?: Record<string, unknown>;
+  },
 ): OpenClawConfig {
-  const existing = toAgentModelListLike(cfg.agents?.defaults?.[params.key]);
+  // The canonical model catalog (agents.defaults.models) is always global; only
+  // the fallback list itself is scoped per agent.
+  const base = params.models
+    ? {
+        ...cfg,
+        agents: {
+          ...cfg.agents,
+          defaults: {
+            ...cfg.agents?.defaults,
+            models: params.models as never,
+          },
+        },
+      }
+    : cfg;
+
+  if (params.key === "model" && params.agentId && agentHasFallbacksOverride(base, params.agentId)) {
+    const next = structuredClone(base);
+    setAgentEffectiveModelFallbacks(next, params.agentId, params.fallbacks);
+    return next;
+  }
+
+  const existing = toAgentModelListLike(base.agents?.defaults?.[params.key]);
   return {
-    ...cfg,
+    ...base,
     agents: {
-      ...cfg.agents,
+      ...base.agents,
       defaults: {
-        ...cfg.agents?.defaults,
+        ...base.agents?.defaults,
         [params.key]: mergePrimaryFallbackConfig(existing, { fallbacks: params.fallbacks }),
-        ...(params.models ? { models: params.models as never } : undefined),
       },
     },
   };
 }
 
-/** Lists fallback model refs for the selected defaults key. */
+/** Lists fallback model refs for the selected key (per agent when `--agent` is set). */
 export async function listFallbacksCommand(
   params: { label: string; key: DefaultsFallbackKey },
-  opts: { json?: boolean; plain?: boolean },
+  opts: { json?: boolean; plain?: boolean } & FallbackScopeOpts,
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
   const cfg = await loadModelsConfig({ commandName: `models ${params.key} list`, runtime });
-  const fallbacks = getFallbacks(cfg, params.key);
+  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
+  const fallbacks = getFallbacks(cfg, params.key, agentId);
 
   if (opts.json) {
     writeRuntimeJson(runtime, { fallbacks });
@@ -87,29 +142,33 @@ export async function addFallbackCommand(
     logPrefix: string;
   },
   modelRaw: string,
+  opts: FallbackScopeOpts,
   runtime: RuntimeEnv,
 ) {
+  let agentId: string | undefined;
   const updated = await updateConfig((cfg) => {
+    agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const nextModels = {
       ...cfg.agents?.defaults?.models,
     } as Record<string, AgentModelEntryConfig>;
     const targetKey = upsertCanonicalModelConfigEntry(nextModels, resolved);
-    const existing = getFallbacks(cfg, params.key);
+    const existing = getFallbacks(cfg, params.key, agentId);
     const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
     if (existingKeys.includes(targetKey)) {
       return cfg;
     }
 
-    return patchDefaultsFallbacks(cfg, {
+    return patchFallbacks(cfg, {
       key: params.key,
+      agentId,
       fallbacks: [...existing, targetKey],
       models: nextModels,
     });
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
+  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key, agentId).join(", ")}`);
 }
 
 /** Removes a fallback model by resolving aliases to the canonical provider/model key. */
@@ -121,16 +180,19 @@ export async function removeFallbackCommand(
     logPrefix: string;
   },
   modelRaw: string,
+  opts: FallbackScopeOpts,
   runtime: RuntimeEnv,
 ) {
+  let agentId: string | undefined;
   const updated = await updateConfig((cfg) => {
+    agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const targetKey = modelKey(resolved.provider, resolved.model);
     const aliasIndex = buildModelAliasIndex({
       cfg,
       defaultProvider: DEFAULT_PROVIDER,
     });
-    const existing = getFallbacks(cfg, params.key);
+    const existing = getFallbacks(cfg, params.key, agentId);
     // Fallback entries may be aliases or provider/model refs. Resolve each entry
     // before comparison so removing an alias removes the canonical target.
     const filtered = existing.filter((entry) => {
@@ -151,20 +213,22 @@ export async function removeFallbackCommand(
       );
     }
 
-    return patchDefaultsFallbacks(cfg, { key: params.key, fallbacks: filtered });
+    return patchFallbacks(cfg, { key: params.key, agentId, fallbacks: filtered });
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
+  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key, agentId).join(", ")}`);
 }
 
-/** Clears all fallback model refs for the selected defaults key. */
+/** Clears all fallback model refs for the selected key (per agent when `--agent` is set). */
 export async function clearFallbacksCommand(
   params: { key: DefaultsFallbackKey; clearedMessage: string },
+  opts: FallbackScopeOpts,
   runtime: RuntimeEnv,
 ) {
   await updateConfig((cfg) => {
-    return patchDefaultsFallbacks(cfg, { key: params.key, fallbacks: [] });
+    const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
+    return patchFallbacks(cfg, { key: params.key, agentId, fallbacks: [] });
   });
 
   logConfigUpdated(runtime);

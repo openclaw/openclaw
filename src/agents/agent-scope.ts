@@ -403,6 +403,47 @@ export function setAgentEffectiveModelPrimary(
   return "defaults";
 }
 
+function updateAgentModelFallbacks(
+  existing: AgentModelConfig | undefined,
+  fallbacks: string[],
+): AgentModelConfig {
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    return { ...existing, fallbacks };
+  }
+  if (typeof existing === "string") {
+    return { primary: existing, fallbacks };
+  }
+  return { fallbacks };
+}
+
+/**
+ * Writes the fallback chain for the agent's effective model selection. Mirrors
+ * {@link setAgentEffectiveModelPrimary}: when the agent carries its own model
+ * override the agent entry is mutated in place; otherwise the global defaults
+ * are updated. Returns which target was written.
+ */
+export function setAgentEffectiveModelFallbacks(
+  cfg: OpenClawConfig,
+  agentId: string,
+  fallbacks: string[],
+): AgentModelPrimaryWriteTarget {
+  const id = normalizeAgentId(agentId);
+  const hasAgentOverride =
+    resolveAgentModelFallbacksOverride(cfg, id) !== undefined ||
+    resolveAgentExplicitModelPrimary(cfg, id) !== undefined;
+  if (hasAgentOverride) {
+    const entry = findMutableAgentEntry(cfg, id);
+    if (entry) {
+      entry.model = updateAgentModelFallbacks(entry.model, fallbacks);
+      return "agent";
+    }
+  }
+  cfg.agents ??= {};
+  cfg.agents.defaults ??= {};
+  cfg.agents.defaults.model = updateAgentModelFallbacks(cfg.agents.defaults.model, fallbacks);
+  return "defaults";
+}
+
 /** @deprecated Prefer explicit/effective helpers at new call sites. */
 export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
   return resolveAgentExplicitModelPrimary(cfg, agentId);

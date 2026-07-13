@@ -28,6 +28,7 @@ import {
   resolveAutoFallbackPrimaryProbe,
   resolveAgentIdByWorkspacePath,
   resolveAgentIdsByWorkspacePath,
+  setAgentEffectiveModelFallbacks,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
 
@@ -1357,6 +1358,88 @@ describe("resolveAgentSkillsFilter", () => {
     };
 
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
+  });
+});
+
+describe("setAgentEffectiveModelFallbacks", () => {
+  it("writes to the agent entry when the agent owns a model override", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4", fallbacks: ["anthropic/claude-sonnet-4-6"] },
+        },
+        list: [
+          {
+            id: "linus",
+            model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.4"] },
+          },
+        ],
+      },
+    };
+    expect(setAgentEffectiveModelFallbacks(cfg, "linus", ["google/gemini-3-pro"])).toBe("agent");
+    expect(cfg.agents?.list?.[0]?.model).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: ["google/gemini-3-pro"],
+    });
+    // Global defaults must remain untouched.
+    expect(cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+  });
+
+  it("falls back to global defaults when the agent has no override", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4", fallbacks: ["anthropic/claude-sonnet-4-6"] },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    };
+    expect(setAgentEffectiveModelFallbacks(cfg, "main", ["google/gemini-3-pro"])).toBe("defaults");
+    expect(cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["google/gemini-3-pro"],
+    });
+  });
+
+  it("clears an agent fallback chain in place", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "linus",
+            model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: ["openai/gpt-5.4"] },
+          },
+        ],
+      },
+    };
+    expect(setAgentEffectiveModelFallbacks(cfg, "linus", [])).toBe("agent");
+    expect(cfg.agents?.list?.[0]?.model).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: [],
+    });
+  });
+
+  it("writes to the agent entry when it has an explicit primary but no fallbacks yet", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4", fallbacks: ["anthropic/claude-sonnet-4-6"] },
+        },
+        list: [{ id: "linus", model: "anthropic/claude-sonnet-4-6" }],
+      },
+    };
+    expect(setAgentEffectiveModelFallbacks(cfg, "linus", ["google/gemini-3-pro"])).toBe("agent");
+    expect(cfg.agents?.list?.[0]?.model).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: ["google/gemini-3-pro"],
+    });
+    expect(cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.4",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

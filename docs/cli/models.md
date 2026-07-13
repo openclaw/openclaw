@@ -26,7 +26,7 @@ openclaw models set-image <model-or-alias>
 openclaw models scan
 ```
 
-`status` and `auth` subcommands accept `--agent <id>` to target a configured agent; `list`, `scan`, `aliases`, and `fallbacks`/`image-fallbacks` always use the configured default agent, and `set`/`set-image` reject `--agent` outright. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
+`status`, `auth`, and `fallbacks` subcommands accept `--agent <id>` to target a configured agent (`fallbacks` reads and edits that agent's own fallback chain when it has one, and the global defaults otherwise); `list`, `scan`, and `aliases` always use the configured default agent, and `set`/`set-image`/`image-fallbacks` reject `--agent` outright. When omitted, `--agent`-aware commands use `OPENCLAW_AGENT_DIR` if set, otherwise the configured default agent.
 
 ### Status
 
