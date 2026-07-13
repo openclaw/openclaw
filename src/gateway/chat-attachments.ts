@@ -71,6 +71,9 @@ export async function persistInboundImagesForTranscript(params: {
   const inline: SavedMedia[] = [];
   for (const image of params.images) {
     try {
+      if (!isValidBase64(image.data)) {
+        throw new Error(`attachment: invalid base64 content (${image.mimeType})`);
+      }
       inline.push(
         await saveMediaBuffer(Buffer.from(image.data, "base64"), image.mimeType, "inbound"),
       );
