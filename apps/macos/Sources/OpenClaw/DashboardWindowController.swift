@@ -74,20 +74,26 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var auth: DashboardWindowAuth
     private let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
+    private let requestBrowserProfileImportOffer: @MainActor () -> Void
     private var canGoBackObservation: NSKeyValueObservation?
     private var canGoForwardObservation: NSKeyValueObservation?
+    private var didOpenLinkBrowser = false
 
     init(
         url: URL,
         auth: DashboardWindowAuth,
         updater: UpdaterProviding? = nil,
-        updateBridgeEnabled: Bool = true)
+        updateBridgeEnabled: Bool = true,
+        requestBrowserProfileImportOffer: @escaping @MainActor () -> Void = {
+            Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
+        })
     {
         let shouldEnableUpdateBridge = updater?.isAvailable == true && updateBridgeEnabled
         self.currentURL = url
         self.auth = auth
         self.updater = updater
         self.updateBridgeEnabled = shouldEnableUpdateBridge
+        self.requestBrowserProfileImportOffer = requestBrowserProfileImportOffer
 
         let dataStore = WKWebsiteDataStore.default()
         let config = WKWebViewConfiguration()
@@ -307,10 +313,15 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.webView.load(URLRequest(url: url))
     }
 
-    private func openLinkBrowser(_ url: URL) {
+    private func openLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = true) {
+        let isFirstOpen = !self.didOpenLinkBrowser
+        self.didOpenLinkBrowser = true
         self.linkBrowserItem.isCollapsed = false
         self.linkBrowser.open(url)
         window?.makeFirstResponder(self.linkBrowser.activeWebView)
+        if isFirstOpen, requestBrowserProfileImportOffer {
+            self.requestBrowserProfileImportOffer()
+        }
     }
 
     private func closeLinkBrowser(focusDashboard: Bool = true) {
@@ -984,8 +995,8 @@ extension DashboardWindowController {
         self.splitViewController.splitView.autosaveName
     }
 
-    func _testOpenLinkBrowser(_ url: URL) {
-        self.openLinkBrowser(url)
+    func _testOpenLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = false) {
+        self.openLinkBrowser(url, requestBrowserProfileImportOffer: requestBrowserProfileImportOffer)
     }
 
     func _testCloseLinkBrowser() {

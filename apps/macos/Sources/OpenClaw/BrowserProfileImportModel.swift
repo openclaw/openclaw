@@ -119,9 +119,9 @@ final class BrowserProfileImportModel {
         self.phaseGeneration += 1
     }
 
-    /// Launch/connect/window triggers. Only fills an empty banner slot so a
-    /// visible offer, in-flight import, or result is never clobbered by a
-    /// background status poll.
+    /// First inline-browser open trigger. Only fills an empty banner slot so a
+    /// visible offer, in-flight import, or result is never clobbered by the
+    /// status poll.
     @discardableResult
     func refreshIfIdle() async -> Bool {
         guard !self.dismissedThisSession, case .hidden = self.phase else { return false }

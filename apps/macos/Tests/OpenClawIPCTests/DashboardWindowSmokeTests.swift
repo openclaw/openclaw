@@ -89,6 +89,27 @@ struct DashboardWindowSmokeTests {
         #expect(controller._testNavigationWebViewIdentity == linkWebView)
     }
 
+    @Test func `browser import offer waits for the first inline browser open`() throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        var requestCount = 0
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            requestBrowserProfileImportOffer: { requestCount += 1 })
+        defer { controller.closeDashboard() }
+
+        controller.show()
+        #expect(requestCount == 0)
+
+        let link = try #require(URL(string: "https://docs.openclaw.ai/"))
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        #expect(requestCount == 1)
+
+        controller._testCloseLinkBrowser()
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        #expect(requestCount == 1)
+    }
+
     @Test func `dashboard parses only bounded native link requests`() throws {
         let request = DashboardWindowController.linkRequest(from: [
             "type": "open-link",
