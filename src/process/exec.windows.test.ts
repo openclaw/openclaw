@@ -3,16 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getWindowsInstallRoots,
   getWindowsSystem32ExePath,
@@ -145,9 +136,8 @@ describe("Windows command execution", () => {
     vi.resetModules();
     vi.doMock("execa", () => ({ execa: execaMock }));
     vi.doMock("node:child_process", async () => {
-      const actual = await vi.importActual<typeof import("node:child_process")>(
-        "node:child_process",
-      );
+      const actual =
+        await vi.importActual<typeof import("node:child_process")>("node:child_process");
       return { ...actual, spawnSync: spawnSyncMock };
     });
     ({ runCommandWithTimeout, runExec, spawnCommand } = await import("./exec.js"));
