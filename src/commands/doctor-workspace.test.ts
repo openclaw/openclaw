@@ -139,20 +139,35 @@ describe("root memory repair", () => {
     await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(true);
   });
 
-  it("archives but does not merge an oversized legacy memory file", async () => {
+  it("does not archive or remove an oversized legacy memory file", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n".repeat(1_000_000), "utf8");
 
     const migration = await migrateLegacyRootMemoryFile(tmpDir);
-    expect(migration.changed).toBe(true);
-    expect(migration.removedLegacy).toBe(true);
+    expect(migration.changed).toBe(false);
+    expect(migration.removedLegacy).toBe(false);
     expect(migration.mergedLegacy).toBe(false);
-    expect(migration.archiveOnly).toBe(true);
-    expect(migration.archivedLegacyPath).toBeDefined();
-    await expectPathMissing(path.join(tmpDir, "memory.md"));
+    expect(migration.readLimitExceeded).toBe(true);
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toContain(
+      "# Legacy",
+    );
   });
 
-  it("reports an archive-only repair when the legacy memory file is oversized", async () => {
+  it("does not archive or remove a valid legacy memory file when canonical is oversized", async () => {
+    await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n".repeat(1_000_000), "utf8");
+    await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n", "utf8");
+
+    const migration = await migrateLegacyRootMemoryFile(tmpDir);
+    expect(migration.changed).toBe(false);
+    expect(migration.removedLegacy).toBe(false);
+    expect(migration.mergedLegacy).toBe(false);
+    expect(migration.readLimitExceeded).toBe(true);
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toContain(
+      "# Legacy",
+    );
+  });
+
+  it("reports a skipped repair when a root memory file is oversized", async () => {
     await fs.writeFile(path.join(tmpDir, "MEMORY.md"), "# Canonical\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "memory.md"), "# Legacy\n".repeat(1_000_000), "utf8");
     const cfg = { agents: { defaults: { workspace: tmpDir } } } as OpenClawConfig;
@@ -167,10 +182,10 @@ describe("root memory repair", () => {
     const repairMessage = String(repairNote?.[0] ?? "");
     const repairLines = repairMessage.split("\n");
     expect(repairLines[0]).toBe(
-      "Workspace memory root archived (merge skipped because a file exceeded the safe read limit):",
+      "Workspace memory root repair skipped (a file exceeded the safe read limit):",
     );
     expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
-    expect(repairLines).toContain(`- removed legacy file: ${path.join(tmpDir, "memory.md")}`);
+    expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
   });
 });

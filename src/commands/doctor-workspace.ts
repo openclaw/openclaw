@@ -162,8 +162,8 @@ export type RootMemoryMigrationResult = {
   mergedLegacy: boolean;
   archivedLegacyPath?: string;
   copiedBytes?: number;
-  /** True when the legacy file was archived but its content could not be merged. */
-  archiveOnly?: boolean;
+  /** True when the repair was skipped because a file exceeded the safe read limit. */
+  readLimitExceeded?: boolean;
 };
 
 async function moveLegacyRootMemoryFileToArchive(params: {
@@ -220,10 +220,6 @@ export async function migrateLegacyRootMemoryFile(
       mergedLegacy: false,
     };
   }
-  const archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
-    workspaceDir: detection.workspaceDir,
-    legacyPath: detection.legacyPath,
-  });
   let canonicalText: string;
   let legacyText: string;
   try {
@@ -232,24 +228,27 @@ export async function migrateLegacyRootMemoryFile(
         filePath: detection.canonicalPath,
         maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
       }).then(({ buffer }) => buffer.toString("utf-8")),
-      readRegularFile({ filePath: archivedLegacyPath, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES }).then(
-        ({ buffer }) => buffer.toString("utf-8"),
-      ),
+      readRegularFile({
+        filePath: detection.legacyPath,
+        maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
+      }).then(({ buffer }) => buffer.toString("utf-8")),
     ]);
   } catch {
-    // One of the files is unreadable or exceeds the safe read cap. Leave the
-    // legacy file archived and do not attempt a memory merge.
+    // One of the files is unreadable or exceeds the safe read cap. Leave both
+    // files in place and do not attempt a memory merge.
     return {
-      changed: true,
+      changed: false,
       canonicalPath: detection.canonicalPath,
       legacyPath: detection.legacyPath,
-      removedLegacy: true,
+      removedLegacy: false,
       mergedLegacy: false,
-      archivedLegacyPath,
-      archiveOnly: true,
-      ...(typeof detection.legacyBytes === "number" ? { copiedBytes: detection.legacyBytes } : {}),
+      readLimitExceeded: true,
     };
   }
+  const archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
+    workspaceDir: detection.workspaceDir,
+    legacyPath: detection.legacyPath,
+  });
   if (canonicalText !== legacyText) {
     const merged = `${canonicalText.trimEnd()}\n${buildMergedLegacyRootMemorySection({
       legacyText,
@@ -304,14 +303,22 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       return;
     }
     const migration = await migrateLegacyRootMemoryFile(configuredWorkspaceDir);
+    if (migration.readLimitExceeded) {
+      note(
+        [
+          "Workspace memory root repair skipped (a file exceeded the safe read limit):",
+          `- canonical: ${migration.canonicalPath}`,
+          `- legacy: ${migration.legacyPath}`,
+        ].join("\n"),
+        "Doctor changes",
+      );
+      return;
+    }
     if (!migration.changed) {
       return;
     }
-    const header = migration.archiveOnly
-      ? "Workspace memory root archived (merge skipped because a file exceeded the safe read limit):"
-      : "Workspace memory root merged:";
     const lines = [
-      header,
+      "Workspace memory root merged:",
       `- canonical: ${migration.canonicalPath}`,
       migration.archivedLegacyPath ? `- backup: ${migration.archivedLegacyPath}` : null,
       migration.mergedLegacy ? `- merged legacy content from: ${migration.legacyPath}` : null,
