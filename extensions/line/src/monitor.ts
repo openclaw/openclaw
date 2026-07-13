@@ -328,11 +328,16 @@ export async function monitorLineProvider(
                 cfg: config,
                 accountId: ctx.accountId,
               });
+              logVerbose(
+                `line: steering ack sent to ${ctxPayload.From} (message ${ctxPayload.MessageSid ?? "unknown"})`,
+              );
             } catch (ackErr) {
               logVerbose(`line: steering ack reply failed: ${String(ackErr)}`);
             }
           } else {
-            logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
+            logVerbose(
+              `line: no response generated for message ${ctxPayload.MessageSid ?? "unknown"} from ${ctxPayload.From} (inFlightAtAdmission=${String(ctx.inFlightAtAdmission)})`,
+            );
           }
         }
       } catch (err) {
