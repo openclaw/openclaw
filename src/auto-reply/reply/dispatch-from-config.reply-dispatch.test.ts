@@ -838,7 +838,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       });
 
       releaseOwner.resolve();
-      await vi.runAllTicks();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
       expect(replyRunRegistry.get("agent:test:session")).toBe(successor);

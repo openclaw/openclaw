@@ -537,8 +537,6 @@ export function createReplyOperation(params: {
   let acceptedSteeredInboundAudio = false;
   const startedAtMs = Date.now();
   let lastActivityAtMs = startedAtMs;
-  let finalizationLease: ReturnType<typeof replyRunSettle.createReplyRunFinalizationLease>;
-  let terminalSettleTimer: ReturnType<typeof replyRunSettle.createReplyRunSettleTimer>;
   const upstreamAbortSignal = params.upstreamAbortSignal;
   let upstreamAbortHandler: (() => void) | undefined;
   const detachUpstreamAbort = () => {
@@ -892,7 +890,7 @@ export function createReplyOperation(params: {
     clearState();
     return true;
   });
-  finalizationLease = replyRunSettle.createReplyRunFinalizationLease({
+  const finalizationLease = replyRunSettle.createReplyRunFinalizationLease({
     owner: operation,
     canExpire: () =>
       !stateCleared &&
@@ -914,7 +912,7 @@ export function createReplyOperation(params: {
       expireReplyOperationByOperation.get(operation)?.("finalization_stalled");
     },
   });
-  terminalSettleTimer = replyRunSettle.createReplyRunSettleTimer({
+  const terminalSettleTimer = replyRunSettle.createReplyRunSettleTimer({
     canExpire: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
     onExpire: () => {
       // Retained terminal results get one delivery grace window, not a second lifetime.
