@@ -17,7 +17,7 @@ type GlobalChannelRegistryState = typeof globalThis & {
 
 type GlobalChannelRegistryRuntimeState = GlobalChannelRegistryState[typeof PLUGIN_REGISTRY_STATE];
 
-export type ActivePluginChannelRegistrySnapshot = {
+type ActivePluginChannelRegistrySnapshot = {
   registry: ActivePluginChannelRegistry | null;
   version: number;
 };
