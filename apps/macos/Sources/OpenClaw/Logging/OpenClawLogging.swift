@@ -93,7 +93,11 @@ extension Logging.Logger {
 }
 
 extension Logger.Message.StringInterpolation {
-    mutating func appendInterpolation(_ value: some Any, privacy: OSLogPrivacy) {
+    // periphery:ignore:parameters privacy - Call sites need OSLog syntax that swift-log otherwise cannot parse.
+    mutating func appendInterpolation(
+        _ value: some Any,
+        privacy: OSLogPrivacy)
+    {
         self.appendInterpolation(String(describing: value))
     }
 }

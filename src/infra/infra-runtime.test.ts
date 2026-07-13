@@ -19,6 +19,7 @@ import {
   isGatewaySigusr1RestartExternallyAllowed,
   markGatewaySigusr1RestartHandled,
   peekGatewaySigusr1RestartReason,
+  requestGatewayRestartWithSignalAdmission,
   scheduleGatewaySigusr1Restart,
   setGatewaySigusr1RestartPolicy,
   setPreRestartDeferralCheck,
@@ -180,8 +181,8 @@ describe("infra runtime", () => {
       const handler = () => {};
       process.on("SIGUSR1", handler);
       try {
-        expect(emitGatewayRestart()).toBe(true);
-        expect(emitGatewayRestart()).toBe(false);
+        expect(requestGatewayRestartWithSignalAdmission()).toEqual({ status: "emitted" });
+        expect(requestGatewayRestartWithSignalAdmission()).toEqual({ status: "coalesced" });
         expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
 
         markGatewaySigusr1RestartHandled();
@@ -233,9 +234,13 @@ describe("infra runtime", () => {
             .mockReturnValueOnce({ ok: false, method: "schtasks", detail: "denied" })
             .mockReturnValueOnce({ ok: true, method: "schtasks" });
 
-          expect(emitGatewayRestart("windows-fallback")).toBe(false);
+          expect(requestGatewayRestartWithSignalAdmission("windows-fallback")).toEqual({
+            status: "failed",
+          });
           expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
-          expect(emitGatewayRestart("windows-retry")).toBe(true);
+          expect(requestGatewayRestartWithSignalAdmission("windows-retry")).toEqual({
+            status: "emitted",
+          });
           expect(relaunchGatewayScheduledTaskMock).toHaveBeenCalledTimes(2);
         });
       });

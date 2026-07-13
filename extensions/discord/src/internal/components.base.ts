@@ -41,7 +41,7 @@ export function clean<T extends Record<string, unknown>>(value: T): T {
 
 export function colorToNumber(value: string | number | undefined): number | undefined {
   if (typeof value === "number") {
-    return value;
+    return Number.isInteger(value) && value >= 0 && value <= 0xffffff ? value : undefined;
   }
   if (typeof value === "string" && /^#?[0-9a-f]{6}$/i.test(value)) {
     return Number.parseInt(value.replace(/^#/, ""), 16);

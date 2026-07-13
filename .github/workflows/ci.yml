@@ -1559,6 +1559,7 @@ jobs:
         env:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
+          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before || '') }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
@@ -1568,12 +1569,17 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
+              if [ -n "$LOC_BASE_SHA" ]; then
+                git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/loc-base"
+                pnpm check:loc --base-ref refs/remotes/origin/loc-base
+              else
+                pnpm check:loc
+              fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD --no-merge-base
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/loc-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
@@ -1597,12 +1603,21 @@ jobs:
               fi
               ;;
             dependencies)
-              if pnpm run --silent 2>/dev/null | grep -q '^  deadcode:dependencies$'; then
+              has_package_script() {
+                node -e '
+                  const scripts = require("./package.json").scripts ?? {};
+                  process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+                ' "$1"
+              }
+              if has_package_script "deadcode:dependencies" &&
+                has_package_script "deadcode:unused-files"; then
                 pnpm deadcode:dependencies
                 pnpm deadcode:unused-files
-                pnpm deadcode:report:ci:ts-unused
-              else
+              elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"; then
                 pnpm deadcode:ci
+              else
+                echo "Target does not provide a supported deadcode check." >&2
+                exit 1
               fi
               ;;
             test-types)
@@ -1625,14 +1640,6 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Upload deadcode reports
-        if: ${{ always() && matrix.task == 'dependencies' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: deadcode-reports
-          path: .artifacts/deadcode
-          if-no-files-found: ignore
 
   check-additional-shard:
     permissions:
