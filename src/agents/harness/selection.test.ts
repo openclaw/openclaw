@@ -2632,6 +2632,30 @@ describe("selectAgentHarness", () => {
     ).toThrow('Requested agent harness "my-custom-cli" is not registered');
   });
 
+  it("returns OpenClaw for a config-only CLI backend via cli_runtime_passthrough_openclaw", () => {
+    const config = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli-max": {
+              command: "/usr/local/bin/claude",
+              args: ["-p", "--output-format", "stream-json"],
+              jsonlDialect: "claude-stream-json",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const harness = selectAgentHarness({
+      provider: "claude-cli-max",
+      modelId: "claude-fable-5",
+      config,
+    });
+
+    expect(harness.id).toBe("openclaw");
+  });
+
   it("still throws MissingAgentHarnessError for an explicit non-CLI unknown runtime", () => {
     expect(() =>
       selectAgentHarness({
