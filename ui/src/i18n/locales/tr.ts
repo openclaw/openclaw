@@ -3430,6 +3430,8 @@ export const tr: TranslationMap = {
       empty: "Bu aracı için henüz arka plan görevi yok.",
       running: "Çalışıyor ({count})",
       finished: "Tamamlandı ({count})",
+      statusRunningOne: "1 görev çalışıyor",
+      statusRunningMany: "{count} görev çalışıyor",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
       toolUseOne: "1 araç kullanımı",

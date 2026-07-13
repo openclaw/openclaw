@@ -3425,6 +3425,8 @@ export const nl: TranslationMap = {
       empty: "Nog geen achtergrondtaken voor deze agent.",
       running: "Actief ({count})",
       finished: "Voltooid ({count})",
+      statusRunningOne: "1 actieve taak",
+      statusRunningMany: "{count} actieve taken",
       stopTask: "{title} stoppen",
       viewTranscript: "Transcript bekijken",
       toolUseOne: "1 toolgebruik",

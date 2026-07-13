@@ -3419,6 +3419,8 @@ export const pt_BR: TranslationMap = {
       empty: "Ainda não há tarefas em segundo plano para este agente.",
       running: "Em execução ({count})",
       finished: "Concluídas ({count})",
+      statusRunningOne: "1 tarefa em execução",
+      statusRunningMany: "{count} tarefas em execução",
       stopTask: "Parar {title}",
       viewTranscript: "Ver transcrição",
       toolUseOne: "1 uso de ferramenta",

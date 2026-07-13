@@ -18,6 +18,7 @@ import { t } from "../../i18n/index.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
+import "../../styles/sidebar-markdown.css";
 import "./memory/memory-panel.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";

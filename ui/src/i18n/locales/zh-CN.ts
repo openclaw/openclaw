@@ -3341,6 +3341,8 @@ export const zh_CN: TranslationMap = {
       empty: "此智能体尚无后台任务。",
       running: "正在运行 ({count})",
       finished: "已完成 ({count})",
+      statusRunningOne: "1 个正在运行的任务",
+      statusRunningMany: "{count} 个正在运行的任务",
       stopTask: "停止 {title}",
       viewTranscript: "查看转录",
       toolUseOne: "1 次工具调用",

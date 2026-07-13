@@ -42,6 +42,17 @@
   }
 }
 
+/* Shared by the login gate and the Sessions, Tasks, and Cron routes. */
+.session-link {
+  color: var(--accent);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.session-link:hover {
+  text-decoration: underline;
+}
+
 /* ===========================================
    Login Gate
    =========================================== */
