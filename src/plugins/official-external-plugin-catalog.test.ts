@@ -105,8 +105,7 @@ function signedHostedCatalogFeed(params: {
         privateKeyPem: params.privateKeyPem,
         publicKeyPem: crypto
           .createPublicKey(params.privateKeyPem)
-          .export({ type: "spki", format: "pem" })
-          .toString(),
+          .export({ type: "spki", format: "pem" }),
       }
     : (() => {
         const generated = crypto.generateKeyPairSync("ed25519", {
