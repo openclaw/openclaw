@@ -86,7 +86,11 @@ export async function readMirroredSessionHistoryMessages(params: {
 }): Promise<AgentMessage[] | undefined> {
   const messages = await readCodexMirroredSessionHistoryMessages(params);
   if (!messages) {
-    embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
+    // A missing or non-Codex-native mirror (first turn, or a Claude/Haiku run
+    // routed through this harness) is expected, and every caller falls back to
+    // existing history. Keep it at debug so it does not surface to operators as
+    // a failed "Process".
+    embeddedAgentLog.debug("no mirrored session history for codex harness hooks", {
       sessionFile: params.sessionFile,
     });
   }

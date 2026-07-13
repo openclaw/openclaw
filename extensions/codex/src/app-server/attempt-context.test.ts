@@ -45,6 +45,36 @@ describe("Codex app-server attempt context", () => {
     }
   });
 
+  it("does not warn when the mirror exists but is not a Codex-native session", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const debug = vi.spyOn(embeddedAgentLog, "debug").mockImplementation(() => undefined);
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-attempt-context-nonnative-"));
+    const sessionFile = path.join(dir, "session.jsonl");
+    // First entry is a message row, not a `session` header: the run is routed
+    // through the Codex harness but has no Codex-native mirror to read.
+    const nonSessionEntry = {
+      type: "message",
+      id: "m1",
+      parentId: null,
+      timestamp: "2026-06-15T00:00:00.000Z",
+      message: { role: "user", content: "hi", timestamp: 1 },
+    };
+    try {
+      await fs.writeFile(sessionFile, `${JSON.stringify(nonSessionEntry)}\n`);
+      await expect(
+        readMirroredSessionHistoryMessages({
+          sessionFile,
+          sessionId: "codex-session",
+          sessionKey: "codex-session",
+        }),
+      ).resolves.toBeUndefined();
+      expect(warn).not.toHaveBeenCalled();
+      expect(debug).toHaveBeenCalled();
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("returns a run context report without deferred Codex dynamic tool schemas", () => {
     const tools = [
       {
