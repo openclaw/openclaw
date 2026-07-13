@@ -1046,6 +1046,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           ? html`
               <openclaw-macos-titlebar-controls
                 .navCollapsed=${this.nativeNavCollapsed()}
+                .historyOnly=${settingsTakeover}
                 .canGoBack=${this.nativeHistoryState.canGoBack}
                 .canGoForward=${this.nativeHistoryState.canGoForward}
                 .onToggleSidebar=${() => this.toggleNavigationSurface()}
