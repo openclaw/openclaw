@@ -690,6 +690,15 @@ async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<
   await maybeScrubConfigAuditLog({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
+async function runUsageCostCacheMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRemoveLegacyUsageCostCacheFiles } =
+    await import("../commands/doctor-usage-cost-cache.js");
+  await maybeRemoveLegacyUsageCostCacheFiles({
+    shouldRepair: ctx.prompter.shouldRepair,
+    env: ctx.env,
+  });
+}
+
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
     await import("../commands/doctor/cron/index.js");
@@ -1894,6 +1903,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         },
       },
       run: runConfigAuditScrubHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:usage-cost-cache-sqlite",
+      label: "Usage cost cache",
+      run: runUsageCostCacheMigrationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-cron",
