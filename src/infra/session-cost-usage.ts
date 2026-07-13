@@ -171,7 +171,7 @@ type UsageCostTranscriptFile = {
 type UsageCostCacheLock = {
   pid: number;
   startedAt: number;
-  token?: string;
+  ownerNonce?: string;
 };
 
 type UsageCostCacheLockReadResult =
@@ -212,11 +212,11 @@ function parseUsageCostCacheLock(raw: string): UsageCostCacheLock | null {
     lock.pid <= 0 ||
     typeof lock.startedAt !== "number" ||
     !Number.isFinite(lock.startedAt) ||
-    (lock.token !== undefined && typeof lock.token !== "string")
+    (lock.ownerNonce !== undefined && typeof lock.ownerNonce !== "string")
   ) {
     return null;
   }
-  return { pid: lock.pid, startedAt: lock.startedAt, token: lock.token };
+  return { pid: lock.pid, startedAt: lock.startedAt, ownerNonce: lock.ownerNonce };
 }
 
 async function readUsageCostCacheLockState(
@@ -301,7 +301,7 @@ async function acquireUsageCostCacheRefreshLock(cachePath: string): Promise<{
   const lock: UsageCostCacheLock = {
     pid: process.pid,
     startedAt: Date.now(),
-    token: `${process.pid}:${Date.now()}:${process.hrtime.bigint()}`,
+    ownerNonce: `${process.pid}:${Date.now()}:${process.hrtime.bigint()}`,
   };
   try {
     await writeUsageCostCacheLockAtomically(lockPath, lock);
@@ -312,7 +312,7 @@ async function acquireUsageCostCacheRefreshLock(cachePath: string): Promise<{
         if (
           current?.pid === lock.pid &&
           current.startedAt === lock.startedAt &&
-          current.token === lock.token
+          current.ownerNonce === lock.ownerNonce
         ) {
           await fs.promises.rm(lockPath, { force: true }).catch(() => undefined);
         }
