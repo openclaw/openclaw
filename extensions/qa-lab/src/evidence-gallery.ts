@@ -21,15 +21,6 @@ import {
   type QaEvidenceSummaryEntry,
 } from "./evidence-summary.js";
 
-export type {
-  QaEvidenceArtifactView,
-  QaEvidenceGalleryEntryView,
-  QaEvidenceGalleryModel,
-  QaEvidenceMatrixCellView,
-  QaEvidenceProducerContext,
-  QaEvidenceProducerContextFile,
-} from "../shared/evidence-gallery-types.js";
-
 const TEXT_PREVIEW_BYTES = 12 * 1024;
 const ARTIFACT_VIEW_CONCURRENCY = 8;
 const REPO_ROOT_ARTIFACT_PATH_PREFIX = "<repo-root>/";

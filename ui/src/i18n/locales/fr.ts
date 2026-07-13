@@ -219,10 +219,11 @@ export const fr: TranslationMap = {
   lazyView: {
     loadingTitle: "Chargement du panneau",
     errorTitle: "Échec du chargement du panneau",
-    errorSubtitle:
-      "Rechargez la page pour charger la dernière version du bundle Control UI, ou réessayez si la requête réseau a échoué.",
+    genericSubtitle: "Une erreur s’est produite lors du chargement de ce panneau.",
+    staleTitle: "Une nouvelle version est disponible",
+    staleSubtitle:
+      "OpenClaw a été mis à jour en arrière-plan. Rechargez la page pour obtenir le panneau le plus récent.",
     retry: "Réessayer",
-    unknownError: "Erreur inconnue de chargement du module.",
   },
   nodes: {
     pairing: {
@@ -1757,8 +1758,6 @@ export const fr: TranslationMap = {
     removedRestart:
       "{name} supprimé. Un redémarrage de Gateway est nécessaire pour appliquer la modification.",
     verifiedSource: "Source vérifiée",
-    menuLabel: "Actions de {name}",
-    menuDetails: "Voir les détails",
     enableAction: "Activer",
     disableAction: "Désactiver",
     working: "Traitement en cours…",

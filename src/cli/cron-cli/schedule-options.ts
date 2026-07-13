@@ -29,7 +29,7 @@ type NormalizedScheduleOptions = {
 };
 
 /** Normalized schedule edit request, including patch-only updates for cron metadata. */
-export type CronEditScheduleRequest =
+type CronEditScheduleRequest =
   | { kind: "direct"; schedule: CronSchedule }
   | { kind: "patch-existing-cron"; staggerMs: number | undefined; tz: string | undefined }
   | { kind: "none" };

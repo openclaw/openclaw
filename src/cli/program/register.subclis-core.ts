@@ -20,12 +20,9 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 import {
-  getSubCliCommandsWithSubcommands,
   getSubCliEntries as getSubCliEntryDescriptors,
   type SubCliDescriptor,
 } from "./subcli-descriptors.js";
-
-export { getSubCliCommandsWithSubcommands };
 
 export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";

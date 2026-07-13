@@ -24,7 +24,7 @@ const CAMERA_URL_DOWNLOAD_TIMEOUT_MS = 15 * 60_000;
 export type CameraFacing = "front" | "back";
 
 /** Validated still-image payload from `nodes camera snap`. */
-export type CameraSnapPayload = {
+type CameraSnapPayload = {
   format: string;
   base64?: string;
   url?: string;
@@ -33,7 +33,7 @@ export type CameraSnapPayload = {
 };
 
 /** Validated video payload from `nodes camera clip`. */
-export type CameraClipPayload = {
+type CameraClipPayload = {
   format: string;
   base64?: string;
   url?: string;

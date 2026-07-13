@@ -218,10 +218,11 @@ export const ru: TranslationMap = {
   lazyView: {
     loadingTitle: "Загрузка панели",
     errorTitle: "Не удалось загрузить панель",
-    errorSubtitle:
-      "Перезагрузите страницу, чтобы загрузить последнюю версию пакета Control UI, или повторите попытку, если сетевой запрос завершился ошибкой.",
+    genericSubtitle: "При загрузке этой панели произошла ошибка.",
+    staleTitle: "Доступна новая версия",
+    staleSubtitle:
+      "OpenClaw был обновлён в фоновом режиме. Перезагрузите страницу, чтобы получить последнюю версию панели.",
     retry: "Повторить",
-    unknownError: "Неизвестная ошибка загрузки модуля.",
   },
   nodes: {
     pairing: {
@@ -1745,8 +1746,6 @@ export const ru: TranslationMap = {
     cancel: "Отмена",
     removedRestart: "{name} удален. Для применения изменения требуется перезапуск Gateway.",
     verifiedSource: "Проверенный источник",
-    menuLabel: "Действия для {name}",
-    menuDetails: "Просмотреть сведения",
     enableAction: "Включить",
     disableAction: "Отключить",
     working: "Выполняется…",

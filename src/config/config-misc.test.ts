@@ -1254,7 +1254,7 @@ describe("config paths", () => {
   it("sets, gets, and unsets nested values", () => {
     const root: Record<string, unknown> = {};
     const parsed = parseConfigPath("foo.bar");
-    if (!parsed.ok || !parsed.path) {
+    if (!parsed.ok) {
       throw new Error("path parse failed");
     }
     setConfigValueAtPath(root, parsed.path, 123);

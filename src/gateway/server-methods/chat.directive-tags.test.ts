@@ -389,19 +389,6 @@ vi.mock("../../sessions/transcript-events.js", () => ({
       mockState.emittedTranscriptUpdates.push(update);
     },
   ),
-  emitInternalSessionTranscriptUpdate: vi.fn(
-    (update: {
-      sessionFile?: string;
-      target?: { agentId: string; sessionId: string; sessionKey: string };
-      agentId?: string;
-      sessionId?: string;
-      sessionKey?: string;
-      message?: unknown;
-      messageId?: string;
-    }) => {
-      mockState.emittedTranscriptUpdates.push(update);
-    },
-  ),
 }));
 
 vi.mock("../../agents/sandbox/context.js", async () => {

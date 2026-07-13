@@ -219,10 +219,10 @@ export const tr: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel yükleniyor",
     errorTitle: "Panel yüklenemedi",
-    errorSubtitle:
-      "En son Control UI paketini yüklemek için sayfayı yeniden yükleyin veya ağ isteği başarısız olduysa tekrar deneyin.",
+    genericSubtitle: "Bu panel yüklenirken bir sorun oluştu.",
+    staleTitle: "Yeni bir sürüm mevcut",
+    staleSubtitle: "OpenClaw arka planda güncellendi. En son paneli almak için yeniden yükleyin.",
     retry: "Tekrar dene",
-    unknownError: "Bilinmeyen modül yükleme hatası.",
   },
   nodes: {
     pairing: {
@@ -1747,8 +1747,6 @@ export const tr: TranslationMap = {
     removedRestart:
       "{name} kaldırıldı. Değişikliği uygulamak için Gateway yeniden başlatılmalıdır.",
     verifiedSource: "Doğrulanmış kaynak",
-    menuLabel: "{name} eylemleri",
-    menuDetails: "Ayrıntıları görüntüle",
     enableAction: "Etkinleştir",
     disableAction: "Devre dışı bırak",
     working: "Çalışıyor…",

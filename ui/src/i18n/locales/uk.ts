@@ -218,10 +218,11 @@ export const uk: TranslationMap = {
   lazyView: {
     loadingTitle: "Завантаження панелі",
     errorTitle: "Не вдалося завантажити панель",
-    errorSubtitle:
-      "Перезавантажте сторінку, щоб завантажити найновіший пакет Control UI, або повторіть спробу, якщо мережевий запит не вдався.",
+    genericSubtitle: "Під час завантаження цієї панелі сталася помилка.",
+    staleTitle: "Доступна нова версія",
+    staleSubtitle:
+      "OpenClaw оновлено у фоновому режимі. Перезавантажте, щоб отримати найновішу панель.",
     retry: "Повторити",
-    unknownError: "Невідома помилка завантаження модуля.",
   },
   nodes: {
     pairing: {
@@ -1738,8 +1739,6 @@ export const uk: TranslationMap = {
     cancel: "Скасувати",
     removedRestart: "Видалено {name}. Щоб застосувати зміну, потрібен перезапуск Gateway.",
     verifiedSource: "Перевірене джерело",
-    menuLabel: "Дії для {name}",
-    menuDetails: "Переглянути деталі",
     enableAction: "Увімкнути",
     disableAction: "Вимкнути",
     working: "Обробка…",
