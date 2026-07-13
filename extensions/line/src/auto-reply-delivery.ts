@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { markLineVisibleDeliveryError } from "./delivery-error.js";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
@@ -46,16 +47,6 @@ export type LineAutoReplyDeps = {
 type LineAutoReplyDeliveryResult =
   | { status: "delivered"; replyTokenUsed: boolean }
   | { status: "partial"; replyTokenUsed: boolean; error: Error };
-
-function markLineVisibleDeliveryError(error: unknown): Error {
-  if (error instanceof Error && Object.isExtensible(error)) {
-    Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
-    return error;
-  }
-  const visibleError = new Error("LINE rich or media message send failed", { cause: error });
-  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
-  return visibleError;
-}
 
 export async function deliverLineAutoReply(params: {
   payload: ReplyPayload;

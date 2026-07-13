@@ -178,4 +178,43 @@ describe("sendLineReplyChunks", () => {
       accountId: "default",
     });
   });
+
+  it("does not re-send reply-delivered chunks when a later push fails", async () => {
+    // Reply delivers the first 5 chunks; a follow-up push (chunk 6+) then fails. The
+    // failure must surface without re-pushing the chunks the reply already delivered.
+    const { pushTextMessageWithQuickReplies, createTextMessageWithQuickReplies } =
+      createReplyChunksHarness();
+    const replyMessageLine = vi.fn(async () => ({}));
+    const pushed: string[] = [];
+    const pushMessageLine = vi.fn(async (_to: string, text: string) => {
+      if (text === "six") {
+        throw new Error("transient push failure");
+      }
+      pushed.push(text);
+      return {};
+    });
+
+    const error = await sendLineReplyChunks({
+      to: "line:user:1",
+      chunks: ["one", "two", "three", "four", "five", "six", "seven"],
+      replyToken: "token",
+      replyTokenUsed: false,
+      cfg: LINE_TEST_CFG,
+      accountId: "default",
+      replyMessageLine,
+      pushMessageLine,
+      pushTextMessageWithQuickReplies,
+      createTextMessageWithQuickReplies,
+    }).then(
+      () => undefined,
+      (err: unknown) => err,
+    );
+
+    expect(replyMessageLine).toHaveBeenCalledTimes(1);
+    // The first 5 chunks went out via the reply; none of them may be pushed again.
+    expect(pushed).not.toContain("one");
+    expect(pushed).not.toContain("five");
+    // The failure is surfaced, tagged so the core suppresses a duplicate fallback.
+    expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
+  });
 });
