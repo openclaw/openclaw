@@ -23,7 +23,13 @@ const log = createSubsystemLogger("session-suspension");
 const DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY = 1;
 const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 
-const laneResumeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+type LaneResumeTimer = {
+  timer: ReturnType<typeof setTimeout>;
+  resumeConcurrency: number;
+};
+
+const laneResumeTimers = new Map<string, LaneResumeTimer>();
+let cleanupGeneration = 0;
 const deferredSessionSuspension = new AsyncLocalStorage<{
   claimed: boolean;
   onDeferred?: (params: SessionSuspensionParams) => void;
@@ -90,10 +96,12 @@ export function resolveSessionSuspensionTarget(): SessionSuspensionTarget {
 function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurrency: number) {
   const existing = laneResumeTimers.get(laneId);
   if (existing) {
-    clearTimeout(existing);
+    clearTimeout(existing.timer);
   }
   const timer = setTimeout(() => {
-    laneResumeTimers.delete(laneId);
+    if (laneResumeTimers.get(laneId)?.timer === timer) {
+      laneResumeTimers.delete(laneId);
+    }
     setCommandLaneConcurrency(laneId, resumeConcurrency);
     log.info("auto-resumed lane after suspension TTL", {
       laneId,
@@ -104,13 +112,15 @@ function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurren
   if (typeof timer.unref === "function") {
     timer.unref();
   }
-  laneResumeTimers.set(laneId, timer);
+  laneResumeTimers.set(laneId, { timer, resumeConcurrency });
 }
 
 export function clearSessionSuspensionTimers(): number {
+  cleanupGeneration += 1;
   let cleared = 0;
-  for (const timer of laneResumeTimers.values()) {
-    clearTimeout(timer);
+  for (const [laneId, entry] of laneResumeTimers.entries()) {
+    clearTimeout(entry.timer);
+    setCommandLaneConcurrency(laneId, entry.resumeConcurrency);
     cleared += 1;
   }
   laneResumeTimers.clear();
@@ -135,6 +145,7 @@ export async function suspendSession(params: SessionSuspensionParams) {
   const ttlMs = resolveTimerTimeoutMs(params.ttlMs, DEFAULT_QUOTA_SUSPENSION_RESUME_MS, 0);
   const now = Date.now();
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
+  const suspensionGeneration = cleanupGeneration;
 
   try {
     await patchSessionEntry(
@@ -160,6 +171,22 @@ export async function suspendSession(params: SessionSuspensionParams) {
       laneId: params.laneId,
       error: err instanceof Error ? err.message : String(err),
     });
+    return;
+  }
+
+  if (suspensionGeneration !== cleanupGeneration) {
+    try {
+      await patchSessionEntry({ storePath, sessionKey }, () => ({ quotaSuspension: undefined }), {
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      });
+    } catch (err) {
+      log.warn("failed to clear quota suspension after shutdown cleanup", {
+        sessionId: params.sessionId,
+        laneId: params.laneId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return;
   }
 

@@ -121,20 +121,70 @@ describe("session suspension", () => {
     expect(patch.quotaSuspension?.expectedResumeBy).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
   });
 
-  it("clears pending lane auto-resume timers without resuming after cleanup", async () => {
+  it("restores and clears pending lane auto-resume timers during cleanup", async () => {
     vi.useFakeTimers();
     const { clearSessionSuspensionTimers } = await import("./session-suspension.js");
 
-    await suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
+    await suspendLane(
+      100,
+      { agents: { defaults: { maxConcurrent: 3 } } } as OpenClawConfig,
+      CommandLane.Main,
+    );
 
     expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Main, 0);
     expect(clearSessionSuspensionTimers()).toBe(1);
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
+      CommandLane.Main,
+      3,
+    );
 
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
     await vi.advanceTimersByTimeAsync(100);
 
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
     expect(clearSessionSuspensionTimers()).toBe(0);
+  });
+
+  it("restores custom lanes to their default resume concurrency during cleanup", async () => {
+    vi.useFakeTimers();
+    const { clearSessionSuspensionTimers } = await import("./session-suspension.js");
+
+    await suspendLane(100, {} as OpenClawConfig, CommandLane.Nested);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Nested, 0);
+    expect(clearSessionSuspensionTimers()).toBe(1);
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
+      CommandLane.Nested,
+      1,
+    );
+  });
+
+  it("does not throttle lanes when cleanup wins a pending suspension write race", async () => {
+    vi.useFakeTimers();
+    const { clearSessionSuspensionTimers } = await import("./session-suspension.js");
+    let resolvePatch: (() => void) | undefined;
+    sessionAccessorMocks.patchSessionEntry.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePatch = resolve;
+        }),
+    );
+
+    const suspension = suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
+    await vi.waitFor(() => {
+      expect(resolvePatch).toBeTypeOf("function");
+    });
+
+    expect(clearSessionSuspensionTimers()).toBe(0);
+    resolvePatch?.();
+    await suspension;
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+    expect(sessionAccessorMocks.patchSessionEntry).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
   });
 
   it("defers session suspension only for the outer fallback candidate run", async () => {
