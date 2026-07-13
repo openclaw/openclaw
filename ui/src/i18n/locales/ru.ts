@@ -82,6 +82,7 @@ export const ru: TranslationMap = {
     relink: "Повторно привязать",
     waitForScan: "Ожидание сканирования",
     logout: "Выйти",
+    skipToMainContent: "Перейти к основному содержимому",
   },
   nativeLinkMenu: {
     label: "Действия со ссылкой",
@@ -1130,6 +1131,7 @@ export const ru: TranslationMap = {
     settingsView: "Просмотр настроек",
     simple: "Простой",
     advanced: "Расширенные",
+    content: "Содержимое настроек",
     themeImported: "Импортировано: {name}.",
     themeRemoved: "Пользовательская тема удалена.",
     channels: {
@@ -1487,6 +1489,8 @@ export const ru: TranslationMap = {
     platforms: "Платформы: {platforms}",
     installNamed: "Установить {name}",
     notFound: "Skill не найден.",
+    openDetails: "Открыть сведения о {name}",
+    enabledNamed: "{name} включено",
     invalidLink: "Недействительная ссылка ClawHub",
     overview: "Обзор",
     skillCard: "Карточка Skill",
@@ -3553,11 +3557,13 @@ export const ru: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Статус автоматизации",
       all: "Все",
       active: "Активно",
       paused: "Приостановлено",
     },
     list: {
+      viewLabel: "Представления автоматизации",
       searchPlaceholder: "Поиск запланированных задач",
       newTask: "Новая задача",
       filters: "Фильтры",
@@ -3629,6 +3635,7 @@ export const ru: TranslationMap = {
       nextWake: "Следующее пробуждение",
     },
     detail: {
+      tabsLabel: "Сведения об автоматизации",
       newTitle: "Новая запланированная задача",
       newSubtitle: "Опишите, что должен делать OpenClaw, затем выберите время запуска.",
       back: "Все автоматизации",

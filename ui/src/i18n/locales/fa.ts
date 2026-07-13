@@ -82,6 +82,7 @@ export const fa: TranslationMap = {
     relink: "پیوند مجدد",
     waitForScan: "انتظار برای اسکن",
     logout: "خروج",
+    skipToMainContent: "رفتن به محتوای اصلی",
   },
   nativeLinkMenu: {
     label: "اقدامات پیوند",
@@ -1121,6 +1122,7 @@ export const fa: TranslationMap = {
     settingsView: "نمای تنظیمات",
     simple: "ساده",
     advanced: "پیشرفته",
+    content: "محتوای تنظیمات",
     themeImported: "{name} وارد شد.",
     themeRemoved: "تم سفارشی حذف شد.",
     channels: {
@@ -1474,6 +1476,8 @@ export const fa: TranslationMap = {
     platforms: "پلتفرم‌ها: {platforms}",
     installNamed: "نصب {name}",
     notFound: "Skill یافت نشد.",
+    openDetails: "باز کردن جزئیات {name}",
+    enabledNamed: "{name} فعال است",
     invalidLink: "پیوند ClawHub نامعتبر است",
     overview: "نمای کلی",
     skillCard: "کارت مهارت",
@@ -3523,11 +3527,13 @@ export const fa: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "وضعیت خودکارسازی",
       all: "همه",
       active: "فعال",
       paused: "متوقف‌شده",
     },
     list: {
+      viewLabel: "نماهای خودکارسازی",
       searchPlaceholder: "جستجوی وظایف زمان‌بندی‌شده",
       newTask: "وظیفه جدید",
       filters: "فیلترها",
@@ -3598,6 +3604,7 @@ export const fa: TranslationMap = {
       nextWake: "بیداری بعدی",
     },
     detail: {
+      tabsLabel: "جزئیات خودکارسازی",
       newTitle: "وظیفهٔ زمان‌بندی‌شدهٔ جدید",
       newSubtitle: "توضیح دهید OpenClaw چه کاری باید انجام دهد، سپس زمان اجرای آن را انتخاب کنید.",
       back: "همه خودکارسازی‌ها",

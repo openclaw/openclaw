@@ -82,6 +82,7 @@ export const ko: TranslationMap = {
     relink: "다시 연결",
     waitForScan: "스캔 대기",
     logout: "로그아웃",
+    skipToMainContent: "주요 콘텐츠로 건너뛰기",
   },
   nativeLinkMenu: {
     label: "링크 작업",
@@ -1117,6 +1118,7 @@ export const ko: TranslationMap = {
     settingsView: "설정 보기",
     simple: "간단",
     advanced: "고급",
+    content: "설정 콘텐츠",
     themeImported: "{name}을(를) 가져왔습니다.",
     themeRemoved: "사용자 지정 테마가 제거되었습니다.",
     channels: {
@@ -1470,6 +1472,8 @@ export const ko: TranslationMap = {
     platforms: "플랫폼: {platforms}",
     installNamed: "{name} 설치",
     notFound: "Skill을 찾을 수 없습니다.",
+    openDetails: "{name} 세부 정보 열기",
+    enabledNamed: "{name} 활성화됨",
     invalidLink: "ClawHub 링크가 잘못되었습니다",
     overview: "개요",
     skillCard: "Skill Card",
@@ -3513,11 +3517,13 @@ export const ko: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "자동화 상태",
       all: "전체",
       active: "활성",
       paused: "일시중지됨",
     },
     list: {
+      viewLabel: "자동화 보기",
       searchPlaceholder: "예약된 작업 검색",
       newTask: "새 작업",
       filters: "필터",
@@ -3588,6 +3594,7 @@ export const ko: TranslationMap = {
       nextWake: "다음 실행",
     },
     detail: {
+      tabsLabel: "자동화 세부 정보",
       newTitle: "새 예약 작업",
       newSubtitle: "OpenClaw가 수행할 작업을 설명한 후 실행 시점을 선택하세요.",
       back: "모든 자동화",

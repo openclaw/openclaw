@@ -82,6 +82,7 @@ export const hi: TranslationMap = {
     relink: "फिर से लिंक करें",
     waitForScan: "स्कैन की प्रतीक्षा करें",
     logout: "लॉग आउट",
+    skipToMainContent: "मुख्य सामग्री पर जाएँ",
   },
   nativeLinkMenu: {
     label: "लिंक कार्रवाइयाँ",
@@ -1117,6 +1118,7 @@ export const hi: TranslationMap = {
     settingsView: "सेटिंग्स दृश्य",
     simple: "सरल",
     advanced: "उन्नत",
+    content: "सेटिंग्स की सामग्री",
     themeImported: "{name} आयात किया गया।",
     themeRemoved: "कस्टम थीम हटा दी गई।",
     channels: {
@@ -1468,6 +1470,8 @@ export const hi: TranslationMap = {
     platforms: "प्लेटफ़ॉर्म: {platforms}",
     installNamed: "{name} इंस्टॉल करें",
     notFound: "Skill नहीं मिली।",
+    openDetails: "{name} का विवरण खोलें",
+    enabledNamed: "{name} सक्षम है",
     invalidLink: "ClawHub लिंक अमान्य है",
     overview: "ओवरव्यू",
     skillCard: "Skill Card",
@@ -3495,11 +3499,13 @@ export const hi: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "ऑटोमेशन की स्थिति",
       all: "सभी",
       active: "सक्रिय",
       paused: "रोका गया",
     },
     list: {
+      viewLabel: "ऑटोमेशन दृश्य",
       searchPlaceholder: "अनुसूचित कार्य खोजें",
       newTask: "नया कार्य",
       filters: "फ़िल्टर",
@@ -3570,6 +3576,7 @@ export const hi: TranslationMap = {
       nextWake: "अगला वेक",
     },
     detail: {
+      tabsLabel: "ऑटोमेशन का विवरण",
       newTitle: "नया शेड्यूल किया गया कार्य",
       newSubtitle: "बताएं कि OpenClaw को क्या करना चाहिए, फिर चुनें कि यह कब चले।",
       back: "सभी ऑटोमेशन",

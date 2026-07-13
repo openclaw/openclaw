@@ -82,6 +82,7 @@ export const ja_JP: TranslationMap = {
     relink: "再リンク",
     waitForScan: "スキャンを待機",
     logout: "ログアウト",
+    skipToMainContent: "メインコンテンツにスキップ",
   },
   nativeLinkMenu: {
     label: "リンクのアクション",
@@ -1127,6 +1128,7 @@ export const ja_JP: TranslationMap = {
     settingsView: "設定ビュー",
     simple: "シンプル",
     advanced: "詳細",
+    content: "設定内容",
     themeImported: "{name} をインポートしました。",
     themeRemoved: "カスタムテーマを削除しました。",
     channels: {
@@ -1482,6 +1484,8 @@ export const ja_JP: TranslationMap = {
     platforms: "プラットフォーム: {platforms}",
     installNamed: "{name} をインストール",
     notFound: "Skill が見つかりません。",
+    openDetails: "{name}の詳細を開く",
+    enabledNamed: "{name}が有効",
     invalidLink: "ClawHub リンクが無効です",
     overview: "概要",
     skillCard: "Skill カード",
@@ -3537,11 +3541,13 @@ export const ja_JP: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "自動化ステータス",
       all: "すべて",
       active: "アクティブ",
       paused: "一時停止中",
     },
     list: {
+      viewLabel: "自動化ビュー",
       searchPlaceholder: "スケジュールされたタスクを検索",
       newTask: "新規タスク",
       filters: "フィルター",
@@ -3612,6 +3618,7 @@ export const ja_JP: TranslationMap = {
       nextWake: "次回の起動",
     },
     detail: {
+      tabsLabel: "自動化の詳細",
       newTitle: "新規スケジュールタスク",
       newSubtitle: "OpenClaw に何をさせるかを記述し、実行するタイミングを選択します。",
       back: "すべての自動化",

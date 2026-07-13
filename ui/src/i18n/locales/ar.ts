@@ -82,6 +82,7 @@ export const ar: TranslationMap = {
     relink: "إعادة الربط",
     waitForScan: "انتظار المسح",
     logout: "تسجيل الخروج",
+    skipToMainContent: "تخطَّ إلى المحتوى الرئيسي",
   },
   nativeLinkMenu: {
     label: "إجراءات الرابط",
@@ -1116,6 +1117,7 @@ export const ar: TranslationMap = {
     settingsView: "عرض الإعدادات",
     simple: "بسيط",
     advanced: "متقدم",
+    content: "محتوى الإعدادات",
     themeImported: "تم استيراد {name}.",
     themeRemoved: "تمت إزالة السمة المخصصة.",
     channels: {
@@ -1467,6 +1469,8 @@ export const ar: TranslationMap = {
     platforms: "المنصات: {platforms}",
     installNamed: "تثبيت {name}",
     notFound: "لم يتم العثور على المهارة.",
+    openDetails: "فتح تفاصيل {name}",
+    enabledNamed: "تم تفعيل {name}",
     invalidLink: "رابط ClawHub غير صالح",
     overview: "نظرة عامة",
     skillCard: "بطاقة المهارة",
@@ -3500,11 +3504,13 @@ export const ar: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "حالة الأتمتة",
       all: "الكل",
       active: "نشط",
       paused: "متوقفة مؤقتًا",
     },
     list: {
+      viewLabel: "عروض الأتمتة",
       searchPlaceholder: "البحث في المهام المجدولة",
       newTask: "مهمة جديدة",
       filters: "عوامل التصفية",
@@ -3575,6 +3581,7 @@ export const ar: TranslationMap = {
       nextWake: "التشغيل التالي",
     },
     detail: {
+      tabsLabel: "تفاصيل الأتمتة",
       newTitle: "مهمة مجدولة جديدة",
       newSubtitle: "صِف ما ينبغي أن يفعله OpenClaw، ثم اختر وقت تشغيله.",
       back: "كل عمليات الأتمتة",

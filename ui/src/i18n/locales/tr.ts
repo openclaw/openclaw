@@ -82,6 +82,7 @@ export const tr: TranslationMap = {
     relink: "Yeniden bağla",
     waitForScan: "Tarama için bekle",
     logout: "Çıkış yap",
+    skipToMainContent: "Ana içeriğe geç",
   },
   nativeLinkMenu: {
     label: "Bağlantı eylemleri",
@@ -1126,6 +1127,7 @@ export const tr: TranslationMap = {
     settingsView: "Ayarlar görünümü",
     simple: "Basit",
     advanced: "Gelişmiş",
+    content: "Ayarlar içeriği",
     themeImported: "{name} içe aktarıldı.",
     themeRemoved: "Özel tema kaldırıldı.",
     channels: {
@@ -1479,6 +1481,8 @@ export const tr: TranslationMap = {
     platforms: "Platformlar: {platforms}",
     installNamed: "{name} yükle",
     notFound: "Beceri bulunamadı.",
+    openDetails: "{name} ayrıntılarını aç",
+    enabledNamed: "{name} etkin",
     invalidLink: "ClawHub bağlantısı geçersiz",
     overview: "Genel bakış",
     skillCard: "Skill Card",
@@ -3547,11 +3551,13 @@ export const tr: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Otomasyon durumu",
       all: "Tümü",
       active: "Etkin",
       paused: "Duraklatıldı",
     },
     list: {
+      viewLabel: "Otomasyon görünümleri",
       searchPlaceholder: "Zamanlanmış görevleri ara",
       newTask: "Yeni görev",
       filters: "Filtreler",
@@ -3623,6 +3629,7 @@ export const tr: TranslationMap = {
       nextWake: "Sonraki uyanma",
     },
     detail: {
+      tabsLabel: "Otomasyon ayrıntıları",
       newTitle: "Yeni zamanlanmış görev",
       newSubtitle:
         "OpenClaw'ın ne yapması gerektiğini açıklayın, ardından ne zaman çalışacağını seçin.",

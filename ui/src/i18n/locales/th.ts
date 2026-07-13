@@ -82,6 +82,7 @@ export const th: TranslationMap = {
     relink: "เชื่อมโยงใหม่",
     waitForScan: "รอการสแกน",
     logout: "ออกจากระบบ",
+    skipToMainContent: "ข้ามไปยังเนื้อหาหลัก",
   },
   nativeLinkMenu: {
     label: "การดำเนินการลิงก์",
@@ -1111,6 +1112,7 @@ export const th: TranslationMap = {
     settingsView: "มุมมองการตั้งค่า",
     simple: "แบบง่าย",
     advanced: "ขั้นสูง",
+    content: "เนื้อหาการตั้งค่า",
     themeImported: "นำเข้า {name} แล้ว",
     themeRemoved: "ลบธีมที่กำหนดเองแล้ว",
     channels: {
@@ -1460,6 +1462,8 @@ export const th: TranslationMap = {
     platforms: "แพลตฟอร์ม: {platforms}",
     installNamed: "ติดตั้ง {name}",
     notFound: "ไม่พบ Skill",
+    openDetails: "เปิดรายละเอียดของ {name}",
+    enabledNamed: "เปิดใช้งาน {name} แล้ว",
     invalidLink: "ลิงก์ ClawHub ไม่ถูกต้อง",
     overview: "ภาพรวม",
     skillCard: "Skill Card",
@@ -3471,11 +3475,13 @@ export const th: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "สถานะระบบอัตโนมัติ",
       all: "ทั้งหมด",
       active: "ใช้งานอยู่",
       paused: "หยุดชั่วคราว",
     },
     list: {
+      viewLabel: "มุมมองระบบอัตโนมัติ",
       searchPlaceholder: "ค้นหางานที่ตั้งเวลาไว้",
       newTask: "งานใหม่",
       filters: "ตัวกรอง",
@@ -3546,6 +3552,7 @@ export const th: TranslationMap = {
       nextWake: "ปลุกครั้งถัดไป",
     },
     detail: {
+      tabsLabel: "รายละเอียดระบบอัตโนมัติ",
       newTitle: "งานตามกำหนดเวลาใหม่",
       newSubtitle: "อธิบายสิ่งที่ OpenClaw ควรทำ แล้วเลือกเวลาที่จะให้ทำงาน",
       back: "การทำงานอัตโนมัติทั้งหมด",
