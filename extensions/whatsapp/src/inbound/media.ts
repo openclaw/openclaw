@@ -6,11 +6,75 @@ import { extractContextInfo } from "./extract.js";
 import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadMediaMessage, normalizeMessageContent } from "./runtime-api.js";
 
+/**
+ * Default per-chunk idle timeout for WhatsApp inbound media downloads.
+ * Matches Telegram `TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000` so a stalled
+ * Baileys media stream cannot block inbound dispatch indefinitely.
+ */
+export const WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
+
 class WhatsAppInboundMediaLimitExceededError extends Error {
   constructor(maxBytes: number) {
     super(`Media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
     this.name = "WhatsAppInboundMediaLimitExceededError";
   }
+}
+
+export class WhatsAppInboundMediaTimeoutError extends Error {
+  readonly chunkTimeoutMs: number;
+  constructor(chunkTimeoutMs: number) {
+    super(`WhatsApp media download stalled: no data received for ${chunkTimeoutMs}ms`);
+    this.name = "WhatsAppInboundMediaTimeoutError";
+    this.chunkTimeoutMs = chunkTimeoutMs;
+  }
+}
+
+// Bound each AsyncIterable `next()` so a stalled Baileys download cannot hang
+// inbound dispatch. On timeout, call `return()` so Node Readable streams are
+// destroyed; silence the losing `nextPromise` to avoid unhandledRejection.
+function withChunkIdleTimeout<T>(
+  source: AsyncIterable<T>,
+  chunkTimeoutMs: number,
+): AsyncIterable<T> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      const iterator = source[Symbol.asyncIterator]();
+      try {
+        while (true) {
+          const nextPromise = iterator.next();
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(
+              () => reject(new WhatsAppInboundMediaTimeoutError(chunkTimeoutMs)),
+              chunkTimeoutMs,
+            );
+          });
+          let result: IteratorResult<T>;
+          try {
+            result = await Promise.race([nextPromise, timeoutPromise]);
+          } catch (err) {
+            nextPromise.then(
+              () => undefined,
+              () => undefined,
+            );
+            throw err;
+          } finally {
+            if (timeoutHandle !== undefined) {
+              clearTimeout(timeoutHandle);
+            }
+          }
+          if (result.done) {
+            return;
+          }
+          yield result.value;
+        }
+      } finally {
+        if (typeof iterator.return === "function") {
+          await iterator.return().catch(() => undefined);
+        }
+      }
+    },
+  };
 }
 
 function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
@@ -22,6 +86,7 @@ export async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
   maxBytes = 50 * 1024 * 1024,
+  options?: { chunkTimeoutMs?: number },
 ): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
   const message = unwrapMessage(msg.message as proto.IMessage | undefined);
   if (!message) {
@@ -38,6 +103,7 @@ export async function downloadInboundMedia(
   ) {
     return undefined;
   }
+  const chunkTimeoutMs = options?.chunkTimeoutMs ?? WHATSAPP_INBOUND_MEDIA_IDLE_TIMEOUT_MS;
   const stream = await downloadMediaMessage(
     msg as WAMessage,
     "stream",
@@ -48,7 +114,7 @@ export async function downloadInboundMedia(
     },
   );
   const saved = await saveMediaStream(
-    stream as AsyncIterable<unknown>,
+    withChunkIdleTimeout(stream as AsyncIterable<unknown>, chunkTimeoutMs),
     mimetype,
     "inbound",
     maxBytes,
@@ -66,6 +132,7 @@ export async function downloadQuotedInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
   maxBytes = 50 * 1024 * 1024,
+  options?: { chunkTimeoutMs?: number },
 ): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
   const message = unwrapMessage(msg.message as proto.IMessage | undefined);
   const contextInfo = extractContextInfo(message);
@@ -86,5 +153,6 @@ export async function downloadQuotedInboundMedia(
     },
     sock,
     maxBytes,
+    options,
   );
 }
