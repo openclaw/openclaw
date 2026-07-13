@@ -10,9 +10,11 @@ import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
+import { normalizeGatewayTokenScope } from "../app/gateway-scope.ts";
 import { isCronJobActiveFailure } from "../lib/cron-status.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
 import { isMonitoredAuthProvider, loadModelAuthStatus } from "../lib/model-auth.ts";
+import { getSafeLocalStorage } from "../local-storage.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons, type IconName } from "./icons.ts";
@@ -27,12 +29,100 @@ const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 // slow lifecycle-owned interval keeps the chips from going permanently stale.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
 
+const SIDEBAR_ATTENTION_KINDS = [
+  "cronFailed",
+  "cronOverdue",
+  "modelAuthExpired",
+  "modelAuthExpiring",
+] as const;
+export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
+
 export type SidebarAttentionItem = {
+  kind: SidebarAttentionKind;
   severity: "error" | "warning";
   icon: IconName;
   label: string;
   routeId: NavigationRouteId;
+  // Sorted ids of the entities behind the chip. A dismissal stores this
+  // signature so the chip stays hidden only while the same set is affected;
+  // any change (new job/provider) resurfaces it.
+  signature: string;
 };
+
+// Per-gateway, per-browser snooze state for the chips. Deliberately client-side
+// chrome (like nav width / dock layout), not gateway state: dismissing a nag on
+// one device should not acknowledge it everywhere.
+const DISMISSED_STORE_PREFIX = "openclaw.control.sidebarAttention.v1:";
+
+export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string>>;
+
+function dismissedStoreKey(gatewayUrl: string): string {
+  return `${DISMISSED_STORE_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+}
+
+function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
+  const storage = getSafeLocalStorage();
+  if (!storage) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(storage.getItem(dismissedStoreKey(gatewayUrl)) ?? "null");
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const result: SidebarAttentionDismissals = {};
+    for (const kind of SIDEBAR_ATTENTION_KINDS) {
+      const value = (parsed as Record<string, unknown>)[kind];
+      if (typeof value === "string") {
+        result[kind] = value;
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function saveDismissals(gatewayUrl: string, dismissals: SidebarAttentionDismissals) {
+  const storage = getSafeLocalStorage();
+  if (!storage) {
+    return;
+  }
+  try {
+    if (Object.keys(dismissals).length === 0) {
+      storage.removeItem(dismissedStoreKey(gatewayUrl));
+    } else {
+      storage.setItem(dismissedStoreKey(gatewayUrl), JSON.stringify(dismissals));
+    }
+  } catch {
+    // Quota/privacy-mode failures just lose the snooze; chips reappear.
+  }
+}
+
+/**
+ * Drop dismissals whose chip is gone or whose entity set changed, so a state
+ * that clears and later recurs surfaces again instead of staying hidden by a
+ * stale snooze. Returns the input object when nothing changed.
+ */
+export function pruneDismissals(
+  dismissals: SidebarAttentionDismissals,
+  items: readonly SidebarAttentionItem[],
+): SidebarAttentionDismissals {
+  const next: SidebarAttentionDismissals = {};
+  let changed = false;
+  for (const kind of SIDEBAR_ATTENTION_KINDS) {
+    const stored = dismissals[kind];
+    if (stored === undefined) {
+      continue;
+    }
+    if (items.some((item) => item.kind === kind && item.signature === stored)) {
+      next[kind] = stored;
+    } else {
+      changed = true;
+    }
+  }
+  return changed ? next : dismissals;
+}
 
 export function buildSidebarAttentionItems(params: {
   cronJobs: readonly CronJob[];
@@ -40,14 +130,17 @@ export function buildSidebarAttentionItems(params: {
   now: number;
 }): SidebarAttentionItem[] {
   const items: SidebarAttentionItem[] = [];
+  const signatureOf = (ids: readonly string[]) => [...ids].sort().join("\n");
 
-  const failedCron = params.cronJobs.filter(isCronJobActiveFailure).length;
-  if (failedCron > 0) {
+  const failedCron = params.cronJobs.filter(isCronJobActiveFailure);
+  if (failedCron.length > 0) {
     items.push({
+      kind: "cronFailed",
       severity: "error",
       icon: "clock",
-      label: t("attention.cronFailed", { count: String(failedCron) }),
+      label: t("attention.cronFailed", { count: String(failedCron.length) }),
       routeId: "cron",
+      signature: signatureOf(failedCron.map((job) => job.id)),
     });
   }
   const overdueCron = params.cronJobs.filter(
@@ -55,13 +148,15 @@ export function buildSidebarAttentionItems(params: {
       job.enabled &&
       job.state?.nextRunAtMs != null &&
       params.now - job.state.nextRunAtMs > CRON_OVERDUE_GRACE_MS,
-  ).length;
-  if (overdueCron > 0) {
+  );
+  if (overdueCron.length > 0) {
     items.push({
+      kind: "cronOverdue",
       severity: "warning",
       icon: "clock",
-      label: t("attention.cronOverdue", { count: String(overdueCron) }),
+      label: t("attention.cronOverdue", { count: String(overdueCron.length) }),
       routeId: "cron",
+      signature: signatureOf(overdueCron.map((job) => job.id)),
     });
   }
 
@@ -71,17 +166,20 @@ export function buildSidebarAttentionItems(params: {
   );
   if (expired.length > 0) {
     items.push({
+      kind: "modelAuthExpired",
       severity: "error",
       icon: "plug",
       label: t("attention.modelAuthExpired", {
         providers: expired.map((provider) => provider.displayName).join(", "),
       }),
       routeId: "model-providers",
+      signature: signatureOf(expired.map((provider) => provider.provider)),
     });
   }
   const expiring = monitored.filter((provider) => provider.status === "expiring");
   if (expiring.length > 0) {
     items.push({
+      kind: "modelAuthExpiring",
       severity: "warning",
       icon: "plug",
       label: t("attention.modelAuthExpiring", {
@@ -90,6 +188,7 @@ export function buildSidebarAttentionItems(params: {
           .join(", "),
       }),
       routeId: "model-providers",
+      signature: signatureOf(expiring.map((provider) => provider.provider)),
     });
   }
   return items;
@@ -101,11 +200,13 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   @state() private cronJobs: CronJob[] = [];
   @state() private modelAuthStatus: ModelAuthStatusResult | null = null;
+  @state() private dismissed: SidebarAttentionDismissals = {};
 
   @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
   private loadedAtMs = 0;
+  private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
 
   private readonly subscriptions = new SubscriptionsController(this).effect(
@@ -146,6 +247,11 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
 
   private synchronize(gateway: ApplicationContext["gateway"]) {
     const snapshot = gateway.snapshot;
+    const gatewayUrl = gateway.connection.gatewayUrl;
+    if (gatewayUrl && gatewayUrl !== this.dismissedScope) {
+      this.dismissedScope = gatewayUrl;
+      this.dismissed = loadDismissals(gatewayUrl);
+    }
     if (!snapshot.connected || !snapshot.client) {
       this.loadedClient = null;
       this.cronJobs = [];
@@ -185,6 +291,39 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
     }
   }
 
+  // Re-arm stale snoozes after each data refresh. Runs against loaded data
+  // only: the empty pre-load snapshot must not wipe dismissals for chips that
+  // are still true on the gateway. A failed auth-status fetch (null) prunes
+  // auth snoozes, which fails safe — the chip re-nags instead of staying
+  // hidden.
+  override updated() {
+    if (this.loadedAtMs === 0 || !this.dismissedScope) {
+      return;
+    }
+    if (!this.context?.gateway.snapshot.connected) {
+      return;
+    }
+    const items = buildSidebarAttentionItems({
+      cronJobs: this.cronJobs,
+      modelAuthStatus: this.modelAuthStatus,
+      now: Date.now(),
+    });
+    const pruned = pruneDismissals(this.dismissed, items);
+    if (pruned !== this.dismissed) {
+      this.dismissed = pruned;
+      saveDismissals(this.dismissedScope, pruned);
+    }
+  }
+
+  private dismiss(item: SidebarAttentionItem) {
+    if (!this.dismissedScope) {
+      return;
+    }
+    const next = { ...this.dismissed, [item.kind]: item.signature };
+    this.dismissed = next;
+    saveDismissals(this.dismissedScope, next);
+  }
+
   override render() {
     if (!this.context?.gateway.snapshot.connected) {
       return nothing;
@@ -193,7 +332,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       cronJobs: this.cronJobs,
       modelAuthStatus: this.modelAuthStatus,
       now: Date.now(),
-    });
+    }).filter((item) => this.dismissed[item.kind] !== item.signature);
     if (items.length === 0) {
       return nothing;
     }
@@ -201,15 +340,26 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       <div class="sidebar-attention" role="status">
         ${items.map(
           (item) => html`
-            <button
-              type="button"
-              class="sidebar-attention__item sidebar-attention__item--${item.severity}"
-              title=${item.label}
-              @click=${() => this.onNavigate?.(item.routeId)}
-            >
-              <span class="sidebar-attention__icon" aria-hidden="true">${icons[item.icon]}</span>
-              <span class="sidebar-attention__label">${item.label}</span>
-            </button>
+            <div class="sidebar-attention__item sidebar-attention__item--${item.severity}">
+              <button
+                type="button"
+                class="sidebar-attention__open"
+                title=${item.label}
+                @click=${() => this.onNavigate?.(item.routeId)}
+              >
+                <span class="sidebar-attention__icon" aria-hidden="true">${icons[item.icon]}</span>
+                <span class="sidebar-attention__label">${item.label}</span>
+              </button>
+              <button
+                type="button"
+                class="sidebar-attention__dismiss"
+                title=${t("common.dismiss")}
+                aria-label=${t("common.dismiss")}
+                @click=${() => this.dismiss(item)}
+              >
+                ${icons.x}
+              </button>
+            </div>
           `,
         )}
       </div>
