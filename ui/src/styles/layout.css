@@ -117,6 +117,48 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   display: none;
 }
 
+/* Shipped Mac app builds without web chrome still use openclaw-native-nav
+   above; new hosts render the replacement controls in this document. Unlike
+   that rule this keeps the drawer hamburger: the web toolbar hides at
+   <=1100px, so narrow windows still need the in-page toggle. */
+html.openclaw-native-web-chrome .shell-nav-expand,
+html.openclaw-native-web-chrome .sidebar-brand__collapse {
+  display: none;
+}
+
+.macos-titlebar-controls {
+  position: fixed;
+  top: 0;
+  left: 78px;
+  /* Above app chrome (<=45), below dropdowns/dialogs (>=100). */
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 156px;
+  height: var(--openclaw-native-titlebar-height, 50px);
+}
+
+.macos-titlebar-controls__button.topbar-icon-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.macos-titlebar-controls__button:active:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-hover) 96%, transparent);
+  color: var(--text);
+}
+
+.macos-titlebar-controls__button:disabled {
+  opacity: 0.38;
+}
+
+@media (max-width: 1100px) {
+  .macos-titlebar-controls {
+    display: none;
+  }
+}
+
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
