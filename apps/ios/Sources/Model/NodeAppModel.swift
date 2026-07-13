@@ -3697,6 +3697,8 @@ extension NodeAppModel {
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
         self.gatewayAutoReconnectEnabled = true
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
         if !preservingGatewayProblem {
             // Same-target reconnects keep the prior failure readable until success or a new failure.
             // Initial connects and target changes must not inherit another gateway's problem state.

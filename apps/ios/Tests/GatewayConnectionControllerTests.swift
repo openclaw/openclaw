@@ -455,6 +455,30 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(lhs.hasSameConnectionInputs(as: rhs))
     }
 
+    @Test @MainActor func `same target retry unpauses retained pairing problem`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let config = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(config)
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+        #expect(appModel.gatewayPairingPaused)
+
+        appModel.applyGatewayConnectConfig(config, forceReconnect: true)
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+    }
+
     @Test func `gateway connect config keeps stable owner bytes exact`() {
         let composedID = "gateway-\u{00E9}"
         let decomposedID = "gateway-e\u{0301}"
