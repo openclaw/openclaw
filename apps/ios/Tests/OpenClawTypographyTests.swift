@@ -369,6 +369,12 @@ struct OpenClawTypographyTests {
 
         #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: ["Text(title)"]))
         #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: [".accessibilityLabel(title)"]))
+
+        let nearbyVisualText = [
+            ".accessibilityLabel(Text(title))",
+            "Text(body)",
+        ]
+        #expect(!Self.isAccessibilityMetadataTextCall(at: 1, in: nearbyVisualText))
     }
 
     @Test func `secure fields do not use platform placeholder text`() throws {
