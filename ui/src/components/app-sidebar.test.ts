@@ -168,7 +168,9 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const create = vi.fn(() => Promise.resolve("agent:main:fork"));
-  const patch = vi.fn((key: string) => Promise.resolve(successfulSessionPatch(key)));
+  const patch = vi.fn((key: string, _patch: Parameters<SessionCapability["patch"]>[1]) =>
+    Promise.resolve(successfulSessionPatch(key)),
+  );
   const deleteSession = vi.fn(
     (): Promise<SessionDeleteOutcome> => Promise.resolve({ deleted: false }),
   );
