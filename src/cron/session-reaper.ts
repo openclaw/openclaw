@@ -65,15 +65,17 @@ export async function sweepCronRunSessions(params: {
     return { swept: false, pruned: 0 };
   }
 
+  // Throttle attempts, not only successful sweeps. A broken session store must
+  // not turn frequent timer ticks into an unbounded persistence-error loop.
+  lastSweepAtMsByStore.set(storePath, now);
+
   const retentionMs = resolveRetentionMs(params.cronConfig);
   if (retentionMs === null) {
-    lastSweepAtMsByStore.set(storePath, now);
     return { swept: false, pruned: 0 };
   }
 
   let pruned = 0;
   let transcriptCleanupError: unknown;
-  let swept = false;
   try {
     const cutoff = now - retentionMs;
     const removals: SessionEntryLifecycleRemoval[] = [];
@@ -123,16 +125,8 @@ export async function sweepCronRunSessions(params: {
       pruned = result.removedEntries;
       transcriptCleanupError = result.artifactCleanupError;
     }
-    swept = true;
   } catch (err) {
     params.log.warn({ err: String(err) }, "cron-reaper: failed to sweep session store");
-  } finally {
-    // Always arm the per-store cooldown — including after persistence errors —
-    // so timer ticks cannot immediately re-enter and thrash disk I/O (#105188).
-    lastSweepAtMsByStore.set(storePath, now);
-  }
-
-  if (!swept) {
     return { swept: false, pruned: 0 };
   }
 
