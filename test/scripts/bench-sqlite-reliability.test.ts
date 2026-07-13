@@ -161,6 +161,10 @@ describe("scripts/bench-sqlite-reliability", () => {
         heldRows: number;
         visibleAfterRestore: boolean;
       };
+      walBytes: {
+        limit: number;
+        peak: number;
+      };
       writer: {
         rowsCommitted: number;
       };
@@ -181,6 +185,9 @@ describe("scripts/bench-sqlite-reliability", () => {
     expect(firstReport.maintenanceProof.postCompact.state.batches).toBeGreaterThan(0);
     expect(firstReport.maintenanceProof.postCompact.state.rows).toBeGreaterThan(0);
     expect(firstReport.maintenanceProof.postCompact.state.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(firstReport.walBytes.limit).toBeGreaterThan(0);
+    expect(firstReport.walBytes.peak).toBeGreaterThan(0);
+    expect(firstReport.walBytes.peak).toBeLessThanOrEqual(firstReport.walBytes.limit);
 
     const database = new DatabaseSync(firstReport.paths.sourceDatabase);
     try {
@@ -215,7 +222,7 @@ describe("scripts/bench-sqlite-reliability", () => {
     const databasePath = path.join(makeTempDir(), "writer.sqlite");
     const child = fork(
       path.resolve("scripts/lib/sqlite-reliability-writer.ts"),
-      [databasePath, "8", "64", "4", "1"],
+      [databasePath, "8", "64", "4", "256", String(64 * 1024 * 1024), "1"],
       {
         cwd: process.cwd(),
         execArgv: ["--import", "tsx"],

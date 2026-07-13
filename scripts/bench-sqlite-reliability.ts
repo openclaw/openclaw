@@ -81,7 +81,7 @@ Usage:
 Options:
   --profile <smoke|default|large>  Stress profile (default: default)
   --agent <id>                     Stress one per-agent database (default: global)
-  --state-dir <path>               Reuse a state directory instead of a temp dir
+  --state-dir <path>               Reuse a state directory and retain proof artifacts
   --repository <path>              Snapshot repository path
   --output <path>                  Write machine-readable JSON report
   --help                           Show this text
@@ -117,6 +117,8 @@ function printProofLines(report: ReliabilityReport): void {
   console.log(
     `SQLITE_RELIABILITY_FINAL_STATE_SHA256=${report.maintenanceProof.postCompact.state.sha256}`,
   );
+  console.log(`SQLITE_RELIABILITY_WAL_PEAK_BYTES=${report.walBytes.peak}`);
+  console.log(`SQLITE_RELIABILITY_WAL_LIMIT_BYTES=${report.walBytes.limit}`);
 }
 
 async function main(argv: string[]): Promise<void> {

@@ -448,6 +448,7 @@ async function runMaintenanceRoundTrip(params: {
 }
 
 async function runSnapshotIteration(params: {
+  cleanupArtifacts: boolean;
   iteration: number;
   repositoryProvider: ReturnType<typeof createLocalSqliteSnapshotProvider>;
   restoreRoot: string;
@@ -476,6 +477,11 @@ async function runSnapshotIteration(params: {
     rowsPerBatch: params.rowsPerBatch,
     uncommittedBatch: params.uncommittedBatch,
   });
+  if (params.cleanupArtifacts) {
+    fs.rmSync(snapshot.ref.path, { force: true, recursive: true });
+    fs.rmSync(copiedPath, { force: true, recursive: true });
+    fs.rmSync(restorePath, { force: true });
+  }
   return {
     restoreMs: Number(restoreMs.toFixed(3)),
     snapshotBytes: snapshot.manifest.artifact.sizeBytes,
@@ -486,6 +492,7 @@ async function runSnapshotIteration(params: {
 export async function runReliabilityStress(options: CliOptions): Promise<ReliabilityReport> {
   const profile = PROFILES[options.profile];
   const ownsStateDir = options.stateDir === null;
+  const cleanupIterationArtifacts = ownsStateDir && options.repository === null;
   const stateDir =
     options.stateDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-reliability-"));
   const repository = options.repository ?? path.join(stateDir, "snapshots");
@@ -511,6 +518,7 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
     writer = startWriter(target.path, profile);
     await waitForWriterMessage(writer, "ready");
     const walBytesBefore = fileSize(`${target.path}-wal`);
+    let peakWalBytes = walBytesBefore;
     const partial = await waitForWriterMessage(writer, "partial", () => {
       writer?.child.send?.({ kind: "hold-partial" });
     });
@@ -518,6 +526,7 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
     for (let iteration = 0; iteration < profile.iterations; iteration += 1) {
       metrics.push(
         await runSnapshotIteration({
+          cleanupArtifacts: cleanupIterationArtifacts,
           iteration,
           repositoryProvider,
           restoreRoot,
@@ -528,6 +537,13 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
           uncommittedBatch: iteration === 0 ? partial.batch : null,
         }),
       );
+      const currentWalBytes = fileSize(`${target.path}-wal`);
+      peakWalBytes = Math.max(peakWalBytes, currentWalBytes);
+      if (currentWalBytes > profile.maxWalBytes) {
+        throw new Error(
+          `SQLite reliability WAL exceeded the ${profile.maxWalBytes}-byte ${options.profile} profile limit: ${currentWalBytes} bytes`,
+        );
+      }
       if (iteration === 0) {
         await waitForWriterMessage(writer, "released", () => {
           writer?.child.send?.({ action: "rollback", kind: "release-partial" });
@@ -595,6 +611,8 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
       walBytes: {
         after: fileSize(`${target.path}-wal`),
         before: walBytesBefore,
+        limit: profile.maxWalBytes,
+        peak: peakWalBytes,
       },
       writer: {
         batchesCommitted: writerResult.batchesCommitted,
