@@ -45,6 +45,8 @@ type ShellNavigationState = {
   handleNativeToggleSidebar: () => void;
   handleNativeOpenSearch: () => void;
   handleNativeNewSession: () => void;
+  handleNativeHistoryState: (event: Event) => void;
+  nativeHistoryState: { canGoBack: boolean; canGoForward: boolean };
   onboarding: boolean;
   updated: () => void;
 };
@@ -364,6 +366,17 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     shell.handleNativeNewSession();
 
     expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it("updates native history state from the host event", () => {
+    const shell = document.createElement("openclaw-app-shell") as unknown as ShellNavigationState;
+    shell.handleNativeHistoryState(
+      new CustomEvent("openclaw:native-history-state", {
+        detail: { canGoBack: true, canGoForward: false },
+      }),
+    );
+
+    expect(shell.nativeHistoryState).toEqual({ canGoBack: true, canGoForward: false });
   });
 
   it("deduplicates native nav state reports", () => {

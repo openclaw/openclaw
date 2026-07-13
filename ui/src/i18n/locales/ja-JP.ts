@@ -1462,6 +1462,8 @@ export const ja_JP: TranslationMap = {
     blockedAgentFilter: "エージェントフィルターによりブロック",
   },
   nav: {
+    back: "戻る",
+    forward: "進む",
     chat: "チャット",
     settings: "設定",
     settingsGeneral: "一般",
@@ -3588,6 +3590,14 @@ export const ja_JP: TranslationMap = {
       remove: "削除",
       more: "その他の操作",
       history: "履歴",
+    },
+    runNotStarted: {
+      notDue: "この自動化はまだ実行時刻になっていません。",
+      alreadyRunning: "この自動化はすでに実行中です。",
+      recoveryPending: "スケジューラの復旧処理がまだ進行中です。",
+      invalidSpec: "この自動化のスケジュールまたはペイロードが無効です。",
+      stopped: "スケジューラは停止しています。",
+      unknown: "この自動化を開始できませんでした。",
     },
     jobs: {
       schedule: "スケジュール",

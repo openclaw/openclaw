@@ -200,7 +200,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/channels/channel-routing",
     tests: ["src/commands/doctor/shared/channel-legacy-config-migrate.test.ts"],
     notes:
-      "Bundled channel schemas are nested-only except Matrix and Feishu (migration pending); doctor keeps this migration to move shipped configs during upgrade. src/channels/streaming.ts retains a warn-once flat-key fallback for those channels and external SDK plugin configs until the next release train.",
+      "Bundled channel schemas are nested-only; doctor keeps this migration to move shipped configs during upgrade. src/channels/streaming.ts retains a warn-once flat-key fallback for external SDK plugin configs until the next release train.",
   }),
   deprecatedCompatRecord({
     code: "doctor-webchat-channel-config",

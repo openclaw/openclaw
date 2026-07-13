@@ -1465,6 +1465,8 @@ export const it: TranslationMap = {
     blockedAgentFilter: "bloccato dal filtro dell'agente",
   },
   nav: {
+    back: "Indietro",
+    forward: "Avanti",
     chat: "Chat",
     settings: "Impostazioni",
     settingsGeneral: "Generale",
@@ -3614,6 +3616,14 @@ export const it: TranslationMap = {
       remove: "Rimuovi",
       more: "Altre azioni",
       history: "Cronologia",
+    },
+    runNotStarted: {
+      notDue: "Questa automazione non è ancora prevista.",
+      alreadyRunning: "Questa automazione è già in esecuzione.",
+      recoveryPending: "Il ripristino dell'utilità di pianificazione è ancora in corso.",
+      invalidSpec: "Questa automazione presenta una pianificazione o un payload non valido.",
+      stopped: "L'utilità di pianificazione è arrestata.",
+      unknown: "Non è stato possibile avviare questa automazione.",
     },
     jobs: {
       schedule: "Pianificazione",

@@ -1398,8 +1398,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@openclaw/crabline':
-        specifier: 0.1.9
-        version: 0.1.9
+        specifier: 0.1.10
+        version: 0.1.10
       '@openclaw/discord':
         specifier: workspace:*
         version: link:../discord
@@ -3404,8 +3404,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/crabline@0.1.9':
-    resolution: {integrity: sha512-i3RZ/qAMM1dnNEaj4KwcO1iJRXJIrvfTRIXdMiy7SgZh8A7EUCFNPNviC3URLirX9wIYrkuVTyk9QHKOFPcz7g==}
+  '@openclaw/crabline@0.1.10':
+    resolution: {integrity: sha512-j9IwibClUZs1vcw/v4tF9VP57OPuZxr1RqeLPvxUcz6Ldvw1ukVf7O7FLAfaRMOZxCMSxpjpx3wg+VnvmiATvQ==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -4506,6 +4506,9 @@ packages:
 
   '@types/node@20.19.43':
     resolution: {integrity: sha512-6oYBAi5ikg4Pl+kGsoYtawUMBT2zZMCvPNF7pVLnHZfd1zf38DRiWn/gT01RYCdUqkv7Fhr+C9ot4/tb+2sVvA==}
+
+  '@types/node@22.20.1':
+    resolution: {integrity: sha512-EANqOCF9QFyra+4pfxUcX9STKJpCLjMbObVzljIJomAWSnuSIEAvyzEU53GaajbXJEgdh0iEcPL+DGvpUd4k1Q==}
 
   '@types/node@24.13.2':
     resolution: {integrity: sha512-fRa09kZTgu8o71KFcDjUFuc7F+dEbZYZmkI0mg5YBTRs0yMKjYHsq/c0urDKeDb+D5qVgXOdFcuu+DZPKOITwA==}
@@ -6968,6 +6971,10 @@ packages:
   rc@1.2.8:
     resolution: {integrity: sha512-y3bGgqKj3QBdxLbLkomlohkvsA8gdAiUQlSBJnBhfn+BPxg4bc62d8TcBW15wavDfgexCgccckhcZvywyQYPOw==}
     hasBin: true
+
+  re2js@2.8.6:
+    resolution: {integrity: sha512-xLgQil4kIUCrAzVk9fRSkxkFNwmygLFjVxXrLc65aE1F0+Zsb8rxumFBy4XKyvgMCTL6kilDq3EZ0piE2dP/Dg==}
+    engines: {node: '>=18.0.0'}
 
   react-dom@19.2.4:
     resolution: {integrity: sha512-AXJdLo8kgMbimY95O2aKQqsz2iWi9jMgKJhRBAxECE4IFxfcazB2LmzloIoibJI3C12IlY20+KFaLv+71bUJeQ==}
@@ -9544,11 +9551,15 @@ snapshots:
   '@openai/codex@0.144.1-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.9':
+  '@openclaw/crabline@0.1.10':
     dependencies:
+      '@types/node': 22.20.1
       commander: 15.0.0
       curve25519-js: 0.0.4
+      libsignal: 6.0.0
       picocolors: 1.1.1
+      proper-lockfile: 4.1.2
+      re2js: 2.8.6
       ws: 8.21.0
       yaml: 2.9.0
       zod: 4.4.3
@@ -10571,6 +10582,10 @@ snapshots:
   '@types/ms@2.1.0': {}
 
   '@types/node@20.19.43':
+    dependencies:
+      undici-types: 6.21.0
+
+  '@types/node@22.20.1':
     dependencies:
       undici-types: 6.21.0
 
@@ -13416,6 +13431,8 @@ snapshots:
       minimist: 1.2.8
       strip-json-comments: 2.0.1
     optional: true
+
+  re2js@2.8.6: {}
 
   react-dom@19.2.4(react@19.2.4):
     dependencies:
