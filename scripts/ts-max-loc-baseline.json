@@ -667,7 +667,7 @@
   "src/agents/tools/web-fetch.ts": 884,
   "src/agents/transcript-redact.ts": 761,
   "src/agents/workspace.ts": 1328,
-  "src/agents/worktrees/service.ts": 851,
+  "src/agents/worktrees/service.ts": 831,
   "src/audit/audit-event-store.ts": 703,
   "src/auto-reply/chunk.ts": 557,
   "src/auto-reply/command-auth.ts": 710,
