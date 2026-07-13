@@ -27155,7 +27155,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 718,
+      "line": 763,
       "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift",
       "source": "[\\(host)]",
       "surface": "apple",
