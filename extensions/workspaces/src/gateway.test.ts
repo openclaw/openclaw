@@ -454,6 +454,41 @@ describe("workspace gateway methods", () => {
     });
   });
 
+  it("refreshes an existing participant without evicting another entry at capacity", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const identity = {
+        teamsDomainId: "domain-1",
+        principalId: "principal-0",
+      };
+      const { api, methods } = createApi(identity);
+      const store = new WorkspaceStore({ stateDir, isolationDomainId: "domain-1" });
+      registerWorkspaceGatewayMethods({
+        api,
+        store,
+        storeForDomain: () => store,
+        presenceNow: () => 1_000,
+      });
+      const method = methods.get("workspaces.tab.get")!;
+
+      let response: Awaited<ReturnType<typeof callMethod>> | undefined;
+      for (let index = 0; index < 1_024; index += 1) {
+        identity.principalId = `principal-${index}`;
+        response = await callMethod(method, { workspaceId: "default", id: "main" });
+      }
+      expect(response?.response?.[1]?.presence).toHaveLength(1_024);
+
+      identity.principalId = "principal-500";
+      const refreshed = await callMethod(method, { workspaceId: "default", id: "main" });
+      expect(refreshed.response?.[1]?.presence).toHaveLength(1_024);
+      expect(refreshed.response?.[1]?.presence).toContainEqual({
+        id: "principal-0",
+        kind: "human",
+        self: false,
+      });
+      store.close();
+    });
+  });
+
   it("projects member-safe widgets and the strongest exact-tab capability", async () => {
     await withTempStateDir(async (stateDir) => {
       const { api, methods } = createApi({

@@ -513,6 +513,7 @@ export class TeamsPortalStore {
   private gateway: TeamsPortalGateway | null = null;
   private expiryTimer: number | null = null;
   private presenceTimer: number | null = null;
+  private presenceRefreshGeneration = 0;
   private listeners = new Set<(snapshot: TeamsPortalSnapshot) => void>();
   private inviteCode: string | null = null;
   private lifecycleGeneration = 0;
@@ -1087,31 +1088,44 @@ export class TeamsPortalStore {
     generation: number;
   }): void {
     this.clearPresenceTimer();
-    this.presenceTimer = window.setInterval(() => {
-      void params.gateway
-        .request("workspaces.tab.get", {
-          workspaceId: params.workspaceId,
-          id: params.tabId,
-        })
-        .then((payload) =>
-          readPortalTabResult(payload, {
+    const refreshGeneration = this.presenceRefreshGeneration;
+    const isCurrentRefresh = () =>
+      refreshGeneration === this.presenceRefreshGeneration &&
+      this.isCurrent(params.generation) &&
+      this.gateway === params.gateway;
+    const schedule = () => {
+      if (!isCurrentRefresh()) {
+        return;
+      }
+      this.presenceTimer = window.setTimeout(() => {
+        this.presenceTimer = null;
+        void params.gateway
+          .request("workspaces.tab.get", {
             workspaceId: params.workspaceId,
-            tabId: params.tabId,
-          }),
-        )
-        .then((result) => {
-          if (this.isCurrent(params.generation) && this.gateway === params.gateway) {
-            this.update({ presence: result.presence });
-          }
-        })
-        .catch(() => {
-          // Presence is a best-effort exact-tab projection. Content and editing
-          // remain available if a heartbeat fails, but stale viewers disappear.
-          if (this.isCurrent(params.generation) && this.gateway === params.gateway) {
-            this.update({ presence: [] });
-          }
-        });
-    }, 10_000);
+            id: params.tabId,
+          })
+          .then((payload) =>
+            readPortalTabResult(payload, {
+              workspaceId: params.workspaceId,
+              tabId: params.tabId,
+            }),
+          )
+          .then((result) => {
+            if (isCurrentRefresh()) {
+              this.update({ presence: result.presence });
+            }
+          })
+          .catch(() => {
+            // Presence is a best-effort exact-tab projection. Content and editing
+            // remain available if a heartbeat fails, but stale viewers disappear.
+            if (isCurrentRefresh()) {
+              this.update({ presence: [] });
+            }
+          })
+          .finally(schedule);
+      }, 10_000);
+    };
+    schedule();
   }
 
   private clearPortalState(): void {
@@ -1167,8 +1181,9 @@ export class TeamsPortalStore {
   }
 
   private clearPresenceTimer(): void {
+    this.presenceRefreshGeneration += 1;
     if (this.presenceTimer !== null) {
-      window.clearInterval(this.presenceTimer);
+      window.clearTimeout(this.presenceTimer);
       this.presenceTimer = null;
     }
   }
