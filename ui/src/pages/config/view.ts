@@ -52,7 +52,7 @@ type WebPushUiState = {
   error?: string | null;
 };
 
-export type SettingsMicrophoneState = {
+type SettingsMicrophoneState = {
   devices: RealtimeTalkInputDevice[];
   selectedDeviceId: string;
   loading: boolean;
