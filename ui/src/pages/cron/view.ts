@@ -6,6 +6,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../../api/types.ts";
+import "../../styles/cron.css";
 import type {
   CronDeliveryStatus,
   CronJobsEnabledFilter,

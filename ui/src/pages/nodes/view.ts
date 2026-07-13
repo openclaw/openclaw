@@ -1,6 +1,7 @@
 // Nodes page renders its screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import "../../styles/nodes.css";
 import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
 import { renderNodesInventory } from "./view-inventory.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./view-shared.ts";
