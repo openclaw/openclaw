@@ -3,7 +3,7 @@ import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
 /** Descriptor shape for root commands owned by the core CLI. */
-export type CoreCliCommandDescriptor = NamedCommandDescriptor;
+type CoreCliCommandDescriptor = NamedCommandDescriptor;
 
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {

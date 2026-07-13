@@ -3,13 +3,12 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { serializeMSTeamsAdaptiveCardActionValue } from "./adaptive-card-submit.js";
 import { formatUnknownError } from "./errors.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
-export type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
-import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 
 export type MSTeamsActivityHandler = {
   onMessage: (

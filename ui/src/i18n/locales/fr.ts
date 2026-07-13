@@ -219,10 +219,11 @@ export const fr: TranslationMap = {
   lazyView: {
     loadingTitle: "Chargement du panneau",
     errorTitle: "Échec du chargement du panneau",
-    errorSubtitle:
-      "Rechargez la page pour charger la dernière version du bundle Control UI, ou réessayez si la requête réseau a échoué.",
+    genericSubtitle: "Une erreur s’est produite lors du chargement de ce panneau.",
+    staleTitle: "Une nouvelle version est disponible",
+    staleSubtitle:
+      "OpenClaw a été mis à jour en arrière-plan. Rechargez la page pour obtenir le panneau le plus récent.",
     retry: "Réessayer",
-    unknownError: "Erreur inconnue de chargement du module.",
   },
   nodes: {
     pairing: {
@@ -231,6 +232,16 @@ export const fr: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Scannez ce code QR dans l’application mobile pour connecter un nouveau téléphone.",
       generating: "Création d’un code de configuration sécurisé…",
+      accessTitle: "Accès mobile",
+      fullAccess: "Accès complet (recommandé)",
+      fullAccessHint:
+        "Nœud avec toutes les commandes du Gateway, y compris les paramètres et les mises à niveau.",
+      limitedAccess: "Accès limité",
+      limitedAccessHint: "Nœud, chat et approbations sans commandes d’administration.",
+      generateCode: "Créer un code de configuration",
+      transportLimitedTitle: "Limité pour la sécurité du réseau",
+      transportLimitedHint:
+        "Cette URL du Gateway utilise le protocole ws:// en texte clair. Utilisez wss:// ou Tailscale Serve, puis créez un nouveau code pour bénéficier d’un accès complet.",
       failed: "Impossible de créer un code de configuration.",
       qrAlt: "Code QR d’association OpenClaw mobile",
       qrUnavailable: "Code QR indisponible. Copiez plutôt le code de configuration.",
@@ -266,7 +277,8 @@ export const fr: TranslationMap = {
     },
     inventory: {
       title: "Appareils",
-      subtitle: "Une ligne par client appairé : statut, rôles, jetons.",
+      summaryConnected: "{connected} sur {total} connectés",
+      summaryPending: "{count} en attente d’approbation",
       cleanupStale: "Nettoyer {count} obsolètes",
       pendingApproval: "En attente d'approbation",
       paired: "Appairé",
@@ -400,6 +412,9 @@ export const fr: TranslationMap = {
     working: "Traitement en cours…",
     ready: "Prêt à discuter",
     whatCanAgentDo: "Que peut faire {name} ?",
+    getHelp: "Obtenir de l’aide",
+    discord: "Communauté Discord",
+    viewChangelog: "Voir le journal des modifications",
   },
   newSession: {
     title: "Nouvelle session",
@@ -571,6 +586,7 @@ export const fr: TranslationMap = {
     groupBy: "Regrouper par",
     groupByNone: "Aucun",
     groupByCategory: "Groupes personnalisés",
+    showCronSessions: "Afficher les sessions cron",
     groupByChannel: "Canal",
     groupByKind: "Type",
     groupByAgent: "Agent",
@@ -1209,6 +1225,10 @@ export const fr: TranslationMap = {
         "pour ajouter un thème tweakcn local au navigateur. Dans tweakcn, utilisez Partager et collez ici le lien copié.",
       textSize: "Taille du texte",
     },
+    chatPrefs: {
+      title: "Chat",
+      hint: "Préférences de chat locales au navigateur.",
+    },
     connection: {
       title: "Connexion",
       gateway: "Gateway",
@@ -1754,8 +1774,6 @@ export const fr: TranslationMap = {
     removedRestart:
       "{name} supprimé. Un redémarrage de Gateway est nécessaire pour appliquer la modification.",
     verifiedSource: "Source vérifiée",
-    menuLabel: "Actions de {name}",
-    menuDetails: "Voir les détails",
     enableAction: "Activer",
     disableAction: "Désactiver",
     working: "Traitement en cours…",
@@ -1896,6 +1914,10 @@ export const fr: TranslationMap = {
       useCurrentChatAria: "Utiliser la discussion actuelle pour les demandes de révision",
       useCurrentChatTooltip:
         "Envoyer les demandes de révision à la session de discussion actuelle plutôt qu'à la session d'atelier de la proposition.",
+      selfLearning: "Auto-apprentissage",
+      selfLearningAria: "Activer ou désactiver les propositions de Skills par auto-apprentissage",
+      selfLearningTooltip:
+        "Capture les corrections et analyse les travaux substantiels terminés pour en faire des propositions de Skills en attente. Utilise des jetons supplémentaires en arrière-plan ; les brouillons apparaissent sur ce tableau comme propositions en attente.",
       view: "Vue de l'atelier",
       board: "Tableau",
       today: "Aujourd’hui",
@@ -1979,6 +2001,14 @@ export const fr: TranslationMap = {
       noProposalsTitle: "Aucune proposition pour le moment",
       noProposalsBody: "{agent} n'a rédigé aucune proposition de skill.",
       noProposalsFooter: "Les nouvelles propositions apparaîtront ici pour révision.",
+    },
+    selfLearning: {
+      pitchTitle: "Activer l’auto-apprentissage",
+      pitchBody:
+        "OpenClaw analyse les corrections et les exécutions substantielles terminées, puis rédige des propositions de Skills pour ce tableau. Il utilise des jetons supplémentaires en arrière-plan, et les brouillons apparaissent comme propositions en attente.",
+      enable: "Activer l’auto-apprentissage",
+      enabling: "Activation…",
+      updateError: "Impossible de mettre à jour le paramètre d’auto-apprentissage.",
     },
     today: {
       emptyTitle: "Rien en attente aujourd'hui",
@@ -3126,24 +3156,16 @@ export const fr: TranslationMap = {
       rateLimited:
         "Limite de débit de l’API GitHub atteinte. L’état de la pull request peut être obsolète jusqu’à la réinitialisation de la limite.",
     },
-    refreshTitle: "Actualiser les données du chat",
-    settings: "Paramètres de chat",
     usageRemaining: "Utilisation restante",
-    voiceSettings: "Voix",
-    thinkingToggle: "Afficher/masquer la sortie de réflexion/travail de l’assistant",
-    toolCallsToggle: "Afficher/masquer les appels d’outil et les résultats d’outil",
-    commentaryToggle: "Conserver le commentaire après la réponse finale",
-    commentaryLabel: "Commentaire",
-    autoScrollMode: "Mode de défilement automatique",
-    autoScrollAlways: "Toujours",
-    autoScrollNearBottom: "Près du bas",
-    autoScrollOff: "Désactivé",
+    view: {
+      menu: "Affichage",
+      reasoning: "Raisonnement",
+      toolCalls: "Appels d’outils",
+      commentary: "Conserver les commentaires",
+    },
     sendShortcut: "Raccourci d’envoi",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Masquer les sessions cron",
-    showCronSessions: "Afficher les sessions cron",
-    showCronSessionsHidden: "Afficher les sessions cron ({count} masquées)",
     onboardingDisabled: "Désactivé pendant la configuration",
     gatewayStatus: "État du Gateway : {status}",
     commandPaletteTitle: "Rechercher ou accéder à… (⌘K)",
@@ -3333,7 +3355,6 @@ export const fr: TranslationMap = {
       },
       takePhoto: "Prendre une photo",
       dismissVoiceInputError: "Ignorer l’erreur de saisie vocale",
-      loadingMicrophones: "Chargement des microphones…",
       microphoneAccessFailed: "Impossible d’accéder aux entrées microphone.",
       microphoneBusy: "Les entrées microphone sont occupées ou indisponibles pour le navigateur.",
       microphoneFallback: "Microphone {number}",
@@ -3353,20 +3374,6 @@ export const fr: TranslationMap = {
       stillListening: "Toujours à l’écoute",
       stopVoiceInput: "Arrêter la saisie vocale",
       systemDefaultMicrophone: "Par défaut du système",
-      talkAdvancedSettingsRequiresAdmin:
-        "Les paramètres avancés nécessitent un accès administrateur",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Les paramètres Talk avancés nécessitent l’accès operator.admin.",
-      talkDefault: "Par défaut",
-      talkModel: "Modèle",
-      talkModelAuto: "Automatique",
-      talkMoreInSettings: "Plus dans les paramètres",
-      talkSensitivity: "Sensibilité",
-      talkSensitivityHigh: "Élevée",
-      talkSensitivityLow: "Faible",
-      talkSensitivityMedium: "Moyenne",
-      talkVoice: "Voix",
-      voiceOptions: "Options vocales",
       voiceTranscript: "Transcription vocale",
     },
     selectors: {
@@ -3451,6 +3458,8 @@ export const fr: TranslationMap = {
       empty: "Aucune tâche en arrière-plan pour cet agent pour le moment.",
       running: "En cours ({count})",
       finished: "Terminées ({count})",
+      statusRunningOne: "1 tâche en cours",
+      statusRunningMany: "{count} tâches en cours",
       stopTask: "Arrêter {title}",
       viewTranscript: "Afficher la transcription",
       toolUseOne: "1 utilisation d’outil",
@@ -3609,7 +3618,6 @@ export const fr: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Planificateur",
       tasks: "Tâches",
       failing: "En échec",
       nextWake: "Prochain réveil",
@@ -3634,7 +3642,6 @@ export const fr: TranslationMap = {
       clone: "Cloner",
       remove: "Supprimer",
       more: "Plus d'actions",
-      history: "Historique",
     },
     runNotStarted: {
       notDue: "Cette automatisation n’est pas encore prévue.",

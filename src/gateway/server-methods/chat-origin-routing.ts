@@ -37,7 +37,7 @@ const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
 ]);
 const CHANNEL_SCOPED_SESSION_SHAPES = new Set(["direct", "dm", "group", "channel"]);
 
-export type ChatSendDeliveryEntry = {
+type ChatSendDeliveryEntry = {
   route?: ChannelRouteRef;
   deliveryContext?: {
     channel?: string;
@@ -56,7 +56,7 @@ export type ChatSendDeliveryEntry = {
   lastThreadId?: string | number;
 };
 
-export type ChatSendOriginatingRoute = {
+type ChatSendOriginatingRoute = {
   originatingChannel: string;
   originatingTo?: string;
   accountId?: string;

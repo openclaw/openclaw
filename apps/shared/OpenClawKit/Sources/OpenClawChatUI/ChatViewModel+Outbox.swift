@@ -876,7 +876,7 @@ extension OpenClawChatViewModel {
         guard let agentID else { return nil }
         let normalized = raw.lowercased()
         if normalized == "global" { return "global" }
-        if Self.agentID(fromSessionKey: raw) != nil { return raw }
+        if OpenClawChatSessionKey.agentID(from: raw) != nil { return raw }
         // A malformed ownership prefix must fail closed, not become a nested
         // key such as agent:<id>:agent::main.
         guard !normalized.hasPrefix("agent:") else { return nil }

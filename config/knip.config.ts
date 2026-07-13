@@ -19,6 +19,7 @@ const rootEntries = [
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
   "src/mcp/codex-supervision-tools-serve.ts!",
+  "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
@@ -132,6 +133,7 @@ const ignoredTestSupportFiles = [
 const config = {
   ignoreFiles: [
     "scripts/**",
+    "dist/**",
     "packages/*/dist/**",
     "**/live-*.ts",
     "src/secrets/credential-matrix.ts",
@@ -141,7 +143,7 @@ const config = {
   ],
   // Knip's `ignoreFiles` only suppresses unused-file findings. Test helpers
   // belong in `ignore` so they do not inflate unused-export/type findings.
-  ignore: ["packages/*/dist/**", ...ignoredTestSupportFiles],
+  ignore: ["dist/**", "packages/*/dist/**", ...ignoredTestSupportFiles],
   workspaces: {
     ".": {
       entry: rootEntries,
@@ -237,6 +239,10 @@ const config = {
     },
     "packages/terminal-core": {
       entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/memory-host-sdk": {
+      entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/speech-core": {

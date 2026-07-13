@@ -30,6 +30,55 @@ suite("Codex native session catalog", () => {
     await server?.close();
   });
 
+  it("omits empty native session catalogs from the sidebar", async () => {
+    const page = await browser.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.catalog.list"],
+      methodResponses: {
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "codex",
+              label: "Codex",
+              capabilities: { continueSession: true, archive: true },
+              hosts: [
+                {
+                  hostId: "gateway:codex",
+                  label: "Local Codex",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [],
+                },
+              ],
+            },
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: { continueSession: true, archive: false },
+              hosts: [
+                {
+                  hostId: "gateway:claude",
+                  label: "Local Claude",
+                  kind: "gateway",
+                  connected: true,
+                  sessions: [],
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    await page.goto(`${server.baseUrl}chat`);
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.catalog.list")).length)
+      .toBeGreaterThan(0);
+    expect(await page.locator('[data-session-section="catalog:codex"]').count()).toBe(0);
+    expect(await page.locator('[data-session-section="catalog:claude"]').count()).toBe(0);
+    await page.close();
+  });
+
   it("adopts from the native chat composer, navigates, and auto-sends", async () => {
     const page = await browser.newPage();
     const gateway = await installMockGateway(page, {

@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
 import { fetchGraphJson } from "./graph.js";
 
-export type MSTeamsConversationMember = {
+type MSTeamsConversationMember = {
   id?: string;
   userId?: string;
   email?: string;

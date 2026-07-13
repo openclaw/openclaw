@@ -30,7 +30,7 @@ type RecordSessionMetaFromInbound =
 type UpdateLastRoute = import("../../config/sessions/runtime-types.js").UpdateLastRoute;
 type RecordInboundSession = import("../../channels/session.types.js").RecordInboundSession;
 
-export type RuntimeThreadBindingLifecycleRecord =
+type RuntimeThreadBindingLifecycleRecord =
   | import("../../infra/outbound/session-binding.types.js").SessionBindingRecord
   | {
       boundAt: number;
@@ -39,13 +39,13 @@ export type RuntimeThreadBindingLifecycleRecord =
       maxAgeMs?: number;
     };
 
-export type PluginRuntimeChannelContextKey = {
+type PluginRuntimeChannelContextKey = {
   channelId: string;
   accountId?: string | null;
   capability: string;
 };
 
-export type PluginRuntimeChannelContextEvent = {
+type PluginRuntimeChannelContextEvent = {
   type: "registered" | "unregistered";
   key: {
     channelId: string;
@@ -55,7 +55,7 @@ export type PluginRuntimeChannelContextEvent = {
   context?: unknown;
 };
 
-export type PluginRuntimeChannelContextRegistry = {
+type PluginRuntimeChannelContextRegistry = {
   register: (
     params: PluginRuntimeChannelContextKey & {
       context: unknown;

@@ -161,7 +161,7 @@ describe("openclaw-router-outlet", () => {
 
     const alert = outlet.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("Importing a module script failed.");
-    expect(alert?.textContent).toContain("Reload the page");
+    expect(alert?.textContent).toContain("Reload to get the latest panel");
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(loadCount).toBe(1);
     outlet.querySelector<HTMLButtonElement>("button")?.click();
