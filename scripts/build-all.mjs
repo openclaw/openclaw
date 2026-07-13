@@ -596,7 +596,6 @@ export function formatBuildAllDuration(durationMs) {
   return prettyMilliseconds(roundedMs, {
     millisecondsDecimalDigits: 0,
     secondsDecimalDigits: clampedMs < 10_000 ? 2 : 1,
-    unitCount: 1,
   });
 }
 
