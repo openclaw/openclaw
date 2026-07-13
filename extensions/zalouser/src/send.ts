@@ -202,3 +202,107 @@ function sliceTextStyles(
 
   return chunkStyles.length > 0 ? chunkStyles : undefined;
 }
+function splitTextRanges(
+  text: string,
+  limit: number,
+  mode: TextChunkMode,
+): Array<{ start: number; end: number }> {
+  if (mode === "newline") {
+    return splitTextRangesByPreferredBreaks(text, limit);
+  }
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  for (let start = 0; start < text.length;) {
+    let end = Math.min(text.length, start + limit);
+    if (end < text.length && end > start) {
+      const cu = text.charCodeAt(end - 1);
+      if (cu >= 0xd800 && cu <= 0xdbff) {
+        if (end > start + 1) {
+          end -= 1;
+        } else if (end < text.length) {
+          end += 1;
+        }
+      }
+    }
+    ranges.push({ start, end });
+    start = end;
+  }
+  return ranges;
+}
+
+function splitTextRangesByPreferredBreaks(
+  text: string,
+  limit: number,
+): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = [];
+  let start = 0;
+
+  while (start < text.length) {
+    let maxEnd = Math.min(text.length, start + limit);
+    if (maxEnd < text.length && maxEnd > start) {
+      const cu = text.charCodeAt(maxEnd - 1);
+      if (cu >= 0xd800 && cu <= 0xdbff) {
+        if (maxEnd > start + 1) {
+          maxEnd -= 1;
+        } else if (maxEnd < text.length) {
+          maxEnd += 1;
+        }
+      }
+    }
+    let end = maxEnd;
+    if (maxEnd < text.length) {
+      end =
+        findParagraphBreak(text, start, maxEnd) ??
+        findLastBreak(text, "
+", start, maxEnd) ??
+        findLastWhitespaceBreak(text, start, maxEnd) ??
+        maxEnd;
+    }
+
+    if (end <= start) {
+      end = maxEnd;
+    }
+
+    ranges.push({ start, end });
+    start = end;
+  }
+
+  return ranges;
+}
+
+function findParagraphBreak(text: string, start: number, end: number): number | undefined {
+  const slice = text.slice(start, end);
+  const matches = slice.matchAll(/
+[	 ]*
++/g);
+  let lastMatch: RegExpMatchArray | undefined;
+  for (const match of matches) {
+    lastMatch = match;
+  }
+  if (!lastMatch || lastMatch.index === undefined) {
+    return undefined;
+  }
+  return start + lastMatch.index + lastMatch[0].length;
+}
+
+function findLastBreak(
+  text: string,
+  marker: string,
+  start: number,
+  end: number,
+): number | undefined {
+  const index = text.lastIndexOf(marker, end - 1);
+  if (index < start) {
+    return undefined;
+  }
+  return index + marker.length;
+}
+
+function findLastWhitespaceBreak(text: string, start: number, end: number): number | undefined {
+  for (let index = end - 1; index > start; index -= 1) {
+    if (/\s/.test(text.charAt(index))) {
+      return index + 1;
+    }
+  }
+  return undefined;
+}
