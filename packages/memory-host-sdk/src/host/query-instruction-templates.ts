@@ -10,10 +10,6 @@ const QUERY_INSTRUCTION_TEMPLATES = [
       "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:{query}",
   },
   {
-    prefix: "nomic-embed-text",
-    template: "search_query: {query}",
-  },
-  {
     prefix: "mxbai-embed-large",
     template: "Represent this sentence for searching relevant passages: {query}",
   },

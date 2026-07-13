@@ -828,10 +828,6 @@ describe("openai-compatible generic embedding provider", () => {
         "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:find workshop notes",
     },
     {
-      model: "text-embedding-nomic-embed-text-v1.5",
-      expected: "search_query: find workshop notes",
-    },
-    {
       model: "mixedbread-ai/mxbai-embed-large-v1",
       expected: "Represent this sentence for searching relevant passages: find workshop notes",
     },

@@ -28,14 +28,6 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
       return `Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:${queryText}`;
     }
     if (
-      normalizedModel === "nomic-embed-text" ||
-      normalizedModel.startsWith("nomic-embed-text-") ||
-      normalizedModel.startsWith("nomic-embed-text:") ||
-      normalizedModel.includes("-nomic-embed-text")
-    ) {
-      return `search_query: ${queryText}`;
-    }
-    if (
       normalizedModel === "mxbai-embed-large" ||
       normalizedModel.startsWith("mxbai-embed-large-") ||
       normalizedModel.startsWith("mxbai-embed-large:") ||
@@ -278,26 +270,6 @@ describe("OpenAI embedding provider", () => {
             input: [
               "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:memory search query?",
             ],
-          }),
-        }),
-      );
-    });
-
-    it.each([
-      "nomic-embed-text",
-      "nomic-ai/nomic-embed-text-v1.5",
-      "text-embedding-nomic-embed-text-v1.5",
-    ])("applies nomic-embed-text prefix to query string for %s", async (model) => {
-      const { provider } = await createOpenAiEmbeddingProvider(
-        createOptions({ model, queryInstructionTemplate: true }),
-      );
-
-      await provider.embedQuery("Zabbix monitoring rules");
-
-      expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
-        expect.objectContaining({
-          body: expect.objectContaining({
-            input: ["search_query: Zabbix monitoring rules"],
           }),
         }),
       );
