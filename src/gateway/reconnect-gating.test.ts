@@ -2,9 +2,9 @@
 // failures that cannot recover by retrying.
 import { describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { type GatewayErrorInfo, isNonRecoverableConnectError } from "../../ui/src/api/gateway.ts";
+import { isNonRecoverableConnectError } from "../../ui/src/api/gateway.ts";
 
-function makeError(detailCode: string): GatewayErrorInfo {
+function makeError(detailCode: string) {
   return { code: "connect_failed", message: "auth failed", details: { code: detailCode } };
 }
 

@@ -2,11 +2,36 @@
 import { describe, expect, it } from "vitest";
 import {
   collectPreparedPrepackErrors,
+  resolvePrepackAllowUnreleasedChangelog,
   resolvePrepackBuildEnvironment,
   resolvePrepackCommandStdio,
   resolvePrepackCommandTimeoutMs,
   runPrepackCommand,
 } from "../scripts/openclaw-prepack.ts";
+
+describe("resolvePrepackAllowUnreleasedChangelog", () => {
+  it("requires an explicit non-publish opt-in", () => {
+    for (const raw of [undefined, "", "0", "false"]) {
+      expect(
+        resolvePrepackAllowUnreleasedChangelog({
+          OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: raw,
+        }),
+      ).toBe(false);
+    }
+    for (const raw of ["1", "true"]) {
+      expect(
+        resolvePrepackAllowUnreleasedChangelog({
+          OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: raw,
+        }),
+      ).toBe(true);
+    }
+    expect(() =>
+      resolvePrepackAllowUnreleasedChangelog({
+        OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "yes",
+      }),
+    ).toThrow("invalid OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: yes");
+  });
+});
 
 describe("resolvePrepackBuildEnvironment", () => {
   it("pins one timestamp across package and Control UI builds", () => {
@@ -76,9 +101,25 @@ describe("collectPreparedPrepackErrors", () => {
     expect(
       collectPreparedPrepackErrors(
         ["dist/index.mjs", "dist/control-ui/index.html"],
-        ["dist/control-ui/assets/index-Bu8rSoJV.js"],
+        [
+          "dist/control-ui/assets/index-Bu8rSoJV.js",
+          "dist/control-ui/assets/index-Bu8rSoJV.js.br",
+          "dist/control-ui/assets/index-Bu8rSoJV.js.gz",
+        ],
       ),
     ).toStrictEqual([]);
+  });
+
+  it("rejects a stale Control UI build without precompressed variants", () => {
+    expect(
+      collectPreparedPrepackErrors(
+        ["dist/index.mjs", "dist/control-ui/index.html"],
+        ["dist/control-ui/assets/index-Bu8rSoJV.js"],
+      ),
+    ).toEqual([
+      "missing prepared Control UI .br asset under dist/control-ui/assets/",
+      "missing prepared Control UI .gz asset under dist/control-ui/assets/",
+    ]);
   });
 
   it("reports missing build and control ui artifacts", () => {

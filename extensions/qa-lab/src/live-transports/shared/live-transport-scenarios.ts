@@ -13,15 +13,14 @@ export {
   findMissingLiveTransportStandardScenarios,
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
-  type LiveTransportStandardScenarioId,
 } from "openclaw/plugin-sdk/qa-live-transport-scenarios";
 
-export type LiveTransportCoverageMember = {
+type LiveTransportCoverageMember = {
   scenarioId?: string;
   standardId: LiveTransportStandardScenarioId;
 };
 
-export type LiveTransportCoverageLane = {
+type LiveTransportCoverageLane = {
   commandName: string;
   members: readonly LiveTransportCoverageMember[];
   transportId: string;
@@ -36,7 +35,7 @@ export type LiveTransportCoverageLaneSummary = {
   transportId: string;
 };
 
-export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[] = [
+const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[] = [
   {
     transportId: "discord",
     commandName: "discord",

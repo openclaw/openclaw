@@ -2,9 +2,19 @@
 // Coordinates release-candidate validation runs and emits the publish command
 // only after required local, CI, npm, plugin, and E2E evidence is green.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import {
@@ -19,6 +29,7 @@ import {
 } from "./render-github-release-notes.mjs";
 import {
   isShaPinnedReleaseValidationBranch,
+  runStrictReleaseEvidenceValidation,
   validateFullReleaseValidationEvidence,
 } from "./validate-full-release-validation-evidence.mjs";
 
@@ -31,6 +42,9 @@ const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 const DEFAULT_GITHUB_API_RESPONSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
 const COMMAND_CAPTURE_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const TOOLING_ROOT = fileURLToPath(new URL("../", import.meta.url));
+const TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN =
+  /^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u;
 const WINDOWS_NODE_TAG_PATTERN = /^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/u;
 const WINDOWS_NODE_REPO = "openclaw/openclaw-windows-node";
 const WINDOWS_NODE_REQUIRED_ASSETS = [
@@ -38,6 +52,25 @@ const WINDOWS_NODE_REQUIRED_ASSETS = [
   "OpenClawCompanion-Setup-arm64.exe",
 ];
 const SHA256_DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/u;
+const RELEASE_CANDIDATE_STATE_VERSION = 1;
+const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
+const RELEASE_CANDIDATE_STATE_KEYS = [
+  "repo",
+  "tag",
+  "targetSha",
+  "toolingSha",
+  "workflowRef",
+  "provider",
+  "mode",
+  "releaseProfile",
+  "npmDistTag",
+  "pluginPublishScope",
+  "plugins",
+  "windowsNodeTag",
+  "skipParallels",
+  "skipTelegram",
+  "telegramProviderMode",
+];
 
 function usage() {
   return `Usage: pnpm release:candidate -- --tag vYYYY.M.PATCH-beta.N [options]
@@ -48,7 +81,7 @@ OpenClaw Release Publish command only after everything is green.
 
 Options:
   --tag <tag>                         Release tag to validate.
-  --workflow-ref <ref>                Workflow branch/ref. Default: current branch.
+  --workflow-ref <ref>                Trusted workflow ref. Default: main; matching Tideclaw branch required for alpha.
   --repo <owner/repo>                 GitHub repo. Default: ${DEFAULT_REPO}
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
@@ -74,6 +107,14 @@ function requireValue(argv, index, flag) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
+}
+
+export function releaseBranchForTag(tag) {
+  if (tag.includes("-alpha.")) {
+    return "";
+  }
+  const version = tag.replace(/^v/u, "").split("-", 1)[0];
+  return `release/${version}`;
 }
 
 /**
@@ -180,6 +221,18 @@ export function parseArgs(argv) {
   if (!options.tag) {
     throw new Error("--tag is required");
   }
+  if (options.tag.includes("-alpha.")) {
+    if (!TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(options.workflowRef)) {
+      throw new Error(
+        "--workflow-ref must be the matching tideclaw/alpha/YYYY-MM-DD-HHMMZ branch for alpha release candidates",
+      );
+    }
+  } else {
+    options.workflowRef ||= "main";
+  }
+  if (!options.tag.includes("-alpha.") && options.workflowRef !== "main") {
+    throw new Error("--workflow-ref must be main for regular beta and stable release candidates");
+  }
   options.releaseProfile ||=
     options.tag.includes("-alpha.") || options.tag.includes("-beta.") ? "beta" : "stable";
   if (!["beta", "stable", "full"].includes(options.releaseProfile)) {
@@ -239,6 +292,74 @@ function readJson(path, label) {
       { cause: error },
     );
   }
+}
+
+export function buildReleaseCandidateState(options, { targetSha, toolingSha }) {
+  return {
+    version: RELEASE_CANDIDATE_STATE_VERSION,
+    phase: "validated",
+    repo: options.repo,
+    tag: options.tag,
+    targetSha,
+    toolingSha,
+    workflowRef: options.workflowRef,
+    provider: options.provider,
+    mode: options.mode,
+    releaseProfile: options.releaseProfile,
+    npmDistTag: options.npmDistTag,
+    pluginPublishScope: options.pluginPublishScope,
+    plugins: options.plugins,
+    windowsNodeTag: options.windowsNodeTag,
+    skipParallels: options.skipParallels,
+    skipTelegram: options.skipTelegram,
+    telegramProviderMode: options.telegramProviderMode,
+    fullReleaseRunId: options.fullReleaseRunId,
+    npmPreflightRunId: options.npmPreflightRunId,
+  };
+}
+
+export function reconcileReleaseCandidateState(saved, expected) {
+  if (!saved) {
+    return expected;
+  }
+  if (
+    typeof saved !== "object" ||
+    Array.isArray(saved) ||
+    saved.version !== RELEASE_CANDIDATE_STATE_VERSION
+  ) {
+    throw new Error("release candidate state has an unsupported schema");
+  }
+  for (const key of RELEASE_CANDIDATE_STATE_KEYS) {
+    if (!isDeepStrictEqual(saved[key], expected[key])) {
+      throw new Error(
+        `release candidate state mismatch for ${key}: saved=${JSON.stringify(saved[key])} current=${JSON.stringify(expected[key])}`,
+      );
+    }
+  }
+  for (const key of ["fullReleaseRunId", "npmPreflightRunId"]) {
+    if (saved[key] && expected[key] && saved[key] !== expected[key]) {
+      throw new Error(`release candidate state mismatch for ${key}`);
+    }
+  }
+  return {
+    ...expected,
+    phase: typeof saved.phase === "string" ? saved.phase : expected.phase,
+    fullReleaseRunId: expected.fullReleaseRunId || saved.fullReleaseRunId || "",
+    npmPreflightRunId: expected.npmPreflightRunId || saved.npmPreflightRunId || "",
+  };
+}
+
+function writeReleaseCandidateState(path, state) {
+  mkdirSync(join(path, ".."), { recursive: true });
+  const temporaryPath = `${path}.tmp-${process.pid}`;
+  writeFileSync(temporaryPath, `${JSON.stringify(state, null, 2)}\n`);
+  renameSync(temporaryPath, path);
+}
+
+function updateReleaseCandidateState(path, state, phase, runIds = {}) {
+  const next = { ...state, ...runIds, phase };
+  writeReleaseCandidateState(path, next);
+  return next;
 }
 
 function githubApiTimeoutMs() {
@@ -348,24 +469,100 @@ export async function validateWindowsSourceRelease(tag, options = {}) {
   };
 }
 
-function currentBranch() {
-  return run("git", ["branch", "--show-current"], { capture: true }).trim();
+function gitRevParse(ref, cwd) {
+  return run("git", ["rev-parse", ref], { capture: true, cwd }).trim();
 }
 
-function gitRevParse(ref) {
-  return run("git", ["rev-parse", ref], { capture: true }).trim();
+function gitTopLevel(cwd) {
+  return run("git", ["rev-parse", "--show-toplevel"], { capture: true, cwd }).trim();
 }
 
-export function validateCandidateCheckout({ targetSha, headSha, trackedStatus }) {
-  if (headSha !== targetSha) {
-    throw new Error(`release candidate tag resolves to ${targetSha}, but HEAD is ${headSha}`);
+function gitTrackedStatus(cwd) {
+  return run("git", ["status", "--porcelain=v1", "--untracked-files=no"], {
+    capture: true,
+    cwd,
+  });
+}
+
+function fetchTrustedWorkflowSha(workflowRef, toolingRoot) {
+  const remoteRef = `refs/remotes/origin/${workflowRef}`;
+  run("git", ["fetch", "--no-tags", "origin", `+refs/heads/${workflowRef}:${remoteRef}`], {
+    cwd: toolingRoot,
+  });
+  return gitRevParse(`${remoteRef}^{commit}`, toolingRoot);
+}
+
+function runFromTrustedTooling(argv, { targetRoot, workflowRef }) {
+  const trustedToolingSha = fetchTrustedWorkflowSha(workflowRef, targetRoot);
+  const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"));
+  const toolingRoot = join(tempRoot, "checkout");
+  let worktreeAdded = false;
+  try {
+    run("git", ["worktree", "add", "--detach", toolingRoot, trustedToolingSha], {
+      cwd: targetRoot,
+    });
+    worktreeAdded = true;
+    const result = spawnSync(
+      process.execPath,
+      [join(toolingRoot, "scripts/release-candidate-checklist.mjs"), ...argv],
+      {
+        cwd: targetRoot,
+        env: process.env,
+        stdio: "inherit",
+      },
+    );
+    if (result.status !== 0) {
+      throw new Error(
+        `trusted release candidate tooling failed with ${result.status ?? result.signal}`,
+      );
+    }
+  } finally {
+    if (worktreeAdded) {
+      const cleanup = spawnSync("git", ["worktree", "remove", "--force", toolingRoot], {
+        cwd: targetRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      if (cleanup.status !== 0) {
+        console.warn(
+          `could not remove temporary trusted tooling worktree: ${cleanup.stderr?.trim() || cleanup.signal || cleanup.status}`,
+        );
+      }
+    }
+    rmSync(tempRoot, { force: true, recursive: true });
   }
-  if (trackedStatus.trim()) {
+}
+
+export function validateCandidateCheckout({
+  targetSha,
+  targetHeadSha,
+  targetTrackedStatus,
+  toolingSha,
+  trustedToolingSha,
+  toolingTrackedStatus,
+  workflowRef,
+}) {
+  if (targetHeadSha !== targetSha) {
     throw new Error(
-      "release candidate validation requires a clean tracked worktree so the checked tooling matches the tag",
+      `release candidate tag resolves to ${targetSha}, but target worktree HEAD is ${targetHeadSha}`,
     );
   }
-  return { status: "passed", targetSha };
+  if (targetTrackedStatus.trim()) {
+    throw new Error(
+      "release candidate validation requires a clean tracked target worktree at the release tag",
+    );
+  }
+  if (toolingSha !== trustedToolingSha) {
+    throw new Error(
+      `release candidate tooling HEAD ${toolingSha} does not match trusted ${workflowRef} ${trustedToolingSha}`,
+    );
+  }
+  if (toolingTrackedStatus.trim()) {
+    throw new Error(
+      "release candidate validation requires a clean tracked tooling checkout at the trusted workflow ref",
+    );
+  }
+  return { status: "passed", targetSha, toolingSha, workflowRef };
 }
 
 function gitIsAncestor(ancestor, target) {
@@ -857,6 +1054,12 @@ function shellQuote(value) {
  * Builds the final release publish workflow command once validation evidence is ready.
  */
 export function buildPublishCommand(options) {
+  const workflowRef = options.tag.includes("-alpha.") ? options.workflowRef : "main";
+  if (options.tag.includes("-alpha.") && !TIDECLAW_ALPHA_WORKFLOW_REF_PATTERN.test(workflowRef)) {
+    throw new Error(
+      "alpha release publish requires a matching tideclaw/alpha/YYYY-MM-DD-HHMMZ workflow ref",
+    );
+  }
   const fields = [
     ["tag", options.tag],
     ["preflight_run_id", options.npmPreflightRunId],
@@ -888,7 +1091,7 @@ export function buildPublishCommand(options) {
     "--repo",
     options.repo,
     "--ref",
-    options.workflowRef,
+    workflowRef,
     ...fields.flatMap(([key, value]) => ["-f", `${key}=${value}`]),
   ]
     .map(shellQuote)
@@ -1030,16 +1233,37 @@ async function runTelegramIfNeeded(options, artifactName) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  options.workflowRef ||= currentBranch();
+  const targetRoot = gitTopLevel(process.cwd());
+  const toolingRoot = gitTopLevel(TOOLING_ROOT);
+  if (targetRoot === toolingRoot) {
+    runFromTrustedTooling(process.argv.slice(2), {
+      targetRoot,
+      workflowRef: options.workflowRef,
+    });
+    return;
+  }
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
-  const targetSha = gitRevParse(`${options.tag}^{}`);
+  const targetSha = gitRevParse(`${options.tag}^{}`, targetRoot);
+  const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
+  const trustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
   validateCandidateCheckout({
     targetSha,
-    headSha: gitRevParse("HEAD"),
-    trackedStatus: run("git", ["status", "--porcelain=v1", "--untracked-files=no"], {
-      capture: true,
-    }),
+    targetHeadSha: gitRevParse("HEAD", targetRoot),
+    targetTrackedStatus: gitTrackedStatus(targetRoot),
+    toolingSha,
+    trustedToolingSha,
+    toolingTrackedStatus: gitTrackedStatus(TOOLING_ROOT),
+    workflowRef: options.workflowRef,
   });
+  const statePath = join(options.outputDir, RELEASE_CANDIDATE_STATE_FILE);
+  const expectedState = buildReleaseCandidateState(options, { targetSha, toolingSha });
+  let candidateState = reconcileReleaseCandidateState(
+    existsSync(statePath) ? readJson(statePath, "release candidate state") : undefined,
+    expectedState,
+  );
+  options.fullReleaseRunId = candidateState.fullReleaseRunId;
+  options.npmPreflightRunId = candidateState.npmPreflightRunId;
+  writeReleaseCandidateState(statePath, candidateState);
   const releaseChangelog = run("git", ["show", `${targetSha}:CHANGELOG.md`], { capture: true });
   const releaseNotesVersion = releaseNotesVersionForTag(options.tag);
   const releaseNotesCheck = validateCandidateReleaseNotes({
@@ -1067,14 +1291,19 @@ async function main() {
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
+    const targetContextRef = releaseBranchForTag(options.tag);
     options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
       ref: options.tag,
+      ...(targetContextRef ? { target_context_ref: targetContextRef } : {}),
       provider: options.provider,
       mode: options.mode,
       release_profile: options.releaseProfile,
       run_release_soak:
         options.releaseProfile === "stable" || options.releaseProfile === "full" ? "true" : "false",
       rerun_group: "all",
+    });
+    candidateState = updateReleaseCandidateState(statePath, candidateState, "dispatching", {
+      fullReleaseRunId: options.fullReleaseRunId,
     });
   }
 
@@ -1085,7 +1314,14 @@ async function main() {
       preflight_only: "true",
       npm_dist_tag: options.npmDistTag,
     });
+    candidateState = updateReleaseCandidateState(statePath, candidateState, "dispatching", {
+      npmPreflightRunId: options.npmPreflightRunId,
+    });
   }
+  candidateState = updateReleaseCandidateState(statePath, candidateState, "waiting", {
+    fullReleaseRunId: options.fullReleaseRunId,
+    npmPreflightRunId: options.npmPreflightRunId,
+  });
 
   const fullRun = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {
     workflowName: "Full Release Validation",
@@ -1131,6 +1367,8 @@ async function main() {
     expectedTargetSha: targetSha,
     expectedWorkflowBranch: options.workflowRef,
     isTrustedMainAncestor: (sha) => gitIsAncestor(sha, "refs/remotes/origin/main"),
+    validateEvidenceReuseStrictly: ({ repository, runId }) =>
+      runStrictReleaseEvidenceValidation({ repository, runId }),
   });
   if (fullValidationEvidence.source === "direct" && fullRun.headSha !== targetSha) {
     throw new Error(`run SHA mismatch: tag=${targetSha} full=${fullRun.headSha}`);
@@ -1266,6 +1504,7 @@ async function main() {
       "",
     ].join("\n"),
   );
+  updateReleaseCandidateState(statePath, candidateState, "completed");
 
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);

@@ -35,7 +35,7 @@ export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeo
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
-export type SessionCompactionCheckpointPreview = Pick<
+type SessionCompactionCheckpointPreview = Pick<
   SessionCompactionCheckpoint,
   "checkpointId" | "createdAt" | "reason"
 >;
@@ -49,6 +49,8 @@ export type GatewaySessionRow = {
   worktree?: SessionEntry["worktree"];
   /** Session-scoped exec node binding (exec host=node routing). */
   execNode?: string;
+  /** Working directory interpreted only by the bound exec node. */
+  execCwd?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
   subagentRole?: SessionEntry["subagentRole"];
@@ -99,6 +101,8 @@ export type GatewaySessionRow = {
   status?: SessionRunStatus;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
+  hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -111,6 +115,7 @@ export type GatewaySessionRow = {
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
+  modelSelectionLocked?: boolean;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   contextBudgetStatus?: SessionEntry["contextBudgetStatus"];

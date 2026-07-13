@@ -2,7 +2,9 @@
 // message/poll path while preserving media policy and transcript mirrors.
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
+import type { ConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
@@ -29,7 +31,7 @@ import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
 
 /** Gateway connection settings forwarded to outbound send helpers. */
-export type OutboundGatewayContext = {
+type OutboundGatewayContext = {
   url?: string;
   token?: string;
   timeoutMs?: number;
@@ -39,7 +41,7 @@ export type OutboundGatewayContext = {
 };
 
 /** Shared execution context for message-tool send and poll actions. */
-export type OutboundSendContext = {
+type OutboundSendContext = {
   cfg: OpenClawConfig;
   channel: ChannelId;
   params: Record<string, unknown>;
@@ -52,9 +54,12 @@ export type OutboundSendContext = {
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
   senderIsOwner?: boolean;
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
+  /** Known destination conversation kind prepared by the caller. */
+  conversationType?: ChatType;
   sessionId?: string;
   inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;
@@ -132,6 +137,7 @@ async function sendCoreMessage(params: {
     asVoice: params.asVoice,
     channel: params.ctx.channel || undefined,
     accountId: params.ctx.accountId ?? undefined,
+    conversationType: params.ctx.conversationType,
     replyToId: params.replyToId,
     threadId: params.threadId,
     gifPlayback: params.gifPlayback,
@@ -213,6 +219,7 @@ function createChannelActionContext(params: {
     requesterAccountId: params.ctx.requesterAccountId,
     requesterSenderId: params.ctx.requesterSenderId,
     senderIsOwner: params.ctx.senderIsOwner,
+    conversationReadOrigin: params.ctx.conversationReadOrigin,
     sessionKey: params.ctx.sessionKey,
     sessionId: params.ctx.sessionId,
     inboundEventKind: params.ctx.inboundEventKind,
@@ -233,6 +240,7 @@ async function preparePluginSendPayload(params: {
   to: string;
   payload: ReplyPayload;
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number;
 }): Promise<PluginSendPayloadPreparation> {
   const plugin = resolveOutboundChannelPlugin({
@@ -251,6 +259,7 @@ async function preparePluginSendPayload(params: {
     to: params.to,
     payload: params.payload,
     replyToId: params.replyToId,
+    replyToIdSource: params.replyToIdSource,
     threadId: params.threadId,
   });
   // A null result is an ownership decision: the provider-native payload cannot
@@ -274,6 +283,7 @@ export async function executeSendAction(params: {
   forceDocument?: boolean;
   bestEffort?: boolean;
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number;
 }): Promise<{
   handledBy: "plugin" | "core";
@@ -294,6 +304,7 @@ export async function executeSendAction(params: {
     to: params.to,
     payload: defaultPayload,
     replyToId: params.replyToId,
+    replyToIdSource: params.replyToIdSource,
     threadId: params.threadId,
   });
   const channelPlugin = resolveOutboundChannelPlugin({

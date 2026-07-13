@@ -516,9 +516,7 @@ describe("Feishu Card Action Handler", () => {
     createFeishuClientMock.mockReturnValueOnce({
       im: {
         chat: {
-          get: vi
-            .fn()
-            .mockResolvedValue({ code: 99, msg: `${"x".repeat(499)}😀tail` }),
+          get: vi.fn().mockResolvedValue({ code: 99, msg: `${"x".repeat(499)}😀tail` }),
         },
       },
     });
@@ -565,6 +563,24 @@ describe("Feishu Card Action Handler", () => {
     await handleFeishuCardAction({ cfg, event, runtime });
 
     expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not log raw duplicate callback tokens", async () => {
+    const log = vi.fn();
+    const callbackToken = "test-token-placeholder";
+    const event = createStructuredQuickActionEvent({
+      token: callbackToken,
+      action: "feishu.quick_actions.help",
+      command: "/help",
+    });
+
+    await handleFeishuCardAction({ cfg, event, runtime: { ...runtime, log } });
+    await handleFeishuCardAction({ cfg, event, runtime: { ...runtime, log } });
+
+    const logs = log.mock.calls.flat().join("\n");
+    expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
+    expect(logs).toContain("skipping duplicate card action token");
+    expect(logs).not.toContain(callbackToken);
   });
 
   it("does not cache callback tokens when token ttl expiry overflows", async () => {

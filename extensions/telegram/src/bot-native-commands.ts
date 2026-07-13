@@ -35,17 +35,18 @@ import type {
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { codexChannelLoginRuntime } from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
+  formatSqliteSessionFileMarker,
   getSessionEntry,
   resolveStorePath,
   type SessionEntry,
+  updateSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { resolveSessionTranscriptLegacyFileTarget } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -109,10 +110,7 @@ import { buildTelegramNativeCommandCallbackData } from "./native-command-callbac
 import { recordSentMessage } from "./sent-message-cache.js";
 import { getTopicName, resolveTopicNameCacheScope } from "./topic-name-cache.js";
 
-export {
-  buildTelegramNativeCommandCallbackData,
-  parseTelegramNativeCommandCallbackData,
-} from "./native-command-callback-data.js";
+export { parseTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const activeTelegramCodexLoginFlows = new Map<string, { expiresAt: number }>();
@@ -125,6 +123,9 @@ type TelegramNativeReplyPayload = import("openclaw/plugin-sdk/plugin-entry").Plu
 type TelegramNativeReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
+  reaction?: {
+    emoji?: unknown;
+  };
 };
 type FastModeState = ReturnType<typeof resolveFastModeState>;
 type TelegramResolvedGroupConfig = {
@@ -219,6 +220,24 @@ export { testing as __testing };
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 
+function resolveTelegramCommandSessionFile(params: {
+  agentId: string;
+  sessionFile?: string;
+  sessionId: string;
+  storePath: string;
+}): string {
+  const sqliteMarker = formatSqliteSessionFileMarker({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+  });
+  const explicitSessionFile = params.sessionFile?.trim();
+  if (explicitSessionFile === sqliteMarker) {
+    return explicitSessionFile;
+  }
+  return sqliteMarker;
+}
+
 function resolveTelegramProgressPlaceholder(command: {
   nativeProgressMessages?: Partial<Record<string, string>> & { default?: string };
 }): string | null {
@@ -246,17 +265,16 @@ async function resolveTelegramCommandTranscriptContext(params: {
       storePath,
     });
     const sessionId = entry?.sessionId?.trim() || randomUUID();
-    const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
-    const target = await resolveSessionTranscriptLegacyFileTarget({
+    const sessionFile = resolveTelegramCommandSessionFile({
       agentId: params.agentId,
+      sessionFile: entry?.sessionFile,
       sessionId,
-      sessionKey,
       storePath,
-      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     });
+    const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
     return {
       sessionId,
-      sessionFile: target.sessionFile,
+      sessionFile,
       ...(authProfileId ? { authProfileId } : {}),
     };
   } catch {
@@ -491,8 +509,20 @@ function isSuppressedTelegramNativeReplyPayload(result: TelegramNativeReplyPaylo
   return result.suppressReply === true;
 }
 
+function hasTelegramNativeReplyReaction(result: TelegramNativeReplyPayload): boolean {
+  const reactionEmoji = resolveTelegramNativeReplyChannelData(result)?.reaction?.emoji;
+  return typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
+}
+
 function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
-  return resolveSendableOutboundReplyParts(result).hasContent;
+  const { channelData: _channelData, ...portableContent } = result;
+  if (hasOutboundReplyContent(portableContent, { trimText: true })) {
+    return true;
+  }
+  const telegramData = resolveTelegramNativeReplyChannelData(result);
+  return Boolean(
+    buildInlineKeyboard(telegramData?.buttons) || hasTelegramNativeReplyReaction(result),
+  );
 }
 
 function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): boolean {
@@ -505,6 +535,7 @@ function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): b
     !result.presentation &&
     !result.interactive &&
     !result.btw &&
+    !hasTelegramNativeReplyReaction(result) &&
     telegramData?.pin !== true,
   );
 }
@@ -974,7 +1005,7 @@ export const registerTelegramNativeCommands = ({
     const initialCommandCount = fullCommandCatalog.totalCommands;
     menuCommandCatalog = resolveTelegramMenuCommandCatalog([], skillCommands);
     runtime.log?.(
-      `Telegram: ${initialCommandCount} commands exceeds limit; removing per-skill commands and keeping /skill.`,
+      `${initialCommandCount} commands exceed the ${fullCommandCatalog.maxCommands}-command Telegram limit; removing per-skill commands and keeping /skill.`,
     );
   }
   const { nativeCommands, pluginCatalog } = fullCommandCatalog;
@@ -1305,21 +1336,88 @@ export const registerTelegramNativeCommands = ({
               agentId: route.agentId,
               sessionKey: targetSessionKey,
             });
-            const profileId = codexChannelLoginRuntime.resolveProviderScopedProfileId(
-              targetSessionEntry?.authProfileOverride,
-              loginProvider,
-            );
-            await codexChannelLoginRuntime.runDeviceLoginFlow({
+            const loginResult = await codexChannelLoginRuntime.runDeviceLoginFlow({
               runLoginFlow: loginFlow,
               provider: loginProvider,
               agentId: route.agentId,
-              ...(profileId ? { profileId } : {}),
               config: runtimeCfg,
               runtime,
               sendMessage: sendLoginMessage,
               unsupportedPromptMessage:
                 "Telegram /login supports only fixed Codex device-code auth.",
             });
+            const nextProfileId = loginResult.profiles.find(
+              (profile) => profile.provider === loginProvider,
+            )?.profileId;
+            if (!nextProfileId) {
+              await sendLoginMessage(
+                "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+              );
+              return;
+            }
+            const needsSessionUpdate =
+              targetSessionEntry &&
+              (targetSessionEntry.authProfileOverride !== nextProfileId ||
+                targetSessionEntry.authProfileOverrideSource !== "user" ||
+                targetSessionEntry.authProfileOverrideCompactionCount !== undefined);
+            if (targetSessionEntry) {
+              try {
+                const storePath = resolveStorePath(runtimeCfg.session?.store, {
+                  agentId: route.agentId,
+                });
+                let snapshotMatched = false;
+                const persisted = await updateSessionStoreEntry({
+                  sessionKey: targetSessionKey,
+                  storePath,
+                  requireWriteSuccess: true,
+                  skipMaintenance: true,
+                  update: (entry) => {
+                    if (
+                      entry.sessionId !== targetSessionEntry.sessionId ||
+                      entry.authProfileOverride !== targetSessionEntry.authProfileOverride ||
+                      entry.authProfileOverrideSource !==
+                        targetSessionEntry.authProfileOverrideSource ||
+                      entry.authProfileOverrideCompactionCount !==
+                        targetSessionEntry.authProfileOverrideCompactionCount
+                    ) {
+                      return null;
+                    }
+                    snapshotMatched = true;
+                    return needsSessionUpdate
+                      ? {
+                          authProfileOverride: nextProfileId,
+                          authProfileOverrideSource: "user",
+                          authProfileOverrideCompactionCount: undefined,
+                        }
+                      : null;
+                  },
+                });
+                if (
+                  !snapshotMatched ||
+                  !persisted ||
+                  persisted.authProfileOverride !== nextProfileId ||
+                  persisted.authProfileOverrideSource !== "user" ||
+                  persisted.authProfileOverrideCompactionCount !== undefined
+                ) {
+                  await sendLoginMessage(
+                    "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+                  );
+                  return;
+                }
+              } catch (error) {
+                runtime.error?.(
+                  danger(
+                    `telegram /login codex completed but failed to update session auth profile: ${String(
+                      error,
+                    )}`,
+                  ),
+                );
+                await sendLoginMessage(
+                  "Codex login completed, but this Telegram session could not switch to the newly authenticated profile. Retry `/login codex`, or select the profile manually.",
+                );
+                return;
+              }
+            }
             await sendLoginMessage("Codex login complete. Try your request again now.");
           } catch {
             runtime.error?.(danger("telegram /login codex failed"));
@@ -1797,9 +1895,13 @@ export const registerTelegramNativeCommands = ({
           return;
         }
 
-        const deliverableResult = hasRenderableTelegramNativeReplyPayload(result)
-          ? result
-          : { text: EMPTY_RESPONSE_FALLBACK };
+        const hasReaction = hasTelegramNativeReplyReaction(result);
+        const deliverableResult: TelegramNativeReplyPayload =
+          hasRenderableTelegramNativeReplyPayload(result)
+            ? hasReaction && !normalizeOptionalString(result.replyToId)
+              ? { ...result, replyToId: String(msg.message_id) }
+              : result
+            : { text: EMPTY_RESPONSE_FALLBACK };
         const progressResultText =
           typeof deliverableResult.text === "string" && deliverableResult.text.trim().length > 0
             ? deliverableResult.text
@@ -1844,6 +1946,7 @@ export const registerTelegramNativeCommands = ({
         await deliverReplies({
           replies: [deliverableResult],
           ...deliveryBaseOptions,
+          ...(hasReaction ? { replyToMode: "all" as const } : {}),
           silent:
             runtimeTelegramCfg.silentErrorReplies === true && deliverableResult.isError === true,
         });

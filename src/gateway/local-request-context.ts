@@ -1,6 +1,6 @@
 // Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
-import { loadManifestModelCatalog } from "../agents/model-catalog.js";
+import { loadManifestModelCatalog, loadModelCatalogSnapshot } from "../agents/model-catalog.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -11,7 +11,7 @@ import {
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
 import { createChatRunEntry, type ChatRunEntry } from "./server-chat-state.js";
-import type { GatewayCronServiceContract } from "./server-cron.js";
+import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
@@ -82,6 +82,8 @@ function createLocalGatewayRequestContext(
     isTerminalEnabled: () => false,
     loadGatewayModelCatalog: async () =>
       loadManifestModelCatalog({ config: params.getRuntimeConfig() }),
+    loadGatewayModelCatalogSnapshot: async ({ readOnly } = {}) =>
+      loadModelCatalogSnapshot({ config: params.getRuntimeConfig(), readOnly }),
     getHealthCache: () => null,
     refreshHealthSnapshot: async () =>
       ({}) as Awaited<ReturnType<GatewayRequestContext["refreshHealthSnapshot"]>>,
@@ -129,7 +131,7 @@ function createLocalGatewayRequestContext(
     unsubscribeSessionEvents: (connId) => {
       sessionEvents.delete(connId);
     },
-    subscribeSessionMessageEvents: () => {},
+    subscribeSessionMessageEvents: () => undefined,
     unsubscribeSessionMessageEvents: () => {},
     unsubscribeAllSessionEvents: (connId) => {
       sessionEvents.delete(connId);

@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- **SQLite snapshots:** add `openclaw backup sqlite create|list|verify|restore` for compact, verified global and per-agent database artifacts with fresh-target-only restore. (#94805) Thanks @giodl73-repo.
 - **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
 - **OpenAI GPT-5.6 defaults:** use `openai/gpt-5.6` (Sol alias) for fresh API-key setup and exact `openai/gpt-5.6-sol` for fresh Codex/OAuth setup, while preserving existing primaries, fallbacks, aliases, and explicit GPT-5.5 selections. (#103234)
 - **Meta provider:** add bundled `muse-spark-1.1` model support with Responses API streaming, tool calls, encrypted reasoning replay, onboarding, and standalone npm/ClawHub distribution. (#102873) Thanks @HamidShojanazeri.
@@ -16,6 +17,9 @@ Docs: https://docs.openclaw.ai
 - **Control UI Talk controls:** keep voice, model, sensitivity, and other realtime defaults in Settings → Communications → Talk, and use the composer microphone caret to select any browser audio input. (#101046)
 - **Control UI session workspace shortcut:** expand or collapse the active Chat pane's session workspace rail with ⇧⌘B without changing the main app sidebar or the separate detail and Canvas preview panel. Thanks @shakkernerd.
 - **Control UI Settings shortcut:** open Settings with ⇧⌘, while leaving the browser-owned ⌘, shortcut unchanged. Thanks @shakkernerd.
+- **Control UI chat layout:** center the transcript on the composer axis, keep assistant and tool output left and user bubbles right within the same readable frame, and preserve custom message-width overrides. (#104474) Thanks @shakkernerd.
+- **Control UI composer footer:** center the chat settings chip and model controls between the divider and the card edge instead of pinning them to the divider. (#105866)
+- **Control UI assistant actions:** keep assistant name and time first while placing hover actions beside them on the left instead of at the far edge. Thanks @shakkernerd.
 - **Cron model selection:** choose an agent-turn model in Control UI Quick Create and show configured or default models in cron job rows and details. (#95341) Thanks @ly85206559.
 - **Control UI GitHub previews:** show issue and pull request state, title, author, activity, comments, and change statistics in hover and keyboard-focus cards. (#100434)
 - **Logbook work journal:** add a disabled-by-default bundled plugin that turns paired-node screen snapshots into a private timeline, daily standup, and timeline-grounded Q&A in a plugin-contributed Control UI tab. (#99930)
@@ -28,6 +32,46 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Claude CLI context budgets:** honor Anthropic model and per-agent `contextTokens` limits by passing the effective limit to Claude Code's native auto-compactor and persisting the same prepared budget in OpenClaw session state. Fixes #80933. (#93198) Thanks @mushuiyu886.
+- **Native app connection and relay reliability:** keep Android disconnects stopped across Activity recreation, fail remote camera commands without opening permission prompts, refresh mobile node registration after capability changes, surface iOS onboarding connection failures, cancel stale Talk owners on session switches, reject invalid Watch acknowledgments, preserve Watch events received during startup, and prevent older agent overview requests from replacing newer gateway state.
+- **Gateway source watch:** hand the configured port off from the installed service before starting the tmux watcher, preserve failed panes for attach/capture, and keep explicit alternate-port watches side by side with the managed Gateway.
+- **Claude CLI max-turn diagnostics:** preserve terminal max-turn results with OpenClaw and Claude session context, warn when tool actions may already have run, and stop unsafe auth-profile or model replay for potentially side-effecting turns. (#94130) Thanks @zhangguiping-xydt.
+- **Provider network retries:** align provider read/poll/download and agent-wait recovery for transient connection errors, retry bounded provider `ENOTFOUND` failures while leaving gateway `ENOTFOUND` and non-idempotent create operations fail-fast. (#101496) Thanks @xialonglee.
+- **Session retry classification:** stop permanent provider errors whose identifiers or payload details merely contain 429/5xx digit sequences from re-sending full context, and share bounded rate-limit-window parsing across retry paths. (#105258) Thanks @destire-mio.
+- **LINE directive templates:** suppress confirms and buttons with blank required fields or unlabeled actions while preserving valid titleless buttons and surrounding reply text. (#105520) Thanks @edenfunf.
+- **SQLite maintenance schema validation:** reject current-version global and agent databases with missing or drifted canonical tables, constraints, indexes, triggers, or table options before compaction, while accepting supported additive-migration layouts.
+- **Matrix bootstrap diagnostics:** preserve complete UTF-8 code points in bounded stdout and stderr tails so crypto dependency failures do not show replacement characters at retention boundaries. (#105475) Thanks @qingminlong.
+- **iOS Watch relay commands:** allow paired iPhone nodes to advertise and invoke `watch.status` and `watch.notify` through the default Gateway policy while preserving the direct watchOS node's fixed minimal command surface.
+- **Swabble status config:** honor the global `--config` path when reading service status instead of silently using the default configuration.
+- **Gradium TTS credential egress:** reject non-HTTPS, foreign-host, and hostname-lookalike base URLs before dispatching API keys, and pin guarded transport to Gradium's documented API hostname. (#101280) Thanks @zhangguiping-xydt.
+- **ClawHub retry timing:** reject fractional delay-seconds and calendar-normalized invalid Retry-After dates so runtime and release reads stay on their bounded fallback schedule. (#105479) Thanks @qingminlong.
+- **Gateway command SecretRefs:** preserve authoritative active-snapshot values when another command secret remains unresolved, falling back locally only for missing paths instead of emitting a per-turn `secrets.resolve` failure. (#96661) Thanks @SunnyShu0925.
+- **Cron delivery status:** keep successful isolated agent turns at `status=ok` when downstream delivery fails, while preserving the send failure separately in delivery state and run logs. (#95419) Thanks @Alix-007.
+- **Channel ingress recovery:** tombstone and scrub malformed durable ingress payloads without letting corrupt rows hide or starve later valid messages. (#98402) Thanks @Pick-cat.
+- **Installed plugin loading:** make native-module fallback use jiti's transform path instead of retrying the same synchronous ESM load, preventing Node 24 startup races when official plugins import SDK contract modules.
+- **QA profile channel execution:** partition mixed Crabline channel scenarios into one aggregate host suite so taxonomy-backed profile commands and evidence workflows no longer abort before execution.
+- **Plugin SDK API baseline:** cover every public entrypoint, preserve complete declaration shapes without source-line churn, and run baseline and export-surface guards from changed-file validation.
+- **Official plugin beta compatibility:** keep the exact beta.5 session-store helper imports working over SQLite through the documented deprecation window, preventing installed Codex and Feishu plugins from failing during package acceptance and upgrades. (#105287) Thanks @vincentkoc.
+- **SQLite terminal session recovery:** track physical transcript mutation time in the agent database so killed or timed-out main sessions rotate when transcript writes outlive the registry update, while preserving legacy transcript mtimes during doctor import.
+- **Gateway chat typecheck:** import chat event types from their owning protocol schema after the retired aggregate type module was removed, restoring full project typechecks.
+- **Packaged Crabbox commands:** include the lease-freshness helper imported by the published wrapper so `crabbox:*` commands do not fail with `ERR_MODULE_NOT_FOUND` in npm installs.
+- **Plugin session catalogs:** reject unknown catalog filters, report catalogs as plugin capabilities, and preserve them in SDK registration captures instead of silently returning empty results or classifying catalog-only plugins as capability-free.
+- **Gateway service audit:** treat POSIX shell `-c` wrappers as opaque for the gateway-subcommand check, avoiding false missing-command warnings for shell-wrapped macOS LaunchAgents without parsing inner commands or ports. Fixes #81751. (#81778) Thanks @liaoandi.
+- **Memory filename search:** index paths separately from chunk bodies so exact full-path, basename, and stem queries rank the intended memory file first without changing body BM25 scores, snippets, or embeddings. (#96052, #94102) Thanks @Pick-cat.
+- **Outbound channel bootstrap:** suppress repeated failed plugin activation for the same channel, config, and registry generation while retrying after config or registry reloads. (#100377) Thanks @xialonglee.
+- **OpenAI Realtime client-secret deadlines:** bound voice and transcription secret acquisition to 30 seconds through the guarded fetch boundary while preserving authentication and bounded response parsing. (#102860) Thanks @Alix-007.
+- **Gateway client watchdog:** keep transport-stall detection active for unbounded and mixed pending requests so dead sockets reject pending requests, reconnect, and never replay rejected requests. (#103407) Thanks @NianJiuZst.
+- **iOS Share Extension drafts:** preserve legitimate shared text beginning with scaffold-like prefixes, remove only exact legacy scaffold lines, avoid treating scheme-like prose as a URL, and deduplicate host-mirrored content. (#103453) Thanks @lin-hongkuan.
+- **Telegram reasoning previews:** reposition split reasoning previews through deferred deletion so prior preview messages do not remain stale while preserving client scroll position. (#97828) Thanks @ly-wang19.
+- **Feishu native-card threading:** normalize whitespace reply targets once and reuse the shared reply mode for card and media parts so native-card topic replies stay in their thread. (#102804) Thanks @sunlit-deng.
+- **Plain-text XML tool calls:** repair zero-argument calls and keep byte/character-bounded stream normalization from leaking incomplete or oversized tool syntax while preserving visible suffix text. (#98984, #102240, #102933, #102975, #103220, #103585) Thanks @wangyan2026, @qingminglong, @wuqxuan, and @ZOOWH.
+- **QQBot token requests:** bound token acquisition with the shared 30-second guarded-fetch deadline so stalled singleflight callers fail together, clean up, and can retry. (#102897) Thanks @maweibin.
+- **Canvas A2UI validation:** reject malformed or unsupported JSONL at CLI, agent-tool, and final node-invoke boundaries while preserving native v0.8 dispatch. (#103713) Thanks @qingminglong.
+- **Twilio RCS inbound routing:** normalize RCS consumer addresses only after signed webhook validation so sender matching and sessions work without changing outbound RCS semantics. (#102373) Thanks @clawSean.
+- **ClickClack output sanitization:** strip internal tool and XML scaffolding at the sender boundary, suppress scaffold-only sends, and preserve optional modern delivery IDs. (#103142) Thanks @masatohoshino.
+- **CLI installer cleanup:** remove Node staging directories and pnpm workspace-rewrite temporary files on failure. (#103725) Thanks @SebTardif.
+- **Agent-core truncation:** avoid empty-output crashes when head truncation receives negative line or byte ceilings. (#103425) Thanks @qingminglong.
+- **Windows Node resolution:** preserve the current executable when resolving bare case-insensitive `node.exe` entries under hostile `PATH` values. (#103907) Thanks @soldforaloss.
 - **Codex runtime switching:** accept the bundled Codex runtime for both `codex/*` and `openai/*` model routes while keeping unsupported provider/runtime pairs rejected. (#103762)
 - **Agent abort cleanup:** serialize prompt lock reacquisition with terminal cleanup so canceled embedded runs do not self-contend on session locks for up to 60 seconds.
 - **Chutes OAuth deadlines:** bound token exchange, profile lookup, and refresh requests, and keep issued tokens when optional userinfo enrichment stalls. (#102026) Thanks @Alix-007.
@@ -36,6 +80,7 @@ Docs: https://docs.openclaw.ai
 - **iOS session mutations:** scope rename, archive, pin, delete, and fork requests to the selected agent, preserving the parent agent for forked sessions so multi-agent chat actions cannot mutate or create sessions under the wrong agent. (#103366, #103415) Thanks @lin-hongkuan and @harjothkhara.
 - **Model pin hot reload and fallback:** keep explicit `/model` selections authoritative across Telegram config reloads and model fallback, capture one live config snapshot per assembled turn, and leave fallback candidates turn-local instead of persisting them over the user's pin. (#103324, #103417) Thanks @obviyus.
 - **Swift protocol initializers:** default every schema-optional generated initializer parameter to `nil` so additive protocol fields no longer break SDK construction call sites.
+- **Telegram DM conversation context:** correlate rendered outbound messages with stable transcript identities across chunked, rich-fallback, media, and streamed delivery, preventing Markdown replies from appearing twice while retaining the full transcript when a cached multipart projection is incomplete. (#100333, #102257, #102259, #102469) Thanks @crabkun, @consoleaf, and @chenyangjun-xy.
 - **OpenCode Go MiMo catalog:** stop exposing the deprecated `mimo-v2-omni` and `mimo-v2-pro` aliases that reject agent requests, and keep release validation on the active MiMo V2.5 routes. (#103311, #103329) Thanks @krissding.
 - **Audit time filters:** reject impossible calendar dates for `openclaw audit --after` and `--before` instead of rolling them into unintended intervals, while preserving timezone-less timestamp semantics. (#103433) Thanks @qingminglong.
 - **OpenAI-compatible streamed tool calls:** execute complete native tool calls from streams that end with SSE `data: [DONE]` but omit `finish_reason`, while keeping transport EOF and visible-text cases fail-closed. (#98124, #97994) Thanks @SunnyShu0925.
@@ -185,6 +230,10 @@ Docs: https://docs.openclaw.ai
 - **iOS Gateway auth retry:** restrict stored device-token retry to parsed loopback hosts and reject wildcard bind addresses, preventing remote lookalike hostnames from receiving trusted retry credentials. (#99859) Thanks @ly85206559.
 - **Bedrock Mantle discovery:** bound model-catalog fetch time and response size, and release rejected response bodies so stalled, oversized, or failed provider responses fall back safely. (#99961) Thanks @zhangguiping-xydt.
 - **Discord thread-title prompts:** truncate generated-title message and channel context on UTF-16 boundaries so emoji cannot leave malformed model prompt text. (#101551) Thanks @Alix-007.
+- **Task state migration:** canonicalize legacy `not-requested` delivery statuses during sidecar import and existing shared-database open so upgraded task registries and linked TaskFlows recover without manual SQL, and surface rejected persisted values in compact console diagnostics. (#103946) Thanks @bek91.
+- **Reply pre-delivery recovery:** bound each pre-delivery callback with an owner-overridable deadline, release serialized reply lanes after hung plugin work, and preserve durable final-delivery retry state only when transport never started. (#104256) Thanks @NianJiuZst.
+- **Signal native quote replies:** preserve the active inbound message as a native quote across agent, explicit, durable, and chunked sends while keeping reply-mode policy inside the Signal plugin. (#105347) Thanks @jesse-merhi.
+- **Media-store remote downloads:** bound response-header waits and stalled bodies, close abandoned redirect and error responses, and remove partial temp files so hung sources cannot pin callers. (#104624) Thanks @hugenshen.
 
 ## 2026.7.1
 

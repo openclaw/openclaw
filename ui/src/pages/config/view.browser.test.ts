@@ -1,6 +1,7 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import "../../styles.css";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import { createConfigViewState, renderConfig, type ConfigProps } from "./view.ts";
 
@@ -60,8 +61,30 @@ describe("config view", () => {
     onOpenCustomThemeImport: vi.fn(),
     textScale: 100,
     setTextScale: vi.fn(),
+    chatSendShortcut: "enter" as const,
+    setChatSendShortcut: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
+  });
+
+  it("lets config pages grow with their content instead of creating an inner viewport", async () => {
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      customThemeImportExpanded: true,
+    });
+    document.body.append(container);
+
+    try {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+
+      const content = queryRequired(container, ".config-content", HTMLElement);
+      expect(content.scrollHeight - content.clientHeight).toBeLessThanOrEqual(1);
+    } finally {
+      container.remove();
+    }
   });
 
   function findActionButtons(container: HTMLElement): {
@@ -218,7 +241,7 @@ describe("config view", () => {
     expect(onReset).toHaveBeenCalledTimes(1);
   });
 
-  it("renders inline progress inside busy action buttons without locking adjacent controls", () => {
+  it("locks config editors and adjacent actions while a config operation is pending", () => {
     const container = document.createElement("div");
     const renderCase = (overrides: Partial<ConfigProps>) =>
       render(
@@ -245,8 +268,9 @@ describe("config view", () => {
     expect(busyButton.disabled).toBe(true);
     expect(busyButton.getAttribute("aria-busy")).toBe("true");
     expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-    expect(clearButton.disabled).toBe(false);
-    expect(applyButton.disabled).toBe(false);
+    expect(clearButton.disabled).toBe(true);
+    expect(applyButton.disabled).toBe(true);
+    expect(container.querySelector(".config-content input")?.hasAttribute("disabled")).toBe(true);
 
     renderCase({ applying: true });
     busyButton = findButtonContainingText(container, "Applying…");
@@ -254,7 +278,7 @@ describe("config view", () => {
     clearButton = requireActionButton(actionButtons.clearButton, "Clear");
     expect(busyButton.disabled).toBe(true);
     expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-    expect(clearButton.disabled).toBe(false);
+    expect(clearButton.disabled).toBe(true);
 
     renderCase({ updating: true });
     busyButton = findButtonContainingText(container, "Updating…");
@@ -262,7 +286,17 @@ describe("config view", () => {
     clearButton = requireActionButton(actionButtons.clearButton, "Clear");
     expect(busyButton.disabled).toBe(true);
     expect(busyButton.querySelectorAll(".config-action-spinner")).toHaveLength(1);
-    expect(clearButton.disabled).toBe(false);
+    expect(clearButton.disabled).toBe(true);
+
+    renderCase({
+      formMode: "raw",
+      raw: '{\n  gateway: { mode: "remote" }\n}\n',
+      originalRaw: '{\n  gateway: { mode: "local" }\n}\n',
+      saving: true,
+    });
+    const rawEditor = container.querySelector(".config-raw-field textarea");
+    expect(rawEditor).toBeInstanceOf(HTMLTextAreaElement);
+    expect(rawEditor?.hasAttribute("disabled")).toBe(true);
   });
 
   it("switches mode via the sidebar toggle", () => {
@@ -345,6 +379,17 @@ describe("config view", () => {
     const btn = findButtonByText(container, "Gateway");
     btn.click();
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
+
+    onSectionChange.mockClear();
+    const settings = findButtonByText(container, "Settings");
+    expect(settings.tabIndex).toBe(0);
+    expect(btn.tabIndex).toBe(-1);
+    expect(btn.getAttribute("aria-controls")).toBe("config-section-panel");
+    settings.focus();
+    settings.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+    expect(onSectionChange).toHaveBeenCalledWith("agents");
   });
 
   it("renders the virtual Notifications tab in Communication settings", () => {
@@ -756,6 +801,32 @@ describe("config view", () => {
     expect(item.querySelector(".config-diff__path")?.textContent?.trim()).toBe("gateway.mode");
     expect(item.querySelector(".config-diff__from")?.textContent?.trim()).toBe('"local"');
     expect(item.querySelector(".config-diff__to")?.textContent?.trim()).toBe('"remote"');
+  });
+
+  it("preserves UTF-16 boundaries in pending change summaries", () => {
+    const boundaryValue = `${"A".repeat(35)}😀ZZZZZ`;
+    const adjacentValue = `${"B".repeat(34)}😀YYYYYY`;
+    const { container } = renderConfigView({
+      formValue: {
+        boundary: boundaryValue,
+        adjacent: adjacentValue,
+      },
+      originalValue: {
+        boundary: "before",
+        adjacent: "before",
+      },
+    });
+
+    const items = Array.from(container.querySelectorAll(".config-diff__item"));
+    const values = new Map(
+      items.map((item) => [
+        item.querySelector(".config-diff__path")?.textContent?.trim(),
+        item.querySelector(".config-diff__to")?.textContent?.trim(),
+      ]),
+    );
+
+    expect(values.get("boundary")).toBe(`"${"A".repeat(35)}...`);
+    expect(values.get("adjacent")).toBe(`"${"B".repeat(34)}😀...`);
   });
 
   it("renders array diff summaries without serializing array values", () => {

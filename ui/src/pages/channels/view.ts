@@ -89,7 +89,7 @@ export function renderChannels(props: ChannelsProps) {
       ${showingStaleSnapshot
         ? html`
             <div class="callout info" style="margin-top: 12px;">
-              Refreshing channel status in the background; showing the last successful snapshot.
+              ${t("channels.refreshingStaleSnapshot")}
             </div>
           `
         : nothing}
@@ -106,8 +106,7 @@ export function renderChannels(props: ChannelsProps) {
         : nothing}
       <pre class="code-block" style="margin-top: 12px;">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
-      </pre
-      >
+      </pre>
     </section>
   `;
 }

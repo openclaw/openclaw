@@ -3,58 +3,65 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
+import {
+  loadSessionEntry,
+  loadTranscriptEvents,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
+import type { CronJob } from "../cron/types.js";
 import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
   setupGatewaySessionsTestHarness,
   getGatewayConfigModule,
   getSessionsHandlers,
-  createLinearSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-function collectNonEmptyLines(text: string): string[] {
-  const lines: string[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    if (line.trim().length > 0) {
-      lines.push(line);
-    }
-  }
-  return lines;
+async function seedLinearTranscript(params: {
+  contents: string[];
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  await persistSessionTranscriptTurn(
+    {
+      agentId: "main",
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    {
+      updateMode: "none",
+      messages: params.contents.map((content, index) => ({
+        message: { role: "user", content, timestamp: index + 1 },
+        now: Date.parse(`2026-06-19T12:00:${String(index + 1).padStart(2, "0")}.000Z`),
+      })),
+    },
+  );
 }
 
-function expectSinglePrefixedFilename(files: string[], prefix: string): string {
-  const matches = files.filter((file) => file.startsWith(prefix));
-  expect(matches).toHaveLength(1);
-  const [match] = matches;
-  if (!match) {
-    throw new Error(`Expected one filename with prefix ${prefix}`);
-  }
-  expect(match.length).toBeGreaterThan(prefix.length);
-  return match;
+async function loadTranscriptRows(params: {
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<unknown[]> {
+  return await loadTranscriptEvents({
+    agentId: "main",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
 }
 
 test("lists and patches session store via sessions.* RPC", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const now = Date.now();
   const recent = now - 30_000;
   const stale = now - 15 * 60_000;
-
-  await fs.writeFile(
-    path.join(dir, "sess-main.jsonl"),
-    createLinearSessionTranscript(
-      "sess-main",
-      Array.from({ length: 10 }, (_, index) => `line ${index}`),
-    ),
-    "utf-8",
-  );
-  await fs.writeFile(
-    path.join(dir, "sess-group.jsonl"),
-    createLinearSessionTranscript("sess-group", ["group line 0"]),
-    "utf-8",
-  );
 
   await writeSessionStore({
     entries: {
@@ -88,6 +95,25 @@ test("lists and patches session store via sessions.* RPC", async () => {
       },
     },
   });
+  await seedLinearTranscript({
+    contents: Array.from({ length: 10 }, (_, index) => `line ${index}`),
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  await seedLinearTranscript({
+    contents: ["group line 0"],
+    sessionId: "sess-group",
+    sessionKey: "agent:main:discord:group:dev",
+    storePath,
+  });
+  await expect(
+    loadTranscriptRows({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      storePath,
+    }),
+  ).resolves.toHaveLength(11);
 
   const { ws, hello } = await openClient();
   const methods = (hello as { features?: { methods?: string[] } }).features?.methods ?? [];
@@ -102,6 +128,8 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
     broadcastToConnIds: vi.fn(),
+    chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
@@ -120,7 +148,10 @@ test("lists and patches session store via sessions.* RPC", async () => {
           error?: unknown;
         }
       | undefined;
-    await sessionsHandlers[method]({
+    await expectDefined(
+      sessionsHandlers[method],
+      "sessionsHandlers[method] test invariant",
+    )({
       req: {} as never,
       params,
       respond: (ok, payload, error) => {
@@ -470,7 +501,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(modelPatched.payload?.resolved?.modelProvider).toBe("openai");
   expect(modelPatched.payload?.resolved?.model).toBe("gpt-test-a");
   expect(modelPatched.payload?.resolved?.agentRuntime).toEqual({
-    id: "codex",
+    id: "openclaw",
     source: "implicit",
   });
 
@@ -488,7 +519,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   );
   expect(mainAfterModelPatch?.modelProvider).toBe("openai");
   expect(mainAfterModelPatch?.model).toBe("gpt-test-a");
-  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "codex", source: "implicit" });
+  expect(mainAfterModelPatch?.agentRuntime).toEqual({ id: "openclaw", source: "implicit" });
 
   const compacted = await directSessionReq<{ ok: true; compacted: boolean }>("sessions.compact", {
     key: "agent:main:main",
@@ -496,18 +527,25 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.compacted).toBe(true);
-  const compactedLines = collectNonEmptyLines(
-    await fs.readFile(path.join(dir, "sess-main.jsonl"), "utf-8"),
-  );
-  expect(compactedLines).toHaveLength(3);
-  const filesAfterCompact = await fs.readdir(dir);
-  expectSinglePrefixedFilename(filesAfterCompact, "sess-main.jsonl.bak.");
+  await expect(
+    loadTranscriptRows({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      storePath,
+    }),
+  ).resolves.toHaveLength(3);
 
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
-    key: "agent:main:discord:group:dev",
-  });
+  const deleted = await directSessionReq<{
+    archived: string[];
+    ok: true;
+    deleted: boolean;
+  }>("sessions.delete", { key: "agent:main:discord:group:dev" });
   expect(deleted.ok).toBe(true);
   expect(deleted.payload?.deleted).toBe(true);
+  expect(deleted.payload?.archived).toHaveLength(1);
+  expect(path.basename(deleted.payload?.archived[0] ?? "")).toMatch(
+    /^sess-group\.jsonl\.deleted\./,
+  );
   const listAfterDelete = await directSessionReq<{
     sessions: Array<{ key: string }>;
   }>("sessions.list", {});
@@ -515,8 +553,13 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(listAfterDelete.payload?.sessions.map((session) => session.key)).not.toContain(
     "agent:main:discord:group:dev",
   );
-  const filesAfterDelete = await fs.readdir(dir);
-  expectSinglePrefixedFilename(filesAfterDelete, "sess-group.jsonl.deleted.");
+  await expect(
+    loadTranscriptRows({
+      sessionId: "sess-group",
+      sessionKey: "agent:main:discord:group:dev",
+      storePath,
+    }),
+  ).resolves.toEqual([]);
 
   const reset = await directSessionReq<{
     ok: true;
@@ -536,14 +579,16 @@ test("lists and patches session store via sessions.* RPC", async () => {
   expect(reset.payload?.entry.model).toBe("gpt-test-a");
   expect(reset.payload?.entry.lastAccountId).toBe("work");
   expect(reset.payload?.entry.lastThreadId).toBe("1737500000.123456");
-  const storeAfterReset = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { lastAccountId?: string; lastThreadId?: string | number }
-  >;
-  expect(storeAfterReset["agent:main:main"]?.lastAccountId).toBe("work");
-  expect(storeAfterReset["agent:main:main"]?.lastThreadId).toBe("1737500000.123456");
-  const filesAfterReset = await fs.readdir(dir);
-  expectSinglePrefixedFilename(filesAfterReset, "sess-main.jsonl.reset.");
+  const entryAfterReset = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+  expect(entryAfterReset?.lastAccountId).toBe("work");
+  expect(entryAfterReset?.lastThreadId).toBe("1737500000.123456");
+  await expect(
+    loadTranscriptRows({
+      sessionId: "sess-main",
+      sessionKey: "agent:main:main",
+      storePath,
+    }),
+  ).resolves.toEqual([]);
 
   const badThinking = await directSessionReq("sessions.patch", {
     key: "agent:main:main",
@@ -578,57 +623,45 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
   const acpStorePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
   const childStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
   const diskOnlyStorePath = path.join(stateDir, "agents", "local", "sessions", "sessions.json");
-  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(acpStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(childStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(diskOnlyStorePath), { recursive: true });
-  await fs.writeFile(
-    mainStorePath,
-    JSON.stringify({ main: { sessionId: "sess-main", updatedAt: 20 } }, null, 2),
-    "utf-8",
-  );
-  await fs.writeFile(
-    acpStorePath,
-    JSON.stringify(
-      {
-        "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7": {
-          sessionId: "sess-claude-acp",
-          updatedAt: 30,
-          acp: {
-            backend: "acpx",
-            agent: "claude",
-            runtimeSessionName: "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
-            mode: "oneshot",
-            state: "idle",
-            lastActivityAt: 30,
-          },
+  await writeSessionStore({
+    storePath: mainStorePath,
+    agentId: "main",
+    entries: { main: { sessionId: "sess-main", updatedAt: 20 } },
+  });
+  await writeSessionStore({
+    storePath: acpStorePath,
+    agentId: "claude",
+    entries: {
+      "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7": {
+        sessionId: "sess-claude-acp",
+        updatedAt: 30,
+        acp: {
+          backend: "acpx",
+          agent: "claude",
+          runtimeSessionName: "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
+          mode: "oneshot",
+          state: "idle",
+          lastActivityAt: 30,
         },
       },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  await fs.writeFile(
-    childStorePath,
-    JSON.stringify(
-      {
-        "agent:codex:subagent:app-server-child": {
-          sessionId: "sess-codex-child",
-          updatedAt: 25,
-          spawnedBy: "agent:main:main",
-        },
+    },
+  });
+  await writeSessionStore({
+    storePath: childStorePath,
+    agentId: "codex",
+    entries: {
+      "agent:codex:subagent:app-server-child": {
+        sessionId: "sess-codex-child",
+        updatedAt: 25,
+        spawnedBy: "agent:main:main",
       },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  await fs.writeFile(
-    diskOnlyStorePath,
-    JSON.stringify({ main: { sessionId: "sess-local", updatedAt: 10 } }, null, 2),
-    "utf-8",
-  );
+    },
+  });
+  await writeSessionStore({
+    storePath: diskOnlyStorePath,
+    agentId: "local",
+    entries: { main: { sessionId: "sess-local", updatedAt: 10 } },
+  });
 
   const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
     "sessions.list",
@@ -857,4 +890,71 @@ test("sessions.list breaks timestamp ties by key for stable paging", async () =>
   );
   expect(paged.ok).toBe(true);
   expect(paged.payload?.sessions.map((session) => session.key)).toEqual(expectedOrder.slice(2));
+});
+
+test("archiving a session disables cron jobs bound to it", async () => {
+  await createSessionStoreDir();
+  const now = Date.now();
+  await writeSessionStore({
+    entries: {
+      main: { sessionId: "sess-main", updatedAt: now },
+      "agent:main:subagent:cronbound": {
+        sessionId: "sess-bound",
+        updatedAt: now,
+        spawnedBy: "agent:main:main",
+      },
+    },
+  });
+  const jobs = [
+    { id: "bound", enabled: true, sessionTarget: "session:agent:main:subagent:cronbound" },
+    { id: "elsewhere", enabled: true, sessionTarget: "isolated" },
+  ] as unknown as CronJob[];
+  const update = vi.fn(
+    async (id: string, _patch: unknown, precondition: (job: CronJob, nowMs: number) => void) => {
+      const current = jobs.find((candidate) => candidate.id === id);
+      if (!current) {
+        throw new Error(`cron job not found: ${id}`);
+      }
+      precondition(current, Date.now());
+      return current;
+    },
+  );
+  const cron = {
+    list: async () => jobs,
+    updateWithPrecondition: update,
+    getDefaultAgentId: () => "main",
+  };
+
+  const archived = await directSessionHandlerReq(
+    "sessions.patch",
+    { key: "agent:main:subagent:cronbound", archived: true },
+    { context: { cron } },
+  );
+  expect(archived.ok).toBe(true);
+  expect(update.mock.calls.map((call) => call.slice(0, 2))).toEqual([
+    ["bound", { enabled: false }],
+  ]);
+
+  // Restoring must not silently re-arm schedules that archive disabled.
+  update.mockClear();
+  const restored = await directSessionHandlerReq(
+    "sessions.patch",
+    { key: "agent:main:subagent:cronbound", archived: false },
+    { context: { cron } },
+  );
+  expect(restored.ok).toBe(true);
+  expect(update).not.toHaveBeenCalled();
+
+  // Cron mutations are admin surface: a write-scoped operator can archive but
+  // must not cascade into disabling admin-managed schedules.
+  const writeScopedClient = {
+    connect: { scopes: ["operator.write"] },
+  } as unknown as NonNullable<Parameters<typeof directSessionHandlerReq>[2]>["client"];
+  const writeScopedArchive = await directSessionHandlerReq(
+    "sessions.patch",
+    { key: "agent:main:subagent:cronbound", archived: true },
+    { context: { cron }, client: writeScopedClient },
+  );
+  expect(writeScopedArchive.ok).toBe(true);
+  expect(update).not.toHaveBeenCalled();
 });

@@ -7,11 +7,17 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
-import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "../../config/sessions/store.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  isModelSelectionLocked,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+  ModelSelectionLockedError,
+} from "../../sessions/model-overrides.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -195,14 +201,10 @@ export function initFastReplySessionState(params: {
     mainKey: cfg.session?.mainKey,
   });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
-    skipCache: true,
-    clone: false,
-  });
-  const existingEntry = resolveSessionStoreEntry({
-    store: sessionStore,
-    sessionKey,
-  }).existing;
+  const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey: entryKey, entry }) => [entryKey, entry]),
+  );
+  const existingEntry = loadSessionEntry({ storePath, sessionKey });
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
     ? commandSource.trim()
@@ -218,6 +220,9 @@ export function initFastReplySessionState(params: {
   const softReset = parseSoftResetCommand(normalizedResetBody);
   const resetMatch = normalizedResetBody.match(/^\/(new|reset)(?:\s|$)/i);
   const resetTriggered = Boolean(resetMatch) && !softReset.matched;
+  if (resetTriggered && isModelSelectionLocked(existingEntry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+  }
   const previousSessionEntry = resetTriggered && existingEntry ? { ...existingEntry } : undefined;
   const sessionId =
     !resetTriggered && existingEntry ? existingEntry.sessionId : crypto.randomUUID();
@@ -228,7 +233,7 @@ export function initFastReplySessionState(params: {
   const sessionFile =
     !resetTriggered && existingEntry?.sessionFile
       ? existingEntry.sessionFile
-      : resolveSessionTranscriptPath(sessionId, agentId);
+      : formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,

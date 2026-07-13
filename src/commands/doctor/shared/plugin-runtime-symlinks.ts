@@ -29,7 +29,7 @@ interface StatsLike {
   isSymbolicLink(): boolean;
 }
 
-export interface StalePluginRuntimeSymlink {
+interface StalePluginRuntimeSymlink {
   /** Package or scoped package name for the stale symlink. */
   readonly name: string;
   /** Symlink path under the containing node_modules directory. */
@@ -38,7 +38,7 @@ export interface StalePluginRuntimeSymlink {
   readonly target: string;
 }
 
-export interface PluginRuntimeSymlinkOptions {
+interface PluginRuntimeSymlinkOptions {
   /** Filesystem adapter for tests and doctor cleanup callers. */
   readonly fs?: FsLike;
   /** Roots already classified as stale by plugin dependency cleanup. */

@@ -51,7 +51,7 @@ import { type FeishuPermissionError, resolveFeishuSenderName } from "./bot-sende
 import { getChatInfo } from "./chat.js";
 import { createFeishuClient } from "./client.js";
 import { resolveConfiguredFeishuGroupSessionScope } from "./conversation-id.js";
-import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
+import { finalizeFeishuMessageProcessing, recordProcessedFeishuMessage } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
@@ -1416,6 +1416,7 @@ export async function handleFeishuMessage(params: {
         conversation: {
           kind: isGroup ? "group" : "direct",
           id: ctx.chatId,
+          nativeChannelId: ctx.chatId,
           label: isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
           threadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
         },
@@ -1533,7 +1534,7 @@ export async function handleFeishuMessage(params: {
       // Uses a shared "broadcast" namespace (not per-account) so the first handler
       // to reach this point claims the message; subsequent accounts skip.
       if (
-        !(await tryRecordMessagePersistent(messageDedupeKey ?? ctx.messageId, "broadcast", log))
+        !(await recordProcessedFeishuMessage(messageDedupeKey ?? ctx.messageId, "broadcast", log))
       ) {
         log(
           `feishu[${account.accountId}]: broadcast already claimed by another account for message ${ctx.messageId}; skipping`,
@@ -1735,10 +1736,14 @@ export async function handleFeishuMessage(params: {
         }
       } else {
         const results = await Promise.allSettled(broadcastAgents.map(dispatchForAgent));
-        for (let i = 0; i < results.length; i++) {
-          if (results[i].status === "rejected") {
+        for (const [i, result] of results.entries()) {
+          if (result.status === "rejected") {
+            const agentId = broadcastAgents.at(i);
+            if (agentId === undefined) {
+              continue;
+            }
             log(
-              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${broadcastAgents[i]}: ${String((results[i] as PromiseRejectedResult).reason)}`,
+              `feishu[${account.accountId}]: broadcast dispatch failed for agent=${agentId}: ${String(result.reason)}`,
             );
           }
         }

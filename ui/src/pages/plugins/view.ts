@@ -6,6 +6,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../lib/external-link.ts";
+import "../../styles/plugins.css";
 import {
   CLAWHUB_BROWSE_URL,
   type PluginCatalogItem,
@@ -62,7 +63,6 @@ export type PluginsViewProps = {
   busy: Readonly<Record<string, boolean>>;
   messages: Readonly<Record<string, PluginRowMessage>>;
   pendingRemoval: Readonly<Record<string, boolean>>;
-  openMenuKey: string | null;
   detailPluginId: string | null;
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -72,11 +72,9 @@ export type PluginsViewProps = {
   mcpMessage: PluginRowMessage | null;
   mcpBusy: boolean;
   mcpFormOpen: boolean;
-  onTabChange: (tab: PluginsTab) => void;
   onQueryChange: (query: string) => void;
   onFilterChange: (filter: InstalledFilter) => void;
   onRefresh: () => void;
-  onToggleMenu: (key: string | null) => void;
   onShowDetails: (pluginId: string | null) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onInstall: (rowKey: string, request: PluginInstallRequest) => void;
@@ -91,20 +89,7 @@ export type PluginsViewProps = {
   onMcpAdd: (form: McpServerForm) => void;
 };
 
-const PLUGIN_TABS: readonly PluginsTab[] = ["installed", "discover"];
-
 const INSTALLED_FILTERS: readonly InstalledFilter[] = ["all", "enabled", "disabled", "issues"];
-
-function tabLabel(tab: PluginsTab): string {
-  switch (tab) {
-    case "installed":
-      return t("pluginsPage.installedTab");
-    case "discover":
-      return t("pluginsPage.discoverTab");
-    default:
-      return tab satisfies never;
-  }
-}
 
 function filterLabel(filter: InstalledFilter): string {
   switch (filter) {
@@ -134,39 +119,6 @@ function connectorGroupLabel(group: ConnectorGroup): string {
     default:
       return group satisfies never;
   }
-}
-
-function handleTabKeydown(
-  event: KeyboardEvent,
-  tab: PluginsTab,
-  onTabChange: PluginsViewProps["onTabChange"],
-) {
-  const currentIndex = PLUGIN_TABS.indexOf(tab);
-  let nextIndex: number;
-  switch (event.key) {
-    case "ArrowRight":
-      nextIndex = (currentIndex + 1) % PLUGIN_TABS.length;
-      break;
-    case "ArrowLeft":
-      nextIndex = (currentIndex - 1 + PLUGIN_TABS.length) % PLUGIN_TABS.length;
-      break;
-    case "Home":
-      nextIndex = 0;
-      break;
-    case "End":
-      nextIndex = PLUGIN_TABS.length - 1;
-      break;
-    default:
-      return;
-  }
-  event.preventDefault();
-  const nextTab = PLUGIN_TABS[nextIndex];
-  if (!nextTab) {
-    return;
-  }
-  onTabChange(nextTab);
-  const tablist = (event.currentTarget as HTMLElement).closest('[role="tablist"]');
-  tablist?.querySelector<HTMLElement>(`#plugins-tab-${nextTab}`)?.focus();
 }
 
 export function pluginRowKey(pluginId: string): string {
@@ -205,7 +157,7 @@ function matchesConnector(connector: ConnectorSuggestion, query: string): boolea
   if (!needle) {
     return true;
   }
-  return [connector.id, connector.name, connector.description].some((value) =>
+  return [connector.id, connector.name, t(connector.descriptionKey)].some((value) =>
     value.toLocaleLowerCase().includes(needle),
   );
 }
@@ -404,103 +356,53 @@ function stateChip(plugin: PluginCatalogItem) {
   >`;
 }
 
-type PluginMenuItem = {
-  key: string;
-  label: string;
-  icon: TemplateResult;
-  danger?: boolean;
-  disabled?: boolean;
-  onSelect: () => void;
-};
-
-function renderActionsMenu(
-  menuKey: string,
-  label: string,
-  items: readonly PluginMenuItem[],
+function renderToggleButton(
   props: PluginsViewProps,
+  busy: boolean,
+  options: { enabled: boolean; onToggle: (enabled: boolean) => void },
 ) {
-  const open = props.openMenuKey === menuKey;
+  const enable = !options.enabled;
   return html`
-    <span class="plugins-actions-menu">
-      <button
-        type="button"
-        class="btn btn--sm btn--icon plugins-kebab"
-        aria-label=${label}
-        aria-haspopup="menu"
-        aria-expanded=${open ? "true" : "false"}
-        @click=${(event: Event) => {
-          event.stopPropagation();
-          props.onToggleMenu(open ? null : menuKey);
-        }}
-      >
-        ${icons.moreHorizontal}
-      </button>
-      ${open
-        ? html`
-            <div class="plugins-menu" role="menu" aria-label=${label}>
-              ${items.map(
-                (item) => html`
-                  <button
-                    type="button"
-                    role="menuitem"
-                    class="plugins-menu__item ${item.danger ? "plugins-menu__item--danger" : ""}"
-                    ?disabled=${item.disabled}
-                    @click=${(event: Event) => {
-                      event.stopPropagation();
-                      props.onToggleMenu(null);
-                      item.onSelect();
-                    }}
-                  >
-                    <span class="plugins-menu__icon" aria-hidden="true">${item.icon}</span>
-                    ${item.label}
-                  </button>
-                `,
-              )}
-            </div>
-          `
-        : nothing}
-    </span>
+    <button
+      type="button"
+      class="btn btn--sm ${enable ? "primary" : ""}"
+      title=${props.mutationBlockedReason ?? ""}
+      ?disabled=${!props.canMutate || busy}
+      @click=${(event: Event) => {
+        event.stopPropagation();
+        options.onToggle(enable);
+      }}
+    >
+      ${busy
+        ? t("pluginsPage.working")
+        : enable
+          ? t("pluginsPage.enableAction")
+          : t("pluginsPage.disableAction")}
+    </button>
   `;
 }
 
-function pluginMenuItems(
-  plugin: PluginCatalogItem,
+function renderRemoveButton(
   props: PluginsViewProps,
-  rowKey: string,
-  options: { details: boolean },
-): PluginMenuItem[] {
-  const blocked = !props.canMutate || props.busy[rowKey];
-  const items: PluginMenuItem[] = [];
-  if (options.details) {
-    items.push({
-      key: "details",
-      label: t("pluginsPage.menuDetails"),
-      icon: icons.eye,
-      onSelect: () => props.onShowDetails(plugin.id),
-    });
-  }
-  items.push({
-    key: "toggle",
-    label: plugin.enabled ? t("pluginsPage.disableAction") : t("pluginsPage.enableAction"),
-    icon: plugin.enabled ? circleIcon() : icons.check,
-    disabled: blocked,
-    onSelect: () => props.onSetEnabled(plugin.id, !plugin.enabled, rowKey),
-  });
-  if (plugin.removable) {
-    items.push({
-      key: "remove",
-      label: t("pluginsPage.remove"),
-      icon: icons.trash,
-      danger: true,
-      disabled: blocked,
-      onSelect: () => props.onRequestUninstall(rowKey),
-    });
-  }
-  return items;
-}
-
-function circleIcon(): TemplateResult {
-  return icons.circle;
+  busy: boolean,
+  name: string,
+  onRemove: () => void,
+) {
+  return html`
+    <button
+      type="button"
+      class="btn btn--sm btn--icon plugins-remove"
+      aria-label=${t("pluginsPage.removeNamed", { name })}
+      title=${props.mutationBlockedReason ?? t("pluginsPage.removeNamed", { name })}
+      ?disabled=${!props.canMutate || busy}
+      @click=${(event: Event) => {
+        event.stopPropagation();
+        onRemove();
+      }}
+    >
+      ${icons.trash}
+    </button>
+  `;
 }
 
 function renderInstallButton(
@@ -571,7 +473,6 @@ function renderCatalogActions(
   props: PluginsViewProps,
   busy: boolean,
   rowKey: string,
-  options: { details: boolean },
 ) {
   if (props.pendingRemoval[rowKey]) {
     return renderRemoveConfirm(plugin, props, busy, rowKey);
@@ -583,13 +484,13 @@ function renderCatalogActions(
       : html`<span class="plugins-action-note">${t("pluginsPage.unavailable")}</span>`;
   }
   return html`
-    ${stateChip(plugin)}
-    ${renderActionsMenu(
-      rowKey,
-      t("pluginsPage.menuLabel", { name: plugin.name }),
-      pluginMenuItems(plugin, props, rowKey, options),
-      props,
-    )}
+    ${renderToggleButton(props, busy, {
+      enabled: plugin.enabled,
+      onToggle: (enabled) => props.onSetEnabled(plugin.id, enabled, rowKey),
+    })}
+    ${plugin.removable
+      ? renderRemoveButton(props, busy, plugin.name, () => props.onRequestUninstall(rowKey))
+      : nothing}
   `;
 }
 
@@ -667,7 +568,7 @@ function renderInventoryPulse(props: PluginsViewProps) {
 
 function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <article
       class="plugins-row plugins-row--${plugin.state} plugins-row--clickable"
@@ -700,9 +601,7 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
             : nothing}
         </div>
       </div>
-      <div class="plugins-row__actions">
-        ${renderCatalogActions(plugin, props, busy, key, { details: true })}
-      </div>
+      <div class="plugins-row__actions">${renderCatalogActions(plugin, props, busy, key)}</div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
             ${plugin.error}
@@ -711,27 +610,6 @@ function renderInstalledRow(plugin: PluginCatalogItem, props: PluginsViewProps):
       ${renderRowMessage(key, props.messages[key], busy, props)}
     </article>
   `;
-}
-
-function mcpMenuItems(server: McpServerSummary, props: PluginsViewProps): PluginMenuItem[] {
-  const blocked = !props.canMutate || props.mcpBusy;
-  return [
-    {
-      key: "toggle",
-      label: server.enabled ? t("pluginsPage.disableAction") : t("pluginsPage.enableAction"),
-      icon: server.enabled ? circleIcon() : icons.check,
-      disabled: blocked,
-      onSelect: () => props.onMcpToggle(server.name, !server.enabled),
-    },
-    {
-      key: "remove",
-      label: t("pluginsPage.remove"),
-      icon: icons.trash,
-      danger: true,
-      disabled: blocked,
-      onSelect: () => props.onMcpRemove(server.name),
-    },
-  ];
 }
 
 function renderMcpSection(props: PluginsViewProps) {
@@ -798,21 +676,21 @@ function renderMcpRow(server: McpServerSummary, props: PluginsViewProps): Templa
       <div class="plugins-row__copy">
         <div class="plugins-row__title">
           <h3>${server.name}</h3>
-          <span class="plugins-badge plugins-badge--mcp">MCP</span>
-          ${server.auth === "oauth" ? html`<span class="plugins-badge">OAuth</span>` : nothing}
+          <span class="plugins-badge plugins-badge--mcp">${t("pluginsPage.mcp")}</span>
+          ${server.auth === "oauth"
+            ? html`<span class="plugins-badge">${t("pluginsPage.oauth")}</span>`
+            : nothing}
         </div>
         <p class="plugins-row__target">${server.target}</p>
         <div class="plugins-row__meta"><span>${server.transport}</span></div>
       </div>
       <div class="plugins-row__actions">
-        <span class="plugins-state ${server.enabled ? "plugins-state--enabled" : ""}"
-          >${server.enabled ? t("pluginsPage.enabled") : t("pluginsPage.disabled")}</span
-        >
-        ${renderActionsMenu(
-          `mcp:${server.name}`,
-          t("pluginsPage.menuLabel", { name: server.name }),
-          mcpMenuItems(server, props),
-          props,
+        ${renderToggleButton(props, props.mcpBusy, {
+          enabled: server.enabled,
+          onToggle: (enabled) => props.onMcpToggle(server.name, enabled),
+        })}
+        ${renderRemoveButton(props, props.mcpBusy, server.name, () =>
+          props.onMcpRemove(server.name),
         )}
       </div>
     </article>
@@ -902,7 +780,7 @@ function renderInstalled(props: PluginsViewProps) {
 
 function renderCatalogCard(plugin: PluginCatalogItem, props: PluginsViewProps): TemplateResult {
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <article
       class="plugins-card plugins-card--clickable"
@@ -929,9 +807,7 @@ function renderCatalogCard(plugin: PluginCatalogItem, props: PluginsViewProps): 
           ${plugin.origin ? html`<span>${originLabel(plugin.origin)}</span>` : nothing}
         </div>
       </div>
-      <div class="plugins-card__footer">
-        ${renderCatalogActions(plugin, props, busy, key, { details: true })}
-      </div>
+      <div class="plugins-card__footer">${renderCatalogActions(plugin, props, busy, key)}</div>
       ${plugin.error
         ? html`<div class="plugins-row-message plugins-row-message--error" role="alert">
             ${plugin.error}
@@ -947,7 +823,7 @@ function renderConnectorCard(
   props: PluginsViewProps,
 ): TemplateResult {
   const key = connectorRowKey(connector.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   const isMcp = connector.action.kind === "mcp";
   const installed =
     isMcp &&
@@ -968,10 +844,10 @@ function renderConnectorCard(
         <div class="plugins-card__title-row">
           <h3>${connector.name}</h3>
         </div>
-        <p>${connector.description}</p>
+        <p>${t(connector.descriptionKey)}</p>
         <div class="plugins-card__meta">
           ${isMcp
-            ? html`<span class="plugins-badge plugins-badge--mcp">MCP</span>
+            ? html`<span class="plugins-badge plugins-badge--mcp">${t("pluginsPage.mcp")}</span>
                 <span>${t("pluginsPage.connectorMcpNote")}</span>`
             : html`<span>${t("pluginsPage.connectorClawHubNote")}</span>`}
         </div>
@@ -1053,7 +929,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
   const pkg = item.package;
   const installed = findInstalledSearchPlugin(item, props.result?.plugins ?? []);
   const key = clawHubRowKey(pkg.name);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   const artSlug = pkg.runtimeId ?? pkg.name;
   return html`
     <article
@@ -1102,7 +978,7 @@ function renderClawHubResult(item: PluginSearchResult, props: PluginsViewProps):
       </div>
       <div class="plugins-row__actions">
         ${installed
-          ? renderCatalogActions(installed, props, busy, key, { details: true })
+          ? renderCatalogActions(installed, props, busy, key)
           : renderInstallButton(props, busy, key, pkg.displayName, {
               source: "clawhub",
               packageName: pkg.name,
@@ -1239,7 +1115,7 @@ function renderDetailOverlay(props: PluginsViewProps) {
     return nothing;
   }
   const key = pluginRowKey(plugin.id);
-  const busy = props.busy[key];
+  const busy = props.busy[key] ?? false;
   return html`
     <div
       class="plugins-detail-backdrop"
@@ -1366,7 +1242,6 @@ function renderActivePanel(props: PluginsViewProps) {
 }
 
 export function renderPlugins(props: PluginsViewProps) {
-  const installedCount = props.result?.plugins.filter((plugin) => plugin.installed).length ?? 0;
   const canShowCatalog = Boolean(props.result);
   return html`
     <section class="plugins-workspace" aria-label=${t("tabs.plugins")}>
@@ -1403,29 +1278,6 @@ export function renderPlugins(props: PluginsViewProps) {
             <span>${props.mutationBlockedReason}</span>
           </div>`
         : nothing}
-
-      <div class="plugins-tabs" role="tablist" aria-label=${t("pluginsPage.tablistLabel")}>
-        ${PLUGIN_TABS.map((tab) => {
-          const selected = props.activeTab === tab;
-          const count = tab === "installed" ? installedCount : null;
-          return html`
-            <button
-              id=${`plugins-tab-${tab}`}
-              type="button"
-              role="tab"
-              aria-selected=${selected ? "true" : "false"}
-              aria-controls="plugins-tabpanel"
-              .tabIndex=${selected ? 0 : -1}
-              class=${selected ? "active" : ""}
-              @click=${() => props.onTabChange(tab)}
-              @keydown=${(event: KeyboardEvent) => handleTabKeydown(event, tab, props.onTabChange)}
-            >
-              ${tabLabel(tab)} ${count === null ? nothing : html`<span>${count}</span>`}
-            </button>
-          `;
-        })}
-      </div>
-
       ${props.error
         ? html`<div class="plugins-page-error" role="alert">
             <span>${props.error}</span>
@@ -1445,7 +1297,7 @@ export function renderPlugins(props: PluginsViewProps) {
         : nothing}
 
       <div
-        id="plugins-tabpanel"
+        id="plugins-hub-panel"
         class="plugins-panel"
         role="tabpanel"
         aria-labelledby=${`plugins-tab-${props.activeTab}`}

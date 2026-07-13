@@ -2,6 +2,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -59,12 +60,9 @@ type BuildModelsProviderDataMock = ReturnType<
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
-const {
-  createTelegramBotCore: createTelegramBotBase,
-  getTelegramSequentialKey,
-  resolveTelegramScopedGroupConfig,
-  setTelegramBotRuntimeForTest,
-} = await import("./bot-core.js");
+const { createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+  await import("./bot-core.js");
+const { getTelegramSequentialKey } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
@@ -83,7 +81,8 @@ const {
   resetTelegramForumFlagCacheForTest,
   resolveTelegramThreadSpec,
 } = await import("./bot/helpers.js");
-const { resolveTelegramGroupPromptSettings } = await import("./group-config-helpers.js");
+const { resolveTelegramGroupPromptSettings, resolveTelegramScopedGroupConfig } =
+  await import("./group-config-helpers.js");
 let createTelegramBot: (
   opts: TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -2081,7 +2080,7 @@ describe("createTelegramBot", () => {
             Math.min(pairingUpsertCall, testCase.pairingUpsertResults.length - 1)
           ];
         pairingUpsertCall += 1;
-        return result;
+        return expectDefined(result, `pairing upsert result ${pairingUpsertCall}`);
       });
 
       createTelegramBot({ token: "tok" });
@@ -5910,7 +5909,13 @@ describe("createTelegramBot", () => {
     await runMiddlewareChain(ctx);
 
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      231,
+      expect.stringContaining("Result: Allowed once"),
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
@@ -6038,5 +6043,46 @@ describe("createTelegramBot", () => {
         (typeof call[2] === "string" ? call[2] : "").includes("Failed to change model"),
       ),
     ).toBe(false);
+  });
+
+  it("shows a permanent rejection when model selection is locked", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    const patchSessionEntrySpy = vi
+      .spyOn(sessionStoreRuntime, "patchSessionEntry")
+      .mockImplementationOnce(async (params) => {
+        const entry = {
+          sessionId: "locked-session",
+          updatedAt: Date.now(),
+          modelSelectionLocked: true,
+        };
+        await params.update(entry, { existingEntry: entry });
+        return entry;
+      });
+    const ctx = {
+      callbackQuery: {
+        id: "cbq-model-select-locked-1",
+        data: "mdl_sel_openai/gpt-5.4",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    try {
+      await expect(callbackHandler(ctx)).resolves.toBeUndefined();
+    } finally {
+      patchSessionEntrySpy.mockRestore();
+    }
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toBe(
+      "❌ Model selection is locked for this session.",
+    );
   });
 });

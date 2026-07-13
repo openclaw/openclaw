@@ -11,7 +11,6 @@ import {
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
-  clearFollowupQueue,
   clearSessionQueues,
   enqueueFollowupRun,
   FollowupRunDeferredError,
@@ -22,7 +21,7 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -257,7 +256,6 @@ describe("followup queue drain restart after idle window", () => {
       import.meta.url,
       "./queue/enqueue.js?scope=restart-b",
     );
-    const { clearSessionQueues } = await import("./queue.js");
     const key = `test-idle-window-cross-module-${Date.now()}`;
     const calls: FollowupRun[] = [];
     const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
@@ -522,7 +520,6 @@ describe("followup queue drain restart after idle window", () => {
       setImmediate(resolve);
     });
 
-    const { clearSessionQueues } = await import("./queue.js");
     clearSessionQueues([key]);
 
     enqueueFollowupRun(key, createRun({ prompt: "after-clear" }), settings);

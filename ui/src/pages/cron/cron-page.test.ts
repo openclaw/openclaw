@@ -12,7 +12,6 @@ type CronTestPage = HTMLElement & {
   render: () => typeof nothing;
   cron: CronState;
   cronModelSuggestions: string[];
-  quickCreateOpen: boolean;
 };
 
 type TestGateway = ApplicationContext["gateway"] & {
@@ -71,8 +70,10 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
   } as unknown as TestGateway;
 }
 
-function createContext(gateway: TestGateway): ApplicationContext {
+function createContext(gateway: TestGateway, scopeId: string | null = "main"): ApplicationContext {
   const subscribe = () => () => undefined;
+  let selectionState = { selectedId: scopeId, scopeId };
+  const selectionListeners = new Set<(state: typeof selectionState) => void>();
   return {
     basePath: "",
     gateway,
@@ -96,15 +97,38 @@ function createContext(gateway: TestGateway): ApplicationContext {
       state: { configSnapshot: null },
       subscribe,
     },
+    agentSelection: {
+      get state() {
+        return selectionState;
+      },
+      set(agentId: string | null) {
+        selectionState = { selectedId: agentId, scopeId: agentId };
+        for (const listener of selectionListeners) {
+          listener(selectionState);
+        }
+      },
+      setScope(agentId: string | null) {
+        selectionState = { ...selectionState, scopeId: agentId };
+        for (const listener of selectionListeners) {
+          listener(selectionState);
+        }
+      },
+      subscribe(listener: (state: typeof selectionState) => void) {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
+    },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
 }
 
-function createPage(context: ApplicationContext): CronTestPage {
+function createPage(context: ApplicationContext, options: { render?: boolean } = {}): CronTestPage {
   const page = document.createElement("openclaw-cron-page") as CronTestPage;
   page.context = context;
-  page.render = () => nothing;
+  if (!options.render) {
+    page.render = () => nothing;
+  }
   document.body.append(page);
   return page;
 }
@@ -129,6 +153,148 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("CronPage editor state sync", () => {
+  it("scopes list, stats, and run history requests to the selected agent", async () => {
+    const request = createRequest();
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    createPage(createContext(gateway, "writer"));
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "cron.list",
+        expect.objectContaining({ agentId: "writer" }),
+      );
+      expect(request).toHaveBeenCalledWith(
+        "cron.runs",
+        expect.objectContaining({ agentId: "writer" }),
+      );
+    });
+  });
+
+  it("create & run now issues cron.run for the job returned by cron.add", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.add") {
+        return { id: "job-fresh" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-test-id="cron-new-task"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-suggestion="repoPulse"]') as HTMLButtonElement).click();
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-test-id="cron-submit-run"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-test-id="cron-submit-run"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => {
+      const methods = request.mock.calls.map((call) => call[0]);
+      expect(methods.indexOf("cron.run")).toBeGreaterThan(methods.indexOf("cron.add"));
+    });
+    expect(request).toHaveBeenCalledWith("cron.run", { id: "job-fresh", mode: "force" });
+    await vi.waitFor(() => expect(page.cron.cronCreateOpen).toBe(false));
+  });
+
+  it("drills from the failing stat into run history filtered to errors", async () => {
+    const request = createRequest();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-test-id="cron-stat-failing"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-test-id="cron-stat-failing"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(page.querySelector(".cron-activity")).not.toBeNull());
+    expect(page.cron.cronRunsStatuses).toEqual(["error"]);
+    expect(request).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({ statuses: ["error"] }),
+    );
+  });
+
+  it("syncs form enabled after header pause and resets runs scope after remove", async () => {
+    const job = {
+      id: "job-1",
+      name: "Nightly digest",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "digest" },
+    };
+    let serverEnabled = true;
+    let removed = false;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "cron.list") {
+        return {
+          jobs: removed ? [] : [{ ...job, enabled: serverEnabled }],
+          total: removed ? 0 : 1,
+          offset: 0,
+          hasMore: false,
+        };
+      }
+      if (method === "cron.update") {
+        const patch = (params as { patch?: { enabled?: boolean } }).patch;
+        if (typeof patch?.enabled === "boolean") {
+          serverEnabled = patch.enabled;
+        }
+        return {};
+      }
+      if (method === "cron.remove") {
+        removed = true;
+        return {};
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await vi.waitFor(() => expect(page.querySelector(".cron-table__row")).not.toBeNull());
+    (page.querySelector(".cron-table__row") as HTMLElement).click();
+    await vi.waitFor(() => expect(page.cron.cronEditingJobId).toBe("job-1"));
+    expect(page.cron.cronRunsScope).toBe("job");
+    expect(page.cron.cronForm.enabled).toBe(true);
+
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-test-id="cron-toggle-enabled"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-test-id="cron-toggle-enabled"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(page.cron.cronForm.enabled).toBe(false));
+    expect(serverEnabled).toBe(false);
+
+    const removeButton = Array.from(page.querySelectorAll(".cron-job-menu__item")).find(
+      (item) => item.textContent?.trim() === "Remove",
+    ) as HTMLButtonElement;
+    removeButton.click();
+    await vi.waitFor(() => expect(page.cron.cronEditingJobId).toBeNull());
+    await vi.waitFor(() => expect(page.cron.cronRunsScope).toBe("all"));
+  });
+});
+
 describe("CronPage lifecycle", () => {
   it("registers idempotently after a module reset with the shared custom element registry", async () => {
     const registered = customElements.get("openclaw-cron-page");
@@ -151,9 +317,9 @@ describe("CronPage lifecycle", () => {
       ...connectedState,
       cronStatus: { enabled: true, jobs: 1 },
       cronJobs: [{ id: "old" } as never],
+      cronCreateOpen: true,
     };
     page.cronModelSuggestions = ["old/model"];
-    page.quickCreateOpen = true;
 
     gateway.emitSnapshot({ connected: false });
     const disconnectedState = page.cron;
@@ -162,7 +328,7 @@ describe("CronPage lifecycle", () => {
     expect(disconnectedState.cronStatus).toBeNull();
     expect(disconnectedState.cronJobs).toEqual([]);
     expect(page.cronModelSuggestions).toEqual([]);
-    expect(page.quickCreateOpen).toBe(false);
+    expect(disconnectedState.cronCreateOpen).toBe(false);
 
     gateway.emitSnapshot({ connected: true });
     expect(page.cron).not.toBe(disconnectedState);

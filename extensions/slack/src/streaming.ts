@@ -233,7 +233,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
 }
 
 /** Result of {@link stopSlackStream}. */
-export type StopSlackStreamResult = {
+type StopSlackStreamResult = {
   /**
    * The Slack `ts` of the finalized streamed message, when `chat.stopStream`
    * reports it. Used to populate `MessageSentEvent.messageId` for the

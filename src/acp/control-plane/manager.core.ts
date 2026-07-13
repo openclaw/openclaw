@@ -87,16 +87,18 @@ export class AcpSessionManager {
         sessionKey,
       };
     }
-    const acp = this.deps.readSessionEntry({
+    const stored = this.deps.loadSessionEntry({
       cfg: params.cfg,
       sessionKey,
       clone: false,
-    })?.acp;
+    });
+    const acp = stored?.acp;
     if (acp) {
       return {
         kind: "ready",
         sessionKey,
         meta: acp,
+        entry: stored.entry,
       };
     }
     if (isAcpSessionKey(sessionKey)) {

@@ -9,12 +9,7 @@ import {
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
-import {
-  listSessionEntries,
-  resolveSessionFilePath,
-  resolveStorePath,
-  updateSessionStoreEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
@@ -52,6 +47,7 @@ type LegacyBindingOwner = {
   transcriptPath: string;
   lifecycleRevision?: string;
   agentHarnessId?: string;
+  updatedAt?: number;
 };
 
 type LegacySessionIndexEntry = {
@@ -59,6 +55,7 @@ type LegacySessionIndexEntry = {
   sessionFile?: string;
   lifecycleRevision?: string;
   agentHarnessId?: string;
+  updatedAt?: number;
 };
 
 type BindingOwnerCollection = {
@@ -157,9 +154,7 @@ async function collectLegacyBindingSources(
     return source;
   };
   for (const surface of surfaces) {
-    const sidecars = surface.scan
-      ? walkSidecars(surface.root)
-      : iterateIndexedSidecars(surface, params);
+    const sidecars = surface.scan ? walkSidecars(surface.root) : iterateIndexedSidecars(surface);
     for await (const sidecarPath of sidecars) {
       const source = await addSource(sidecarPath, surface);
       if (options.firstOnly) {
@@ -196,28 +191,24 @@ async function readLegacySessionIndex(
   if (!isRecord(raw)) {
     return { failure: `session index ${storePath} has invalid entries` };
   }
-  let normalizedEntries: ReturnType<typeof listSessionEntries>;
-  try {
-    normalizedEntries = listSessionEntries({ storePath, hydrateSkillPromptRefs: false });
-  } catch {
-    return { failure: `session index ${storePath} could not be normalized` };
-  }
-  const normalizedByKey = new Map(
-    normalizedEntries.map(({ sessionKey, entry }) => [sessionKey, entry] as const),
-  );
   const entries: Array<{ sessionKey: string; entry: LegacySessionIndexEntry }> = [];
   for (const [sessionKey, value] of Object.entries(raw)) {
     if (!isRecord(value)) {
       return { failure: `session index ${storePath} has invalid entries` };
     }
-    const rawSessionId = typeof value.sessionId === "string" ? value.sessionId.trim() : "";
-    const sessionId = normalizedByKey.get(sessionKey)?.sessionId?.trim() ?? "";
+    // Metadata-only rows have no transcript identity and therefore cannot own
+    // a binding sidecar. This legacy reader parses the raw file directly:
+    // post-flip listSessionEntries reads SQLite, so main's normalized
+    // cross-check would consult the wrong store for import inputs.
+    if (value.sessionId === undefined) {
+      continue;
+    }
+    const sessionId = typeof value.sessionId === "string" ? value.sessionId.trim() : "";
     const sessionFile = value.sessionFile;
     const lifecycleRevision = value.lifecycleRevision;
     const agentHarnessId = value.agentHarnessId;
     if (
-      !sessionId ||
-      sessionId !== rawSessionId ||
+      !isSafeLegacySessionId(value.sessionId) ||
       (sessionFile !== undefined && typeof sessionFile !== "string") ||
       (lifecycleRevision !== undefined && typeof lifecycleRevision !== "string") ||
       (agentHarnessId !== undefined && typeof agentHarnessId !== "string")
@@ -231,33 +222,37 @@ async function readLegacySessionIndex(
         ...(typeof sessionFile === "string" ? { sessionFile } : {}),
         ...(typeof lifecycleRevision === "string" ? { lifecycleRevision } : {}),
         ...(typeof agentHarnessId === "string" ? { agentHarnessId } : {}),
+        ...(typeof value.updatedAt === "number" &&
+        Number.isFinite(value.updatedAt) &&
+        value.updatedAt >= 0
+          ? { updatedAt: value.updatedAt }
+          : {}),
       },
     });
   }
   return { entries };
 }
 
-async function* iterateIndexedSidecars(
-  surface: SessionSurface,
-  params: MigrationEnvironment,
-): AsyncGenerator<string> {
+async function* iterateIndexedSidecars(surface: SessionSurface): AsyncGenerator<string> {
   for (const storePath of surface.storePaths) {
     const index = await readLegacySessionIndex(storePath);
     if ("failure" in index) {
       continue;
     }
-    for (const { sessionKey, entry } of index.entries) {
-      const agentId = resolveLegacyBindingOwnerAgentId({
-        sessionKey,
-        config: params.config,
-        storeAgentIds: surface.agentIds,
-      });
+    for (const { entry } of index.entries) {
+      // Legacy sidecars sit beside file-era transcripts; sqlite-marker entries
+      // never had sidecars, so the raw locator is skipped for them.
+      const sessionFile = entry.sessionFile?.trim() ?? "";
+      if (sessionFile.startsWith("sqlite:")) {
+        continue;
+      }
       let transcriptPath: string;
       try {
-        transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
-          sessionsDir: path.dirname(storePath),
-          agentId,
-        });
+        transcriptPath = await resolveLegacySessionFileLocator(
+          path.dirname(storePath),
+          entry,
+          entry.sessionId,
+        );
       } catch {
         continue;
       }
@@ -325,18 +320,16 @@ async function collectBindingOwners(
         config: params.config,
         storeAgentIds: storeAgentIds.get(storePath),
       });
-      let effectiveTranscriptPath: string;
+      let legacyTranscriptPath: string;
+      let canonicalLegacyTranscriptPath: string;
       try {
-        effectiveTranscriptPath = resolveSessionFilePath(sessionId, entry, {
-          sessionsDir,
-          agentId,
-        });
+        legacyTranscriptPath = await resolveLegacySessionFileLocator(sessionsDir, entry, sessionId);
+        canonicalLegacyTranscriptPath = await canonicalizePath(legacyTranscriptPath);
       } catch {
         failures.push(`session index ${storePath} has an invalid locator for ${sessionKey}`);
         continue;
       }
-      const transcriptPath = await canonicalizePath(effectiveTranscriptPath);
-      if (!sourcePaths.has(transcriptPath)) {
+      if (!sourcePaths.has(canonicalLegacyTranscriptPath)) {
         continue;
       }
       const owner: LegacyBindingOwner = {
@@ -344,11 +337,13 @@ async function collectBindingOwners(
         sessionId,
         sessionKey,
         storePath,
-        transcriptPath: effectiveTranscriptPath,
+        transcriptPath: legacyTranscriptPath,
         ...(entry.lifecycleRevision ? { lifecycleRevision: entry.lifecycleRevision } : {}),
         ...(entry.agentHarnessId?.trim() ? { agentHarnessId: entry.agentHarnessId.trim() } : {}),
+        ...(entry.updatedAt !== undefined ? { updatedAt: entry.updatedAt } : {}),
       };
-      const candidates = owners.get(transcriptPath) ?? new Map<string, LegacyBindingOwner>();
+      const candidates =
+        owners.get(canonicalLegacyTranscriptPath) ?? new Map<string, LegacyBindingOwner>();
       const ownerKey = `${agentId}\0${sessionId}\0${sessionKey}\0${canonicalStorePath}`;
       const configuredStorePath = resolveStorePath(params.config.session?.store, {
         agentId,
@@ -359,13 +354,37 @@ async function collectBindingOwners(
       if (!candidates.has(ownerKey) || storePath === configuredStorePath) {
         candidates.set(ownerKey, owner);
       }
-      owners.set(transcriptPath, candidates);
+      owners.set(canonicalLegacyTranscriptPath, candidates);
     }
   }
   return {
     owners: new Map([...owners].map(([key, values]) => [key, [...values.values()]])),
     failures,
   };
+}
+
+// Doctor-only locator for retired file-backed session indexes. Active runtime
+// never resolves these paths; migration needs them only to find old sidecars.
+async function resolveLegacySessionFileLocator(
+  sessionsDir: string,
+  entry: { sessionFile?: string },
+  sessionId: string,
+): Promise<string> {
+  const base = path.resolve(sessionsDir);
+  const fallback = path.join(base, `${sessionId}.jsonl`);
+  const sessionFile = entry.sessionFile?.trim();
+  if (!sessionFile) {
+    return fallback;
+  }
+  const candidate = path.resolve(base, sessionFile);
+  const [canonicalBase, canonicalCandidate] = await Promise.all([
+    canonicalizePathForContainment(base),
+    canonicalizePathForContainment(candidate),
+  ]);
+  if (!isPathWithin(canonicalBase, canonicalCandidate)) {
+    throw new Error("legacy session file locator escapes its session directory");
+  }
+  return candidate;
 }
 
 function resolveLegacyBindingOwnerAgentId(params: {
@@ -419,7 +438,12 @@ async function migrateSource(
       ]);
       const raw = JSON.parse(contents) as Record<string, unknown>;
       const [
-        { bindingStoreKey, createStoredCodexAppServerBinding, readStoredCodexAppServerBinding },
+        {
+          bindingStoreKey,
+          createStoredCodexAppServerBinding,
+          normalizeStoredCodexAppServerBindingFingerprints,
+          readStoredCodexAppServerBinding,
+        },
         { legacyCodexConversationBindingId },
       ] = await Promise.all([
         import("../app-server/session-binding.js"),
@@ -462,17 +486,53 @@ async function migrateSource(
           bindingId: legacyCodexConversationBindingId(sessionFile),
         }),
       );
+      const normalizeStoredRow = async (
+        key: string,
+        current: MigratedBindingRow,
+      ): Promise<{ value?: MigratedBindingRow; warning?: string }> => {
+        const parsed = readStoredCodexAppServerBinding(current);
+        if (!parsed) {
+          return { warning: `canonical plugin state is invalid at ${key}` };
+        }
+        const normalized = normalizeStoredCodexAppServerBindingFingerprints(parsed);
+        if (!normalized) {
+          return { warning: `canonical plugin state is invalid at ${key}` };
+        }
+        if (isDeepStrictEqual(parsed, normalized)) {
+          return { value: parsed };
+        }
+        if (parsed.lease && parsed.lease.expiresAt > Date.now()) {
+          return { warning: `canonical plugin state is leased at ${key}` };
+        }
+        const update = store.update;
+        if (!update) {
+          return { warning: `canonical plugin state could not be normalized at ${key}` };
+        }
+        await update(key, (candidate) => {
+          const candidateParsed = readStoredCodexAppServerBinding(candidate);
+          if (!candidateParsed || !isDeepStrictEqual(candidateParsed, parsed)) {
+            return undefined;
+          }
+          return normalized;
+        });
+        const persisted = readStoredCodexAppServerBinding(await store.lookup(key));
+        if (!persisted || !isDeepStrictEqual(persisted, normalized)) {
+          return { warning: `canonical plugin state changed at ${key}` };
+        }
+        importedKeys++;
+        return { value: normalized };
+      };
       let currentConversation: MigratedBindingRow | undefined;
       for (const key of conversationKeys) {
         const current = await store.lookup(key);
         if (current === undefined) {
           continue;
         }
-        const parsed = readStoredCodexAppServerBinding(current);
-        if (!parsed) {
-          return retain(`canonical plugin state is invalid at ${key}`);
+        const result = await normalizeStoredRow(key, current);
+        if (result.warning || !result.value) {
+          return retain(result.warning ?? `canonical plugin state is invalid at ${key}`);
         }
-        currentConversation ??= parsed;
+        currentConversation ??= result.value;
       }
       const stored = currentConversation ?? baseStored;
       const sessionKey = owner
@@ -504,7 +564,14 @@ async function migrateSource(
       };
       for (const entry of entries) {
         const current = await store.lookup(entry.key);
-        if (current !== undefined && !hasExpected(current, entry.value)) {
+        if (current === undefined) {
+          continue;
+        }
+        const result = await normalizeStoredRow(entry.key, current);
+        if (result.warning || !result.value) {
+          return retain(result.warning ?? `canonical plugin state is invalid at ${entry.key}`);
+        }
+        if (!hasExpected(result.value, entry.value)) {
           return retain(`canonical plugin state changed at ${entry.key}`);
         }
       }
@@ -517,7 +584,7 @@ async function migrateSource(
         }
       }
       if (owner) {
-        const ownershipWarning = await recordSessionOwner(owner);
+        const ownershipWarning = await recordSessionOwner(owner, params.env);
         if (ownershipWarning) {
           if (sessionEntry?.value.state === "active") {
             const update = store.update;
@@ -569,25 +636,69 @@ async function migrateSource(
   }
 }
 
-async function recordSessionOwner(owner: LegacyBindingOwner): Promise<string | undefined> {
+async function recordSessionOwner(
+  owner: LegacyBindingOwner,
+  env: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const currentIndex = await readLegacySessionIndex(owner.storePath);
+  if ("failure" in currentIndex) {
+    return "its legacy session owner could not be revalidated";
+  }
+  const currentOwner = currentIndex.entries.find(
+    ({ sessionKey }) => sessionKey === owner.sessionKey,
+  );
+  if (!currentOwner || currentOwner.entry.sessionId !== owner.sessionId) {
+    return "its session owner changed before Codex ownership could be recorded";
+  }
+  let currentTranscriptPath: string;
+  try {
+    currentTranscriptPath = await resolveLegacySessionFileLocator(
+      path.dirname(owner.storePath),
+      currentOwner.entry,
+      currentOwner.entry.sessionId,
+    );
+  } catch {
+    return "its session owner changed before Codex ownership could be recorded";
+  }
+  if (
+    (await canonicalizePath(currentTranscriptPath)) !==
+      (await canonicalizePath(owner.transcriptPath)) ||
+    currentOwner.entry.lifecycleRevision !== owner.lifecycleRevision
+  ) {
+    return "its session owner changed before Codex ownership could be recorded";
+  }
+  const legacyHarnessId = currentOwner.entry.agentHarnessId?.trim();
+  if (currentOwner.entry.agentHarnessId !== undefined && !legacyHarnessId) {
+    return "its session owner changed before Codex ownership could be recorded";
+  }
+  if (legacyHarnessId && legacyHarnessId !== CODEX_AGENT_HARNESS_ID) {
+    return `its session is owned by agent harness ${legacyHarnessId}`;
+  }
+
   let observedForeignHarness: string | undefined;
-  const updated = await updateSessionStoreEntry({
+  const updated = await patchSessionEntry({
+    agentId: owner.agentId,
+    env,
+    fallbackEntry: {
+      sessionId: owner.sessionId,
+      updatedAt: currentOwner.entry.updatedAt ?? owner.updatedAt ?? 0,
+      ...(owner.lifecycleRevision ? { lifecycleRevision: owner.lifecycleRevision } : {}),
+    },
+    preserveActivity: true,
+    requireWriteSuccess: true,
+    skipMaintenance: true,
     storePath: owner.storePath,
     sessionKey: owner.sessionKey,
-    skipMaintenance: true,
-    requireWriteSuccess: true,
     update: (entry) => {
-      const transcriptPath = resolveOwnerTranscriptPath(owner, entry);
       if (
         entry.sessionId.trim() !== owner.sessionId ||
-        transcriptPath !== owner.transcriptPath ||
         entry.lifecycleRevision !== owner.lifecycleRevision
       ) {
         return null;
       }
       const harnessId =
         typeof entry.agentHarnessId === "string" ? entry.agentHarnessId.trim() : undefined;
-      if (entry.agentHarnessId !== undefined && harnessId === undefined) {
+      if (entry.agentHarnessId !== undefined && !harnessId) {
         return null;
       }
       if (harnessId && harnessId !== CODEX_AGENT_HARNESS_ID) {
@@ -602,10 +713,8 @@ async function recordSessionOwner(owner: LegacyBindingOwner): Promise<string | u
       ? `its session is owned by agent harness ${observedForeignHarness}`
       : "its session owner changed before Codex ownership could be recorded";
   }
-  const transcriptPath = resolveOwnerTranscriptPath(owner, updated);
   if (
     updated.sessionId.trim() !== owner.sessionId ||
-    transcriptPath !== owner.transcriptPath ||
     updated.lifecycleRevision !== owner.lifecycleRevision
   ) {
     return "its session owner changed before Codex ownership could be recorded";
@@ -616,20 +725,6 @@ async function recordSessionOwner(owner: LegacyBindingOwner): Promise<string | u
     : harnessId
       ? `its session is owned by agent harness ${harnessId}`
       : "Codex harness ownership could not be recorded on its session";
-}
-
-function resolveOwnerTranscriptPath(
-  owner: LegacyBindingOwner,
-  entry: { sessionFile?: string; sessionId: string },
-): string | undefined {
-  try {
-    return resolveSessionFilePath(entry.sessionId, entry, {
-      sessionsDir: path.dirname(owner.storePath),
-      agentId: owner.agentId,
-    });
-  } catch {
-    return undefined;
-  }
 }
 
 async function readDirectoryEntries(directory: string) {
@@ -657,6 +752,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function isSafeLegacySessionId(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const trimmed = value.trim();
+  return (
+    trimmed.length > 0 && trimmed.length <= 255 && /^[A-Za-z0-9][A-Za-z0-9._:@-]*$/.test(trimmed)
+  );
+}
+
 function isPathWithin(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   // Bare ".." (candidate is root's parent) must stay outside; treating it as
@@ -672,6 +777,25 @@ async function canonicalizePath(filePath: string): Promise<string> {
     return await fs.realpath(filePath);
   } catch {
     return path.resolve(filePath);
+  }
+}
+
+async function canonicalizePathForContainment(filePath: string): Promise<string> {
+  const resolved = path.resolve(filePath);
+  const suffix: string[] = [];
+  let probe = resolved;
+  while (true) {
+    try {
+      const realProbe = await fs.realpath(probe);
+      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return resolved;
+      }
+      suffix.push(path.basename(probe));
+      probe = parent;
+    }
   }
 }
 

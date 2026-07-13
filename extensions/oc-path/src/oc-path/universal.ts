@@ -15,6 +15,7 @@
  * @module @openclaw/oc-path/universal
  */
 
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isScalar, isSeq, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import { setMdOcPath } from "./edit.js";
@@ -62,9 +63,9 @@ export type OcMatch =
   | { readonly kind: "node"; readonly descriptor: NodeDescriptor; readonly line: number }
   | { readonly kind: "insertion-point"; readonly container: ContainerKind; readonly line: number };
 
-export type LeafType = "string" | "number" | "boolean" | "null";
+type LeafType = "string" | "number" | "boolean" | "null";
 
-export type NodeDescriptor =
+type NodeDescriptor =
   | "md-block"
   | "md-item"
   | "jsonc-object"
@@ -73,7 +74,7 @@ export type NodeDescriptor =
   | "yaml-map"
   | "yaml-seq";
 
-export type ContainerKind =
+type ContainerKind =
   | "md-section" // append item to a section
   | "md-file" // append a section to the file
   | "md-frontmatter" // add a frontmatter key
@@ -83,7 +84,7 @@ export type ContainerKind =
   | "yaml-map"
   | "yaml-seq";
 
-export type SetResult =
+type SetResult =
   | { readonly ok: true; readonly ast: OcAst }
   | {
       readonly ok: false;
@@ -107,7 +108,7 @@ type SetOcPathOptions = {
  * Insertion marker on the deepest path segment: `+`, `+<key>`, or
  * `+<index>`. Returns parent path + marker; null for plain paths.
  */
-export interface InsertionInfo {
+interface InsertionInfo {
   readonly parentPath: OcPath;
   readonly marker: "+" | { kind: "keyed"; key: string } | { kind: "indexed"; index: number };
 }
@@ -127,7 +128,7 @@ export function detectInsertion(path: OcPath): InsertionInfo | null {
     return null;
   }
 
-  const last = segments[segments.length - 1];
+  const last = expectDefined(segments.at(-1), "non-empty insertion path segments");
   if (!last.value.startsWith("+")) {
     return null;
   }
@@ -391,7 +392,7 @@ function resolveJsonlInsertion(ast: JsonlAst, info: InsertionInfo): OcMatch | nu
   if (info.parentPath.section !== undefined) {
     return null;
   }
-  const lastLine = ast.lines.length > 0 ? ast.lines[ast.lines.length - 1].line : 0;
+  const lastLine = ast.lines.at(-1)?.line ?? 0;
   return { kind: "insertion-point", container: "jsonl-file", line: lastLine + 1 };
 }
 
@@ -613,18 +614,25 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
     if (info.marker !== "+") {
       return { ok: false, reason: "not-writable", detail: "md section insertion uses bare `+`" };
     }
-    const blockIdx = ast.blocks.findIndex((b) => b.slug === p.section!.toLowerCase());
+    const section = expectDefined(p.section, "Markdown section insertion has a section");
+    const blockIdx = ast.blocks.findIndex((b) => b.slug === section.toLowerCase());
     if (blockIdx === -1) {
       return { ok: false, reason: "unresolved" };
     }
-    const block = ast.blocks[blockIdx];
+    const block = expectDefined(ast.blocks[blockIdx], "located Markdown block index");
     const kvMatch = /^([^:]+?)\s*:\s*(.+)$/.exec(value);
     const itemLine = `- ${value}`;
+    const kvKey =
+      kvMatch === null ? undefined : expectDefined(kvMatch[1], "Markdown item key capture");
+    const kvValue =
+      kvMatch === null ? undefined : expectDefined(kvMatch[2], "Markdown item value capture");
     const newItem = {
       text: value,
-      slug: slugifyHeading(kvMatch ? kvMatch[1] : value),
+      slug: slugifyHeading(kvKey ?? value),
       line: 0,
-      ...(kvMatch !== null ? { kv: { key: kvMatch[1].trim(), value: kvMatch[2].trim() } } : {}),
+      ...(kvKey !== undefined && kvValue !== undefined
+        ? { kv: { key: kvKey.trim(), value: kvValue.trim() } }
+        : {}),
     };
     const newBodyText =
       block.bodyText.length === 0 ? itemLine : block.bodyText.replace(/\n*$/, "\n") + itemLine;
@@ -924,7 +932,7 @@ function mutateAt(
     if (idx === -1) {
       return null;
     }
-    const child = current.entries[idx];
+    const child = expectDefined(current.entries[idx], "located JSONC object entry index");
     const replaced = mutateAt(child.value, segments, i + 1, mutate);
     if (replaced === null) {
       return null;
@@ -942,7 +950,7 @@ function mutateAt(
     if (idx === null) {
       return null;
     }
-    const child = current.items[idx];
+    const child = expectDefined(current.items[idx], "parsed JSONC array index is in bounds");
     const replaced = mutateAt(child, segments, i + 1, mutate);
     if (replaced === null) {
       return null;

@@ -85,6 +85,10 @@ function coerceCanvasPreview(
   if (!render) {
     return null;
   }
+  const mcpApp =
+    preview.mcpApp && typeof preview.mcpApp === "object" && !Array.isArray(preview.mcpApp)
+      ? (preview.mcpApp as Record<string, unknown>)
+      : undefined;
   return {
     kind: "canvas",
     surface: "assistant_message",
@@ -99,6 +103,19 @@ function coerceCanvasPreview(
     ...(typeof preview.style === "string" ? { style: preview.style } : {}),
     ...(preview.sandbox === "strict" || preview.sandbox === "scripts"
       ? { sandbox: preview.sandbox }
+      : {}),
+    ...(typeof mcpApp?.viewId === "string" && mcpApp.viewId.trim()
+      ? {
+          mcpApp: {
+            viewId: mcpApp.viewId,
+            ...(typeof mcpApp.serverName === "string" ? { serverName: mcpApp.serverName } : {}),
+            ...(typeof mcpApp.toolName === "string" ? { toolName: mcpApp.toolName } : {}),
+            ...(typeof mcpApp.uiResourceUri === "string"
+              ? { uiResourceUri: mcpApp.uiResourceUri }
+              : {}),
+            ...(typeof mcpApp.toolCallId === "string" ? { toolCallId: mcpApp.toolCallId } : {}),
+          },
+        }
       : {}),
   };
 }

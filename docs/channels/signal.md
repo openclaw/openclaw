@@ -256,7 +256,7 @@ Groups:
 ## Media + limits
 
 - Outbound text is chunked to `channels.signal.textChunkLimit` (default 4000).
-- Optional newline chunking: set `channels.signal.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
+- Optional newline chunking: set `channels.signal.streaming.chunkMode="newline"` to split on blank lines (paragraph boundaries) before length chunking.
 - Attachments are supported (base64 fetched from `signal-cli`).
 - Voice-note attachments use the `signal-cli` filename as a MIME fallback when `contentType` is missing, so audio transcription can still classify AAC voice memos.
 - Default media cap: `channels.signal.mediaMaxMb` (default 8).
@@ -440,12 +440,12 @@ Provider options:
 - `channels.signal.historyLimit`: max group messages to include as context (0 disables).
 - `channels.signal.dmHistoryLimit`: DM history limit in user turns. Per-user overrides: `channels.signal.dms["<phone_or_uuid>"].historyLimit`.
 - `channels.signal.textChunkLimit`: outbound chunk size in characters (default 4000).
-- `channels.signal.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.signal.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.signal.mediaMaxMb`: inbound/outbound media cap in MB (default 8).
 - `channels.signal.reactionLevel`: `off | ack | minimal | extensive` (default `minimal`). See [Reactions](#reactions-message-tool).
 - `channels.signal.reactionNotifications`: `off | own | all | allowlist` (default `own`) - when the agent is notified of incoming reactions from others.
 - `channels.signal.reactionAllowlist`: senders whose reactions notify the agent when `reactionNotifications: "allowlist"`.
-- `channels.signal.blockStreaming`, `channels.signal.blockStreamingCoalesce`: block-mode streaming controls shared across channels. See [Streaming](/concepts/streaming).
+- `channels.signal.streaming.block.enabled`, `channels.signal.streaming.block.coalesce`: block-mode streaming controls shared across channels. See [Streaming](/concepts/streaming).
 
 Related global options:
 
