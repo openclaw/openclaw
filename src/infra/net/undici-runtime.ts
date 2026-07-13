@@ -15,6 +15,7 @@ export type UndiciRuntimeDeps = {
   FormData?: typeof import("undici").FormData;
   ProxyAgent: typeof import("undici").ProxyAgent;
   fetch: typeof import("undici").fetch;
+  buildConnector: typeof import("undici").buildConnector;
 };
 
 /** Minimal undici surface needed by global-dispatcher installation code. */
@@ -57,7 +58,8 @@ function isUndiciRuntimeDeps(value: unknown): value is UndiciRuntimeDeps {
     typeof (value as UndiciRuntimeDeps).Agent === "function" &&
     typeof (value as UndiciRuntimeDeps).EnvHttpProxyAgent === "function" &&
     typeof (value as UndiciRuntimeDeps).ProxyAgent === "function" &&
-    typeof (value as UndiciRuntimeDeps).fetch === "function"
+    typeof (value as UndiciRuntimeDeps).fetch === "function" &&
+    typeof (value as UndiciRuntimeDeps).buildConnector === "function"
   );
 }
 
@@ -105,8 +107,9 @@ function stripIpServernameFromConnect(connect: unknown): unknown {
   if (typeof connect !== "function") {
     return connect;
   }
+  const safeConnect = wrapSafeUndiciConnector(connect) as UnknownFunction;
   return (options: unknown, callback: unknown): unknown =>
-    (connect as UnknownFunction)(stripIpServernameFromConnectOptions(options), callback);
+    safeConnect(stripIpServernameFromConnectOptions(options), callback);
 }
 
 function createIpSafeProxyClientFactory(): UndiciProxyClientFactory {
@@ -151,6 +154,7 @@ export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
     FormData: undici.FormData,
     ProxyAgent: undici.ProxyAgent,
     fetch: undici.fetch,
+    buildConnector: undici.buildConnector,
   };
 }
 
@@ -212,7 +216,47 @@ function withHttp1OnlyDispatcherOptions<T extends object | undefined>(
       };
     }
   }
+  if (targets.connect) {
+    if (typeof baseRecord.connect !== "function") {
+      baseRecord.connect = createSafeUndiciConnector(
+        isObjectRecord(baseRecord.connect) ? (baseRecord.connect as any) : {}
+      );
+    } else {
+      baseRecord.connect = wrapSafeUndiciConnector(baseRecord.connect);
+    }
+  }
   return base;
+}
+
+export function wrapSafeUndiciConnector(
+  connector: unknown
+): unknown {
+  if (typeof connector !== "function") {
+    return connector;
+  }
+  return (
+    opts: unknown,
+    cb: unknown
+  ): unknown => {
+    const socket = (connector as Function)(opts, cb) as import("node:net").Socket | undefined;
+    if (socket && typeof socket.on === "function") {
+      // Swallow unhandled socket errors to prevent process exits; undici handles them via callback.
+      socket.on("error", () => {});
+    }
+    return socket;
+  };
+}
+
+/**
+ * Wraps undici's buildConnector to attach a dummy error listener on the returned socket.
+ * This prevents unhandled "error" events (e.g. from Node's Happy-Eyeballs internalConnectMultiple)
+ * from crashing the process before Undici's dispatcher can attach its own error handler.
+ */
+export function createSafeUndiciConnector(
+  options: import("undici").buildConnector.BuildOptions
+): import("undici").buildConnector.connector {
+  const { buildConnector } = loadUndiciRuntimeDeps();
+  return wrapSafeUndiciConnector(buildConnector(options)) as import("undici").buildConnector.connector;
 }
 
 /** Creates a direct undici Agent with OpenClaw's HTTP/1-only dispatcher policy. */

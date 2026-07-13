@@ -645,7 +645,7 @@ export async function resolvePinnedHostname(
 function withPinnedLookup(
   lookup: PinnedHostname["lookup"],
   connect?: Record<string, unknown>,
-): Record<string, unknown> {
+): import("undici").buildConnector.BuildOptions {
   return connect ? { ...connect, lookup } : { lookup };
 }
 

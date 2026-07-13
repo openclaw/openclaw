@@ -225,8 +225,8 @@ export function formatDocs(params = {}, deps = {}) {
       );
       repairFiles(tempRoot, files);
       for (const relativePath of files) {
-        const raw = fs.readFileSync(path.join(root, relativePath), "utf8");
-        const formatted = fs.readFileSync(path.join(tempRoot, relativePath), "utf8");
+        const raw = fs.readFileSync(path.join(root, relativePath), "utf8").replace(/\r\n/g, "\n");
+        const formatted = fs.readFileSync(path.join(tempRoot, relativePath), "utf8").replace(/\r\n/g, "\n");
         if (formatted !== raw) {
           changed.push(relativePath);
         }
