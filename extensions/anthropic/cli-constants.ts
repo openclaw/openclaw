@@ -11,8 +11,7 @@ export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID = CLAUDE_CLI_DEFAULT_MODEL_RE
   CLAUDE_CLI_BACKEND_ID.length + 1,
 );
 /** Canonical model ref routed to the Claude CLI backend by Anthropic setup. */
-export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF =
-  `anthropic/${CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID}`;
+export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = `anthropic/${CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID}`;
 /** Default Claude CLI models allowed when setup seeds the model allowlist. */
 export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
   CLAUDE_CLI_DEFAULT_MODEL_REF,

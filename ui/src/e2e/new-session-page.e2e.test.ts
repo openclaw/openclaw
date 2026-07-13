@@ -410,9 +410,9 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         dispatchEvent(new PopStateEvent("popstate"));
       });
 
-      await expect.poll(() => page.locator(".new-session-page__runtime").textContent()).toContain(
-        "Claude Code",
-      );
+      await expect
+        .poll(() => page.locator(".new-session-page__runtime").textContent())
+        .toContain("Claude Code");
       await expect.poll(() => folderLabel.textContent()).toBe("openclaw");
       await page.locator(".new-session-page__message").fill("retarget this draft");
       await page.getByRole("button", { name: "Start session" }).click();

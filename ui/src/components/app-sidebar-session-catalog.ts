@@ -135,8 +135,7 @@ export function renderSidebarSessionCatalogs(params: SidebarSessionCatalogParams
                   const href = `${pathForRoute("chat", params.basePath)}${searchForSession(key)}`;
                   const hostSubtitle =
                     catalog.hosts.length > 1 || host.kind === "node" ? host.label : undefined;
-                  const rawTimestamp =
-                    session.recencyAt ?? session.updatedAt ?? session.createdAt;
+                  const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
                   const timestamp =
                     typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
                       ? rawTimestamp * 1000
