@@ -21,13 +21,13 @@ import {
 } from "../lifecycle/workspace-skill-write.js";
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { scanSkillContent, scanSource } from "../security/scanner.js";
 import { resolveSkillWorkshopConfig, type SkillWorkshopConfig } from "./config.js";
 import {
   readProposalFrontmatter,
   renderProposalMarkdown,
   stripProposalFrontmatterForSkill,
 } from "./frontmatter.js";
+import { assertProposalContainsNoLiteralSecrets, scanProposalBundle } from "./proposal-scan.js";
 import {
   createSkillProposalId,
   createSkillProposalRollback,
@@ -58,7 +58,6 @@ import {
   type SkillProposalRecord,
   type SkillProposalReviseInput,
   type SkillProposalRollback,
-  type SkillProposalScan,
   type SkillProposalSupportFile,
   type SkillProposalSupportFileInput,
   type SkillProposalUpdateInput,
@@ -491,6 +490,7 @@ export async function reviseSkillProposal(
       input.evidence === undefined
         ? normalizeOptionalString(record.evidence)
         : normalizeOptionalString(input.evidence);
+    const origin = normalizeProposalOrigin(input.origin);
     const previousSupportFiles = record.supportFiles;
     const scan = scanProposalBundle(proposalContent, supportFiles, [
       { file: "description", content: description },
@@ -505,6 +505,7 @@ export async function reviseSkillProposal(
       proposedVersion: nextVersion,
       draftHash: hashSkillProposalContent(proposalContent),
       scan,
+      ...(origin ? { origin } : {}),
     };
     if (supportFiles.length > 0) {
       revised.supportFiles = supportFileMetadata;
@@ -710,53 +711,6 @@ async function readApplyTargetState(
     }
   }
   return { previousContent, previousSupportFiles };
-}
-
-function scanProposalBundle(
-  content: string,
-  supportFiles: readonly PreparedSkillProposalSupportFile[] = [],
-  metadata: readonly { file: string; content: string | undefined }[] = [],
-): SkillProposalScan {
-  const scannedAt = new Date().toISOString();
-  const findings = [
-    ...scanSkillContent(content, "PROPOSAL.md"),
-    ...scanSource(content, "PROPOSAL.md"),
-    ...supportFiles.flatMap((file) => [
-      ...scanSkillContent(file.path, "support-file-path").filter(
-        (finding) => finding.ruleId === "literal-secret",
-      ),
-      ...scanSkillContent(file.content, file.path),
-      ...scanSource(file.content, file.path),
-    ]),
-    ...metadata.flatMap((entry) =>
-      entry.content
-        ? scanSkillContent(entry.content, entry.file).filter(
-            (finding) => finding.ruleId === "literal-secret",
-          )
-        : [],
-    ),
-  ];
-  const critical = findings.filter((finding) => finding.severity === "critical").length;
-  const warn = findings.filter((finding) => finding.severity === "warn").length;
-  const info = findings.filter((finding) => finding.severity === "info").length;
-  return {
-    state: critical > 0 ? "failed" : "clean",
-    scannedAt,
-    critical,
-    warn,
-    info,
-    findings,
-  };
-}
-
-function assertProposalContainsNoLiteralSecrets(scan: SkillProposalScan): void {
-  const finding = scan.findings.find((entry) => entry.ruleId === "literal-secret");
-  if (!finding) {
-    return;
-  }
-  throw new Error(
-    `Skill proposal contains a recognized literal credential in ${finding.file}; replace it with a SecretRef or placeholder.`,
-  );
 }
 
 async function assertCanCreatePendingProposal(

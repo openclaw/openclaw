@@ -15,6 +15,7 @@ function completedRun(
     runId?: string;
     enabled?: boolean;
     skillWorkshopAvailable?: boolean;
+    compacted?: boolean;
     modelMetadata?: boolean;
   } = {},
 ): SkillExperienceReviewParams {
@@ -50,6 +51,7 @@ function completedRun(
             authProfileId: "openai:work",
           }),
       skillWorkshopAvailable: options.skillWorkshopAvailable ?? true,
+      compacted: options.compacted,
       trigger: "user",
     },
     config: {
@@ -158,6 +160,7 @@ describe("skill experience review scheduler", () => {
 
     scheduler.schedule(completedRun({ iterations: 9 }));
     scheduler.schedule(completedRun({ success: false }));
+    scheduler.schedule(completedRun({ compacted: true, sessionKey: "agent:main:compacted" }));
     scheduler.schedule(completedRun({ enabled: false }));
     scheduler.schedule(
       completedRun({ modelMetadata: false, sessionKey: "agent:main:missing-model" }),
@@ -191,6 +194,58 @@ describe("skill experience review scheduler", () => {
     expect(runReview).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(runReview).toHaveBeenCalledTimes(1);
+    scheduler.clear();
+  });
+
+  it("extends quiet time after later completions that cannot replace the candidate", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun());
+    await vi.advanceTimersByTimeAsync(29_000);
+    scheduler.schedule(completedRun({ modelMetadata: false }));
+    await vi.advanceTimersByTimeAsync(29_000);
+    scheduler.schedule(completedRun({ skillWorkshopAvailable: false }));
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(runReview).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runReview).toHaveBeenCalledTimes(1);
+    scheduler.clear();
+  });
+
+  it("discards a queued candidate when the same run later fails", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+
+    scheduler.schedule(completedRun({ runId: "retried-run" }));
+    scheduler.schedule(completedRun({ runId: "retried-run", success: false }));
+    await vi.runAllTimersAsync();
+    expect(runReview).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
+  it("preserves the complete requester role identity for delayed policy checks", async () => {
+    vi.useFakeTimers();
+    const runReview = vi.fn().mockResolvedValue(undefined);
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+    });
+    const params = completedRun();
+    const memberRoleIds = Array.from({ length: 150 }, (_, index) => `role-${index}`);
+    params.ctx.memberRoleIds = memberRoleIds;
+
+    scheduler.schedule(params);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(runReview.mock.calls[0]?.[0].ctx.memberRoleIds).toEqual(memberRoleIds);
     scheduler.clear();
   });
 

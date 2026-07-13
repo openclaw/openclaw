@@ -345,6 +345,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
+import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
@@ -1469,9 +1470,11 @@ export async function runEmbeddedAttempt(
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
             modelId: params.modelId,
-            skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
-            skillWorkshopOrigin: params.skillWorkshopOrigin,
-            skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+            skillWorkshop: {
+              proposalOnly: params.skillWorkshopProposalOnly,
+              origin: params.skillWorkshopOrigin,
+              proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+            },
             modelCompat: extractModelCompat(params.model),
             modelApi: params.model.api,
             modelContextWindowTokens: params.model.contextWindow,
@@ -5390,41 +5393,15 @@ export async function runEmbeddedAttempt(
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
             },
-            ctx: {
-              runId: params.runId,
-              trace: freezeDiagnosticTraceContext(diagnosticTrace),
+            ctx: buildEmbeddedAgentEndContext({
+              run: params,
               agentId: hookAgentId,
-              sessionKey: params.sessionKey,
-              sessionId: params.sessionId,
-              workspaceDir: params.workspaceDir,
-              modelProviderId: params.provider,
-              modelId: params.modelId,
-              authProfileId: params.authProfileId,
+              trace: freezeDiagnosticTraceContext(diagnosticTrace),
               skillWorkshopAvailable: uncompactedEffectiveTools.some(
                 (tool) => tool.name === "skill_workshop",
               ),
-              messageChannel: params.messageChannel,
-              chatType: params.chatType,
-              agentAccountId: params.agentAccountId,
-              groupId: params.groupId,
-              groupChannel: params.groupChannel,
-              groupSpace: params.groupSpace,
-              memberRoleIds: params.memberRoleIds,
-              spawnedBy: params.spawnedBy,
-              senderName: params.senderName,
-              senderUsername: params.senderUsername,
-              senderE164: params.senderE164,
-              senderIsOwner: params.senderIsOwner,
-              trigger: params.trigger,
-              ...(params.config ? { config: params.config } : {}),
-              ...buildAgentHookContextChannelFields(params),
-              ...buildAgentHookContextIdentityFields({
-                trigger: params.trigger,
-                senderId: params.senderId,
-                chatId: params.chatId,
-                channelContext: params.channelContext,
-              }),
-            },
+              compacted: compactionOccurredThisAttempt,
+            }),
             hookRunner,
           });
         }

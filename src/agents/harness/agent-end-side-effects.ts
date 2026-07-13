@@ -18,6 +18,7 @@ type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
   ctx: BaseAgentEndSideEffectsParams["ctx"] & {
     authProfileId?: string;
     skillWorkshopAvailable?: boolean;
+    compacted?: boolean;
     messageChannel?: string | null;
     chatType?: ChatType;
     agentAccountId?: string | null;

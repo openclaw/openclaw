@@ -18,10 +18,7 @@ import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import type {
-  SkillProposalOrigin,
-  SkillWorkshopProposalMutationBudget,
-} from "../skills/workshop/types.js";
+import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -74,7 +71,7 @@ import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
-import { createSkillWorkshopTool } from "./tools/skill-workshop-tool.js";
+import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
@@ -174,12 +171,8 @@ export function createOpenClawTools(
     modelProvider?: string;
     /** Active model id for provider/model-specific tool gating. */
     modelId?: string;
-    /** Restrict Skill Workshop to pending proposal work for internal review runs. */
-    skillWorkshopProposalOnly?: boolean;
-    /** Override proposal provenance for internal review runs. */
-    skillWorkshopOrigin?: SkillProposalOrigin;
-    /** Run-scoped proposal mutation budget shared across runner attempts. */
-    skillWorkshopProposalMutationBudget?: SkillWorkshopProposalMutationBudget;
+    /** Internal review-run restrictions and proposal provenance. */
+    skillWorkshop?: SkillWorkshopRunOptions;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -293,13 +286,6 @@ export function createOpenClawTools(
       ? undefined
       : options?.onYield
     : options?.onYield;
-  const skillWorkshopSessionKey = normalizeOptionalString(
-    options?.runSessionKey ?? options?.agentSessionKey,
-  );
-  const skillWorkshopRunId = normalizeOptionalString(options?.runId);
-  const skillWorkshopMessageId = normalizeOptionalString(
-    options?.currentMessageId === undefined ? undefined : String(options.currentMessageId),
-  );
   const taskSuggestionSessionKey = normalizeOptionalString(
     options?.runSessionKey ?? options?.agentSessionKey,
   );
@@ -559,22 +545,14 @@ export function createOpenClawTools(
     ...(options?.sandboxed
       ? []
       : [
-          createSkillWorkshopTool({
+          createConfiguredSkillWorkshopTool({
             workspaceDir,
             config: resolvedConfig,
             agentId: sessionAgentId,
-            origin:
-              options?.skillWorkshopOrigin ??
-              ({
-                agentId: sessionAgentId,
-                ...(skillWorkshopSessionKey ? { sessionKey: skillWorkshopSessionKey } : {}),
-                ...(skillWorkshopRunId ? { runId: skillWorkshopRunId } : {}),
-                ...(skillWorkshopMessageId ? { messageId: skillWorkshopMessageId } : {}),
-              } satisfies SkillProposalOrigin),
-            proposalOnly: options?.skillWorkshopProposalOnly,
-            proposalMutationBudget:
-              options?.skillWorkshopProposalMutationBudget ??
-              (options?.skillWorkshopProposalOnly ? { remaining: 1 } : undefined),
+            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
+            messageId: options?.currentMessageId,
+            run: options?.skillWorkshop,
           }),
         ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),

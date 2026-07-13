@@ -227,6 +227,7 @@ import {
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
+import { buildHandledReplyPayloads } from "./run/handled-reply.js";
 import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
@@ -709,21 +710,6 @@ function assertAgentHarnessRunAdmission(params: RunEmbeddedAgentParams): void {
   if (admissionError) {
     throw new Error(admissionError);
   }
-}
-
-function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
 }
 
 /** Marks only request parameters that OpenClaw applies to provider egress. */
@@ -1228,6 +1214,7 @@ async function runEmbeddedAgentInternal(
         attachments: buildBeforeModelResolveAttachments(params.images),
         provider,
         modelId,
+        modelSelectionLocked: params.modelSelectionLocked,
         hookRunner,
         hookContext: hookCtx,
       });

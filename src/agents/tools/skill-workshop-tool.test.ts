@@ -311,7 +311,19 @@ describe("skill_workshop tool", () => {
       fs.access(path.join(workspaceDir, "skills", "weather-planner", "SKILL.md")),
     ).rejects.toThrow();
 
-    const revised = await tool.execute("call-2", {
+    const reviewerOrigin = {
+      agentId: "main",
+      sessionKey: "agent:main:skill-workshop-review:review-test",
+      runId: "run-review-test",
+    };
+    const reviewerTool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      origin: reviewerOrigin,
+      proposalOnly: true,
+    });
+    const revised = await reviewerTool.execute("call-2", {
       action: "revise",
       proposal_id: (result.details as { id: string }).id,
       proposal_content: "# Weather Planner\n\nCheck weather, alerts, and timing.\n",
@@ -346,6 +358,20 @@ describe("skill_workshop tool", () => {
         "utf8",
       ),
     ).resolves.toContain('version: "v2"');
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
+            "proposal.json",
+          ),
+          "utf8",
+        )
+        .then((raw) => JSON.parse(raw).origin),
+    ).resolves.toEqual(reviewerOrigin);
 
     const listed = await tool.execute("call-3", {
       action: "list",
@@ -399,7 +425,7 @@ describe("skill_workshop tool", () => {
       },
     ]);
 
-    const revisedByName = await tool.execute("call-5", {
+    const revisedByName = await reviewerTool.execute("call-5", {
       action: "revise",
       name: "weather-planner",
       proposal_content: "# Weather Planner\n\nCheck weather, alerts, timing, and location.\n",

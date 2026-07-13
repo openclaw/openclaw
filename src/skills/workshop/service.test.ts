@@ -381,6 +381,7 @@ describe("skill workshop proposals", () => {
       name: "Draftable Skill",
       description: "Original proposal",
       content: "# Draftable\n\nOriginal body.\n",
+      origin: { runId: "original-run" },
       supportFiles: [
         {
           path: "references/original.md",
@@ -396,6 +397,7 @@ describe("skill workshop proposals", () => {
       proposalId: proposal.record.id,
       description: "Revised proposal",
       content: "# Draftable\n\nRevised body.\n",
+      origin: { runId: "revision-run" },
       evidence: "",
     });
 
@@ -404,6 +406,7 @@ describe("skill workshop proposals", () => {
     expect(revised.record.description).toBe("Revised proposal");
     expect(revised.record.goal).toBe("Original goal");
     expect(revised.record.evidence).toBeUndefined();
+    expect(revised.record.origin).toEqual({ runId: "revision-run" });
     expect(revised.record.supportFiles?.map((file) => file.path)).toEqual([
       "references/original.md",
     ]);
@@ -418,6 +421,7 @@ describe("skill workshop proposals", () => {
     });
 
     expect(removedSupport.record.proposedVersion).toBe("v3");
+    expect(removedSupport.record.origin).toEqual({ runId: "revision-run" });
     expect(removedSupport.record.supportFiles).toBeUndefined();
     await expect(
       fs.access(
