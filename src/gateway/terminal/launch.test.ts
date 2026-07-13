@@ -283,6 +283,122 @@ describe("createTerminalLaunchPolicy", () => {
     );
     restartPolicy.prepareConfig(baseConfig, { restartPending: true });
     expect(restartPolicy.resolve().ok).toBe(false);
+    restartPolicy.acceptConfig({ retireRejectedRestart: false });
+    restartPolicy.commitConfig();
+    expect(restartPolicy.resolve().ok).toBe(true);
+  });
+
+  it("releases a rejected restart restriction after an accepted revert", () => {
+    const baseConfig: OpenClawConfig = {
+      gateway: { terminal: { enabled: true } },
+    };
+    const policy = createTerminalLaunchPolicy(baseConfig);
+
+    policy.prepareConfig({}, { restartPending: true });
+    policy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    policy.commitConfig();
+    expect(policy.isEnabled()).toBe(false);
+
+    policy.acceptConfig({ retireRejectedRestart: true });
+    policy.commitConfig();
+    expect(policy.isEnabled()).toBe(true);
+  });
+
+  it("commits a newer hot candidate after a rejected restart is retired", () => {
+    const baseConfig: OpenClawConfig = {
+      gateway: { terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "all" } } },
+    };
+    const policy = createTerminalLaunchPolicy(baseConfig);
+
+    policy.prepareConfig({}, { restartPending: true });
+    policy.prepareConfig(
+      {
+        gateway: { terminal: { enabled: true } },
+        agents: { defaults: { sandbox: { mode: "off" } } },
+      },
+      { restartPending: false },
+    );
+    policy.commitConfig();
+    expect(policy.resolve().ok).toBe(false);
+
+    policy.acceptConfig({ retireRejectedRestart: true });
+    policy.commitConfig();
+    expect(policy.resolve().ok).toBe(true);
+  });
+
+  it("retires failed hot candidates without clearing committed restart restrictions", () => {
+    const baseConfig: OpenClawConfig = {
+      gateway: { terminal: { enabled: true } },
+      agents: { defaults: { sandbox: { mode: "off" } } },
+    };
+    const policy = createTerminalLaunchPolicy(baseConfig);
+
+    policy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    expect(policy.resolve().ok).toBe(false);
+
+    policy.acceptConfig({ retireRejectedRestart: false });
+    policy.commitConfig();
+    expect(policy.resolve().ok).toBe(true);
+
+    const skippedPolicy = createTerminalLaunchPolicy({
+      ...baseConfig,
+      agents: { defaults: { sandbox: { mode: "all" } } },
+    });
+    skippedPolicy.prepareConfig(baseConfig, { restartPending: false });
+    skippedPolicy.acceptConfig({ retireRejectedRestart: false });
+    skippedPolicy.commitConfig();
+    expect(skippedPolicy.resolve().ok).toBe(false);
+
+    const pendingPolicy = createTerminalLaunchPolicy(baseConfig);
+    pendingPolicy.prepareConfig(baseConfig, { restartPending: true });
+    pendingPolicy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    expect(pendingPolicy.resolve().ok).toBe(false);
+    pendingPolicy.acceptConfig({ retireRejectedRestart: false });
+    pendingPolicy.commitConfig();
+    expect(pendingPolicy.resolve().ok).toBe(true);
+
+    const appliedPendingPolicy = createTerminalLaunchPolicy(baseConfig);
+    appliedPendingPolicy.prepareConfig(baseConfig, { restartPending: true });
+    appliedPendingPolicy.prepareConfig(
+      {
+        ...baseConfig,
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      { restartPending: false },
+    );
+    appliedPendingPolicy.commitConfig();
+    appliedPendingPolicy.acceptConfig({ retireRejectedRestart: false });
+    appliedPendingPolicy.commitConfig();
+    expect(appliedPendingPolicy.resolve().ok).toBe(false);
+    appliedPendingPolicy.prepareConfig(baseConfig, { restartPending: false });
+    appliedPendingPolicy.commitConfig();
+    appliedPendingPolicy.acceptConfig({ retireRejectedRestart: false });
+    appliedPendingPolicy.commitConfig();
+    expect(appliedPendingPolicy.resolve().ok).toBe(true);
+
+    policy.prepareConfig({}, { restartPending: true });
+    policy.acceptConfig({ retireRejectedRestart: false });
+    policy.commitConfig();
+    expect(policy.isEnabled()).toBe(false);
   });
 
   it("does not promote a terminal setting previously ignored by reload mode", () => {

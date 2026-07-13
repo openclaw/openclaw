@@ -85,12 +85,12 @@ class LogsPage extends OpenClawLightDomElement {
   }
 
   override updated(changed: PropertyValues) {
+    const autoFollowEnabled = this.logsAutoFollow && changed.has("logsAutoFollow");
     if (
-      this.logsAutoFollow &&
-      this.logsAtBottom &&
-      (changed.has("logsEntries") || changed.has("logsAutoFollow"))
+      autoFollowEnabled ||
+      (this.logsAutoFollow && this.logsAtBottom && changed.has("logsEntries"))
     ) {
-      this.scheduleScroll(changed.has("logsAutoFollow"));
+      this.scheduleScroll(autoFollowEnabled);
     }
   }
 

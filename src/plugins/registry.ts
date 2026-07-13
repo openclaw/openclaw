@@ -55,7 +55,6 @@ export type {
   PluginSessionExtensionRegistryRegistration,
 } from "./registry-types.js";
 export { createEmptyPluginRegistry } from "./registry-empty.js";
-export { resolvePluginPath } from "./registry-api.js";
 
 /**
  * Compose the registry state, domain registrars, scoped runtime, and plugin API.

@@ -16,6 +16,8 @@ class SidebarAgentChip extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) statusLabel = "";
   @property({ attribute: false }) subtitle = "";
   @property({ attribute: false }) menuOpen = false;
+  /** Unread sessions exist on non-active agents; surfaces on the menu toggle. */
+  @property({ attribute: false }) menuUnread = false;
   @property({ attribute: false }) newSessionDisabled = false;
   @property({ attribute: false }) onOpenConversation?: () => void;
   @property({ attribute: false }) onNewSession?: () => void;
@@ -81,6 +83,13 @@ class SidebarAgentChip extends OpenClawLightDomContentsElement {
           @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
         >
           ${icons.chevronDown}
+          ${this.menuUnread && !this.menuOpen
+            ? html`<span
+                class="session-unread-dot sidebar-agent-chip__menu-unread"
+                role="img"
+                aria-label=${t("sessionsView.unread")}
+              ></span>`
+            : nothing}
         </button>
       </div>
     `;

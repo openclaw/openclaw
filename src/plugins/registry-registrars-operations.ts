@@ -452,5 +452,3 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerCommand,
   };
 }
-
-export type OperationRegistrars = ReturnType<typeof createOperationRegistrars>;

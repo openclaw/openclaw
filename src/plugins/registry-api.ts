@@ -37,7 +37,7 @@ function normalizeLogger(logger: PluginLogger): PluginLogger {
   };
 }
 
-export function resolvePluginPath(input: string, rootDir: string | undefined): string {
+function resolvePluginPath(input: string, rootDir: string | undefined): string {
   const trimmed = input.trim();
   if (!trimmed || path.isAbsolute(trimmed) || trimmed.startsWith("~")) {
     return resolveUserPath(input);
