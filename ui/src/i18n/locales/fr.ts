@@ -126,6 +126,7 @@ export const fr: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number} : {title}, par {author}",
   },
   channels: {
+    lastError: "Dernière erreur",
     refreshingStaleSnapshot:
       "Actualisation du statut du canal en arrière-plan ; affichage du dernier instantané réussi.",
     config: {
@@ -387,7 +388,6 @@ export const fr: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Nouveau worktree",
-    owner: "Propriétaire",
     ownerManual: "Manuel",
     ownerSession: "Session",
     ownerWorkboard: "Workboard",
@@ -408,10 +408,6 @@ export const fr: TranslationMap = {
     cleanupSaveFailed: "Échec de l’enregistrement des limites de nettoyage.",
     name: "Nom",
     repo: "Dépôt",
-    branch: "Branche",
-    status: "Statut",
-    lastActive: "Dernière activité",
-    actions: "Actions",
     empty: "Aucun worktree géré.",
     restorable: "Restaurable",
     restore: "Restaurer",
@@ -466,6 +462,7 @@ export const fr: TranslationMap = {
     start: "Démarrer la session",
     starting: "Démarrage…",
     createFailed: "Impossible de créer la session.",
+    catalogUnavailable: "La cible de cette session est indisponible.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -834,6 +831,7 @@ export const fr: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Échec de l’appel",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1427,6 +1425,7 @@ export const fr: TranslationMap = {
       "{count} outils en direct supplémentaires sont disponibles dans les groupes ci-dessous.",
     moreLive: "+{count} outils en direct supplémentaires",
     quickPresets: "Préréglages rapides",
+    catalogTitle: "Catalogue d’outils",
     inherit: "Hériter",
     profile: "Profil",
     source: "Source",
@@ -2537,6 +2536,7 @@ export const fr: TranslationMap = {
       uptime: "Durée de fonctionnement",
       tickInterval: "Intervalle de rafraîchissement",
       lastChannelsRefresh: "Dernière actualisation des canaux",
+      lastError: "Dernière erreur",
     },
     help: {
       title: "Comment se connecter",

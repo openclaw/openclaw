@@ -126,6 +126,7 @@ export const pl: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, autor: {author}",
   },
   channels: {
+    lastError: "Ostatni błąd",
     refreshingStaleSnapshot:
       "Odświeżanie statusu kanału w tle; wyświetlanie ostatniej udanej migawki.",
     config: {
@@ -383,7 +384,6 @@ export const pl: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Nowy worktree",
-    owner: "Właściciel",
     ownerManual: "Ręcznie",
     ownerSession: "Sesja",
     ownerWorkboard: "Workboard",
@@ -404,10 +404,6 @@ export const pl: TranslationMap = {
     cleanupSaveFailed: "Nie udało się zapisać limitów czyszczenia.",
     name: "Nazwa",
     repo: "Repozytorium",
-    branch: "Gałąź",
-    status: "Status",
-    lastActive: "Ostatnia aktywność",
-    actions: "Akcje",
     empty: "Brak zarządzanych worktree.",
     restorable: "Możliwe do przywrócenia",
     restore: "Przywróć",
@@ -460,6 +456,7 @@ export const pl: TranslationMap = {
     start: "Rozpocznij sesję",
     starting: "Uruchamianie…",
     createFailed: "Nie udało się utworzyć sesji.",
+    catalogUnavailable: "Wybrany cel sesji jest niedostępny.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -825,6 +822,7 @@ export const pl: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Wywołanie nie powiodło się",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1418,6 +1416,7 @@ export const pl: TranslationMap = {
     moreLiveTitle: "{count} więcej aktywnych narzędzi jest dostępnych w grupach poniżej.",
     moreLive: "+{count} więcej aktywnych narzędzi",
     quickPresets: "Szybkie ustawienia",
+    catalogTitle: "Katalog narzędzi",
     inherit: "Dziedzicz",
     profile: "Profil",
     source: "Źródło",
@@ -2510,6 +2509,7 @@ export const pl: TranslationMap = {
       uptime: "Czas działania",
       tickInterval: "Interwał aktualizacji",
       lastChannelsRefresh: "Ostatnie odświeżenie kanałów",
+      lastError: "Ostatni błąd",
     },
     help: {
       title: "Jak się połączyć",

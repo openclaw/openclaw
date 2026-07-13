@@ -2797,11 +2797,6 @@ openclaw-session-menu[popover] {
     gap: 10px;
   }
 
-  .table-head,
-  .table-row {
-    grid-template-columns: 1fr;
-  }
-
   .list-item {
     grid-template-columns: 1fr;
   }
