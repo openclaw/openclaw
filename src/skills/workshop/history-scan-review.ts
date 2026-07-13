@@ -2,11 +2,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CommandLane } from "../../process/lanes.js";
-import { buildSkillHistoryScanPrompt, type SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
+import {
+  buildSkillHistoryScanPrompt,
+  type SkillHistoryScanPromptSession,
+} from "./history-scan-prompt.js";
 import type { SkillWorkshopProposalReviewProgress } from "./types.js";
 
 export const HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS = 3;

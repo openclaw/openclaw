@@ -9,11 +9,7 @@ import type {
   SkillProposalSupportFileInput,
   SkillWorkshopProposalReviewCompletion,
 } from "../../skills/workshop/types.js";
-import {
-  readPositiveIntegerParam,
-  readStringParam,
-  ToolInputError,
-} from "./common.js";
+import { readPositiveIntegerParam, readStringParam, ToolInputError } from "./common.js";
 
 export function proposalReviewPhase(
   completion: SkillWorkshopProposalReviewCompletion,

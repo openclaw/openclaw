@@ -17,9 +17,9 @@ import {
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
 import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
-import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 import { buildChannelsStatusMock, buildChannelWizardMocks } from "./control-ui-mock-channels.ts";
 import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
+import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
