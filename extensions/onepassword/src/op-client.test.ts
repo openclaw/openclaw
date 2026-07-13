@@ -17,6 +17,7 @@ describe("OpClient", () => {
   const rightFixture = ["right", "fixture"].join("-");
 
   beforeEach(async () => {
+    // openclaw-temp-dir: allow plugin tests cannot import the core-only tracker.
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-"));
     tempDirs.push(root);
     opBin = path.join(root, "op");
