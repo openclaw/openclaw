@@ -127,4 +127,23 @@ describe("1Password CLI output", () => {
     expect(rows[0]?.reason).toHaveLength(80);
     expect(JSON.stringify(rows)).not.toContain(["fixture", "value"].join("-"));
   });
+
+  it("does not split a surrogate pair when truncating an audit reason", async () => {
+    const store = new MemoryKeyedStore<AuditRow>();
+    await store.register("unicode", {
+      timestampMs: 1000,
+      agentId: "agent-a",
+      sessionKey: "session-a",
+      toolCallId: "call-a",
+      slug: "alpha",
+      reason: `${"x".repeat(76)}\u{1f600}tail`,
+      outcome: "auto",
+    });
+    const { onepassword, write } = setupCommands(store);
+
+    await onepassword.child("audit").run({ limit: "1" });
+    const rows = JSON.parse(String(write.mock.calls[0]?.[0])) as Array<Record<string, unknown>>;
+
+    expect(rows[0]?.reason).toBe(`${"x".repeat(76)}...`);
+  });
 });
