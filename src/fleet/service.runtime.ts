@@ -538,7 +538,9 @@ export function createFleetService(options: FleetServiceOptions = {}) {
         await containers.inspect(record.runtime, record.containerName),
       );
       const gatewayCredential = inspection.environment.OPENCLAW_GATEWAY_TOKEN;
-      await containers.logs(record.runtime, record.containerName, {
+      // Pin the stream to the inspected generation. A concurrent restore can
+      // replace the named container after ownership inspection but before logs attach.
+      await containers.logs(record.runtime, inspection.containerId, {
         follow: logOptions.follow,
         tail: logOptions.tail,
         since: logOptions.since,

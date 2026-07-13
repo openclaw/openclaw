@@ -166,7 +166,7 @@ openclaw fleet logs acme --tail 200
 openclaw fleet logs acme --since 10m
 ```
 
-Fleet verifies the registered container's ownership labels before reading any logs, so it refuses a foreign container using the expected cell name. Press Ctrl-C to end `--follow` without treating the operator stop as a command failure. Log output is piped through a redaction filter that replaces the cell's current Gateway token with `<redacted>` before anything reaches the terminal.
+Fleet verifies the registered container's ownership labels before reading any logs, so it refuses a foreign container using the expected cell name. The stream is pinned to that inspected container ID, so a concurrent replacement cannot redirect it to a newer generation. Press Ctrl-C to end `--follow` without treating the operator stop as a command failure. Log output is piped through a redaction filter that replaces the cell's current Gateway token with `<redacted>` before anything reaches the terminal.
 
 `fleet logs` has no `--json` mode because container logs are a raw stdout/stderr stream. For scripts, bound the output with `--tail` and use ordinary shell redirection or pipelines.
 
@@ -218,6 +218,8 @@ openclaw fleet restore acme --from ./acme.tgz
 ```
 
 These are host-operator-privileged commands. Archives contain tenant state and auth secrets, are created with mode `0600`, and must be stored like credentials. Backup refuses a running cell so SQLite state is captured consistently. Restore refuses a running cell unless `--force` is supplied, replaces only that tenant's state, rotates the Gateway token, and prints the new token once. Fleet backs up one tenant at a time; all-tenant backup is a separate operator action.
+
+Restore needs an existing stopped container because its inspected runtime profile supplies the replacement limits, user mapping, environment provenance, and image. If the registered container was removed out of band, first run `fleet rm <tenant> --force` without `--purge-data`, recreate the cell with the intended image and `--no-start`, then retry restore. The first removal keeps both tenant data directories intact.
 
 Both commands accept `--max-bytes <bytes>` to bound archived or extracted file data, and both apply the same fixed one-million budget of archive path segments so metadata-only archive bombs cannot exhaust host inodes and every accepted backup stays restorable. Backup accepts `--out <path>` and both commands support `--json`.
 
