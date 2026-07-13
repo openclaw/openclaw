@@ -2,6 +2,22 @@
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema, FeishuGroupSchema } from "./config-schema.js";
 
+// The NEGATIVE webhook fixtures below spread these bases and add
+// verificationToken separately so the GHSA-G353-MGV3-8PCJ opengrep pattern —
+// which matches `connectionMode: "webhook"` next to `verificationToken` in
+// one object literal (including via constant propagation) — does not flag the
+// fixtures that prove the schema rejects them. Positive fixtures stay literal.
+const topLevelWebhookBase = {
+  connectionMode: "webhook",
+  appId: "cli_top",
+  appSecret: "secret_top", // pragma: allowlist secret
+};
+const accountWebhookBase = {
+  connectionMode: "webhook",
+  appId: "cli_main",
+  appSecret: "secret_main", // pragma: allowlist secret
+};
+
 function expectSchemaIssue(
   result: ReturnType<typeof FeishuConfigSchema.safeParse>,
   issuePath: string,
@@ -57,14 +73,11 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects top-level webhook mode without encryptKey", () => {
-    // Composed from two literals so the GHSA-G353-MGV3-8PCJ opengrep pattern
-    // (flagging webhook configs that set verificationToken without encryptKey)
-    // does not match the negative fixture that proves the schema rejects it.
+    // topLevelWebhookBase (see top of file) keeps the GHSA opengrep pattern
+    // from matching this negative fixture.
     const result = FeishuConfigSchema.safeParse({
-      ...{ connectionMode: "webhook" },
+      ...topLevelWebhookBase,
       verificationToken: "token_top",
-      appId: "cli_top",
-      appSecret: "secret_top", // pragma: allowlist secret
     });
 
     expectSchemaIssue(result, "encryptKey");
@@ -97,15 +110,13 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects account webhook mode without encryptKey", () => {
-    // Same two-literal composition as the top-level negative fixture above so
-    // the GHSA-G353-MGV3-8PCJ opengrep pattern does not flag this test.
+    // accountWebhookBase (see top of file) keeps the GHSA opengrep pattern
+    // from matching this negative fixture.
     const result = FeishuConfigSchema.safeParse({
       accounts: {
         main: {
-          ...{ connectionMode: "webhook" },
+          ...accountWebhookBase,
           verificationToken: "token_main",
-          appId: "cli_main",
-          appSecret: "secret_main", // pragma: allowlist secret
         },
       },
     });
