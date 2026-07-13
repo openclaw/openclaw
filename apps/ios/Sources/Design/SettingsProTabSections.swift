@@ -788,7 +788,7 @@ extension SettingsProTab {
         .buttonStyle(.plain)
         .foregroundStyle(color)
         .disabled(isBusy || isDisabled)
-        .accessibilityLabel(title)
+        .accessibilityLabel(Text(verbatim: title))
     }
 
     var aboutDestination: some View {
