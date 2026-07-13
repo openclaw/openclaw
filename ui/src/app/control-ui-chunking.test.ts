@@ -26,6 +26,7 @@ describe("Control UI build chunking", () => {
     expect(controlUiManualChunk("/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js")).toBe(
       "gateway-runtime",
     );
+    expect(controlUiManualChunk("/repo/ui/src/lib/gateway-methods.ts")).toBe("gateway-runtime");
     expect(controlUiManualChunk("/repo/ui/src/app/app-host.ts")).toBeUndefined();
   });
 

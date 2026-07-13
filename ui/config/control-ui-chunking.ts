@@ -23,6 +23,10 @@ export function controlUiManualChunk(id: string): string | undefined {
     return "control-ui-shared";
   }
 
+  if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
+    return "gateway-runtime";
+  }
+
   if (
     moduleIdIncludesPackage(id, "lit") ||
     moduleIdIncludesPackage(id, "lit-html") ||
