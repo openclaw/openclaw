@@ -3931,6 +3931,7 @@ async function runEmbeddedAgentInternal(
               aborted,
               externalAbort,
               fallbackConfigured,
+              failoverCode: promptErrorDetails.code,
               failoverFailure: promptFailoverFailure,
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
@@ -3972,6 +3973,7 @@ async function runEmbeddedAgentInternal(
                 aborted,
                 externalAbort,
                 fallbackConfigured,
+                failoverCode: promptErrorDetails.code,
                 failoverFailure: promptFailoverFailure,
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,
@@ -4342,6 +4344,7 @@ async function runEmbeddedAgentInternal(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didDeliverSourceReplyViaMessageTool:
               attempt.didDeliverSourceReplyViaMessageTool === true,
+            messagingToolSentTargets: attempt.messagingToolSentTargets,
             messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             agentId: params.agentId,

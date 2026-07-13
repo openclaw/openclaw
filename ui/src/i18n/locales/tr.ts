@@ -395,7 +395,6 @@ export const tr: TranslationMap = {
       "Anlık görüntü başarısız oldu: {error}\n\nAnlık görüntü olmadan silinsin mi?",
   },
   agentChip: {
-    openConversation: "{name} ile konuşmanızı açın",
     menuLabel: "Ajan menüsü",
     agents: "Ajanlar",
     working: "Çalışıyor…",
@@ -1460,6 +1459,8 @@ export const tr: TranslationMap = {
     blockedAgentFilter: "aracı filtresi tarafından engellendi",
   },
   nav: {
+    back: "Geri",
+    forward: "İleri",
     chat: "Sohbet",
     settings: "Ayarlar",
     settingsGeneral: "Genel",
@@ -3602,6 +3603,14 @@ export const tr: TranslationMap = {
       remove: "Kaldır",
       more: "Diğer işlemler",
       history: "Geçmiş",
+    },
+    runNotStarted: {
+      notDue: "Bu otomasyonun çalışma zamanı henüz gelmedi.",
+      alreadyRunning: "Bu otomasyon zaten çalışıyor.",
+      recoveryPending: "Zamanlayıcı kurtarma işlemi hâlâ devam ediyor.",
+      invalidSpec: "Bu otomasyonun zamanlaması veya yükü geçersiz.",
+      stopped: "Zamanlayıcı durduruldu.",
+      unknown: "Bu otomasyon başlatılamadı.",
     },
     jobs: {
       schedule: "Zamanlama",

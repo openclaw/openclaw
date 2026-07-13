@@ -62,7 +62,6 @@ function makeSettings(gatewayUrl: string, overrides: Partial<UiSettings> = {}): 
     navCollapsed: false,
     navWidth: 258,
     sidebarPinnedRoutes: [],
-    sidebarMoreExpanded: false,
     ...overrides,
   };
 }
@@ -262,7 +261,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
       textScale: 100,
     });
 
@@ -294,7 +292,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
     });
 
     saveSettings({
@@ -311,7 +308,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
     });
 
     const settings = loadSettings();
@@ -340,7 +336,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
     });
     const settings = loadSettings();
     expect(settings.gatewayUrl).toBe(gwUrl);
@@ -359,7 +354,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
       textScale: 100,
       sessionsByGateway: {
         [gwUrl]: {
@@ -393,12 +387,10 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: ["sessions", "cron"],
-      sidebarMoreExpanded: true,
       textScale: 100,
     });
 
     expect(loadSettings().sidebarPinnedRoutes).toEqual(["sessions", "cron"]);
-    expect(loadSettings().sidebarMoreExpanded).toBe(true);
     expect(loadSettings().navWidth).toBe(258);
 
     // Corrupt the persisted list; load falls back to the default pinned set.
@@ -408,12 +400,10 @@ describe("loadSettings default gateway URL derivation", () => {
       unknown
     >;
     persisted.sidebarPinnedRoutes = "sessions";
-    persisted.sidebarMoreExpanded = "yes";
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 
     expect(loadSettings().sidebarPinnedRoutes).toEqual(["usage", "cron", "plugins"]);
-    expect(loadSettings().sidebarMoreExpanded).toBe(false);
     expect(loadSettings().navWidth).toBe(258);
   });
 
@@ -532,7 +522,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
     });
     saveSettings({
       gatewayUrl: gwUrl,
@@ -547,7 +536,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
     });
 
     expect(loadSettings().token).toBe("");
@@ -575,7 +563,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 320,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
     });
 
     const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
@@ -646,7 +633,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
       customTheme,
     });
 
@@ -676,7 +662,6 @@ describe("loadSettings default gateway URL derivation", () => {
         navCollapsed: false,
         navWidth: 258,
         sidebarPinnedRoutes: [],
-        sidebarMoreExpanded: false,
         customTheme: {
           sourceUrl: "https://tweakcn.com/themes/broken",
           themeId: "broken",
@@ -720,7 +705,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
     });
 
     const settings = loadSettings();
@@ -763,7 +747,6 @@ describe("loadSettings default gateway URL derivation", () => {
       navCollapsed: false,
       navWidth: 258,
       sidebarPinnedRoutes: [],
-      sidebarMoreExpanded: false,
     });
 
     const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}");

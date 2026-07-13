@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordChannelContext } from "./agent-components-helpers.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
-import * as modelPickerModule from "./model-picker.js";
+import * as modelPickerModule from "./model-picker.state.js";
 import { createModelsProviderData as createBaseModelsProviderData } from "./model-picker.test-utils.js";
 import {
   createDiscordModelPickerFallbackButton,

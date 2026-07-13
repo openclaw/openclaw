@@ -395,7 +395,6 @@ export const fr: TranslationMap = {
       "Échec de la création de l’instantané : {error}\n\nSupprimer sans instantané ?",
   },
   agentChip: {
-    openConversation: "Ouvrir votre conversation avec {name}",
     menuLabel: "Menu de l’agent",
     agents: "Agents",
     working: "Traitement en cours…",
@@ -1468,6 +1467,8 @@ export const fr: TranslationMap = {
     blockedAgentFilter: "bloqué par le filtre d'agent",
   },
   nav: {
+    back: "Retour",
+    forward: "Suivant",
     chat: "Chat",
     settings: "Paramètres",
     settingsGeneral: "Général",
@@ -3634,6 +3635,15 @@ export const fr: TranslationMap = {
       remove: "Supprimer",
       more: "Plus d'actions",
       history: "Historique",
+    },
+    runNotStarted: {
+      notDue: "Cette automatisation n’est pas encore prévue.",
+      alreadyRunning: "Cette automatisation est déjà en cours d’exécution.",
+      recoveryPending: "La récupération du planificateur est toujours en cours.",
+      invalidSpec:
+        "Cette automatisation comporte une planification ou une charge utile non valide.",
+      stopped: "Le planificateur est arrêté.",
+      unknown: "Cette automatisation n’a pas pu être démarrée.",
     },
     jobs: {
       schedule: "Planification",
