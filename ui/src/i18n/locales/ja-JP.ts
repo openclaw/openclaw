@@ -3420,6 +3420,8 @@ export const ja_JP: TranslationMap = {
       empty: "このエージェントにはまだバックグラウンドタスクがありません。",
       running: "実行中（{count}）",
       finished: "完了（{count}）",
+      statusRunningOne: "1 件のタスクを実行中",
+      statusRunningMany: "{count} 件のタスクを実行中",
       stopTask: "{title}を停止",
       viewTranscript: "トランスクリプトを表示",
       toolUseOne: "ツール使用 1 回",

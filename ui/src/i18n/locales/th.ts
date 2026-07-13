@@ -3355,6 +3355,8 @@ export const th: TranslationMap = {
       empty: "ยังไม่มีงานเบื้องหลังสำหรับเอเจนต์นี้",
       running: "กำลังทำงาน ({count})",
       finished: "เสร็จสิ้น ({count})",
+      statusRunningOne: "งานที่กำลังทำงานอยู่ 1 รายการ",
+      statusRunningMany: "งานที่กำลังทำงานอยู่ {count} รายการ",
       stopTask: "หยุด {title}",
       viewTranscript: "ดูบันทึกการสนทนา",
       toolUseOne: "ใช้เครื่องมือ 1 ครั้ง",

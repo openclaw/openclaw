@@ -3431,6 +3431,8 @@ export const pl: TranslationMap = {
       empty: "Brak zadań w tle dla tego agenta.",
       running: "Uruchomione ({count})",
       finished: "Ukończone ({count})",
+      statusRunningOne: "1 uruchomione zadanie",
+      statusRunningMany: "{count} uruchomionych zadań",
       stopTask: "Zatrzymaj {title}",
       viewTranscript: "Wyświetl transkrypcję",
       toolUseOne: "1 użycie narzędzia",
