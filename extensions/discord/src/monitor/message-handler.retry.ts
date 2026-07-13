@@ -19,7 +19,7 @@ function isReplySessionInitConflictError(error: unknown): boolean {
   return REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(message);
 }
 
-export class DiscordReplySessionConflictExhaustedError extends DiscordRetryableInboundError {
+class DiscordReplySessionConflictExhaustedError extends DiscordRetryableInboundError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "DiscordReplySessionConflictExhaustedError";
