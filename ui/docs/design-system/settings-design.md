@@ -42,20 +42,15 @@ import {
   renderSettingsEmpty,
 } from "../../components/settings-ui.ts";
 
-renderSettingsPage(
-  [
-    renderSettingsSection(
-      { title: t("settings.notifications") },
-      [
-        renderSettingsRow({
-          title: t("settings.systemNotifications"),
-          description: t("settings.systemNotificationsDesc"),
-          control: renderSettingsToggle({ checked, onChange }),
-        }),
-      ],
-    ),
-  ],
-)
+renderSettingsPage([
+  renderSettingsSection({ title: t("settings.notifications") }, [
+    renderSettingsRow({
+      title: t("settings.systemNotifications"),
+      description: t("settings.systemNotificationsDesc"),
+      control: renderSettingsToggle({ checked, onChange }),
+    }),
+  ]),
+]);
 ```
 
 Custom content inside a group (tables, meters) is allowed as an escape hatch — keep it inside one `.settings-group` and match row paddings (`--space-3 --space-4`).
