@@ -564,7 +564,7 @@ func TestValidateDocChunkTranslationRejectsAdditionalI18NPlaceholder(t *testing.
 func TestValidateDocChunkTranslationRejectsMalformedI18NPlaceholder(t *testing.T) {
 	t.Parallel()
 
-	for _, leaked := range []string{"__oc_i18n_900014__", "__OC_I18N_invalid__"} {
+	for _, leaked := range []string{"__oc_i18n_900014__", "__OC_I18N_invalid__", `\_\_OC\_I18N\_900014\_\_`} {
 		err := validateDocChunkTranslation("Regular paragraph.\n", "Обычный абзац.\n"+leaked+"\n")
 		if err == nil {
 			t.Fatalf("expected malformed i18n placeholder %q to be rejected", leaked)
@@ -581,6 +581,17 @@ func TestValidateDocBodyFencedLiteralsRejectsRestoredPlaceholderLeak(t *testing.
 	err := validateDocBodyFencedLiterals(source, translated)
 	if err == nil {
 		t.Fatal("expected restored placeholder leak to be rejected")
+	}
+}
+
+func TestFinalDocOutputRejectsI18NPlaceholderLeak(t *testing.T) {
+	t.Parallel()
+
+	if sameI18NProtocolMarkers("Regular prose.\n", "Обычный текст.\n__OC_I18N_900014__\n") {
+		t.Fatal("expected final output placeholder leak to be rejected")
+	}
+	if !sameI18NProtocolMarkers("Example __OC_I18N_42__.\n", "Пример __OC_I18N_42__.\n") {
+		t.Fatal("expected source-authored placeholder example to remain valid")
 	}
 }
 
@@ -2180,7 +2191,7 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 17") {
+	if !strings.Contains(text, "prompt_version: 18") {
 		t.Fatalf("expected prompt version 15 in output metadata:\n%s", text)
 	}
 }
