@@ -325,7 +325,6 @@ describe("skill experience review scheduler", () => {
     const params = completedRun();
     const prompt = buildSkillExperienceReviewPrompt({
       ctx: params.ctx,
-      config: params.config,
       transcript: formatSkillExperienceReviewTranscript(params.event.messages),
       modelIterations: 10,
     });
