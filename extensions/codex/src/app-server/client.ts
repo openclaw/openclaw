@@ -30,7 +30,6 @@ import {
 import { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
 /** Minimum supported Codex app-server version exported for callers/tests. */
-export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
@@ -179,7 +178,7 @@ type CodexServerRequestHandler = (
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
 /** Notification handler registered on a Codex app-server client. */
-export type CodexServerNotificationHandler = (
+type CodexServerNotificationHandler = (
   notification: CodexServerNotification,
 ) => Promise<void> | void;
 
@@ -879,7 +878,7 @@ function timeoutServerRequestResponse(
 }
 
 /** Raised when the initialize handshake detects an unsupported app-server version. */
-export class CodexAppServerVersionError extends Error {
+class CodexAppServerVersionError extends Error {
   readonly detectedVersion?: string;
 
   constructor(detectedVersion: string | undefined) {
@@ -932,7 +931,7 @@ function readNonEmptyInitializeString(value: string | undefined): string | undef
 }
 
 /** Extracts the Codex version from the app-server initialize user-agent field. */
-export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
+function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
   // Codex returns `<originator>/<codex-version> ...`; the originator can be
   // OpenClaw, Codex Desktop, or an env override, so only the slash-delimited
   // version in the leading product field is stable.
@@ -943,7 +942,7 @@ export function readCodexVersionFromUserAgent(userAgent: string | undefined): st
 }
 
 /** Compares stable Codex app-server versions for protocol floor checks. */
-export function compareCodexAppServerVersions(left: string, right: string): number {
+function compareCodexAppServerVersions(left: string, right: string): number {
   const leftVersion = parseVersionForComparison(left);
   const rightVersion = parseVersionForComparison(right);
   const leftParts = leftVersion.parts;
@@ -1060,12 +1059,3 @@ function formatExitValue(value: unknown): string {
   }
   return "unknown";
 }
-
-/** Test-only access to transport close helpers and parser redaction internals. */
-export const testing = {
-  closeCodexAppServerTransport,
-  closeCodexAppServerTransportAndWait,
-  CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
-  redactCodexAppServerLinePreview,
-} as const;
-export { testing as __testing };
