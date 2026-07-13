@@ -4,13 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { beforeEach, describe, expect, it } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsSsoTokenStoreFs, makeMSTeamsSsoTokenStoreKey } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("msteams sso token store (plugin state)", () => {
   beforeEach(() => {
@@ -82,34 +80,35 @@ describe("msteams sso token store (plugin state)", () => {
   });
 
   it("keeps default and named account tokens separate", async () => {
-    const stateDir = tempDirs.make("openclaw-msteams-sso-account-");
-    const defaultStore = createMSTeamsSsoTokenStoreFs({ stateDir });
-    const namedStore = createMSTeamsSsoTokenStoreFs({ accountId: "secondary", stateDir });
-    const defaultToken = {
-      connectionName: "graph",
-      userId: "aad-user",
-      token: "default-token",
-      updatedAt: "2026-04-10T00:00:00.000Z",
-    } as const;
-    const namedToken = {
-      connectionName: "graph",
-      userId: "aad-user",
-      token: "secondary-token",
-      updatedAt: "2026-04-10T00:00:01.000Z",
-    } as const;
+    await withTempDir("openclaw-msteams-sso-account-", async (stateDir) => {
+      const defaultStore = createMSTeamsSsoTokenStoreFs({ stateDir });
+      const namedStore = createMSTeamsSsoTokenStoreFs({ accountId: "secondary", stateDir });
+      const defaultToken = {
+        connectionName: "graph",
+        userId: "aad-user",
+        token: "default-token",
+        updatedAt: "2026-04-10T00:00:00.000Z",
+      } as const;
+      const namedToken = {
+        connectionName: "graph",
+        userId: "aad-user",
+        token: "secondary-token",
+        updatedAt: "2026-04-10T00:00:01.000Z",
+      } as const;
 
-    await defaultStore.save(defaultToken);
-    await namedStore.save(namedToken);
+      await defaultStore.save(defaultToken);
+      await namedStore.save(namedToken);
 
-    expect(await defaultStore.get(defaultToken)).toEqual(defaultToken);
-    expect(await namedStore.get(namedToken)).toEqual({
-      ...namedToken,
-      accountId: "secondary",
-    });
-    expect(await defaultStore.remove(defaultToken)).toBe(true);
-    expect(await namedStore.get(namedToken)).toEqual({
-      ...namedToken,
-      accountId: "secondary",
+      expect(await defaultStore.get(defaultToken)).toEqual(defaultToken);
+      expect(await namedStore.get(namedToken)).toEqual({
+        ...namedToken,
+        accountId: "secondary",
+      });
+      expect(await defaultStore.remove(defaultToken)).toBe(true);
+      expect(await namedStore.get(namedToken)).toEqual({
+        ...namedToken,
+        accountId: "secondary",
+      });
     });
   });
 
