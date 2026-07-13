@@ -754,7 +754,10 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
 
     it("rejects include paths at or over the platform-safe maximum", () => {
-      expectResolveIncludeError(() => resolve({ $include: "a".repeat(4096) }, {}), /maximum length/);
+      expectResolveIncludeError(
+        () => resolve({ $include: "a".repeat(4096) }, {}),
+        /maximum length/,
+      );
       expectResolveIncludeError(
         () => resolve({ $include: "b".repeat(4097) }, {}),
         /maximum length/,
@@ -863,10 +866,7 @@ describe("security: path traversal protection (CWE-22)", () => {
         );
 
         expect(() =>
-          resolveConfigIncludes(
-            { $include: "./big.json5" },
-            path.join(configDir, "openclaw.json"),
-          ),
+          resolveConfigIncludes({ $include: "./big.json5" }, path.join(configDir, "openclaw.json")),
         ).toThrow(/security checks|max/i);
       });
     });
