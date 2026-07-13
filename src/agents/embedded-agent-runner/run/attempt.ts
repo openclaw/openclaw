@@ -491,7 +491,8 @@ export async function runEmbeddedAttempt(
     });
     bundleMcpRuntime = preparedBundleTools.bundleMcpRuntime;
     bundleLspRuntime = preparedBundleTools.bundleLspRuntime;
-    const { clientTools, tools, uncompactedEffectiveTools } = preparedBundleTools;
+    const { clientTools, middlewarePluginMetadataSnapshot, tools, uncompactedEffectiveTools } =
+      preparedBundleTools;
     const preparedToolCatalog = prepareEmbeddedAttemptToolCatalog({
       attempt: params,
       preparedToolBase,
@@ -758,6 +759,8 @@ export async function runEmbeddedAttempt(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
+        pluginMetadataSnapshot: middlewarePluginMetadataSnapshot,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,

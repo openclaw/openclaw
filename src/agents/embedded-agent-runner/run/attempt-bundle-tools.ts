@@ -79,6 +79,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     bundleMetadataSnapshot?.pluginIds === undefined
       ? bundleMetadataSnapshot?.manifestRegistry
       : undefined;
+  const middlewarePluginMetadataSnapshot =
+    bundleMetadataSnapshot?.pluginIds === undefined ? bundleMetadataSnapshot : undefined;
   const bundleMcpSessionRuntime = bundleMcpEnabled
     ? await getOrCreateSessionMcpRuntime({
         sessionId: params.attempt.sessionId,
@@ -201,6 +203,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       bundleLspRuntime,
       bundleMcpRuntime,
       clientTools,
+      middlewarePluginMetadataSnapshot,
       tools,
       uncompactedEffectiveTools: [...schemaProjection.tools],
     };

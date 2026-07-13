@@ -1522,15 +1522,16 @@ async function compactEmbeddedAgentSessionDirectOnce(
       });
       compactionSessionManager = sessionManager;
       trackSessionManagerAccess(params.sessionFile);
+      const pluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: process.env,
+        workspaceDir: effectiveWorkspace,
+      });
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
         cwd: effectiveCwd,
         agentDir,
         cfg: params.config,
-        pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-          config: params.config,
-          env: process.env,
-          workspaceDir: effectiveWorkspace,
-        }),
+        pluginMetadataSnapshot,
         contextTokenBudget,
       });
       // Sets compaction/pruning runtime state and returns extension factories
@@ -1538,6 +1539,8 @@ async function compactEmbeddedAgentSessionDirectOnce(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
+        pluginMetadataSnapshot,
         provider,
         modelId,
         model: effectiveModel,

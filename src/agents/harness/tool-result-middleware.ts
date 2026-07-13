@@ -2,6 +2,7 @@
  * Runs native harness tool-result middleware around tool execution results.
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
@@ -10,6 +11,7 @@ import type {
   AgentToolResultMiddlewareEvent,
   OpenClawAgentToolResult,
 } from "../../plugins/agent-tool-result-middleware-types.js";
+import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createLazyPromiseLoader } from "../../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
@@ -28,6 +30,12 @@ const MAX_MIDDLEWARE_DETAILS_BYTES = 100_000;
 const MAX_MIDDLEWARE_DETAILS_DEPTH = 20;
 const MAX_MIDDLEWARE_DETAILS_KEYS = 1_000;
 const NESTED_TOOL_RESULT_BLOCK_TYPES = new Set(["toolresult", "tool_result"]);
+
+type AgentToolResultMiddlewareLoaderContext = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  manifestRegistry?: PluginManifestRegistry;
+};
 
 type MiddlewareContentBlock = OpenClawAgentToolResult["content"][number];
 type MiddlewareContentCoerceState = { depth: number; seen: Set<object> };
@@ -480,6 +488,7 @@ function reconcileDeliveredMessagingFailure(
 export function createAgentToolResultMiddlewareRunner(
   ctx: AgentToolResultMiddlewareContext,
   handlers?: AgentToolResultMiddleware[],
+  loaderContext?: AgentToolResultMiddlewareLoaderContext,
 ) {
   const middlewareContext = { ...ctx, harness: ctx.harness ?? ctx.runtime };
   let resolvedHandlers = handlers;
@@ -488,6 +497,7 @@ export function createAgentToolResultMiddlewareRunner(
       await import("../../plugins/agent-tool-result-middleware-loader.js");
     return loadAgentToolResultMiddlewaresForRuntime({
       runtime: ctx.runtime,
+      ...loaderContext,
     });
   });
   const resolveHandlers = async (): Promise<AgentToolResultMiddleware[]> => {
