@@ -6,12 +6,12 @@ import {
   getToolTerminalPresentation,
   setToolTerminalPresentation,
 } from "../../tool-terminal-presentation.js";
-import { wrapEmbeddedAttemptToolWithActivity } from "./attempt-tool-catalog.js";
 import {
   clearToolActivityRun,
   getLastToolActivityMs,
   notifyToolActivity,
   onToolActivity,
+  wrapEmbeddedAttemptToolWithActivity,
 } from "./tool-activity-heartbeat.js";
 
 const RUN = "test-run";
