@@ -461,9 +461,6 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 1.29.0
         version: 1.29.0(zod@4.4.3)
-      commander:
-        specifier: 15.0.0
-        version: 15.0.0
       express:
         specifier: 5.2.1
         version: 5.2.1
@@ -859,9 +856,6 @@ importers:
 
   extensions/google-meet:
     dependencies:
-      commander:
-        specifier: 15.0.0
-        version: 15.0.0
       pretty-ms:
         specifier: 9.3.0
         version: 9.3.0
@@ -1297,9 +1291,6 @@ importers:
 
   extensions/oc-path:
     dependencies:
-      commander:
-        specifier: 15.0.0
-        version: 15.0.0
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -1793,9 +1784,6 @@ importers:
 
   extensions/voice-call:
     dependencies:
-      commander:
-        specifier: 15.0.0
-        version: 15.0.0
       defu:
         specifier: 6.1.5
         version: 6.1.5
