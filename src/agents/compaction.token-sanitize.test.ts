@@ -1,5 +1,5 @@
 // Verifies compaction token planning strips private/non-model fields first.
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { serializeConversation, type AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 
 const agentSessionMocks = vi.hoisted(() => ({
@@ -112,6 +112,51 @@ describe("compaction token accounting sanitization", () => {
     expect(projectedJson).not.toContain(hugeText);
     expect(estimateMessagesTokens(projected)).toBeGreaterThanOrEqual(
       estimateMessagesTokens(messages),
+    );
+  });
+
+  it("removes tool-result image bytes while preserving image pressure and summary semantics", () => {
+    const imageData = "a".repeat(1_000_000);
+    const userImageMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "describe this image" },
+        { type: "image", data: imageData, mimeType: "image/png" },
+      ],
+      timestamp: 0,
+    } satisfies AgentMessage;
+    const imageMessage = {
+      role: "toolResult",
+      toolCallId: "call_image",
+      toolName: "browser",
+      isError: false,
+      content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+      timestamp: 1,
+    } satisfies AgentMessage;
+    const messages: AgentMessage[] = [userImageMessage, imageMessage];
+
+    const projected = projectCompactionMessagesForPlanning(messages);
+    const projectedUserMessage = projected[0];
+    expect(projectedUserMessage?.role).toBe("user");
+    if (!projectedUserMessage || projectedUserMessage.role !== "user") {
+      throw new Error("expected projected user message");
+    }
+    const projectedUserImage = Array.isArray(projectedUserMessage.content)
+      ? projectedUserMessage.content[1]
+      : undefined;
+    const projectedMessage = projected[1];
+    expect(projectedMessage?.role).toBe("toolResult");
+    if (!projectedMessage || projectedMessage.role !== "toolResult") {
+      throw new Error("expected projected tool result");
+    }
+    const projectedImage = projectedMessage.content[0];
+
+    expect(projectedUserImage).toMatchObject({ type: "image", data: "", mimeType: "image/png" });
+    expect(projectedImage).toMatchObject({ type: "image", data: "", mimeType: "image/png" });
+    expect(JSON.stringify(projected)).not.toContain(imageData);
+    expect(estimateMessagesTokens(projected)).toBe(estimateMessagesTokens(messages));
+    expect(serializeConversation([projectedUserMessage, projectedMessage])).toBe(
+      serializeConversation([userImageMessage, imageMessage]),
     );
   });
 });

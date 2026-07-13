@@ -114,7 +114,10 @@ function projectTextForCompactionPlanning(
   };
 }
 
-function projectToolResultBlockForPlanning(block: unknown): {
+function projectContentBlockForPlanning(
+  block: unknown,
+  projectText: boolean,
+): {
   block: unknown;
   omittedChars: number;
   changed: boolean;
@@ -124,6 +127,16 @@ function projectToolResultBlockForPlanning(block: unknown): {
   }
   const record = block as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : "";
+  if (type === "image" && typeof record.data === "string" && record.data.length > 0) {
+    return {
+      block: { ...record, data: "" },
+      omittedChars: 0,
+      changed: true,
+    };
+  }
+  if (!projectText) {
+    return { block, omittedChars: 0, changed: false };
+  }
   const textIsModelVisible =
     type === "text" ||
     ((type === "toolResult" || type === "tool_result") && typeof record.text === "string");
@@ -151,13 +164,10 @@ function projectToolResultBlockForPlanning(block: unknown): {
   return { block: next, omittedChars, changed: true };
 }
 
-function projectToolResultMessageForPlanning(message: AgentMessage): AgentMessage {
-  if (message.role !== "toolResult") {
-    return message;
-  }
+function projectMessageForPlanning(message: AgentMessage): AgentMessage {
   const currentOmittedChars = readCompactionPlanningOmittedChars(message);
   const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
+  if (message.role === "toolResult" && typeof content === "string") {
     const projected = projectTextForCompactionPlanning(content);
     if (!projected) {
       return message;
@@ -175,7 +185,7 @@ function projectToolResultMessageForPlanning(message: AgentMessage): AgentMessag
   let omittedChars = 0;
   let changed = false;
   const projectedContent = content.map((block) => {
-    const projected = projectToolResultBlockForPlanning(block);
+    const projected = projectContentBlockForPlanning(block, message.role === "toolResult");
     omittedChars += projected.omittedChars;
     changed ||= projected.changed;
     return projected.block;
@@ -193,7 +203,7 @@ function projectToolResultMessageForPlanning(message: AgentMessage): AgentMessag
 /** Builds a bounded planning projection that preserves token pressure accounting. */
 export function projectCompactionMessagesForPlanning(messages: AgentMessage[]): AgentMessage[] {
   const safe = sanitizeCompactionMessages(messages);
-  return safe.map(projectToolResultMessageForPlanning);
+  return safe.map(projectMessageForPlanning);
 }
 
 /** Clamps requested split parts to a usable count for the available messages. */

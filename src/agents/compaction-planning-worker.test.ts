@@ -1,7 +1,12 @@
 // Covers the compaction planning worker boundary and timeout behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.js";
+import {
+  buildSummaryChunksWithWorker,
+  compactionPlanningWorkerTesting,
+} from "./compaction-planning-worker.js";
+import { estimateMessagesTokens } from "./compaction-planning.js";
 import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
 import type { AgentMessage } from "./runtime/index.js";
 
@@ -66,6 +71,60 @@ describe("compaction planning worker", () => {
       1, 2, 3,
     ]);
     expect(packagedSummaryChunks.chunks.length).toBeGreaterThan(1);
+  }, 45_000);
+
+  it("bounds image data across the packaged worker without changing planning pressure", async () => {
+    const imageData = "a".repeat(1_000_000);
+    const imageMessage = {
+      role: "toolResult",
+      toolCallId: "call_image",
+      toolName: "browser",
+      isError: false,
+      content: [{ type: "image", data: imageData, mimeType: "image/png" }],
+      timestamp: 1,
+    } satisfies AgentMessage;
+    const messages = [
+      {
+        role: "user" as const,
+        content: [{ type: "image" as const, data: imageData, mimeType: "image/png" }],
+        timestamp: 0,
+      },
+      imageMessage,
+      ...Array.from({ length: 62 }, (_, index) => makeMessage(index + 2)),
+    ];
+
+    const chunks = await buildSummaryChunksWithWorker({ messages, maxChunkTokens: 8_000 });
+    const plannedMessages = chunks.flat();
+    const plannedImageMessage = plannedMessages.find(
+      (message) => message.role === "toolResult" && message.toolCallId === "call_image",
+    );
+    const plannedUserImageMessage = plannedMessages.find(
+      (message) => message.role === "user" && message.timestamp === 0,
+    );
+    expect(plannedImageMessage?.role).toBe("toolResult");
+    if (!plannedImageMessage || plannedImageMessage.role !== "toolResult") {
+      throw new Error("expected planned tool result");
+    }
+
+    expect(plannedImageMessage.content[0]).toMatchObject({
+      type: "image",
+      data: "",
+      mimeType: "image/png",
+    });
+    expect(plannedUserImageMessage?.role).toBe("user");
+    if (!plannedUserImageMessage || plannedUserImageMessage.role !== "user") {
+      throw new Error("expected planned user message");
+    }
+    expect(plannedUserImageMessage.content).toEqual([
+      { type: "image", data: "", mimeType: "image/png" },
+    ]);
+    expect(JSON.stringify(plannedMessages)).not.toContain(imageData);
+    expect(estimateMessagesTokens([plannedImageMessage])).toBe(
+      estimateMessagesTokens([imageMessage]),
+    );
+    expect(serializeConversation([plannedImageMessage])).toBe(
+      serializeConversation([imageMessage]),
+    );
   }, 45_000);
 
   it("plans summary chunks for worker input", () => {
