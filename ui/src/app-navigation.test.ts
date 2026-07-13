@@ -55,6 +55,7 @@ const SETTINGS_ROUTE_PATHS = [
   { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
   { routeId: "sessions", path: "/settings/sessions", alias: "/sessions" },
   { routeId: "nodes", path: "/settings/devices", alias: "/nodes" },
+  { routeId: "agents", path: "/settings/agents", alias: "/agents" },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
   {
     routeId: "model-providers",
@@ -398,6 +399,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "connection",
       "channels",
       "communications",
+      "agents",
       "ai-agents",
       "sessions",
       "model-providers",

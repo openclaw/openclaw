@@ -406,6 +406,13 @@ export const th: TranslationMap = {
     getHelp: "ขอความช่วยเหลือ",
     discord: "ชุมชน Discord",
     viewChangelog: "ดูบันทึกการเปลี่ยนแปลง",
+    agentSettings: "การตั้งค่าเอเจนต์",
+    filterAgents: "ค้นหาเอเจนต์…",
+    noAgentMatches: "ไม่พบเอเจนต์ที่ตรงกัน",
+  },
+  agentScope: {
+    label: "ขอบเขตเอเจนต์",
+    allAgents: "เอเจนต์ทั้งหมด",
   },
   newSession: {
     title: "เซสชันใหม่",
@@ -612,6 +619,8 @@ export const th: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "ปักหมุดไว้ที่ตัวสลับ",
+    unpinFromSwitcher: "เลิกปักหมุดจากตัวสลับ",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -636,6 +645,17 @@ export const th: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "ข้อมูลประจำตัว",
+      subtitle: "ชื่อ อีโมจิ และรูปประจำตัวที่แสดงในแชตและแถบด้านข้าง",
+      name: "ชื่อที่แสดง",
+      namePlaceholder: "ชื่อเอเจนต์",
+      emoji: "อีโมจิ",
+      chooseImage: "เลือกรูปภาพ…",
+      replaceImage: "เปลี่ยนรูปภาพ…",
+      imageUnusable: "ไม่สามารถใช้รูปภาพนั้นได้ โปรดเลือกไฟล์รูปภาพที่มีขนาดไม่เกิน 2 MB",
+      fileHint: "เอเจนต์สามารถตั้งค่านี้ได้เองโดยแก้ไข IDENTITY.md ในพื้นที่ทำงานของตน",
     },
     overview: {
       title: "ภาพรวม",
