@@ -1,5 +1,7 @@
 // Resolves canonical group policy scopes prepared by channel plugins.
-import { resolveToolsBySender } from "./group-policy.js";
+import type { ChannelId } from "../channels/plugins/channel-id.types.js";
+import { resolveChannelGroups, resolveToolsBySender } from "./group-policy.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type ScopeNode = {
@@ -20,6 +22,19 @@ export type ScopeTree = {
 export type ScopePath = string[];
 
 type ScopeToolPolicySender = Omit<Parameters<typeof resolveToolsBySender>[0], "toolsBySender">;
+
+export function buildChannelGroupsScopeTree(
+  cfg: OpenClawConfig,
+  channel: ChannelId,
+  accountId?: string | null,
+): ScopeTree {
+  // 13+ channels share the flat `groups` config shape; richer channels such as
+  // Discord, Telegram, and Microsoft Teams ship their own builders.
+  const groups = resolveChannelGroups(cfg, channel, accountId) ?? {};
+  // The wildcard config is the fallback node, not a matchable exact scope.
+  const { "*": defaults, ...scopes } = groups;
+  return { defaults, scopes };
+}
 
 function resolveFromScopes<Value>(params: {
   tree: ScopeTree;

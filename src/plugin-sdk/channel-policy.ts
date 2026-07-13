@@ -49,6 +49,7 @@ export {
   type ChannelGroupPolicy,
 } from "../config/group-policy.js";
 export {
+  buildChannelGroupsScopeTree,
   resolveScopeIntroHint,
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
