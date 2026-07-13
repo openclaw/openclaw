@@ -81,6 +81,7 @@ describe("cleanupArchivedSessionTranscripts", () => {
   it("notifies transcript subscribers only when retention deletes an archive", async () => {
     const archiveName = `a.jsonl.reset.${OLD_STAMP}`;
     const archivePath = path.join(dir, archiveName);
+    const sourcePath = path.join(dir, "a.jsonl");
     await seed([archiveName]);
     const updates: string[] = [];
     const unsubscribe = onInternalSessionTranscriptUpdate((update) => {
@@ -103,7 +104,7 @@ describe("cleanupArchivedSessionTranscripts", () => {
         rules: [{ reason: "reset", olderThanMs: 30 * DAY_MS }],
         nowMs: NOW_MS,
       });
-      expect(updates).toEqual([archivePath]);
+      expect(updates).toEqual([archivePath, sourcePath]);
     } finally {
       unsubscribe();
     }

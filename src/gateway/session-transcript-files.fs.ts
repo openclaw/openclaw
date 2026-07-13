@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import {
   formatSessionArchiveTimestamp,
+  parseSessionArchiveSourceFileName,
   parseSessionArchiveTimestamp,
   type SessionArchiveReason,
 } from "../config/sessions/artifacts.js";
@@ -376,13 +377,16 @@ function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string 
   // chat inject, command execution) already emit here; archive was the sole
   // remaining gap, which is why `.jsonl.reset.<iso>` / `.jsonl.deleted.<iso>`
   // files only surfaced in the index after a full reindex.
-  emitSessionTranscriptArchiveMutation(archived);
+  emitSessionTranscriptArchiveMutation(archived, filePath);
   return archived;
 }
 
-function emitSessionTranscriptArchiveMutation(sessionFile: string): void {
+function emitSessionTranscriptArchiveMutation(sessionFile: string, sourceFile?: string): void {
   clearSessionTranscriptResetArchiveDiscoveryCache();
   emitSessionTranscriptUpdate({ sessionFile });
+  if (sourceFile && sourceFile !== sessionFile) {
+    emitSessionTranscriptUpdate({ sessionFile: sourceFile });
+  }
 }
 
 export function archiveSessionTranscriptPaths(opts: {
@@ -545,6 +549,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
           continue;
         }
         const fullPath = path.join(dir, entry);
+        const sourceFileName = parseSessionArchiveSourceFileName(entry, rule.reason);
         if (opts.excludeCanonicalPaths?.has(canonicalizePathForComparison(fullPath))) {
           break;
         }
@@ -561,7 +566,10 @@ export async function cleanupArchivedSessionTranscripts(opts: {
                 () => false,
               );
               if (didRemove) {
-                emitSessionTranscriptArchiveMutation(fullPath);
+                emitSessionTranscriptArchiveMutation(
+                  fullPath,
+                  sourceFileName ? path.join(dir, sourceFileName) : undefined,
+                );
                 opts.onRemoveFile?.(canonicalizePathForComparison(fullPath));
                 removed += 1;
               }
