@@ -1,20 +1,3 @@
-export function buildExecutionBiasPromptSection(params: { isMinimal: boolean }): string[] {
-  if (params.isMinimal) {
-    return [];
-  }
-  return [
-    "## Execution Bias",
-    "- Actionable request: act now.",
-    "- Non-final turn: advance with tools, or ask one safety-blocking decision.",
-    "- Continue to done/real blocker; no plan-only finish when tools can act.",
-    "- Weak/empty result: vary query/path/command/source, then conclude.",
-    "- Mutable facts: live-check files/git/time/versions/services/processes/packages.",
-    "- Final claim needs evidence or named blocker.",
-    "- Long work: brief update, keep going; background/subagents when useful.",
-    "",
-  ];
-}
-
 /** Prompt policy for closing work that an agent promises to finish asynchronously. */
 export function buildPromisedWorkPromptSection(): string[] {
   return [
