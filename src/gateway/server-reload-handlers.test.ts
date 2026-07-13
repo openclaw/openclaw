@@ -143,13 +143,9 @@ const hoisted = vi.hoisted(() => ({
   clearCurrentProviderAuthState: vi.fn(() => {}),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
-<<<<<<< HEAD
   setInternalHooksEnabled: vi.fn((_enabled: boolean) => {}),
   loadInternalHooks: vi.fn(async (_cfg: OpenClawConfig, _workspaceDir: string) => 0),
-  buildGatewayCronService: vi.fn(() => ({
-=======
   buildGatewayCronService: vi.fn((_params?: { env?: NodeJS.ProcessEnv }) => ({
->>>>>>> upstream/main
     cron: { start: vi.fn(async () => {}), stop: vi.fn() },
     storePath: "/tmp/rebuilt-cron.json",
     cronEnabled: true,
@@ -382,6 +378,7 @@ function createReloadHandlersForTest(
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron,
     logReload,
+    defaultWorkspaceDir: "/tmp/openclaw-workspace",
     cronReconciliation,
     requestRecoveryRestart:
       typeof recovery === "function"
@@ -534,6 +531,7 @@ function createManagedRestartSequenceHarness(
   );
   const sharedGatewaySessionGenerationState = { current: undefined, required: null };
   let generationInvalidated = false;
+  const cronReconciliation = createTestCronReconciliation();
   const reloader = startManagedGatewayConfigReloader({
     minimalTestGateway: false,
     initialConfig,
@@ -590,11 +588,8 @@ function createManagedRestartSequenceHarness(
     logChannels: { info: vi.fn(), error: vi.fn() },
     logCron: { error: vi.fn() },
     logReload,
-<<<<<<< HEAD
     defaultWorkspaceDir: "/tmp/openclaw-workspace",
     cronReconciliation,
-    createHealthMonitor: () => null,
-=======
     channelManager: {} as never,
     activateRuntimeSecrets: activateRuntimeSecrets as never,
     resolveSharedGatewaySessionGenerationForConfig: () => undefined,
@@ -615,7 +610,7 @@ function createManagedRestartSequenceHarness(
     commitTerminalConfig: terminalPolicy.commitConfig,
     acceptTerminalConfig: terminalPolicy.acceptConfig,
     requestRecoveryRestart,
->>>>>>> upstream/main
+    createHealthMonitor: () => null,
   });
   const writeConfig = (
     config: OpenClawConfig,

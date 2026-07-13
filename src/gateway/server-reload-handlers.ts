@@ -19,12 +19,9 @@ import {
   getRuntimeConfigSourceSnapshot,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-<<<<<<< HEAD
+import { isSecretRef } from "../config/types.secrets.js";
 import { setInternalHooksEnabled } from "../hooks/internal-hooks.js";
 import { loadInternalHooks } from "../hooks/loader.js";
-=======
-import { isSecretRef } from "../config/types.secrets.js";
->>>>>>> upstream/main
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
