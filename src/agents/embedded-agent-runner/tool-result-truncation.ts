@@ -8,6 +8,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TextContent } from "../../llm/types.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -68,7 +69,10 @@ const AGGREGATE_TOOL_RESULT_CONTEXT_SHARE = 0.5;
  */
 const MIN_KEEP_CHARS = 2_000;
 const RECOVERY_MIN_KEEP_CHARS = 0;
-const aggregateToolResultRecoveryWarnings = new Set<string>();
+const aggregateToolResultRecoveryWarnings = createDedupeCache({
+  ttlMs: 0,
+  maxSize: 4096,
+});
 
 type ToolResultTruncationOptions = {
   suffix?: string | ((truncatedChars: number) => string);
@@ -103,11 +107,10 @@ function logToolResultSessionTruncation(params: {
     log.info(message);
     return;
   }
-  if (aggregateToolResultRecoveryWarnings.has(sessionLogKey)) {
+  if (aggregateToolResultRecoveryWarnings.check(sessionLogKey)) {
     log.info(message);
     return;
   }
-  aggregateToolResultRecoveryWarnings.add(sessionLogKey);
   log.warn(
     `${message}; aggregate tool-result pressure detected; consider /compact or /new if pressure persists`,
   );
