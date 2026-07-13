@@ -30,7 +30,7 @@ import {
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export type AgentRequestPreflight = {
+type AgentRequestPreflight = {
   request: AgentRunRequest;
   cfg: ReturnType<GatewayRequestHandlerOptions["context"]["getRuntimeConfig"]>;
   runId: string;

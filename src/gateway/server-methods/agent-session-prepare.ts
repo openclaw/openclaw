@@ -35,7 +35,7 @@ import {
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-export type PreparedAgentSession = {
+type PreparedAgentSession = {
   cfg: OpenClawConfig;
   storePath: string;
   entry?: SessionEntry;

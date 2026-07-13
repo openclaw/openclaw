@@ -32,7 +32,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type ExplicitRecipientSession = Awaited<ReturnType<typeof resolveAgentExplicitRecipientSession>>;
 
-export type AgentRequestRouting = {
+type AgentRequestRouting = {
   normalizedAttachments: ReturnType<typeof normalizeRpcAttachmentsToChatAttachments>;
   requestedBestEffortDeliver?: boolean;
   knownAgents: string[];

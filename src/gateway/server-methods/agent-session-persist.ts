@@ -38,7 +38,7 @@ export type CronContinuationClaim = {
   mediaTaskIdsBefore: ReadonlySet<string>;
 };
 
-export type AgentSessionPersistResult = {
+type AgentSessionPersistResult = {
   sessionEntry?: SessionEntry;
   resolvedSessionId?: string;
   sessionPersistedBeforeGatewayAdmission: boolean;

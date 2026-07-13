@@ -50,7 +50,7 @@ type ExplicitRecipientSession = Awaited<
   >
 >;
 
-export type AgentContentPhaseResult = {
+type AgentContentPhaseResult = {
   agentId?: string;
   requestedSessionKey?: string;
   effectiveTranscriptInputText: string;
