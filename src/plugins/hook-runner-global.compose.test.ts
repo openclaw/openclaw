@@ -7,13 +7,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { addTestHook, createMockPluginRegistry } from "../../test/helpers/plugins/hooks.js";
 import { getGlobalHookRunnerRegistry } from "./hook-runner-global-state.js";
 import {
   getGlobalHookRunner,
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "./hook-runner-global.js";
-import { addTestHook, createMockPluginRegistry } from "./hooks.test-fixtures.js";
 import type { PluginRegistry } from "./registry.js";
 import {
   pinActivePluginChannelRegistry,

@@ -2,8 +2,11 @@
 // lifecycle events, and deferred reply cleanup.
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import {
+  createMockPluginRegistry,
+  TEST_PLUGIN_AGENT_CTX,
+} from "../../test/helpers/plugins/hooks.js";
 import { createHookRunner } from "../plugins/hooks.js";
-import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
 import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 

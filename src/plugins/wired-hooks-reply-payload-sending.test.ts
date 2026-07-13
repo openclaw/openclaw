@@ -1,12 +1,12 @@
 /** Tests reply payload sending through wired plugin hook flows. */
 import { describe, expect, it, vi } from "vitest";
+import { createHookRunnerWithRegistry } from "../../test/helpers/plugins/hooks.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../auto-reply/reply-payload.js";
 import type { PluginHookReplyPayload } from "./hook-types.js";
-import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;

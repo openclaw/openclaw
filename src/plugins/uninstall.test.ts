@@ -1,6 +1,5 @@
 // Covers plugin uninstall flows and install-record cleanup.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -29,7 +28,9 @@ type PluginInstallRecord = NonNullable<PluginConfig["installs"]>[string];
 
 async function uninstallPlugin(params: Parameters<typeof planPluginUninstall>[0]) {
   const plan = planPluginUninstall(params);
-  if (!plan.ok) return plan;
+  if (!plan.ok) {
+    return plan;
+  }
   const directory = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
   return {
     ok: true as const,

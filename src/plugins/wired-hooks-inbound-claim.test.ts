@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
+import { createHookRunnerWithRegistry } from "../../test/helpers/plugins/hooks.js";
 
 const inboundClaimEvent = {
   content: "who are you",

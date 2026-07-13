@@ -1,7 +1,7 @@
 // Auth choice tests cover auth choice application, provider config, and credential prompts.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -14,6 +14,7 @@ import {
   createAuthTestLifecycle,
   createExitThrowingRuntime,
   createWizardPrompter,
+  setupAuthTestEnv,
 } from "./test-wizard-helpers.js";
 
 type DetectZaiEndpoint = (params: {
@@ -43,6 +44,13 @@ const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
 vi.mock("../plugins/provider-install-catalog.js", () => ({
   resolveDeprecatedProviderInstallCatalogEntry,
   resolveProviderInstallCatalogEntry: vi.fn(() => undefined),
+}));
+
+vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
+  resolvePluginProviders,
+  resolvePluginSetupProvider: () => undefined,
+  resolveProviderPluginChoice,
+  runProviderModelSelectedHook,
 }));
 
 vi.mock("./auth-choice.apply.api-providers.js", () => {
@@ -666,6 +674,18 @@ describe("applyAuthChoice", () => {
   }
 
   let defaultProviderPlugins: ProviderPlugin[] = [];
+
+  beforeAll(async () => {
+    authTestRoot = (await setupAuthTestEnv("openclaw-auth-")).stateDir;
+    defaultProviderPlugins = await createDefaultProviderPlugins();
+    resolvePluginProviders.mockReturnValue(defaultProviderPlugins);
+  });
+
+  afterAll(async () => {
+    if (authTestRoot) {
+      await fs.rm(authTestRoot, { recursive: true, force: true });
+    }
+  });
 
   afterEach(async () => {
     vi.unstubAllGlobals();

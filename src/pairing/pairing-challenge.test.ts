@@ -1,10 +1,10 @@
 // Tests pairing challenge creation, validation, and reply formatting.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createMockPluginRegistry } from "../../test/helpers/plugins/hooks.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { issuePairingChallenge } from "./pairing-challenge.js";
 
 describe("issuePairingChallenge", () => {

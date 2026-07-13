@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -26,10 +25,6 @@ function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
     throw new Error(`Expected external plugin catalog entry for ${id}`);
   }
   return entry;
-}
-
-function expectRequestUrl(input: RequestInfo | URL): string {
-  return typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 }
 
 describe("official external plugin catalog", () => {

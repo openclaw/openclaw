@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
-} from "../../plugins/memory-state.test-fixtures.js";
+} from "../../../test/helpers/plugins/memory-state.js";
 import type { AgentSession } from "../sessions/index.js";
 import { applySystemPromptToSession, buildEmbeddedSystemPrompt } from "./system-prompt.js";
 

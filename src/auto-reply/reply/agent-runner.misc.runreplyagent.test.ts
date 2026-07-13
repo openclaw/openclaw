@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearMemoryPluginState,
+  registerMemoryCapability,
+  type MemoryFlushPlanResolver,
+} from "../../../test/helpers/plugins/memory-state.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import {
   testing as embeddedRunTesting,
@@ -20,11 +25,6 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
-import {
-  clearMemoryPluginState,
-  registerMemoryCapability,
-  type MemoryFlushPlanResolver,
-} from "../../plugins/memory-state.test-fixtures.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";

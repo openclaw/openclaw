@@ -1,7 +1,10 @@
 // Covers plugin hooks that run before agent finalization.
 import { describe, expect, it, vi } from "vitest";
+import {
+  createMockPluginRegistry,
+  TEST_PLUGIN_AGENT_CTX,
+} from "../../test/helpers/plugins/hooks.js";
 import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 
 const EVENT = {
   runId: "run-1",

@@ -1,7 +1,7 @@
 // Verifies plugin hook security constraints and rejections.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { addStaticTestHooks } from "../../test/helpers/plugins/hooks.js";
 import { createHookRunner } from "./hooks.js";
-import { addStaticTestHooks } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginHookBeforeToolCallResult, PluginHookMessageSendingResult } from "./types.js";
 

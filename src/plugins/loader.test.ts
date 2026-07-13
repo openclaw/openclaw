@@ -3,6 +3,19 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildMemoryPromptSection,
+  clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
+  getMemoryRuntime,
+  listActiveMemoryPublicArtifacts,
+  listMemoryCorpusSupplements,
+  listMemoryPromptSupplements,
+  registerMemoryCapability,
+  registerMemoryCorpusSupplement,
+  registerMemoryPromptSupplement,
+  resolveMemoryFlushPlan,
+} from "../../test/helpers/plugins/memory-state.js";
 import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
@@ -32,7 +45,6 @@ import {
   type DetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
-import { buildPluginApi } from "./api-builder.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { getCompactionProvider } from "./compaction-provider.js";
@@ -82,19 +94,6 @@ import {
   listMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "./memory-embedding-providers.js";
-import {
-  buildMemoryPromptSection,
-  clearMemoryPluginState,
-  getMemoryCapabilityRegistration,
-  getMemoryRuntime,
-  listActiveMemoryPublicArtifacts,
-  listMemoryCorpusSupplements,
-  listMemoryPromptSupplements,
-  registerMemoryCapability,
-  registerMemoryCorpusSupplement,
-  registerMemoryPromptSupplement,
-  resolveMemoryFlushPlan,
-} from "./memory-state.test-fixtures.js";
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {

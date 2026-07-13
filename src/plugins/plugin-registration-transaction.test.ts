@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCapabilityRegistration,
   registerMemoryCapability,
-} from "./memory-state.test-fixtures.js";
+} from "../../test/helpers/plugins/memory-state.js";
 import {
   createPluginRegistrationTransaction,
   type PluginProcessGlobalState,

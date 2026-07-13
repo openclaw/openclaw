@@ -5,7 +5,6 @@ type RegistryModule = typeof import("./registry.js");
 type RuntimeModule = typeof import("./runtime.js");
 type WebSearchProvidersRuntimeModule = typeof import("./web-search-providers.runtime.js");
 type PluginAutoEnableModule = typeof import("../config/plugin-auto-enable.js");
-type WebSearchProvidersSharedModule = typeof import("./web-search-providers.shared.js");
 type PluginManifestRegistry = import("./manifest-registry.js").PluginManifestRegistry;
 type LoadPluginManifestRegistryForPluginRegistry =
   typeof import("./plugin-registry.js").loadPluginManifestRegistryForPluginRegistry;
@@ -34,12 +33,10 @@ let loadInstalledPluginManifestRegistryMock: ReturnType<
 >;
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
-let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
 let loadOpenClawPluginsMock: ReturnType<typeof vi.fn>;
 let loaderModule: typeof import("./loader.js");
 let pluginAutoEnableModule: PluginAutoEnableModule;
 let applyPluginAutoEnableSpy: ReturnType<typeof vi.fn>;
-let webSearchProvidersSharedModule: WebSearchProvidersSharedModule;
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
 let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
@@ -275,61 +272,6 @@ function expectSnapshotLoaderCalls(params: {
   expectLoaderCallCount(params.expectedLoaderCalls);
 }
 
-function createRuntimeWebSearchProvider(params: {
-  pluginId: string;
-  pluginName: string;
-  id: string;
-  label: string;
-  hint: string;
-  envVar: string;
-  signupUrl: string;
-  credentialPath: string;
-}) {
-  return {
-    pluginId: params.pluginId,
-    pluginName: params.pluginName,
-    provider: {
-      id: params.id,
-      label: params.label,
-      hint: params.hint,
-      envVars: [params.envVar],
-      placeholder: `${params.id}-...`,
-      signupUrl: params.signupUrl,
-      autoDetectOrder: 1,
-      credentialPath: params.credentialPath,
-      getCredentialValue: () => "configured",
-      setCredentialValue: () => {},
-      createTool: () => ({
-        description: params.id,
-        parameters: {},
-        execute: async () => ({}),
-      }),
-    },
-    source: "test" as const,
-  };
-}
-
-function createBraveRuntimeWebSearchProvider() {
-  return createRuntimeWebSearchProvider({
-    pluginId: "brave",
-    pluginName: "Brave",
-    id: "brave",
-    label: "Brave Search",
-    hint: "Brave runtime provider",
-    envVar: "BRAVE_API_KEY",
-    signupUrl: "https://example.com/brave",
-    credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-  });
-}
-
-function expectRuntimeProviderResolution(
-  providers: ReturnType<WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"]>,
-  expected: readonly string[],
-) {
-  expect(toRuntimeProviderKeys(providers)).toEqual([...expected]);
-  expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-}
-
 describe("resolvePluginWebSearchProviders", () => {
   beforeAll(async () => {
     loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForPluginRegistry>();
@@ -382,11 +324,9 @@ describe("resolvePluginWebSearchProviders", () => {
     ({ createEmptyPluginRegistry } = await import("./registry-empty.js"));
     loaderModule = await import("./loader.js");
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
-    webSearchProvidersSharedModule = await import("./web-search-providers.shared.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
     ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
-    ({ resolvePluginWebSearchProviders, resolveRuntimeWebSearchProviders } =
-      await import("./web-search-providers.runtime.js"));
+    ({ resolvePluginWebSearchProviders } = await import("./web-search-providers.runtime.js"));
   });
 
   beforeEach(() => {

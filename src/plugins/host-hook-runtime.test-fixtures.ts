@@ -26,7 +26,9 @@ export function listPluginSessionSchedulerJobs(
   const pluginIds = pluginId ? [pluginId] : [...state.schedulerJobsByPlugin.keys()];
   for (const currentPluginId of pluginIds) {
     const jobs = state.schedulerJobsByPlugin.get(currentPluginId);
-    if (!jobs) continue;
+    if (!jobs) {
+      continue;
+    }
     for (const record of jobs.values()) {
       records.push({
         id: record.job.id,

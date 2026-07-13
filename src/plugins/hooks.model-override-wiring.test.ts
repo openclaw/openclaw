@@ -7,9 +7,9 @@
  * 3. before_agent_start remains a legacy compatibility fallback
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "../../test/helpers/plugins/hooks.js";
 import { joinPresentTextSegments } from "../shared/text/join-segments.js";
 import { createHookRunner } from "./hooks.js";
-import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type {
   PluginHookAgentContext,

@@ -2,8 +2,8 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { createHookRunnerWithRegistry } from "../../test/helpers/plugins/hooks.js";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
-import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 const replyDispatchEvent = {
   ctx: buildTestCtx({ SessionKey: "agent:test:session", BodyForAgent: "hello" }),

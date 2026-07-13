@@ -1,6 +1,6 @@
 // Covers wired plugin hooks around LLM request handling.
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
+import { createHookRunnerWithRegistry } from "../../test/helpers/plugins/hooks.js";
 
 const hookCtx = {
   agentId: "main",

@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearMemoryPluginState,
+  registerMemoryPromptSection,
+} from "../../../../test/helpers/plugins/memory-state.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import {
   appendTranscriptMessage,
@@ -11,10 +15,6 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
-import {
-  clearMemoryPluginState,
-  registerMemoryPromptSection,
-} from "../../../plugins/memory-state.test-fixtures.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,

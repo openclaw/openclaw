@@ -94,17 +94,6 @@ function normalizeDemoModel(modelId = "demo-model"): string | undefined {
   });
 }
 
-function normalizeDemoModelWithEnv(
-  env: NodeJS.ProcessEnv,
-  modelId = "demo-model",
-): string | undefined {
-  return normalizeProviderModelIdWithManifest({
-    provider: "demo",
-    env,
-    context: { provider: "demo", modelId },
-  });
-}
-
 describe("manifest model id normalization", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();

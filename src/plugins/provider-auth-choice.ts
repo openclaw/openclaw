@@ -206,15 +206,8 @@ async function applyDefaultModelFromAuthChoice(params: {
 
 type ProviderAuthChoiceRuntime = typeof import("./provider-auth-choice.runtime.js");
 
-const defaultProviderAuthChoiceDeps = {
-  loadPluginProviderRuntime: async (): Promise<ProviderAuthChoiceRuntime> =>
-    import("./provider-auth-choice.runtime.js"),
-};
-
-let providerAuthChoiceDeps = defaultProviderAuthChoiceDeps;
-
-async function loadPluginProviderRuntime() {
-  return await providerAuthChoiceDeps.loadPluginProviderRuntime();
+async function loadPluginProviderRuntime(): Promise<ProviderAuthChoiceRuntime> {
+  return await import("./provider-auth-choice.runtime.js");
 }
 
 function resolveManifestAuthChoiceScope(params: {

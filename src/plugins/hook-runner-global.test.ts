@@ -1,6 +1,6 @@
 /** Verifies global hook runner sequencing, mutation, and error behavior. */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
+import { createMockPluginRegistry } from "../../test/helpers/plugins/hooks.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   pinActivePluginChannelRegistry,

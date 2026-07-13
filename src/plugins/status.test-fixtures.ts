@@ -53,6 +53,7 @@ export function createCompatibilityNotice(
         message: REMOVED_SESSION_TRANSCRIPT_FILE_API_MESSAGE,
       };
   }
+  throw new Error("Unsupported compatibility notice code");
 }
 
 export function createBundledPluginRecord(id: string): PluginRecord {

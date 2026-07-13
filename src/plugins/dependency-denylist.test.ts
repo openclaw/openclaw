@@ -34,10 +34,6 @@ function readPnpmWorkspaceConfig(): PnpmWorkspaceConfig {
   ) as PnpmWorkspaceConfig;
 }
 
-function readRootLockfile(): string {
-  return fs.readFileSync(path.resolve(process.cwd(), "pnpm-lock.yaml"), "utf8");
-}
-
 describe("dependency denylist guardrails", () => {
   it("finds blocked package names on vendored manifests", () => {
     expect(

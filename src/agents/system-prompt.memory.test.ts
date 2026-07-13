@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
-} from "../plugins/memory-state.test-fixtures.js";
+} from "../../test/helpers/plugins/memory-state.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt memory guidance", () => {

@@ -36,7 +36,7 @@ type LoadPluginLookUpTableParams = {
   workerProviderIds?: readonly string[];
 };
 
-let lookupTableMemoBySnapshot = new WeakMap<
+const lookupTableMemoBySnapshot = new WeakMap<
   PluginMetadataSnapshot,
   Map<string, PluginLookUpTable>
 >();

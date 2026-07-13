@@ -253,7 +253,7 @@ vi.mock("../plugins/memory-runtime.js", () => ({
   closeActiveMemorySearchManagers: closeActiveMemorySearchManagersMock,
 }));
 
-vi.mock("../plugins/memory-state.test-fixtures.js", () => ({
+vi.mock("../../test/helpers/plugins/memory-state.js", () => ({
   hasMemoryRuntime: hasMemoryRuntimeMock,
 }));
 

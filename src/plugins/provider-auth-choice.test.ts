@@ -22,25 +22,6 @@ vi.mock("../wizard/setup.post-install-migration.js", () => ({
 
 const { runProviderPluginAuthMethodUnpersisted } = await import("./provider-auth-choice.js");
 
-function buildProvider(): ProviderPlugin {
-  return {
-    id: "openai",
-    label: "OpenAI",
-    auth: [
-      {
-        id: "api-key",
-        label: "API key",
-        kind: "api_key",
-        run: vi.fn(async () => ({
-          profiles: [],
-          notes: [],
-          defaultModel: "gpt-5.5",
-        })),
-      },
-    ],
-  };
-}
-
 describe("runProviderPluginAuthMethodUnpersisted", () => {
   it("delegates remote browser destinations to structured wizard clients", async () => {
     const openUrl = vi.fn(async () => undefined);

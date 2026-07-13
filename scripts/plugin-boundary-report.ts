@@ -377,6 +377,10 @@ function collectCompatDebt(
   return listPluginCompatRecords()
     .filter((record) => record.status === "deprecated")
     .map((record) => {
+      const replacement = record.replacement;
+      if (!replacement) {
+        throw new Error(`Deprecated plugin compatibility record ${record.code} has no replacement`);
+      }
       const tokens = extractCompatTokens(record);
       const references =
         options.includeReferenceFiles === false
@@ -390,7 +394,7 @@ function collectCompatDebt(
         owner: record.owner,
         status: record.status,
         removeAfter: record.removeAfter,
-        replacement: record.replacement,
+        replacement,
         docsPath: record.docsPath,
         surfaces: record.surfaces,
         tokens,
