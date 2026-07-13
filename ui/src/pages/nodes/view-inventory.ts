@@ -417,28 +417,30 @@ function renderPresenceOnlyEntry(entry: PresenceEntry) {
   `;
 }
 
-function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: NodesProps) {
-  const status = token.revokedAtMs ? t("nodes.inventory.revoked") : t("nodes.inventory.active");
-  const scopes = t("nodes.inventory.scopes", { scopes: formatList(token.scopes) });
+function renderTokenRow(deviceId: string, tokenSummary: DeviceTokenSummary, props: NodesProps) {
+  const status = tokenSummary.revokedAtMs
+    ? t("nodes.inventory.revoked")
+    : t("nodes.inventory.active");
+  const scopes = t("nodes.inventory.scopes", { scopes: formatList(tokenSummary.scopes) });
   const when = formatRelativeTimestamp(
-    token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null,
+    tokenSummary.rotatedAtMs ?? tokenSummary.createdAtMs ?? tokenSummary.lastUsedAtMs ?? null,
   );
   return html`
     <div class="row" style="justify-content: space-between; gap: 8px;">
-      <div class="list-sub">${token.role} · ${status} · ${scopes} · ${when}</div>
+      <div class="list-sub">${tokenSummary.role} · ${status} · ${scopes} · ${when}</div>
       <div class="row" style="justify-content: flex-end; gap: 6px; flex-wrap: wrap;">
         <button
           class="btn btn--sm"
-          @click=${() => props.onDeviceRotate(deviceId, token.role, token.scopes)}
+          @click=${() => props.onDeviceRotate(deviceId, tokenSummary.role, tokenSummary.scopes)}
         >
           ${t("nodes.inventory.rotate")}
         </button>
-        ${token.revokedAtMs
+        ${tokenSummary.revokedAtMs
           ? nothing
           : html`
               <button
                 class="btn btn--sm danger"
-                @click=${() => props.onDeviceRevoke(deviceId, token.role)}
+                @click=${() => props.onDeviceRevoke(deviceId, tokenSummary.role)}
               >
                 ${t("nodes.inventory.revoke")}
               </button>
