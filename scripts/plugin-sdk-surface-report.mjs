@@ -91,6 +91,8 @@ function readPluginSdkEntrypointBudgetEnv(name, fallback, env = process.env) {
 }
 
 const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
+  "channel-pairing": 1,
+  "conversation-runtime": 4,
   core: 2,
   health: 1,
   lmstudio: 1,
@@ -209,7 +211,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3279,
+      3284,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
