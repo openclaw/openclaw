@@ -2082,26 +2082,24 @@ describe("updateNpmInstalledPlugins", () => {
       logger: { warn },
     });
 
-    const message =
-      'Disabled "lossless-claw" after plugin update failure; OpenClaw will continue without it. Failed to check lossless-claw: npm view failed: registry timeout';
-    expect(warn).toHaveBeenCalledWith(message);
+    expect(warn).not.toHaveBeenCalled();
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
-    expect(result.changed).toBe(true);
+    expect(result.changed).toBe(false);
     expect(result.config.plugins?.entries?.["lossless-claw"]).toEqual({
-      enabled: false,
+      enabled: true,
       config: { preserved: true },
     });
-    expect(result.config.plugins?.allow).toEqual(["keep"]);
-    expect(result.config.plugins?.deny).toEqual(["blocked"]);
+    expect(result.config.plugins?.allow).toEqual(["lossless-claw", "keep"]);
+    expect(result.config.plugins?.deny).toEqual(["lossless-claw", "blocked"]);
     expect(result.config.plugins?.slots).toEqual({
-      memory: "memory-core",
-      contextEngine: "legacy",
+      memory: "lossless-claw",
+      contextEngine: "lossless-claw",
     });
     expect(result.outcomes).toEqual([
       {
         pluginId: "lossless-claw",
-        status: "skipped",
-        message,
+        status: "error",
+        message: `Failed to check lossless-claw: npm view failed: registry timeout`,
       },
     ]);
   });
