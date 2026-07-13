@@ -8,6 +8,7 @@ import {
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   type AuthProbeResult,
   type AuthProbeStatus,
@@ -119,12 +120,16 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     );
     try {
       const cfg = context.getRuntimeConfig();
+      // Probe under the canonical auth provider so credentials stored/aliased
+      // there resolve, matching models.list/models.authStatus. The response
+      // echoes the requested id; the UI correlates by that.
+      const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
       const summary = await runAuthProbes({
         cfg,
-        providers: [provider],
+        providers: [authProvider],
         modelCandidates: modelCandidatesFromConfig(cfg),
         options: {
-          provider,
+          provider: authProvider,
           ...(profileId ? { profileIds: [profileId] } : {}),
           ...(!profileId ? { includeDirectKeys: true } : {}),
           timeoutMs,
