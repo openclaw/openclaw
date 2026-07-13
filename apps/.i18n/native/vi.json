@@ -4159,11 +4159,6 @@
       "translated": "Giới hạn tốc độ"
     },
     {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "Quyền truy cập"
-    },
-    {
       "id": "native.android.ebeec52e498bc128",
       "source": "Granted",
       "translated": "Đã cấp"
@@ -4429,14 +4424,19 @@
       "translated": "Trực tuyến"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "Quyền truy cập"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "Địa chỉ"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "Không khả dụng"
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "Limited Gateway access"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4547,6 +4547,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "Nhập mã thiết lập hoặc địa chỉ gateway hợp lệ."
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "Không khả dụng"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "Full"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "Limited"
+    },
+    {
+      "id": "native.android.6ed5e7c96e0ae21a",
+      "source": "Generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below to enable settings and upgrades.",
+      "translated": "Generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below to enable settings and upgrades."
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -11332,6 +11352,41 @@
       "id": "native.apple.8e3656d85f092897",
       "source": "Agents",
       "translated": "Tác nhân"
+    },
+    {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "Access"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "Full"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "Limited"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "Upgrade access"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "This phone has limited Gateway access."
+    },
+    {
+      "id": "native.apple.6b55386e269b6dee",
+      "source": "Scan a full-access setup code from the Control UI or openclaw qr, then reconnect to enable settings and upgrades.",
+      "translated": "Scan a full-access setup code from the Control UI or openclaw qr, then reconnect to enable settings and upgrades."
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "Scan Full-Access Code"
     },
     {
       "id": "native.apple.88835de05348122a",
