@@ -10686,10 +10686,11 @@ extension NodeAppModel {
             ?? self.connectedGatewayID,
             !GatewayStableIdentifier.matches(currentStableID, stableID)
         else { return }
-        // A retained problem belongs to its gateway. Clear it as soon as another target is chosen,
-        // or the replacement connection can briefly present the previous gateway's error.
+        // A retained problem and status belong to their gateway. Replace both as soon as another
+        // target is chosen, or the replacement connection can present the previous gateway's error.
         self.operatorGatewayProblem = nil
         self.clearGatewayConnectionProblem()
+        self.setGatewayConnectionProgress(reconnecting: false)
     }
 }
 

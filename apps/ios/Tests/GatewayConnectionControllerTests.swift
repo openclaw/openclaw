@@ -419,6 +419,8 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
 
         appModel.clearGatewayProblemWhenSwitching(to: "manual|replacement.example.com|443")
         #expect(appModel.lastGatewayProblem == nil)
+        #expect(appModel.gatewayStatusText == "Connecting…")
+        #expect(appModel.gatewayDisplayStatusText == "Connecting…")
         #expect(!appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == nil)
     }
