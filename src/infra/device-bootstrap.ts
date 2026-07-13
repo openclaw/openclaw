@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
+  deviceBootstrapProfilesEqual,
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -77,23 +78,6 @@ function resolveRequestedBootstrapProfile(params: {
     scopes: resolveBootstrapProfileScopesForRole(params.role, params.scopes, params.purpose),
     purpose: params.purpose,
   });
-}
-
-function sameBootstrapProfile(
-  left: DeviceBootstrapProfile,
-  right: DeviceBootstrapProfile,
-): boolean {
-  if (
-    left.purpose !== right.purpose ||
-    left.roles.length !== right.roles.length ||
-    left.scopes.length !== right.scopes.length
-  ) {
-    return false;
-  }
-  return (
-    left.roles.every((role, index) => role === right.roles[index]) &&
-    left.scopes.every((scope, index) => scope === right.scopes[index])
-  );
 }
 
 function resolveIssuedBootstrapProfile(params: {
@@ -448,7 +432,7 @@ export async function verifyDeviceBootstrapToken(params: {
         return { ok: false, reason: "bootstrap_token_invalid" };
       }
       const pendingProfile = resolvePersistedPendingProfile(record);
-      if (pendingProfile && !sameBootstrapProfile(pendingProfile, requestedProfile)) {
+      if (pendingProfile && !deviceBootstrapProfilesEqual(pendingProfile, requestedProfile)) {
         return { ok: false, reason: "bootstrap_token_invalid" };
       }
       state[tokenKey] = {

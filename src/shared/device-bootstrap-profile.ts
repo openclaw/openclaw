@@ -58,11 +58,13 @@ export const NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   scopes: [],
 };
 
-function matchesBootstrapProfile(
-  input: DeviceBootstrapProfileInput | undefined,
-  expected: DeviceBootstrapProfile,
+/** Compare normalized bootstrap profiles, including their closed purpose. */
+export function deviceBootstrapProfilesEqual(
+  left: DeviceBootstrapProfileInput | undefined,
+  right: DeviceBootstrapProfileInput | undefined,
 ): boolean {
-  const profile = normalizeDeviceBootstrapProfile(input);
+  const profile = normalizeDeviceBootstrapProfile(left);
+  const expected = normalizeDeviceBootstrapProfile(right);
   return (
     profile.purpose === expected.purpose &&
     profile.roles.length === expected.roles.length &&
@@ -70,6 +72,13 @@ function matchesBootstrapProfile(
     profile.roles.every((role, index) => role === expected.roles[index]) &&
     profile.scopes.every((scope, index) => scope === expected.scopes[index])
   );
+}
+
+function matchesBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+  expected: DeviceBootstrapProfile,
+): boolean {
+  return deviceBootstrapProfilesEqual(input, expected);
 }
 
 /** Return whether an input exactly matches the limited mobile setup profile. */
@@ -127,6 +136,24 @@ export function resolveBootstrapProfileScopesForRoles(
   return normalizeDeviceAuthScopes(
     roles.flatMap((role) => resolveBootstrapProfileScopesForRole(role, scopes, purpose)),
   );
+}
+
+/** Resolve one role's scopes directly from a normalized bootstrap profile. */
+export function resolveDeviceProfileRoleScopes(
+  profile: DeviceBootstrapProfile,
+  role: string,
+  scopes: readonly string[] = profile.scopes,
+): string[] {
+  return resolveBootstrapProfileScopesForRole(role, scopes, profile.purpose);
+}
+
+/** Resolve role-set scopes directly from a normalized bootstrap profile. */
+export function resolveDeviceProfileScopes(
+  profile: DeviceBootstrapProfile,
+  roles: readonly string[],
+  scopes: readonly string[] = profile.scopes,
+): string[] {
+  return resolveBootstrapProfileScopesForRoles(roles, scopes, profile.purpose);
 }
 
 /** Normalize a requested bootstrap profile and strip scopes outside the handoff allowlist. */

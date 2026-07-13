@@ -6,12 +6,13 @@ import type { GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable } from "../api/types.ts";
 import {
   closeDevicePairSetup as closeDevicePairSetupState,
+  createDevicePairSetupState,
   openDevicePairSetup as openDevicePairSetupState,
+  readDevicePairSetupSnapshot,
   refreshDevicePairSetup as refreshDevicePairSetupState,
-  setDevicePairSetupAccess as setDevicePairSetupAccessState,
+  setDevicePairSetupAccess as setPairAccess,
   type DevicePairSetup,
   type DevicePairSetupAccess,
-  type DevicePairSetupState,
 } from "../lib/device-pair-setup.ts";
 import {
   clearResolvedExecApprovalPrompt,
@@ -237,16 +238,10 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
     epoch: number;
     id: string;
   } | null = null;
-  const devicePairSetupState: DevicePairSetupState & { pendingCount: number } = {
+  const devicePairSetupState = createDevicePairSetupState({
     client: gateway.snapshot.client,
     connected: gateway.snapshot.connected,
-    devicePairSetupOpen: false,
-    devicePairSetupLoading: false,
-    devicePairSetupError: null,
-    devicePairSetup: null,
-    devicePairSetupAccess: "full",
-    pendingCount: 0,
-  };
+  });
   const promptState: ExecApprovalPromptState = {
     client: activeClient,
     execApprovalQueue: [],
@@ -266,19 +261,20 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       approvalQueue: promptState.execApprovalQueue,
       approvalBusy: promptState.execApprovalBusy,
       approvalError: promptState.execApprovalError,
-      devicePairSetupOpen: devicePairSetupState.devicePairSetupOpen,
-      devicePairSetupLoading: devicePairSetupState.devicePairSetupLoading,
-      devicePairSetupError: devicePairSetupState.devicePairSetupError,
-      devicePairSetup: devicePairSetupState.devicePairSetup,
-      devicePairSetupAccess: devicePairSetupState.devicePairSetupAccess,
-      devicePairPendingCount: devicePairSetupState.pendingCount,
+      ...readDevicePairSetupSnapshot(devicePairSetupState),
     };
     for (const listener of listeners) {
       listener(snapshot);
     }
   };
   promptState.execApprovalExpired = publish;
-
+  const publishDevicePairSetupOperation = async (operation: Promise<void>) => {
+    publish();
+    await operation;
+    if (!disposed) {
+      publish();
+    }
+  };
   const isCurrentClient = (client: NonNullable<typeof activeClient>) =>
     !disposed &&
     activeClient === client &&
@@ -679,33 +675,19 @@ export function createApplicationOverlays(gateway: ApplicationGateway): Applicat
       const setupOperation = openDevicePairSetupState(devicePairSetupState);
       // Pairing-list latency must not keep a ready setup code behind the loading state.
       void refreshDevicePairPendingCount();
-      publish();
-      await setupOperation;
-      if (!disposed) {
-        publish();
-      }
+      await publishDevicePairSetupOperation(setupOperation);
     },
     async refreshDevicePairSetup() {
       if (disposed) {
         return;
       }
-      const operation = refreshDevicePairSetupState(devicePairSetupState);
-      publish();
-      await operation;
-      if (!disposed) {
-        publish();
-      }
+      await publishDevicePairSetupOperation(refreshDevicePairSetupState(devicePairSetupState));
     },
     async setDevicePairSetupAccess(access) {
       if (disposed) {
         return;
       }
-      const operation = setDevicePairSetupAccessState(devicePairSetupState, access);
-      publish();
-      await operation;
-      if (!disposed) {
-        publish();
-      }
+      await publishDevicePairSetupOperation(setPairAccess(devicePairSetupState, access));
     },
     closeDevicePairSetup() {
       devicePairPendingCountGeneration += 1;

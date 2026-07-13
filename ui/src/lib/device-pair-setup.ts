@@ -18,6 +18,34 @@ export type DevicePairSetupState = {
   devicePairSetupAccess: DevicePairSetupAccess;
 };
 
+export type DevicePairSetupOverlayState = DevicePairSetupState & { pendingCount: number };
+
+export function createDevicePairSetupState(params: {
+  client: DevicePairSetupState["client"];
+  connected: boolean;
+}): DevicePairSetupOverlayState {
+  return {
+    ...params,
+    devicePairSetupOpen: false,
+    devicePairSetupLoading: false,
+    devicePairSetupError: null,
+    devicePairSetup: null,
+    devicePairSetupAccess: "full",
+    pendingCount: 0,
+  };
+}
+
+export function readDevicePairSetupSnapshot(state: DevicePairSetupOverlayState) {
+  return {
+    devicePairSetupOpen: state.devicePairSetupOpen,
+    devicePairSetupLoading: state.devicePairSetupLoading,
+    devicePairSetupError: state.devicePairSetupError,
+    devicePairSetup: state.devicePairSetup,
+    devicePairSetupAccess: state.devicePairSetupAccess,
+    devicePairPendingCount: state.pendingCount,
+  };
+}
+
 const devicePairSetupRequests = new WeakMap<DevicePairSetupState, object>();
 
 export async function openDevicePairSetup(state: DevicePairSetupState) {

@@ -4,8 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import {
-  resolveBootstrapProfileScopesForRole,
-  resolveBootstrapProfileScopesForRoles,
+  resolveDeviceProfileRoleScopes,
+  resolveDeviceProfileScopes,
   type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
 import {
@@ -925,11 +925,7 @@ export async function approveBootstrapDevicePairing(
       : optionsOrBaseDir;
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   const approvedRoles = mergeRoles(bootstrapProfile.roles) ?? [];
-  const approvedScopes = resolveBootstrapProfileScopesForRoles(
-    approvedRoles,
-    bootstrapProfile.scopes,
-    bootstrapProfile.purpose,
-  );
+  const approvedScopes = resolveDeviceProfileScopes(bootstrapProfile, approvedRoles);
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pending = state.pendingById[requestId];
@@ -952,14 +948,13 @@ export async function approveBootstrapDevicePairing(
     if (missingScope) {
       return { status: "forbidden", reason: "bootstrap-scope-not-allowed", scope: missingScope };
     }
-
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
     const grantedRoles = requestedRoles;
-    const grantedScopes = resolveBootstrapProfileScopesForRoles(
+    const grantedScopes = resolveDeviceProfileScopes(
+      bootstrapProfile,
       grantedRoles,
       pending.scopes ?? [],
-      bootstrapProfile.purpose,
     );
     const grantedRoleSet = new Set(grantedRoles);
     const preservedExistingScopes = (mergeRoles(existing?.roles, existing?.role) ?? []).flatMap(
@@ -978,11 +973,7 @@ export async function approveBootstrapDevicePairing(
       const existingToken = tokens[roleForToken];
       const tokenScopes =
         roleForToken === OPERATOR_ROLE
-          ? resolveBootstrapProfileScopesForRole(
-              roleForToken,
-              grantedScopes,
-              bootstrapProfile.purpose,
-            )
+          ? resolveDeviceProfileRoleScopes(bootstrapProfile, roleForToken, grantedScopes)
           : [];
       tokens[roleForToken] = buildDeviceAuthToken({
         role: roleForToken,

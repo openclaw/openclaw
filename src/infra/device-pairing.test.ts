@@ -170,7 +170,7 @@ async function mutatePairedDevice(
 function mutatePendingRequest(
   baseDir: string,
   requestId: string,
-  mutate: (pending: { ts: number; refreshedAtMs?: number }) => void,
+  mutate: (pending: { ts: number; refreshedAtMs?: number; scopes?: string[] }) => void,
 ) {
   const state = loadDevicePairingStoreState(baseDir);
   const pending = requireValue(state.pendingById[requestId], "expected pending pairing request");
@@ -1365,6 +1365,35 @@ describe("device pairing tokens", () => {
     expect(paired?.approvedScopes).toStrictEqual([]);
     expect(paired?.tokens?.node?.scopes).toStrictEqual([]);
     expect(paired?.tokens?.operator).toBeUndefined();
+  });
+
+  test("bootstrap pairing treats missing persisted scopes as an empty grant", async () => {
+    const baseDir = await makeDevicePairingDir();
+    const request = await requestDevicePairing(
+      {
+        deviceId: "bootstrap-device-missing-scopes",
+        publicKey: "bootstrap-public-key-missing-scopes",
+        role: "operator",
+        roles: ["operator"],
+        scopes: [],
+        silent: true,
+      },
+      baseDir,
+    );
+    mutatePendingRequest(baseDir, request.request.requestId, (pending) => {
+      delete pending.scopes;
+    });
+
+    const approved = await approveBootstrapDevicePairing(
+      request.request.requestId,
+      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      baseDir,
+    );
+    expectRecordFields(approved, "approved result", { status: "approved" });
+
+    const paired = await getPairedDevice("bootstrap-device-missing-scopes", baseDir);
+    expect(paired?.approvedScopes).toStrictEqual([]);
+    expect(paired?.tokens?.operator?.scopes).toStrictEqual([]);
   });
 
   test("bootstrap approval access metadata initializes paired device last-seen fields", async () => {

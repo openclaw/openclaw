@@ -100,7 +100,6 @@ import {
   tryBeginGatewayRootWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
 import {
-  BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
   isMobilePairingSetupBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
   resolveBootstrapProfileScopesForRoles,
@@ -195,6 +194,14 @@ import {
   HandshakeAuthLogLimiter,
   shouldLimitMissingCredentialAuthLog,
 } from "./handshake-auth-log-limiter.js";
+import {
+  isControlUiOperatorBootstrapProfile,
+  isMobileNodeBootstrapConnect,
+  isSetupCodeMobileBootstrapClient,
+  pairedDeviceAllowsBootstrapOperator,
+  pairedDeviceAllowsBootstrapProfile,
+  resolvePairedAccessScopes,
+} from "./mobile-bootstrap-pairing.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -343,58 +350,6 @@ export type WsOriginCheckMetrics = {
 
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
-}
-
-function resolvePairedAccessScopes(
-  device: { approvedScopes?: unknown; scopes?: unknown } | null | undefined,
-): string[] {
-  const scopes = Array.isArray(device?.approvedScopes)
-    ? device.approvedScopes
-    : Array.isArray(device?.scopes)
-      ? device.scopes
-      : [];
-  return normalizeSortedUniqueTrimmedStringList(scopes);
-}
-
-function isSetupCodeMobileBootstrapClient(client: {
-  id?: string;
-  platform?: string;
-  deviceFamily?: string;
-}): boolean {
-  const platform = normalizeDeviceMetadataForAuth(client.platform);
-  const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
-  if (client.id === GATEWAY_CLIENT_IDS.ANDROID_APP) {
-    return /^android(?:\s|$)/.test(platform) && deviceFamily === "android";
-  }
-  if (client.id === GATEWAY_CLIENT_IDS.IOS_APP) {
-    return /^(?:ios|ipados)(?:\s|$)/.test(platform) && /^(?:iphone|ipad|ios)$/.test(deviceFamily);
-  }
-  return false;
-}
-
-function isControlUiOperatorBootstrapProfile(params: {
-  profile: DeviceBootstrapProfile | null;
-  requestedScopes: readonly string[];
-}): params is { profile: DeviceBootstrapProfile; requestedScopes: readonly string[] } {
-  const { profile, requestedScopes } = params;
-  if (!profile || profile.purpose !== "control-ui") {
-    return false;
-  }
-  if (profile.roles.length !== 1 || profile.roles[0] !== "operator") {
-    return false;
-  }
-  if (
-    !profile.scopes.every((scope) =>
-      (BOOTSTRAP_HANDOFF_OPERATOR_SCOPES as readonly string[]).includes(scope),
-    )
-  ) {
-    return false;
-  }
-  return roleScopesAllow({
-    role: "operator",
-    requestedScopes,
-    allowedScopes: profile.scopes,
-  });
 }
 
 function resolveTrustedProxyControlUiScopes(params: {
@@ -1488,29 +1443,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 allowedScopes: pairedScopes,
               });
             };
-            const pairingStateAllowsBootstrapProfile = (
-              pairedCandidate: Awaited<ReturnType<typeof getPairedDevice>>,
-              profile: DeviceBootstrapProfile,
-            ): boolean => {
-              if (!pairedCandidate || pairedCandidate.publicKey !== devicePublicKey) {
-                return false;
-              }
-              const pairedScopes = resolvePairedAccessScopes(pairedCandidate);
-              return profile.roles.every((profileRole) => {
-                if (!hasEffectivePairedDeviceRole(pairedCandidate, profileRole)) {
-                  return false;
-                }
-                return roleScopesAllow({
-                  role: profileRole,
-                  requestedScopes: resolveBootstrapProfileScopesForRole(
-                    profileRole,
-                    profile.scopes,
-                    profile.purpose,
-                  ),
-                  allowedScopes: pairedScopes,
-                });
-              });
-            };
             const allowSilentExistingNonOperatorPairing = !(
               existingPairedDevice && role !== "operator"
             );
@@ -1538,13 +1470,14 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 autoApproveCidrs: configSnapshot.gateway?.nodes?.pairing?.autoApproveCidrs,
               },
             );
-            const isSetupCodeMobileNodeConnect =
-              role === "node" &&
-              scopes.length === 0 &&
-              !isControlUi &&
-              !isBrowserOperatorUi &&
-              !isWebchat &&
-              connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE;
+            const isSetupCodeMobileNodeConnect = isMobileNodeBootstrapConnect({
+              role,
+              scopes,
+              isControlUi,
+              isBrowserOperatorUi,
+              isWebchat,
+              clientMode: connectParams.client.mode,
+            });
             const allowBoundBootstrapProfileLookup =
               (reason === "not-paired" &&
                 !existingPairedDevice &&
@@ -1702,10 +1635,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               } else {
                 const pairedAfterConcurrentApproval = await getPairedDevice(device.id);
                 resolvedByConcurrentApproval = bootstrapApprovalProfile
-                  ? pairingStateAllowsBootstrapProfile(
-                      pairedAfterConcurrentApproval,
-                      bootstrapApprovalProfile,
-                    )
+                  ? pairedDeviceAllowsBootstrapProfile({
+                      device: pairedAfterConcurrentApproval,
+                      devicePublicKey,
+                      profile: bootstrapApprovalProfile,
+                    })
                   : pairingStateAllowsRequestedAccess(pairedAfterConcurrentApproval);
                 let requestStillPending = false;
                 if (!resolvedByConcurrentApproval) {
@@ -2018,13 +1952,10 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 }
                 const pairedAfterBootstrapUpgrade = await getPairedDevice(device.id);
                 if (
-                  pairedAfterBootstrapUpgrade &&
-                  pairedAfterBootstrapUpgrade.publicKey === devicePublicKey &&
-                  hasEffectivePairedDeviceRole(pairedAfterBootstrapUpgrade, "operator") &&
-                  roleScopesAllow({
-                    role: "operator",
-                    requestedScopes: retryBootstrapOperatorScopes,
-                    allowedScopes: resolvePairedAccessScopes(pairedAfterBootstrapUpgrade),
+                  pairedDeviceAllowsBootstrapOperator({
+                    device: pairedAfterBootstrapUpgrade,
+                    devicePublicKey,
+                    profile: retryBootstrapHandoffProfile,
                   })
                 ) {
                   // The setup code is the owner-approved upgrade artifact. Reuse the
