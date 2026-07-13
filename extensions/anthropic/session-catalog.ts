@@ -6,11 +6,7 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  OpenClawPluginApi,
-  OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   SessionCatalogHost,
@@ -25,7 +21,7 @@ export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
 export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 
-const CLAUDE_SESSIONS_CAPABILITY = "claude-sessions";
+export const CLAUDE_SESSIONS_CAPABILITY = "claude-sessions";
 const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
@@ -139,7 +135,7 @@ type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
 
-class ClaudeCatalogParamsError extends Error {}
+export class ClaudeCatalogParamsError extends Error {}
 
 function optionalString(value: unknown, maxLength = MAX_STRING_LENGTH): string | undefined {
   if (typeof value !== "string") {
@@ -216,7 +212,7 @@ function currentHomeDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
 }
 
-function claudeProjectsAvailable(env: NodeJS.ProcessEnv): boolean {
+export function claudeProjectsAvailable(env: NodeJS.ProcessEnv): boolean {
   const homeDir = currentHomeDir(env);
   try {
     return statSync(projectsDir(homeDir)).isDirectory();
@@ -618,19 +614,6 @@ export async function listLocalClaudeSessionPage(
     sessions: page,
     ...(nextOffset < records.length ? { nextCursor: encodeOffset(nextOffset) } : {}),
   };
-}
-
-function parseNodeParams(paramsJSON?: string | null): unknown {
-  if (!paramsJSON) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(paramsJSON) as unknown;
-  } catch (error) {
-    throw new ClaudeCatalogParamsError("Claude session parameters must be valid JSON", {
-      cause: error,
-    });
-  }
 }
 
 function transcriptItemType(role: string, content: unknown): string {
@@ -1172,37 +1155,6 @@ async function readClaudeSessionTranscript(params: {
       ? { nextCursor: optionalString(page.nextCursor, MAX_CURSOR_LENGTH) }
       : {}),
   };
-}
-
-export function createClaudeSessionNodeHostCommands(): OpenClawPluginNodeHostCommand[] {
-  return [
-    {
-      command: CLAUDE_SESSIONS_LIST_COMMAND,
-      cap: CLAUDE_SESSIONS_CAPABILITY,
-      dangerous: false,
-      isAvailable: ({ env }) => claudeProjectsAvailable(env),
-      handle: async (paramsJSON) =>
-        JSON.stringify(await listLocalClaudeSessionPage(parseNodeParams(paramsJSON))),
-    },
-    {
-      command: CLAUDE_SESSION_READ_COMMAND,
-      cap: CLAUDE_SESSIONS_CAPABILITY,
-      dangerous: false,
-      isAvailable: ({ env }) => claudeProjectsAvailable(env),
-      handle: async (paramsJSON) =>
-        JSON.stringify(await readLocalClaudeTranscriptPage(parseNodeParams(paramsJSON))),
-    },
-  ];
-}
-
-export function createClaudeSessionNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
-  return [
-    {
-      commands: [CLAUDE_SESSIONS_LIST_COMMAND, CLAUDE_SESSION_READ_COMMAND],
-      defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) => context.invokeNode(),
-    },
-  ];
 }
 
 function adoptedSessionKey(threadId: string): string {

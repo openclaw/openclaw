@@ -40,7 +40,6 @@ import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/displ
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { editorOpenUrl } from "../lib/editor-links.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import {
@@ -50,7 +49,6 @@ import {
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
 import {
-  buildCatalogSessionKey,
   CATALOG_SESSION_CONTINUED_EVENT,
   type CatalogSessionContinuedDetail,
 } from "../lib/sessions/catalog-key.ts";
@@ -97,6 +95,12 @@ import {
   sidebarMoreMenuHoldsActiveRoute,
   sidebarPluginTabs,
 } from "./app-sidebar-nav-menus.ts";
+import {
+  adoptedCatalogSessionKeys,
+  bindAdoptedCatalogSession,
+  formatSidebarTimestamp,
+  renderSessionCatalogGroups,
+} from "./app-sidebar-session-catalogs.ts";
 import { icons, type IconName } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -224,14 +228,6 @@ const AGENT_MENU_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () 
     label: () => t("agentChip.viewChangelog"),
   },
 ];
-
-function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
-  const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
-  if (value === "just now") {
-    return "now";
-  }
-  return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
-}
 
 function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;
@@ -435,25 +431,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!detail?.sessionKey) {
       return;
     }
-    this.sessionCatalogs = this.sessionCatalogs.map((catalog) =>
-      catalog.id === detail.catalogId
-        ? {
-            ...catalog,
-            hosts: catalog.hosts.map((host) =>
-              host.hostId === detail.hostId
-                ? {
-                    ...host,
-                    sessions: host.sessions.map((session) =>
-                      session.threadId === detail.threadId
-                        ? { ...session, openClawSessionKey: detail.sessionKey }
-                        : session,
-                    ),
-                  }
-                : host,
-            ),
-          }
-        : catalog,
-    );
+    this.sessionCatalogs = bindAdoptedCatalogSession(this.sessionCatalogs, detail);
     // Invalidate in-flight polls and load-more merges so a pre-adoption
     // snapshot cannot clobber the patched rows; the 30s poll reconfirms.
     this.sessionCatalogRevision += 1;
@@ -2629,7 +2607,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     // Adopted catalog sessions render inside their catalog group; hiding them
     // here keeps one selectable row per session instead of a duplicate that
     // jumps to the top of the regular list.
-    const adopted = this.adoptedCatalogSessionKeys();
+    const adopted = adoptedCatalogSessionKeys(this.sessionCatalogs);
     const selected = this.expandedAgentId();
     const loadedAgentId = normalizeAgentId(this.sessionsAgentId ?? "");
     const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);
@@ -2651,20 +2629,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       .toSorted(this.compareSidebarSessionRows)
       .filter((row) => !adopted.has(row.key))
       .map(navigationState.toSidebarSession);
-  }
-
-  private adoptedCatalogSessionKeys(): ReadonlySet<string> {
-    const keys = new Set<string>();
-    for (const catalog of this.sessionCatalogs) {
-      for (const host of catalog.hosts) {
-        for (const session of host.sessions) {
-          if (session.openClawSessionKey) {
-            keys.add(session.openClawSessionKey);
-          }
-        }
-      }
-    }
-    return keys;
   }
 
   private agentUnreadCount(agentId: string): number {
@@ -2805,138 +2769,21 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private renderSessionCatalogs(
     navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
   ) {
-    // Adopted rows reuse the live session row so activity, unread state, and
-    // the session menu behave exactly like the regular list.
-    const liveRows = new Map<string, SessionsListResult["sessions"][number]>();
-    for (const row of [
-      ...(this.sessionsResult?.sessions ?? []),
-      ...Object.values(this.sessionRowsByAgent).flat(),
-    ]) {
-      if (!liveRows.has(row.key)) {
-        liveRows.set(row.key, row);
-      }
-    }
-    const routeSessionKey = this.activeRouteId === "chat" ? this.getRouteSessionKey() : "";
-    return this.sessionCatalogs.map((catalog) => {
-      const sectionId = `catalog:${catalog.id}`;
-      const collapsed = this.collapsedSessionSections.has(sectionId);
-      const hosts = catalog.hosts;
-      const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
-      const loadingMore = this.loadingMoreSessionCatalogIds.has(catalog.id);
-      const hasMore = hosts.some((host) => Boolean(host.nextCursor));
-      return html`
-        <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
-          <div class="sidebar-recent-sessions__head">
-            <button
-              type="button"
-              class="sidebar-session-group-toggle"
-              aria-expanded=${String(!collapsed)}
-              aria-label=${catalog.label}
-              @click=${() => this.toggleSessionSection(sectionId)}
-            >
-              <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-              >
-              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-              <span class="sidebar-session-group-count">${rows.length}</span>
-            </button>
-          </div>
-          ${collapsed
-            ? nothing
-            : html`<div class="sidebar-recent-sessions__list">
-                  ${rows.map(({ host, session }) =>
-                    this.renderCatalogSession(catalog, host, session, {
-                      navigationState,
-                      liveRows,
-                      routeSessionKey,
-                    }),
-                  )}
-                </div>
-                ${hasMore
-                  ? html`<button
-                      type="button"
-                      class="sidebar-session-catalog-load-more"
-                      data-session-catalog-load-more=${catalog.id}
-                      ?disabled=${loadingMore}
-                      aria-busy=${String(loadingMore)}
-                      @click=${() => void this.loadMoreSessionCatalog(catalog.id)}
-                    >
-                      ${t("chat.selectors.loadMoreSessions")}
-                    </button>`
-                  : nothing}`}
-        </div>
-      `;
+    return renderSessionCatalogGroups({
+      catalogs: this.sessionCatalogs,
+      basePath: this.basePath,
+      routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+      collapsedSections: this.collapsedSessionSections,
+      loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
+      liveRows: [
+        ...(this.sessionsResult?.sessions ?? []),
+        ...Object.values(this.sessionRowsByAgent).flat(),
+      ],
+      renderLiveRow: (row) => this.renderRecentSession(navigationState.toSidebarSession(row)),
+      onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),
+      onLoadMore: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
+      onNavigate: (search) => this.onNavigate?.("chat", { search }),
     });
-  }
-
-  private renderCatalogSession(
-    catalog: SessionCatalog,
-    host: SessionCatalogHost,
-    session: SessionCatalogSession,
-    context: {
-      navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>;
-      liveRows: ReadonlyMap<string, SessionsListResult["sessions"][number]>;
-      routeSessionKey: string;
-    },
-  ) {
-    const adoptedRow = session.openClawSessionKey
-      ? context.liveRows.get(session.openClawSessionKey)
-      : undefined;
-    if (adoptedRow) {
-      return this.renderRecentSession(context.navigationState.toSidebarSession(adoptedRow));
-    }
-    const key =
-      session.openClawSessionKey ??
-      buildCatalogSessionKey({
-        catalogId: catalog.id,
-        hostId: host.hostId,
-        threadId: session.threadId,
-      });
-    const href = `${pathForRoute("chat", this.basePath)}${searchForSession(key)}`;
-    // The catalog header already names the source; only a paired node's
-    // machine name adds signal on the row itself.
-    const hostSubtitle = host.kind === "node" ? host.label : undefined;
-    const active = context.routeSessionKey !== "" && key === context.routeSessionKey;
-    const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-    const timestamp =
-      typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-        ? rawTimestamp * 1000
-        : rawTimestamp;
-    return html`
-      <div
-        class="sidebar-recent-session session-row-host ${active
-          ? "sidebar-recent-session--active"
-          : ""}"
-        data-session-key=${key}
-      >
-        <a
-          href=${href}
-          class="sidebar-recent-session__link"
-          title=${hostSubtitle
-            ? `${session.name || session.threadId} · ${hostSubtitle}`
-            : session.name || session.threadId}
-          @click=${(event: MouseEvent) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            this.onNavigate?.("chat", { search: searchForSession(key) });
-          }}
-        >
-          <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee"
-              >${session.name || session.threadId}</span
-            >
-            ${hostSubtitle
-              ? html`<span class="sidebar-recent-session__subtitle">${hostSubtitle}</span>`
-              : nothing}
-          </span>
-          <span class="sidebar-recent-session__aside session-row-aside">
-            <span class="session-row-trail">${formatSidebarTimestamp(timestamp)}</span>
-          </span>
-        </a>
-      </div>
-    `;
   }
 
   private renderMoreRow() {
