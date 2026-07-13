@@ -68,7 +68,7 @@ type EmbeddedAttemptResultState = Pick<
   diagnosticTrace: DiagnosticTraceContext;
 };
 
-export type CompleteEmbeddedAttemptResultInput = {
+type CompleteEmbeddedAttemptResultInput = {
   attempt: EmbeddedRunAttemptParams;
   subscription: EmbeddedAttemptSubscription;
   state: EmbeddedAttemptResultState;
@@ -89,7 +89,7 @@ export type CompleteEmbeddedAttemptResultInput = {
   trajectoryRecorder?: EmbeddedRunAttemptTrajectoryRecorder | null;
 };
 
-export function normalizeEmbeddedAttemptToolMetas(
+function normalizeEmbeddedAttemptToolMetas(
   entries: EmbeddedAttemptSubscription["toolMetas"],
 ): EmbeddedRunAttemptResult["toolMetas"] {
   return entries
@@ -128,7 +128,7 @@ export function normalizeEmbeddedAttemptToolMetas(
     });
 }
 
-export function collectCompletedClientToolCalls(
+function collectCompletedClientToolCalls(
   slots: readonly EmbeddedAttemptClientToolCallSlot[],
 ): NonNullable<EmbeddedRunAttemptResult["clientToolCalls"]> {
   return slots.flatMap((slot) =>
@@ -136,7 +136,7 @@ export function collectCompletedClientToolCalls(
   );
 }
 
-export function hasVisiblePendingToolMediaReply(
+function hasVisiblePendingToolMediaReply(
   reply: { mediaUrls?: string[]; audioAsVoice?: boolean } | null | undefined,
 ): boolean {
   return Boolean(

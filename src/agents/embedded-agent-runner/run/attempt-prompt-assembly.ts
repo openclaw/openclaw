@@ -46,12 +46,12 @@ type OrphanRepairPlan = ReturnType<typeof resolveOrphanRepairPlan>;
 type CacheRetention = Parameters<typeof beginPromptCacheObservation>[0]["cacheRetention"];
 type PromptBuildHookContext = Parameters<typeof resolvePromptBuildHookResult>[0]["hookCtx"];
 
-export type EmbeddedAttemptSteeringLease = {
+type EmbeddedAttemptSteeringLease = {
   leaseId: string;
   runIds: string[];
 };
 
-export type EmbeddedAttemptPromptAssembly = {
+type EmbeddedAttemptPromptAssembly = {
   hookCtx: PromptBuildHookContext;
   effectivePrompt: string;
   promptBeforePromptBuildHooks: string;

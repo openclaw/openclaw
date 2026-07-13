@@ -40,7 +40,7 @@ type AttemptSessionLockController = Awaited<
 type PromptCacheInfo = ReturnType<typeof buildContextEnginePromptCacheInfo>;
 type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
-export type CompleteEmbeddedAttemptAfterTurnInput = {
+type CompleteEmbeddedAttemptAfterTurnInput = {
   attempt: EmbeddedRunAttemptParams;
   activeContextEngine?: ContextEngine;
   activeSession: AgentSession;
