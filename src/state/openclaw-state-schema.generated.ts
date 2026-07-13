@@ -1103,42 +1103,6 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status_due
 CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
   ON commitments(agent_id, session_key, channel, dedupe_key, status);
 
-CREATE TABLE IF NOT EXISTS cron_run_logs (
-  store_key TEXT NOT NULL,
-  job_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  ts INTEGER NOT NULL,
-  status TEXT,
-  error TEXT,
-  summary TEXT,
-  diagnostics_summary TEXT,
-  delivery_status TEXT,
-  delivery_error TEXT,
-  delivered INTEGER,
-  session_id TEXT,
-  session_key TEXT,
-  run_id TEXT,
-  run_at_ms INTEGER,
-  duration_ms INTEGER,
-  next_run_at_ms INTEGER,
-  model TEXT,
-  provider TEXT,
-  total_tokens INTEGER,
-  entry_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (store_key, job_id, seq)
-);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_store_ts
-  ON cron_run_logs(store_key, ts DESC, seq DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_job_status
-  ON cron_run_logs(store_key, job_id, status, ts DESC, seq DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
-  ON cron_run_logs(store_key, delivery_status, ts DESC, seq DESC)
-  WHERE delivery_status IS NOT NULL;
-
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,

@@ -34,6 +34,11 @@ import {
 } from "../sessions/session-chat-type-shared.js";
 import { CODEX_NATIVE_SUBAGENT_STALE_ERROR } from "./codex-native-subagent-task.js";
 import {
+  collectCronHistoryOverflowTaskIds,
+  shouldPruneTerminalTask,
+} from "./cron-history-retention.js";
+export { CRON_HISTORY_KEEP_PER_JOB } from "./cron-history-retention.js";
+import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
@@ -63,11 +68,7 @@ import { listTaskRegistryRecordsByRuntimeSourceIdFromSqlite } from "./task-regis
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registry.types.js";
 import type { ActiveTaskRestartBlocker } from "./task-restart-blocker.js";
-import {
-  resolveEffectiveTaskCleanupAfter,
-  resolveTaskCleanupAfter,
-  resolveTaskRetentionMs,
-} from "./task-retention.js";
+import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./task-retention.js";
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
@@ -482,22 +483,15 @@ function hasDetachedTaskRecoveryHook(): boolean {
   return Boolean(getDetachedTaskLifecycleRuntime().tryRecoverTaskBeforeMarkLost);
 }
 
-function shouldPruneTerminalTask(task: TaskRecord, now: number): boolean {
-  if (!isTerminalTask(task)) {
-    return false;
-  }
-  if (typeof task.cleanupAfter === "number") {
-    return now >= resolveEffectiveTaskCleanupAfter(task);
-  }
-  const terminalAt = task.endedAt ?? task.lastEventAt ?? task.createdAt;
-  return now - terminalAt >= resolveTaskRetentionMs(task.status);
-}
-
 function shouldStampCleanupAfter(task: TaskRecord): boolean {
-  return isTerminalTask(task) && typeof task.cleanupAfter !== "number";
+  return (
+    isTerminalTask(task) &&
+    typeof task.cleanupAfter !== "number" &&
+    resolveTaskCleanupAfter(task) !== undefined
+  );
 }
 
-function resolveCleanupAfter(task: TaskRecord): number {
+function resolveCleanupAfter(task: TaskRecord): number | undefined {
   return resolveTaskCleanupAfter(task);
 }
 
@@ -696,7 +690,7 @@ function markTaskLost(
     ...task,
     status: "lost",
     endedAt: lostAt,
-  });
+  })!;
   const updated =
     taskRegistryMaintenanceRuntime.markTaskLostById({
       taskId: task.taskId,
@@ -888,7 +882,9 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
   let pruned = 0;
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
-  for (const task of taskRegistryMaintenanceRuntime.listTaskRecords()) {
+  const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
+  const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
+  for (const task of tasks) {
     if (resolveDurableCronTaskRecovery(task, cronRecoveryContext)) {
       recovered += 1;
       continue;
@@ -897,7 +893,7 @@ export function previewTaskRegistryMaintenance(): TaskRegistryMaintenanceSummary
       reconciled += 1;
       continue;
     }
-    if (shouldPruneTerminalTask(task, now)) {
+    if (shouldPruneTerminalTask(task, now, cronHistoryOverflowTaskIds)) {
       pruned += 1;
       continue;
     }
@@ -1006,6 +1002,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let cleanupStamped = 0;
   let pruned = 0;
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
+  const cronHistoryOverflowTaskIds = collectCronHistoryOverflowTaskIds(tasks);
   const cronRecoveryContext = createCronRecoveryContext();
   const backingSessionContext = createBackingSessionLookupContext();
   const recoveryHookRegistered = hasDetachedTaskRecoveryHook();
@@ -1075,7 +1072,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
     }
     await cleanupTerminalAcpSession(current);
     if (
-      shouldPruneTerminalTask(current, now) &&
+      shouldPruneTerminalTask(current, now, cronHistoryOverflowTaskIds) &&
       taskRegistryMaintenanceRuntime.deleteTaskRecordById(current.taskId)
     ) {
       pruned += 1;
@@ -1085,14 +1082,17 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       }
       continue;
     }
-    if (
-      shouldStampCleanupAfter(current) &&
-      taskRegistryMaintenanceRuntime.setTaskCleanupAfterById({
-        taskId: current.taskId,
-        cleanupAfter: resolveCleanupAfter(current),
-      })
-    ) {
-      cleanupStamped += 1;
+    if (shouldStampCleanupAfter(current)) {
+      const cleanupAfter = resolveCleanupAfter(current);
+      if (
+        cleanupAfter !== undefined &&
+        taskRegistryMaintenanceRuntime.setTaskCleanupAfterById({
+          taskId: current.taskId,
+          cleanupAfter,
+        })
+      ) {
+        cleanupStamped += 1;
+      }
     }
     processed += 1;
     if (processed % SWEEP_YIELD_BATCH_SIZE === 0) {

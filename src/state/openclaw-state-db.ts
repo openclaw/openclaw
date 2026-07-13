@@ -89,8 +89,6 @@ const OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY = {
     "cron_jobs.schedule_kind": ["schedule_kind TEXT NOT NULL DEFAULT 'manual'"],
     "cron_jobs.session_target": ["session_target TEXT NOT NULL DEFAULT 'main'"],
     "cron_jobs.wake_mode": ["wake_mode TEXT NOT NULL DEFAULT 'auto'"],
-    "cron_run_logs.created_at": ["created_at INTEGER NOT NULL DEFAULT 0"],
-    "cron_run_logs.entry_json": ["entry_json TEXT NOT NULL DEFAULT '{}'"],
     "current_conversation_bindings.conversation_kind": [
       "conversation_kind TEXT NOT NULL DEFAULT 'channel'",
     ],

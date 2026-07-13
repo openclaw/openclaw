@@ -143,9 +143,6 @@ const TARGET_KEYS = [
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
-  "cron.runLog",
-  "cron.runLog.maxBytes",
-  "cron.runLog.keepLines",
   "session",
   "session.scope",
   "session.dmScope",
@@ -867,26 +864,6 @@ describe("config help copy quality", () => {
       'FIELD_HELP["session.maintenance.highWaterBytes"] test invariant',
     );
     expect(highWater.includes("80%")).toBe(true);
-  });
-
-  it("documents cron run-log retention controls", () => {
-    const runLog = expectDefined(
-      FIELD_HELP["cron.runLog"],
-      'FIELD_HELP["cron.runLog"] test invariant',
-    );
-    expect(runLog.includes("SQLite")).toBe(true);
-
-    const maxBytes = expectDefined(
-      FIELD_HELP["cron.runLog.maxBytes"],
-      'FIELD_HELP["cron.runLog.maxBytes"] test invariant',
-    );
-    expect(maxBytes.includes("2mb")).toBe(true);
-
-    const keepLines = expectDefined(
-      FIELD_HELP["cron.runLog.keepLines"],
-      'FIELD_HELP["cron.runLog.keepLines"] test invariant',
-    );
-    expect(keepLines.includes("2000")).toBe(true);
   });
 
   it("documents approvals filters and target semantics", () => {

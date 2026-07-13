@@ -5,7 +5,6 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { base64UrlDecode, normalizeEd25519PublicKeyBase64Url } from "../infra/ed25519-signature.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -1078,13 +1077,6 @@ export const OpenClawSchema = z
         webhook: HttpUrlSchema.optional(),
         webhookToken: SecretInputSchema.optional().register(sensitive),
         sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
-        runLog: z
-          .object({
-            maxBytes: z.union([z.string(), z.number()]).optional(),
-            keepLines: z.number().int().positive().optional(),
-          })
-          .strict()
-          .optional(),
         failureAlert: z
           .object({
             enabled: z.boolean().optional(),
@@ -1118,19 +1110,6 @@ export const OpenClawSchema = z
               code: z.ZodIssueCode.custom,
               path: ["sessionRetention"],
               message: "invalid duration (use ms, s, m, h, d)",
-            });
-          }
-        }
-        if (val.runLog?.maxBytes !== undefined) {
-          try {
-            parseByteSize(normalizeStringifiedOptionalString(val.runLog.maxBytes) ?? "", {
-              defaultUnit: "b",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["runLog", "maxBytes"],
-              message: "invalid size (use b, kb, mb, gb, tb)",
             });
           }
         }

@@ -14,14 +14,11 @@ import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import {
-  cancelActiveCronTaskRun,
-  resetActiveCronTaskRunsForTests,
-} from "../../tasks/cron-task-cancel.js";
-import {
   cancelTaskById,
   listTaskRecords,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
+  setTaskRegistryControlRuntimeForTests,
 } from "../../tasks/task-registry.js";
 import {
   advanceCronActiveJobGeneration,
@@ -37,6 +34,10 @@ import type {
   CronAgentExecutionStarted,
   CronJob,
 } from "../types.js";
+import {
+  cancelActiveCronTaskRun,
+  resetActiveCronTaskRunsForTests,
+} from "./active-run-cancellation.js";
 import { computeJobNextRunAtMs } from "./jobs.js";
 import { run as runManualCronJob } from "./ops.js";
 import { createCronServiceState, type CronEvent } from "./state.js";
@@ -91,6 +92,20 @@ function findCronTaskByBaseRunId(baseRunId: string) {
       entry.runtime === "cron" &&
       (entry.runId === baseRunId || entry.runId?.startsWith(`${baseRunId}:`)),
   );
+}
+
+function installCronCancellationControlRuntime() {
+  setTaskRegistryControlRuntimeForTests({
+    cancelActiveCronTaskRun,
+    getAcpSessionManager: () => ({
+      cancelSession: async () => {
+        throw new Error("Unexpected ACP cancellation");
+      },
+    }),
+    killSubagentRunAdmin: async () => {
+      throw new Error("Unexpected subagent cancellation");
+    },
+  });
 }
 
 describe("cron service timer regressions", () => {
@@ -856,6 +871,7 @@ describe("cron service timer regressions", () => {
         throw new Error("Expected timeout-disabled cron task row");
       }
 
+      installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
         cfg: {} as never,
         taskId: task.taskId,
@@ -882,6 +898,7 @@ describe("cron service timer regressions", () => {
     } finally {
       vi.useRealTimers();
       resetActiveCronTaskRunsForTests();
+      resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
     }
   });
@@ -1119,6 +1136,7 @@ describe("cron service timer regressions", () => {
       }
       expect(task.status).toBe("running");
 
+      installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
         cfg: {} as never,
         taskId: task.taskId,
@@ -1140,6 +1158,7 @@ describe("cron service timer regressions", () => {
     } finally {
       vi.useRealTimers();
       resetActiveCronTaskRunsForTests();
+      resetTaskRegistryControlRuntimeForTests();
       resetTaskRegistryForTests();
     }
   });
@@ -1270,7 +1289,7 @@ describe("cron service timer regressions", () => {
 
         expect(result.status).toBe("error");
         expect(result.error).toContain("timed out");
-        // #95873: a post-runner timeout must not blank out cron_run_logs; the
+        // #95873: a post-runner timeout must not blank out task-run history; the
         // already-resolved attribution carried by the watchdog survives the row.
         expect(result.provider).toBe("deepseek");
         expect(result.model).toBe("deepseek-v4-pro");
@@ -1700,6 +1719,7 @@ describe("cron service timer regressions", () => {
       }
       expect(task.status).toBe("running");
 
+      installCronCancellationControlRuntime();
       const cancelResult = await cancelTaskById({
         cfg: {} as never,
         taskId: task.taskId,

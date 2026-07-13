@@ -16,8 +16,8 @@ import {
   type CronActiveJobMarker,
 } from "../active-jobs.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
-import { normalizeCronRunLogJobId } from "../run-log.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -563,7 +563,7 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
       throw new Error("cron job id must not be blank");
     }
     if (normalizedId) {
-      normalizeCronRunLogJobId(normalizedId);
+      normalizeCronTaskRunJobId(normalizedId);
     }
     const normalizedInput = normalizedId ? { ...input, id: normalizedId } : input;
     const declarationKey = normalizeOptionalString(input.declarationKey);

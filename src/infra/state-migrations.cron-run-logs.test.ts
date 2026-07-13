@@ -1,8 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
-import { readCronRunLogEntriesPage } from "../cron/run-log.js";
-import { insertCronRunLogEntry } from "../cron/run-log/sqlite-store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { cronRunLogEntryToTaskDetail, cronRunStatusToTaskStatus } from "../cron/task-run-detail.js";
 import { readCronTaskRunHistoryPage } from "../cron/task-run-history.js";
@@ -81,17 +79,44 @@ describe("cron run-log task import", () => {
             durationMs: 100,
           },
         ];
+        const mirroredWithRunId = entries[4];
+        if (!mirroredWithRunId) {
+          throw new Error("expected mirrored cron history fixture");
+        }
+        const legacyRows = [...entries, { ...mirroredWithRunId }];
 
         const initial = openOpenClawStateDatabase();
         const databasePath = initial.path;
         closeOpenClawStateDatabaseForTest();
         const fixture = new DatabaseSync(databasePath);
         try {
-          fixture
-            .prepare("DELETE FROM migration_runs WHERE id = ?")
-            .run(CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID);
-          for (const entry of entries) {
-            insertCronRunLogEntry(fixture, storeKey, entry);
+          fixture.exec(`
+            CREATE TABLE cron_run_logs (
+              store_key TEXT NOT NULL,
+              job_id TEXT NOT NULL,
+              seq INTEGER NOT NULL,
+              ts INTEGER NOT NULL,
+              entry_json TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              PRIMARY KEY (store_key, job_id, seq)
+            );
+            CREATE INDEX idx_cron_run_logs_store_ts
+              ON cron_run_logs(store_key, ts DESC, seq DESC);
+          `);
+          const insertLegacy = fixture.prepare(
+            `INSERT INTO cron_run_logs
+              (store_key, job_id, seq, ts, entry_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+          );
+          for (const [index, entry] of legacyRows.entries()) {
+            insertLegacy.run(
+              storeKey,
+              entry.jobId,
+              index + 1,
+              entry.ts,
+              JSON.stringify(entry),
+              entry.ts,
+            );
           }
           const insertMirrored = fixture.prepare(
             `INSERT INTO task_runs (
@@ -125,7 +150,7 @@ describe("cron run-log task import", () => {
             .prepare(
               `INSERT INTO cron_run_logs
                 (store_key, job_id, seq, ts, entry_json, created_at)
-               VALUES (?, ?, 7, 5100, '{', 5100)`,
+               VALUES (?, ?, 8, 5100, '{', 5100)`,
             )
             .run(storeKey, jobId);
         } finally {
@@ -138,7 +163,7 @@ describe("cron run-log task import", () => {
           .get(CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID) as { report_json: string };
         expect(JSON.parse(report.report_json)).toEqual({
           imported: 4,
-          alreadyMirrored: 2,
+          alreadyMirrored: 3,
           malformed: 1,
           skipped: false,
         });
@@ -148,10 +173,28 @@ describe("cron run-log task import", () => {
           limit: 50,
           sortDir: "asc",
         }).entries;
-        const legacyEntries = (
-          await readCronRunLogEntriesPage({ storePath, jobId, limit: 50, sortDir: "asc" })
-        ).entries;
-        expect(ledgerEntries).toEqual(legacyEntries);
+        expect(
+          ledgerEntries.map(({ ts, jobId: entryJobId, runId, summary, error }) => ({
+            ts,
+            jobId: entryJobId,
+            runId,
+            summary,
+            error,
+          })),
+        ).toEqual(
+          entries.map(({ ts, jobId: entryJobId, runId, summary, error }) => ({
+            ts,
+            jobId: entryJobId,
+            runId,
+            summary,
+            error,
+          })),
+        );
+        expect(
+          reopened.db
+            .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs'")
+            .get(),
+        ).toBeUndefined();
         const imported = reopened.db
           .prepare(
             "SELECT task_id, cleanup_after FROM task_runs WHERE task_id LIKE 'cron-runlog-import:%' ORDER BY task_id",
@@ -159,10 +202,10 @@ describe("cron run-log task import", () => {
           .all() as Array<{ task_id: string; cleanup_after: number | null }>;
         expect(imported).toHaveLength(4);
         expect(imported.map((row) => row.task_id)).toEqual([
-          expect.stringMatching(/^cron-runlog-import:[a-f0-9]{16}:legacy-history-job:1100:1$/u),
-          expect.stringMatching(/^cron-runlog-import:[a-f0-9]{16}:legacy-history-job:2100:2$/u),
-          expect.stringMatching(/^cron-runlog-import:[a-f0-9]{16}:legacy-history-job:2100:3$/u),
-          expect.stringMatching(/^cron-runlog-import:[a-f0-9]{16}:legacy-history-job:3100:4$/u),
+          "cron-runlog-import:legacy-history-job:1100:1",
+          "cron-runlog-import:legacy-history-job:2100:1",
+          "cron-runlog-import:legacy-history-job:2100:2",
+          "cron-runlog-import:legacy-history-job:3100:1",
         ]);
         expect(imported.every((row) => row.cleanup_after === null)).toBe(true);
 

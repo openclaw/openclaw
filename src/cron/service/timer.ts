@@ -20,11 +20,6 @@ import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import {
-  registerActiveCronTaskRun,
-  startActiveCronTaskRunSettlementGrace,
-  trackActiveCronTaskRunSettlement,
-} from "../../tasks/cron-task-cancel.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
@@ -52,6 +47,11 @@ import type {
   CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
+import {
+  registerActiveCronTaskRun,
+  startActiveCronTaskRunSettlementGrace,
+  trackActiveCronTaskRunSettlement,
+} from "./active-run-cancellation.js";
 import {
   cleanupTimedOutCronAgentRun,
   createCronAgentWatchdog,
@@ -1135,7 +1135,7 @@ function applyOutcomeToStoredJob(
     }
     if (result.status === "ok") {
       // A manual/queued run may finish after the job was removed. Preserve the
-      // successful run log state without resurrecting the job in the store.
+      // successful run-history state without resurrecting the job in the store.
       applyJobResult(state, result.job, {
         status: result.status,
         error: result.error,

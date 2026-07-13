@@ -125,10 +125,7 @@ export function cancelActiveCronTaskRun(params: {
     return false;
   }
   const handle = activeCronTaskRunsByRunId.get(runId);
-  if (!handle) {
-    return false;
-  }
-  if (handle.controller.signal.aborted) {
+  if (!handle || handle.controller.signal.aborted) {
     return false;
   }
   const reason = params.reason?.trim() || "Cancelled by operator.";

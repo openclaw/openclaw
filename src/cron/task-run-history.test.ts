@@ -5,7 +5,6 @@ import { saveTaskRegistryStateToSqlite } from "../tasks/task-registry.store.sqli
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
-import { appendCronRunLog, readCronRunLogEntriesPage } from "./run-log.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
@@ -13,6 +12,7 @@ import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronTaskRecordToRunLogEntry,
+  parseCronRunLogEntryObject,
 } from "./task-run-detail.js";
 import { cronRunLogEntryFromEvent } from "./task-run-event-codec.js";
 import { readCronTaskRunHistoryPage } from "./task-run-history.js";
@@ -64,13 +64,12 @@ function futureCronDetailTask(storeKey: string): TaskRecord {
 }
 
 describe("cron task run history", () => {
-  it("matches legacy history for executions produced by the cron service", async () => {
+  it("reads executions produced by the cron service from the ledger", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-service-history-" },
       async (state) => {
         resetTaskRegistryForTests();
         const storePath = state.path("cron", "jobs.json");
-        const legacyWrites: Promise<void>[] = [];
         let now = Date.parse("2026-07-12T12:00:00.000Z");
         const cron = new CronService({
           storePath,
@@ -112,16 +111,6 @@ describe("cron task run history", () => {
               usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
             };
           }),
-          onEvent: (event) => {
-            if (event.action === "finished") {
-              legacyWrites.push(
-                appendCronRunLog({
-                  storePath,
-                  entry: cronRunLogEntryFromEvent({ ...event, action: "finished" }, Date.now()),
-                }),
-              );
-            }
-          },
         });
         try {
           await cron.start();
@@ -148,19 +137,11 @@ describe("cron task run history", () => {
             });
             now += 10_000;
           }
-          await Promise.all(legacyWrites);
-
           const ledger = readCronTaskRunHistoryPage({
             storeKey: cronStoreKey(storePath),
             limit: 50,
             sortDir: "asc",
           });
-          const legacy = await readCronRunLogEntriesPage({
-            storePath,
-            limit: 50,
-            sortDir: "asc",
-          });
-          expect(ledger).toEqual(legacy);
           expect(ledger.entries.map((entry) => entry.status)).toEqual([
             "ok",
             "error",
@@ -183,7 +164,7 @@ describe("cron task run history", () => {
     );
   });
 
-  it("matches legacy run-log records across outcomes and telemetry", async () => {
+  it("round-trips outcomes and telemetry through task detail", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-history-" },
       async (state) => {
@@ -279,17 +260,11 @@ describe("cron task run history", () => {
           ),
           deliveryStates: new Map(),
         });
-        for (const entry of entries) {
-          await appendCronRunLog({ storePath, entry });
-        }
-
         const ledger = readCronTaskRunHistoryPage({ storeKey, jobId: JOB_ID, limit: 50 });
-        const legacy = await readCronRunLogEntriesPage({
-          storePath,
-          jobId: JOB_ID,
-          limit: 50,
-        });
-        expect(ledger).toEqual(legacy);
+        const expected = entries
+          .map((entry, index) => cronTaskRecordToRunLogEntry(taskFromEntry(entry, index, storeKey)))
+          .toReversed();
+        expect(ledger.entries).toEqual(expected);
         expect(ledger.entries.map((entry) => entry.status)).toEqual([
           "skipped",
           "error",
@@ -465,5 +440,25 @@ describe("cron task run history", () => {
         `detail for status "${status}" must keep the stable prefix: ${serialized}`,
       ).toBe(true);
     }
+  });
+
+  it("authors failure reasons on write and trusts stored values on read", () => {
+    const entry = cronRunLogEntryFromEvent(
+      {
+        jobId: JOB_ID,
+        action: "finished",
+        status: "error",
+        error: "upstream unavailable: 503 overloaded",
+      },
+      1,
+    );
+    expect(entry.errorReason).toBe("overloaded");
+    expect(parseCronRunLogEntryObject(entry)?.errorReason).toBe("overloaded");
+    expect(
+      parseCronRunLogEntryObject({
+        ...entry,
+        errorReason: "not-a-real-reason",
+      })?.errorReason,
+    ).toBeUndefined();
   });
 });

@@ -24,7 +24,6 @@ import {
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { registerActiveCronTaskRun, resetActiveCronTaskRunsForTests } from "./cron-task-cancel.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { ensureTaskRuntimeStateReady } from "./runtime-internal.js";
 import {
@@ -115,10 +114,12 @@ function createTaskFlowForTask(
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();
+  const cancelActiveCronTaskRunMock = vi.fn();
   const killSubagentRunAdminMock = vi.fn();
   return {
     sendMessageMock,
     cancelSessionMock,
+    cancelActiveCronTaskRunMock,
     killSubagentRunAdminMock,
   };
 });
@@ -471,6 +472,7 @@ describe("task-registry", () => {
       sendMessage: hoisted.sendMessageMock,
     });
     setTaskRegistryControlRuntimeForTests({
+      cancelActiveCronTaskRun: (params) => hoisted.cancelActiveCronTaskRunMock(params),
       getAcpSessionManager: () => ({
         cancelSession: hoisted.cancelSessionMock,
       }),
@@ -485,7 +487,6 @@ describe("task-registry", () => {
     resetHeartbeatWakeStateForTests();
     resetAgentRunContextForTest();
     resetCronActiveJobs();
-    resetActiveCronTaskRunsForTests();
     resetTaskRegistryControlRuntimeForTests();
     resetTaskRegistryDeliveryRuntimeForTests();
     resetTaskRegistryMaintenanceRuntimeForTests();
@@ -493,6 +494,7 @@ describe("task-registry", () => {
     resetTaskFlowRegistryForTests({ persist: false });
     hoisted.sendMessageMock.mockReset();
     hoisted.cancelSessionMock.mockReset();
+    hoisted.cancelActiveCronTaskRunMock.mockReset();
     hoisted.killSubagentRunAdminMock.mockReset();
   });
 
@@ -3441,12 +3443,12 @@ describe("task-registry", () => {
                 "task-missing-cleanup",
                 {
                   taskId: "task-missing-cleanup",
-                  runtime: "cron",
+                  runtime: "cli",
                   requesterSessionKey: "",
-                  ownerKey: "system:cron:task-missing-cleanup",
+                  ownerKey: "system:cli:task-missing-cleanup",
                   scopeKind: "system",
                   runId: "run-maintenance-cleanup",
-                  task: "Finished cron",
+                  task: "Finished CLI task",
                   status: "failed",
                   deliveryStatus: "not_applicable",
                   notifyPolicy: "silent",
@@ -5217,9 +5219,9 @@ describe("task-registry", () => {
       if (!task) {
         throw new Error("expected cron task");
       }
-      registerActiveCronTaskRun({
-        runId: "cron:nightly-gmail-sync:123",
-        controller: abortController,
+      hoisted.cancelActiveCronTaskRunMock.mockImplementation(({ reason }: { reason?: string }) => {
+        abortController.abort(reason);
+        return true;
       });
 
       const result = await cancelTaskById({
@@ -5227,6 +5229,10 @@ describe("task-registry", () => {
         taskId: task.taskId,
       });
 
+      expect(hoisted.cancelActiveCronTaskRunMock).toHaveBeenCalledWith({
+        runId: "cron:nightly-gmail-sync:123",
+        reason: "Cancelled by operator.",
+      });
       expect(abortController.signal.aborted).toBe(true);
       expect(abortController.signal.reason).toBe("Cancelled by operator.");
       expectRecordFields(result, {
@@ -5239,6 +5245,38 @@ describe("task-registry", () => {
         status: "cancelled",
         error: "Cancelled by operator.",
       });
+    });
+  });
+
+  it("refuses terminal and unknown cron task cancellation before runtime dispatch", async () => {
+    await withTaskRegistryTempDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cron",
+        sourceId: "finished-cron",
+        ownerKey: "",
+        scopeKind: "system",
+        runId: "cron:finished-cron:123",
+        task: "Finished cron",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+
+      await expect(
+        cancelTaskById({ cfg: {} as never, taskId: task.taskId }),
+      ).resolves.toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Task is already terminal.",
+      });
+      await expect(
+        cancelTaskById({ cfg: {} as never, taskId: "unknown-cron-task" }),
+      ).resolves.toMatchObject({
+        found: false,
+        cancelled: false,
+        reason: "Task not found.",
+      });
+      expect(hoisted.cancelActiveCronTaskRunMock).not.toHaveBeenCalled();
     });
   });
 

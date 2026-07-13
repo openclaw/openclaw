@@ -189,7 +189,7 @@ vi.mock("../../cron/active-jobs.js", () => ({
   waitForActiveCronJobs: (timeoutMs: number) => waitForActiveCronJobs(timeoutMs),
 }));
 
-vi.mock("../../tasks/cron-task-cancel.js", () => ({
+vi.mock("../../cron/service/active-run-cancellation.js", () => ({
   abortActiveCronTaskRuns: (reason?: string) => abortActiveCronTaskRuns(reason),
   retireActiveCronTaskRunTracking: () => retireActiveCronTaskRunTracking(),
   waitForActiveCronTaskRuns: (timeoutMs: number) => waitForActiveCronTaskRuns(timeoutMs),

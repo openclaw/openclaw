@@ -24,14 +24,12 @@ import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
-import { appendCronRunLog, resolveCronRunLogPruneOptions } from "../cron/run-log.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
   resolveCronSessionTargetSessionKey,
 } from "../cron/session-target.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
-import { cronRunLogEntryFromEvent } from "../cron/task-run-event-codec.js";
 import { createCronTriggerEvaluator } from "../cron/trigger-script.js";
 import type { CronJob, CronPayload } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -364,7 +362,6 @@ export function buildGatewayCronService(params: {
   };
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveStorePath(params.cfg.session?.store, {
       agentId: agentId ?? defaultAgentId,
@@ -785,7 +782,6 @@ export function buildGatewayCronService(params: {
       }
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);
-        const runLogEntry = cronRunLogEntryFromEvent({ ...evt, action: "finished" }, Date.now());
         dispatchGatewayCronFinishedNotifications({
           evt,
           job,
@@ -794,19 +790,6 @@ export function buildGatewayCronService(params: {
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
           globalFailureDestination: params.cfg.cron?.failureDestination,
-        });
-
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
-          await appendCronRunLog({
-            storePath,
-            entry: runLogEntry,
-            opts: { keepLines: runLogPrune.keepLines },
-          });
-        }).catch((err: unknown) => {
-          cronLogger.warn(
-            { err: String(err), storePath, jobId: evt.jobId },
-            "cron: run log append failed",
-          );
         });
       }
     },

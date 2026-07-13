@@ -22,7 +22,6 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
 import {
@@ -1271,10 +1270,9 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     delete next.childSessionKey;
   }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
-    next.cleanupAfter = resolveTaskCleanupAfter({
-      ...next,
-      createdAt: next.createdAt ?? Date.now(),
-    });
+    const createdAt = next.createdAt ?? Date.now();
+    const cleanupAfter = resolveTaskCleanupAfter({ ...next, createdAt });
+    Object.assign(next, cleanupAfter === undefined ? {} : { cleanupAfter });
   }
   const sessionIndexChanged =
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
@@ -2001,7 +1999,8 @@ export function createTaskRecord(params: {
     ...(params.detail !== undefined ? { detail: structuredClone(params.detail) } : {}),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
-    record.cleanupAfter = resolveTaskCleanupAfter(record);
+    const cleanupAfter = resolveTaskCleanupAfter(record);
+    Object.assign(record, cleanupAfter === undefined ? {} : { cleanupAfter });
   }
   const requesterOrigin = normalizeDeliveryContext(params.requesterOrigin);
   const deliveryState = requesterOrigin
@@ -2340,6 +2339,7 @@ export async function cancelTaskById(params: {
     // owning subagent run before promotion so its canonical completion can win.
     if (task.runtime !== "cli") {
       if (task.runtime === "cron") {
+        const { cancelActiveCronTaskRun } = await loadTaskRegistryControlRuntime();
         if (
           !cancelActiveCronTaskRun({
             runId: task.runId,

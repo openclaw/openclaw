@@ -7,7 +7,7 @@ import {
   startActiveCronTaskRunSettlementGrace,
   trackActiveCronTaskRunSettlement,
   waitForActiveCronTaskRuns,
-} from "./cron-task-cancel.js";
+} from "./active-run-cancellation.js";
 
 describe("cron task cancellation tracking", () => {
   it("retires restart tracking while keeping an unsettled core suspension-visible", async () => {

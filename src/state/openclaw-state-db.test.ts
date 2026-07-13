@@ -6,7 +6,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   executeSqliteQuerySync,
@@ -2499,7 +2498,7 @@ describe("openclaw state database", () => {
     ).toEqual({ delivery_thread_id: "1008013", delivery_thread_id_type: "number" });
   });
 
-  it("opens databases with early cron run-log tables before creating cron indexes", () => {
+  it("imports early cron run-log tables before dropping them", () => {
     const stateDir = createTempStateDir();
     const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
@@ -2526,26 +2525,14 @@ describe("openclaw state database", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
-    expect(() =>
-      database.db.prepare("SELECT status, entry_json FROM cron_run_logs LIMIT 1").all(),
-    ).not.toThrow();
-
-    const previousStateDir = process.env["OPENCLAW_STATE_DIR"];
-    process.env["OPENCLAW_STATE_DIR"] = stateDir;
-    try {
-      expect(
-        readCronRunLogEntriesSync({
-          storePath: path.join(stateDir, "cron", "jobs.json"),
-          jobId: "legacy-job",
-        }),
-      ).toMatchObject([{ action: "finished", jobId: "legacy-job", ts: 12345 }]);
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env["OPENCLAW_STATE_DIR"];
-      } else {
-        process.env["OPENCLAW_STATE_DIR"] = previousStateDir;
-      }
-    }
+    expect(
+      database.db
+        .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs'")
+        .get(),
+    ).toBeUndefined();
+    expect(
+      database.db.prepare("SELECT source_id, ended_at FROM task_runs WHERE runtime = 'cron'").all(),
+    ).toEqual([{ source_id: "legacy-job", ended_at: 12345 }]);
   });
 
   it("opens databases with early queue and commitment tables before creating newer indexes", () => {

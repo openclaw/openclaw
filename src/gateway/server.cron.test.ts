@@ -1326,11 +1326,11 @@ describe("gateway server cron", () => {
       const writerFinished = events.wait(
         (payload) => payload?.jobId === writerJobId && payload?.action === "finished",
       );
-      const writerRunResult = await directCronReq(cronState, "cron.run", {
+      const writerRun = await directCronReq(cronState, "cron.run", {
         id: writerJobId,
         mode: "force",
       });
-      expect(writerRunResult.ok).toBe(true);
+      expect(writerRun.ok).toBe(true);
       await writerFinished;
 
       const mainRuns = await directCronReq(cronState, "cron.runs", {

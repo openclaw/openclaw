@@ -115,6 +115,7 @@ async function withTaskExecutorStateDir(run: (stateDir: string) => Promise<void>
       sendMessage: hoisted.sendMessageMock,
     });
     setTaskRegistryControlRuntimeForTests({
+      cancelActiveCronTaskRun: () => false,
       getAcpSessionManager: () => ({
         cancelSession: hoisted.cancelSessionMock,
       }),
