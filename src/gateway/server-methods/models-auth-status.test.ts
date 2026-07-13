@@ -11,6 +11,8 @@ import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
+type BuildAuthHealthSummary = typeof import("../../agents/auth-health.js").buildAuthHealthSummary;
+
 const emptyUsageSummary = (): UsageSummary => ({ updatedAt: 0, providers: [] });
 
 const mocks = vi.hoisted(() => ({
@@ -39,7 +41,7 @@ const mocks = vi.hoisted(() => ({
   refreshActiveProviderAuthRuntimeSnapshot: vi.fn(async () => false),
   clearCurrentProviderAuthState: vi.fn(),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
-  buildAuthHealthSummary: vi.fn(
+  buildAuthHealthSummary: vi.fn<BuildAuthHealthSummary>(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
   loadProviderUsageSummary: vi.fn(async (): Promise<UsageSummary> => emptyUsageSummary()),
