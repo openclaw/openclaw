@@ -51,6 +51,16 @@ export type WorkspaceCustomWidgetContext = {
   onReject: (widget: WorkspaceWidget) => void;
 };
 
+export type WorkspaceWidgetBlame = {
+  creator: string;
+  agentId: string | null;
+  firstSeen:
+    | { kind: "exact"; version: number }
+    | { kind: "range"; afterVersion: number; byVersion: number }
+    | { kind: "unknown" };
+  logbookHref?: string | null;
+};
+
 export type WorkspaceWidgetCellProps = {
   widget: WorkspaceWidget;
   /** Resolved binding value for the primary binding, or an error to surface. */
@@ -62,6 +72,7 @@ export type WorkspaceWidgetCellProps = {
   /** Ambient context builtins may need (embed policy for iframe-embed). */
   builtinContext: BuiltinWidgetContext;
   callbacks: WorkspaceWidgetCellCallbacks;
+  blame?: WorkspaceWidgetBlame;
   /** Present for `custom:` widgets only (L5); builtin widgets leave this undefined. */
   custom?: WorkspaceCustomWidgetContext;
 };
@@ -88,12 +99,51 @@ function renderProvenanceChip(widget: WorkspaceWidget): TemplateResult | typeof 
   >`;
 }
 
+function renderBlame(blame: WorkspaceWidgetBlame): TemplateResult {
+  const label = (() => {
+    switch (blame.firstSeen.kind) {
+      case "exact":
+        return t("workspaces.widget.blame.createdByVersion", {
+          creator: blame.creator,
+          version: String(blame.firstSeen.version),
+        });
+      case "range":
+        return t("workspaces.widget.blame.createdByRange", {
+          creator: blame.creator,
+          afterVersion: String(blame.firstSeen.afterVersion),
+          byVersion: String(blame.firstSeen.byVersion),
+        });
+      case "unknown":
+        return t("workspaces.widget.blame.createdBy", { creator: blame.creator });
+    }
+    throw new Error("unsupported workspace first-seen state");
+  })();
+  const logbookHref = blame.agentId === null ? null : blame.logbookHref;
+  return html`
+    <div class="workspace-widget__blame" role="note" data-test-id="workspace-widget-blame">
+      <span>${label}</span>
+      ${logbookHref
+        ? html`<a
+            class="workspace-widget__blame-link"
+            href=${logbookHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-test-id="workspace-widget-blame-link"
+            >${icons.externalLink} ${t("workspaces.widget.blame.logbookLink")}</a
+          >`
+        : nothing}
+    </div>
+  `;
+}
+
 function renderMenu(
   widget: WorkspaceWidget,
   callbacks: WorkspaceWidgetCellCallbacks,
+  blame: WorkspaceWidgetBlame | undefined,
 ): TemplateResult {
   return html`
     <div class="workspace-widget__menu" role="menu">
+      ${blame ? renderBlame(blame) : nothing}
       <button
         class="workspace-widget__menu-item"
         type="button"
@@ -327,7 +377,7 @@ export function renderWidgetCell(props: WorkspaceWidgetCellProps): TemplateResul
         >
           ${icons.moreHorizontal}
         </button>
-        ${props.menuOpen ? renderMenu(widget, callbacks) : nothing}
+        ${props.menuOpen ? renderMenu(widget, callbacks, props.blame) : nothing}
       </header>
       ${widget.collapsed
         ? nothing

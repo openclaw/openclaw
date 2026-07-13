@@ -56,6 +56,49 @@ function createLogbookPage(): DeferredPluginPage {
 }
 
 describe("PluginPage", () => {
+  it("passes the advertised logbook route to the bundled Workspaces view", () => {
+    const render = vi.fn((_props?: unknown) => "workspaces-view");
+    const page = new PluginPage();
+    page.pluginId = "workspaces";
+    page.tabId = "workspaces";
+    (page as unknown as { bundledView: { render: typeof render; stop: () => void } }).bundledView =
+      {
+        render,
+        stop: vi.fn(),
+      };
+    (page as unknown as { context: ApplicationContext<RouteId> }).context = {
+      basePath: "/control",
+      gateway: {
+        snapshot: {
+          client: null,
+          connected: true,
+          reconnecting: false,
+          hello: {
+            type: "hello-ok",
+            protocol: 3,
+            auth: { role: "operator", scopes: ["operator.read"] },
+            controlUiTabs: [
+              { pluginId: "workspaces", id: "workspaces", label: "Workspaces" },
+              { pluginId: "logbook", id: "logbook", label: "Logbook" },
+            ],
+          },
+          assistantAgentId: null,
+          sessionKey: "main",
+          lastError: null,
+          lastErrorCode: null,
+        },
+        subscribe: () => () => undefined,
+      },
+    } as unknown as ApplicationContext<RouteId>;
+
+    page.render();
+
+    const props = render.mock.calls[0]?.[0] as { logbookHref?: string | null } | undefined;
+    expect(props?.logbookHref).toContain("/control/plugin");
+    expect(props?.logbookHref).toContain("plugin=logbook");
+    expect(props?.logbookHref).toContain("id=logbook");
+  });
+
   it("stops a bundled view when its advertised descriptor disappears", async () => {
     const bundledView = deferred<TestBundledView>();
     const stop = vi.fn();

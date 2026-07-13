@@ -2,13 +2,15 @@ import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
+import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { pluginTabKey } from "./route.ts";
+import { pluginTabKey, pluginTabSearch } from "./route.ts";
+
+const LOGBOOK_TAB_REF = { pluginId: "logbook", id: "logbook" } as const;
 
 /**
  * Bundled plugin tab views ship with the Control UI and render natively; every
@@ -29,6 +31,7 @@ type BundledPluginTabView = {
     // key (prompt dispatch). Bundled views that don't use them ignore these.
     basePath?: string;
     sessionKey?: string;
+    logbookHref?: string | null;
   }) => unknown;
   stop: (host: object) => void;
 };
@@ -149,6 +152,17 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     return tabs.find((tab) => tab.pluginId === this.pluginId && tab.id === this.tabId);
   }
 
+  private logbookHref(): string | null {
+    const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
+    const advertised = tabs.some(
+      (tab) => tab.pluginId === LOGBOOK_TAB_REF.pluginId && tab.id === LOGBOOK_TAB_REF.id,
+    );
+    if (!advertised) {
+      return null;
+    }
+    return `${pathForRoute("plugin", this.context?.basePath ?? "")}${pluginTabSearch(LOGBOOK_TAB_REF)}`;
+  }
+
   override render() {
     const context = this.context;
     if (!context) {
@@ -178,6 +192,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         onRequestUpdate: () => this.requestUpdate(),
         basePath: context.basePath,
         sessionKey: snapshot.sessionKey,
+        logbookHref: this.logbookHref(),
       });
     }
     if (info?.path) {

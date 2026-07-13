@@ -21,8 +21,23 @@
 /* #7: page-header treatment for the Workspaces view (title = active tab). */
 .workspace-page-header {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workspace-page-header__titles {
+  display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+}
+
+.workspace-history__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 /* --- Tab strip ----------------------------------------------------------- */
@@ -344,6 +359,202 @@
 @media (prefers-reduced-motion: reduce) {
   .workspace-widget__body {
     animation: none;
+  }
+}
+
+/* --- Workspace history -------------------------------------------------- */
+
+.workspace-history {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: min(78vw, 820px);
+  max-width: 820px;
+}
+
+.workspace-history__header,
+.workspace-history__detail,
+.workspace-history__diff-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workspace-history__body {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.workspace-history__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.workspace-history__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-history__item:hover,
+.workspace-history__item--active {
+  background: var(--bg-hover);
+}
+
+.workspace-history__item--active {
+  border-color: var(--accent, var(--text));
+}
+
+.workspace-history__version {
+  font-weight: 600;
+}
+
+.workspace-history__time,
+.workspace-history__latest {
+  font-size: 12px;
+  color: var(--text-muted, var(--text));
+}
+
+.workspace-history__latest {
+  color: var(--accent, var(--text));
+}
+
+.workspace-history__section-title {
+  margin-bottom: 6px;
+  color: var(--text-muted, var(--text));
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.workspace-history__preview {
+  position: relative;
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  opacity: 0.85;
+}
+
+.workspace-history__preview--empty {
+  display: block;
+  color: var(--text-muted, var(--text));
+  font-size: 13px;
+}
+
+.workspace-history__cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-subtle, var(--bg));
+}
+
+.workspace-history__cell-title {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-history__diff-actor {
+  margin-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workspace-history__diff-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.workspace-history__diff-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.workspace-history__diff-kind {
+  flex-shrink: 0;
+  color: var(--text-muted, var(--text));
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.workspace-history__diff-detail {
+  color: var(--text-muted, var(--text));
+}
+
+.workspace-history__restore {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workspace-history__confirm {
+  font-size: 13px;
+}
+
+/* --- Widget provenance detail ------------------------------------------ */
+
+.workspace-widget__blame {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted, var(--text));
+  font-size: 12px;
+}
+
+.workspace-widget__blame-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent, var(--text));
+  text-decoration: none;
+}
+
+.workspace-widget__blame-link:hover {
+  text-decoration: underline;
+}
+
+.workspace-widget__blame-link svg {
+  width: 12px;
+  height: 12px;
+}
+
+@media (max-width: 640px) {
+  .workspace-history__body {
+    grid-template-columns: 1fr;
   }
 }
 

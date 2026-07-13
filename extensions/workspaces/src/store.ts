@@ -11,7 +11,11 @@
 //
 // Every mutation is a single BEGIN IMMEDIATE transaction, so a read-modify-write
 // cycle cannot interleave with another writer. node:sqlite is synchronous, which
-// is why the mutator must be synchronous too: the transaction is the lock.
+// is why the mutator must be synchronous too: the transaction is the lock. This
+// dedicated DB is intentionally not plugin KV: one validated workspace or undo
+// snapshot may be 256 KB, above plugin KV's 64 KB value limit. The public Plugin
+// SDK Kysely helpers keep steady-state reads and writes typed; raw SQL is limited
+// to schema DDL and the synchronous BEGIN/COMMIT/ROLLBACK transaction primitive.
 //
 // There is deliberately no migration from the `workspace.json` this plugin used
 // while it was in review. The plugin has never been reachable from a release tag,
@@ -22,7 +26,13 @@
 import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { configureSqliteConnectionPragmas } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { Kysely } from "kysely";
+import {
+  configureSqliteConnectionPragmas,
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { WidgetAssetTokens } from "./asset-tokens.js";
 import { DEFAULT_WORKSPACE } from "./default-workspace.js";
@@ -35,6 +45,12 @@ import {
 
 type WorkspaceMutationOptions = { actor: WorkspaceActor };
 type WorkspaceMutationResult = { doc: WorkspaceDoc; changed: boolean };
+type WorkspaceHistoryEntry = { version: number; savedAt: string; bytes: number };
+type WorkspaceHistoryRow = { version: number; doc: string; created_ms: number };
+type WorkspaceDatabase = {
+  workspace: { id: number; version: number; doc: string; updated_ms: number };
+  undo: WorkspaceHistoryRow;
+};
 
 const MAX_WORKSPACE_BYTES = 256 * 1024;
 const UNDO_RING_SIZE = 20;
@@ -112,6 +128,7 @@ export class WorkspaceStore {
   readonly workspaceDir: string;
   readonly dbPath: string;
   private readonly db: DatabaseSync;
+  private readonly kysely: Kysely<WorkspaceDatabase>;
   readonly assetTokens = new WidgetAssetTokens();
   /**
    * Single-slot cache of the parsed document. This process is the only writer
@@ -127,6 +144,7 @@ export class WorkspaceStore {
     this.dbPath = path.join(this.workspaceDir, "workspaces.sqlite");
     mkdirSync(this.workspaceDir, { recursive: true, mode: DIR_MODE });
     this.db = new DatabaseSync(this.dbPath);
+    this.kysely = getNodeSqliteKysely<WorkspaceDatabase>(this.db);
     try {
       configureSqliteConnectionPragmas(this.db, { busyTimeoutMs: BUSY_TIMEOUT_MS });
       // WAL/SHM sidecars inherit the main DB file's permissions.
@@ -146,9 +164,10 @@ export class WorkspaceStore {
     if (this.cached) {
       return structuredClone(this.cached);
     }
-    const row = this.db.prepare("SELECT doc FROM workspace WHERE id = 1").get() as
-      | { doc: string }
-      | undefined;
+    const row = executeSqliteQueryTakeFirstSync(
+      this.db,
+      this.kysely.selectFrom("workspace").select("doc").where("id", "=", 1),
+    );
     if (!row) {
       const seeded = validateWorkspaceDoc(structuredClone(DEFAULT_WORKSPACE));
       this.commit(seeded, { snapshot: null });
@@ -204,25 +223,95 @@ export class WorkspaceStore {
   undo(): WorkspaceDoc {
     return this.transact(
       (current) => {
-        const row = this.db
-          .prepare("SELECT version, doc FROM undo ORDER BY version DESC LIMIT 1")
-          .get() as { version: number; doc: string } | undefined;
-        if (!row) {
+        const snapshot = this.findHistorySnapshot();
+        if (!snapshot) {
           throw new Error("no workspace undo snapshot available");
         }
-        this.db.prepare("DELETE FROM undo WHERE version = ?").run(row.version);
+        executeSqliteQuerySync(
+          this.db,
+          this.kysely.deleteFrom("undo").where("version", "=", snapshot.version),
+        );
         // transact() stamps the next version, so the restored document lands as a
         // forward write rather than a rewind.
-        const snapshot = validateWorkspaceDoc(JSON.parse(row.doc));
         // Approval state is a separate operator decision, not layout history.
         // Undo may restore tabs/widgets, but it must never revive a revoked
         // approval or discard a registry decision made after the snapshot.
-        return { ...snapshot, widgetsRegistry: current.widgetsRegistry };
+        return { ...snapshot.doc, widgetsRegistry: current.widgetsRegistry };
       },
       // An undo consumes a snapshot; it must not push one, or repeated undo would
       // oscillate between the last two documents instead of walking history back.
       { snapshot: false },
     ).doc;
+  }
+
+  /** Restores exactly the snapshot the caller previewed, as a new monotonic version. */
+  restoreHistorySnapshot(version: number): WorkspaceDoc {
+    return this.transact((current) => {
+      const snapshot = this.findHistorySnapshot(version);
+      if (!snapshot) {
+        throw new Error(`no workspace history snapshot for version ${version}`);
+      }
+      executeSqliteQuerySync(
+        this.db,
+        this.kysely.deleteFrom("undo").where("version", "=", snapshot.version),
+      );
+      return { ...snapshot.doc, widgetsRegistry: current.widgetsRegistry };
+    }).doc;
+  }
+
+  /** Lists undo snapshots newest-first without exposing their document bodies. */
+  listHistory(): WorkspaceHistoryEntry[] {
+    const entries: WorkspaceHistoryEntry[] = [];
+    for (const row of this.historyRows()) {
+      const snapshot = this.parseHistoryRow(row);
+      if (snapshot) {
+        entries.push({
+          version: snapshot.workspaceVersion,
+          savedAt: new Date(row.created_ms).toISOString(),
+          bytes: Buffer.byteLength(row.doc, "utf8"),
+        });
+      }
+    }
+    return entries;
+  }
+
+  /** Returns one undo snapshot by the version represented inside its document. */
+  getHistorySnapshot(version: number): WorkspaceDoc {
+    const snapshot = this.findHistorySnapshot(version);
+    if (snapshot) {
+      return snapshot.doc;
+    }
+    throw new Error(`no workspace history snapshot for version ${version}`);
+  }
+
+  private historyRows(): WorkspaceHistoryRow[] {
+    return executeSqliteQuerySync(
+      this.db,
+      this.kysely.selectFrom("undo").selectAll().orderBy("version", "desc"),
+    ).rows;
+  }
+
+  private parseHistoryRow(row: WorkspaceHistoryRow): WorkspaceDoc | null {
+    try {
+      const doc = validateWorkspaceDoc(JSON.parse(row.doc));
+      return doc.workspaceVersion === row.version ? doc : null;
+    } catch {
+      // A damaged snapshot is isolated to its row; valid older history remains usable.
+      return null;
+    }
+  }
+
+  private findHistorySnapshot(version?: number): { version: number; doc: WorkspaceDoc } | null {
+    for (const row of this.historyRows()) {
+      if (version !== undefined && row.version !== version) {
+        continue;
+      }
+      const doc = this.parseHistoryRow(row);
+      if (doc) {
+        return { version: row.version, doc };
+      }
+    }
+    return null;
   }
 
   /**
@@ -260,21 +349,46 @@ export class WorkspaceStore {
     assertWorkspaceSize(serialized);
     const now = Date.now();
     if (params.snapshot) {
-      this.db
-        .prepare("INSERT OR REPLACE INTO undo (version, doc, created_ms) VALUES (?, ?, ?)")
-        .run(doc.workspaceVersion, serializeWorkspaceDoc(params.snapshot), now);
-      this.db
-        .prepare(
-          "DELETE FROM undo WHERE version NOT IN (SELECT version FROM undo ORDER BY version DESC LIMIT ?)",
-        )
-        .run(UNDO_RING_SIZE);
+      const snapshotSerialized = serializeWorkspaceDoc(params.snapshot);
+      executeSqliteQuerySync(
+        this.db,
+        this.kysely
+          .insertInto("undo")
+          .values({
+            version: params.snapshot.workspaceVersion,
+            doc: snapshotSerialized,
+            created_ms: now,
+          })
+          .onConflict((conflict) =>
+            conflict.column("version").doUpdateSet({
+              doc: snapshotSerialized,
+              created_ms: now,
+            }),
+          ),
+      );
+      const retained = this.kysely
+        .selectFrom("undo")
+        .select("version")
+        .orderBy("version", "desc")
+        .limit(UNDO_RING_SIZE);
+      executeSqliteQuerySync(
+        this.db,
+        this.kysely.deleteFrom("undo").where("version", "not in", retained),
+      );
     }
-    this.db
-      .prepare(
-        "INSERT INTO workspace (id, version, doc, updated_ms) VALUES (1, ?, ?, ?) " +
-          "ON CONFLICT(id) DO UPDATE SET version = excluded.version, doc = excluded.doc, updated_ms = excluded.updated_ms",
-      )
-      .run(doc.workspaceVersion, serialized, now);
+    executeSqliteQuerySync(
+      this.db,
+      this.kysely
+        .insertInto("workspace")
+        .values({ id: 1, version: doc.workspaceVersion, doc: serialized, updated_ms: now })
+        .onConflict((conflict) =>
+          conflict.column("id").doUpdateSet({
+            version: doc.workspaceVersion,
+            doc: serialized,
+            updated_ms: now,
+          }),
+        ),
+    );
     this.cached = doc;
   }
 }

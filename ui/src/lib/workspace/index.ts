@@ -379,6 +379,35 @@ export async function loadWorkspace(
   }
 }
 
+/** Restores the exact history version the operator previewed and confirmed. */
+export async function restoreWorkspaceVersion(
+  state: WorkspaceUiState,
+  client: GatewayBrowserClient | null,
+  version: number,
+): Promise<boolean> {
+  if (!client) {
+    return false;
+  }
+  state.actionError = null;
+  notify(state);
+  try {
+    const payload = await client.request("workspaces.history.restore", { version });
+    const workspace = normalizeWorkspace(
+      isRecord(payload) && "doc" in payload ? payload.doc : payload,
+    );
+    state.workspace = workspace;
+    state.activeSlug = resolveActiveSlug(workspace, state.activeSlug);
+    state.error = null;
+    state.loaded = true;
+    notify(state);
+    return true;
+  } catch (error) {
+    state.actionError = formatError(error);
+    notify(state);
+    return false;
+  }
+}
+
 /**
  * Subscribe to `plugin.workspaces.changed` and refetch on a newer version (skips
  * stale/own-echo events by comparing `workspaceVersion`). Push path per spec-30 —

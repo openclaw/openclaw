@@ -71,6 +71,9 @@ describe("workspace gateway methods", () => {
       "workspaces.widget.approve",
       "workspaces.replace",
       "workspaces.undo",
+      "workspaces.history.list",
+      "workspaces.history.get",
+      "workspaces.history.restore",
       "workspaces.data.read",
     ]);
     expect(methods.get("workspaces.get")?.opts).toEqual({ scope: "operator.read" });
@@ -81,7 +84,13 @@ describe("workspace gateway methods", () => {
     expect(methods.get("workspaces.widget.approve")?.opts).toEqual({
       scope: "operator.approvals",
     });
-    const readOnly = new Set(["workspaces.get", "workspaces.widget.frame", "workspaces.data.read"]);
+    const readOnly = new Set([
+      "workspaces.get",
+      "workspaces.widget.frame",
+      "workspaces.history.list",
+      "workspaces.history.get",
+      "workspaces.data.read",
+    ]);
     for (const [name, method] of methods) {
       if (readOnly.has(name) || name === "workspaces.widget.approve") {
         continue;
@@ -129,6 +138,97 @@ describe("workspace gateway methods", () => {
       expect(broadcast).toHaveBeenCalledWith("plugin.workspaces.changed", {
         workspaceVersion: 2,
         changedTabSlug: "finance-ops",
+        actor: "user",
+      });
+    });
+  });
+
+  it("serves undo history through read-only methods without broadcasting", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { api, methods } = createApi();
+      registerWorkspaceGatewayMethods({ api, store: new WorkspaceStore({ stateDir }) });
+      const writeBroadcast = vi.fn();
+      await callMethod(methods.get("workspaces.get")!, {}, writeBroadcast);
+      await callMethod(methods.get("workspaces.tab.create")!, { title: "One" }, writeBroadcast);
+      await callMethod(methods.get("workspaces.tab.create")!, { title: "Two" }, writeBroadcast);
+
+      const historyBroadcast = vi.fn();
+      const list = await callMethod(methods.get("workspaces.history.list")!, {}, historyBroadcast);
+      expect(list.response?.[0]).toBe(true);
+      const entries = list.response?.[1]?.entries as Array<{
+        version: number;
+        savedAt: string;
+        bytes: number;
+        doc?: unknown;
+      }>;
+      expect(entries.map((entry) => entry.version)).toEqual([2, 1]);
+      expect(entries.every((entry) => entry.doc === undefined)).toBe(true);
+
+      const snapshot = await callMethod(
+        methods.get("workspaces.history.get")!,
+        { version: 2 },
+        historyBroadcast,
+      );
+      expect(snapshot.response?.[0]).toBe(true);
+      expect(snapshot.response?.[1]?.doc.workspaceVersion).toBe(2);
+
+      const missing = await callMethod(
+        methods.get("workspaces.history.get")!,
+        { version: 999 },
+        historyBroadcast,
+      );
+      expect(missing.response?.[0]).toBe(false);
+      expect(missing.response?.[2]?.message).toContain("no workspace history snapshot");
+
+      const invalid = await callMethod(
+        methods.get("workspaces.history.get")!,
+        { version: -1 },
+        historyBroadcast,
+      );
+      expect(invalid.response?.[0]).toBe(false);
+      expect(invalid.response?.[2]?.message).toContain("non-negative integer");
+      expect(historyBroadcast).not.toHaveBeenCalled();
+    });
+  });
+
+  it("restores the exact history version requested after an intervening write", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { api, methods } = createApi();
+      registerWorkspaceGatewayMethods({ api, store: new WorkspaceStore({ stateDir }) });
+      const broadcast = vi.fn();
+      await callMethod(methods.get("workspaces.get")!, {}, broadcast);
+      await callMethod(methods.get("workspaces.tab.create")!, { title: "Previewed" }, broadcast);
+      await callMethod(methods.get("workspaces.tab.create")!, { title: "Current" }, broadcast);
+      const preview = await callMethod(
+        methods.get("workspaces.history.get")!,
+        { version: 2 },
+        broadcast,
+      );
+      expect(
+        preview.response?.[1]?.doc.tabs.some((tab: { title: string }) => tab.title === "Previewed"),
+      ).toBe(true);
+
+      await callMethod(methods.get("workspaces.tab.create")!, { title: "Concurrent" }, broadcast);
+      const restored = await callMethod(
+        methods.get("workspaces.history.restore")!,
+        { version: 2 },
+        broadcast,
+      );
+
+      expect(restored.response?.[0]).toBe(true);
+      expect(restored.response?.[1]?.doc.workspaceVersion).toBe(5);
+      expect(
+        restored.response?.[1]?.doc.tabs.some(
+          (tab: { title: string }) => tab.title === "Previewed",
+        ),
+      ).toBe(true);
+      expect(
+        restored.response?.[1]?.doc.tabs.some(
+          (tab: { title: string }) => tab.title === "Concurrent",
+        ),
+      ).toBe(false);
+      expect(broadcast).toHaveBeenLastCalledWith("plugin.workspaces.changed", {
+        workspaceVersion: 5,
         actor: "user",
       });
     });

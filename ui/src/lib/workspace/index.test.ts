@@ -152,6 +152,53 @@ describe("loadWorkspace", () => {
     expect(state.error).toBe("boom");
     expect(state.loaded).toBe(false);
   });
+
+  it("restores the exact history version and eagerly reloads the new version", async () => {
+    const workspaceModule = (await import("./index.ts")) as typeof import("./index.ts") & {
+      restoreWorkspaceVersion?: (
+        state: ReturnType<typeof getWorkspaceState>,
+        client: GatewayBrowserClient | null,
+        version: number,
+      ) => Promise<void>;
+    };
+    expect(workspaceModule.restoreWorkspaceVersion).toEqual(expect.any(Function));
+    const host = {};
+    const state = getWorkspaceState(host);
+    state.workspace = normalizeWorkspace(sampleDoc);
+    const request = vi.fn(async () => ({
+      doc: { ...sampleDoc, workspaceVersion: 4 },
+      workspaceVersion: 4,
+    }));
+    const client = mockClient({ request: request as never });
+
+    await expect(workspaceModule.restoreWorkspaceVersion!(state, client, 2)).resolves.toBe(true);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("workspaces.history.restore", { version: 2 });
+    expect(state.workspace?.workspaceVersion).toBe(4);
+    expect(state.actionError).toBeNull();
+  });
+
+  it("surfaces an error when versioned restore rejects", async () => {
+    const workspaceModule = (await import("./index.ts")) as typeof import("./index.ts") & {
+      restoreWorkspaceVersion?: (
+        state: ReturnType<typeof getWorkspaceState>,
+        client: GatewayBrowserClient | null,
+        version: number,
+      ) => Promise<void>;
+    };
+    expect(workspaceModule.restoreWorkspaceVersion).toEqual(expect.any(Function));
+    const state = getWorkspaceState({});
+    const client = mockClient({
+      request: vi.fn(async () => {
+        throw new Error("nothing to undo");
+      }) as never,
+    });
+
+    await expect(workspaceModule.restoreWorkspaceVersion!(state, client, 2)).resolves.toBe(false);
+
+    expect(state.actionError).toBe("nothing to undo");
+  });
 });
 
 describe("optimistic mutations", () => {
