@@ -11,6 +11,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-events", () => ({
   appendMemoryHostEvent: vi.fn(async () => {}),
 }));
 
+import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import {
   configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
@@ -1620,6 +1621,273 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("classifies markdown placeholders without dropping meaningful snippets", () => {
+    for (const raw of [
+      "-",
+      "* ",
+      "- -",
+      ">",
+      "```",
+      "```ts",
+      "``` ts",
+      "~~~ qmd",
+      "| --- |",
+      "- [ ]",
+      "- [x]",
+      "@@ -1,2\n## Tagesnotizen\n-",
+      "@@ -1,2 ## Tagesnotizen -",
+      "## Tagesnotizen\n-\n\n## Entscheidungen:\n-",
+      "## Tagesnotizen ## Entscheidungen",
+      "## Morning ## Light Sleep",
+      "## Tagesnotizen ## Morning",
+      "## 2026-05-28 ## Morning",
+      "# 2026-05-28",
+      "@@ -1,2 # 2026-05-28 -",
+      "## Morning",
+      "## Morning:",
+      "@@ -1,2 ## Morning -",
+      "@@ -1,2 ## Morning: -",
+      "## Light Sleep",
+      "## Light Sleep:",
+      "Morning:",
+      "Light Sleep:",
+    ]) {
+      expect(testing.resolvePromotableShortTermSnippet(raw)).toMatchObject({
+        promotable: false,
+        reason: "markdown-placeholder",
+      });
+    }
+
+    for (const raw of [
+      "- Keep gateway restarts supervised.",
+      "- [ ] rotate API keys",
+      "- [x] backups verified",
+      "## API keys rotated",
+      "## Decision: Move backups to S3",
+      "## Morning backup verification",
+      "## Morning - backup verification",
+      "@@ -7,1\nrouter glacier backup",
+      "@@ -1,1\n- Keep gateway restarts supervised.",
+      "- ## 修复备份轮换",
+    ]) {
+      expect(testing.resolvePromotableShortTermSnippet(raw)).toMatchObject({
+        promotable: true,
+      });
+    }
+
+    expect(
+      testing.resolvePromotableShortTermSnippet(
+        "@@ -6,2\n## Morning\n- Reviewed travel timing before the workshop.",
+      ),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "- Reviewed travel timing before the workshop.",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet(
+        "@@ -6,2 ## Morning - Reviewed travel timing before the workshop.",
+      ),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "Reviewed travel timing before the workshop.",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet(
+        "@@ -6,2 ## Tagesnotizen - Rotate backups before deploy.",
+      ),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "Rotate backups before deploy.",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet("@@ -7,1 router glacier backup"),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "router glacier backup",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet("## Morning - backup verification"),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "backup verification",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet("## Morning: - backup verification"),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "backup verification",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet("Morning:: Reviewed travel timing."),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "Reviewed travel timing.",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet("Light Sleep: useful dream note"),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "useful dream note",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet("- Morning: Reviewed travel timing."),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "Reviewed travel timing.",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet("@@ -6,1 - Light Sleep: useful note"),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "useful note",
+    });
+    expect(testing.resolvePromotableShortTermSnippet("Decision: Move backups to S3")).toMatchObject(
+      {
+        promotable: true,
+        snippet: "Decision: Move backups to S3",
+      },
+    );
+    expect(
+      testing.resolvePromotableShortTermSnippet("- Decision: Move backups to S3"),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "- Decision: Move backups to S3",
+    });
+    expect(
+      testing.resolvePromotableShortTermSnippet(
+        "~~~ qmd\n- Keep gateway restarts supervised.\n~~~",
+      ),
+    ).toMatchObject({
+      promotable: true,
+      snippet: "- Keep gateway restarts supervised.",
+    });
+  });
+
+  it("skips placeholder short-term recalls before recording and reports them separately", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const notePath = await writeDailyMemoryNote(workspaceDir, "2026-04-19", [
+        "## Tagesnotizen",
+        "-",
+        "Rotate backups before deploy.",
+      ]);
+      const relativePath = path.relative(workspaceDir, notePath).replaceAll("\\", "/");
+      const appendEventMock = vi.mocked(appendMemoryHostEvent);
+      appendEventMock.mockClear();
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "backup recall",
+        results: [
+          {
+            path: relativePath,
+            source: "memory",
+            startLine: 1,
+            endLine: 2,
+            score: 0.8,
+            snippet: "@@ -1,2\n## Tagesnotizen\n-",
+          },
+          {
+            path: relativePath,
+            source: "memory",
+            startLine: 3,
+            endLine: 3,
+            score: 0.9,
+            snippet: "Rotate backups before deploy.",
+          },
+        ],
+      });
+
+      const entries = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entries).toHaveLength(1);
+      expect(readEntrySnippet(entries[0])).toBe("Rotate backups before deploy.");
+
+      const events = appendEventMock.mock.calls.map(
+        ([, event]) =>
+          event as {
+            type?: string;
+            reason?: string;
+            resultCount?: number;
+            skippedResultCount?: number;
+            results?: unknown[];
+          },
+      );
+      expect(events.find((event) => event.type === "memory.recall.recorded")).toMatchObject({
+        resultCount: 1,
+        results: [expect.objectContaining({ startLine: 3, endLine: 3 })],
+      });
+      expect(
+        events.find(
+          (event) =>
+            event.type === "memory.recall.skipped" &&
+            event.reason === "unpromotable-short-term-snippet",
+        ),
+      ).toMatchObject({
+        skippedResultCount: 1,
+        results: [expect.objectContaining({ startLine: 1, endLine: 2 })],
+      });
+    });
+  });
+
+  it("drops placeholder snippets from existing and grounded short-term candidates", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await testing.writeRawRecallStore(workspaceDir, {
+        version: 1,
+        updatedAt: "2026-04-04T00:00:00.000Z",
+        entries: {
+          placeholder: {
+            key: "placeholder",
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            source: "memory",
+            snippet: "## Tagesnotizen\n-",
+            recallCount: 4,
+            dailyCount: 0,
+            groundedCount: 0,
+            totalScore: 3.6,
+            maxScore: 0.95,
+            firstRecalledAt: "2026-04-03T00:00:00.000Z",
+            lastRecalledAt: "2026-04-04T00:00:00.000Z",
+            queryHashes: ["a", "b"],
+            recallDays: ["2026-04-03", "2026-04-04"],
+            conceptTags: ["notes"],
+          },
+        },
+      });
+      await recordGroundedShortTermCandidates({
+        workspaceDir,
+        query: "backup recall",
+        items: [
+          {
+            path: "memory/2026-04-04.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.95,
+            snippet: "## Entscheidungen:\n-",
+          },
+          {
+            path: "memory/2026-04-04.md",
+            startLine: 3,
+            endLine: 3,
+            score: 0.95,
+            snippet: "- Keep gateway restarts supervised.",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      expect(ranked.map((candidate) => candidate.snippet)).toStrictEqual([
+        "- Keep gateway restarts supervised.",
+      ]);
+    });
+  });
+
   it("treats diff-prefixed dreaming snippets as contaminated", () => {
     expect(
       testing.isContaminatedDreamingSnippet(
@@ -1954,6 +2222,48 @@ describe("short-term promotion", () => {
         .catch(() => "");
       expect(memoryText).not.toContain("Promoted From Short-Term Memory");
       expect(memoryText).not.toContain("staged dream scratchwork");
+    });
+  });
+
+  it("refuses placeholder-only direct promotion candidates", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const applied = await applyShortTermPromotions({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        candidates: [
+          {
+            key: "memory:memory/2026-04-19.md:2:2",
+            path: "memory/2026-04-19.md",
+            startLine: 2,
+            endLine: 2,
+            source: "memory",
+            snippet: "-",
+            recallCount: 3,
+            avgScore: 0.9,
+            maxScore: 0.9,
+            uniqueQueries: 2,
+            firstRecalledAt: "2026-04-18T00:00:00.000Z",
+            lastRecalledAt: "2026-04-19T00:00:00.000Z",
+            ageDays: 1,
+            score: 0.9,
+            recallDays: ["2026-04-18", "2026-04-19"],
+            conceptTags: ["notes"],
+            components: {
+              frequency: 1,
+              relevance: 0.9,
+              diversity: 1,
+              recency: 1,
+              consolidation: 0.5,
+              conceptual: 0.2,
+            },
+          },
+        ],
+      });
+
+      expect(applied.applied).toBe(0);
+      await expectEnoent(fs.readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8"));
     });
   });
 
