@@ -5,6 +5,8 @@ import type { ConfigValidationIssue } from "./types.js";
 type ConfigIssueLineInput = {
   path?: string | null;
   message: string;
+  line?: number;
+  sourceFile?: string;
 };
 
 type ConfigIssueFormatOptions = {
@@ -46,6 +48,22 @@ export function normalizeConfigIssues(
   return issues.map((issue) => normalizeConfigIssue(issue));
 }
 
+function resolveIssueLocationPrefix(
+  issue: ConfigIssueLineInput,
+  opts?: ConfigIssueFormatOptions,
+): string {
+  const sourceFile =
+    typeof issue.sourceFile === "string" && issue.sourceFile.trim()
+      ? issue.sourceFile.trim()
+      : typeof opts?.sourceFile === "string" && opts.sourceFile.trim()
+        ? opts.sourceFile.trim()
+        : "";
+  if (!sourceFile || typeof issue.line !== "number" || issue.line <= 0) {
+    return "";
+  }
+  return `${sanitizeTerminalText(sourceFile)}:${issue.line} — `;
+}
+
 function resolveIssuePathForLine(
   path: string | null | undefined,
   opts?: ConfigIssueFormatOptions,
@@ -66,9 +84,10 @@ export function formatConfigIssueLine(
   opts?: ConfigIssueFormatOptions,
 ): string {
   const prefix = marker ? `${marker} ` : "";
+  const locationPrefix = resolveIssueLocationPrefix(issue, opts);
   const path = sanitizeTerminalText(resolveIssuePathForLine(issue.path, opts));
   const message = sanitizeTerminalText(issue.message);
-  return `${prefix}${path}: ${message}`;
+  return `${prefix}${locationPrefix}${path}: ${message}`;
 }
 
 /** Format config issues as terminal-safe lines with a shared marker prefix. */

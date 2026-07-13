@@ -8,6 +8,21 @@ import {
 } from "./issue-format.js";
 
 describe("config issue format", () => {
+  it("formats issue lines with source locations", () => {
+    expect(
+      formatConfigIssueLine(
+        {
+          path: "agents.list[3].tools.profile",
+          message: 'Invalid input, got: "none"',
+          line: 247,
+          sourceFile: "openclaw.json",
+        },
+        "×",
+        { normalizeRoot: true },
+      ),
+    ).toBe('× openclaw.json:247 — agents.list[3].tools.profile: Invalid input, got: "none"');
+  });
+
   it("formats issue lines with and without markers", () => {
     expect(formatConfigIssueLine({ path: "", message: "broken" }, "-")).toBe("- : broken");
     expect(
