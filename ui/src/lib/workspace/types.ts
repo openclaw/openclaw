@@ -44,6 +44,7 @@ export type WorkspaceWidget = {
   createdBy?: WorkspaceCreatedBy;
   bindings?: Record<string, WorkspaceBinding>;
   props?: Record<string, unknown>;
+  ephemeral?: { expiresAt: string };
 };
 
 export type WorkspaceTab = {

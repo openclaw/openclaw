@@ -2,12 +2,27 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { DEFAULT_WORKSPACE } from "./default-workspace.js";
 import { validateWorkspaceDoc, type WorkspaceDoc } from "./schema.js";
-import { WorkspaceStore } from "./store.js";
+import { sweepExpiredEphemeral, WorkspaceStore } from "./store.js";
 
 async function withStore<T>(run: (store: WorkspaceStore) => Promise<T> | T): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
   const store = new WorkspaceStore({ stateDir });
+  try {
+    return await run(store);
+  } finally {
+    store.close();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
+async function withTimedStore<T>(
+  now: () => number,
+  run: (store: WorkspaceStore) => Promise<T> | T,
+): Promise<T> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+  const store = new WorkspaceStore({ stateDir, now });
   try {
     return await run(store);
   } finally {
@@ -27,6 +42,76 @@ function docWithPendingWidget(store: WorkspaceStore): WorkspaceDoc {
 }
 
 describe("WorkspaceStore", () => {
+  it("sweeps expired temporary widgets but preserves future and pinned widgets", () => {
+    const doc = validateWorkspaceDoc({
+      ...structuredClone(DEFAULT_WORKSPACE),
+      tabs: [
+        {
+          ...structuredClone(DEFAULT_WORKSPACE.tabs[0]!),
+          widgets: [
+            {
+              id: "expired",
+              kind: "builtin:markdown",
+              grid: { x: 0, y: 0, w: 4, h: 2 },
+              collapsed: false,
+              hidden: false,
+              createdBy: "agent:main",
+              ephemeral: { expiresAt: "2026-07-01T00:00:00Z" },
+            },
+            {
+              id: "future",
+              kind: "builtin:markdown",
+              grid: { x: 4, y: 0, w: 4, h: 2 },
+              collapsed: false,
+              hidden: false,
+              createdBy: "agent:main",
+              ephemeral: { expiresAt: "2026-08-01T00:00:00Z" },
+            },
+            {
+              id: "pinned",
+              kind: "builtin:markdown",
+              grid: { x: 8, y: 0, w: 4, h: 2 },
+              collapsed: false,
+              hidden: false,
+              createdBy: "agent:main",
+            },
+          ],
+        },
+      ],
+    });
+    const swept = sweepExpiredEphemeral(doc, Date.parse("2026-07-13T00:00:00Z"));
+    expect(swept?.tabs[0]?.widgets.map((widget) => widget.id)).toEqual(["future", "pinned"]);
+  });
+
+  it("sweeps a widget after it expires even when the document was cached", async () => {
+    let now = Date.parse("2026-07-13T00:00:00Z");
+    await withTimedStore(
+      () => now,
+      (store) => {
+        store.mutate(
+          (draft) => {
+            draft.tabs[0]!.widgets.push({
+              id: "temporary",
+              kind: "builtin:markdown",
+              grid: { x: 0, y: 2, w: 4, h: 2 },
+              collapsed: false,
+              hidden: false,
+              createdBy: "agent:main",
+              ephemeral: { expiresAt: "2026-07-14T00:00:00Z" },
+            });
+          },
+          { actor: "agent:main" },
+        );
+        expect(store.read().tabs[0]?.widgets.some((widget) => widget.id === "temporary")).toBe(
+          true,
+        );
+        now = Date.parse("2026-07-15T00:00:00Z");
+        expect(store.read().tabs[0]?.widgets.some((widget) => widget.id === "temporary")).toBe(
+          false,
+        );
+      },
+    );
+  });
   it("seeds the default workspace on first read", async () => {
     await withStore((store) => {
       const doc = store.read();

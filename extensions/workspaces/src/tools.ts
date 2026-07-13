@@ -23,6 +23,7 @@ import {
   type WorkspaceGrid,
   type WorkspaceTab,
   type WorkspaceWidget,
+  type WorkspaceEphemeral,
   type JsonValue,
   type WorkspaceDoc,
 } from "./schema.js";
@@ -110,6 +111,10 @@ const BindingSchema = Type.Union([
 const BindingsRecordSchema = Type.Record(Type.String(), BindingSchema, {
   description: "Widget binding map keyed by binding id.",
 });
+const EphemeralSchema = Type.Object(
+  { expiresAt: Type.String({ description: "ISO 8601 expiry timestamp with timezone." }) },
+  { additionalProperties: false },
+);
 const WidgetPatchSchema = Type.Object(
   {
     title: Type.Optional(Type.String({ description: "Widget title, 80 chars max." })),
@@ -118,6 +123,7 @@ const WidgetPatchSchema = Type.Object(
     hidden: Type.Optional(Type.Boolean({ description: "Hide widget." })),
     bindings: Type.Optional(BindingsRecordSchema),
     props: Type.Optional(JsonSchema),
+    ephemeral: Type.Optional(Type.Union([EphemeralSchema, Type.Null()])),
   },
   { additionalProperties: false },
 );
@@ -131,6 +137,7 @@ const WidgetInputSchema = Type.Object(
     hidden: Type.Optional(Type.Boolean({ description: "Initial hidden state." })),
     bindings: Type.Optional(BindingsRecordSchema),
     props: Type.Optional(JsonSchema),
+    ephemeral: Type.Optional(EphemeralSchema),
   },
   { additionalProperties: false },
 );
@@ -321,6 +328,13 @@ function findWidget(tab: WorkspaceTab, id: string): WorkspaceWidget {
   return widget;
 }
 
+function readEphemeralInput(value: unknown): WorkspaceEphemeral {
+  if (!isRecord(value)) {
+    throw new Error("ephemeral must be an object");
+  }
+  return { expiresAt: readRequiredString(value, "expiresAt", "ephemeral.expiresAt") };
+}
+
 function readWidgetInput(
   value: unknown,
   doc: WorkspaceDoc,
@@ -335,6 +349,7 @@ function readWidgetInput(
     "hidden",
     "bindings",
     "props",
+    "ephemeral",
   ]);
   const title = readOptionalString(record, "title");
   const bindings = readBindings(record.bindings);
@@ -348,11 +363,20 @@ function readWidgetInput(
     createdBy: actor,
     ...(bindings !== undefined ? { bindings } : {}),
     ...(record.props !== undefined ? { props: record.props as JsonValue } : {}),
+    ...(record.ephemeral !== undefined ? { ephemeral: readEphemeralInput(record.ephemeral) } : {}),
   };
 }
 
 function readWidgetPatch(value: unknown): Partial<WorkspaceWidget> {
-  const record = readRecord(value, ["title", "grid", "collapsed", "hidden", "bindings", "props"]);
+  const record = readRecord(value, [
+    "title",
+    "grid",
+    "collapsed",
+    "hidden",
+    "bindings",
+    "props",
+    "ephemeral",
+  ]);
   const title = readOptionalString(record, "title");
   const collapsed = readOptionalBoolean(record, "collapsed");
   const hidden = readOptionalBoolean(record, "hidden");
@@ -364,6 +388,9 @@ function readWidgetPatch(value: unknown): Partial<WorkspaceWidget> {
     ...(hidden !== undefined ? { hidden } : {}),
     ...(bindings !== undefined ? { bindings } : {}),
     ...(record.props !== undefined ? { props: record.props as JsonValue } : {}),
+    ...(Object.hasOwn(record, "ephemeral")
+      ? { ephemeral: record.ephemeral === null ? undefined : readEphemeralInput(record.ephemeral) }
+      : {}),
   };
 }
 

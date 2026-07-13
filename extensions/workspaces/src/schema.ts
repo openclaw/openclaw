@@ -18,6 +18,7 @@ type WorkspaceRpcBinding = {
 type WorkspaceFileBinding = { source: "file"; path: string; pointer?: string };
 type WorkspaceStaticBinding = { source: "static"; value: JsonValue };
 export type WorkspaceBinding = WorkspaceRpcBinding | WorkspaceFileBinding | WorkspaceStaticBinding;
+export type WorkspaceEphemeral = { expiresAt: string };
 export type WorkspaceWidget = {
   id: string;
   kind: string;
@@ -29,6 +30,7 @@ export type WorkspaceWidget = {
   createdBy: WorkspaceActor;
   bindings?: Record<string, WorkspaceBinding>;
   props?: JsonValue;
+  ephemeral?: WorkspaceEphemeral;
 };
 export type WorkspaceTab = {
   slug: string;
@@ -70,6 +72,7 @@ export const BUILTIN_WIDGET_KINDS = [
   "builtin:cron",
   "builtin:instances",
   "builtin:activity",
+  "builtin:action-form",
 ] as const;
 
 const BUILTIN_KINDS = new Set<string>(BUILTIN_WIDGET_KINDS);
@@ -77,6 +80,10 @@ const CUSTOM_KIND_PATTERN = /^custom:(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
 const CUSTOM_WIDGET_NAME_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
 const MAX_STATIC_BINDING_BYTES = 8 * 1024;
 const MAX_RPC_BINDING_PARAMS_BYTES = 8 * 1024;
+const ISO_TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+const ACTION_FORM_FIELD_NAME_PATTERN = /^[A-Za-z0-9_]{1,32}$/;
+const ACTION_FORM_SLOT_PATTERN = /\{([A-Za-z0-9_]+)\}/g;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -251,11 +258,92 @@ function validateBindingRecord(value: unknown, path: string): Record<string, Wor
   );
 }
 
+function validateEphemeral(value: unknown, path: string): WorkspaceEphemeral {
+  const record = assertRecord(value, path);
+  assertKnownKeys(record, ["expiresAt"], path);
+  const expiresAt = requireString(record, "expiresAt", path);
+  if (!ISO_TIMESTAMP_PATTERN.test(expiresAt) || Number.isNaN(Date.parse(expiresAt))) {
+    throw new Error(`${path}.expiresAt must be an ISO 8601 timestamp with an explicit timezone`);
+  }
+  return { expiresAt };
+}
+
+function validateActionFormProps(value: unknown, path: string): void {
+  const record = assertRecord(value, path);
+  assertKnownKeys(record, ["template", "fields", "buttonLabel"], path);
+  const template = requireString(record, "template", path);
+  if (template.length < 1 || template.length > 2000) {
+    throw new Error(`${path}.template must be 1-2000 characters`);
+  }
+  const fields = requireArray(record.fields, `${path}.fields`);
+  if (fields.length < 1 || fields.length > 8) {
+    throw new Error(`${path}.fields must contain 1-8 entries`);
+  }
+  const names = new Set<string>();
+  fields.forEach((field, index) => {
+    const fieldPath = `${path}.fields[${index}]`;
+    const item = assertRecord(field, fieldPath);
+    assertKnownKeys(item, ["name", "label", "type", "options", "maxLength"], fieldPath);
+    const name = requireString(item, "name", fieldPath);
+    if (!ACTION_FORM_FIELD_NAME_PATTERN.test(name) || names.has(name)) {
+      throw new Error(`${fieldPath}.name is invalid or duplicated`);
+    }
+    names.add(name);
+    const label = requireString(item, "label", fieldPath);
+    if (label.length < 1 || label.length > 80) {
+      throw new Error(`${fieldPath}.label must be 1-80 characters`);
+    }
+    const type = requireString(item, "type", fieldPath);
+    if (type !== "text" && type !== "number" && type !== "select") {
+      throw new Error(`${fieldPath}.type is invalid`);
+    }
+    if (type === "select") {
+      const options = requireArray(item.options, `${fieldPath}.options`);
+      if (
+        options.length < 1 ||
+        options.length > 20 ||
+        options.some(
+          (option) => typeof option !== "string" || option.length < 1 || option.length > 80,
+        )
+      ) {
+        throw new Error(`${fieldPath}.options must contain 1-20 strings of 1-80 characters`);
+      }
+    } else if (item.options !== undefined) {
+      throw new Error(`${fieldPath}.options is only allowed for select fields`);
+    }
+    if (item.maxLength !== undefined) {
+      assertIntegerRange(item.maxLength, `${fieldPath}.maxLength`, 1, 1000);
+    }
+  });
+  if (record.buttonLabel !== undefined) {
+    const label = requireString(record, "buttonLabel", path);
+    if (label.length < 1 || label.length > 40) {
+      throw new Error(`${path}.buttonLabel must be 1-40 characters`);
+    }
+  }
+  for (const match of template.matchAll(ACTION_FORM_SLOT_PATTERN)) {
+    if (!names.has(match[1]!)) {
+      throw new Error(`${path}.template references unknown field: {${match[1]}}`);
+    }
+  }
+}
+
 function validateWidget(value: unknown, path: string): WorkspaceWidget {
   const record = assertRecord(value, path);
   assertKnownKeys(
     record,
-    ["id", "kind", "title", "grid", "collapsed", "hidden", "createdBy", "bindings", "props"],
+    [
+      "id",
+      "kind",
+      "title",
+      "grid",
+      "collapsed",
+      "hidden",
+      "createdBy",
+      "bindings",
+      "props",
+      "ephemeral",
+    ],
     path,
   );
   const id = requireString(record, "id", path);
@@ -280,6 +368,13 @@ function validateWidget(value: unknown, path: string): WorkspaceWidget {
       : validateBindingRecord(record.bindings, `${path}.bindings`);
   const props =
     record.props === undefined ? undefined : assertJsonValue(record.props, `${path}.props`);
+  const ephemeral =
+    record.ephemeral === undefined
+      ? undefined
+      : validateEphemeral(record.ephemeral, `${path}.ephemeral`);
+  if (kind === "builtin:action-form") {
+    validateActionFormProps(props, `${path}.props`);
+  }
   return {
     id,
     kind,
@@ -290,6 +385,7 @@ function validateWidget(value: unknown, path: string): WorkspaceWidget {
     createdBy: validateActor(record.createdBy, `${path}.createdBy`),
     ...(bindings !== undefined ? { bindings } : {}),
     ...(props !== undefined ? { props } : {}),
+    ...(ephemeral !== undefined ? { ephemeral } : {}),
   };
 }
 

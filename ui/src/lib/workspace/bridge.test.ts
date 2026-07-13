@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createWidgetBridge,
+  dispatchRateLimitedPrompt,
   isWellFormedInbound,
   resetPromptRateStatesForTest,
   type WidgetBridgeDeps,
@@ -12,6 +13,32 @@ import type { WidgetManifestView } from "./types.ts";
 beforeEach(() => {
   // Rate-limit state is module-level (keyed by widget name); reset between tests.
   resetPromptRateStatesForTest();
+});
+
+describe("shared prompt dispatch gate", () => {
+  it("requires confirmation and rejects concurrent sends", async () => {
+    let release!: (value: boolean) => void;
+    const confirmPrompt = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const sendPrompt = vi.fn(async () => {});
+    const first = dispatchRateLimitedPrompt({
+      widgetKey: "form:1",
+      text: "run",
+      confirmPrompt,
+      sendPrompt,
+    });
+    await Promise.resolve();
+    await expect(
+      dispatchRateLimitedPrompt({ widgetKey: "form:1", text: "run", confirmPrompt, sendPrompt }),
+    ).resolves.toBe("rate_limited");
+    release(false);
+    await expect(first).resolves.toBe("declined");
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
 });
 
 function manifest(overrides?: Partial<WidgetManifestView>): WidgetManifestView {

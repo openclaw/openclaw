@@ -176,6 +176,9 @@ function normalizeWidget(value: unknown): WorkspaceWidget | null {
     ...(typeof value.createdBy === "string" ? { createdBy: value.createdBy } : {}),
     ...(normalizeBindings(value.bindings) ? { bindings: normalizeBindings(value.bindings) } : {}),
     ...(isRecord(value.props) ? { props: value.props } : {}),
+    ...(isRecord(value.ephemeral) && typeof value.ephemeral.expiresAt === "string"
+      ? { ephemeral: { expiresAt: value.ephemeral.expiresAt } }
+      : {}),
   };
 }
 
@@ -619,6 +622,23 @@ export function updateWidgetTitle(
         ...widget,
         title: params.title,
       })),
+  });
+}
+
+export function pinWidget(
+  state: WorkspaceUiState,
+  client: GatewayBrowserClient | null,
+  params: { slug: string; widgetId: string },
+): Promise<void> {
+  return optimisticMutation(state, client, {
+    widgetId: params.widgetId,
+    method: "workspaces.widget.update",
+    rpcParams: { tab: params.slug, id: params.widgetId, patch: { ephemeral: null } },
+    optimistic: (workspace) =>
+      replaceWidget(workspace, params.slug, params.widgetId, (widget) => {
+        const { ephemeral: _ephemeral, ...rest } = widget;
+        return rest;
+      }),
   });
 }
 

@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
+import { buildActionFormPrompt, coerceFieldValue, mapActionForm } from "./action-form.ts";
 import { mapActivity, renderActivity } from "./activity.ts";
 import { mapCron, renderCron } from "./cron.ts";
 import { evaluateEmbedUrl, renderIframeEmbed } from "./iframe-embed.ts";
@@ -27,6 +28,25 @@ function widget(overrides: Partial<WorkspaceWidget> = {}): WorkspaceWidget {
     ...overrides,
   };
 }
+
+describe("action-form", () => {
+  it("interpolates declared slots once and bounds typed values", () => {
+    const model = mapActionForm(
+      widget({
+        kind: "builtin:action-form",
+        props: {
+          template: "Run {topic} {count}",
+          fields: [
+            { name: "topic", label: "Topic", type: "text", maxLength: 8 },
+            { name: "count", label: "Count", type: "number" },
+          ],
+        },
+      }),
+    );
+    expect(buildActionFormPrompt(model, { topic: "{count}!!", count: "3" })).toBe("Run {count}! 3");
+    expect(coerceFieldValue(model.fields[1]!, "not-a-number")).toBe("");
+  });
+});
 
 function renderToContainer(template: unknown): HTMLElement {
   const container = document.createElement("div");
