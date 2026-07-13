@@ -1,4 +1,4 @@
-// Progress-draft status text normalization for reasoning and commentary lanes.
+// Progress-draft status text normalization for reasoning, preamble, and commentary lanes.
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
@@ -139,9 +139,17 @@ function compactReasoningProgressDisplayLine(text: string, maxChars: number): st
   return `${head}…`;
 }
 
-export function normalizeCommentaryProgressText(text: string): string {
+export function sanitizeProgressStatusText(text: string): string {
   const cleaned = stripInlineDirectiveTagsForDelivery(text).text.trim();
   if (!cleaned || isSilentCommentaryProgressText(cleaned)) {
+    return "";
+  }
+  return cleaned;
+}
+
+export function normalizeCommentaryProgressText(text: string): string {
+  const cleaned = sanitizeProgressStatusText(text);
+  if (!cleaned) {
     return "";
   }
   return cleaned

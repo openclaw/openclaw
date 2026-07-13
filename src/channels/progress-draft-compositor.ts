@@ -6,6 +6,7 @@ import {
   mergeReasoningProgressText,
   normalizeCommentaryProgressText,
   normalizeReasoningProgressLine,
+  sanitizeProgressStatusText,
 } from "./progress-draft-status-text.js";
 import {
   createChannelProgressDraftGate,
@@ -308,7 +309,7 @@ export function createChannelProgressDraftCompositor(params: {
       if (finalReplyStarted || finalReplyDelivered) {
         return false;
       }
-      const normalized = text?.replace(/\s+/g, " ").trim() ?? "";
+      const normalized = sanitizeProgressStatusText(text ?? "").replace(/\s+/g, " ").trim();
       if (!normalized) {
         return false;
       }

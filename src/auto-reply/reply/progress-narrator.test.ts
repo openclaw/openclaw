@@ -40,6 +40,8 @@ function createNarratorHarness(params?: {
   now?: () => number;
   hideCommandText?: boolean;
   isProgressDraftVisible?: () => boolean;
+  setTimeoutFn?: typeof setTimeout;
+  clearTimeoutFn?: typeof clearTimeout;
 }) {
   const inputs: ProgressNarrationInput[] = [];
   const texts = params?.texts ?? ["Working on the request."];
@@ -57,6 +59,8 @@ function createNarratorHarness(params?: {
     now: params?.now,
     hideCommandText: params?.hideCommandText,
     isProgressDraftVisible: params?.isProgressDraftVisible,
+    setTimeoutFn: params?.setTimeoutFn,
+    clearTimeoutFn: params?.clearTimeoutFn,
   });
   return { narrator, generate, onUpdate, inputs };
 }
@@ -84,69 +88,83 @@ describe("createProgressNarrator", () => {
     expect(generate).not.toHaveBeenCalled();
   });
 
-  it("does not generate narration while the progress draft is hidden", async () => {
-    const { narrator, generate } = createNarratorHarness({
-      isProgressDraftVisible: () => false,
-    });
+  it("retries buffered notes after visibility flips without a new note", async () => {
+    vi.useFakeTimers();
+    try {
+      let visible = false;
+      const { narrator, generate, inputs } = createNarratorHarness({
+        isProgressDraftVisible: () => visible,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
 
-    narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "first" } });
-    narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "second" } });
-    await flushNarrations();
+      narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "first" } });
+      narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "second" } });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(generate).not.toHaveBeenCalled();
 
-    expect(generate).not.toHaveBeenCalled();
+      visible = true;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await flushNarrations();
+
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(inputs[0]?.activityNotes.join("\n")).toContain("first");
+      expect(inputs[0]?.activityNotes.join("\n")).toContain("second");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("generates from buffered notes after the progress draft becomes visible", async () => {
-    let visible = false;
-    const { narrator, generate, inputs } = createNarratorHarness({
-      isProgressDraftVisible: () => visible,
-    });
+  it("retries narration after preamble freshness expires without a new note", async () => {
+    vi.useFakeTimers();
+    try {
+      let nowMs = 0;
+      const { narrator, generate, inputs } = createNarratorHarness({
+        now: () => nowMs,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
 
-    narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "first" } });
-    await flushNarrations();
-    visible = true;
-    narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "second" } });
-    await flushNarrations();
+      narrator.noteItemEvent({
+        kind: "preamble",
+        progressText: "Checking   the current configuration.",
+      });
+      narrator.noteToolStart({ name: "read", phase: "start" });
+      await flushNarrations();
+      expect(generate).not.toHaveBeenCalled();
 
-    expect(generate).toHaveBeenCalledTimes(1);
-    expect(inputs[0]?.activityNotes.join("\n")).toContain("first");
-    expect(inputs[0]?.activityNotes.join("\n")).toContain("second");
+      nowMs = PROGRESS_STATUS_PREAMBLE_FRESH_MS + 1;
+      await vi.advanceTimersByTimeAsync(PROGRESS_STATUS_PREAMBLE_FRESH_MS + 1);
+      await flushNarrations();
+
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(inputs[0]?.activityNotes).toContain("model: Checking the current configuration.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("buffers model preamble notes without generating while the preamble is fresh", async () => {
-    let nowMs = 0;
-    const { narrator, generate } = createNarratorHarness({ now: () => nowMs });
+  it("does not let silent or directive-only preambles suppress narration", async () => {
+    vi.useFakeTimers();
+    try {
+      const { narrator, generate, inputs } = createNarratorHarness({
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
 
-    narrator.noteItemEvent({
-      kind: "preamble",
-      progressText: "Checking   the current configuration.",
-    });
-    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS - 1;
-    narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "openclaw config" } });
-    await flushNarrations();
+      narrator.noteItemEvent({ kind: "preamble", progressText: "[[reply_to_current]]" });
+      narrator.noteItemEvent({
+        kind: "preamble",
+        progressText: "[[audio_as_voice]] _NO_REPLY_",
+      });
+      narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "ls" } });
+      await flushNarrations();
 
-    expect(generate).not.toHaveBeenCalled();
-  });
-
-  it("narrates the buffered model preamble after it becomes stale", async () => {
-    let nowMs = 0;
-    const { narrator, generate, inputs } = createNarratorHarness({ now: () => nowMs });
-
-    narrator.noteItemEvent({
-      kind: "preamble",
-      progressText: "Checking   the current configuration.",
-    });
-    narrator.noteToolStart({ name: "read", phase: "start" });
-    await flushNarrations();
-    expect(generate).not.toHaveBeenCalled();
-
-    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
-    narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "openclaw config" } });
-    await flushNarrations();
-
-    expect(generate).toHaveBeenCalledTimes(1);
-    expect(inputs[0]?.activityNotes).toContain("model: Checking the current configuration.");
-    expect(inputs[0]?.activityNotes.join("\n")).toContain("openclaw config");
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(inputs[0]?.activityNotes.some((note) => note.startsWith("model:"))).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("batches follow-up events until the event threshold", async () => {

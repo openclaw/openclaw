@@ -8,6 +8,7 @@ import {
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
 import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
+import { sanitizeProgressStatusText } from "../../channels/progress-draft-status-text.js";
 import { isChannelProgressDraftWorkToolName, isCommandToolName } from "../../channels/streaming.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -25,6 +26,8 @@ const NARRATION_NOTE_MAX_CHARS = 160;
 const MAX_ACTIVITY_NOTES = 40;
 const NOTES_IN_PROMPT = 15;
 const USER_MESSAGE_PROMPT_CHARS = 500;
+const VISIBILITY_RETRY_MS = 1_000;
+const PREAMBLE_RETRY_EPSILON_MS = 1;
 // Reasoning-capable utility models spend output tokens before the short
 // visible text; a tiny cap can leave no text (same budget as label generation).
 const NARRATION_MAX_TOKENS = 4_096;
@@ -197,8 +200,14 @@ export function createProgressNarrator(params: {
   /** Test seam: replaces the utility-model completion. */
   generate?: (input: ProgressNarrationInput) => Promise<string | null>;
   now?: () => number;
+  /** Timer implementation, injectable for retry tests. */
+  setTimeoutFn?: typeof setTimeout;
+  /** Timer clearer, injectable for retry tests. */
+  clearTimeoutFn?: typeof clearTimeout;
 }): ProgressNarrator {
   const now = params.now ?? Date.now;
+  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const notes: string[] = [];
   let disabled = false;
   let inFlight = false;
@@ -212,6 +221,32 @@ export function createProgressNarrator(params: {
   let lastFailure: string | undefined;
   let utilityModelLabel: string | undefined;
   let lastPreambleAt: number | undefined;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearRetryTimer = () => {
+    if (retryTimer !== undefined) {
+      clearTimeoutFn(retryTimer);
+      retryTimer = undefined;
+    }
+  };
+
+  // Stopping mid-turn must clear any rendered narration so the channel draft
+  // falls back to raw tool lines instead of pinning stale status text.
+  function disableNarration() {
+    clearRetryTimer();
+    params.abortSignal?.removeEventListener("abort", clearRetryTimer);
+    if (disabled) {
+      return;
+    }
+    disabled = true;
+    if (!lastText || params.abortSignal?.aborted) {
+      return;
+    }
+    lastText = "";
+    void Promise.resolve(params.onUpdate({ text: "" })).catch((err: unknown) => {
+      logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
+    });
+  }
 
   const generate =
     params.generate ??
@@ -219,7 +254,7 @@ export function createProgressNarrator(params: {
       preparedPromise ??= prepareNarrationModel({ cfg: params.cfg, agentId: params.agentId });
       const prepared = await preparedPromise;
       if (!prepared) {
-        disabled = true;
+        disableNarration();
         return null;
       }
       const { provider, modelId, profileId } = prepared.selection;
@@ -234,22 +269,6 @@ export function createProgressNarrator(params: {
       lastFailure = outcome.error;
       return outcome.text;
     });
-
-  // Stopping mid-turn must clear any rendered narration so the channel draft
-  // falls back to raw tool lines instead of pinning stale status text.
-  const disableNarration = () => {
-    if (disabled) {
-      return;
-    }
-    disabled = true;
-    if (!lastText || params.abortSignal?.aborted) {
-      return;
-    }
-    lastText = "";
-    void Promise.resolve(params.onUpdate({ text: "" })).catch((err: unknown) => {
-      logVerbose(`progress-narrator: narration clear failed: ${String(err)}`);
-    });
-  };
 
   const addNote = (note: string, options?: { immediate?: boolean }) => {
     if (disabled || params.abortSignal?.aborted) {
@@ -276,19 +295,35 @@ export function createProgressNarrator(params: {
     return now() - lastRunAt >= MIN_INTERVAL_MS;
   };
 
-  const maybeRun = (immediate: boolean) => {
-    if (disabled) {
+  // Skips retain note bookkeeping; one replaceable timer rechecks the active gate.
+  const scheduleRetry = (delayMs: number) => {
+    clearRetryTimer();
+    if (disabled || params.abortSignal?.aborted) {
+      return;
+    }
+    retryTimer = setTimeoutFn(() => {
+      retryTimer = undefined;
+      maybeRun(false);
+    }, Math.max(1, delayMs));
+  };
+
+  function maybeRun(immediate: boolean) {
+    if (disabled || params.abortSignal?.aborted) {
+      clearRetryTimer();
       return;
     }
     if (params.isProgressDraftVisible?.() === false) {
+      scheduleRetry(VISIBILITY_RETRY_MS);
       return;
     }
-    if (
-      lastPreambleAt !== undefined &&
-      now() - lastPreambleAt < PROGRESS_STATUS_PREAMBLE_FRESH_MS
-    ) {
+    const preambleAge = lastPreambleAt === undefined ? undefined : now() - lastPreambleAt;
+    if (preambleAge !== undefined && preambleAge < PROGRESS_STATUS_PREAMBLE_FRESH_MS) {
+      scheduleRetry(
+        PROGRESS_STATUS_PREAMBLE_FRESH_MS - preambleAge + PREAMBLE_RETRY_EPSILON_MS,
+      );
       return;
     }
+    clearRetryTimer();
     if (inFlight) {
       pendingImmediate ||= immediate;
       return;
@@ -345,7 +380,9 @@ export function createProgressNarrator(params: {
         }
       }
     })();
-  };
+  }
+
+  params.abortSignal?.addEventListener("abort", clearRetryTimer, { once: true });
 
   return {
     noteToolStart(payload) {
@@ -376,8 +413,13 @@ export function createProgressNarrator(params: {
       addNote(`${subject} failed${exit}`, { immediate: true });
     },
     noteItemEvent(payload) {
-      const preambleText = payload.progressText?.replace(/\s+/g, " ").trim();
-      if (payload.kind === "preamble" && preambleText) {
+      if (payload.kind === "preamble") {
+        const preambleText = sanitizeProgressStatusText(payload.progressText ?? "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!preambleText) {
+          return;
+        }
         lastPreambleAt = now();
         addNote(`model: ${preambleText}`);
         return;

@@ -340,6 +340,43 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenCalledWith("Reading the workspace.", { flush: true, lines: [] });
   });
 
+  it("rejects control-only preambles without clobbering a valid headline", async () => {
+    let nowMs = 0;
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress" } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      now: () => nowMs,
+      update,
+    });
+
+    await progress.pushPreambleHeadline(
+      "[[reply_to_current]] Reading   the workspace. [[audio_as_voice]]",
+    );
+    await progress.start();
+    expect(update).toHaveBeenLastCalledWith("Reading the workspace.", {
+      flush: true,
+      lines: [],
+    });
+
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    const calls = update.mock.calls.length;
+    expect(await progress.pushPreambleHeadline("[[reply_to_current]]")).toBe(false);
+    expect(
+      await progress.pushPreambleHeadline(
+        "[[reply_to_current]] ~~NO_REPLY~~ [[audio_as_voice]]",
+      ),
+    ).toBe(false);
+    expect(update).toHaveBeenCalledTimes(calls);
+
+    await progress.pushNarrationProgress("Utility filler.");
+    expect(update).toHaveBeenLastCalledWith("Utility filler.", expect.anything());
+    await progress.pushNarrationProgress("");
+    expect(update).toHaveBeenLastCalledWith("Reading the workspace.", expect.anything());
+  });
+
   it("keeps a fresh preamble ahead of later narration", async () => {
     let nowMs = 0;
     const update = vi.fn();
