@@ -49,6 +49,7 @@ type SessionSuspensionRuntimeState = {
       activeCount: number;
     }
   >;
+  suspensionWriteChain: Promise<void>;
   cleanupGeneration: number;
   cleanupActive: boolean;
 };
@@ -74,6 +75,7 @@ function getSessionSuspensionState(): SessionSuspensionRuntimeState {
           activeCount: number;
         }
       >(),
+      suspensionWriteChain: Promise.resolve(),
       cleanupGeneration: 0,
       cleanupActive: false,
     }),
@@ -91,6 +93,9 @@ function getSessionSuspensionState(): SessionSuspensionRuntimeState {
         activeCount: number;
       }
     >();
+  }
+  if (!state.suspensionWriteChain) {
+    state.suspensionWriteChain = Promise.resolve();
   }
   return state;
 }
@@ -249,6 +254,20 @@ export function getCleanupSuspendedLaneIdsForGatewayPublication(): Set<string> {
 }
 
 export async function suspendSession(params: SessionSuspensionParams) {
+  const state = getSessionSuspensionState();
+  const run = state.suspensionWriteChain
+    .catch(() => undefined)
+    .then(() => suspendSessionQueued(params));
+  // Suspension persistence is per-process and rare; serialize it so cleanup
+  // rollback has one winner and cannot erase another in-flight suspension.
+  state.suspensionWriteChain = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  await run;
+}
+
+async function suspendSessionQueued(params: SessionSuspensionParams) {
   if (!params.cfg) {
     return;
   }
@@ -394,6 +413,7 @@ export const testing = {
     state.laneResumeTimers.clear();
     state.clearedLaneResumes.clear();
     state.pendingSuspensionWrites.clear();
+    state.suspensionWriteChain = Promise.resolve();
     state.cleanupGeneration = 0;
     state.cleanupActive = false;
   },

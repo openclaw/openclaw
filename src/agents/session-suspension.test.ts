@@ -300,7 +300,7 @@ describe("session suspension", () => {
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
   });
 
-  it("restores the pre-cleanup absence when multiple writes race cleanup", async () => {
+  it("serializes suspension writes so cleanup cannot leave an intermediate write", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const { clearSessionSuspensionTimers } = await import("./session-suspension.js");
@@ -334,7 +334,7 @@ describe("session suspension", () => {
     const first = suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
     const second = suspendLane(100, {} as OpenClawConfig, CommandLane.Main);
     await vi.waitFor(() => {
-      expect(initialWrites).toBe(2);
+      expect(initialWrites).toBe(1);
     });
 
     expect(clearSessionSuspensionTimers()).toBe(0);
