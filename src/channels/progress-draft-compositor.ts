@@ -246,6 +246,9 @@ export function createChannelProgressDraftCompositor(params: {
     get hasStarted() {
       return gate.hasStarted;
     },
+    get hasStatusHeadline() {
+      return Boolean(preambleText);
+    },
     markFinalReplyStarted() {
       finalReplyStarted = true;
     },

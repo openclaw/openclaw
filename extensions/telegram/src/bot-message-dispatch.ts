@@ -2721,8 +2721,8 @@ export const dispatchTelegramMessage = async ({
                         return;
                       }
                       if (streamMode === "progress") {
-                        progressHeadlineActive ||= Boolean(payload.progressText?.trim());
                         await progressDraft.pushPreambleHeadline(payload.progressText);
+                        progressHeadlineActive = progressDraft.hasStatusHeadline;
                       }
                       if (streamMode === "progress" && progressDraft.commentaryProgressEnabled) {
                         // Only the opt-in commentary lane contributes receipt notes;

@@ -352,9 +352,13 @@ describe("createChannelProgressDraftCompositor", () => {
       update,
     });
 
+    expect(progress.hasStatusHeadline).toBe(false);
+    expect(await progress.pushPreambleHeadline("[[reply_to_current]]")).toBe(false);
+    expect(progress.hasStatusHeadline).toBe(false);
     await progress.pushPreambleHeadline(
       "[[reply_to_current]] Reading   the workspace. [[audio_as_voice]]",
     );
+    expect(progress.hasStatusHeadline).toBe(true);
     await progress.start();
     expect(update).toHaveBeenLastCalledWith("Reading the workspace.", {
       flush: true,
@@ -369,6 +373,7 @@ describe("createChannelProgressDraftCompositor", () => {
         "[[reply_to_current]] ~~NO_REPLY~~ [[audio_as_voice]]",
       ),
     ).toBe(false);
+    expect(progress.hasStatusHeadline).toBe(true);
     expect(update).toHaveBeenCalledTimes(calls);
 
     await progress.pushNarrationProgress("Utility filler.");

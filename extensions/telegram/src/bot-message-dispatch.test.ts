@@ -5427,6 +5427,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("keeps structured progress rendering after a silent preamble", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]",
+      });
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
+    );
+  });
+
   it("keeps the progress draft label when tool progress lines are hidden", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);

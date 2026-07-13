@@ -57,7 +57,7 @@ migration, see [Streaming and chunking](/concepts/streaming).
 
 | Part            | Purpose                                                                           |
 | --------------- | --------------------------------------------------------------------------------- |
-| Status headline | The model's latest pre-tool preamble, with utility narration as optional filler.  |
+| Status headline | On Discord and Telegram, the model preamble or optional utility filler.           |
 | Label           | Optional starter/status line such as `Working` or `Shelling`.                     |
 | Progress lines  | Compact run updates using the same tool icons and detail formatter as `/verbose`. |
 
@@ -261,15 +261,16 @@ pre-tool commentary/preamble narration (💬, for example "I'll check... then
 [Streaming and chunking](/concepts/streaming#commentary-progress-lane) for the
 shared config shape across channels.
 
-The latest preamble still supplies the status headline when this interleaved
-commentary lane is off.
+On Discord and Telegram, the latest preamble still supplies the status headline
+when this interleaved commentary lane is off.
 
 ### Status headline
 
-In progress mode, the model's typed pre-tool preamble becomes the draft's
-status headline whenever it is available. This headline is always on: it does
-not depend on `streaming.progress.commentary`, and it does not bypass the
-normal activity gate for short turns.
+On Discord and Telegram in progress mode, the model's typed pre-tool preamble
+becomes the draft's status headline whenever it is available. Other
+progress-mode channels keep their existing status behavior. This headline is
+always on: it does not depend on `streaming.progress.commentary`, and it does
+not bypass the normal activity gate for short turns.
 
 When a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents#utilitymodel), or the primary

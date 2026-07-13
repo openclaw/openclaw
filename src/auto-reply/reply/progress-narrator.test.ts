@@ -115,6 +115,30 @@ describe("createProgressNarrator", () => {
     }
   });
 
+  it("bounds hidden-draft retries and re-arms them after new activity", async () => {
+    vi.useFakeTimers();
+    try {
+      const { narrator, generate } = createNarratorHarness({
+        isProgressDraftVisible: () => false,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+      });
+
+      narrator.noteToolStart({ name: "exec", phase: "start" });
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(generate).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+
+      narrator.noteToolStart({ name: "read", phase: "start" });
+      expect(vi.getTimerCount()).toBe(1);
+      vi.clearAllTimers();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("retries narration after preamble freshness expires without a new note", async () => {
     vi.useFakeTimers();
     try {

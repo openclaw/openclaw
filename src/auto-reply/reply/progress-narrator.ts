@@ -1,6 +1,4 @@
-// Generates short utility-model narration of an in-progress agent turn.
-// Channels opt in via GetReplyOptions.onNarrationUpdate; the narrator tees
-// tool lifecycle events and emits 1-2 plain sentences describing the work.
+// Utility-model narration for channel progress drafts.
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -27,6 +25,8 @@ const MAX_ACTIVITY_NOTES = 40;
 const NOTES_IN_PROMPT = 15;
 const USER_MESSAGE_PROMPT_CHARS = 500;
 const VISIBILITY_RETRY_MS = 1_000;
+// Turn completion has no narrator disposal signal, so hidden-draft polling must expire.
+const MAX_VISIBILITY_RETRIES = 30;
 const PREAMBLE_RETRY_EPSILON_MS = 1;
 // Reasoning-capable utility models spend output tokens before the short
 // visible text; a tiny cap can leave no text (same budget as label generation).
@@ -200,9 +200,7 @@ export function createProgressNarrator(params: {
   /** Test seam: replaces the utility-model completion. */
   generate?: (input: ProgressNarrationInput) => Promise<string | null>;
   now?: () => number;
-  /** Timer implementation, injectable for retry tests. */
   setTimeoutFn?: typeof setTimeout;
-  /** Timer clearer, injectable for retry tests. */
   clearTimeoutFn?: typeof clearTimeout;
 }): ProgressNarrator {
   const now = params.now ?? Date.now;
@@ -221,6 +219,7 @@ export function createProgressNarrator(params: {
   let lastFailure: string | undefined;
   let utilityModelLabel: string | undefined;
   let lastPreambleAt: number | undefined;
+  let visibilityRetryCount = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
   const clearRetryTimer = () => {
@@ -274,6 +273,7 @@ export function createProgressNarrator(params: {
     if (disabled || params.abortSignal?.aborted) {
       return;
     }
+    visibilityRetryCount = 0;
     notes.push(truncateAtWordBoundary(note.replace(/\s+/g, " ").trim(), NARRATION_NOTE_MAX_CHARS));
     if (notes.length > MAX_ACTIVITY_NOTES) {
       notes.splice(0, notes.length - MAX_ACTIVITY_NOTES);
@@ -313,7 +313,10 @@ export function createProgressNarrator(params: {
       return;
     }
     if (params.isProgressDraftVisible?.() === false) {
-      scheduleRetry(VISIBILITY_RETRY_MS);
+      if (visibilityRetryCount < MAX_VISIBILITY_RETRIES) {
+        visibilityRetryCount += 1;
+        scheduleRetry(VISIBILITY_RETRY_MS);
+      }
       return;
     }
     const preambleAge = lastPreambleAt === undefined ? undefined : now() - lastPreambleAt;
@@ -335,6 +338,7 @@ export function createProgressNarrator(params: {
       disableNarration();
       return;
     }
+    visibilityRetryCount = 0;
     inFlight = true;
     narrationCount += 1;
     notesAtLastRun = notes.length;

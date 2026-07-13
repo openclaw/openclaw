@@ -340,9 +340,10 @@ in the draft:
 
 - **`streaming.progress.commentary`** - render the model's pre-tool
   **commentary** (a short "I'll check... then..." narration) interleaved with
-  tool lines in the progress draft. In progress mode, the same preamble always
-  supplies the status headline even when this optional interleaved lane is off;
-  see [Progress drafts](/concepts/progress-drafts#status-headline).
+  tool lines in the progress draft. On Discord and Telegram in progress mode,
+  the same preamble supplies the status headline even when this optional lane
+  is off; other channels keep their existing progress behavior. See
+  [Progress drafts](/concepts/progress-drafts#status-headline).
 
 ```json
 {
