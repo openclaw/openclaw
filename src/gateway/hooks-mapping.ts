@@ -264,6 +264,20 @@ function buildActionFromMapping(
     };
   }
   const message = renderTemplate(mapping.messageTemplate ?? "", ctx);
+
+  // Render sessionKey and validate against the character allowlist.
+  // Reject invalid rendered values with a mapping error so the webhook
+  // handler returns 400 instead of falling through to default or
+  // generated session routing.
+  const rawSessionKey = renderOptional(mapping.sessionKey, ctx);
+  if (rawSessionKey && !SESSION_KEY_ALLOWLIST.test(rawSessionKey)) {
+    return {
+      ok: false,
+      error:
+        "hook mapping sessionKey rendered value contains characters not allowed by session-key allowlist",
+    };
+  }
+
   return {
     ok: true,
     action: {
@@ -272,7 +286,7 @@ function buildActionFromMapping(
       name: renderOptional(mapping.name, ctx),
       agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
-      sessionKey: renderOptionalValidated(mapping.sessionKey, ctx, SESSION_KEY_ALLOWLIST),
+      sessionKey: rawSessionKey,
       sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
@@ -483,21 +497,6 @@ function renderOptional(value: string | undefined, ctx: HookMappingContext) {
   }
   const rendered = renderTemplate(value, ctx).trim();
   return rendered ? rendered : undefined;
-}
-
-// Renders a template and validates the result against a regex allowlist.
-// Returns undefined when validation fails, preventing template injection from
-// routing messages to attacker-controlled sessions.
-function renderOptionalValidated(
-  value: string | undefined,
-  ctx: HookMappingContext,
-  allowlist: RegExp,
-): string | undefined {
-  const rendered = renderOptional(value, ctx);
-  if (rendered && !allowlist.test(rendered)) {
-    return undefined;
-  }
-  return rendered;
 }
 
 /** Only allow alphanumeric, colon, dot, hyphen and underscore in session keys. */

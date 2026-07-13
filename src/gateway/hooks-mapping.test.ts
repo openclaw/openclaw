@@ -678,4 +678,145 @@ describe("hooks mapping", () => {
       });
     });
   });
+
+  describe("sessionKey allowlist validation", () => {
+    it("rejects invalid characters in rendered sessionKey", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          {
+            id: "invalid-session-key",
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:{{payload.injected}}",
+          },
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { injected: "bad@chars!" } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(false);
+      if (result && !result.ok) {
+        expect(result.error).toContain("sessionKey");
+      }
+    });
+
+    it("rejects rendered sessionKey with whitespace", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          {
+            id: "whitespace-session-key",
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{payload.name}}",
+          },
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { name: "John Doe" } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(false);
+      if (result && !result.ok) {
+        expect(result.error).toContain("sessionKey");
+      }
+    });
+
+    it("accepts valid characters in rendered sessionKey", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          {
+            id: "valid-session-key",
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{payload.id}}",
+          },
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: { id: "abc123:test.valid_session-key" } as Record<string, unknown>,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok && result.action?.kind === "agent") {
+        expect(result.action.sessionKey).toBe("hook:gmail:abc123:test.valid_session-key");
+        expect(result.action.sessionKeySource).toBe("templated");
+      }
+    });
+
+    it("accepts absent sessionKey as undefined", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          createGmailAgentMapping({
+            id: "no-session-key",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+          }),
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: gmailPayload,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok && result.action?.kind === "agent") {
+        expect(result.action.sessionKey).toBeUndefined();
+        expect(result.action.sessionKeySource).toBeUndefined();
+      }
+    });
+
+    it("accepts literal sessionKey without templates", async () => {
+      const result = await applyGmailMappings({
+        mappings: [
+          {
+            id: "literal-key",
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:static-key",
+          },
+        ],
+      });
+      expect(result?.ok).toBe(true);
+      if (result?.ok && result.action?.kind === "agent") {
+        expect(result.action.sessionKey).toBe("hook:gmail:static-key");
+        expect(result.action.sessionKeySource).toBe("static");
+      }
+    });
+
+    it("accepts rendered sessionKey that is empty after template resolution", async () => {
+      const mappings = resolveHookMappings({
+        mappings: [
+          {
+            id: "empty-rendered-key",
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "{{payload.missing}}",
+          },
+        ],
+      });
+      const result = await applyHookMappings(mappings, {
+        payload: gmailPayload,
+        headers: {},
+        url: baseUrl,
+        path: "gmail",
+      });
+      // Empty rendered template should produce undefined sessionKey (not an error)
+      expect(result?.ok).toBe(true);
+      if (result?.ok && result.action?.kind === "agent") {
+        expect(result.action.sessionKey).toBeUndefined();
+      }
+    });
+  });
 });
