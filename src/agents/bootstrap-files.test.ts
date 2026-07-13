@@ -1,4 +1,5 @@
 /** Tests agent bootstrap file discovery, filtering, and injected context modes. */
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -657,6 +658,7 @@ describe("makeBootstrapWarn", () => {
     const warnings: string[] = [];
     const warn = makeBootstrapWarn({
       sessionLabel: "agent:main:test-session",
+      workspaceDir: `/tmp/${randomUUID()}`,
       warn: (message) => warnings.push(message),
     });
 
@@ -670,12 +672,15 @@ describe("makeBootstrapWarn", () => {
 
   it("keeps warnings distinct across sessions", () => {
     const warnings: string[] = [];
+    const workspaceDir = `/tmp/${randomUUID()}`;
     const first = makeBootstrapWarn({
       sessionLabel: "agent:main:first-session",
+      workspaceDir,
       warn: (message) => warnings.push(message),
     });
     const second = makeBootstrapWarn({
       sessionLabel: "agent:main:second-session",
+      workspaceDir,
       warn: (message) => warnings.push(message),
     });
 
@@ -690,14 +695,15 @@ describe("makeBootstrapWarn", () => {
 
   it("keeps warnings distinct across workspaces with the same session", () => {
     const warnings: string[] = [];
+    const workspaceRoot = `/tmp/${randomUUID()}`;
     const first = makeBootstrapWarn({
       sessionLabel: "agent:main:shared-session",
-      workspaceDir: "/tmp/workspace-a",
+      workspaceDir: `${workspaceRoot}/workspace-a`,
       warn: (message) => warnings.push(message),
     });
     const second = makeBootstrapWarn({
       sessionLabel: "agent:main:shared-session",
-      workspaceDir: "/tmp/workspace-b",
+      workspaceDir: `${workspaceRoot}/workspace-b`,
       warn: (message) => warnings.push(message),
     });
 
