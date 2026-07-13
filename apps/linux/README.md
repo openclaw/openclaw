@@ -32,13 +32,28 @@ The app uses `OPENCLAW_DESKTOP_CLI` when set. Otherwise it checks `~/.openclaw/b
 
 ## Icons
 
-Committed PNGs come from `ui/public/favicon.svg`:
+The icon sources of truth live next to the PNGs: `icons/icon.svg` (transparent
+claw mark, used by the tray) and `icons/icon-tile.svg` (claw mark on the dark
+brand tile, used for the app and package icons). Regenerate the committed PNGs
+with librsvg:
 
 ```bash
-magick ui/public/favicon.svg -background none -resize 32x32 -alpha on -define png:color-type=6 PNG32:apps/linux/src-tauri/icons/32x32.png
-magick ui/public/favicon.svg -background none -resize 128x128 -alpha on -define png:color-type=6 PNG32:apps/linux/src-tauri/icons/128x128.png
-magick ui/public/favicon.svg -background none -resize 256x256 -alpha on -define png:color-type=6 PNG32:apps/linux/src-tauri/icons/128x128@2x.png
-magick ui/public/favicon.svg -background none -resize 512x512 -alpha on -define png:color-type=6 PNG32:apps/linux/src-tauri/icons/icon.png
+cd apps/linux/src-tauri/icons
+rsvg-convert -w 32 -h 32 --keep-aspect-ratio icon.svg -o 32x32.png   # then pad to 32x32 square
+rsvg-convert -w 128 -h 128 icon-tile.svg -o 128x128.png
+rsvg-convert -w 256 -h 256 icon-tile.svg -o 128x128@2x.png
+rsvg-convert -w 512 -h 512 icon-tile.svg -o icon.png
 ```
 
-Packaged AppImage and Debian releases are not part of the initial app. Build on Linux when validating WebKitGTK, systemd user services, and tray integration.
+## Packaging
+
+Build a `.deb` and AppImage locally (the same command CI runs):
+
+```bash
+cd apps/linux/src-tauri
+pnpm dlx @tauri-apps/cli@^2 build --bundles deb,appimage
+```
+
+Bundles land in `target/release/bundle/{deb,appimage}/`. The `Linux App` CI
+workflow uploads them as the `openclaw-linux-companion` artifact on pull
+requests touching `apps/linux/**` and on manual dispatch.

@@ -131,6 +131,20 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
     let detail = value
         .rpc
         .and_then(|rpc| rpc.error)
+        .map(|error| {
+            // The CLI reports "unauthorized" when a gateway this profile has no
+            // credentials for already occupies the port (for example another
+            // user's install); a raw auth error reads like an app bug.
+            if error.to_ascii_lowercase().contains("unauthorized") {
+                format!(
+                    "{error}\nA Gateway this profile is not authorized for is already \
+                     listening on the configured port. Stop that instance or run \
+                     `openclaw gateway status` in a terminal to inspect it, then retry."
+                )
+            } else {
+                error
+            }
+        })
         .or_else(|| (!running).then(|| format!("Gateway service is {runtime_status}.")));
     let status = if reachable {
         "Connected".to_string()
