@@ -29,7 +29,10 @@ private final class BrowserImportTransportStub {
     }
     """
 
-    func makeModel(isLocalMode: @escaping @MainActor () -> Bool = { true }) -> BrowserProfileImportModel {
+    func makeModel(
+        isOnboarded: @escaping @MainActor () -> Bool = { true },
+        isLocalMode: @escaping @MainActor () -> Bool = { true }) -> BrowserProfileImportModel
+    {
         BrowserProfileImportModel(
             transport: { [weak self] request in
                 guard let self else { throw StubError() }
@@ -50,7 +53,7 @@ private final class BrowserImportTransportStub {
                     return Data(#"{"ok":true}"#.utf8)
                 }
             },
-            isOnboarded: { true },
+            isOnboarded: isOnboarded,
             isLocalMode: isLocalMode)
     }
 
@@ -123,6 +126,26 @@ struct BrowserProfileImportModelTests {
             message: "Switch this Mac app to a local Gateway before importing browser cookies."))
         #expect(model.phase == .hidden)
         #expect(stub.requests.isEmpty)
+    }
+
+    @Test func `automatic offer request waits for onboarding and local mode`() async {
+        let stub = BrowserImportTransportStub()
+        var isOnboarded = false
+        var isLocalMode = false
+        let model = stub.makeModel(
+            isOnboarded: { isOnboarded },
+            isLocalMode: { isLocalMode })
+
+        #expect(!model.requestAutomaticOfferIfEligible())
+        isOnboarded = true
+        #expect(!model.requestAutomaticOfferIfEligible())
+        isLocalMode = true
+        #expect(model.requestAutomaticOfferIfEligible())
+
+        for _ in 0..<200 where stub.requests(for: "/system-profile-import/status").isEmpty {
+            await Task.yield()
+        }
+        #expect(stub.requests(for: "/system-profile-import/status").count == 1)
     }
 
     @Test func `import success records counts and target`() async throws {

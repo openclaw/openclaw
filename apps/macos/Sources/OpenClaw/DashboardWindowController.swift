@@ -74,18 +74,18 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var auth: DashboardWindowAuth
     private let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
-    private let requestBrowserProfileImportOffer: @MainActor () -> Void
+    private let requestBrowserProfileImportOffer: @MainActor () -> Bool
     private var canGoBackObservation: NSKeyValueObservation?
     private var canGoForwardObservation: NSKeyValueObservation?
-    private var didOpenLinkBrowser = false
+    private var didRequestBrowserProfileImportOffer = false
 
     init(
         url: URL,
         auth: DashboardWindowAuth,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
-        requestBrowserProfileImportOffer: @escaping @MainActor () -> Void = {
-            Task { await BrowserProfileImportModel.shared.refreshIfIdle() }
+        requestBrowserProfileImportOffer: @escaping @MainActor () -> Bool = {
+            BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible()
         })
     {
         let shouldEnableUpdateBridge = updater?.isAvailable == true && updateBridgeEnabled
@@ -314,13 +314,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func openLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = true) {
-        let isFirstOpen = !self.didOpenLinkBrowser
-        self.didOpenLinkBrowser = true
         self.linkBrowserItem.isCollapsed = false
         self.linkBrowser.open(url)
         window?.makeFirstResponder(self.linkBrowser.activeWebView)
-        if isFirstOpen, requestBrowserProfileImportOffer {
-            self.requestBrowserProfileImportOffer()
+        if requestBrowserProfileImportOffer, !self.didRequestBrowserProfileImportOffer {
+            self.didRequestBrowserProfileImportOffer = self.requestBrowserProfileImportOffer()
         }
     }
 

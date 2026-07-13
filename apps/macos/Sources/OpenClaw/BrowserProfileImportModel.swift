@@ -129,6 +129,16 @@ final class BrowserProfileImportModel {
         return true
     }
 
+    /// Defers the one-shot automatic offer until the app can actually query
+    /// the host-local import endpoint. A remote or pre-onboarding sidebar open
+    /// must not consume the first eligible local attempt.
+    @discardableResult
+    func requestAutomaticOfferIfEligible() -> Bool {
+        guard self.isOnboarded(), self.isLocalMode() else { return false }
+        Task { await self.refreshIfIdle() }
+        return true
+    }
+
     /// Force (Settings → Import…) re-offers even after a persisted dismissal
     /// and reports why nothing can be offered so the caller can tell the user.
     @discardableResult
