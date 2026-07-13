@@ -97,32 +97,10 @@ openclaw gateway call node.list --params "{}"
 
 ## Health summaries
 
-The iOS node can return a read-only, on-device aggregate for `today`. The fixed
-summary includes steps, sleep duration, average resting heart rate, and workout
-count/duration. It never returns individual HealthKit
-samples, sources, metadata, clinical records, or write access.
-
-This surface has two independent opt-ins:
-
-1. In the iOS app, open **Settings -> Permissions -> Privacy & Access -> Health Summaries** and
-   tap **Enable & Share Summaries**. The disclosure explains that the requested
-   aggregate leaves the phone through your Gateway, reaches your configured AI
-   provider, and may remain in chat history.
-2. Add `health.summary` to `gateway.nodes.allowCommands`, then reject and
-   re-approve the changed iPhone node command surface. Keep your Gateway local
-   or tailnet-only; the security audit reports this sensitive command when it is
-   enabled.
-
-Models use the existing `nodes` tool with `action: "invoke"`,
-`invokeCommand: "health.summary"`, and `invokeParamsJson` set to
-`{"period":"today"}`.
-
-HealthKit deliberately does not reveal whether read access was denied. Missing
-metrics therefore mean only that no readable value was returned; they do not
-prove either denial or absence of health data. OpenClaw limits summaries to the
-current calendar day so a limited historical-access window cannot make a
-multi-day total look complete. OpenClaw does not ingest Health data in the
-background and does not use summaries for diagnosis or medical advice.
+The iOS node can return an opt-in, read-only HealthKit aggregate for the current
+calendar day. iPhone consent and explicit Gateway command authorization are
+independent gates. See [HealthKit summaries](/platforms/ios-healthkit) for
+setup, invocation, payload fields, privacy behavior, and troubleshooting.
 
 By default, the Apple Watch companion keeps using the existing iPhone relay and
 does not need a separate Gateway pairing. Pair the Watch with the iPhone in

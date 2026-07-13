@@ -9,6 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { parse as parseSemverVersion, prerelease as parseSemverPrerelease } from "semver";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
@@ -18,7 +19,7 @@ import {
   parseStrictPositiveInteger,
 } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
-import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
+import { compareValidSemver } from "./semver.js";
 import { createTempDownloadTarget } from "./temp-download.js";
 export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
@@ -549,14 +550,13 @@ function normalizePartialComparableVersion(version: string): {
 }
 
 function compareSemver(left: string, right: string): number | null {
-  return compareComparableSemver(
-    parseComparableSemver(normalizePartialComparableVersion(left).version),
-    parseComparableSemver(normalizePartialComparableVersion(right).version),
-  );
+  const normalizedLeft = normalizePartialComparableVersion(left).version;
+  const normalizedRight = normalizePartialComparableVersion(right).version;
+  return compareValidSemver(normalizedLeft, normalizedRight);
 }
 
 function upperBoundForCaret(version: string): string | null {
-  const parsed = parseComparableSemver(normalizePartialComparableVersion(version).version);
+  const parsed = parseSemverVersion(normalizePartialComparableVersion(version).version);
   if (!parsed) {
     return null;
   }
@@ -579,9 +579,7 @@ function matchWildcardComparator(token: string): "any" | "none" | null {
 }
 
 function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
-  return Boolean(
-    parseComparableSemver(normalizePartialComparableVersion(target).version)?.prerelease?.length,
-  );
+  return Boolean(parseSemverPrerelease(normalizePartialComparableVersion(target).version));
 }
 
 function normalizePluginApiVersionForComparator(version: string, target: string): string {
@@ -601,7 +599,7 @@ function satisfiesComparator(version: string, token: string): boolean {
   }
   const wildcard = matchWildcardComparator(trimmed);
   if (wildcard) {
-    return wildcard === "any" && parseComparableSemver(version) != null;
+    return wildcard === "any" && parseSemverVersion(version) != null;
   }
   if (trimmed.startsWith("^")) {
     const base = trimmed.slice(1).trim();

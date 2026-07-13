@@ -11,12 +11,8 @@ import {
   formatUserFacingAssistantErrorText,
 } from "./embedded-agent-helpers.js";
 import {
-  buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
   createOpenAICompletionsTransportStreamFn,
-  parseTransportChunkUsage,
-  resolveAzureOpenAIApiVersion,
-  sanitizeTransportPayloadText,
   testing,
 } from "./openai-transport-stream.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
@@ -28,6 +24,9 @@ import {
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
+
+const { buildOpenAIResponsesParams, parseTransportChunkUsage, resolveAzureOpenAIApiVersion } =
+  testing;
 
 type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
 type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
@@ -1543,15 +1542,6 @@ describe("openai transport stream", () => {
       id: "claude-sonnet-4.6",
     });
     expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
-  });
-
-  it("removes unpaired surrogate code units but preserves valid surrogate pairs", () => {
-    const high = String.fromCharCode(0xd83d);
-    const low = String.fromCharCode(0xdc00);
-
-    expect(sanitizeTransportPayloadText(`left${high}right`)).toBe("leftright");
-    expect(sanitizeTransportPayloadText(`left${low}right`)).toBe("leftright");
-    expect(sanitizeTransportPayloadText("emoji 🙈 ok")).toBe("emoji 🙈 ok");
   });
 
   it("uses a valid Azure API version default when the environment is unset", () => {
@@ -6827,8 +6817,8 @@ describe("openai transport stream", () => {
     }));
 
     try {
-      const { buildOpenAIResponsesParams: isolatedBuildOpenAIResponsesParams } =
-        await import("./openai-transport-stream.js");
+      const { testing: isolatedTesting } = await import("./openai-transport-stream.js");
+      const isolatedBuildOpenAIResponsesParams = isolatedTesting.buildOpenAIResponsesParams;
       const model = makeResponsesModel({
         id: "gpt-5.4",
         name: "GPT-5.4",
