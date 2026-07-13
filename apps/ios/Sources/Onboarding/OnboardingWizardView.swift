@@ -1383,7 +1383,9 @@ extension OnboardingWizardView {
         self.connectMessage = "Connecting to \(gateway.name)…"
         self.statusLine = "Connecting to \(gateway.name)…"
         defer { self.connectingGateway = nil }
-        await self.gatewayController.connect(gateway)
+        if let message = await self.gatewayController.connectWithDiagnostics(gateway) {
+            self.setConnectionFailure(message)
+        }
     }
 
     private func selectMode(_ mode: OnboardingConnectionMode) {
