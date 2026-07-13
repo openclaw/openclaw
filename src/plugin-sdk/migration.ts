@@ -1,6 +1,7 @@
 // Shared migration-provider helpers for plan/apply item bookkeeping.
 
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type {
   MigrationDetection,
   MigrationItem,
@@ -133,10 +134,25 @@ export function readMigrationConfigPath(
 /** Deep-merges object patches and replaces scalar/array values with a cloned target value. */
 export function mergeMigrationConfigValue(left: unknown, right: unknown): unknown {
   if (!isRecord(left) || !isRecord(right)) {
+    // Filter blocked keys from a fresh destination (when left is absent or
+    // non-record, the merge-loop guard never runs).
+    if (isRecord(right)) {
+      const filtered: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(right)) {
+        if (!isBlockedObjectKey(key)) {
+          filtered[key] = value;
+        }
+      }
+      return structuredClone(filtered);
+    }
     return structuredClone(right);
   }
   const next: Record<string, unknown> = { ...left };
   for (const [key, value] of Object.entries(right)) {
+    // Reject prototype-bearing keys before they reach a bracket assignment.
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
     next[key] = mergeMigrationConfigValue(next[key], value);
   }
   return next;
@@ -150,6 +166,10 @@ export function writeMigrationConfigPath(
 ): void {
   let current = root;
   for (const segment of path.slice(0, -1)) {
+    // Reject prototype-bearing path segments.
+    if (isBlockedObjectKey(segment)) {
+      return;
+    }
     const existing = current[segment];
     if (!isRecord(existing)) {
       current[segment] = {};
@@ -157,7 +177,7 @@ export function writeMigrationConfigPath(
     current = current[segment] as Record<string, unknown>;
   }
   const leaf = path.at(-1);
-  if (!leaf) {
+  if (!leaf || isBlockedObjectKey(leaf)) {
     return;
   }
   current[leaf] = mergeMigrationConfigValue(current[leaf], value);
