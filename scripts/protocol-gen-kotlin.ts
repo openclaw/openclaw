@@ -304,7 +304,9 @@ async function generate(): Promise<void> {
     path.join(repoRoot, "src/gateway/events.ts"),
     "utf8",
   );
-  const gatewayEvents = extractGatewayEventNames(gatewayEventSource, gatewayEventConstants);
+  const gatewayEvents = Array.from(
+    extractGatewayEventNames(gatewayEventSource, gatewayEventConstants),
+  );
   const gatewayMethods = CORE_GATEWAY_METHOD_SPECS.map((spec) => spec.name);
 
   const gatewayContent = [
