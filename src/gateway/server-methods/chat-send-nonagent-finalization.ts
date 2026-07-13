@@ -34,7 +34,7 @@ type DeliveredReply = {
   kind: "block" | "final";
 };
 
-export function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[]) {
+function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[]) {
   const replies = deliveredReplies.map((entry) => entry.payload).filter(isBtwReplyPayload);
   const text = replies
     .map((payload) => payload.text.trim())

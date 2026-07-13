@@ -39,7 +39,7 @@ type DeliveredReply = {
   kind: "block" | "final";
 };
 
-export function selectChatSendAgentReplyPayloads(params: {
+function selectChatSendAgentReplyPayloads(params: {
   deliveredReplies: readonly DeliveredReply[];
   hasReturnedAgentErrorPayloads: boolean;
 }): ReplyPayload[] {
