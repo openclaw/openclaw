@@ -11,6 +11,7 @@ import {
   type CustomWidgetHostContext,
 } from "../../components/workspace-custom-widget.ts";
 import {
+  renderWidgetBody,
   renderWidgetCell,
   type WorkspaceCustomWidgetContext,
   type WorkspaceWidgetCellCallbacks,
@@ -564,6 +565,9 @@ function renderGrid(
       </div>
     `;
   }
+  if (tab.layout === "full") {
+    return renderFullBleed(props, state, viewState, workspace, tab);
+  }
   const callbacks = makeCallbacks(props, state, viewState, tab);
   const builtinContext: BuiltinWidgetContext = {
     basePath: props.basePath ?? "",
@@ -589,6 +593,36 @@ function renderGrid(
       ${renderDragGhost(viewState, tab)}
     </div>
   `;
+}
+
+/** App-like tabs render their first widget through the same approval and sandbox path. */
+function renderFullBleed(
+  props: WorkspaceProps,
+  state: WorkspaceUiState,
+  viewState: WorkspaceViewState,
+  workspace: WorkspaceDocument,
+  tab: WorkspaceTab,
+): TemplateResult {
+  const widget = tab.widgets[0]!;
+  const callbacks = makeCallbacks(props, state, viewState, tab);
+  const builtinContext: BuiltinWidgetContext = {
+    basePath: props.basePath ?? "",
+    embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
+  };
+  const custom = buildCustomContext(props, state, viewState, workspace, widget);
+  return html`<div
+    class="workspace-fullbleed"
+    data-test-id="workspace-fullbleed"
+    data-widget-id=${widget.id}
+  >
+    ${renderWidgetBody(
+      widget,
+      viewState.bindingResults.get(widget.id) ?? null,
+      builtinContext,
+      callbacks,
+      custom ?? undefined,
+    )}
+  </div>`;
 }
 
 /**

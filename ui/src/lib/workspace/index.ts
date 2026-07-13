@@ -202,6 +202,7 @@ function normalizeTab(value: unknown): WorkspaceTab | null {
     title: readString(value.title, slug),
     hidden: value.hidden === true,
     widgets,
+    ...(value.layout === "grid" || value.layout === "full" ? { layout: value.layout } : {}),
     ...(typeof value.icon === "string" ? { icon: value.icon } : {}),
     ...(typeof value.createdBy === "string" ? { createdBy: value.createdBy } : {}),
   };

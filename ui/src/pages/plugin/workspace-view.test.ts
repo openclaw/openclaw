@@ -117,6 +117,19 @@ describe("renderWorkspace", () => {
     expect(container.querySelector('[data-test-id="workspace-empty-tab"]')).not.toBeNull();
   });
 
+  it("renders the first widget full bleed without grid chrome", () => {
+    const host = {};
+    const state = getWorkspaceState(host);
+    state.loaded = true;
+    state.workspace = structuredClone(doc);
+    state.workspace.tabs[0]!.layout = "full";
+    state.activeSlug = "main";
+    const container = renderView(host);
+    expect(container.querySelector('[data-test-id="workspace-fullbleed"]')).not.toBeNull();
+    expect(container.querySelector('[data-test-id="workspace-grid"]')).toBeNull();
+    expect(container.textContent).toContain("hello");
+  });
+
   it("surfaces an action error toast", () => {
     const host = {};
     const state = getWorkspaceState(host);
