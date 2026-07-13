@@ -4,12 +4,10 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 const BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES = ["plain-crypto-js"] as const;
 
 /** Package names blocked from installed plugin dependency trees. */
-export const blockedInstallDependencyPackageNames = [
-  ...BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES,
-] as const;
+const blockedInstallDependencyPackageNames = [...BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES] as const;
 
 /** Finding for blocked dependencies declared in a plugin package manifest. */
-export type BlockedManifestDependencyFinding = {
+type BlockedManifestDependencyFinding = {
   dependencyName: string;
   declaredAs?: string;
   field: "dependencies" | "name" | "optionalDependencies" | "overrides" | "peerDependencies";

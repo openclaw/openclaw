@@ -319,12 +319,7 @@ import {
   hasSessionUserTurnBeenSent,
   markSessionUserTurnsSent,
 } from "../session-prompt-state.js";
-import {
-  resetEmbeddedAgentBaseStreamFnCacheForTest,
-  resolveEmbeddedAgentApiKey,
-  resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
-} from "../stream-resolution.js";
+import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import {
   collectCoreBuiltinToolNames,
@@ -474,6 +469,10 @@ import {
   type MidTurnPrecheckRequest,
 } from "./midturn-precheck.js";
 import {
+  detachPrePersistedCurrentUserTurn,
+  sessionMessagesContainIdempotencyKey,
+} from "./pre-persisted-user-turn.js";
+import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
@@ -504,28 +503,6 @@ function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetS
     overflowTokens: snapshot.overflowTokens,
   };
 }
-
-export {
-  appendAttemptCacheTtlIfNeeded,
-  composeSystemPromptWithHookContext,
-  resolveAttemptSpawnWorkspaceDir,
-} from "./attempt.thread-helpers.js";
-export {
-  buildAfterTurnRuntimeContext,
-  buildAfterTurnRuntimeContextFromUsage,
-  mergeOrphanedTrailingUserPrompt,
-  prependSystemPromptAddition,
-  resolveAttemptFsWorkspaceOnly,
-  resolveAttemptMediaTaskSystemPromptAddition,
-  resolvePromptBuildHookResult,
-  resolvePromptModeForSession,
-  shouldWarnOnOrphanedUserRepair,
-} from "./attempt.prompt-helpers.js";
-export {
-  resetEmbeddedAgentBaseStreamFnCacheForTest,
-  resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
-};
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const aggregateToolResultPressureWarnings = new Set<string>();
@@ -595,17 +572,6 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 
 function cloneHookMessages(messages: AgentMessage[]): AgentMessage[] {
   return messages.map((message) => structuredClone(message));
-}
-
-function sessionMessagesContainIdempotencyKey(
-  messages: AgentMessage[],
-  idempotencyKey: string,
-): boolean {
-  return messages.some(
-    (message) =>
-      typeof (message as { idempotencyKey?: unknown }).idempotencyKey === "string" &&
-      (message as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey,
-  );
 }
 
 function flushSessionManagerTranscript(
@@ -2818,6 +2784,12 @@ export async function runEmbeddedAttempt(
         params.onUserMessagePersistenceInvalidated?.();
         activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
       }
+      detachPrePersistedCurrentUserTurn({
+        activeSession,
+        preparedUserTurnMessage,
+        suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
+        userTurnAlreadyPersisted: params.userTurnTranscriptRecorder?.hasPersisted() === true,
+      });
       // Single source for the per-message timestamp prefix (issue #3658):
       // normal embedded runs stamp every user message from its own timestamp.
       // Raw model probes must keep the requested prompt text exact.

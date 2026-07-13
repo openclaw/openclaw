@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 const val GATEWAY_PROTOCOL_VERSION = 4
-const val GATEWAY_MIN_PROTOCOL_VERSION = 4
+const val GATEWAY_MIN_PROTOCOL_VERSION = 3
 
 @Serializable
 data class GatewayProtocolError(
