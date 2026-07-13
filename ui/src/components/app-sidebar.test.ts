@@ -463,6 +463,7 @@ describe("AppSidebar agent chip", () => {
     ].find((row) => row.textContent?.includes("Agent settings"));
     expect(settingsRow).toBeDefined();
     settingsRow?.click();
+    await sidebar.updateComplete;
     expect(onNavigate).toHaveBeenCalledWith("agents", { search: "?agent=main" });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
@@ -494,7 +495,7 @@ describe("AppSidebar agent chip", () => {
 
   it("shows pinned agents plus filter for large rosters and filters on input", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
+    const { sidebar, context } = await mountSidebar(
       gateway,
       createSessions("agent-1", ["agent:agent-1:main"]),
       "panel",
@@ -502,6 +503,8 @@ describe("AppSidebar agent chip", () => {
     );
     sidebar.connected = true;
     sidebar.pinnedAgentIds = ["agent-7", "agent-12"];
+    // Two agents pinned while a third is active: the menu must keep all three.
+    context.agentSelection.state.selectedId = "agent-1";
     await sidebar.updateComplete;
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();

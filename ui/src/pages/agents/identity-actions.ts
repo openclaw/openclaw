@@ -6,7 +6,7 @@ import { updateAgentIdentity } from "../../lib/agents/index.ts";
 import { fileToAvatarDataUrl } from "./avatar-image.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
 
-export type AgentIdentityEditorHost = {
+type AgentIdentityEditorHost = {
   identityDraft: AgentIdentityDraft;
   identitySaving: boolean;
   identityError: string | null;
