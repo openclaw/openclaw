@@ -270,6 +270,14 @@ export function resolveApprovalAuditTrustPath(
   return resolvePolicyTargetTrustPath(resolution, cwd);
 }
 
+/** @deprecated Use resolveExecutionTargetCandidatePath. */
+export function resolveAllowlistCandidatePath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutionTargetCandidatePath(resolution, cwd);
+}
+
 export function resolvePolicyAllowlistCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
