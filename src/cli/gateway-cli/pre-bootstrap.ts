@@ -29,6 +29,7 @@ let appliedGatewayRunConfigEnvironment: GatewayRunEnvironmentSelection | undefin
 let lastGuardedGatewayRunSnapshot: ConfigFileSnapshot | undefined;
 let preparedGatewayRunBootstrapSnapshot: ConfigFileSnapshot | undefined;
 let preparedGatewayRunStateWasPristine = false;
+let preparedGatewayRunCoreStateWasPristine = false;
 let preparedGatewayRunReset: PreparedGatewayRunReset | undefined;
 let gatewayRunTargetSelectedByConfig = false;
 
@@ -623,10 +624,11 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
 export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams): Promise<boolean> {
   preparedGatewayRunReset = undefined;
   preparedGatewayRunStateWasPristine = false;
+  preparedGatewayRunCoreStateWasPristine = false;
   const pristineSelectionSignature = resolveGatewayConfigSelectionSignature(process.env);
-  const { canSkipPristineStartupStateMigrations } =
+  const { planPristineStartupStateMigrations } =
     await import("../../commands/doctor/shared/pristine-startup-state.js");
-  const selectedStateWasPristine = canSkipPristineStartupStateMigrations(process.env);
+  const pristineStatePlan = planPristineStartupStateMigrations(process.env);
   // Stop the early proxy before recovery can select another config/state target. Its lifecycle
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
@@ -646,7 +648,12 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
   preparedGatewayRunStateWasPristine =
     guarded &&
     !params.opts.reset &&
-    selectedStateWasPristine &&
+    pristineStatePlan.skipAllStateMigrations &&
+    resolveGatewayConfigSelectionSignature(process.env) === pristineSelectionSignature;
+  preparedGatewayRunCoreStateWasPristine =
+    guarded &&
+    !params.opts.reset &&
+    pristineStatePlan.skipCoreStateMigrations &&
     resolveGatewayConfigSelectionSignature(process.env) === pristineSelectionSignature;
   await pinGatewayRunRuntimePaths();
   // Dev reset deletes the state directory before recreating config. Migrating first would
@@ -666,6 +673,11 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
 /** Prepared fact captured before Gateway bootstrap can create runtime state. */
 export function wasPreparedGatewayRunStatePristine(): boolean {
   return preparedGatewayRunStateWasPristine;
+}
+
+/** Prepared fact keeps plugin-only configs out of unrelated core migration discovery. */
+export function wasPreparedGatewayRunCoreStatePristine(): boolean {
+  return preparedGatewayRunCoreStateWasPristine;
 }
 
 export async function recheckGatewayRunBootstrap(

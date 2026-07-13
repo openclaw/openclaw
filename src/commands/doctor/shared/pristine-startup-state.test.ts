@@ -2,7 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { canSkipPristineStartupStateMigrations } from "./pristine-startup-state.js";
+import {
+  canSkipPristineStartupStateMigrations,
+  planPristineStartupStateMigrations,
+} from "./pristine-startup-state.js";
 
 const roots: string[] = [];
 
@@ -101,6 +104,27 @@ describe("pristine startup state", () => {
     );
 
     expect(canSkipPristineStartupStateMigrations(env)).toBe(false);
+  });
+
+  it("retains plugin migrations while skipping absent core state for load paths", () => {
+    const env = createFixture({
+      gateway: { mode: "local" },
+      plugins: { allow: ["example"], load: { paths: ["/plugins/example"] } },
+    });
+
+    expect(planPristineStartupStateMigrations(env)).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: true,
+    });
+  });
+
+  it("retains core migrations for config that can point outside the state root", () => {
+    const env = createFixture({ session: { store: "/tmp/sessions.json" } });
+
+    expect(planPristineStartupStateMigrations(env)).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
   });
 
   it("rejects enabled plugin entries and includes", () => {
