@@ -145,8 +145,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
-      // +7: generic source and outbound delivery policy hook contracts.
-      4728,
+      // +8: generic source and outbound delivery policy hook contracts.
+      4729,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
