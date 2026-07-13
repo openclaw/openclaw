@@ -1914,7 +1914,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/config/sessions/transcript.ts: TailAssistantTranscriptText",
   "src/config/sessions/types.ts: LaneExecutionState",
   "src/config/sessions/types.ts: mergeSessionEntryWithPolicy",
-  "src/config/sessions/types.ts: QuotaSuspension",
   "src/config/sessions/types.ts: SessionAcpIdentitySource",
   "src/config/sessions/types.ts: SessionAcpIdentityState",
   "src/config/sessions/types.ts: SessionChannelId",
