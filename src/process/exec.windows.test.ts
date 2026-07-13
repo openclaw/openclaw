@@ -419,6 +419,61 @@ describe("Windows command execution", () => {
     });
   });
 
+  it("waits for forced taskkill before aborting the live Windows root", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    const forcedTaskkill = createMockSubprocess({ autoFinish: false });
+    execaMock
+      .mockImplementationOnce(() => command)
+      .mockImplementationOnce(() => createMockSubprocess())
+      .mockImplementationOnce(() => forcedTaskkill);
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+        killProcessTree: true,
+        timeoutMs: 80,
+      });
+      const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
+
+      await vi.advanceTimersByTimeAsync(381);
+      expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      expect(cancelSignal.aborted).toBe(false);
+
+      forcedTaskkill.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cancelSignal.aborted).toBe(true);
+
+      command.finish({ signal: "SIGKILL" });
+      await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
+    });
+  });
+
+  it("waits for immediate forced taskkill before aborting the Windows root", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    const forcedTaskkill = createMockSubprocess({ autoFinish: false });
+    execaMock.mockImplementationOnce(() => command).mockImplementationOnce(() => forcedTaskkill);
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+        killProcessTree: false,
+        timeoutMs: 80,
+      });
+      const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
+
+      await vi.advanceTimersByTimeAsync(81);
+      expect(requireExecaCall(1)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      expect(cancelSignal.aborted).toBe(false);
+
+      forcedTaskkill.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cancelSignal.aborted).toBe(true);
+
+      command.finish({ signal: "SIGKILL" });
+      await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
+    });
+  });
+
   it("decodes GBK stdout and stderr from runExec", async () => {
     execaMock.mockImplementationOnce(() =>
       createMockSubprocess({

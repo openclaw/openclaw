@@ -275,6 +275,7 @@ export type CommandOptions = {
 };
 
 const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
+const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 const DEFAULT_EXEC_MAX_BUFFER_BYTES = 1024 * 1024;
@@ -762,9 +763,8 @@ export async function runCommandWithTimeout(
   const combinedCapturedBytesByStream = { stdout: 0, stderr: 0 };
   const combinedTailChunks: Array<{ stream: "stdout" | "stderr"; buffer: Buffer }> = [];
   let noOutputTimer: NodeJS.Timeout | undefined;
-  let cancelControllerAbortTimer: NodeJS.Timeout | undefined;
-  let processTreeForceKillTimer: NodeJS.Timeout | undefined;
   let processTreeSettleAt: number | undefined;
+  let windowsTerminationPromise: Promise<void> | undefined;
   let outputObserverError: unknown;
   let outputErrorStream: CommandOutputStream | undefined;
 
@@ -795,18 +795,6 @@ export async function runCommandWithTimeout(
       noOutputTimer = undefined;
     }
   };
-  const clearProcessTreeForceKillTimer = () => {
-    if (processTreeForceKillTimer) {
-      clearTimeout(processTreeForceKillTimer);
-      processTreeForceKillTimer = undefined;
-    }
-  };
-  const clearCancelControllerAbortTimer = () => {
-    if (cancelControllerAbortTimer) {
-      clearTimeout(cancelControllerAbortTimer);
-      cancelControllerAbortTimer = undefined;
-    }
-  };
   const killDirectChild = () => {
     if (!childExited && child.exitCode == null && child.signalCode == null) {
       child.kill("SIGKILL");
@@ -817,8 +805,10 @@ export async function runCommandWithTimeout(
       const taskkillChild = spawnCommand([getWindowsSystem32ExePath("taskkill.exe"), ...args], {
         baseEnv,
         env,
+        forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
         reject: false,
         stdio: "ignore",
+        timeout: WINDOWS_TASKKILL_TIMEOUT_MS,
       });
       return taskkillChild.then(
         (result) => {
@@ -837,7 +827,38 @@ export async function runCommandWithTimeout(
       return undefined;
     }
   };
-  const terminateChild = () => {
+  const startWindowsTermination = (childPid: number, graceful: boolean): Promise<void> => {
+    const taskkills: Promise<unknown>[] = [];
+    const startTaskkill = (args: string[]) => {
+      const taskkill = spawnTaskkillOrFallback(args, killDirectChild);
+      if (taskkill) {
+        taskkills.push(taskkill);
+      }
+    };
+    const terminationPromise = (async () => {
+      if (graceful) {
+        startTaskkill(["/PID", String(childPid), "/T"]);
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(resolve, COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+          timer.unref();
+        });
+        if (!childExited && child.exitCode == null && child.signalCode == null) {
+          startTaskkill(["/PID", String(childPid), "/T", "/F"]);
+        }
+      } else {
+        startTaskkill(["/PID", String(childPid), "/T", "/F"]);
+      }
+      // taskkill owns the live PID while it enumerates descendants. Abort Execa
+      // only after every started taskkill settles, avoiding a reused-PID race.
+      await Promise.allSettled(taskkills);
+      if (!commandSettled) {
+        cancelController.abort();
+      }
+    })();
+    windowsTerminationPromise = terminationPromise;
+    return terminationPromise;
+  };
+  const terminateChild = (): Promise<void> | undefined => {
     const childPid = child.pid;
     const directChildAlive = !childExited && child.exitCode == null && child.signalCode == null;
     if (process.platform === "win32" && !directChildAlive) {
@@ -848,20 +869,7 @@ export async function runCommandWithTimeout(
     if (killProcessTree && typeof childPid === "number") {
       processTreeSettleAt ??= Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
       if (process.platform === "win32") {
-        const taskkillStarted = spawnTaskkillOrFallback(["/PID", String(childPid), "/T"], () => {
-          clearProcessTreeForceKillTimer();
-          killDirectChild();
-        });
-        if (taskkillStarted) {
-          processTreeForceKillTimer = setTimeout(() => {
-            processTreeForceKillTimer = undefined;
-            if (childExited || child.exitCode != null || child.signalCode != null) {
-              return;
-            }
-            void spawnTaskkillOrFallback(["/PID", String(childPid), "/T", "/F"], killDirectChild);
-          }, COMMAND_PROCESS_TREE_KILL_GRACE_MS);
-          processTreeForceKillTimer.unref();
-        }
+        return startWindowsTermination(childPid, true);
       } else {
         terminateProcessTree(childPid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
       }
@@ -871,12 +879,15 @@ export async function runCommandWithTimeout(
       return;
     }
     if (process.platform === "win32" && typeof childPid === "number") {
-      void spawnTaskkillOrFallback(["/PID", String(childPid), "/T", "/F"], killDirectChild);
+      return startWindowsTermination(childPid, false);
     }
+    return undefined;
   };
   const settleTerminatedProcessTree = async () => {
+    if (windowsTerminationPromise) {
+      await windowsTerminationPromise;
+    }
     if (!killProcessTree || processTreeSettleAt === undefined || typeof child.pid !== "number") {
-      clearProcessTreeForceKillTimer();
       return;
     }
     // A direct child can exit before its descendants finish the graceful
@@ -888,12 +899,7 @@ export async function runCommandWithTimeout(
         setTimeout(resolve, remainingMs);
       });
     }
-    clearProcessTreeForceKillTimer();
-    if (process.platform === "win32") {
-      if (!childExited && child.exitCode == null && child.signalCode == null) {
-        await spawnTaskkillOrFallback(["/PID", String(child.pid), "/T", "/F"], killDirectChild);
-      }
-    } else {
+    if (process.platform !== "win32") {
       terminateProcessTree(child.pid, { force: true });
     }
   };
@@ -902,24 +908,11 @@ export async function runCommandWithTimeout(
       return;
     }
     termination = reason;
-    terminateChild();
-    // Give a live Windows taskkill tree its grace period before Execa targets
-    // the direct child. A root that already exited has no safe taskkill identity.
-    if (
-      process.platform !== "win32" ||
-      !killProcessTree ||
-      processTreeSettleAt === undefined ||
-      typeof child.pid !== "number"
-    ) {
+    const terminationPromise = terminateChild();
+    // A live Windows PID stays owned by taskkill until enumeration finishes.
+    // Other platforms, and an already-dead Windows root, can abort immediately.
+    if (!terminationPromise) {
       cancelController.abort();
-    } else {
-      cancelControllerAbortTimer = setTimeout(() => {
-        cancelControllerAbortTimer = undefined;
-        if (!commandSettled) {
-          cancelController.abort();
-        }
-      }, COMMAND_PROCESS_TREE_KILL_GRACE_MS);
-      cancelControllerAbortTimer.unref();
     }
   };
   const shouldTrackOutputTimeout =
@@ -1069,7 +1062,6 @@ export async function runCommandWithTimeout(
       clearTimeout(timeoutTimer);
     }
     clearNoOutputTimer();
-    clearCancelControllerAbortTimer();
     signal?.removeEventListener("abort", onAbort);
     releaseOutput();
   });
