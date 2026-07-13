@@ -475,7 +475,8 @@ class ChannelsPage extends OpenClawLightDomElement {
             void context.channels.startWhatsApp(force, this.wizardHost.whatsappAccountId),
           onWhatsAppWait: () =>
             void context.channels.waitWhatsApp(this.wizardHost.whatsappAccountId),
-          onWhatsAppLogout: () => void context.channels.logoutWhatsApp(),
+          onWhatsAppLogout: () =>
+            void context.channels.logoutWhatsApp(this.wizardHost.whatsappAccountId),
           onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
           onConfigSave: () => void this.saveChannelConfig(),
           onConfigReload: () => void this.reloadChannelConfig(),
