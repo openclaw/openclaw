@@ -110,4 +110,56 @@ describe("googlechat doctor contract", () => {
     const second = normalizeCompatibilityConfig({ cfg: result.config });
     expect(second.changes).toEqual([]);
   });
+
+  it("seeds named accounts from accounts.default over root (layered inheritance)", () => {
+    // Regression for #105940: doctor must not drop accounts.default block
+    // streaming when materializing a named account that only had chunkMode.
+    // Google Chat runtime resolves named accounts as {...accounts.default, ...named}
+    // (accounts.ts), so a materialized named-account streaming object must
+    // inherit accounts.default.streaming fields, not only the root streaming.
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          googlechat: {
+            accounts: {
+              default: { blockStreaming: true },
+              support: { chunkMode: "newline" },
+            },
+          },
+        },
+      } as never,
+    });
+    const googlechat = result.config.channels?.googlechat as unknown as Record<string, unknown>;
+    const accounts = googlechat.accounts as Record<string, Record<string, unknown>>;
+    expect(accounts.default?.streaming).toEqual({ block: { enabled: true } });
+    expect(accounts.support?.streaming).toEqual({
+      chunkMode: "newline",
+      block: { enabled: true },
+    });
+    // Idempotent: a second pass makes no further changes.
+    const second = normalizeCompatibilityConfig({ cfg: result.config });
+    expect(second.changes).toEqual([]);
+  });
+
+  it("resolves the default account case-insensitively when seeding named accounts", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: {
+        channels: {
+          googlechat: {
+            accounts: {
+              Default: { blockStreaming: true },
+              support: { chunkMode: "newline" },
+            },
+          },
+        },
+      } as never,
+    });
+    const googlechat = result.config.channels?.googlechat as unknown as Record<string, unknown>;
+    const accounts = googlechat.accounts as Record<string, Record<string, unknown>>;
+    expect(accounts.Default?.streaming).toEqual({ block: { enabled: true } });
+    expect(accounts.support?.streaming).toEqual({
+      chunkMode: "newline",
+      block: { enabled: true },
+    });
+  });
 });
