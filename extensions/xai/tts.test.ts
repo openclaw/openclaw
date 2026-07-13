@@ -313,7 +313,7 @@ describe("xai tts", () => {
     it("streams decoded audio chunks without buffering the full body", async () => {
       const resultPromise = xaiTTSStream({
         text: "hello",
-        apiKey: "ok-key",
+        apiKey: "dummy",
         baseUrl: XAI_BASE_URL,
         voiceId: "eve",
         language: "en",
@@ -323,7 +323,7 @@ describe("xai tts", () => {
       });
       const ws = FakeWebSocket.instances.at(0);
       expect(ws?.url).toContain("wss://api.x.ai/v1/tts");
-      expect(ws?.headers?.Authorization).toBe("Bearer ok-key");
+      expect(ws?.headers?.Authorization).toBe("Bearer dummy");
       expect(ws?.maxPayload).toBe(5_024);
       ws?.emit("open");
       expect(ws?.sent).toEqual([
@@ -349,7 +349,7 @@ describe("xai tts", () => {
       const text = `${"a".repeat(15_000)}${"b".repeat(15_000)}c`;
       const resultPromise = xaiTTSStream({
         text,
-        apiKey: "ok-key",
+        apiKey: "dummy",
         baseUrl: XAI_BASE_URL,
         voiceId: "eve",
         timeoutMs: 5_000,
@@ -373,7 +373,7 @@ describe("xai tts", () => {
       const text = `${"a".repeat(14_999)}😀${"b".repeat(15_000)}`;
       const resultPromise = xaiTTSStream({
         text,
-        apiKey: "ok-key",
+        apiKey: "dummy",
         baseUrl: XAI_BASE_URL,
         voiceId: "eve",
         timeoutMs: 5_000,
@@ -402,7 +402,7 @@ describe("xai tts", () => {
       const text = "a".repeat(15_000);
       const resultPromise = xaiTTSStream({
         text,
-        apiKey: "ok-key",
+        apiKey: "dummy",
         baseUrl: XAI_BASE_URL,
         voiceId: "eve",
         timeoutMs: 5_000,
@@ -423,7 +423,7 @@ describe("xai tts", () => {
     it("rejects upgrade failures before streaming starts", async () => {
       const resultPromise = xaiTTSStream({
         text: "hello",
-        apiKey: "bad-key",
+        apiKey: "dummy",
         baseUrl: XAI_BASE_URL,
         voiceId: "eve",
         language: "en",
@@ -441,7 +441,7 @@ describe("xai tts", () => {
       await expect(
         xaiTTSStream({
           text: "hello",
-          apiKey: "ok-key",
+          apiKey: "dummy",
           baseUrl: "https://proxy.example/v1",
           voiceId: "eve",
           language: "en",
@@ -456,7 +456,7 @@ describe("xai tts", () => {
       await expect(
         xaiTTSStream({
           text: "hello",
-          apiKey: "ok-key",
+          apiKey: "dummy",
           baseUrl: "http://api.x.ai/v1",
           voiceId: "eve",
           language: "en",
@@ -470,7 +470,7 @@ describe("xai tts", () => {
     it("fails promptly when the socket closes before open", async () => {
       const resultPromise = xaiTTSStream({
         text: "hello",
-        apiKey: "ok-key",
+        apiKey: "dummy",
         baseUrl: XAI_BASE_URL,
         voiceId: "eve",
         language: "en",
@@ -485,7 +485,7 @@ describe("xai tts", () => {
     it("closes idempotently when released before audio.done", async () => {
       const resultPromise = xaiTTSStream({
         text: "hello",
-        apiKey: "ok-key",
+        apiKey: "dummy",
         baseUrl: XAI_BASE_URL,
         voiceId: "eve",
         language: "en",
@@ -508,7 +508,7 @@ describe("xai tts", () => {
       vi.useFakeTimers();
       const resultPromise = xaiTTSStream({
         text: "hello",
-        apiKey: "ok-key",
+        apiKey: "dummy",
         baseUrl: XAI_BASE_URL,
         voiceId: "eve",
         language: "en",
@@ -536,7 +536,7 @@ describe("xai tts", () => {
     it("caps streamed audio responses instead of forwarding oversized output", async () => {
       const resultPromise = xaiTTSStream({
         text: "hello",
-        apiKey: "ok-key",
+        apiKey: "dummy",
         baseUrl: XAI_BASE_URL,
         voiceId: "eve",
         language: "en",
