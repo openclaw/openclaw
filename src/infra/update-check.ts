@@ -112,7 +112,6 @@ function parseNpmPackageTargetMetadata(raw: string): {
     return { version: null, nodeEngine: null };
   }
   const rec = entry as Record<string, unknown>;
-  const engines = rec.engines && typeof rec.engines === "object" ? rec.engines : null;
   const nodeEngine =
     toOptionalTrimmedString(rec["engines.node"]) ??
     (engines ? toOptionalTrimmedString((engines as Record<string, unknown>).node) : null);

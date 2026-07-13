@@ -70,7 +70,6 @@ import {
 import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
-
 /** Logger surface used by plugin update flows. */
 type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -78,10 +77,8 @@ type PluginUpdateLogger = {
   error?: (message: string) => void;
   terminalLinks?: boolean;
 };
-
 /** Outcome status for one plugin update attempt. */
 type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
-
 type PluginUpdateChannelFallback = {
   requestedSpec: string;
   usedSpec: string;
@@ -90,7 +87,6 @@ type PluginUpdateChannelFallback = {
   reason: "unavailable" | "failed";
   message: string;
 };
-
 type BasePluginUpdateOutcome = {
   pluginId: string;
   message: string;
@@ -99,7 +95,6 @@ type BasePluginUpdateOutcome = {
   channelFallback?: PluginUpdateChannelFallback;
   warning?: string;
 };
-
 export type PluginUpdateOutcome =
   | (BasePluginUpdateOutcome & {
       status: "skipped";
@@ -109,7 +104,6 @@ export type PluginUpdateOutcome =
       status: Exclude<PluginUpdateStatus, "skipped">;
       code?: string;
     });
-
 type PluginUpdateSummary = {
   config: OpenClawConfig;
   changed: boolean;

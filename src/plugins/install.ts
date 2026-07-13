@@ -85,9 +85,7 @@ import {
   pluginAuditOutcomeForReason,
   type PluginSecuritySourceFamily,
 } from "./security-events.js";
-
 export { resolvePluginInstallDir } from "./install-paths.js";
-
 const pluginInstallRuntimeLoader = createLazyImportLoader(() => import("./install.runtime.js"));
 const rollbackSnapshotCopyMode = fsConstants.COPYFILE_FICLONE;
 
@@ -2906,7 +2904,6 @@ export async function installPluginFromNpmSpec(
       code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
     };
   }
-
   const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs });
   if (!metadataResult.ok) {
     return {
