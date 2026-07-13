@@ -639,10 +639,8 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
   it("creates browser-token clients with a finite request timeout", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
-    const providerConfig = { apiKey: "gemini-key" };
-
     await provider.createBrowserSession?.({
-      providerConfig,
+      providerConfig: { apiKey: "test" },
     });
 
     const clientConfig = requireFirstMockArg(createGoogleGenAIMock, "GoogleGenAI config") as {
