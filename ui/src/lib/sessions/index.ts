@@ -877,11 +877,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const loadGroups = async (scope: SessionConnectionScope) => {
+  const loadGroups = async (scope: SessionConnectionScope): Promise<boolean> => {
     try {
       const listed = await scope.client.request("sessions.groups.list", {});
       if (!isCurrentConnection(scope)) {
-        return;
+        return false;
       }
       let names = readGroupNames(listed);
       // One-time migration: browser-local catalogs predate the gateway store.
@@ -889,7 +889,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (names.length === 0 && legacy.length > 0) {
         const put = await scope.client.request("sessions.groups.put", { names: legacy });
         if (!isCurrentConnection(scope)) {
-          return;
+          return false;
         }
         names = readGroupNames(put);
       }
@@ -901,8 +901,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         }
       }
       publishGroups(names);
+      return true;
     } catch {
       // Older gateways without the groups RPC keep observed-category grouping.
+      // A transient rejection (gateway advertises sessions.groups.list but the
+      // call failed) must stay retryable, so do not record a loaded epoch here.
+      return false;
     }
   };
 
@@ -912,8 +916,11 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!scope || groupsLoadedEpoch === scope.epoch) {
       return;
     }
-    groupsLoadedEpoch = scope.epoch;
-    await loadGroups(scope);
+    // Only mark the connection's groups as loaded once the catalog hydration
+    // succeeds; a transient rejection stays retryable on the next call.
+    if (await loadGroups(scope)) {
+      groupsLoadedEpoch = scope.epoch;
+    }
   };
 
   const groupsPut = async (names: readonly string[]) => {

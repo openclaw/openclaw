@@ -737,4 +737,34 @@ describe("createSessionCapability", () => {
     expect(request).toHaveBeenCalledTimes(2);
     sessions.dispose();
   });
+
+  it("retries groups hydration after a transient sessions.groups.list rejection", async () => {
+    // Regression for #106141: a transient sessions.groups.list rejection must
+    // not be latched as "loaded" for the connection - a later groupsLoad() on
+    // the same connection should retry and publish the authoritative groups.
+    let groupsListCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.list") {
+        groupsListCalls += 1;
+        if (groupsListCalls === 1) {
+          throw new Error("transient groups list failure");
+        }
+        return { groups: [{ name: "Alpha" }, { name: "Beta" }] };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    // First load: RPC rejects transiently. groups stay empty.
+    await sessions.groupsLoad();
+    expect(sessions.state.groups).toEqual([]);
+
+    // Second load on the same connection: should retry, not short-circuit.
+    await sessions.groupsLoad();
+    expect(sessions.state.groups).toEqual(["Alpha", "Beta"]);
+    expect(groupsListCalls).toBe(2);
+    sessions.dispose();
+  });
 });
