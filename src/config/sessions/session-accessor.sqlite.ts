@@ -377,11 +377,9 @@ export function resolveSqliteSessionKeyBySessionId(
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("session_entries")
+      .selectFrom("sessions")
       .select("session_key")
       .where("session_id", "=", resolved.sessionId)
-      .orderBy("updated_at", "desc")
-      .orderBy("session_key", "asc")
       .limit(1),
   );
   return row?.session_key;

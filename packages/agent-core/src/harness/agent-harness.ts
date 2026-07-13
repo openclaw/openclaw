@@ -8,6 +8,11 @@ import type {
 import { runAgentLoop } from "../agent-loop.js";
 import { resolveAgentReasoningOption } from "../reasoning.js";
 import { type AgentCoreRuntimeDeps, resolveAgentCoreStreamFn } from "../runtime-deps.js";
+import {
+  appendInterruptedTurnMessage,
+  createFailureMessage,
+  isTurnHandoffAbort,
+} from "../turn-interruption.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -63,27 +68,6 @@ function createUserMessage(text: string, images?: ImageContent[]): UserMessage {
     content.push(...images);
   }
   return { role: "user", content, timestamp: Date.now() };
-}
-
-function createFailureMessage(model: Model, error: unknown, aborted: boolean): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: "" }],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    stopReason: aborted ? "aborted" : "error",
-    errorMessage: error instanceof Error ? error.message : String(error),
-    timestamp: Date.now(),
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-  };
 }
 
 function cloneStreamOptions(streamOptions?: AgentHarnessStreamOptions): AgentHarnessStreamOptions {
@@ -625,8 +609,12 @@ export class CoreAgentHarness<
       { type: "turn_end", message: failureMessage, toolResults: [] },
       signal,
     );
-    await this.handleAgentEvent({ type: "agent_end", messages: [failureMessage] }, signal);
-    return [failureMessage];
+    const messages: AgentMessage[] = [failureMessage];
+    if (aborted && !isTurnHandoffAbort(signal)) {
+      await appendInterruptedTurnMessage(messages, (event) => this.handleAgentEvent(event, signal));
+    }
+    await this.handleAgentEvent({ type: "agent_end", messages }, signal);
+    return messages;
   }
 
   private async executeTurn(
