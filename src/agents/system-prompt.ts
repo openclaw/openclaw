@@ -1139,9 +1139,7 @@ export function buildAgentSystemPrompt(params: {
       }),
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.execution_bias,
-        fallback: buildExecutionBiasSection({
-          isMinimal,
-        }),
+        fallback: buildExecutionBiasSection({ isMinimal }),
       }),
       ...buildPromisedWorkPromptSection(),
       ...buildOverridablePromptSection({
