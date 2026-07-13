@@ -70,7 +70,7 @@ type GatewayRequestContextParams = {
   unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"];
   unsubscribeAllSessionEvents: GatewayRequestContext["unsubscribeAllSessionEvents"];
   getSessionEventSubscriberConnIds: GatewayRequestContext["getSessionEventSubscriberConnIds"];
-  getSessionMessageSubscriberConnIds: GatewayRequestContext["getSessionMessageSubscriberConnIds"];
+  getSessionMessageSubscriberConnIds?: GatewayRequestContext["getSessionMessageSubscriberConnIds"];
   registerToolEventRecipient: GatewayRequestContext["registerToolEventRecipient"];
   dedupe: GatewayRequestContext["dedupe"];
   wizardSessions: GatewayRequestContext["wizardSessions"];

@@ -939,7 +939,9 @@ export const describe0AfterEach0 = () => {
   resetDiagnosticEventsForTest();
   resetTaskRegistryForTests();
   resetSubagentRegistryForTests({ persist: false });
-  subagentRegistryTesting.setDepsForTest();
+  subagentRegistryTesting.setDepsForTest({
+    callGateway: vi.fn().mockResolvedValue({ status: "ok" }) as any,
+  });
   mocks.loadConfigReturn = {};
   mocks.emitGatewaySessionEndPluginHook.mockReset();
   mocks.emitGatewaySessionStartPluginHook.mockReset();

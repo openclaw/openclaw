@@ -52,7 +52,7 @@ export function emitSessionsChanged(
         agentId: payload.agentId,
         defaultAgentId: resolveDefaultAgentId(context.getRuntimeConfig()),
       });
-      msgSubs = context.getSessionMessageSubscriberConnIds(subscriptionKey);
+      msgSubs = context.getSessionMessageSubscriberConnIds?.(subscriptionKey) ?? new Set();
     }
     const drainConnIds = new Set<string>([...evSubs, ...msgSubs]);
 
