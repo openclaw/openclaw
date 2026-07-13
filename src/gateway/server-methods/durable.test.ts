@@ -322,52 +322,31 @@ describe("durable gateway methods", () => {
         },
       });
 
-      call("durable.wake.acknowledge", {
-        wakeId: "wake_gateway_ack",
-        actorKind: "operator",
-        actorRef: "operator:oncall",
-        reason: "operator reviewed failed attempt",
-        idempotencyKey: "gateway:ack:1",
-        evidence: { ticket: "GW-1" },
-      });
-      expect(calls.at(-1)?.[1]).toBe(true);
-      expect(calls.at(-1)?.[2]).toMatchObject({
-        wake: {
+      expect(durableHandlers).not.toHaveProperty("durable.wake.acknowledge");
+      expect(durableHandlers).not.toHaveProperty("durable.wake.supersede");
+      expect(durableHandlers).not.toHaveProperty("durable.wake.mark");
+
+      const reopened = openDurableRuntimeSqliteStore({ path: dbPath });
+      try {
+        expect(reopened.getDurableWake("wake_gateway_ack")).toMatchObject({
           wakeId: "wake_gateway_ack",
-          status: "acked",
-          metadata: { durableWakeControls: [{ kind: "acknowledged" }] },
-        },
-      });
-
-      call("durable.wake.supersede", {
-        wakeId: "wake_gateway_supersede",
-        actorKind: "external",
-        actorRef: "ticket:GW-2",
-        reason: "stale route replaced",
-        idempotencyKey: "gateway:supersede:1",
-        supersededByRef: "wake:replacement",
-      });
-      expect(calls.at(-1)?.[1]).toBe(true);
-      expect(calls.at(-1)?.[2]).toMatchObject({
-        wake: { wakeId: "wake_gateway_supersede", status: "superseded" },
-      });
-
-      call("durable.wake.mark", {
-        wakeId: "wake_gateway_mark",
-        actorKind: "operator",
-        actorRef: "operator:oncall",
-        reason: "requires explicit owner decision",
-        idempotencyKey: "gateway:mark:1",
-        decisionKind: "requires_human_decision",
-      });
-      expect(calls.at(-1)?.[1]).toBe(true);
-      expect(calls.at(-1)?.[2]).toMatchObject({
-        wake: {
+          status: "pending",
+          metadata: {
+            diagnostics: { route: "operator" },
+            evidence: { source: "test" },
+          },
+        });
+        expect(reopened.getDurableWake("wake_gateway_supersede")).toMatchObject({
+          wakeId: "wake_gateway_supersede",
+          status: "pending",
+        });
+        expect(reopened.getDurableWake("wake_gateway_mark")).toMatchObject({
           wakeId: "wake_gateway_mark",
           status: "pending",
-          metadata: { durableWakeControls: [{ kind: "requires_human_decision" }] },
-        },
-      });
+        });
+      } finally {
+        reopened.close();
+      }
     } finally {
       if (!storeClosed) {
         store.close();
@@ -386,39 +365,4 @@ describe("durable gateway methods", () => {
     }
   });
 
-  it("rejects invalid durable wake control params before opening durable state", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-invalid-wake-control-"));
-    const previousEnabled = process.env.OPENCLAW_DURABLE_RUNTIME;
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_DURABLE_RUNTIME = "1";
-    process.env.OPENCLAW_STATE_DIR = dir;
-    try {
-      const calls: unknown[][] = [];
-      void durableHandlers["durable.wake.acknowledge"]?.({
-        params: {
-          wakeId: "wake_invalid",
-          actorKind: "operator",
-          actorRef: "operator:test",
-          reason: "missing idempotency",
-        },
-        respond: (...args: unknown[]) => calls.push(args),
-      } as never);
-
-      expect(calls).toHaveLength(1);
-      expect(calls[0]?.[0]).toBe(false);
-      expect(fs.existsSync(path.join(dir, "state", "openclaw.sqlite"))).toBe(false);
-    } finally {
-      if (previousEnabled === undefined) {
-        delete process.env.OPENCLAW_DURABLE_RUNTIME;
-      } else {
-        process.env.OPENCLAW_DURABLE_RUNTIME = previousEnabled;
-      }
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
 });

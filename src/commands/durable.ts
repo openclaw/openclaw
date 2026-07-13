@@ -15,12 +15,8 @@ import type {
   DurableRuntimeTimer,
   DurableUnresolvedObligation,
   DurableWake,
-  DurableWakeControlActorKind,
-  DurableWakeControlInput,
   DurableWakeDeliveryAttempt,
   DurableWakeInspection,
-  MarkDurableWakeDecisionRequiredInput,
-  SupersedeDurableWakeInput,
 } from "../durable/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -40,9 +36,6 @@ export type DurableCliAction =
   | "wakes"
   | "wake"
   | "wake-attempts"
-  | "wake-ack"
-  | "wake-supersede"
-  | "wake-mark"
   | "stats";
 
 export type DurableCliOptions = {
@@ -51,15 +44,6 @@ export type DurableCliOptions = {
   wakeId?: string;
   json?: boolean;
   limit?: number;
-  actorKind?: string;
-  actorRef?: string;
-  reason?: string;
-  idempotencyKey?: string;
-  decisionRef?: string;
-  decisionKind?: string;
-  supersededByRef?: string;
-  evidence?: string | Record<string, unknown>;
-  metadata?: string | Record<string, unknown>;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -126,102 +110,6 @@ function requireWakeId(opts: DurableCliOptions, runtime: RuntimeEnv): string | u
   runtime.error("A durable wake id is required.");
   runtime.exit(1);
   return undefined;
-}
-
-function parseJsonRecordOption(
-  value: string | Record<string, unknown> | undefined,
-  label: string,
-  runtime: RuntimeEnv,
-): Record<string, unknown> | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (isRecord(value)) {
-    return value;
-  }
-  try {
-    const parsed = JSON.parse(value);
-    if (isRecord(parsed)) {
-      return parsed;
-    }
-  } catch {
-    // Fall through to the shared validation error below.
-  }
-  runtime.error(`${label} must be a JSON object.`);
-  runtime.exit(1);
-  return undefined;
-}
-
-function parseActorKind(
-  value: string | undefined,
-  runtime: RuntimeEnv,
-): DurableWakeControlActorKind | undefined {
-  const actorKind = value?.trim();
-  if (actorKind === "external" || actorKind === "parent" || actorKind === "operator") {
-    return actorKind;
-  }
-  runtime.error("--actor-kind must be one of: external, parent, operator.");
-  runtime.exit(1);
-  return undefined;
-}
-
-function parseDecisionKind(
-  value: string | undefined,
-  runtime: RuntimeEnv,
-): MarkDurableWakeDecisionRequiredInput["decisionKind"] | undefined {
-  const decisionKind = value?.trim();
-  if (
-    decisionKind === "inspected" ||
-    decisionKind === "requires_human_decision" ||
-    decisionKind === "requires_operator_decision"
-  ) {
-    return decisionKind;
-  }
-  runtime.error(
-    "--decision-kind must be one of: inspected, requires_human_decision, requires_operator_decision.",
-  );
-  runtime.exit(1);
-  return undefined;
-}
-
-function requireTextOption(
-  value: string | undefined,
-  label: string,
-  runtime: RuntimeEnv,
-): string | undefined {
-  const text = value?.trim();
-  if (text) {
-    return text;
-  }
-  runtime.error(`${label} is required.`);
-  runtime.exit(1);
-  return undefined;
-}
-
-function buildWakeControlInput(
-  opts: DurableCliOptions,
-  wakeId: string,
-  runtime: RuntimeEnv,
-): DurableWakeControlInput | undefined {
-  const actorKind = parseActorKind(opts.actorKind, runtime);
-  const actorRef = requireTextOption(opts.actorRef, "--actor-ref", runtime);
-  const reason = requireTextOption(opts.reason, "--reason", runtime);
-  const idempotencyKey = requireTextOption(opts.idempotencyKey, "--idempotency-key", runtime);
-  const evidence = parseJsonRecordOption(opts.evidence, "--evidence", runtime);
-  const metadata = parseJsonRecordOption(opts.metadata, "--metadata", runtime);
-  if (!actorKind || !actorRef || !reason || !idempotencyKey) {
-    return undefined;
-  }
-  return {
-    wakeId,
-    actorKind,
-    actorRef,
-    reason,
-    idempotencyKey,
-    ...(opts.decisionRef?.trim() ? { decisionRef: opts.decisionRef.trim() } : {}),
-    ...(evidence ? { evidence } : {}),
-    ...(metadata ? { metadata } : {}),
-  };
 }
 
 function loadRunDetails(
@@ -738,13 +626,7 @@ export async function durableCommand(opts: DurableCliOptions, runtime: RuntimeEn
       return;
     }
 
-    if (
-      opts.action === "wake" ||
-      opts.action === "wake-attempts" ||
-      opts.action === "wake-ack" ||
-      opts.action === "wake-supersede" ||
-      opts.action === "wake-mark"
-    ) {
+    if (opts.action === "wake" || opts.action === "wake-attempts") {
       const wakeId = requireWakeId(opts, runtime);
       if (!wakeId) {
         return;
@@ -777,47 +659,6 @@ export async function durableCommand(opts: DurableCliOptions, runtime: RuntimeEn
         }
         return;
       }
-
-      if (!store.getDurableWake(wakeId)) {
-        runtime.error(`Durable wake not found: ${wakeId}`);
-        runtime.exit(1);
-        return;
-      }
-      const control = buildWakeControlInput(opts, wakeId, runtime);
-      if (!control) {
-        return;
-      }
-      const wake =
-        opts.action === "wake-ack"
-          ? store.acknowledgeDurableWake(control)
-          : opts.action === "wake-supersede"
-            ? store.supersedeDurableWake({
-                ...(control as SupersedeDurableWakeInput),
-                ...(opts.supersededByRef?.trim()
-                  ? { supersededByRef: opts.supersededByRef.trim() }
-                  : {}),
-              })
-            : (() => {
-                const decisionKind = parseDecisionKind(opts.decisionKind, runtime);
-                if (!decisionKind) {
-                  return undefined;
-                }
-                return store.markDurableWakeDecisionRequired({
-                  ...control,
-                  decisionKind,
-                });
-              })();
-      if (!wake) {
-        runtime.error("Durable wake control transition is invalid or terminal.");
-        runtime.exit(1);
-        return;
-      }
-      if (opts.json) {
-        writeJson(runtime, wake);
-      } else {
-        write(runtime, renderWakes([wake]));
-      }
-      return;
     }
 
     const runtimeRunId = requireRunId(opts, runtime);
