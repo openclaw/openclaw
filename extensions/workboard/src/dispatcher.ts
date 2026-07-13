@@ -443,7 +443,7 @@ export async function cleanupWorkboardRunWorktree(params: {
 }): Promise<void> {
   const card = (await params.store.list()).find((entry) => entry.runId === params.runId);
   const workspace = card?.metadata?.automation?.workspace;
-  if (workspace?.kind !== "worktree" || !workspace.path) {
+  if (!card || workspace?.kind !== "worktree" || !workspace.path) {
     return;
   }
   await params.worktrees.removeIfLossless({
