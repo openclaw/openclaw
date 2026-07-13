@@ -43,7 +43,7 @@ export function isControlUiStaticAssetExtension(extension: string): boolean {
   return CONTROL_UI_STATIC_ASSET_EXTENSIONS.has(extension);
 }
 
-export function isControlUiCompressibleExtension(extension: string): boolean {
+function isControlUiCompressibleExtension(extension: string): boolean {
   return CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(extension);
 }
 
@@ -51,8 +51,8 @@ export function isControlUiPrecompressedAssetExtension(extension: string): boole
   return CONTROL_UI_PRECOMPRESSED_ASSET_EXTENSIONS.has(extension);
 }
 
-export type ControlUiContentEncoding = "br" | "gzip";
-export type ControlUiEncodingSelection = ControlUiContentEncoding | "identity" | "not-acceptable";
+type ControlUiContentEncoding = "br" | "gzip";
+type ControlUiEncodingSelection = ControlUiContentEncoding | "identity" | "not-acceptable";
 
 const CONTROL_UI_DYNAMIC_ENCODINGS = new Set<ControlUiContentEncoding>(["br", "gzip"]);
 const controlUiHtmlCompressionCache = new Map<string, Promise<Buffer>>();
@@ -97,7 +97,7 @@ function normalizedAcceptEncoding(req: IncomingMessage): string {
   return Array.isArray(value) ? value.join(",") : (value ?? "");
 }
 
-export function resolveControlUiContentEncoding(
+function resolveControlUiContentEncoding(
   req: IncomingMessage,
   availableEncodings: ReadonlySet<ControlUiContentEncoding>,
 ): ControlUiEncodingSelection {
@@ -151,7 +151,7 @@ export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEnc
   return resolveControlUiContentEncoding(req, CONTROL_UI_DYNAMIC_ENCODINGS);
 }
 
-export type OpenedControlUiRepresentation = {
+type OpenedControlUiRepresentation = {
   bodyFile: { path: string; fd: number };
   contentPath: string;
   encoding?: ControlUiContentEncoding;
