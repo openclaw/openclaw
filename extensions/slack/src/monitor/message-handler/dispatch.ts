@@ -831,7 +831,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
   }): string | undefined => {
-    return params.forcedThreadTs ?? replyPlan.peekThreadTs() ?? (params.kind === "block" ? usedBlockReplyThreadTs : undefined);
+    return (
+      params.forcedThreadTs ??
+      replyPlan.peekThreadTs() ??
+      (params.kind === "block" ? usedBlockReplyThreadTs : undefined)
+    );
   };
   const rememberDeliveredThreadTs = (
     kind: ReplyDispatchKind,
@@ -904,8 +908,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         deferMessageSentHooks: true,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
       });
-      // eslint-disable-next-line curly
-      if (!result || result.suppressed) return false;
+      if (!result || result.suppressed) {
+        return false;
+      }
       markSlackStreamFallbackDelivered(session);
       if (!session.stopped) {
         try {
@@ -980,8 +985,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ...messageSentDeliveryHookContext,
       ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
     });
-    // eslint-disable-next-line curly
-    if (!result || result.suppressed) return undefined;
+    if (!result || result.suppressed) {
+      return undefined;
+    }
     observedReplyDelivery = true;
     if (params.kind === "final") {
       observedFinalReplyDelivery = true;
