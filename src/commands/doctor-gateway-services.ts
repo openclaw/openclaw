@@ -107,6 +107,8 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
+const runLaunchctlQuietly = (args: string[]) =>
+  runExec("launchctl", args, { logOutput: false }).catch(() => undefined);
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
@@ -342,12 +344,8 @@ async function cleanupLegacyLaunchdService(params: {
   plistPath: string;
 }): Promise<string | null> {
   const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-  await runExec("launchctl", ["bootout", domain, params.plistPath], {
-    logOutput: false,
-  }).catch(() => undefined);
-  await runExec("launchctl", ["unload", params.plistPath], { logOutput: false }).catch(
-    () => undefined,
-  );
+  await runLaunchctlQuietly(["bootout", domain, params.plistPath]);
+  await runLaunchctlQuietly(["unload", params.plistPath]);
 
   const trashDir = path.join(os.homedir(), ".Trash");
   try {

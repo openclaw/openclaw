@@ -337,11 +337,10 @@ export async function readPostCorePluginInstallRecordsFile(
 }
 
 async function execFileStdout(file: string, args: string[]): Promise<string | undefined> {
-  try {
-    return (await runExec(file, args, { logOutput: false, timeoutMs: 1000 })).stdout;
-  } catch {
-    return undefined;
-  }
+  return await runExec(file, args, { logOutput: false, timeoutMs: 1000 }).then(
+    ({ stdout }) => stdout,
+    () => undefined,
+  );
 }
 
 async function readProcessStartTimeMs(pid: number): Promise<number | undefined> {
