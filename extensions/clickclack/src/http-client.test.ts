@@ -343,11 +343,14 @@ describe("ClickClack HTTP client", () => {
       buffer: Buffer.from("const proof = true;"),
       filename: "viewer-proof.ts",
       contentType: "text/typescript",
+      nonce: "upload-queue-1",
     });
     await client.attachUpload("msg_1", upload.id);
 
     const uploadRequest = fetchMock.mock.calls[0];
-    expect(uploadRequest?.[0]).toBe("https://clickclack.example/api/uploads?workspace_id=wsp_1");
+    expect(uploadRequest?.[0]).toBe(
+      "https://clickclack.example/api/uploads?workspace_id=wsp_1&nonce=upload-queue-1",
+    );
     const uploadInit = uploadRequest?.[1] as RequestInit;
     expect(uploadInit.method).toBe("POST");
     expect(uploadInit.body).toBeInstanceOf(FormData);
@@ -363,6 +366,116 @@ describe("ClickClack HTTP client", () => {
       "https://clickclack.example/api/messages/msg_1/attachments",
     );
     expect(requestBodyJson(fetchMock.mock.calls[1]?.[1])).toEqual({ upload_id: "upl_1" });
+  });
+
+  it("finds durable uploads by nonce and treats only 404 as absent", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          upload: {
+            id: "upl_1",
+            workspace_id: "wsp_1",
+            owner_id: "usr_1",
+            nonce: "upload-queue-1",
+            filename: "viewer-proof.ts",
+            content_type: "text/typescript",
+            byte_size: 19,
+            width: 0,
+            height: 0,
+            duration_ms: 0,
+            created_at: "2026-07-11T00:00:00Z",
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: "missing" },
+          { status: 404, headers: { "X-ClickClack-Upload-Nonce": "supported" } },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json({ error: "old server" }, { status: 404 }))
+      .mockResolvedValueOnce(Response.json({ error: "broken" }, { status: 503 }));
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(
+      client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "upload-queue-1" }),
+    ).resolves.toEqual(expect.objectContaining({ id: "upl_1", nonce: "upload-queue-1" }));
+    await expect(
+      client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "missing" }),
+    ).resolves.toBeUndefined();
+    await expect(
+      client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "unsupported" }),
+    ).rejects.toThrow("does not support durable upload nonce lookup");
+    await expect(
+      client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "broken" }),
+    ).rejects.toThrow("ClickClack 503");
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://clickclack.example/api/uploads/by-nonce?workspace_id=wsp_1&nonce=upload-queue-1",
+      "https://clickclack.example/api/uploads/by-nonce?workspace_id=wsp_1&nonce=missing",
+      "https://clickclack.example/api/uploads/by-nonce?workspace_id=wsp_1&nonce=unsupported",
+      "https://clickclack.example/api/uploads/by-nonce?workspace_id=wsp_1&nonce=broken",
+    ]);
+  });
+
+  it("finds durable messages by nonce and distinguishes unsupported servers", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          message: {
+            id: "msg_1",
+            workspace_id: "wsp_1",
+            author_id: "usr_1",
+            thread_root_id: "msg_1",
+            body: "retry-safe",
+            body_format: "markdown",
+            created_at: "2026-07-13T00:00:00Z",
+            attachments: [{ id: "upl_1" }],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: "missing" },
+          { status: 404, headers: { "X-ClickClack-Message-Nonce": "supported" } },
+        ),
+      )
+      .mockResolvedValueOnce(Response.json({ error: "old server" }, { status: 404 }))
+      .mockResolvedValueOnce(Response.json({ error: "broken" }, { status: 503 }));
+    const client = createClickClackClient({
+      baseUrl: "https://clickclack.example",
+      token: "test-token",
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(
+      client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "message-queue-1" }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        id: "msg_1",
+        attachments: [{ id: "upl_1" }],
+      }),
+    );
+    await expect(
+      client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "missing" }),
+    ).resolves.toBeUndefined();
+    await expect(
+      client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "unsupported" }),
+    ).rejects.toThrow("does not support durable message nonce lookup");
+    await expect(
+      client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "broken" }),
+    ).rejects.toThrow("ClickClack 503");
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      "https://clickclack.example/api/messages/by-nonce?workspace_id=wsp_1&nonce=message-queue-1",
+      "https://clickclack.example/api/messages/by-nonce?workspace_id=wsp_1&nonce=missing",
+      "https://clickclack.example/api/messages/by-nonce?workspace_id=wsp_1&nonce=unsupported",
+      "https://clickclack.example/api/messages/by-nonce?workspace_id=wsp_1&nonce=broken",
+    ]);
   });
 
   it("omits quoted_message_id on a channel message when not quoting", async () => {
