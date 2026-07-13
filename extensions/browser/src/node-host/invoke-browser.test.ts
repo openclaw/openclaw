@@ -4,11 +4,10 @@ import os from "node:os";
 import nodePath from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  BROWSER_PROXY_MAX_FILE_BYTES,
-  BROWSER_PROXY_MAX_FILES,
-  BROWSER_PROXY_MAX_TOTAL_FILE_BYTES,
-} from "../browser-proxy-envelope.js";
+import { BROWSER_PROXY_MAX_FILE_BYTES } from "../browser-proxy-envelope.js";
+
+const BROWSER_PROXY_MAX_FILES = 256;
+const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
 
 const controlServiceMocks = vi.hoisted(() => ({
   createBrowserControlContext: vi.fn(() => ({ control: true })),
@@ -153,12 +152,10 @@ vi.mock("../control-service.js", () => ({
   startBrowserControlServiceFromConfig: controlServiceMocks.startBrowserControlServiceFromConfig,
 }));
 
-let resetBrowserProxyCommandStateForTests: typeof import("./invoke-browser.js").resetBrowserProxyCommandStateForTests;
 let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
 
 beforeAll(async () => {
-  ({ resetBrowserProxyCommandStateForTests, runBrowserProxyCommand } =
-    await import("./invoke-browser.js"));
+  ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
 });
 
 type BrowserDispatchRequest = {
@@ -178,7 +175,6 @@ function firstBrowserDispatchRequest(): BrowserDispatchRequest {
 describe("runBrowserProxyCommand", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    resetBrowserProxyCommandStateForTests();
     dispatcherMocks.dispatch.mockReset();
     dispatcherMocks.createBrowserRouteDispatcher.mockReset().mockImplementation(() => ({
       dispatch: dispatcherMocks.dispatch,

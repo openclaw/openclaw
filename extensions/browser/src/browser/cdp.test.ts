@@ -14,13 +14,14 @@ import {
 } from "./cdp.helpers.js";
 import { createTargetViaCdp, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
 import {
-  BROWSER_ENDPOINT_BLOCKED_MESSAGE,
-  BROWSER_NAVIGATION_BLOCKED_MESSAGE,
   BrowserCdpEndpointBlockedError,
   BrowserValidationError,
   toBrowserErrorResponse,
 } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
+
+const BROWSER_ENDPOINT_BLOCKED_MESSAGE = "browser endpoint blocked by policy";
+const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 
 describe("cdp", () => {
   let httpServer: ReturnType<typeof createServer> | null = null;

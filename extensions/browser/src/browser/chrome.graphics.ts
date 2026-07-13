@@ -165,7 +165,7 @@ function classifyGraphicsAcceleration(params: {
   return coreFeatureStatuses.some((status) => status.includes("software")) ? "software" : "unknown";
 }
 
-export function normalizeChromeGraphicsInfo(
+function normalizeChromeGraphicsInfo(
   value: unknown,
   observedAt = Date.now(),
 ): BrowserGraphicsDiagnostics {
