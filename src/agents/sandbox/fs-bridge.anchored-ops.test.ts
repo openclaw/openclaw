@@ -222,7 +222,11 @@ describe("sandbox fs bridge anchored ops", () => {
       expect(getDockerArg(args, 2)).toBe("file.txt");
       expect(args).not.toContain("/workspace/nested/file.txt");
       const script = getDockerScript(args);
-      expect(script).toContain(`[ ! -e "$2" ]`);
+      // CS: stat first; missing marker only after failure when neither -e nor -L.
+      const statIdx = script.indexOf('stat -c "%F|%s|%y" -- "$2"');
+      const missingCheckIdx = script.indexOf('[ ! -e "$2" ] && [ ! -L "$2" ]');
+      expect(statIdx).toBeGreaterThanOrEqual(0);
+      expect(missingCheckIdx).toBeGreaterThan(statIdx);
       expect(script).toContain(SANDBOX_STAT_MISSING_MARKER);
     });
   });
@@ -238,7 +242,7 @@ describe("sandbox fs bridge anchored ops", () => {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
         if (script.includes(SANDBOX_STAT_MISSING_MARKER) || script.includes('stat -c "%F|%s|%y"')) {
-          // Simulate plan output for absent basename: marker on stdout, exit 0.
+          // Simulate post-stat missing classification: marker on stdout, exit 0.
           // Localized stderr must not be required for missing-file handling.
           return {
             ...dockerExecResult(`${SANDBOX_STAT_MISSING_MARKER}\n`),
@@ -262,6 +266,38 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
+  it("preserves dangling symlink stats (does not treat as missing)", async () => {
+    await withTempDir("openclaw-fs-bridge-stat-dangle-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (script.includes('stat -c "%F|%s|%y"')) {
+          // GNU stat without -L reports the symlink entry even when the target is gone.
+          return dockerExecResult("symbolic link|11|1710000000.0\n");
+        }
+        return dockerExecResult("");
+      });
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      // Bridge coerces GNU "symbolic link" to type "other"; must not return null.
+      await expect(bridge.stat({ filePath: "dangle" })).resolves.toMatchObject({
+        type: "other",
+        size: 11,
+      });
+    });
+  });
+
   it("still throws on non-missing stat failures (permission / other stderr)", async () => {
     await withTempDir("openclaw-fs-bridge-stat-perm-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
@@ -273,6 +309,7 @@ describe("sandbox fs bridge anchored ops", () => {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
         if (script.includes('stat -c "%F|%s|%y"')) {
+          // Existing entry, non-missing failure: plan rethrows (no missing marker).
           return {
             ...dockerExecResult(""),
             stderr: Buffer.from("stat: permission denied\n"),

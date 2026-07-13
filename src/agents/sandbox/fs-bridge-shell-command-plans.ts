@@ -26,16 +26,19 @@ export function buildStatPlan(
   target: SandboxResolvedFsPath,
   anchoredTarget: AnchoredSandboxEntry,
 ): SandboxFsCommandPlan {
-  // Emit a reserved marker before invoking `stat` so missing paths do not depend on
-  // English-only coreutils diagnostics under non-C locales.
+  // Run `stat` first so dangling symlink entries keep GNU metadata. Only after a
+  // failed stat, classify genuine absence with both `-e` and `-L` and emit a
+  // reserved marker (locale-independent; no check-then-use race on the basename).
   const script = [
     "set -eu",
     'cd -- "$1"',
-    'if [ ! -e "$2" ]; then',
-    `  printf '%s\\n' '${SANDBOX_STAT_MISSING_MARKER}'`,
-    "  exit 0",
+    'if ! stat -c "%F|%s|%y" -- "$2"; then',
+    '  if [ ! -e "$2" ] && [ ! -L "$2" ]; then',
+    `    printf '%s\\n' '${SANDBOX_STAT_MISSING_MARKER}'`,
+    "    exit 0",
+    "  fi",
+    "  exit 1",
     "fi",
-    'stat -c "%F|%s|%y" -- "$2"',
   ].join("\n");
   return {
     checks: [{ target, options: { action: "stat files" } }],
