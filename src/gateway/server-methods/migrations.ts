@@ -29,6 +29,7 @@ import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const MEMORY_ITEM_KIND = "memory";
+const MEMORY_APPLY_DEDUPE_PREFIX = "migrations.memory.apply:";
 const activeApplies = new Set<string>();
 const silentRuntime: RuntimeEnv = {
   log() {},
@@ -44,6 +45,55 @@ function emptySummary() {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+type CachedMemoryApply = {
+  requestFingerprint: string;
+  result: MigrationsMemoryApplyResult;
+};
+
+type MemoryApplyOutcome =
+  | { ok: true; result: MigrationsMemoryApplyResult }
+  | { ok: false; error: ReturnType<typeof errorShape> };
+
+type InFlightMemoryApply = {
+  requestFingerprint: string;
+  completion: Promise<MemoryApplyOutcome>;
+};
+
+const inFlightMemoryApplies = new WeakMap<object, Map<string, InFlightMemoryApply>>();
+
+function memoryApplyInflightMap(dedupe: object): Map<string, InFlightMemoryApply> {
+  let active = inFlightMemoryApplies.get(dedupe);
+  if (!active) {
+    active = new Map();
+    inFlightMemoryApplies.set(dedupe, active);
+  }
+  return active;
+}
+
+function memoryApplyRequestFingerprint(params: {
+  agentId: string;
+  providerId: string;
+  planFingerprint: string;
+  itemIds: string[];
+  overwrite?: boolean;
+}): string {
+  return stableStringify({
+    agentId: params.agentId,
+    providerId: params.providerId,
+    planFingerprint: params.planFingerprint,
+    itemIds: params.itemIds,
+    overwrite: params.overwrite === true,
+  });
+}
+
+function isCachedMemoryApply(value: unknown): value is CachedMemoryApply {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as Partial<CachedMemoryApply>;
+  return typeof candidate.requestFingerprint === "string" && candidate.result !== undefined;
 }
 
 function memoryProviders(config: OpenClawConfig) {
@@ -264,6 +314,27 @@ export const migrationsHandlers: GatewayRequestHandlers = {
     if (!agentId) {
       return;
     }
+    const requestFingerprint = memoryApplyRequestFingerprint({
+      agentId,
+      providerId: params.providerId,
+      planFingerprint: params.planFingerprint,
+      itemIds: params.itemIds,
+      overwrite: params.overwrite,
+    });
+    const dedupeKey = `${MEMORY_APPLY_DEDUPE_PREFIX}${params.idempotencyKey}`;
+    const cached = context.dedupe.get(dedupeKey);
+    if (cached && isCachedMemoryApply(cached.payload)) {
+      if (cached.payload.requestFingerprint !== requestFingerprint) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "memory import idempotency key was reused"),
+        );
+        return;
+      }
+      respond(true, cached.payload.result, undefined, { cached: true });
+      return;
+    }
     const provider = findMemoryProvider(memoryProviders(config), params.providerId);
     if (!provider) {
       respond(
@@ -273,16 +344,50 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const inFlightMap = memoryApplyInflightMap(context.dedupe);
+    const inFlight = inFlightMap.get(dedupeKey);
+    if (inFlight) {
+      if (inFlight.requestFingerprint !== requestFingerprint) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "memory import idempotency key was reused"),
+        );
+        return;
+      }
+      const outcome = await inFlight.completion;
+      if (outcome.ok) {
+        respond(true, outcome.result, undefined, { cached: true });
+      } else {
+        respond(false, undefined, outcome.error, { cached: true });
+      }
+      return;
+    }
+    let settle!: (outcome: MemoryApplyOutcome) => void;
+    const completion = new Promise<MemoryApplyOutcome>((resolve) => {
+      settle = resolve;
+    });
+    // Reserve before awaited planning/apply work. Success moves to the gateway dedupe cache;
+    // failure releases the key so the same frozen request can be retried.
+    inFlightMap.set(dedupeKey, { requestFingerprint, completion });
+    const complete = (outcome: MemoryApplyOutcome) => {
+      settle(outcome);
+      if (outcome.ok) {
+        respond(true, outcome.result, undefined);
+      } else {
+        respond(false, undefined, outcome.error);
+      }
+    };
     const applyKey = `${agentId}:${provider.id}`;
     if (activeApplies.has(applyKey)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "memory import already running", {
+      complete({
+        ok: false,
+        error: errorShape(ErrorCodes.UNAVAILABLE, "memory import already running", {
           retryable: true,
           retryAfterMs: 1000,
         }),
-      );
+      });
+      inFlightMap.delete(dedupeKey);
       return;
     }
     activeApplies.add(applyKey);
@@ -306,14 +411,13 @@ export const migrationsHandlers: GatewayRequestHandlers = {
         plan,
       });
       if (currentFingerprint !== params.planFingerprint) {
-        respond(
-          false,
-          undefined,
-          errorShape(
+        complete({
+          ok: false,
+          error: errorShape(
             ErrorCodes.INVALID_REQUEST,
             "memory migration plan changed; refresh the plan before importing",
           ),
-        );
+        });
         return;
       }
       const selectable = new Map(
@@ -323,28 +427,26 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       );
       const unavailable = params.itemIds.filter((id) => !selectable.has(id));
       if (unavailable.length > 0) {
-        respond(
-          false,
-          undefined,
-          errorShape(
+        complete({
+          ok: false,
+          error: errorShape(
             ErrorCodes.INVALID_REQUEST,
             `memory migration items changed; refresh the plan (${unavailable.join(", ")})`,
           ),
-        );
+        });
         return;
       }
       const selectedConflicts = params.itemIds.filter(
         (id) => selectable.get(id)?.status === "conflict",
       );
       if (!params.overwrite && selectedConflicts.length > 0) {
-        respond(
-          false,
-          undefined,
-          errorShape(
+        complete({
+          ok: false,
+          error: errorShape(
             ErrorCodes.INVALID_REQUEST,
             "selected memory was already imported; enable replacement and refresh the plan",
           ),
-        );
+        });
         return;
       }
       const applied = await runMigrationApply({
@@ -373,11 +475,20 @@ export const migrationsHandlers: GatewayRequestHandlers = {
         ...(applied.backupPath ? { backupPath: applied.backupPath } : {}),
         ...(applied.reportDir ? { reportDir: applied.reportDir } : {}),
       };
-      respond(true, result, undefined);
+      context.dedupe.set(dedupeKey, {
+        ts: Date.now(),
+        ok: true,
+        payload: { requestFingerprint, result } satisfies CachedMemoryApply,
+      });
+      complete({ ok: true, result });
     } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, errorMessage(error)));
+      complete({
+        ok: false,
+        error: errorShape(ErrorCodes.UNAVAILABLE, errorMessage(error)),
+      });
     } finally {
       activeApplies.delete(applyKey);
+      inFlightMap.delete(dedupeKey);
     }
   },
 };

@@ -85,6 +85,7 @@ export const MigrationsMemoryPlanResultSchema = Type.Object(
 
 export const MigrationsMemoryApplyParamsSchema = Type.Object(
   {
+    idempotencyKey: NonEmptyString,
     agentId: NonEmptyString,
     providerId: NonEmptyString,
     planFingerprint: MemoryMigrationPlanFingerprintSchema,

@@ -9,9 +9,20 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderMemoryImport } from "./view.ts";
+
+type PendingMemoryImport = {
+  providerId: string;
+  agentId: string;
+  planFingerprint: string;
+  itemIds: string[];
+  overwrite: boolean;
+  idempotencyKey: string;
+  attempted: boolean;
+};
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error && error.message.trim()
@@ -31,7 +42,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   @state() private replaceExisting = false;
   @state() private selectedByProvider: Record<string, string[]> = {};
   @state() private applyingProviderId: string | null = null;
-  @state() private pendingProviderId: string | null = null;
+  @state() private pendingImport: PendingMemoryImport | null = null;
   @state() private applyError: string | null = null;
   @state() private lastResults: Record<string, MigrationsMemoryApplyResult> = {};
 
@@ -41,6 +52,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   private requestedClient: GatewayBrowserClient | null = null;
   private refreshEpoch = 0;
   private applyEpoch = 0;
+  private gatewayUnavailable = false;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.gateway,
@@ -65,13 +77,13 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   override updated() {
     const snapshot = this.context.gateway.snapshot;
     if (!snapshot.connected || !snapshot.client) {
-      this.plan = null;
-      this.loadedKey = null;
-      this.requestedKey = null;
-      this.loadedClient = null;
-      this.requestedClient = null;
+      if (!this.gatewayUnavailable) {
+        this.gatewayUnavailable = true;
+        this.resetPlanState({ preserveAttemptedImport: true });
+      }
       return;
     }
+    this.gatewayUnavailable = false;
     if (!this.context.agents.state.agentsList) {
       void this.context.agents.ensureList();
       return;
@@ -87,7 +99,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       (activeClient !== null && activeClient !== snapshot.client) ||
       (activeKey !== null && activeKey !== key)
     ) {
-      this.resetPlanState();
+      this.resetPlanState({
+        preserveAttemptedImport: activeClient !== null && activeClient !== snapshot.client,
+      });
     }
     if (
       !this.loading &&
@@ -114,7 +128,11 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     return `${agentId}:${this.replaceExisting ? "replace" : "safe"}`;
   }
 
-  private resetPlanState() {
+  private resetPlanState(options: { preserveAttemptedImport?: boolean } = {}) {
+    // A disconnected apply has an unknown outcome. Keep its key so reconnect retries can
+    // recover the cached server result instead of repeating side effects.
+    const pendingImport =
+      options.preserveAttemptedImport && this.pendingImport?.attempted ? this.pendingImport : null;
     this.refreshEpoch += 1;
     this.applyEpoch += 1;
     this.plan = null;
@@ -122,7 +140,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     this.error = null;
     this.selectedByProvider = {};
     this.applyingProviderId = null;
-    this.pendingProviderId = null;
+    this.pendingImport = pendingImport;
     this.applyError = null;
     this.lastResults = {};
     this.loadedKey = null;
@@ -204,32 +222,15 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private requestImport(providerId: string) {
+    const agentId = this.currentAgentId();
+    const planFingerprint = this.plan?.providers.find(
+      (provider) => provider.providerId === providerId,
+    )?.planFingerprint;
+    const itemIds = this.selectedByProvider[providerId] ?? [];
     if (
       this.loading ||
       this.error !== null ||
       this.applyingProviderId !== null ||
-      (this.selectedByProvider[providerId]?.length ?? 0) === 0
-    ) {
-      return;
-    }
-    this.applyError = null;
-    this.pendingProviderId = providerId;
-  }
-
-  private async confirmImport() {
-    if (this.applyingProviderId !== null) {
-      return;
-    }
-    const providerId = this.pendingProviderId;
-    const snapshot = this.context.gateway.snapshot;
-    const agentId = this.currentAgentId();
-    const itemIds = providerId ? (this.selectedByProvider[providerId] ?? []) : [];
-    const planFingerprint = this.plan?.providers.find(
-      (provider) => provider.providerId === providerId,
-    )?.planFingerprint;
-    if (
-      !providerId ||
-      !snapshot.client ||
       !agentId ||
       this.plan?.agentId !== agentId ||
       !planFingerprint ||
@@ -237,25 +238,54 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     ) {
       return;
     }
+    this.applyError = null;
+    this.pendingImport = {
+      providerId,
+      agentId,
+      planFingerprint,
+      itemIds: [...itemIds],
+      overwrite: this.replaceExisting,
+      idempotencyKey: generateUUID(),
+      attempted: false,
+    };
+  }
+
+  private async confirmImport() {
+    if (this.applyingProviderId !== null) {
+      return;
+    }
+    const pending = this.pendingImport;
+    const snapshot = this.context.gateway.snapshot;
+    if (
+      !pending ||
+      !snapshot.client ||
+      this.currentAgentId() !== pending.agentId ||
+      this.plan?.agentId !== pending.agentId
+    ) {
+      return;
+    }
+    const attemptedImport = { ...pending, attempted: true };
+    this.pendingImport = attemptedImport;
     const applyEpoch = ++this.applyEpoch;
-    this.applyingProviderId = providerId;
+    this.applyingProviderId = attemptedImport.providerId;
     this.applyError = null;
     try {
       const result = await snapshot.client.request<MigrationsMemoryApplyResult>(
         "migrations.memory.apply",
         {
-          agentId,
-          providerId,
-          planFingerprint,
-          itemIds,
-          overwrite: this.replaceExisting,
+          idempotencyKey: attemptedImport.idempotencyKey,
+          agentId: attemptedImport.agentId,
+          providerId: attemptedImport.providerId,
+          planFingerprint: attemptedImport.planFingerprint,
+          itemIds: attemptedImport.itemIds,
+          overwrite: attemptedImport.overwrite,
         },
       );
       if (applyEpoch !== this.applyEpoch) {
         return;
       }
-      this.lastResults = { ...this.lastResults, [providerId]: result };
-      this.pendingProviderId = null;
+      this.lastResults = { ...this.lastResults, [attemptedImport.providerId]: result };
+      this.pendingImport = null;
       this.loadedKey = null;
       this.requestedKey = null;
       this.loadedClient = null;
@@ -263,7 +293,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       await this.refresh(true);
     } catch (error) {
       if (applyEpoch === this.applyEpoch) {
-        this.pendingProviderId = null;
         this.applyError = toErrorMessage(error);
       }
     } finally {
@@ -288,7 +317,8 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       replaceExisting: this.replaceExisting,
       selectedByProvider: this.selectedByProvider,
       applyingProviderId: this.applyingProviderId,
-      pendingProviderId: this.pendingProviderId,
+      pendingProviderId:
+        this.pendingImport?.agentId === agentId ? this.pendingImport.providerId : null,
       lastResults: this.lastResults,
       onSelectAgent: (nextAgentId) => this.selectAgent(nextAgentId),
       onReplaceExisting: (enabled) => this.setReplaceExisting(enabled),
@@ -299,7 +329,8 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       onConfirmImport: () => void this.confirmImport(),
       onCancelImport: () => {
         if (this.applyingProviderId === null) {
-          this.pendingProviderId = null;
+          this.pendingImport = null;
+          this.applyError = null;
         }
       },
     });

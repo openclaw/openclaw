@@ -25,7 +25,12 @@ vi.mock("../../commands/migrate/apply.js", () => ({
 
 import { migrationsHandlers } from "./migrations.js";
 
-type RespondCall = [boolean, unknown?, { code: number; message: string }?];
+type RespondCall = [
+  boolean,
+  unknown?,
+  { code: number; message: string }?,
+  Record<string, unknown>?,
+];
 
 function createConfig() {
   return {
@@ -41,6 +46,7 @@ function createConfig() {
 
 let config = createConfig();
 let sourceRoot = "";
+let dedupe: Map<string, { ts: number; ok: boolean; payload?: unknown }>;
 
 function memoryPlan(): MigrationPlan {
   return {
@@ -98,6 +104,10 @@ function provider(plan = memoryPlan()): MigrationProviderPlugin {
 
 function invoke(method: keyof typeof migrationsHandlers, params: Record<string, unknown>) {
   const respond = vi.fn();
+  const requestParams =
+    method === "migrations.memory.apply" && !("idempotencyKey" in params)
+      ? { idempotencyKey: "memory-import-test", ...params }
+      : params;
   return {
     respond,
     run: async () =>
@@ -105,9 +115,9 @@ function invoke(method: keyof typeof migrationsHandlers, params: Record<string, 
         migrationsHandlers[method],
         `${method} handler test invariant`,
       )({
-        params,
+        params: requestParams,
         respond: respond as never,
-        context: { getRuntimeConfig: () => config } as never,
+        context: { getRuntimeConfig: () => config, dedupe } as never,
         client: null,
         req: { type: "req", id: "req-1", method },
         isWebchatConnect: () => false,
@@ -148,6 +158,7 @@ describe("memory migration gateway handlers", () => {
     config = createConfig();
     mocks.providers = [provider()];
     mocks.runMigrationApply.mockReset();
+    dedupe = new Map();
   });
 
   it("returns memory-only plans for the selected agent", async () => {
@@ -361,6 +372,106 @@ describe("memory migration gateway handlers", () => {
         }),
       }),
     );
+  });
+
+  it("replays a completed import when its idempotency key is retried", async () => {
+    const applied = memoryPlan();
+    applied.items = [applied.items[0]!];
+    applied.summary.total = 1;
+    mocks.runMigrationApply.mockResolvedValue(applied);
+    const planFingerprint = await loadPlanFingerprint();
+    const params = {
+      idempotencyKey: "memory-import-retry",
+      agentId: "research",
+      providerId: "codex",
+      planFingerprint,
+      itemIds: ["memory:one"],
+    };
+    const first = invoke("migrations.memory.apply", params);
+    await first.run();
+    await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "changed after import", "utf8");
+    const retry = invoke("migrations.memory.apply", params);
+
+    await retry.run();
+
+    expect(firstCall(first.respond)[0]).toBe(true);
+    expect(firstCall(retry.respond)[0]).toBe(true);
+    expect(firstCall(retry.respond)[3]).toEqual({ cached: true });
+    expect(mocks.runMigrationApply).toHaveBeenCalledOnce();
+  });
+
+  it("joins identical in-flight retries and rejects mismatched key reuse", async () => {
+    const applied = memoryPlan();
+    applied.items = [applied.items[0]!];
+    applied.summary.total = 1;
+    let finishApply!: (result: MigrationPlan) => void;
+    mocks.runMigrationApply.mockImplementation(
+      async () =>
+        await new Promise<MigrationPlan>((resolve) => {
+          finishApply = resolve;
+        }),
+    );
+    const planFingerprint = await loadPlanFingerprint();
+    const params = {
+      idempotencyKey: "memory-import-in-flight",
+      agentId: "research",
+      providerId: "codex",
+      planFingerprint,
+      itemIds: ["memory:one"],
+    };
+    const first = invoke("migrations.memory.apply", params);
+    const firstRun = first.run();
+    await vi.waitFor(() => expect(mocks.runMigrationApply).toHaveBeenCalledOnce());
+
+    const mismatched = invoke("migrations.memory.apply", {
+      ...params,
+      itemIds: ["memory:other"],
+    });
+    await mismatched.run();
+    expect(firstCall(mismatched.respond)[2]?.message).toContain("idempotency key was reused");
+
+    const retry = invoke("migrations.memory.apply", params);
+    const retryRun = retry.run();
+    await Promise.resolve();
+    expect(retry.respond).not.toHaveBeenCalled();
+    finishApply(applied);
+    await Promise.all([firstRun, retryRun]);
+
+    expect(firstCall(first.respond)[0]).toBe(true);
+    expect(firstCall(retry.respond)[0]).toBe(true);
+    expect(firstCall(retry.respond)[3]).toEqual({ cached: true });
+    expect(mocks.runMigrationApply).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an idempotency key reused for a different import", async () => {
+    const applied = memoryPlan();
+    applied.items = [applied.items[0]!];
+    applied.summary.total = 1;
+    mocks.runMigrationApply.mockResolvedValue(applied);
+    const planFingerprint = await loadPlanFingerprint();
+    const first = invoke("migrations.memory.apply", {
+      idempotencyKey: "memory-import-reused",
+      agentId: "research",
+      providerId: "codex",
+      planFingerprint,
+      itemIds: ["memory:one"],
+    });
+    await first.run();
+    const reused = invoke("migrations.memory.apply", {
+      idempotencyKey: "memory-import-reused",
+      agentId: "research",
+      providerId: "codex",
+      planFingerprint,
+      itemIds: ["memory:other"],
+    });
+
+    await reused.run();
+
+    const [ok, , error] = firstCall(reused.respond);
+    expect(ok).toBe(false);
+    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(error?.message).toContain("idempotency key was reused");
+    expect(mocks.runMigrationApply).toHaveBeenCalledOnce();
   });
 
   it("returns partial failures and recovery metadata to the Control UI", async () => {

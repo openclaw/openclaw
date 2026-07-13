@@ -263,6 +263,171 @@ describe("MemoryImportPage", () => {
     );
   });
 
+  it("reuses the same frozen idempotency key when a failed apply is retried", async () => {
+    let applyRequests = 0;
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "migrations.memory.plan") {
+        return createPlan();
+      }
+      if (method === "migrations.memory.apply") {
+        applyRequests += 1;
+        if (applyRequests === 1) {
+          throw new Error("response lost");
+        }
+        return {
+          providerId: "codex",
+          source: "/tmp/codex",
+          summary: {
+            total: 1,
+            planned: 0,
+            migrated: 1,
+            skipped: 0,
+            conflicts: 0,
+            errors: 0,
+            sensitive: 0,
+          },
+          items: [{ id: "memory:codex:MEMORY.md", status: "migrated" }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const page = await mountPage(createContext(request));
+
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
+      ).not.toBeNull(),
+    );
+    page
+      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
+      ?.click();
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
+      ).not.toBeNull(),
+    );
+    page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
+    await vi.waitFor(() => expect(page.textContent).toContain("response lost"));
+    page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+    const firstApply = request.mock.calls[1]?.[1] as { idempotencyKey?: string } | undefined;
+    const retryApply = request.mock.calls[2]?.[1] as { idempotencyKey?: string } | undefined;
+    expect(firstApply?.idempotencyKey).toMatch(/\S/u);
+    expect(retryApply).toEqual(firstApply);
+  });
+
+  it("clears confirmation state across a gateway disconnect", async () => {
+    const request = vi.fn(async (method: string, params: { agentId?: string }) => {
+      if (method === "migrations.memory.plan") {
+        return createPlan(params.agentId ?? "research");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const context = createContext(request);
+    const page = await mountPage(context);
+
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
+      ).not.toBeNull(),
+    );
+    page
+      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
+      ?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
+    );
+
+    context.gateway.snapshot.connected = false;
+    context.gateway.snapshot.client = null;
+    page.requestUpdate();
+    await page.updateComplete;
+    await page.updateComplete;
+    expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
+
+    const replacementClient = { request } as unknown as GatewayBrowserClient;
+    context.gateway.snapshot.client = replacementClient;
+    context.gateway.snapshot.connected = true;
+    page.requestUpdate();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
+  });
+
+  it("preserves an attempted import key across a gateway disconnect", async () => {
+    const result = {
+      providerId: "codex",
+      source: "/tmp/codex",
+      summary: {
+        total: 1,
+        planned: 0,
+        migrated: 1,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [{ id: "memory:codex:MEMORY.md", status: "migrated" }],
+    };
+    let finishFirstApply!: (value: typeof result) => void;
+    let applyRequests = 0;
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "migrations.memory.plan") {
+        return createPlan();
+      }
+      if (method === "migrations.memory.apply") {
+        applyRequests += 1;
+        if (applyRequests === 1) {
+          return await new Promise<typeof result>((resolve) => {
+            finishFirstApply = resolve;
+          });
+        }
+        return result;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const context = createContext(request);
+    const page = await mountPage(context);
+
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
+      ).not.toBeNull(),
+    );
+    page
+      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
+      ?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
+    );
+    page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    const firstApply = request.mock.calls[1]?.[1] as { idempotencyKey?: string } | undefined;
+
+    context.gateway.snapshot.connected = false;
+    context.gateway.snapshot.client = null;
+    page.requestUpdate();
+    await page.updateComplete;
+    expect(page.querySelector("[data-test-id='memory-import-confirm']")).toBeNull();
+    finishFirstApply(result);
+    await Promise.resolve();
+
+    const replacementClient = { request } as unknown as GatewayBrowserClient;
+    context.gateway.snapshot.client = replacementClient;
+    context.gateway.snapshot.connected = true;
+    page.requestUpdate();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(page.querySelector("[data-test-id='memory-import-confirm']")).not.toBeNull(),
+    );
+    page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(4));
+
+    const retryApply = request.mock.calls[3]?.[1] as { idempotencyKey?: string } | undefined;
+    expect(firstApply?.idempotencyKey).toMatch(/\S/u);
+    expect(retryApply).toEqual(firstApply);
+  });
+
   it("drops pending state and rejects confirmation when shared agent selection changes", async () => {
     const request = vi.fn(async (method: string, params: { agentId?: string }) => {
       if (method === "migrations.memory.plan") {

@@ -25,6 +25,7 @@ describe("memory migration schemas", () => {
   it("requires a non-empty unique item selection for apply", () => {
     expect(
       Value.Check(MigrationsMemoryApplyParamsSchema, {
+        idempotencyKey: "memory-import-1",
         agentId: "research",
         providerId: "codex",
         planFingerprint: "a".repeat(64),
@@ -33,6 +34,7 @@ describe("memory migration schemas", () => {
     ).toBe(true);
     expect(
       Value.Check(MigrationsMemoryApplyParamsSchema, {
+        idempotencyKey: "memory-import-1",
         agentId: "research",
         providerId: "codex",
         planFingerprint: "a".repeat(64),
@@ -41,6 +43,7 @@ describe("memory migration schemas", () => {
     ).toBe(false);
     expect(
       Value.Check(MigrationsMemoryApplyParamsSchema, {
+        idempotencyKey: "memory-import-1",
         agentId: "research",
         providerId: "codex",
         planFingerprint: "a".repeat(64),
@@ -49,9 +52,18 @@ describe("memory migration schemas", () => {
     ).toBe(false);
     expect(
       Value.Check(MigrationsMemoryApplyParamsSchema, {
+        idempotencyKey: "memory-import-1",
         agentId: "research",
         providerId: "codex",
         planFingerprint: "not-a-fingerprint",
+        itemIds: ["memory:codex:MEMORY.md"],
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(MigrationsMemoryApplyParamsSchema, {
+        agentId: "research",
+        providerId: "codex",
+        planFingerprint: "a".repeat(64),
         itemIds: ["memory:codex:MEMORY.md"],
       }),
     ).toBe(false);
