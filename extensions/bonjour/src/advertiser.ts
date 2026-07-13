@@ -544,8 +544,7 @@ export async function startGatewayBonjourAdvertiser(
         const nextState = svc.serviceState;
         const current = stateTracker.get(label);
         const nextEnteredAt =
-          current &&
-          current.state !== announcedState && nextState !== announcedState
+          current && current.state !== announcedState && nextState !== announcedState
             ? current.sinceMs
             : now;
         if (!current || current.state !== nextState || current.sinceMs !== nextEnteredAt) {
