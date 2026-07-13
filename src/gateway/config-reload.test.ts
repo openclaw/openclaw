@@ -10,7 +10,12 @@ import type {
   OpenClawConfig,
 } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  pinActivePluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -154,9 +159,43 @@ describe("buildGatewayReloadPlan", () => {
     },
     reload: { configPrefixes: ["channels.telegram"] },
   };
+  const whatsappPlugin: ChannelPlugin = {
+    id: "whatsapp",
+    meta: {
+      id: "whatsapp",
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp",
+      docsPath: "/channels/whatsapp",
+      blurb: "test",
+    },
+    capabilities: { chatTypes: ["direct"] },
+    config: {
+      listAccountIds: () => [],
+      resolveAccount: () => ({}),
+    },
+    reload: {
+      configPrefixes: ["channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
+      noopPrefixes: ["channels.whatsapp"],
+    },
+  };
   const registry = createTestRegistry([
     { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+    { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
   ]);
+  registry.reloads = [
+    {
+      pluginId: "browser",
+      pluginName: "Browser",
+      registration: { restartPrefixes: ["browser"], hotPrefixes: ["browser.profiles"] },
+      source: "test",
+    },
+    {
+      pluginId: "canvas",
+      pluginName: "Canvas",
+      registration: { restartPrefixes: ["plugins.entries.canvas"] },
+      source: "test",
+    },
+  ];
 
   beforeEach(() => {
     setActivePluginRegistry(registry);
@@ -220,12 +259,82 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it("prefers a specific hot rule under a broad restart prefix", () => {
+    const path = "browser.profiles.sandbox.cdpUrl";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toEqual([path]);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("keeps Gateway reload policy when an agent activates a scoped registry", () => {
+    pinActivePluginHttpRouteRegistry(registry);
+    setActivePluginRegistry(emptyRegistry);
+
+    const path = "browser.profiles.sandbox.cdpUrl";
+    expect(buildGatewayReloadPlan([path])).toMatchObject({
+      restartGateway: false,
+      hotReasons: [path],
+    });
+  });
+
+  it("prefers channel restart prefixes over a broad no-op prefix", () => {
+    const changedPaths = [
+      "channels.whatsapp.accounts.default.enabled",
+      "channels.whatsapp.selfChatMode",
+    ];
+    const plan = buildGatewayReloadPlan(changedPaths);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+    expect(plan.hotReasons).toEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("keeps unrelated channel paths as no-ops", () => {
+    const path = "channels.whatsapp.replyToMode";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.noopPaths).toEqual([path]);
+  });
+
+  it("refreshes channel rules when the tracked channel registry changes", () => {
+    const channelOnlyRegistry = createTestRegistry([
+      { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
+    ]);
+
+    setActivePluginRegistry(emptyRegistry);
+    expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
+      restartGateway: true,
+      restartChannels: new Set(),
+    });
+
+    pinActivePluginChannelRegistry(channelOnlyRegistry);
+    expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
+      restartGateway: false,
+      restartChannels: new Set(["telegram"]),
+    });
+  });
+
   it("reloads loaded channel plugins when plugin entry state changes", () => {
     const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.disposeMcpRuntimes).toBe(true);
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("keeps restart-owned plugin paths ahead of the generic plugin hot rule", () => {
+    const path = "plugins.entries.canvas.enabled";
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual([path]);
+    expect(plan.hotReasons).toStrictEqual([]);
   });
 
   it("uses default reload settings when config is unset", () => {

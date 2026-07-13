@@ -726,7 +726,21 @@ describe("cli session history", () => {
   });
 
   it("rejects path-like Claude CLI session ids", async () => {
-    await withClaudeProjectsDir(async ({ homeDir }) => {
+    await withClaudeProjectsDir(async ({ homeDir, filePath }) => {
+      const projectDir = path.dirname(filePath);
+      const projectsDir = path.dirname(projectDir);
+      const sentinel = `${JSON.stringify({
+        type: "user",
+        uuid: "path-traversal-sentinel",
+        message: { role: "user", content: "must not import" },
+      })}\n`;
+      await fs.writeFile(path.join(projectsDir, "outside.jsonl"), sentinel, "utf-8");
+      await fs.mkdir(path.join(projectDir, "nested"), { recursive: true });
+      await fs.writeFile(path.join(projectDir, "nested", "session.jsonl"), sentinel, "utf-8");
+      if (path.sep !== "\\") {
+        await fs.writeFile(path.join(projectDir, "nested\\session.jsonl"), sentinel, "utf-8");
+      }
+
       for (const cliSessionId of ["../outside", "nested/session", "nested\\session"]) {
         expect(readClaudeCliSessionMessages({ cliSessionId, homeDir })).toEqual([]);
       }
