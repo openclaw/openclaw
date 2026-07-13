@@ -400,7 +400,7 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(appModel.gatewayStatusText == "Connected")
     }
 
-    @Test @MainActor func `retained gateway problem clears only when explicit target changes`() {
+    @Test @MainActor func `retained gateway problem clears only when explicit target changes`() throws {
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
         let currentConfig = Self.makeGatewayConnectConfig()
@@ -417,7 +417,15 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         appModel.clearGatewayProblemWhenSwitching(to: currentConfig.effectiveStableID)
         #expect(appModel.lastGatewayProblem == problem)
 
-        appModel.clearGatewayProblemWhenSwitching(to: "manual|replacement.example.com|443")
+        appModel.applyGatewayConnectConfig(currentConfig, forceReconnect: true)
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+
+        let replacementURL = try #require(URL(string: "wss://replacement.example.com:443"))
+        let replacementConfig = Self.makeGatewayConnectConfig(
+            url: replacementURL,
+            stableID: "manual|replacement.example.com|443")
+        appModel.applyGatewayConnectConfig(replacementConfig, forceReconnect: true)
         #expect(appModel.lastGatewayProblem == nil)
         #expect(appModel.gatewayStatusText == "Connecting…")
         #expect(appModel.gatewayDisplayStatusText == "Connecting…")

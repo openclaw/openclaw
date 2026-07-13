@@ -3409,9 +3409,15 @@ extension NodeAppModel {
             nodeOptions: connectOptions)
         let previousGatewayStableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID
+        let preserveGatewayProblem = previousGatewayStableID.map {
+            !$0.isEmpty && GatewayStableIdentifier.matches($0, effectiveStableID)
+        } ?? false
         let targetChanged = previousGatewayStableID.map {
             !$0.isEmpty && !GatewayStableIdentifier.matches($0, effectiveStableID)
         } ?? false
+        if targetChanged {
+            self.clearGatewayProblemWhenSwitching(to: effectiveStableID)
+        }
         let hasForeignCachedApproval = self.watchExecApprovalPromptsByID.values.contains {
             !GatewayStableIdentifier.matches($0.gatewayStableID, effectiveStableID)
         }
@@ -3438,7 +3444,9 @@ extension NodeAppModel {
 
         self.gatewayRouteGeneration &+= 1
         self.activeGatewayConnectConfig = nextConfig
-        prepareForGatewayConnect(stableID: effectiveStableID)
+        prepareForGatewayConnect(
+            stableID: effectiveStableID,
+            preservingGatewayProblem: preserveGatewayProblem)
         if operatorLoopRequired {
             startOperatorGatewayLoop(
                 url: url,
@@ -3679,17 +3687,22 @@ extension NodeAppModel {
         }
     }
 
-    private func prepareForGatewayConnect(stableID: String) {
+    private func prepareForGatewayConnect(
+        stableID: String,
+        preservingGatewayProblem: Bool = false)
+    {
         self.invalidateNodePushToTalkRoute()
         self.operatorTalkConnectionGeneration &+= 1
         self.chatSessionRoutingRestoreTask?.cancel()
         self.isAppleReviewDemoModeEnabled = false
         self.isScreenshotFixtureModeEnabled = false
         self.gatewayAutoReconnectEnabled = true
-        self.gatewayPairingPaused = false
-        self.gatewayPairingRequestId = nil
-        self.lastGatewayProblem = nil
-        self.operatorGatewayProblem = nil
+        if !preservingGatewayProblem {
+            // Same-target reconnects keep the prior failure readable until success or a new failure.
+            // Initial connects and target changes must not inherit another gateway's problem state.
+            self.operatorGatewayProblem = nil
+            self.clearGatewayConnectionProblem()
+        }
         self.credentialHandoffFailureGeneration = nil
         self.nodeGatewayTask?.cancel()
         self.operatorGatewayTask?.cancel()
