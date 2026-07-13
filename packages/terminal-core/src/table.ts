@@ -369,60 +369,6 @@ function wrapLine(text: string, width: number): string[] {
   // ANSI-aware wrapping: never split inside ANSI SGR/OSC-8 sequences.
   // Table cells are padded and bordered per physical line, so wrapped lines
   // must not leak styling into padding while the next continuation keeps it.
-<<<<<<< HEAD
-  const ESC = "\u001b";
-  const SGR_RESET = `${ESC}[0m`;
-
-  type Token = { kind: "ansi" | "char"; value: string };
-  const tokens: Token[] = [];
-  for (let i = 0; i < text.length; ) {
-    if (text[i] === ESC) {
-      // SGR: ESC [ ... m
-      if (text[i + 1] === "[") {
-        let j = i + 2;
-        while (j < text.length) {
-          const ch = text[j];
-          if (ch === "m") {
-            break;
-          }
-          if (ch && ch >= "0" && ch <= "9") {
-            j += 1;
-            continue;
-          }
-          if (ch === ";") {
-            j += 1;
-            continue;
-          }
-          break;
-        }
-        if (text[j] === "m") {
-          tokens.push({ kind: "ansi", value: text.slice(i, j + 1) });
-          i = j + 1;
-          continue;
-        }
-      }
-
-      // OSC-8 link open/close: ESC ] 8 ; ; ... ST (ST = ESC \)
-      if (text[i + 1] === "]" && text.slice(i + 2, i + 5) === "8;;") {
-        const st = text.indexOf(`${ESC}\\`, i + 5);
-        if (st >= 0) {
-          tokens.push({ kind: "ansi", value: text.slice(i, st + 2) });
-          i = st + 2;
-          continue;
-        }
-      }
-    }
-
-    let nextEsc = text.indexOf(ESC, i);
-    if (nextEsc < 0) {
-      nextEsc = text.length;
-    }
-    if (nextEsc === i) {
-      // Consume unsupported escape bytes as plain characters so wrapping
-      // cannot stall on unknown ANSI/control sequences.
-      tokens.push({ kind: "char", value: ESC });
-      i += ESC.length;
-=======
   const tokens: AnsiToken[] = [];
   for (const segment of splitAnsiSegments(text)) {
     if (segment.kind === "ansi") {
@@ -431,7 +377,6 @@ function wrapLine(text: string, width: number): string[] {
         value: segment.value,
         width: visibleWidth(segment.controls.join("")),
       });
->>>>>>> upstream/main
       continue;
     }
     for (const grapheme of splitGraphemes(segment.value)) {

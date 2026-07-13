@@ -49,6 +49,7 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   canPairDevice: boolean;
+  sessionKey: string;
   onNavigate: (routeId: string, options?: { search?: string }) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
@@ -227,11 +228,12 @@ async function mountSidebar(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
   sidebar.variant = variant;
-  provider.setContext(createContext(gateway, sessions, agentsList));
+  const context = createContext(gateway, sessions, agentsList);
+  provider.setContext(context);
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
-  return { provider, sidebar };
+  return { provider, sidebar, context };
 }
 
 afterEach(() => {
@@ -329,6 +331,58 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-chip__subtitle")?.textContent).toContain(
       "Working",
     );
+  });
+
+  it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar, context } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
+    sidebar.connected = true;
+    const defaults = { modelProvider: null, model: null, contextTokens: null };
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [
+          {
+            key: "agent:research:one",
+            kind: "direct",
+            label: "Research task",
+            updatedAt: 3,
+            unread: true,
+          },
+        ],
+      },
+      agentId: "research",
+    });
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5 }],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    // No per-agent sections: the chip menu owns agent switching now.
+    expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(1);
+    expect(sidebar.querySelector(".sidebar-agent-chip__menu-unread")).not.toBeNull();
+
+    // Mid-switch (selected agent != loaded result agent) the list renders the
+    // target agent's cached rows instead of flashing empty until refresh.
+    // Chip switch and chat-pane both sync agentSelection with the route.
+    context.agentSelection.state.selectedId = "research";
+    sidebar.sessionKey = "agent:research:one";
+    await sidebar.updateComplete;
+    const rows = [...sidebar.querySelectorAll(".sidebar-recent-session")];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("Research task");
   });
 
   it("opens the footer menu with agent switching and folded-in utilities", async () => {
