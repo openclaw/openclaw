@@ -2015,6 +2015,9 @@ importers:
 
   packages/markdown-core:
     dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       markdown-it:
         specifier: 14.3.0
         version: 14.3.0
