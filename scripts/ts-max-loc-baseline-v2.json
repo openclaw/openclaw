@@ -649,7 +649,6 @@
   "src/agents/tools/common.ts": 585,
   "src/agents/tools/computer-tool.ts": 965,
   "src/agents/tools/cron-tool.ts": 1333,
-  "src/agents/tools/gateway-tool.ts": 652,
   "src/agents/tools/gateway.ts": 538,
   "src/agents/tools/image-generate-tool.ts": 1222,
   "src/agents/tools/image-tool.ts": 1095,
