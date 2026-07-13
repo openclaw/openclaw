@@ -246,6 +246,8 @@ failure never fails the attempt: an internal best-effort wrapper, plus a
 defense-in-depth `.catch(...)` at the attempt level. Failures are logged, not
 surfaced.
 
+<a id="side-questions-btw" />
+
 ## Side questions (`/btw`)
 
 `/btw` is **not** native on this harness. `createCopilotAgentHarness()`

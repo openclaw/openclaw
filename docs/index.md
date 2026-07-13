@@ -98,7 +98,7 @@ OpenClaw is a **self-hosted gateway** that connects your favorite chat apps — 
 - **Agent-native**: built for coding agents with tool use, sessions, memory, and multi-agent routing
 - **Open source**: MIT licensed, community-driven
 
-**What do you need?** Node 24 (recommended), or Node 22 LTS (`22.19+`) for compatibility, an API key from your chosen provider, and 5 minutes. For best quality and security, use the strongest latest-generation model available.
+**What do you need?** Node 24 (recommended), or Node 22 LTS (`22.19+`) for compatibility, a supported auth method for your chosen provider, and 5 minutes. Onboarding supports API keys, OAuth, and provider-specific manual auth. For best quality and security, use the strongest latest-generation model available.
 
 ## How it works
 
@@ -142,7 +142,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 <Steps>
   <Step title="Install OpenClaw">
     ```bash
-    npm install -g openclaw@latest
+    curl -fsSL https://openclaw.ai/install.sh | bash
     ```
   </Step>
   <Step title="Onboard and install the service">
@@ -162,7 +162,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
   </Step>
 </Steps>
 
-Need the full install and dev setup? See [Getting Started](/start/getting-started).
+Need Windows, npm, pnpm, bun, Docker, or source setup? See [Getting Started](/start/getting-started) and [Install](/install).
 
 ## Dashboard
 

@@ -37,6 +37,8 @@ Optional repository root shown in the system prompt's Runtime line. If unset, Op
 }
 ```
 
+<a id="agentsdefaultsskills" />
+
 ### `agents.defaults.skills`
 
 Optional default skill allowlist for agents that do not set
@@ -607,6 +609,8 @@ Periodic heartbeat runs.
 - `skipWhenBusy`: when true, heartbeat runs defer on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeats, even without this flag.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
+
+<a id="agentsdefaultscompaction" />
 
 ### `agents.defaults.compaction`
 

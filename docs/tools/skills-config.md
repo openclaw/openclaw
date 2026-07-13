@@ -97,6 +97,8 @@ Most skills configuration lives under `skills` in
   need this setting.
 </ParamField>
 
+<a id="operator-install-policy-securityinstallpolicy" />
+
 ## Operator Install Policy (`security.installPolicy`)
 
 Use `security.installPolicy` when operators need a trusted local command to

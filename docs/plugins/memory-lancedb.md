@@ -182,11 +182,11 @@ local server returns context-length errors.
 
 ## Recall and capture limits
 
-| Setting           | Default | Range                        | Applies to                                                 |
-| ----------------- | ------- | ---------------------------- | ---------------------------------------------------------- |
-| `recallMaxChars`  | `1000`  | 100-10000                    | Text sent to the embedding API for recall.                 |
-| `captureMaxChars` | `500`   | 100-10000                    | Message length eligible for auto-capture.                  |
-| `customTriggers`  | `[]`    | 0-50 items, each <=100 chars | Literal phrases that make auto-capture consider a message. |
+| Setting           | Default | Range                            | Applies to                                                 |
+| ----------------- | ------- | -------------------------------- | ---------------------------------------------------------- |
+| `recallMaxChars`  | `1000`  | 100-10000                        | Text sent to the embedding API for recall.                 |
+| `captureMaxChars` | `500`   | 100-10000                        | Message length eligible for auto-capture.                  |
+| `customTriggers`  | `[]`    | 0-50 items, up to 100 chars each | Literal phrases that make auto-capture consider a message. |
 
 `recallMaxChars` bounds the `before_prompt_build` auto-recall query, the
 `memory_recall` tool, the `memory_forget` query path, and `openclaw ltm

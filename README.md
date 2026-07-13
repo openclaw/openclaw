@@ -94,12 +94,10 @@ Model note: while many providers and models are supported, prefer a current flag
 ## Install (recommended)
 
 Runtime: **Node 24 (recommended) or Node 22.19+**.
+The installer script is the recommended beginner path because it handles Node setup, installs OpenClaw, and launches onboarding.
 
 ```bash
-npm install -g openclaw@latest
-# or: pnpm add -g openclaw@latest
-
-openclaw onboard --install-daemon
+curl -fsSL https://openclaw.ai/install.sh | bash
 ```
 
 OpenClaw Onboard installs the Gateway daemon (launchd/systemd user service) so it stays running.
@@ -115,6 +113,13 @@ Recommended daemon mode:
 ```bash
 openclaw onboard --install-daemon
 openclaw gateway status
+```
+
+Manual Node-managed install:
+
+```bash
+npm install -g openclaw@latest
+openclaw onboard --install-daemon
 ```
 
 Foreground/debug mode:

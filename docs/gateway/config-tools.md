@@ -218,6 +218,8 @@ Controls elevated exec access outside the sandbox:
 
 Values shown are defaults except `applyPatch.allowModels` (empty/unset by default, meaning any compatible model may use `apply_patch`). `approvalRunningNoticeMs` emits a running notice when approval-backed exec runs long; `0` disables it.
 
+<a id="toolsloopdetection" />
+
 ### `tools.loopDetection`
 
 Tool-loop safety checks are **disabled by default**. Set `enabled: true` to activate detection. Settings can be defined globally in `tools.loopDetection` and overridden per-agent at `agents.list[].tools.loopDetection`.
@@ -391,6 +393,8 @@ Configures inbound media understanding (image/audio/video):
   },
 }
 ```
+
+<a id="toolssessions" />
 
 ### `tools.sessions`
 
