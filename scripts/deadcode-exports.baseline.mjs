@@ -894,7 +894,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/whatsapp/src/inbound/access-control.ts: __testing",
   "extensions/whatsapp/src/inbound/access-control.ts: InboundAccessControlResult",
   "extensions/whatsapp/src/inbound/monitor.ts: WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES",
-  "extensions/whatsapp/src/inbound/save-media.runtime.ts: saveMediaBuffer",
   "extensions/whatsapp/src/inbound/types.ts: WhatsAppInboundEvent",
   "extensions/whatsapp/src/inbound/types.ts: WhatsAppInboundPayload",
   "extensions/whatsapp/src/inbound/types.ts: WhatsAppInboundPlatform",
