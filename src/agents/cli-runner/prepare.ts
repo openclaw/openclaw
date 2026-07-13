@@ -646,16 +646,15 @@ export async function prepareCliRunContext(
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
   const isClaudeCli = isClaudeCliProvider(params.provider);
-  const modelContextTokens = isClaudeCli
-    ? resolveContextTokensForModel({
-        cfg: params.config,
-        provider: params.provider,
-        modelProvider: backendResolved.modelProvider,
-        model: resolveClaudeCliContextModelId(modelId),
-        fallbackContextTokens: 200_000,
-        allowAsyncLoad: false,
-      })
-    : undefined;
+  const contextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
+  const modelContextTokens = resolveContextTokensForModel({
+    cfg: params.config,
+    provider: params.provider,
+    modelProvider: backendResolved.modelProvider,
+    model: contextModelId,
+    fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    allowAsyncLoad: false,
+  });
   const contextWindowInfo = resolveContextWindowInfo({
     cfg: params.config,
     provider: params.provider,

@@ -762,6 +762,7 @@ describe("runCliAgent reliability", () => {
     ]);
     expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("error");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
@@ -3763,6 +3764,8 @@ describe("runCliAgent reliability", () => {
       const context = buildPreparedContext({
         sessionKey: "agent:main:main",
         runId: "run-blocked-cli",
+        provider: "claude-cli",
+        model: "opus",
       });
       context.preparedBackend.backend.sessionMode = "none";
       const run = runPreparedCliAgent({
@@ -3796,6 +3799,7 @@ describe("runCliAgent reliability", () => {
       ]);
       expect(result.meta.livenessState).toBe("blocked");
       expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+      expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
       const beforeRunEvent = requireRecord(
