@@ -14,10 +14,8 @@ export function computeBackoff(policy: BackoffPolicy, attempt: number): number {
 }
 
 export function computeBackoffSchedule(scheduleMs: readonly number[], attempt: number): number {
-  if (attempt <= 0) {
-    return 0;
-  }
-  return scheduleMs[Math.min(attempt - 1, scheduleMs.length - 1)] ?? 0;
+  const index = Math.min(attempt - 1, scheduleMs.length - 1);
+  return attempt <= 0 ? 0 : (scheduleMs[index] ?? 0);
 }
 
 export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Promise<void> {
@@ -28,6 +26,7 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Pro
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => abortSignal?.removeEventListener("abort", onAbort);
     const onAbort = () => {
       if (settled) {
         return;
@@ -35,35 +34,24 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Pro
       settled = true;
       if (timer) {
         clearTimeout(timer);
-        timer = null;
       }
-      if (abortSignal) {
-        abortSignal.removeEventListener("abort", onAbort);
-      }
+      timer = null;
+      cleanup();
       reject(new Error("aborted", { cause: abortSignal?.reason ?? new Error("aborted") }));
     };
-
-    if (abortSignal) {
-      abortSignal.addEventListener("abort", onAbort, { once: true });
-      if (abortSignal.aborted) {
-        onAbort();
-        return;
-      }
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+    if (abortSignal?.aborted) {
+      onAbort();
+      return;
     }
-
     timer = setTimeout(() => {
       settled = true;
-      if (abortSignal) {
-        abortSignal.removeEventListener("abort", onAbort);
-      }
+      cleanup();
       timer = null;
       resolve();
     }, delayMs);
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        onAbort();
-      }
+    if (abortSignal?.aborted) {
+      onAbort();
     }
   });
 }
@@ -96,11 +84,8 @@ export class RetrySupervisor {
   next(abortSignal?: AbortSignal) {
     const override = this.nextDelayOverrideMs;
     this.nextDelayOverrideMs = undefined;
-    if (override === undefined) {
-      this.attempts += 1;
-      if (this.attempts > Math.ceil(this.maxAttempts)) {
-        return undefined;
-      }
+    if (override === undefined && ++this.attempts > Math.ceil(this.maxAttempts)) {
+      return undefined;
     }
     const attempt = Math.max(this.attempts, 1);
     const delayMs =
