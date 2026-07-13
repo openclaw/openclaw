@@ -316,11 +316,17 @@ function hasTerminalUnavailableMemoryResultInSessionRecord(
   return Boolean(debug?.error) || Boolean(details?.error);
 }
 
-function createActiveMemoryHookDeadline() {
+type ActiveMemoryHookDeadline = {
+  arm: (timeoutMs: number, onTimeout: () => void) => void;
+  promise: Promise<symbol>;
+  stop: () => void;
+};
+
+function createActiveMemoryHookDeadline(): ActiveMemoryHookDeadline {
   const timeoutSentinel = Symbol("active-memory-hook-timeout");
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let resolveTimeout: (value: typeof timeoutSentinel) => void = () => {};
-  const promise = new Promise<typeof timeoutSentinel>((resolve) => {
+  let resolveTimeout: (value: symbol) => void = () => {};
+  const promise = new Promise<symbol>((resolve) => {
     resolveTimeout = resolve;
   });
   const stop = () => {
