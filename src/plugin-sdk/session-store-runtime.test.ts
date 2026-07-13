@@ -1,14 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import * as jsonFiles from "../infra/json-files.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import {
   cleanupSessionLifecycleArtifacts,
