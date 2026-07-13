@@ -1140,6 +1140,7 @@ describe("AppSidebar session catalog pagination", () => {
       await sidebar.updateComplete;
 
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        agentId: "main",
         catalogId: "codex",
         cursors: { "gateway:local": "page-2" },
       });
