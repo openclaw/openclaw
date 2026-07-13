@@ -196,26 +196,23 @@ function createFixedNodeProxyAgent(
     proxyUrl instanceof URL
       ? proxyUrl
       : proxyUrlWithDefaultScheme(proxyUrl, options.protocol ?? "https");
+  // Pass bounded connection defaults to proxyline at construction time so its
+  // private agents (#httpAgent, #httpsAgent, per-proxy agents created in
+  // addRequest) all inherit the limits. Mutating the returned wrapper's fields
+  // after construction does not propagate to proxyline's internal agents.
+  // Callers may override through agentOptions — applyNodeAgentOptions sets
+  // maxSockets / maxTotalSockets from explicit callers values after this.
   const agent = loadCreateAmbientNodeProxyAgent()({
     env: fixedProxyEnv(parsedProxyUrl),
     protocol: options.protocol ?? "https",
+    agentOptions: {
+      maxSockets: DEFAULT_NODE_PROXY_MAX_SOCKETS,
+      maxTotalSockets: DEFAULT_NODE_PROXY_MAX_TOTAL_SOCKETS,
+    },
     ...(options.proxyTls !== undefined ? { proxyTls: options.proxyTls } : {}),
   });
   if (agent === undefined) {
     throw new Error(`${UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got ${parsedProxyUrl.protocol}`);
-  }
-  // Apply bounded defaults so a proxy agent without explicit limits cannot open
-  // unlimited connections. Callers override by passing maxSockets / maxTotalSockets
-  // in agentOptions.
-  // Proxyline's createAmbientNodeProxyAgent returns a node:http.Agent (or node:https.Agent)
-  // at runtime, which carries maxSockets / maxTotalSockets. The proxyline type is narrower
-  // than NodeProxyAgentWithOptions, so cast through unknown when the runtime shape matches.
-  const agentTyped = agent as unknown as NodeProxyAgentWithOptions;
-  if (agentTyped.maxSockets === Infinity || agentTyped.maxSockets === undefined) {
-    agentTyped.maxSockets = DEFAULT_NODE_PROXY_MAX_SOCKETS;
-  }
-  if (agentTyped.maxTotalSockets === Infinity || agentTyped.maxTotalSockets === undefined) {
-    agentTyped.maxTotalSockets = DEFAULT_NODE_PROXY_MAX_TOTAL_SOCKETS;
   }
   applyNodeAgentOptions(agent as HttpAgent, options.agentOptions);
   return agent as HttpAgent;
