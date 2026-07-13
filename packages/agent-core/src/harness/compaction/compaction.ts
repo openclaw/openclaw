@@ -293,9 +293,7 @@ export function estimateTokens(message: AgentMessage): number {
         } else if (block.type === "thinking") {
           chars += estimateStringChars(block.thinking);
         } else if (block.type === "toolCall") {
-          chars +=
-            estimateStringChars(block.name) +
-            estimateStringChars(safeJsonStringify(block.arguments));
+          chars += estimateStringChars(block.name + safeJsonStringify(block.arguments));
         }
       }
       break;
@@ -310,8 +308,7 @@ export function estimateTokens(message: AgentMessage): number {
       break;
     }
     case "bashExecution": {
-      chars =
-        estimateStringChars(harnessMessage.command) + estimateStringChars(harnessMessage.output);
+      chars = estimateStringChars(harnessMessage.command + harnessMessage.output);
       break;
     }
     case "branchSummary":
@@ -320,7 +317,6 @@ export function estimateTokens(message: AgentMessage): number {
       break;
     }
   }
-
   return estimateTokensFromChars(chars);
 }
 function findValidCutPoints(
