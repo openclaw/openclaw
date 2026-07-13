@@ -9,7 +9,9 @@ import {
   stopSlackMonitor,
 } from "../monitor.test-helpers.js";
 
-const { monitorSlackProvider } = await import("./provider.js");
+const { monitorSlackProvider, SLACK_STARTUP_AUTH_TEST_TIMEOUT_MS } = await import(
+  "./provider.js"
+);
 
 beforeEach(() => {
   resetSlackTestState();
@@ -124,6 +126,45 @@ describe("auth.test boot call", () => {
         "required-mention channels will fail closed without another trusted activation signal",
       ),
     );
+  });
+
+  it("continues startup after a stalled auth.test reaches the startup timeout", async () => {
+    vi.useFakeTimers();
+    const runtimeLog = vi.fn();
+    const { appStartMock } = getSlackTestState();
+    getSlackClient().auth.test.mockImplementationOnce(
+      () => new Promise<Record<string, unknown>>(() => {}),
+    );
+
+    const monitor = startSlackMonitor(monitorSlackProvider, {
+      runtime: {
+        log: runtimeLog,
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+    });
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(getSlackClient().auth.test).toHaveBeenCalledTimes(1);
+      expect(appStartMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(SLACK_STARTUP_AUTH_TEST_TIMEOUT_MS - 1);
+      expect(appStartMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await Promise.resolve();
+
+      expect(appStartMock).toHaveBeenCalledTimes(1);
+      expect(runtimeLog).toHaveBeenCalledWith(
+        expect.stringContaining("slack startup auth.test timed out"),
+      );
+    } finally {
+      monitor.controller.abort();
+      await monitor.run;
+      vi.useRealTimers();
+    }
   });
 
   it("preserves workspace startup when auth.test omits app_id", async () => {
