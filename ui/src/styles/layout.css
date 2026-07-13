@@ -1227,6 +1227,24 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   margin-top: 10px;
 }
 
+.sidebar-session-error {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.sidebar-session-error .callout__content {
+  max-height: 72px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.sidebar-session-error .callout__dismiss {
+  width: 22px;
+  height: 22px;
+}
+
 /* min-height: 0 down this chain lets the recent list shrink and scroll instead
    of pushing the sidebar footer out of view. */
 .sidebar-recent-sessions {
