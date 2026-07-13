@@ -6,11 +6,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { resolveBundledChannelWorkspacePath } from "../../../../plugins/bundled-channel-runtime.js";
-import {
-  resolvePluginRuntimeModulePath,
-  resolvePluginRuntimeRecord,
-} from "../../../../plugins/runtime/runtime-plugin-boundary.js";
+import { listBundledChannelPluginMetadata } from "../../../../plugins/bundled-channel-runtime.js";
+import { loadPluginManifestRegistry } from "../../../../plugins/manifest-registry.js";
+import { resolvePluginRuntimeModulePath } from "../../../../plugins/runtime/runtime-plugin-boundary.js";
 
 const REPO_ROOT = fileURLToPath(new URL("../../../../../", import.meta.url));
 
@@ -19,10 +17,11 @@ function resolveBundledChannelWorkspaceArtifactPath(
   entryBaseName: string,
 ): string | null {
   const normalizedEntryBaseName = entryBaseName.replace(/\.(?:[cm]?js|ts)$/u, "");
-  const pluginRoot = resolveBundledChannelWorkspacePath({
+  const pluginRoot = listBundledChannelPluginMetadata({
     rootDir: REPO_ROOT,
-    pluginId,
-  });
+    includeChannelConfigs: false,
+    includeSyntheticChannelConfigs: false,
+  }).find((metadata) => metadata.manifest.id === pluginId)?.rootDir;
   if (!pluginRoot) {
     return null;
   }
@@ -37,10 +36,10 @@ function resolveBundledChannelWorkspaceArtifactPath(
 
 function resolveBundledChannelContractArtifactUrl(pluginId: string, entryBaseName: string): string {
   const normalizedEntryBaseName = entryBaseName.replace(/\.(?:[cm]?js|ts)$/u, "");
-  const record = resolvePluginRuntimeRecord(pluginId, () => {
-    throw new Error(`missing bundled channel plugin '${pluginId}'`);
-  });
-  if (!record) {
+  const record = loadPluginManifestRegistry({}).plugins.find(
+    (plugin) => plugin.id === pluginId && plugin.source,
+  );
+  if (!record?.source) {
     throw new Error(`missing bundled channel plugin '${pluginId}'`);
   }
   const modulePath =

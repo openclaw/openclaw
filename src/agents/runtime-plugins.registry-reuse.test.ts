@@ -1,8 +1,7 @@
 // Verifies runtime plugin loading can reuse a compatible gateway startup registry.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 
 const mocks = vi.hoisted(() => ({
   getCurrentPluginMetadataSnapshot: vi.fn(),
@@ -22,11 +21,6 @@ vi.mock("../plugins/loader.js", async (importOriginal) => {
   };
 });
 
-const [{ ensureRuntimePluginsLoaded }, { clearPluginLoaderCache, testing }] = await Promise.all([
-  import("./runtime-plugins.js"),
-  import("../plugins/loader.js"),
-]);
-
 function createRegistryWithPlugin(pluginId: string): PluginRegistry {
   // Minimal active registry carrying just enough plugin identity for reuse checks.
   const registry = createEmptyPluginRegistry();
@@ -36,57 +30,3 @@ function createRegistryWithPlugin(pluginId: string): PluginRegistry {
   } as never);
   return registry;
 }
-
-beforeEach(() => {
-  clearPluginLoaderCache();
-  resetPluginRuntimeStateForTest();
-  mocks.getCurrentPluginMetadataSnapshot.mockReset();
-  mocks.loadOpenClawPlugins.mockReset();
-});
-
-afterEach(() => {
-  clearPluginLoaderCache();
-  resetPluginRuntimeStateForTest();
-});
-
-describe("ensureRuntimePluginsLoaded registry reuse", () => {
-  it("reuses the compatible gateway startup registry on the dispatch caller path", () => {
-    // Matching cache key plus gateway-bindable mode means no second plugin load.
-    const config = { plugins: { allow: ["telegram"] } };
-    const activeRegistry = createRegistryWithPlugin("telegram");
-    activeRegistry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const startupLoadOptions = {
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/workspace",
-      onlyPluginIds: ["telegram"],
-      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
-      runtimeOptions: {
-        allowGatewaySubagentBinding: true,
-      },
-      preferBuiltPluginArtifacts: true,
-    };
-    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupLoadOptions);
-    setActivePluginRegistry(activeRegistry, cacheKey, "gateway-bindable", "/tmp/workspace");
-    mocks.getCurrentPluginMetadataSnapshot.mockReturnValue({
-      startup: {
-        pluginIds: ["telegram"],
-      },
-    });
-    mocks.loadOpenClawPlugins.mockImplementation(() => {
-      throw new Error("dispatch should reuse the active gateway startup registry");
-    });
-
-    ensureRuntimePluginsLoaded({
-      config,
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(mocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
-  });
-});

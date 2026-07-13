@@ -23,7 +23,7 @@ import type {
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
-import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.js";
+import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   interruptSessionWorkAdmissions,
