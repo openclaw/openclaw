@@ -2,10 +2,16 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { VERSION } from "../version.js";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
 import { ClaudePermissionRequestSchema, type ClaudeChannelMode } from "./channel-shared.js";
 import { getChannelMcpCapabilities, registerChannelMcpTools } from "./channel-tools.js";
+import {
+  loadOpenClawMcpAppResource,
+  OPENCLAW_SESSION_APP_URI,
+  openClawMcpServerInfo,
+  registerOpenClawMcpApp,
+} from "./session-app.js";
+import { registerSessionMcpTools } from "./session-tools-registration.js";
 
 /**
  * MCP stdio server assembly for OpenClaw channel conversations.
@@ -22,6 +28,8 @@ type OpenClawMcpServeOptions = {
   gatewayPassword?: string;
   config?: OpenClawConfig;
   claudeChannelMode?: ClaudeChannelMode;
+  client?: "codex";
+  appResourcePath?: string;
   verbose?: boolean;
 };
 
@@ -40,31 +48,57 @@ export async function createOpenClawChannelMcpServer(opts: OpenClawMcpServeOptio
   start: () => Promise<void>;
   close: () => Promise<void>;
 }> {
+  if ((opts.client === "codex") !== Boolean(opts.appResourcePath)) {
+    throw new Error("--client codex and --app-resource must be used together");
+  }
+  const isCodex = opts.client === "codex";
+  const appHtml = opts.appResourcePath
+    ? await loadOpenClawMcpAppResource({
+        cwd: process.cwd(),
+        resourcePath: opts.appResourcePath,
+      })
+    : undefined;
   const cfg = await resolveMcpConfig(opts.config);
-  const claudeChannelMode = opts.claudeChannelMode ?? "auto";
+  const claudeChannelMode = isCodex ? "off" : (opts.claudeChannelMode ?? "auto");
+  const { gatewayUrl, gatewayToken, gatewayPassword } = opts;
   const capabilities = getChannelMcpCapabilities(claudeChannelMode);
   const server = new McpServer(
-    { name: "openclaw", version: VERSION },
+    openClawMcpServerInfo(),
     capabilities ? { capabilities } : undefined,
   );
   const bridge = new OpenClawChannelBridge(cfg, {
-    gatewayUrl: opts.gatewayUrl,
-    gatewayToken: opts.gatewayToken,
-    gatewayPassword: opts.gatewayPassword,
+    gatewayUrl,
+    gatewayToken,
+    gatewayPassword,
     claudeChannelMode,
+    client: opts.client,
     verbose: opts.verbose ?? false,
   });
   bridge.setServer(server);
 
-  server.server.setNotificationHandler(ClaudePermissionRequestSchema, async ({ params }) => {
-    await bridge.handleClaudePermissionRequest({
-      requestId: params.request_id,
-      toolName: params.tool_name,
-      description: params.description,
-      inputPreview: params.input_preview,
+  if (!isCodex) {
+    server.server.setNotificationHandler(ClaudePermissionRequestSchema, async ({ params }) => {
+      await bridge.handleClaudePermissionRequest({
+        requestId: params.request_id,
+        toolName: params.tool_name,
+        description: params.description,
+        inputPreview: params.input_preview,
+      });
     });
-  });
-  registerChannelMcpTools(server, bridge);
+  }
+  // The all-session projection is a Codex app capability. Generic and Claude
+  // channel clients must not gain access to unrelated Gateway sessions.
+  if (isCodex && appHtml !== undefined) {
+    registerSessionMcpTools(server, bridge.sessionTools, {
+      appResourceUri: OPENCLAW_SESSION_APP_URI,
+    });
+    registerOpenClawMcpApp(server, {
+      html: appHtml,
+      open: async () => await bridge.sessionTools.open(),
+    });
+  } else {
+    registerChannelMcpTools(server, bridge);
+  }
 
   return {
     server,

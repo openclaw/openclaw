@@ -586,6 +586,8 @@ export function registerMcpCli(program: Command) {
       "Claude channel notification mode: auto, on, or off",
       "auto",
     )
+    .option("--client <client>", 'MCP host profile (currently "codex")')
+    .option("--app-resource <path>", "MCP App HTML path under the current plugin directory")
     .option("-v, --verbose", "Verbose logging to stderr", false)
     .action(async (opts) => {
       try {
@@ -600,11 +602,23 @@ export function registerMcpCli(program: Command) {
         ) {
           throw new Error('Invalid --claude-channel-mode value. Use "auto", "on", or "off".');
         }
+        const client = normalizeLowercaseStringOrEmpty(
+          normalizeStringifiedOptionalString(opts.client),
+        );
+        if (client && client !== "codex") {
+          throw new Error('Invalid --client value. Use "codex".');
+        }
+        const appResourcePath = normalizeStringifiedOptionalString(opts.appResource);
+        if ((client === "codex") !== Boolean(appResourcePath)) {
+          throw new Error("--client codex and --app-resource must be used together.");
+        }
         await serveOpenClawChannelMcp({
           gatewayUrl: opts.url as string | undefined,
           gatewayToken,
           gatewayPassword,
           claudeChannelMode,
+          client: client === "codex" ? client : undefined,
+          appResourcePath,
           verbose: Boolean(opts.verbose),
         });
       } catch (err) {

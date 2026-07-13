@@ -743,7 +743,7 @@ describe("mcp cli", () => {
       const workspaceDir = await createWorkspace();
       const tokenFile = path.join(workspaceDir, "gateway.token");
       vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
-      await fs.writeFile(tokenFile, "secret-token\n", "utf-8");
+      await fs.writeFile(tokenFile, "token\n", "utf-8");
 
       await runMcpCommand([
         "mcp",
@@ -754,16 +754,61 @@ describe("mcp cli", () => {
         tokenFile,
         "--claude-channel-mode",
         "on",
+        "--client",
+        "codex",
+        "--app-resource",
+        "assets/openclaw-session-app.html",
         "--verbose",
       ]);
 
       expect(serveOpenClawChannelMcp).toHaveBeenCalledWith({
         gatewayUrl: "ws://127.0.0.1:18789",
-        gatewayToken: "secret-token",
+        gatewayToken: "token",
         gatewayPassword: undefined,
         claudeChannelMode: "on",
+        client: "codex",
+        appResourcePath: "assets/openclaw-session-app.html",
         verbose: true,
       });
     });
+  });
+
+  it.each([
+    { name: "the default profile", args: [], claudeChannelMode: "auto" },
+    {
+      name: "the Claude channel profile",
+      args: ["--claude-channel-mode", "on"],
+      claudeChannelMode: "on",
+    },
+  ])("keeps Codex session access disabled for $name", async ({ args, claudeChannelMode }) => {
+    await runMcpCommand(["mcp", "serve", ...args]);
+
+    expect(serveOpenClawChannelMcp).toHaveBeenCalledWith({
+      gatewayUrl: undefined,
+      gatewayToken: undefined,
+      gatewayPassword: undefined,
+      claudeChannelMode,
+      client: undefined,
+      appResourcePath: undefined,
+      verbose: false,
+    });
+  });
+
+  it.each([
+    {
+      name: "an unknown client",
+      args: ["--client", "other", "--app-resource", "assets/app.html"],
+    },
+    {
+      name: "a Codex client without an app resource",
+      args: ["--client", "codex"],
+    },
+    {
+      name: "an app resource without a Codex client",
+      args: ["--app-resource", "assets/app.html"],
+    },
+  ])("rejects $name", async ({ args }) => {
+    await expect(runMcpCommand(["mcp", "serve", ...args])).rejects.toThrow("__exit__:1");
+    expect(serveOpenClawChannelMcp).not.toHaveBeenCalled();
   });
 });

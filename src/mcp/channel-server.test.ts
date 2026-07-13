@@ -1,9 +1,12 @@
 // Channel MCP server tests cover channel tool registration and requests.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
-import { shouldRetryInitialMcpGatewayConnect } from "./channel-bridge.js";
+import { getMcpGatewayScopes, shouldRetryInitialMcpGatewayConnect } from "./channel-bridge.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
 import { extractAttachmentsFromMessage } from "./channel-shared.js";
 
@@ -23,9 +26,25 @@ const ClaudePermissionNotificationSchema = z.object({
   }),
 });
 
-async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | "on" | "off" }) {
+const CODEX_SESSION_TOOLS = [
+  "openclaw",
+  "openclaw_sessions_list",
+  "openclaw_session_detail",
+  "openclaw_session_create",
+  "openclaw_session_send",
+  "openclaw_session_abort",
+  "openclaw_session_update",
+];
+
+async function connectMcpWithoutGateway(params?: {
+  claudeChannelMode?: "auto" | "on" | "off";
+  client?: "codex";
+  appResourcePath?: string;
+}) {
   const serverHarness = await createOpenClawChannelMcpServer({
     claudeChannelMode: params?.claudeChannelMode ?? "auto",
+    client: params?.client,
+    appResourcePath: params?.appResourcePath,
     config: {} as never,
     verbose: false,
   });
@@ -91,12 +110,71 @@ function gatewayRequestError(retryable: boolean): Error {
 }
 
 describe("openclaw channel mcp server", () => {
+  test.each([
+    { profile: "default", claudeChannelMode: "auto" as const },
+    { profile: "Claude", claudeChannelMode: "on" as const },
+  ])(
+    "does not register all-session tools for the $profile profile",
+    async ({ claudeChannelMode }) => {
+      const mcp = await connectMcpWithoutGateway({ claudeChannelMode });
+      try {
+        const tools = (await mcp.client.listTools()).tools.map((tool) => tool.name);
+        expect(tools).toContain("conversations_list");
+        expect(tools.filter((name) => CODEX_SESSION_TOOLS.includes(name))).toEqual([]);
+      } finally {
+        await mcp.close();
+      }
+    },
+  );
+
+  test("registers all-session tools for the explicit Codex profile", async () => {
+    const rawPluginRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mcp-codex-"));
+    const pluginRoot = await fs.realpath(rawPluginRoot);
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(pluginRoot);
+    let codexMcp: Awaited<ReturnType<typeof connectMcpWithoutGateway>> | undefined;
+    try {
+      await fs.writeFile(path.join(pluginRoot, "session-app.html"), "<!doctype html>", "utf8");
+      codexMcp = await connectMcpWithoutGateway({
+        client: "codex",
+        appResourcePath: "session-app.html",
+      });
+      const codexTools = (await codexMcp.client.listTools()).tools;
+      expect(codexTools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(CODEX_SESSION_TOOLS),
+      );
+      expect(codexTools.map((tool) => tool.name)).not.toContain("conversations_list");
+      for (const tool of codexTools) {
+        expect(tool["_meta"]).toMatchObject({ ui: { visibility: ["app"] } });
+      }
+      expect(codexMcp.client.getServerCapabilities()?.experimental).toBeUndefined();
+    } finally {
+      await codexMcp?.close();
+      cwdSpy.mockRestore();
+      await fs.rm(pluginRoot, { recursive: true, force: true });
+    }
+  });
+
   test("keeps initial MCP gateway connection alive through transient connect errors", () => {
     expect(
       shouldRetryInitialMcpGatewayConnect(new Error("gateway request timeout for connect")),
     ).toBe(true);
     expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(true))).toBe(true);
     expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(false))).toBe(false);
+  });
+
+  test("does not request approval scope for the Codex app profile", () => {
+    const scopes = {
+      read: "operator.read",
+      write: "operator.write",
+      approvals: "operator.approvals",
+    };
+
+    expect(getMcpGatewayScopes("codex", scopes)).toEqual(["operator.read", "operator.write"]);
+    expect(getMcpGatewayScopes(undefined, scopes)).toEqual([
+      "operator.read",
+      "operator.write",
+      "operator.approvals",
+    ]);
   });
 
   describe("gateway-backed flows", () => {

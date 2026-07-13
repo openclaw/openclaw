@@ -12,6 +12,10 @@ const APPROVAL_DEFAULT_TTL_MS = 30 * ONE_MINUTE_MS;
 // exercise. Defined as a standalone shape (not an intersection with the class)
 // because mixing public/private constituents collapses to `never` under tsgo.
 type BridgeInternals = {
+  gateway: {
+    request: (method: string, params: Record<string, unknown>) => Promise<unknown>;
+    stopAndWait: () => Promise<void>;
+  } | null;
   queue: QueueEvent[];
   pendingClaudePermissions: Map<string, unknown>;
   pendingApprovals: Map<string, unknown>;
@@ -38,6 +42,10 @@ type BridgeInternals = {
     event: string;
     payload?: Record<string, unknown>;
   }) => Promise<void>;
+  handleHelloOk: (hello: {
+    features: { methods: string[] };
+    auth: { scopes: string[] };
+  }) => Promise<void>;
   handleSessionMessageEvent: (payload: {
     sessionKey: string;
     senderIsOwner?: boolean;
@@ -49,12 +57,39 @@ type BridgeInternals = {
   sendNotification: (notification: { method: string }) => Promise<void>;
 };
 
-function makeBridge(verbose = false): BridgeInternals {
+function makeBridge(verbose = false, client?: "codex"): BridgeInternals {
   return new OpenClawChannelBridge({} as never, {
     claudeChannelMode: "off",
+    client,
     verbose,
   }) as unknown as BridgeInternals;
 }
+
+describe("OpenClawChannelBridge — Codex polling lifecycle", () => {
+  test("does not subscribe to or retain raw Gateway events", async () => {
+    const bridge = makeBridge(false, "codex");
+    const request = vi.fn(async () => ({}));
+    bridge.gateway = { request, stopAndWait: async () => {} };
+    try {
+      await bridge.handleHelloOk({
+        features: { methods: ["sessions.subscribe"] },
+        auth: { scopes: ["operator.read", "operator.write"] },
+      });
+      await bridge.dispatchGatewayEvent({
+        event: "session.message",
+        payload: {
+          sessionKey: "agent:main:dashboard:private",
+          message: { role: "assistant", content: "private transcript payload" },
+        },
+      });
+
+      expect(request).not.toHaveBeenCalledWith("sessions.subscribe", {});
+      expect(bridge.queue).toEqual([]);
+    } finally {
+      await bridge.close();
+    }
+  });
+});
 
 describe("OpenClawChannelBridge — Claude permission authorization", () => {
   test.each([

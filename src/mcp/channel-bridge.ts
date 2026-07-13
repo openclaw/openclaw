@@ -6,7 +6,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import type { EventFrame, HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
@@ -25,6 +25,7 @@ import type {
   WaitFilter,
 } from "./channel-shared.js";
 import { matchEventFilter, normalizeApprovalId, toConversation, toText } from "./channel-shared.js";
+import { OpenClawSessionTools } from "./session-tools.js";
 
 /**
  * Runtime bridge between MCP tools and the OpenClaw Gateway channel APIs.
@@ -61,6 +62,8 @@ const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
 /** Connects the MCP server surface to a Gateway client and queues channel events for polling. */
 export class OpenClawChannelBridge {
   private gateway: GatewayClient | null = null;
+  private readonly gatewayMethods = new Set<string>();
+  private readonly gatewayScopes = new Set<string>();
   private readonly verbose: boolean;
   private readonly claudeChannelMode: ClaudeChannelMode;
   private readonly queue: QueueEvent[] = [];
@@ -78,6 +81,7 @@ export class OpenClawChannelBridge {
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
   private readySettled = false;
+  readonly sessionTools: OpenClawSessionTools;
 
   constructor(
     private readonly cfg: OpenClawConfig,
@@ -86,6 +90,7 @@ export class OpenClawChannelBridge {
       gatewayToken?: string;
       gatewayPassword?: string;
       claudeChannelMode: ClaudeChannelMode;
+      client?: "codex";
       verbose: boolean;
     },
   ) {
@@ -94,6 +99,16 @@ export class OpenClawChannelBridge {
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.resolveReady = resolve;
       this.rejectReady = reject;
+    });
+    this.sessionTools = new OpenClawSessionTools({
+      request: async (method, requestParams) => {
+        await this.waitUntilReady();
+        return await this.requestGateway(method, requestParams);
+      },
+      access: () => ({ methods: this.gatewayMethods, scopes: this.gatewayScopes }),
+      ready: async () => {
+        await this.waitUntilReady();
+      },
     });
   }
 
@@ -145,14 +160,18 @@ export class OpenClawChannelBridge {
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
-      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
+      scopes: getMcpGatewayScopes(this.params.client, {
+        read: READ_SCOPE,
+        write: WRITE_SCOPE,
+        approvals: APPROVALS_SCOPE,
+      }),
       requestTimeoutMs: 180_000,
       onEvent: (event) => {
         void this.dispatchGatewayEvent(event);
       },
-      onHelloOk: () => {
+      onHelloOk: (hello) => {
         this.retryingInitialConnect = false;
-        void this.handleHelloOk();
+        void this.handleHelloOk(hello);
       },
       onConnectError: (error) => {
         const normalizedError = error instanceof Error ? error : new Error(String(error));
@@ -196,6 +215,9 @@ export class OpenClawChannelBridge {
     }
     this.pendingClaudePermissions.clear();
     this.pendingApprovals.clear();
+    this.sessionTools.clear();
+    this.gatewayMethods.clear();
+    this.gatewayScopes.clear();
     for (const waiter of this.pendingWaiters) {
       if (waiter.timeout) {
         clearTimeout(waiter.timeout);
@@ -407,9 +429,19 @@ export class OpenClawChannelBridge {
     }
   }
 
-  private async handleHelloOk(): Promise<void> {
+  private async handleHelloOk(hello: HelloOk): Promise<void> {
+    this.gatewayMethods.clear();
+    this.gatewayScopes.clear();
+    for (const method of hello.features.methods) {
+      this.gatewayMethods.add(method);
+    }
+    for (const scope of hello.auth.scopes) {
+      this.gatewayScopes.add(scope);
+    }
     try {
-      await this.requestGateway("sessions.subscribe", {});
+      if (this.params.client !== "codex" && this.gatewayMethods.has("sessions.subscribe")) {
+        await this.requestGateway("sessions.subscribe", {});
+      }
       this.ready = true;
       this.resolveReadyOnce();
     } catch (error) {
@@ -522,6 +554,9 @@ export class OpenClawChannelBridge {
   }
 
   private async dispatchGatewayEvent(event: EventFrame): Promise<void> {
+    if (this.params.client === "codex") {
+      return;
+    }
     try {
       await this.handleGatewayEvent(event);
     } catch (error) {
@@ -677,4 +712,14 @@ export function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
     message.includes("gateway request timeout for connect") ||
     message.includes("gateway connect challenge timeout")
   );
+}
+
+/** Keep approval authority out of the Codex app-only session profile. */
+export function getMcpGatewayScopes(
+  client: "codex" | undefined,
+  scopes: { read: string; write: string; approvals: string },
+): string[] {
+  return client === "codex"
+    ? [scopes.read, scopes.write]
+    : [scopes.read, scopes.write, scopes.approvals];
 }

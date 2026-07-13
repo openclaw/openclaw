@@ -81,6 +81,10 @@ vi.mock("./channel-tools.js", () => ({
   registerChannelMcpTools: vi.fn(),
 }));
 
+vi.mock("./session-tools-registration.js", () => ({
+  registerSessionMcpTools: vi.fn(),
+}));
+
 async function waitForTransport(): Promise<{ onclose?: (() => void) | undefined }> {
   await vi.waitFor(() => {
     if (transportState.lastTransport === null) {

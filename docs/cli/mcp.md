@@ -1,7 +1,8 @@
 ---
-summary: "Expose OpenClaw channel conversations over MCP and manage saved MCP server definitions"
+summary: "Expose OpenClaw sessions and channel conversations over MCP and manage saved MCP server definitions"
 read_when:
   - Connecting Codex, Claude Code, or another MCP client to OpenClaw-backed channels
+  - Showing OpenClaw sessions in a Codex MCP App
   - Running `openclaw mcp serve`
   - Managing OpenClaw-saved MCP server definitions
 title: "MCP"
@@ -23,14 +24,15 @@ Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness sessio
 
 ## Choose the right MCP path
 
-| Goal                                                                | Use                                                                  | Why                                                                                                             |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Let an external MCP client read/send OpenClaw channel conversations | `openclaw mcp serve`                                                 | OpenClaw is the MCP server and exposes Gateway-backed conversations over stdio.                                 |
-| Save third-party MCP servers for OpenClaw-managed agent runs        | `openclaw mcp add`, `set`, `configure`, `tools`, `login`             | OpenClaw is the MCP client-side registry and later projects those servers into eligible runtimes.               |
-| Check a saved server without running an agent turn                  | `openclaw mcp status`, `doctor`, `probe`                             | `status` and `doctor` inspect config; `probe` opens a live MCP connection and lists capabilities.               |
-| Edit MCP config from a browser                                      | Control UI `/settings/mcp` (`/mcp` alias)                            | The page shows inventory, enablement, OAuth/filter summaries, command hints, and a scoped `mcp` editor.         |
-| Give Codex app-server a scoped native MCP server                    | `mcp.servers.<name>.codex`                                           | The `codex` block only affects Codex app-server thread projection and is stripped before native config handoff. |
-| Run ACP-hosted harness sessions                                     | [`openclaw acp`](/cli/acp) and [ACP Agents](/tools/acp-agents-setup) | ACP bridge mode does not accept per-session MCP server injection; configure gateway/plugin bridges instead.     |
+| Goal                                                               | Use                                                                  | Why                                                                                                             |
+| ------------------------------------------------------------------ | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Let an external MCP client read/send routed OpenClaw conversations | `openclaw mcp serve`                                                 | OpenClaw is the MCP server and exposes channel-routed conversations over stdio.                                 |
+| Browse and control all Gateway sessions from Codex                 | `openclaw mcp serve --client codex --app-resource <path>`            | The explicit Codex profile adds the session app and its bounded all-session tools.                              |
+| Save third-party MCP servers for OpenClaw-managed agent runs       | `openclaw mcp add`, `set`, `configure`, `tools`, `login`             | OpenClaw is the MCP client-side registry and later projects those servers into eligible runtimes.               |
+| Check a saved server without running an agent turn                 | `openclaw mcp status`, `doctor`, `probe`                             | `status` and `doctor` inspect config; `probe` opens a live MCP connection and lists capabilities.               |
+| Edit MCP config from a browser                                     | Control UI `/settings/mcp` (`/mcp` alias)                            | The page shows inventory, enablement, OAuth/filter summaries, command hints, and a scoped `mcp` editor.         |
+| Give Codex app-server a scoped native MCP server                   | `mcp.servers.<name>.codex`                                           | The `codex` block only affects Codex app-server thread projection and is stripped before native config handoff. |
+| Run ACP-hosted harness sessions                                    | [`openclaw acp`](/cli/acp) and [ACP Agents](/tools/acp-agents-setup) | ACP bridge mode does not accept per-session MCP server injection; configure gateway/plugin bridges instead.     |
 
 <Tip>
 If you are not sure which path you need, start with `openclaw mcp status --verbose`. It shows what OpenClaw has saved without starting any MCP servers.
@@ -44,7 +46,8 @@ This is the `openclaw mcp serve` path.
 
 Use `openclaw mcp serve` when:
 
-- Codex, Claude Code, or another MCP client should talk directly to OpenClaw-backed channel conversations
+- Claude Code or another MCP client should work with routed OpenClaw channel conversations
+- Codex should browse and control all Gateway sessions through the explicit Codex app profile
 - you already have a local or remote OpenClaw Gateway with routed sessions
 - you want one MCP server that works across OpenClaw's channel backends instead of running separate per-channel bridges
 
@@ -61,8 +64,8 @@ Use [`openclaw acp`](/cli/acp) instead when OpenClaw should host the coding runt
   <Step title="Bridge connects to Gateway">
     The bridge connects to the OpenClaw Gateway over WebSocket.
   </Step>
-  <Step title="Sessions become MCP conversations">
-    Routed sessions become MCP conversations and transcript/history tools.
+  <Step title="Conversations become MCP tools">
+    The default and Claude profiles expose sessions that already have channel routes. The explicit Codex profile additionally exposes all sessions through opaque ids.
   </Step>
   <Step title="Live events queue">
     Live events are queued in memory while the bridge is connected.
@@ -94,6 +97,9 @@ Use [`openclaw acp`](/cli/acp) instead when OpenClaw should host the coding runt
   <Tab title="Claude Code">
     Standard MCP tools plus the Claude-specific channel adapter. Enable `--claude-channel-mode on` or leave the default `auto`.
   </Tab>
+  <Tab title="Codex MCP App">
+    Add `--client codex --app-resource <path>` to register the OpenClaw session app, global entrypoint, and host-native session collection. The app resource path is resolved under the process working directory and read once at startup.
+  </Tab>
 </Tabs>
 
 <Note>
@@ -102,7 +108,7 @@ Today, `auto` behaves the same as `on`. There is no client capability detection 
 
 ### What serve exposes
 
-The bridge uses existing Gateway session route metadata to expose channel-backed conversations. A conversation appears when OpenClaw already has session state with a known route such as:
+By default, the bridge exposes only channel conversation tools. A channel conversation appears when OpenClaw already has session state with a known route such as:
 
 - `channel`
 - recipient or destination metadata
@@ -116,6 +122,8 @@ This gives MCP clients one place to:
 - wait for new inbound events
 - send a reply back through the same route
 - see approval requests that arrive while the bridge is connected
+
+The explicit `--client codex --app-resource <path>` profile instead exposes a bounded, app-only all-session view for list, transcript, create, send, abort, and organization actions. It does not register the model-visible channel, event, or approval tools. Codex only receives opaque session ids, titles/previews, activity state, and sanitized user/assistant text. Raw Gateway session keys and internal transcript details are not returned. Generic and Claude profiles do not register these all-session tools.
 
 ### Usage
 
@@ -141,9 +149,42 @@ This gives MCP clients one place to:
     openclaw mcp serve --claude-channel-mode off
     ```
   </Tab>
+  <Tab title="Codex plugin">
+    ```bash
+    openclaw mcp serve \
+      --client codex \
+      --app-resource path/to/openclaw-session-app.html
+    ```
+
+    Run this with the plugin directory as the working directory. Both options are required together.
+
+  </Tab>
 </Tabs>
 
 ### Bridge tools
+
+The `openclaw_session*` tools below are registered only by the explicit Codex profile. The remaining conversation, event, message, and approval tools are available to generic and Claude clients.
+
+<AccordionGroup>
+  <Accordion title="openclaw_sessions_list">
+    Lists a bounded mix of active and archived Gateway sessions as opaque sidebar items. Set `archived` to filter either state. `limit` defaults to 50 and is capped at 100; `search` is capped at 200 characters. Bounded agent avatar data or emoji fallbacks are included when available; remote avatar URLs are not exposed to the app, and aggregate icon data is capped at 4 MiB.
+  </Accordion>
+  <Accordion title="openclaw_session_detail">
+    Reads up to 200 recent messages for one id returned by `openclaw_sessions_list`. Results contain user/assistant visible text only, capped at 20,000 characters per message and 200,000 characters total.
+  </Accordion>
+  <Accordion title="openclaw_session_create">
+    Creates a session with an optional agent id, label, or first message. This surface deliberately does not accept a host path or worktree selection, so it stays within `operator.write` scope.
+  </Accordion>
+  <Accordion title="openclaw_session_send">
+    Sends bounded text to a listed session. The bridge prefers `sessions.send` and capability-detects the older `chat.send` fallback.
+  </Accordion>
+  <Accordion title="openclaw_session_abort">
+    Aborts the active or named run for a listed session. The bridge prefers `sessions.abort` and capability-detects the older `chat.abort` fallback.
+  </Accordion>
+  <Accordion title="openclaw_session_update">
+    Updates user-level organization fields only: label, archived state, pinned state, and unread state.
+  </Accordion>
+</AccordionGroup>
 
 <AccordionGroup>
   <Accordion title="conversations_list">
@@ -287,7 +328,13 @@ For most generic MCP clients, start with the standard tool surface and ignore Cl
   Read password from file.
 </ParamField>
 <ParamField path="--claude-channel-mode" type='"auto" | "on" | "off"'>
-  Claude notification mode. Default `auto`.
+  Claude notification mode. Default `auto`; disabled by the Codex profile.
+</ParamField>
+<ParamField path="--client" type='"codex"'>
+  Explicitly enables the Codex MCP App and bounded all-session tool profile. Must be used with `--app-resource`.
+</ParamField>
+<ParamField path="--app-resource" type="string">
+  HTML resource path under the current working directory. The file is root-contained, capped at 1 MiB, and read once at startup. Must be used with `--client codex`.
 </ParamField>
 <ParamField path="-v, --verbose" type="boolean">
   Verbose logs on stderr.
@@ -299,12 +346,15 @@ Prefer `--token-file` or `--password-file` over inline secrets when possible.
 
 ### Security and trust boundary
 
-The bridge does not invent routing. It only exposes conversations that Gateway already knows how to route.
+The generic and Claude profiles do not invent routing. They expose only conversation tools backed by Gateway route metadata. The Codex profile is an explicit broader trust boundary: it replaces those model-visible channel tools with bounded, app-only session discovery and control tools for the local session app.
 
 That means:
 
 - sender allowlists, pairing, and channel-level trust still belong to the underlying OpenClaw channel configuration
 - `messages_send` can only reply through an existing stored route
+- Codex-only session tools request `operator.read` and `operator.write`, never `operator.admin`; Gateway hello capabilities and granted scopes decide which actions the app enables, with an existing `operator.admin` grant honored as the normal read/write superset
+- session ids are HMAC-SHA-256 opaque handles derived with a fresh random key for each bridge process; after a restart, clients refresh the session list before acting
+- transcript results omit system, tool, reasoning, diagnostics, route, provider, and filesystem data
 - approval state is live/in-memory only for the current bridge session
 - bridge auth should use the same Gateway token or password controls you would trust for any other remote Gateway client
 
