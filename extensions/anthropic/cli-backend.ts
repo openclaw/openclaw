@@ -90,6 +90,10 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
       systemPromptWhen: "always",
+      // claude-cli >= v2.1.198 backgrounds sub-agents by default; our live session
+      // ends the turn on the first `result` without waiting, dropping their output.
+      // Force synchronous sub-agents (operator-overridable via cliBackends env).
+      env: { CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" },
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       reliability: {
         watchdog: {

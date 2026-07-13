@@ -529,7 +529,9 @@ describe("normalizeClaudeBackendConfig", () => {
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {
     const backend = buildAnthropicCliBackend();
 
-    expect(backend.config.env).toBeUndefined();
+    // claude-cli >= v2.1.198 backgrounds sub-agents by default; forcing this off
+    // keeps the live turn's `result` from arriving before sub-agent output lands.
+    expect(backend.config.env).toEqual({ CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1" });
     expect(backend.config.liveSession).toBe("claude-stdio");
     expect(backend.config.output).toBe("jsonl");
     expect(backend.config.input).toBe("stdin");
