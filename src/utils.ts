@@ -11,6 +11,7 @@ import {
 import { isPlainObject } from "./infra/plain-object.js";
 export { escapeRegExp } from "./shared/regexp.js";
 export { sleep } from "./utils/sleep.js";
+export { isRecord } from "@openclaw/normalization-core/record-coerce";
 export { resolveUserPath };
 
 /** Creates a directory tree if it does not already exist. */
@@ -44,14 +45,6 @@ export function safeParseJson<T>(raw: string): T | null {
 }
 
 export { isPlainObject };
-
-/**
- * Type guard for Record<string, unknown> (less strict than isPlainObject).
- * Accepts any non-null object that isn't an array.
- */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /** Normalizes phone-like input into the loose E.164 shape used by channel helpers. */
 export function normalizeE164(number: string): string {
