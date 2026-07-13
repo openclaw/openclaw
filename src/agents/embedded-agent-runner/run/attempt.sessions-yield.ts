@@ -11,6 +11,12 @@ const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt"
 const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
 
 const SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
+// Hard cap for the post-timeout settle wait. After the soft timeout we keep
+// waiting for the session file lock to release so the next turn does not hit a
+// stale lock, but must never block the next turn forever if the settle itself
+// stalls (e.g. a hung fs operation). Derived from the soft timeout so the
+// test-fast override applies to both.
+const SESSIONS_YIELD_ABORT_SETTLE_HARD_TIMEOUT_MS = SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS * 5;
 
 // Persist a hidden context reminder so the next turn knows why the runner stopped.
 function buildSessionsYieldContextMessage(message: string): string {
@@ -47,6 +53,25 @@ export async function waitForSessionsYieldAbortSettle(params: {
     log.warn(
       `sessions_yield abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS}`,
     );
+    // Continue waiting (bounded) for the settle to complete so the session file
+    // lock is released before the next turn starts. Without this the lock stays
+    // held and the next turn fails with "file lock stale", causing model
+    // fallback and visible error messages in the delivery channel.
+    let hardTimeout: NodeJS.Timeout | undefined;
+    const settled = await Promise.race([
+      params.settlePromise.then(() => true).catch(() => true),
+      new Promise<boolean>((resolve) => {
+        hardTimeout = setTimeout(() => resolve(false), SESSIONS_YIELD_ABORT_SETTLE_HARD_TIMEOUT_MS);
+      }),
+    ]);
+    if (hardTimeout) {
+      clearTimeout(hardTimeout);
+    }
+    if (!settled) {
+      log.warn(
+        `sessions_yield abort settle hard-timeout: runId=${params.runId} sessionId=${params.sessionId} hardTimeoutMs=${SESSIONS_YIELD_ABORT_SETTLE_HARD_TIMEOUT_MS} — proceeding without confirmed lock release`,
+      );
+    }
   }
 }
 
@@ -193,6 +218,19 @@ export function stripSessionsYieldArtifacts(activeSession: {
       strippedMessages.pop();
       continue;
     }
+    // Also strip the sessions_yield context marker. When a new incoming message
+    // aborts an active sessions_yield, this marker remains in the session. If a
+    // subagent completion announce then re-runs the agent to deliver the result,
+    // the agent sees the context message, responds via sessions_yield again, and
+    // the announce system rejects it as "did not produce a visible reply".
+    if (
+      last?.role === "custom" &&
+      "customType" in last &&
+      last.customType === SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE
+    ) {
+      strippedMessages.pop();
+      continue;
+    }
     break;
   }
   if (strippedMessages.length !== activeSession.messages.length) {
@@ -238,7 +276,9 @@ export function stripSessionsYieldArtifacts(activeSession: {
       const isYieldInterruptMessage =
         entry.type === "custom_message" &&
         entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE;
-      return isYieldAbortAssistant || isYieldInterruptMessage;
+      const isYieldContextMessage =
+        entry.type === "custom_message" && entry.customType === SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE;
+      return isYieldAbortAssistant || isYieldInterruptMessage || isYieldContextMessage;
     },
     {
       preserveTrailing: (entry) =>

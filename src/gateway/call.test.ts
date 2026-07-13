@@ -1023,6 +1023,22 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
+  it("keeps device identity for loopback backend scoped calls that opt in via requireDeviceIdentity", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "agent",
+      scopes: ["operator.write"],
+      token: "explicit-token",
+      requireDeviceIdentity: true,
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastClientOptions?.scopes).toEqual(["operator.write"]);
+    expect(lastClientOptions?.deviceIdentity).toEqual(deviceIdentityState.value);
+  });
+
   it("labels default backend calls with the requested method", async () => {
     setLocalLoopbackGatewayConfig();
 

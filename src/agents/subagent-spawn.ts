@@ -227,6 +227,11 @@ async function callSubagentGateway(
     params.scopes ?? (leastPrivilegeScopes.includes(ADMIN_SCOPE) ? [ADMIN_SCOPE] : undefined);
   const request = {
     ...params,
+    // Subagent calls negotiate explicit operator scopes against the paired
+    // device token, so the gateway needs the device identity attached even on
+    // loopback backend connections. Without this the completion announce fails
+    // with "missing scope: operator.write" (#77807).
+    requireDeviceIdentity: true,
     ...(scopes != null ? { scopes } : {}),
   };
   if (
