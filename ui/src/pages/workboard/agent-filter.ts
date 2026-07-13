@@ -4,7 +4,7 @@ import type { WorkboardCard, WorkboardUiState } from "../../lib/workboard/index.
 
 type WorkboardAgentRow = AgentsListResult["agents"][number];
 type WorkboardConfiguredAgentOption = { id: string; label: string; isDefault: boolean };
-export type WorkboardAgentFilterOption = {
+type WorkboardAgentFilterOption = {
   id: WorkboardUiState["agentFilter"];
   label: string;
   description?: string;
