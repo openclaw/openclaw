@@ -30,6 +30,17 @@ private actor DashboardRouteAuthGate {
     }
 }
 
+@MainActor
+private final class DashboardBrowserImportGate {
+    var isOnboarded = false
+    private(set) var requestCount = 0
+
+    func request() -> Bool {
+        self.requestCount += 1
+        return self.isOnboarded
+    }
+}
+
 @Suite(.serialized)
 @MainActor
 struct DashboardWindowSmokeTests {
@@ -141,6 +152,38 @@ struct DashboardWindowSmokeTests {
             await Task.yield()
         }
         #expect(requestCount == 2)
+    }
+
+    @Test func `browser import offer retries when onboarding completes with browser open`() async throws {
+        let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let gate = DashboardBrowserImportGate()
+        let controller = DashboardWindowController(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            requestBrowserProfileImportOffer: { gate.request() })
+        defer { controller.closeDashboard() }
+        let manager = DashboardManager._testMake()
+        manager._testSetController(controller)
+
+        let link = try #require(URL(string: "https://docs.openclaw.ai/"))
+        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        for _ in 0..<200 where gate.requestCount == 0 {
+            await Task.yield()
+        }
+        #expect(gate.requestCount == 1)
+
+        gate.isOnboarded = true
+        manager.handleOnboardingCompletion()
+        for _ in 0..<200 where gate.requestCount == 1 {
+            await Task.yield()
+        }
+        #expect(gate.requestCount == 2)
+
+        manager.handleOnboardingCompletion()
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(gate.requestCount == 2)
     }
 
     @Test func `dashboard parses only bounded native link requests`() throws {

@@ -353,6 +353,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         }
     }
 
+    func handleOnboardingCompletion() {
+        // A pre-onboarding inline browser leaves the one-shot armed. Retry at
+        // the eligibility transition so it does not depend on later navigation.
+        self.requestBrowserProfileImportOfferIfNeeded()
+    }
+
     private func closeLinkBrowser(focusDashboard: Bool = true) {
         self.linkBrowser.closeBrowser()
         self.linkBrowserItem.isCollapsed = true
