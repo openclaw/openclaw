@@ -124,6 +124,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "ssrf-runtime": 1,
   "media-runtime": 2,
   "text-runtime": 191,
+  "agent-core": 1,
   "agent-runtime": 7,
   "plugin-runtime": 13,
   "channel-secret-runtime": 23,
@@ -213,7 +214,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      3281,
+      3282,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
