@@ -1739,7 +1739,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toContain("Use the message tool");
     expect(prompt).not.toContain("Message delivery destination metadata");
-    expect(prompt).toContain("Return your response as plain text");
+    expect(prompt).toContain("Return your response; it will be delivered automatically");
   });
 
   it("does not prompt for the message tool when toolsAllow is explicitly empty", async () => {
@@ -1767,7 +1767,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     });
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toContain("Use the message tool");
-    expect(prompt).toContain("Return your response as plain text");
+    expect(prompt).toContain("Return your response; it will be delivered automatically");
   });
 
   it("prompts for the message tool when toolsAllow uses wildcard access", async () => {
@@ -1847,7 +1847,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
 
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
-    expect(prompt).not.toContain("Return your response as plain text");
+    expect(prompt).not.toContain("Return your response; it will be delivered automatically");
     expect(prompt).not.toContain("it will be delivered automatically");
   });
 
