@@ -36,6 +36,7 @@ import {
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
@@ -5898,7 +5899,7 @@ describe("runAgentTurnWithFallback", () => {
         onItemEvent,
         onCommandOutput,
         progressPreambleEnabled: true,
-      } satisfies GetReplyOptions,
+      } satisfies InternalGetReplyOptions,
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,

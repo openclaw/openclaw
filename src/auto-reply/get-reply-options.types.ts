@@ -199,11 +199,6 @@ export type GetReplyOptions = {
    */
   onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
   /**
-   * When provided and returning false, the narrator must not start utility-model
-   * completions. Activity notes keep accumulating for the first visible update.
-   */
-  isProgressDraftVisible?: () => boolean;
-  /**
    * Omit exec/bash command text from narration model input, mirroring the
    * channel's `streaming.progress.commandText: "status"` display policy so
    * narration never receives more command detail than the draft shows.
@@ -211,11 +206,6 @@ export type GetReplyOptions = {
   narrationHideCommandText?: boolean;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
-  /**
-   * Channels set this when a progress draft can render a preamble headline.
-   * The runner then bridges preamble events even when the commentary lane is off.
-   */
-  progressPreambleEnabled?: boolean;
   /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
   reasoningPayloadsEnabled?: boolean;
   /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
@@ -305,7 +295,3 @@ export type GetReplyOptions = {
   /** Override agent timeout in seconds (0 = no timeout). Threads through to resolveAgentTimeoutMs. */
   timeoutOverrideSeconds?: number;
 };
-
-export function shouldBridgeCliPreambleEvents(opts: GetReplyOptions | undefined): boolean {
-  return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;
-}

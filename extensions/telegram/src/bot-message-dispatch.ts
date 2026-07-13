@@ -2718,15 +2718,22 @@ export const dispatchTelegramMessage = async ({
                         return;
                       }
                       if (streamMode === "progress") {
-                        await progressDraft.pushPreambleHeadline(payload.progressText);
-                      }
-                      if (streamMode === "progress" && progressDraft.commentaryProgressEnabled) {
-                        // Only the opt-in commentary lane contributes receipt notes;
-                        // the always-on headline is display state, not a second lane.
-                        progressSummary.noteCommentary(payload.itemId, payload.progressText);
-                        await progressDraft.pushCommentaryProgress(payload.progressText, {
+                        await progressDraft.pushPreambleHeadline(payload.progressText, {
                           itemId: payload.itemId,
                         });
+                      }
+                      if (streamMode === "progress" && progressDraft.commentaryProgressEnabled) {
+                        const accepted = await progressDraft.pushCommentaryProgress(
+                          payload.progressText,
+                          {
+                            itemId: payload.itemId,
+                          },
+                        );
+                        // Only accepted opt-in commentary contributes receipt notes;
+                        // the always-on headline is display state, not a second lane.
+                        if (accepted) {
+                          progressSummary.noteCommentary(payload.itemId, payload.progressText);
+                        }
                       }
                       return;
                     }

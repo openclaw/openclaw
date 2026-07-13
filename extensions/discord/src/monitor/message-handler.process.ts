@@ -1106,8 +1106,11 @@ async function processDiscordMessageInner(
               await draftPreview.pushNarrationProgress(payload.text);
             }
           : undefined,
+        onProgressNarratorLifecycle: draftPreview.narrationProgressEnabled
+          ? (lifecycle) => draftPreview.setProgressNarratorLifecycle(lifecycle)
+          : undefined,
         isProgressDraftVisible: draftPreview.narrationProgressEnabled
-          ? () => draftPreview.hasProgressDraftStarted
+          ? () => draftPreview.isProgressDraftVisible
           : undefined,
         narrationHideCommandText: draftPreview.narrationHideCommandText ? true : undefined,
         onReasoningStream: async (payload) => {
@@ -1163,8 +1166,7 @@ async function processDiscordMessageInner(
             if (shouldYieldDraftProgress()) {
               return undefined;
             }
-            await draftPreview.pushPreambleItemEvent(payload, noteWindowCommentary);
-            return undefined;
+            return await draftPreview.pushPreambleItemEvent(payload, noteWindowCommentary);
           }
           if (shouldYieldDraftProgress()) {
             return undefined;
@@ -1184,7 +1186,6 @@ async function processDiscordMessageInner(
               meta: payload.meta,
             }),
           );
-          return undefined;
         },
         onPlanUpdate: async (payload) => {
           if (payload.phase !== "update") {

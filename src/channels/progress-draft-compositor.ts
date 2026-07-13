@@ -59,8 +59,12 @@ export function createChannelProgressDraftCompositor(params: {
   reasoningGate?: boolean;
   commentaryItalics?: boolean;
   now?: () => number;
+  setTimeoutFn?: typeof setTimeout;
+  clearTimeoutFn?: typeof clearTimeout;
 }) {
   const now = params.now ?? Date.now;
+  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
+  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const reasoningLinePrefix = params.reasoningLinePrefix ?? "";
   const commentaryLinePrefix = params.commentaryLinePrefix ?? "";
   const commentaryItalics = params.commentaryItalics ?? true;
@@ -89,10 +93,19 @@ export function createChannelProgressDraftCompositor(params: {
   // Model preambles and narration share the status slot while tool lines keep
   // accumulating underneath for turns where neither source is available.
   let preambleText = "";
+  let preambleItemId: string | undefined;
   let preambleAt: number | undefined;
   let narrationText = "";
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
+  let preambleExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+
+  const clearPreambleExpiryTimer = () => {
+    if (preambleExpiryTimer !== undefined) {
+      clearTimeoutFn(preambleExpiryTimer);
+      preambleExpiryTimer = undefined;
+    }
+  };
 
   const resolveStatusText = () => {
     const preambleIsFresh =
@@ -110,12 +123,14 @@ export function createChannelProgressDraftCompositor(params: {
     });
 
   const clearProgressState = (suppressed: boolean) => {
+    clearPreambleExpiryTimer();
     progressSuppressed = suppressed;
     lines = [];
     lastRenderedText = "";
     reasoningRawText = "";
     lastReasoningLine = undefined;
     preambleText = "";
+    preambleItemId = undefined;
     preambleAt = undefined;
     narrationText = "";
   };
@@ -133,9 +148,34 @@ export function createChannelProgressDraftCompositor(params: {
     return true;
   };
 
+  const schedulePreambleExpiryRefresh = () => {
+    clearPreambleExpiryTimer();
+    if (
+      !preambleText ||
+      !narrationText ||
+      preambleAt === undefined ||
+      !gate.hasStarted ||
+      finalReplyStarted ||
+      finalReplyDelivered
+    ) {
+      return;
+    }
+    const remaining = PROGRESS_STATUS_PREAMBLE_FRESH_MS - (now() - preambleAt);
+    if (remaining <= 0) {
+      return;
+    }
+    preambleExpiryTimer = setTimeoutFn(() => {
+      preambleExpiryTimer = undefined;
+      void render().catch((err: unknown) => {
+        console.warn(`[progress-draft] channel progress status refresh failed: ${String(err)}`);
+      });
+    }, remaining);
+  };
+
   const gate = createChannelProgressDraftGate({
     onStart: async () => {
       await render({ flush: true });
+      schedulePreambleExpiryRefresh();
     },
   });
 
@@ -246,14 +286,19 @@ export function createChannelProgressDraftCompositor(params: {
     get hasStarted() {
       return gate.hasStarted;
     },
+    get isVisible() {
+      return gate.hasStarted && !finalReplyStarted && !finalReplyDelivered;
+    },
     get hasStatusHeadline() {
       return Boolean(preambleText);
     },
     markFinalReplyStarted() {
       finalReplyStarted = true;
+      clearPreambleExpiryTimer();
     },
     markFinalReplyDelivered() {
       finalReplyDelivered = true;
+      clearPreambleExpiryTimer();
     },
     // Queued/followup turns reuse this compositor after the primary turn's
     // final reply settled it. Re-arm the draft lanes so the queued turn gets
@@ -279,6 +324,7 @@ export function createChannelProgressDraftCompositor(params: {
     },
     cancel() {
       gate.cancel();
+      clearPreambleExpiryTimer();
     },
     start() {
       return gate.startNow();
@@ -305,7 +351,7 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     },
     pushToolProgress: noteProgress,
-    async pushPreambleHeadline(text?: string) {
+    async pushPreambleHeadline(text?: string, options?: { itemId?: string }) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
         return false;
       }
@@ -321,14 +367,42 @@ export function createChannelProgressDraftCompositor(params: {
       if (finalReplyStarted || finalReplyDelivered) {
         return false;
       }
+      const itemId = options?.itemId?.trim() || undefined;
       const normalized = sanitizeProgressStatusText(text ?? "")
         .replace(/\s+/g, " ")
         .trim();
       if (!normalized) {
+        // Retractions must identify the currently displayed preamble. A late
+        // retraction for an older item must not clear a newer headline.
+        if (!itemId || itemId !== preambleItemId) {
+          return false;
+        }
+        preambleText = "";
+        preambleItemId = undefined;
+        preambleAt = undefined;
+        clearPreambleExpiryTimer();
+        if (!gate.hasStarted) {
+          return false;
+        }
+        const rendered = await render();
+        if (rendered || formatDraftText()) {
+          return rendered;
+        }
+        lastRenderedText = "";
+        await params.deleteCurrent?.();
+        return true;
+      }
+      if (itemId && itemId !== preambleItemId) {
+        preambleItemId = itemId;
+      } else if (!itemId) {
+        preambleItemId = undefined;
+      }
+      if (normalized === preambleText) {
         return false;
       }
       preambleText = normalized;
       preambleAt = now();
+      schedulePreambleExpiryRefresh();
       // Work activity owns the delayed start gate. Retain preambles from fast
       // turns without making their draft visible.
       return gate.hasStarted ? await render() : false;
@@ -348,9 +422,11 @@ export function createChannelProgressDraftCompositor(params: {
         // Release stopped narration without retracting the model's headline;
         // raw tool lines return only when no preamble remains.
         narrationText = "";
+        clearPreambleExpiryTimer();
         return await render();
       }
       narrationText = normalized;
+      schedulePreambleExpiryRefresh();
       // Tool activity owns the delayed start gate. Narration may arrive while
       // that timer is pending; retain the newest text without flashing a draft
       // for a turn that finishes inside the grace period.
@@ -432,8 +508,17 @@ export function createChannelProgressDraftCompositor(params: {
       lines = mergeChannelProgressDraftLine(lines, line, {
         maxLines: resolveChannelProgressDraftMaxLines(params.entry),
       });
+      const alreadyStarted = gate.hasStarted;
       await gate.startNow();
-      return await render();
+      if (!gate.hasStarted) {
+        return false;
+      }
+      if (alreadyStarted) {
+        await render();
+      }
+      // True means the sanitized commentary was accepted into the visible
+      // lane. A first item renders inside gate.onStart, not this call site.
+      return true;
     },
   };
 }

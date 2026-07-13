@@ -59,7 +59,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { shouldBridgeCliPreambleEvents } from "../get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
@@ -102,6 +101,7 @@ import {
   type CompactionNoticePhase,
 } from "./compaction-notice.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
+import { type InternalGetReplyOptions, shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
@@ -395,7 +395,7 @@ async function forwardFollowupProgressEvent(params: {
 
 /** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(params: {
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   typing: TypingController;
   typingMode: TypingMode;
   sessionEntry?: SessionEntry;

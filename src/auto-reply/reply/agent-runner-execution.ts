@@ -103,7 +103,6 @@ import {
   isInternalMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
-import { shouldBridgeCliPreambleEvents } from "../get-reply-options.types.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -149,6 +148,7 @@ import {
   shouldNotifyUserAboutCompaction,
 } from "./compaction-notice.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
+import { type InternalGetReplyOptions, shouldBridgeCliPreambleEvents } from "./get-reply.types.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
@@ -1435,7 +1435,7 @@ async function runAgentTurnWithFallbackInternal(
     sessionCtx: TemplateContext;
     replyThreading?: TemplateContext["ReplyThreading"];
     replyOperation?: ReplyOperation;
-    opts?: GetReplyOptions;
+    opts?: InternalGetReplyOptions;
     typingSignals: TypingSignaler;
     blockReplyPipeline: BlockReplyPipeline | null;
     blockStreamingEnabled: boolean;

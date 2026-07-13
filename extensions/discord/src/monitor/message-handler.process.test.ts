@@ -153,6 +153,10 @@ type DispatchInboundParams = {
       name?: string;
     }) => Promise<false | void> | false | void;
     onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
+    onProgressNarratorLifecycle?: (lifecycle: {
+      beginTurn: () => void;
+      stopTurn: () => void;
+    }) => void;
     isProgressDraftVisible?: () => boolean;
     progressPreambleEnabled?: boolean;
     narrationHideCommandText?: boolean;
@@ -2248,7 +2252,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).not.toHaveBeenCalled();
     expectFreshFinalText("done");
     expect(editMessageDiscord).not.toHaveBeenCalled();
-    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(draftStream.deleteCurrentMessage).not.toHaveBeenCalled();
   });
 
@@ -2293,6 +2297,7 @@ describe("processDiscordMessage draft streaming", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       expect(params?.replyOptions?.isProgressDraftVisible?.()).toBe(true);
       await params?.dispatcher.sendFinalReply({ text: "done" });
+      expect(params?.replyOptions?.isProgressDraftVisible?.()).toBe(false);
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
@@ -2305,6 +2310,25 @@ describe("processDiscordMessage draft streaming", () => {
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toContain("Reading the gateway config and restarting agents.");
     expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
+  });
+
+  it("stops narration at final and resets it for a queued turn", async () => {
+    createMockDraftStreamForTest();
+    const beginTurn = vi.fn();
+    const stopTurn = vi.fn();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      params?.replyOptions?.onProgressNarratorLifecycle?.({ beginTurn, stopTurn });
+      await params?.dispatcher.sendFinalReply({ text: "primary" });
+      expect(stopTurn).toHaveBeenCalled();
+
+      await params?.replyOptions?.onAssistantMessageStart?.();
+      expect(beginTurn).toHaveBeenCalledOnce();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext();
+    await runProcessDiscordMessage(ctx);
   });
 
   it("omits the narration callback when progress narration is disabled", async () => {
@@ -3126,6 +3150,11 @@ describe("processDiscordMessage draft streaming", () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-silent",
+        kind: "preamble",
+        progressText: "[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]",
+      });
+      await params?.replyOptions?.onItemEvent?.({
         itemId: "preamble-1",
         kind: "preamble",
         progressText: "Checking the current weather source before summarizing.",
@@ -3260,7 +3289,7 @@ describe("processDiscordMessage draft streaming", () => {
     },
   );
 
-  it("keeps the preamble headline when its commentary item retracts", async () => {
+  it("retracts a preamble headline by item identity", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -3293,10 +3322,9 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.deleteCurrentMessage).not.toHaveBeenCalled();
-    expect(draftStream.update).toHaveBeenLastCalledWith("Temporary note.");
-    // Empty preamble updates never retract the headline; cleanup still removes
-    // the unfinished draft message at the end of the run.
+    expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec");
+    expect(draftStream.update.mock.calls.flat().join("\n")).not.toContain("Temporary note.");
+    // Cleanup still removes the unfinished tool-progress draft at run end.
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 

@@ -5268,6 +5268,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
       await replyOptions?.onReasoningStream?.({ text: "<think>Running `sleep 4`</think>" });
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await replyOptions?.onItemEvent?.({
         kind: "preamble",
         itemId: "c1",
@@ -5284,12 +5285,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
-    expect(lastPreview?.parseMode).toBe("HTML");
-    expect(lastPreview?.text).toContain("<b>Reading <code>AGENTS.md</code></b>");
+    const headlinePreview = draftStream.updatePreview.mock.calls
+      .map(([preview]) => preview)
+      .find((preview) => preview.text.includes("AGENTS.md"));
+    expect(headlinePreview?.parseMode).toBe("HTML");
+    expect(headlinePreview?.text).toContain("<b>Reading <code>AGENTS.md</code></b>");
     // The fresh headline owns the status slot while reasoning remains buffered.
-    expect(lastPreview?.text).not.toContain("🧠");
-    expect(lastPreview?.text).not.toContain("**");
+    expect(headlinePreview?.text).not.toContain("🧠");
+    expect(headlinePreview?.text).not.toContain("**");
   });
 
   it("keeps clipped long reasoning lines italic behind the 🧠 marker", async () => {
@@ -5334,6 +5337,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
       await replyOptions?.onReasoningStream?.({ text: "<think>Planning the steps</think>" });
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await replyOptions?.onItemEvent?.({
         kind: "preamble",
         itemId: "c1",
@@ -5350,14 +5354,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
-    expect(lastPreview?.parseMode).toBe("HTML");
-    expect(lastPreview?.text).toContain("Planning: three sequential steps");
-    expect(lastPreview?.text).toContain("<b>Step 1:</b>");
-    expect(lastPreview?.text).toContain("<code>sleep 6 &amp;&amp; date</code>");
-    expect(lastPreview?.text).not.toContain("🧠");
+    const headlinePreview = draftStream.updatePreview.mock.calls
+      .map(([preview]) => preview)
+      .find((preview) => preview.text.includes("three sequential steps"));
+    expect(headlinePreview?.parseMode).toBe("HTML");
+    expect(headlinePreview?.text).toContain("Planning: three sequential steps");
+    expect(headlinePreview?.text).toContain("<b>Step 1:</b>");
+    expect(headlinePreview?.text).toContain("<code>sleep 6 &amp;&amp; date</code>");
+    expect(headlinePreview?.text).not.toContain("🧠");
     // No rich-only block HTML that Telegram's parse_mode=HTML would reject.
-    expect(lastPreview?.text).not.toMatch(/<(h[1-6]|hr|ul|ol|li|p|div)\b/u);
+    expect(headlinePreview?.text).not.toMatch(/<(h[1-6]|hr|ul|ol|li|p|div)\b/u);
   });
 
   it("hands preambles to the interleaved commentary lane when it is enabled", async () => {
@@ -5424,6 +5430,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
         "<b>Shelling</b>\nChecking recent context",
       ),
     );
+  });
+
+  it("retracts the Telegram preamble headline by item identity", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking recent context",
+      });
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
+      },
+    });
+
+    const lastPreview = draftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(lastPreview?.text).toContain("Exec");
+    expect(lastPreview?.text).not.toContain("Checking recent context");
   });
 
   it("keeps structured progress rendering after a silent preamble", async () => {

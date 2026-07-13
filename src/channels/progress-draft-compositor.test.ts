@@ -153,9 +153,17 @@ describe("createChannelProgressDraftCompositor", () => {
       update,
     });
 
-    await progress.pushCommentaryProgress("Checking the workspace", { itemId: "c1" });
+    const rejected = await progress.pushCommentaryProgress(
+      "[[reply_to_current]] _NO_REPLY_ [[audio_as_voice]]",
+      { itemId: "silent" },
+    );
+    const accepted = await progress.pushCommentaryProgress("Checking the workspace", {
+      itemId: "c1",
+    });
 
     const rendered = update.mock.calls.map((call) => call[0]);
+    expect(rejected).toBe(false);
+    expect(accepted).toBe(true);
     expect(rendered).toContain("Shelling\n\n💬 _Checking the workspace_");
   });
 
@@ -398,6 +406,30 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(update).toHaveBeenLastCalledWith("Reading the workspace.", expect.anything());
   });
 
+  it("retracts only the matching preamble headline", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.start();
+    await progress.pushPreambleHeadline("Reading the workspace.", { itemId: "preamble-1" });
+    await progress.pushPreambleHeadline("Checking the config.", { itemId: "preamble-2" });
+    const callsBeforeStaleRetraction = update.mock.calls.length;
+
+    expect(await progress.pushPreambleHeadline("", { itemId: "preamble-1" })).toBe(false);
+    expect(update).toHaveBeenCalledTimes(callsBeforeStaleRetraction);
+    expect(progress.hasStatusHeadline).toBe(true);
+
+    expect(await progress.pushPreambleHeadline("", { itemId: "preamble-2" })).toBe(true);
+    expect(progress.hasStatusHeadline).toBe(false);
+    expect(update).toHaveBeenLastCalledWith("Shelling", expect.anything());
+  });
+
   it("keeps a fresh preamble ahead of later narration", async () => {
     let nowMs = 0;
     const update = vi.fn();
@@ -442,6 +474,60 @@ describe("createChannelProgressDraftCompositor", () => {
       "Shelling\n\nComparing the configuration now.",
       expect.anything(),
     );
+  });
+
+  it("refreshes to retained narration when a visible preamble expires", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.start();
+      await progress.pushPreambleHeadline("Reading the workspace.");
+      await progress.pushNarrationProgress("Comparing the configuration now.");
+      expect(update).toHaveBeenLastCalledWith(
+        "Shelling\n\nReading the workspace.",
+        expect.anything(),
+      );
+
+      await vi.advanceTimersByTimeAsync(PROGRESS_STATUS_PREAMBLE_FRESH_MS);
+
+      expect(update).toHaveBeenLastCalledWith(
+        "Shelling\n\nComparing the configuration now.",
+        expect.anything(),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending preamble-expiry refresh when the final starts", async () => {
+    vi.useFakeTimers();
+    try {
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress" } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update: vi.fn(),
+      });
+
+      await progress.start();
+      await progress.pushPreambleHeadline("Reading the workspace.");
+      await progress.pushNarrationProgress("Comparing the configuration now.");
+      expect(vi.getTimerCount()).toBe(1);
+
+      progress.markFinalReplyStarted();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns to the retained preamble when narration clears", async () => {
@@ -529,9 +615,12 @@ describe("createChannelProgressDraftCompositor", () => {
       update,
     });
 
+    await progress.start();
+    expect(progress.isVisible).toBe(true);
     await progress.pushPreambleHeadline("Checking the primary turn.");
     await progress.pushNarrationProgress("Working on it.");
     progress.markFinalReplyStarted();
+    expect(progress.isVisible).toBe(false);
     expect(await progress.pushPreambleHeadline("Too late.")).toBe(false);
     expect(await progress.pushNarrationProgress("Too late.")).toBe(false);
 

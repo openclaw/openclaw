@@ -23,9 +23,26 @@ type InternalReplySessionOptions = {
   onFollowupAdmissionWaitChange?: (waiting: boolean) => void;
 };
 
+type InternalReplyProgressOptions = {
+  /** Channel-owned final/queued-turn boundaries for one narrator instance. */
+  onProgressNarratorLifecycle?: (lifecycle: {
+    beginTurn: () => void;
+    stopTurn: () => void;
+  }) => void;
+  /** False while utility-model narration has no visible progress draft. */
+  isProgressDraftVisible?: () => boolean;
+  /** Bridge preambles for a channel-owned status headline without commentary. */
+  progressPreambleEnabled?: boolean;
+};
+
 export type InternalGetReplyOptions = GetReplyOptions &
   InternalReplySessionOptions &
+  InternalReplyProgressOptions &
   ReplyOptionsWithHeartbeatRunScope;
+
+export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
+  return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;
+}
 
 /** Reply resolver signature used by dispatchers and tests for dependency injection. */
 export type GetReplyFromConfig = (
