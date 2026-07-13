@@ -250,12 +250,16 @@ async function resumeLocalCodexCliSession(paramsJSON?: string | null): Promise<s
   }
 }
 
-async function runCodexExecResume(params: {
-  sessionId: string;
-  prompt: string;
-  cwd?: string;
-  timeoutMs: number;
-}): Promise<string> {
+/** @internal exported for testing */
+export async function runCodexExecResume(
+  params: {
+    sessionId: string;
+    prompt: string;
+    cwd?: string;
+    timeoutMs: number;
+  },
+  spawnFn: typeof spawn = spawn,
+): Promise<string> {
   const outputPath = path.join(
     await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-codex-cli-")),
     "last-message.txt",
@@ -275,7 +279,7 @@ async function runCodexExecResume(params: {
       env: process.env,
       execPath: process.execPath,
     });
-    const child = spawn(invocation.command, invocation.args, {
+    const child = spawnFn(invocation.command, invocation.args, {
       cwd: params.cwd || process.cwd(),
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
@@ -292,10 +296,18 @@ async function runCodexExecResume(params: {
       forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
       forceKillTimeout.unref?.();
     }, params.timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk)).on("error", () => {});
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk)).on("error", () => {});
     child.stdin.end(params.prompt);
     const exitCode = await new Promise<number | null>((resolve, reject) => {
+      child.stdout
+        .on("data", (chunk: Buffer) => stdout.push(chunk))
+        .on("error", (err) => {
+          reject(err);
+        });
+      child.stderr
+        .on("data", (chunk: Buffer) => stderr.push(chunk))
+        .on("error", (err) => {
+          reject(err);
+        });
       child.on("error", reject);
       child.on("exit", (code) => resolve(code));
     }).finally(() => {

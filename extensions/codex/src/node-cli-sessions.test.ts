@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createCodexCliSessionNodeHostCommands,
   listCodexCliSessionsOnNode,
+  runCodexExecResume,
 } from "./node-cli-sessions.js";
 
 const CODEX_CLI_SESSIONS_LIST_COMMAND = "codex.cli.sessions.list";
@@ -245,85 +246,71 @@ describe("codex cli node sessions", () => {
   });
 
   describe("codex exec resume stream error handling", () => {
-    it("survives stdout stream errors without crashing", async () => {
-      const child = spawn(
-        process.execPath,
-        ["-e", "process.stdout.write('data'); setTimeout(() => process.exit(0), 200)"],
-        {
-          stdio: ["pipe", "pipe", "pipe"],
-        },
-      );
-
-      const collected: Buffer[] = [];
-      child.stdout
-        .on("data", (chunk: Buffer) => collected.push(chunk))
-        .on("error", () => {
-          /* no-op: the fix under test */
-        });
-      child.stderr.on("data", () => {}).on("error", () => {});
-
-      // Trigger a stream error by destroying the pipe
-      child.stdout.destroy(new Error("simulated pipe break"));
-
-      // The child should still exit normally; the process must not crash
-      const exitCode = await new Promise<number | null>((resolve) => {
-        child.on("exit", resolve);
+    it("rejects on stdout stream error", async () => {
+      // Spawn a real child and immediately destroy its stdout pipe.
+      // This triggers a stream error that the production handler must catch.
+      const mockSpawn = vi.fn(() => {
+        const child = spawn(
+          process.execPath,
+          ["-e", "process.stdin.resume(); setTimeout(() => process.exit(1), 500)"],
+          { stdio: ["pipe", "pipe", "pipe"] },
+        );
+        // Synchronously destroy the stdout pipe to trigger an error event
+        child.stdout.destroy(new Error("simulated stdout stream error"));
+        return child;
       });
 
-      expect(exitCode).not.toBeNull();
+      await expect(
+        runCodexExecResume(
+          { sessionId: "test-id", prompt: "test prompt", timeoutMs: 5000 },
+          mockSpawn,
+        ),
+      ).rejects.toThrow("simulated stdout stream error");
+
+      expect(mockSpawn).toHaveBeenCalledOnce();
     });
 
-    it("survives stderr stream errors without crashing", async () => {
-      const child = spawn(
-        process.execPath,
-        ["-e", "process.stderr.write('err'); setTimeout(() => process.exit(0), 200)"],
-        {
-          stdio: ["pipe", "pipe", "pipe"],
-        },
-      );
-
-      const collected: Buffer[] = [];
-      child.stderr
-        .on("data", (chunk: Buffer) => collected.push(chunk))
-        .on("error", () => {
-          /* no-op: the fix under test */
-        });
-      child.stdout.on("data", () => {}).on("error", () => {});
-
-      // Trigger a stream error by destroying the pipe
-      child.stderr.destroy(new Error("simulated pipe break"));
-
-      const exitCode = await new Promise<number | null>((resolve) => {
-        child.on("exit", resolve);
+    it("rejects on stderr stream error", async () => {
+      const mockSpawn = vi.fn(() => {
+        const child = spawn(
+          process.execPath,
+          ["-e", "process.stdin.resume(); setTimeout(() => process.exit(1), 500)"],
+          { stdio: ["pipe", "pipe", "pipe"] },
+        );
+        child.stderr.destroy(new Error("simulated stderr stream error"));
+        return child;
       });
 
-      expect(exitCode).not.toBeNull();
+      await expect(
+        runCodexExecResume(
+          { sessionId: "test-id", prompt: "test prompt", timeoutMs: 5000 },
+          mockSpawn,
+        ),
+      ).rejects.toThrow("simulated stderr stream error");
+
+      expect(mockSpawn).toHaveBeenCalledOnce();
     });
 
-    it("survives both stdout and stderr errors simultaneously", async () => {
-      const child = spawn(
-        process.execPath,
-        [
-          "-e",
-          "process.stdout.write('out'); process.stderr.write('err'); setTimeout(() => process.exit(0), 200)",
-        ],
-        {
-          stdio: ["pipe", "pipe", "pipe"],
-        },
-      );
-
-      child.stdout.on("data", () => {}).on("error", () => {});
-      child.stderr.on("data", () => {}).on("error", () => {});
-
-      // Destroy both pipes
-      child.stdout.destroy(new Error("stdout pipe error"));
-      child.stderr.destroy(new Error("stderr pipe error"));
-
-      const exitCode = await new Promise<number | null>((resolve) => {
-        child.on("exit", resolve);
+    it("rejects on simultaneous stdout and stderr errors", async () => {
+      const mockSpawn = vi.fn(() => {
+        const child = spawn(
+          process.execPath,
+          ["-e", "process.stdin.resume(); setTimeout(() => process.exit(1), 500)"],
+          { stdio: ["pipe", "pipe", "pipe"] },
+        );
+        child.stdout.destroy(new Error("simulated stdout stream error"));
+        child.stderr.destroy(new Error("simulated stderr stream error"));
+        return child;
       });
 
-      expect(exitCode).not.toBeNull();
+      await expect(
+        runCodexExecResume(
+          { sessionId: "test-id", prompt: "test prompt", timeoutMs: 5000 },
+          mockSpawn,
+        ),
+      ).rejects.toThrow(); // Rejects with either the stdout or stderr error
+
+      expect(mockSpawn).toHaveBeenCalledOnce();
     });
   });
 });
