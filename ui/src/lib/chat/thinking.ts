@@ -9,7 +9,7 @@ import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
-export type ThinkingCatalogEntry = {
+type ThinkingCatalogEntry = {
   provider: string;
   id: string;
   reasoning?: boolean;
@@ -68,7 +68,7 @@ export function listThinkingLevelLabels(
   return BASE_THINKING_LEVELS;
 }
 
-export function resolveThinkingDefaultForModel(params: {
+function resolveThinkingDefaultForModel(params: {
   provider: string;
   model: string;
   catalog?: readonly ThinkingCatalogEntry[];
