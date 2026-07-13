@@ -497,3 +497,57 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     setTimeoutSpy.mockRestore();
   });
 });
+
+describe("createBlockReplyPipeline stop() delivery", () => {
+  it("delivers buffered sub-minChars text when stop() is called without prior force-flush", async () => {
+    const sent: string[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push(payload.text ?? "");
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 800,
+        maxChars: 2000,
+        idleMs: 1000,
+        joiner: "\n\n",
+      },
+    });
+
+    // Simulate the agent-runner line 2630 recovery path: stop()
+    // without a prior flush({force:true}). With the fix, stop()
+    // must deliver any buffered tail instead of dropping it.
+    pipeline.enqueue({ text: "Final paragraph that was being buffered." });
+    pipeline.stop();
+    // stop() fires onFlush via a microtask; wait for the send chain.
+    await Promise.resolve();
+
+    expect(sent).toEqual(["Final paragraph that was being buffered."]);
+  });
+
+  it("delivers buffered text through stop() even when idle timer hasn't fired", async () => {
+    const sent: string[] = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push(payload.text ?? "");
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 100,
+        maxChars: 500,
+        idleMs: 1000,
+        joiner: " ",
+      },
+    });
+
+    // Multiple small chunks below minChars — coalesced but never
+    // reaching the idle flush threshold. stop() must flush all.
+    pipeline.enqueue({ text: "one" });
+    pipeline.enqueue({ text: "two" });
+    pipeline.enqueue({ text: "three" });
+    pipeline.stop();
+    await Promise.resolve();
+
+    expect(sent).toEqual(["one two three"]);
+  });
+});

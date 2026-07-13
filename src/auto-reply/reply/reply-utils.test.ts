@@ -1224,6 +1224,84 @@ describe("block reply coalescer", () => {
     ]);
     coalescer.stop();
   });
+
+  it("stop() delivers buffered sub-minChars text instead of dropping it", () => {
+    const flushes: string[] = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push(payload.text ?? "");
+      },
+    });
+
+    // Enqueue short text well below minChars — with the old stop()
+    // this would be silently dropped because the idle timer is reset
+    // on each sub-min flush attempt and stop() only cleared the timer.
+    coalescer.enqueue({ text: "Final tail that would be lost" });
+    coalescer.stop();
+
+    expect(flushes).toEqual(["Final tail that would be lost"]);
+  });
+
+  it("stop() does not deliver buffered text when shouldAbort() is true", () => {
+    const flushes: string[] = [];
+    let aborted = false;
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "\n\n" },
+      shouldAbort: () => aborted,
+      onFlush: (payload) => {
+        flushes.push(payload.text ?? "");
+      },
+    });
+
+    coalescer.enqueue({ text: "Should not be delivered" });
+    aborted = true;
+    coalescer.stop();
+
+    expect(flushes).toEqual([]);
+  });
+
+  it("stop() after force-flush is idempotent (no double delivery)", async () => {
+    const flushes: string[] = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " " },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push(payload.text ?? "");
+      },
+    });
+
+    coalescer.enqueue({ text: "Hello" });
+    coalescer.enqueue({ text: "world" });
+    // Normal path: force-flush then stop (as agent-runner line 1803-1805 does)
+    await coalescer.flush({ force: true });
+    coalescer.stop();
+
+    // Should deliver exactly once — stop() must not re-deliver
+    // already-flushed text.
+    expect(flushes).toEqual(["Hello world"]);
+  });
+
+  it("stop() preserves isCommentary so commentary suppression gates still apply", () => {
+    const flushes: Array<{ text?: string; isCommentary?: boolean }> = [];
+    const coalescer = createBlockReplyCoalescer({
+      config: { minChars: 800, maxChars: 2000, idleMs: 1000, joiner: "\n\n" },
+      shouldAbort: () => false,
+      onFlush: (payload) => {
+        flushes.push({ text: payload.text, isCommentary: payload.isCommentary });
+      },
+    });
+
+    // Commentary payloads carry an isCommentary flag that downstream
+    // delivery gates use to suppress or filter them. stop() must
+    // preserve that flag so buffered commentary isn't delivered as
+    // normal reply text.
+    coalescer.enqueue({ text: "Thinking step…", isCommentary: true });
+    coalescer.stop();
+
+    expect(flushes).toEqual([{ text: "Thinking step…", isCommentary: true }]);
+  });
 });
 
 describe("createReplyReferencePlanner", () => {
