@@ -8,6 +8,7 @@ import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
 } from "../../../auto-reply/tokens.js";
+import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
@@ -644,12 +645,19 @@ function shouldSkipNonVisibleTurnRetry(params: {
 /** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
+  currentInboundEventKind?: InboundEventKind;
   payloadCount: number;
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
   if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipNonVisibleTurnRetry(params)) {
+    return false;
+  }
+  // A direct user_request must never resolve to a silent empty reply: if the
+  // model produced nothing, the user gets a fallback/error instead of a
+  // disappearing turn. Ambient room_event turns may still go silent.
+  if (params.currentInboundEventKind === "user_request") {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {

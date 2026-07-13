@@ -3456,6 +3456,79 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
+  it("never silences a clean empty assistant reply for a direct user_request turn", () => {
+    const attempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    // Direct user_request: even with silence allowed, the empty reply must not
+    // vanish — the caller surfaces a fallback/error instead.
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        currentInboundEventKind: "user_request",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(false);
+    // Ambient room_event with silence allowed stays silent when eligible.
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        currentInboundEventKind: "room_event",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(true);
+    // Unspecified event kind preserves the prior silence-when-allowed behavior.
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps side-effect safeguards even for room_event turns that permit silence", () => {
+    const sideEffectAttempt = makeAttemptResult({
+      assistantTexts: [],
+      didSendViaMessagingTool: true,
+      messagingToolSentTexts: ["sent already"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "" }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      shouldTreatEmptyAssistantReplyAsSilent({
+        allowEmptyAssistantReplyAsSilent: true,
+        currentInboundEventKind: "room_event",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: sideEffectAttempt,
+      }),
+    ).toBe(false);
+  });
+
   it("treats reasoning-only assistant turns as silent only when the caller allows it", () => {
     const attempt = makeAttemptResult({
       assistantTexts: [],

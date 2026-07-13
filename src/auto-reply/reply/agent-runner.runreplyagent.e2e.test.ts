@@ -2627,7 +2627,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("preserves intentional fallback silence when the turn permits silent replies", async () => {
+  it("preserves intentional fallback silence for ambient room_event turns that permit silent replies", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       meta: {},
@@ -2653,6 +2653,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     try {
       const { run } = createMinimalRun({
+        currentInboundEventKind: "room_event",
         runOverrides: {
           provider: "lmstudio",
           model: "gemma-4-e4b-it",
@@ -2669,6 +2670,60 @@ describe("runReplyAgent typing (heartbeat)", () => {
       });
 
       await expect(run()).resolves.toBeUndefined();
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("surfaces the fallback failure for a direct user_request even when silent replies are permitted", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "NO_REPLY" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          outcome: "completed" as const,
+          result: await run("openai-codex", "gpt-5.5"),
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          attempts: [
+            {
+              provider: "lmstudio",
+              model: "gemma-4-e4b-it",
+              error: "Connection error.",
+              reason: "timeout",
+            },
+          ],
+        }),
+      );
+
+    try {
+      const { run } = createMinimalRun({
+        currentInboundEventKind: "user_request",
+        runOverrides: {
+          provider: "lmstudio",
+          model: "gemma-4-e4b-it",
+          allowEmptyAssistantReplyAsSilent: true,
+        },
+        sessionCtx: {
+          Provider: "discord",
+          OriginatingChannel: "discord",
+          OriginatingTo: "channel:C1",
+          ChatType: "direct",
+          WasMentioned: true,
+          MessageSid: "1503645939964055592",
+        },
+      });
+
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).toBe(true);
+      expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
+      expect(payload?.text).toContain("Fallback used openai-codex/gpt-5.5");
+      expect(payload?.text).toContain("no visible reply");
     } finally {
       fallbackSpy.mockRestore();
     }

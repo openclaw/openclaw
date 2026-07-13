@@ -199,10 +199,17 @@ function buildSilentFallbackFailurePayload(params: {
   hasSuccessfulTerminalDelivery: boolean;
   allowEmptyAssistantReplyAsSilent?: boolean;
   silentExpected?: boolean;
+  currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
 }): ReplyPayload | undefined {
+  // Empty-reply silence is only safe for ambient room_event turns. A direct
+  // user_request that loses its reply to a model-fallback NO_REPLY must still
+  // surface the fallback-failure warning instead of disappearing silently.
+  const allowSilentForEventKind =
+    params.allowEmptyAssistantReplyAsSilent === true &&
+    params.currentInboundEventKind === "room_event";
   if (
     params.isHeartbeat ||
-    params.allowEmptyAssistantReplyAsSilent === true ||
+    allowSilentForEventKind ||
     params.silentExpected === true ||
     params.hasSuccessfulTerminalDelivery ||
     !params.fallbackTransition.fallbackActive ||
@@ -2145,6 +2152,7 @@ export async function runReplyAgent(params: {
         hasSuccessfulTerminalDelivery: successfulTerminalDelivery,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
+        currentInboundEventKind: followupRun.currentInboundEventKind,
       });
       if (!silentFallbackFailurePayload) {
         return undefined;
