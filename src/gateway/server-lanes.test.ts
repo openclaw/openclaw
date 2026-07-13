@@ -4,7 +4,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { enqueueCommandInLane, resetCommandQueueStateForTest } from "../process/command-queue.js";
+import {
+  enqueueCommandInLane,
+  resetCommandQueueStateForTest,
+  setCommandLaneConcurrency,
+} from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
@@ -113,5 +117,21 @@ describe("applyGatewayLaneConcurrency", () => {
 
     releaseRuns.resolve();
     await Promise.all([first, second]);
+  });
+
+  it("restores a suspended shared nested lane on gateway startup", async () => {
+    setCommandLaneConcurrency(CommandLane.Nested, 0);
+    applyConfigLaneConcurrency({} as OpenClawConfig);
+
+    let started = false;
+    await enqueueCommandInLane(
+      CommandLane.Nested,
+      async () => {
+        started = true;
+      },
+      { warnAfterMs: 10_000 },
+    );
+
+    expect(started).toBe(true);
   });
 });

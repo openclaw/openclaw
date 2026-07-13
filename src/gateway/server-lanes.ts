@@ -1,3 +1,4 @@
+import { enableSessionSuspensionTimersForGatewayStart } from "../agents/session-suspension.js";
 // Gateway command-lane concurrency applier.
 // Pushes config-derived agent/cron limits into the process command queue.
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
@@ -21,11 +22,14 @@ export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneC
 }
 
 export function applyGatewayLaneConcurrency(concurrency: GatewayLaneConcurrency): void {
+  enableSessionSuspensionTimersForGatewayStart();
   // Resolution is deliberately separate: this commit-edge applier only updates
   // live queue state and cannot reject a config midway through publication.
   setCommandLaneConcurrency(CommandLane.Cron, concurrency.cron);
   // Cron isolated agent turns remap inner LLM work to this lane.
   setCommandLaneConcurrency(CommandLane.CronNested, concurrency.cron);
   setCommandLaneConcurrency(CommandLane.Main, concurrency.main);
+  // sessions.send work uses a shared nested lane with no config knob.
+  setCommandLaneConcurrency(CommandLane.Nested, 1);
   setCommandLaneConcurrency(CommandLane.Subagent, concurrency.subagent);
 }

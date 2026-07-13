@@ -30,6 +30,7 @@ type LaneResumeTimer = {
 
 const laneResumeTimers = new Map<string, LaneResumeTimer>();
 let cleanupGeneration = 0;
+let cleanupActive = false;
 const deferredSessionSuspension = new AsyncLocalStorage<{
   claimed: boolean;
   onDeferred?: (params: SessionSuspensionParams) => void;
@@ -117,14 +118,19 @@ function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurren
 
 export function clearSessionSuspensionTimers(): number {
   cleanupGeneration += 1;
+  cleanupActive = true;
   let cleared = 0;
-  for (const [laneId, entry] of laneResumeTimers.entries()) {
+  for (const entry of laneResumeTimers.values()) {
     clearTimeout(entry.timer);
-    setCommandLaneConcurrency(laneId, entry.resumeConcurrency);
     cleared += 1;
   }
   laneResumeTimers.clear();
   return cleared;
+}
+
+export function enableSessionSuspensionTimersForGatewayStart(): void {
+  cleanupGeneration += 1;
+  cleanupActive = false;
 }
 
 export async function suspendSession(params: SessionSuspensionParams) {
@@ -174,12 +180,23 @@ export async function suspendSession(params: SessionSuspensionParams) {
     return;
   }
 
-  if (suspensionGeneration !== cleanupGeneration) {
+  if (cleanupActive || suspensionGeneration !== cleanupGeneration) {
     try {
-      await patchSessionEntry({ storePath, sessionKey }, () => ({ quotaSuspension: undefined }), {
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-      });
+      await patchSessionEntry(
+        { storePath, sessionKey },
+        (entry) =>
+          entry.quotaSuspension?.suspendedAt === now &&
+          entry.quotaSuspension.reason === params.reason &&
+          entry.quotaSuspension.failedProvider === params.failedProvider &&
+          entry.quotaSuspension.failedModel === params.failedModel &&
+          entry.quotaSuspension.laneId === params.laneId
+            ? { quotaSuspension: undefined }
+            : null,
+        {
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+        },
+      );
     } catch (err) {
       log.warn("failed to clear quota suspension after shutdown cleanup", {
         sessionId: params.sessionId,
