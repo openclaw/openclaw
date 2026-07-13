@@ -56,6 +56,7 @@
         "qrcode": "1.5.4",
         "quickjs-wasi": "3.0.2",
         "rastermill": "0.3.1",
+        "semver": "7.8.5",
         "tar": "7.5.19",
         "tree-sitter-bash": "0.25.1",
         "tslog": "4.10.2",
@@ -2899,6 +2900,18 @@
       "resolved": "https://registry.npmjs.org/safer-buffer/-/safer-buffer-2.1.2.tgz",
       "integrity": "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==",
       "license": "MIT"
+    },
+    "node_modules/semver": {
+      "version": "7.8.5",
+      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+      "integrity": "sha512-Y7/KDsb8LjooZpwaqGyulO6DQlksgCncchHGk+sZIY4SBvUocMBEFH5Ur1fI4dV+Jvl0w6cjvucaIi40puRioA==",
+      "license": "ISC",
+      "bin": {
+        "semver": "bin/semver.js"
+      },
+      "engines": {
+        "node": ">=10"
+      }
     },
     "node_modules/send": {
       "version": "1.2.1",

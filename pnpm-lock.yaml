@@ -184,6 +184,9 @@ importers:
       rastermill:
         specifier: 0.3.1
         version: 0.3.1
+      semver:
+        specifier: 7.8.5
+        version: 7.8.5
       tar:
         specifier: 7.5.19
         version: 7.5.19
@@ -260,6 +263,9 @@ importers:
       '@types/proper-lockfile':
         specifier: 4.1.4
         version: 4.1.4
+      '@types/semver':
+        specifier: 7.7.1
+        version: 7.7.1
       '@types/ws':
         specifier: 8.18.1
         version: 8.18.1
@@ -539,6 +545,9 @@ importers:
       '@openai/codex':
         specifier: 0.144.1
         version: 0.144.1
+      semver:
+        specifier: 7.8.5
+        version: 7.8.5
       smol-toml:
         specifier: 1.7.0
         version: 1.7.0
@@ -1396,6 +1405,9 @@ importers:
       playwright-core:
         specifier: 1.61.1
         version: 1.61.1
+      semver:
+        specifier: 7.8.5
+        version: 7.8.5
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -4542,6 +4554,9 @@ packages:
 
   '@types/sarif@2.1.7':
     resolution: {integrity: sha512-kRz0VEkJqWLf1LLVN4pT1cg1Z9wAuvI6L97V3m2f5B76Tg8d413ddvLBPTEHAZJlnn4XSvu0FkZtViCQGVyrXQ==}
+
+  '@types/semver@7.7.1':
+    resolution: {integrity: sha512-FmgJfu+MOcQ370SD0ev7EI8TlCAfKYU+B4m5T3yXc1CiRN94g/SZPtsCkk506aUDtlMnFZvasDwHHUcZUEaYuA==}
 
   '@types/send@1.2.1':
     resolution: {integrity: sha512-arsCikDvlU99zl1g69TcAB3mzZPpxgw0UQnaHeC1Nwb015xp8bknZv5rIfri9xTOcMuaVgvabfIRA7PSZVuZIQ==}
@@ -10619,6 +10634,8 @@ snapshots:
   '@types/retry@0.12.5': {}
 
   '@types/sarif@2.1.7': {}
+
+  '@types/semver@7.7.1': {}
 
   '@types/send@1.2.1':
     dependencies:
