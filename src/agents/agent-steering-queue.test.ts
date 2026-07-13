@@ -144,6 +144,42 @@ describe("agent steering queue", () => {
     expect(runs.get("retry")?.cleanupHandled).toBe(false);
   });
 
+  it("releases finalized cleanup leases back to pending steering", () => {
+    const runs = runMap([
+      makeRun({
+        runId: "finalized",
+        cleanupCompletedAt: 2_500,
+        cleanupHandled: false,
+      }),
+    ]);
+
+    expect(
+      leasePendingAgentSteeringItemsFromSubagentRuns({
+        runs,
+        requesterSessionKey,
+        leaseId: "lease-1",
+        now: 3_000,
+      })?.runIds,
+    ).toEqual(["finalized"]);
+    expect(
+      releaseLeasedAgentSteeringItemsFromSubagentRuns({
+        runs,
+        runIds: ["finalized"],
+        leaseId: "lease-1",
+      }),
+    ).toBe(1);
+    expect(runs.get("finalized")?.cleanupHandled).toBe(true);
+
+    expect(
+      leasePendingAgentSteeringItemsFromSubagentRuns({
+        runs,
+        requesterSessionKey,
+        leaseId: "lease-2",
+        now: 4_000,
+      })?.runIds,
+    ).toEqual(["finalized"]);
+  });
+
   it("preserves suspended payloads across prompt submission failures", () => {
     const runs = runMap([
       makeRun({
@@ -225,7 +261,7 @@ describe("agent steering queue", () => {
     }
   });
 
-  it("skips active cleanup, sanitizes metadata, and reclaims stale leases", () => {
+  it("uses delivery state for eligibility, sanitizes metadata, and reclaims stale leases", () => {
     const runs = runMap([
       makeRun({ runId: "handled", cleanupHandled: true }),
       makeRun({
@@ -249,8 +285,8 @@ describe("agent steering queue", () => {
         runs,
         requesterSessionKey,
         now: 3_000,
-      }),
-    ).toEqual([]);
+      }).map((item) => item.runId),
+    ).toEqual(["handled"]);
 
     const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
       runs,
@@ -258,7 +294,7 @@ describe("agent steering queue", () => {
       leaseId: "new-lease",
       now: 1_000 + 6 * 60 * 1_000,
     });
-    expect(leased?.runIds).toEqual(["stale"]);
+    expect(leased?.runIds).toEqual(["stale", "handled"]);
     expect(runs.get("stale")?.delivery?.steeringLeaseId).toBe("new-lease");
     expect(leased?.prompt).toContain("labelmalicious");
     expect(leased?.prompt).toContain("boominject");

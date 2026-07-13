@@ -99,9 +99,6 @@ export function listPendingAgentSteeringItemsFromSubagentRuns(params: {
       continue;
     }
     const staleLease = isStaleLease(delivery, now);
-    if (entry.cleanupHandled === true && !staleLease) {
-      continue;
-    }
     if (payload.requesterSessionKey !== requesterSessionKey) {
       continue;
     }
