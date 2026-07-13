@@ -31,7 +31,8 @@ final class ShareViewController: UIViewController {
     private var didPrepareDraft = false
     private var isSending = false
     private var pendingAttachments: [ShareAttachment] = []
-    private var attachmentError: ShareImageProcessor.ProcessError?
+    /// Keep omission state controller-owned so send cannot bypass the disabled UI.
+    private var attachmentBlockReason: ShareAttachmentBlockReason?
 
     override func loadView() {
         self.view = self.composeView
@@ -61,7 +62,9 @@ final class ShareViewController: UIViewController {
         let extracted = await self.extractSharedContent()
         let payload = extracted.payload
         self.pendingAttachments = extracted.attachments.map(\.payload)
-        self.attachmentError = extracted.attachmentError
+        self.attachmentBlockReason = ShareAttachmentBlockReason.resolve(
+            hasImageProcessingError: extracted.attachmentError != nil,
+            summary: extracted.attachmentSummary)
         self.logger.info("share payload trace=\(traceId, privacy: .public)")
         self.logger.info(
             "share payload title=\(payload.title?.count ?? 0) text=\(payload.text?.count ?? 0)")
@@ -71,18 +74,8 @@ final class ShareViewController: UIViewController {
         self.composeView.setDraft(message)
         self.composeView.setAttachmentPreviews(extracted.attachments.map(\.preview))
         self.composeView.focusDraft()
-        if let blockReason = ShareAttachmentBlockReason.resolve(
-            hasImageProcessingError: extracted.attachmentError != nil,
-            summary: extracted.attachmentSummary)
-        {
-            switch blockReason {
-            case .imageProcessingFailed:
-                ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
-                self.composeView.apply(.blocked(self.imageProcessingErrorMessage()))
-            case let .omitted(message):
-                ShareGatewayRelaySettings.saveLastEvent("Share blocked: attachment(s) omitted.")
-                self.composeView.apply(.blocked(message))
-            }
+        if let blockReason = self.attachmentBlockReason {
+            self.applyAttachmentBlockReason(blockReason)
         } else if message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             self.composeView.apply(.ready)
             ShareGatewayRelaySettings.saveLastEvent("Share ready: waiting for message input.")
@@ -98,8 +91,8 @@ final class ShareViewController: UIViewController {
     }
 
     private func sendCurrentDraft() async {
-        if self.attachmentError != nil {
-            self.composeView.apply(.blocked(self.imageProcessingErrorMessage()))
+        if let blockReason = self.attachmentBlockReason {
+            self.applyAttachmentBlockReason(blockReason)
             return
         }
         let trimmed = self.composeView.draftText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -389,6 +382,17 @@ final class ShareViewController: UIViewController {
         NSLocalizedString(
             "The shared image could not be prepared.",
             comment: "Share extension image processing failure")
+    }
+
+    private func applyAttachmentBlockReason(_ blockReason: ShareAttachmentBlockReason) {
+        switch blockReason {
+        case .imageProcessingFailed:
+            ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
+            self.composeView.apply(.blocked(self.imageProcessingErrorMessage()))
+        case let .omitted(message):
+            ShareGatewayRelaySettings.saveLastEvent("Share blocked: attachment(s) omitted.")
+            self.composeView.apply(.blocked(message))
+        }
     }
 
     /// Previews are retained for the sheet's lifetime; keep them bounded so

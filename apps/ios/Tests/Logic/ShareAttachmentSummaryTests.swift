@@ -24,7 +24,7 @@ struct ShareAttachmentSummaryTests {
             unknownCount: 1)
 
         #expect(summary.omissionMessage ==
-            "OpenClaw Share cannot send 1 video(s), 2 file(s), 1 unsupported item(s) yet. Remove omitted items and share again.")
+            "OpenClaw Share cannot send 1 video, 2 files, 1 unsupported item yet. Remove omitted items and share again.")
     }
 
     @Test func `keeps image processing failures authoritative before omission warnings`() {
@@ -41,6 +41,6 @@ struct ShareAttachmentSummaryTests {
         #expect(ShareAttachmentBlockReason.resolve(
             hasImageProcessingError: false,
             summary: summary) == .omitted(
-                "Only 3 of 6 images can be sent. Remove omitted items and share again."))
+            "Only 3 of 6 images can be sent. Remove omitted items and share again."))
     }
 }

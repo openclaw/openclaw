@@ -21,24 +21,33 @@ struct ShareAttachmentSummary: Equatable {
 
         var unsupported: [String] = []
         if self.videoCount > 0 {
+            let format = if self.videoCount == 1 {
+                NSLocalizedString("%d video", comment: "Share extension unsupported video count")
+            } else {
+                NSLocalizedString("%d videos", comment: "Share extension unsupported video count")
+            }
             unsupported.append(String(
-                format: NSLocalizedString(
-                    "%d video(s)",
-                    comment: "Share extension unsupported video count"),
+                format: format,
                 self.videoCount))
         }
         if self.fileCount > 0 {
+            let format = if self.fileCount == 1 {
+                NSLocalizedString("%d file", comment: "Share extension unsupported file count")
+            } else {
+                NSLocalizedString("%d files", comment: "Share extension unsupported file count")
+            }
             unsupported.append(String(
-                format: NSLocalizedString(
-                    "%d file(s)",
-                    comment: "Share extension unsupported file count"),
+                format: format,
                 self.fileCount))
         }
         if self.unknownCount > 0 {
+            let format = if self.unknownCount == 1 {
+                NSLocalizedString("%d unsupported item", comment: "Share extension unsupported attachment count")
+            } else {
+                NSLocalizedString("%d unsupported items", comment: "Share extension unsupported attachment count")
+            }
             unsupported.append(String(
-                format: NSLocalizedString(
-                    "%d unsupported item(s)",
-                    comment: "Share extension unsupported attachment count"),
+                format: format,
                 self.unknownCount))
         }
 
