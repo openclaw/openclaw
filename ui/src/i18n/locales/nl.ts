@@ -82,6 +82,7 @@ export const nl: TranslationMap = {
     relink: "Opnieuw koppelen",
     waitForScan: "Wachten op scan",
     logout: "Uitloggen",
+    skipToMainContent: "Ga naar hoofdinhoud",
   },
   nativeLinkMenu: {
     label: "Linkacties",
@@ -391,6 +392,18 @@ export const nl: TranslationMap = {
     title: "Beheerde worktrees",
     subtitle: "Geïsoleerde repository-checkouts beheerd door OpenClaw.",
     cleanNow: "Nu opschonen",
+    cleanupTitle: "Opschonen",
+    cleanupSubtitle:
+      "OpenClaw verwijdert periodiek oude worktrees om schijfruimte vrij te maken. Stel in hoe agressief de opschoning wordt uitgevoerd.",
+    cleanupMaxCount: "Maximaal aantal worktrees",
+    cleanupMaxCountHelp:
+      "Maximaal aantal beheerde worktrees dat in alle repository's samen wordt bewaard. Van oudere worktrees wordt eerst een snapshot gemaakt, waarna ze worden verwijderd. Stel in op 0 om de limiet voor het aantal uit te schakelen.",
+    cleanupMaxSize: "Maximale totale grootte (GB)",
+    cleanupMaxSizeHelp:
+      "Maximale totale grootte in GB van alle beheerde worktrees samen. Stel in op 0 om de groottelimiet uit te schakelen.",
+    cleanupDecrease: "{label} verlagen",
+    cleanupIncrease: "{label} verhogen",
+    cleanupSaveFailed: "Opslaan van opschoningslimieten is mislukt.",
     name: "Naam",
     repo: "Repository",
     branch: "Branch",
@@ -409,9 +422,17 @@ export const nl: TranslationMap = {
     working: "Bezig…",
     ready: "Klaar om te chatten",
     whatCanAgentDo: "Wat kan {name} doen?",
+    help: "Help",
     getHelp: "Hulp krijgen",
     discord: "Discord-community",
     viewChangelog: "Wijzigingslogboek bekijken",
+    agentSettings: "Agentinstellingen",
+    filterAgents: "Agent zoeken…",
+    noAgentMatches: "Geen overeenkomende agents",
+  },
+  agentScope: {
+    label: "Agentbereik",
+    allAgents: "Alle agents",
   },
   newSession: {
     title: "Nieuwe sessie",
@@ -623,6 +644,8 @@ export const nl: TranslationMap = {
     setDefault: "Als standaard instellen",
     alreadyDefaultTitle: "Al de standaardagent",
     setDefaultTitle: "Als standaardagent instellen",
+    pinToSwitcher: "Vastmaken aan wisselaar",
+    unpinFromSwitcher: "Losmaken van wisselaar",
     selectTitle: "Selecteer een agent",
     selectSubtitle: "Kies een agent om de workspace en tools te bekijken.",
     tabs: {
@@ -647,6 +670,18 @@ export const nl: TranslationMap = {
       default: "Standaard",
       configurationSubtitle: "Workspace-, identiteit- en modelconfiguratie.",
       schedulingSubtitle: "Workspace- en planningsdoelen.",
+    },
+    identity: {
+      title: "Identiteit",
+      subtitle: "Naam, emoji en avatar die worden weergegeven in chats en de zijbalk.",
+      name: "Weergavenaam",
+      namePlaceholder: "Agentnaam",
+      emoji: "Emoji",
+      chooseImage: "Afbeelding kiezen…",
+      replaceImage: "Afbeelding vervangen…",
+      imageUnusable:
+        "Die afbeelding kan niet worden gebruikt. Kies een afbeeldingsbestand van maximaal 2 MB.",
+      fileHint: "Agents kunnen dit zelf instellen door IDENTITY.md in hun werkruimte te bewerken.",
     },
     overview: {
       title: "Overzicht",
@@ -1092,6 +1127,7 @@ export const nl: TranslationMap = {
     settingsView: "Instellingenweergave",
     simple: "Eenvoudig",
     advanced: "Geavanceerd",
+    content: "Instellingen",
     themeImported: "{name} geïmporteerd.",
     themeRemoved: "Aangepast thema verwijderd.",
     channels: {
@@ -1447,6 +1483,8 @@ export const nl: TranslationMap = {
     platforms: "Platforms: {platforms}",
     installNamed: "{name} installeren",
     notFound: "Skill niet gevonden.",
+    openDetails: "Details van {name} openen",
+    enabledNamed: "{name} ingeschakeld",
     invalidLink: "ClawHub-link ongeldig",
     overview: "Overzicht",
     skillCard: "Skill-kaart",
@@ -3508,11 +3546,13 @@ export const nl: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Automatiseringsstatus",
       all: "Alle",
       active: "Actief",
       paused: "Gepauzeerd",
     },
     list: {
+      viewLabel: "Automatiseringsweergaven",
       searchPlaceholder: "Geplande taken zoeken",
       newTask: "Nieuwe taak",
       filters: "Filters",
@@ -3583,6 +3623,7 @@ export const nl: TranslationMap = {
       nextWake: "Volgende activering",
     },
     detail: {
+      tabsLabel: "Automatiseringsdetails",
       newTitle: "Nieuwe geplande taak",
       newSubtitle: "Beschrijf wat OpenClaw moet doen en kies wanneer het wordt uitgevoerd.",
       back: "Alle automatiseringen",

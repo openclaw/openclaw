@@ -25,6 +25,8 @@ const rootEntries = [
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   "src/plugin-sdk/*.ts!",
+  // Registry-dated deep-import compatibility surface; keep public until its removal windows pass.
+  "src/channels/plugins/target-parsing-loaded.ts!",
 ] as const;
 
 const bundledPluginEntries = [
@@ -263,6 +265,15 @@ const config = {
         "node-llama-cpp",
         ...bundledPluginIgnoredRuntimeDependencies,
       ],
+    },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {
+      // Reef vendors its wire protocol under protocol/, which owns the noble
+      // crypto dependencies. The protocol barrel is the vendored library's
+      // public surface, so its exports are intentional even where the channel
+      // consumes only a subset.
+      entry: [...bundledPluginEntries, "protocol/index.ts!", "protocol/node.ts!"],
+      project: ["index.ts!", "src/**/*.{js,mjs,ts}!", "protocol/**/*.ts!"],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in

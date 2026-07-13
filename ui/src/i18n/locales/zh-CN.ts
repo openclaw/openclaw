@@ -82,6 +82,7 @@ export const zh_CN: TranslationMap = {
     relink: "重新关联",
     waitForScan: "等待扫描",
     logout: "退出登录",
+    skipToMainContent: "跳转到主要内容",
   },
   nativeLinkMenu: {
     label: "链接操作",
@@ -385,6 +386,16 @@ export const zh_CN: TranslationMap = {
     title: "托管的 Worktrees",
     subtitle: "由 OpenClaw 拥有的隔离代码库检出。",
     cleanNow: "立即清理",
+    cleanupTitle: "清理",
+    cleanupSubtitle: "OpenClaw 会定期移除旧工作树以释放磁盘空间。可调整清理的执行强度。",
+    cleanupMaxCount: "工作树数量上限",
+    cleanupMaxCountHelp:
+      "所有仓库中保留的托管工作树数量上限。系统会优先为较旧的工作树创建快照并将其移除。设置为 0 可禁用数量限制。",
+    cleanupMaxSize: "总大小上限 (GB)",
+    cleanupMaxSizeHelp: "所有托管工作树的总大小上限（以 GB 为单位）。设置为 0 可禁用大小限制。",
+    cleanupDecrease: "减少 {label}",
+    cleanupIncrease: "增加 {label}",
+    cleanupSaveFailed: "保存清理限制失败。",
     name: "名称",
     repo: "代码库",
     branch: "分支",
@@ -403,9 +414,17 @@ export const zh_CN: TranslationMap = {
     working: "正在工作…",
     ready: "可以开始聊天",
     whatCanAgentDo: "{name} 能做什么？",
+    help: "帮助",
     getHelp: "获取帮助",
     discord: "Discord 社区",
     viewChangelog: "查看更新日志",
+    agentSettings: "Agent 设置",
+    filterAgents: "查找 Agent…",
+    noAgentMatches: "没有匹配的 Agent",
+  },
+  agentScope: {
+    label: "代理范围",
+    allAgents: "所有代理",
   },
   newSession: {
     title: "新建会话",
@@ -612,6 +631,8 @@ export const zh_CN: TranslationMap = {
     setDefault: "设为默认",
     alreadyDefaultTitle: "已是默认代理",
     setDefaultTitle: "设为默认代理",
+    pinToSwitcher: "固定到切换器",
+    unpinFromSwitcher: "从切换器取消固定",
     selectTitle: "选择代理",
     selectSubtitle: "选择代理以查看其工作区和工具。",
     tabs: {
@@ -636,6 +657,17 @@ export const zh_CN: TranslationMap = {
       default: "默认",
       configurationSubtitle: "工作区、身份和模型配置。",
       schedulingSubtitle: "工作区和调度目标。",
+    },
+    identity: {
+      title: "身份",
+      subtitle: "显示在聊天和侧边栏中的名称、表情符号和头像。",
+      name: "显示名称",
+      namePlaceholder: "Agent 名称",
+      emoji: "表情符号",
+      chooseImage: "选择图片…",
+      replaceImage: "替换图片…",
+      imageUnusable: "无法使用该图片。请选择一个不超过 2 MB 的图片文件。",
+      fileHint: "Agent 可以通过编辑其工作区中的 IDENTITY.md 自行设置。",
     },
     overview: {
       title: "概览",
@@ -1078,6 +1110,7 @@ export const zh_CN: TranslationMap = {
     settingsView: "设置视图",
     simple: "简单",
     advanced: "高级",
+    content: "设置内容",
     themeImported: "已导入 {name}。",
     themeRemoved: "已移除自定义主题。",
     channels: {
@@ -1424,6 +1457,8 @@ export const zh_CN: TranslationMap = {
     platforms: "平台：{platforms}",
     installNamed: "安装 {name}",
     notFound: "未找到 Skill。",
+    openDetails: "打开 {name} 的详细信息",
+    enabledNamed: "{name} 已启用",
     invalidLink: "ClawHub 链接无效",
     overview: "概览",
     skillCard: "Skill 卡片",
@@ -3424,11 +3459,13 @@ export const zh_CN: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "自动化状态",
       all: "全部",
       active: "活跃",
       paused: "已暂停",
     },
     list: {
+      viewLabel: "自动化视图",
       searchPlaceholder: "搜索计划任务",
       newTask: "新建任务",
       filters: "筛选",
@@ -3499,6 +3536,7 @@ export const zh_CN: TranslationMap = {
       nextWake: "下次唤醒",
     },
     detail: {
+      tabsLabel: "自动化详细信息",
       newTitle: "新建计划任务",
       newSubtitle: "描述 OpenClaw 应该做什么，然后选择运行时间。",
       back: "所有自动化",

@@ -19,6 +19,7 @@ type CronRunLogInsert = Insertable<CronRunLogsTable>;
 type CronRunLogFilterParams = {
   storeKey: string;
   jobId?: string;
+  jobIds?: readonly string[];
   statuses: CronRunStatus[] | null;
   deliveryStatuses: CronDeliveryStatus[] | null;
   runId?: string;
@@ -127,6 +128,8 @@ function applyRunLogFilters<Output>(
   let next = query.where("store_key", "=", params.storeKey);
   if (params.jobId) {
     next = next.where("job_id", "=", params.jobId);
+  } else if (params.jobIds?.length) {
+    next = next.where("job_id", "in", params.jobIds);
   }
   if (params.statuses?.length) {
     next = next.where("status", "in", params.statuses);
@@ -156,10 +159,14 @@ export function countCronRunLogRows(params: {
   db: DatabaseSync;
   storeKey: string;
   jobId?: string;
+  jobIds?: readonly string[];
   statuses: CronRunStatus[] | null;
   deliveryStatuses: CronDeliveryStatus[] | null;
   runId?: string;
 }): number {
+  if (params.jobIds?.length === 0) {
+    return 0;
+  }
   const row = executeSqliteQueryTakeFirstSync(
     params.db,
     applyRunLogFilters(
@@ -177,6 +184,7 @@ export function readCronRunLogRowsPage(params: {
   db: DatabaseSync;
   storeKey: string;
   jobId?: string;
+  jobIds?: readonly string[];
   statuses: CronRunStatus[] | null;
   deliveryStatuses: CronDeliveryStatus[] | null;
   runId?: string;
@@ -184,6 +192,9 @@ export function readCronRunLogRowsPage(params: {
   offset?: number;
   limit?: number;
 }): CronRunLogRow[] {
+  if (params.jobIds?.length === 0) {
+    return [];
+  }
   let query = applyRunLogFilters(
     getCronRunLogKysely(params.db).selectFrom("cron_run_logs").selectAll(),
     params,

@@ -7,10 +7,10 @@ import {
   loadSettings,
   persistSessionToken,
   resolvePageGatewaySettings,
-  resolveApplicationStartupSettings,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
 function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
   vi.stubGlobal("location", {
@@ -404,6 +404,41 @@ describe("loadSettings default gateway URL derivation", () => {
 
     expect(loadSettings().sidebarPinnedRoutes).toEqual(["usage", "cron", "plugins"]);
     expect(loadSettings().navWidth).toBe(258);
+  });
+
+  it("persists pinned agents and drops malformed or duplicate entries", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 258,
+      sidebarPinnedRoutes: [],
+      pinnedAgentIds: ["main", "research"],
+    });
+    expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
+
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    persisted.pinnedAgentIds = ["main", "main", 7, "  ", " research "];
+    localStorage.setItem(scopedKey, JSON.stringify(persisted));
+    expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
   });
 
   it("normalizes persisted text scale to the nearest supported stop", () => {

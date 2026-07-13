@@ -26,8 +26,10 @@ import type {
 } from "../../lib/cron/index.ts";
 import type { CronFormState } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
-import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
+import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
+import { handleTabListKeydown } from "../../lib/tab-list.ts";
+import { renderCronStats } from "./stats.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
 
@@ -42,6 +44,9 @@ type CronProps = {
   jobsLoadingMore: boolean;
   status: CronStatus | null;
   failingCount: number | null;
+  agentScoped: boolean;
+  scopedTotal: number | null;
+  scopedNextWakeAtMs: number | null;
   jobs: CronJob[];
   jobsTotal: number;
   jobsHasMore: boolean;
@@ -361,7 +366,7 @@ const ENABLED_TABS: Array<{ value: CronJobsEnabledFilter; labelKey: string }> = 
 function renderListView(props: CronProps) {
   return html`
     <section class="cron-page" data-panel-mode="overview">
-      ${renderStats(props)}
+      ${renderCronStats(props)}
       ${props.status && !props.status.enabled
         ? html`
             <div class="cron-error-banner" data-test-id="cron-scheduler-banner">
@@ -371,52 +376,17 @@ function renderListView(props: CronProps) {
         : nothing}
       ${props.error ? html`<div class="cron-error-banner">${props.error}</div>` : nothing}
       ${renderToolbar(props)}
-      ${props.listTab === "activity"
-        ? html`<div class="cron-activity card">${renderRunsSection(props)}</div>`
-        : renderTasksPanel(props)}
-    </section>
-  `;
-}
-
-function renderStats(props: CronProps) {
-  // failingCount is a dedicated unfiltered cron.list total; props.jobs only
-  // holds the current filtered page and must not feed a global stat.
-  const failing = props.failingCount;
-  const total = props.status?.jobs ?? Math.max(props.jobsTotal, props.jobs.length);
-  return html`
-    <div class="cron-stats">
-      <div class="cron-stat card">
-        <span class="cron-stat__label">${t("cron.stats.tasks")}</span>
-        <span class="cron-stat__value">${total}</span>
-      </div>
-      <button
-        type="button"
-        class="cron-stat cron-stat--action card"
-        data-test-id="cron-stat-failing"
-        title=${t("cron.list.activityTab")}
-        @click=${() => {
-          // Drill into run history pre-filtered to errors.
-          props.onListTabChange("activity");
-          void props.onRunsFiltersChange({ cronRunsStatuses: ["error"] });
-        }}
+      <div
+        id="cron-list-panel"
+        class="cron-tab-panel"
+        role="tabpanel"
+        aria-labelledby=${`cron-list-tab-${props.listTab}`}
       >
-        <span class="cron-stat__label">${t("cron.stats.failing")}</span>
-        <span
-          class="cron-stat__value ${typeof failing === "number" && failing > 0
-            ? "cron-stat__value--danger"
-            : ""}"
-        >
-          ${failing ?? t("common.na")}
-        </span>
-        <span class="cron-stat__go" aria-hidden="true">${icon("chevronRight")}</span>
-      </button>
-      <div class="cron-stat card">
-        <span class="cron-stat__label">${t("cron.stats.nextWake")}</span>
-        <span class="cron-stat__value cron-stat__value--time">
-          ${formatNextRun(props.status?.nextWakeAtMs ?? null)}
-        </span>
+        ${props.listTab === "activity"
+          ? html`<div class="cron-activity card">${renderRunsSection(props)}</div>`
+          : renderTasksPanel(props)}
       </div>
-    </div>
+    </section>
   `;
 }
 
@@ -434,15 +404,19 @@ function renderToolbar(props: CronProps) {
     props.jobsSortDir !== "asc";
   return html`
     <div class="cron-toolbar">
-      <div class="cron-tabs" role="tablist">
+      <div class="cron-tabs" role="tablist" aria-label=${t("cron.list.viewLabel")}>
         ${viewTabs.map(
           (tab) => html`
             <button
               type="button"
               role="tab"
+              id=${`cron-list-tab-${tab.value}`}
               class="cron-tab ${props.listTab === tab.value ? "cron-tab--active" : ""}"
               aria-selected=${props.listTab === tab.value ? "true" : "false"}
+              aria-controls="cron-list-panel"
+              .tabIndex=${props.listTab === tab.value ? 0 : -1}
               data-test-id=${tab.testId}
+              @keydown=${handleTabListKeydown}
               @click=${() => props.onListTabChange(tab.value)}
             >
               ${tab.label}
@@ -452,16 +426,15 @@ function renderToolbar(props: CronProps) {
       </div>
       ${props.listTab === "tasks"
         ? html`
-            <div class="cron-tabs" role="tablist">
+            <div class="cron-tabs" role="group" aria-label=${t("cron.tabs.filterLabel")}>
               ${ENABLED_TABS.map(
                 (tab) => html`
                   <button
                     type="button"
-                    role="tab"
                     class="cron-tab ${props.jobsEnabledFilter === tab.value
                       ? "cron-tab--active"
                       : ""}"
-                    aria-selected=${props.jobsEnabledFilter === tab.value ? "true" : "false"}
+                    aria-pressed=${props.jobsEnabledFilter === tab.value ? "true" : "false"}
                     data-test-id=${`cron-tab-${tab.value}`}
                     @click=${() => props.onJobsFiltersChange({ cronJobsEnabledFilter: tab.value })}
                   >
@@ -808,6 +781,7 @@ function renderSuggestions(props: CronProps) {
 function renderDetailView(props: CronProps, mode: CronPanelMode) {
   const selectedJob =
     mode === "job" ? props.jobs.find((job) => job.id === props.editingJobId) : undefined;
+  const hasDetailTabs = mode === "job" && Boolean(selectedJob);
   const showHistory = mode === "job" && props.detailTab === "history";
   return html`
     <section class="cron-page cron-page--detail" data-panel-mode=${mode}>
@@ -823,11 +797,18 @@ function renderDetailView(props: CronProps, mode: CronPanelMode) {
         </button>
       </div>
       ${renderDetailHeader(props, mode, selectedJob)}
-      ${mode === "job" && selectedJob ? renderDetailTabs(props) : nothing}
+      ${hasDetailTabs ? renderDetailTabs(props) : nothing}
       ${props.error ? html`<div class="cron-error-banner">${props.error}</div>` : nothing}
-      ${showHistory
-        ? html`<div class="cron-history card">${renderRunsSection(props)}</div>`
-        : renderEditor(props, mode)}
+      <div
+        id="cron-detail-panel"
+        class="cron-tab-panel"
+        role=${hasDetailTabs ? "tabpanel" : nothing}
+        aria-labelledby=${hasDetailTabs ? `cron-detail-tab-${props.detailTab}` : nothing}
+      >
+        ${showHistory
+          ? html`<div class="cron-history card">${renderRunsSection(props)}</div>`
+          : renderEditor(props, mode)}
+      </div>
     </section>
   `;
 }
@@ -907,15 +888,19 @@ function renderDetailTabs(props: CronProps) {
     { value: "history", label: t("cron.detail.historyTitle"), testId: "cron-detail-tab-history" },
   ];
   return html`
-    <div class="cron-tabs cron-view-tabs" role="tablist">
+    <div class="cron-tabs cron-view-tabs" role="tablist" aria-label=${t("cron.detail.tabsLabel")}>
       ${tabs.map(
         (tab) => html`
           <button
             type="button"
             role="tab"
+            id=${`cron-detail-tab-${tab.value}`}
             class="cron-tab ${props.detailTab === tab.value ? "cron-tab--active" : ""}"
             aria-selected=${props.detailTab === tab.value ? "true" : "false"}
+            aria-controls="cron-detail-panel"
+            .tabIndex=${props.detailTab === tab.value ? 0 : -1}
             data-test-id=${tab.testId}
+            @keydown=${handleTabListKeydown}
             @click=${() => props.onDetailTabChange(tab.value)}
           >
             ${tab.label}

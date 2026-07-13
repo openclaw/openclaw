@@ -34,6 +34,7 @@ export type ApplicationNavigationPreferencesSnapshot = {
   navCollapsed: boolean;
   navWidth: number;
   sidebarPinnedRoutes: readonly SidebarNavRoute[];
+  pinnedAgentIds: readonly string[];
 };
 
 export type ApplicationNavigationPreferences = {

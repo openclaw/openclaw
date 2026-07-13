@@ -82,6 +82,7 @@ export const tr: TranslationMap = {
     relink: "Yeniden bağla",
     waitForScan: "Tarama için bekle",
     logout: "Çıkış yap",
+    skipToMainContent: "Ana içeriğe geç",
   },
   nativeLinkMenu: {
     label: "Bağlantı eylemleri",
@@ -391,6 +392,18 @@ export const tr: TranslationMap = {
     title: "Yönetilen Worktree'ler",
     subtitle: "OpenClaw tarafından sahip olunan yalıtılmış depo checkout'ları.",
     cleanNow: "Şimdi temizle",
+    cleanupTitle: "Temizleme",
+    cleanupSubtitle:
+      "OpenClaw, disk alanı açmak için eski worktree'leri düzenli olarak kaldırır. Temizlemenin ne kadar yoğun yapılacağını ayarlayın.",
+    cleanupMaxCount: "Maksimum worktree sayısı",
+    cleanupMaxCountHelp:
+      "Tüm depolarda tutulacak maksimum yönetilen worktree sayısı. Önce eski worktree'lerin anlık görüntüsü alınır ve ardından bunlar kaldırılır. Sayı sınırını devre dışı bırakmak için 0 olarak ayarlayın.",
+    cleanupMaxSize: "Maksimum toplam boyut (GB)",
+    cleanupMaxSizeHelp:
+      "Tüm yönetilen worktree'lerin GB cinsinden maksimum toplam boyutu. Boyut sınırını devre dışı bırakmak için 0 olarak ayarlayın.",
+    cleanupDecrease: "{label} değerini azalt",
+    cleanupIncrease: "{label} değerini artır",
+    cleanupSaveFailed: "Temizleme sınırları kaydedilemedi.",
     name: "Ad",
     repo: "Depo",
     branch: "Dal",
@@ -410,9 +423,17 @@ export const tr: TranslationMap = {
     working: "Çalışıyor…",
     ready: "Sohbete hazır",
     whatCanAgentDo: "{name} neler yapabilir?",
+    help: "Yardım",
     getHelp: "Yardım alın",
     discord: "Discord topluluğu",
     viewChangelog: "Değişiklik günlüğünü görüntüleyin",
+    agentSettings: "Agent ayarları",
+    filterAgents: "Agent bul…",
+    noAgentMatches: "Eşleşen agent yok",
+  },
+  agentScope: {
+    label: "Ajan kapsamı",
+    allAgents: "Tüm ajanlar",
   },
   newSession: {
     title: "Yeni oturum",
@@ -622,6 +643,8 @@ export const tr: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Değiştiriciye sabitle",
+    unpinFromSwitcher: "Değiştiriciden kaldır",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -646,6 +669,18 @@ export const tr: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Kimlik",
+      subtitle: "Sohbetlerde ve kenar çubuğunda gösterilen ad, emoji ve avatar.",
+      name: "Görünen ad",
+      namePlaceholder: "Agent adı",
+      emoji: "Emoji",
+      chooseImage: "Görsel seç…",
+      replaceImage: "Görseli değiştir…",
+      imageUnusable: "Bu görsel kullanılamıyor. En fazla 2 MB boyutunda bir görsel dosyası seçin.",
+      fileHint:
+        "Agent'lar, çalışma alanlarındaki IDENTITY.md dosyasını düzenleyerek bunu kendileri ayarlayabilir.",
     },
     overview: {
       title: "Genel Bakış",
@@ -1092,6 +1127,7 @@ export const tr: TranslationMap = {
     settingsView: "Ayarlar görünümü",
     simple: "Basit",
     advanced: "Gelişmiş",
+    content: "Ayarlar içeriği",
     themeImported: "{name} içe aktarıldı.",
     themeRemoved: "Özel tema kaldırıldı.",
     channels: {
@@ -1445,6 +1481,8 @@ export const tr: TranslationMap = {
     platforms: "Platformlar: {platforms}",
     installNamed: "{name} yükle",
     notFound: "Beceri bulunamadı.",
+    openDetails: "{name} ayrıntılarını aç",
+    enabledNamed: "{name} etkin",
     invalidLink: "ClawHub bağlantısı geçersiz",
     overview: "Genel bakış",
     skillCard: "Skill Card",
@@ -3513,11 +3551,13 @@ export const tr: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Otomasyon durumu",
       all: "Tümü",
       active: "Etkin",
       paused: "Duraklatıldı",
     },
     list: {
+      viewLabel: "Otomasyon görünümleri",
       searchPlaceholder: "Zamanlanmış görevleri ara",
       newTask: "Yeni görev",
       filters: "Filtreler",
@@ -3589,6 +3629,7 @@ export const tr: TranslationMap = {
       nextWake: "Sonraki uyanma",
     },
     detail: {
+      tabsLabel: "Otomasyon ayrıntıları",
       newTitle: "Yeni zamanlanmış görev",
       newSubtitle:
         "OpenClaw'ın ne yapması gerektiğini açıklayın, ardından ne zaman çalışacağını seçin.",
