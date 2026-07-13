@@ -16,7 +16,9 @@ async function send(
   replyToId?: string | null,
 ): Promise<OutboundDeliveryResult> {
   const peer = normalizeReefTarget(to);
-  if (!peer) throw new Error("Reef target must be a handle");
+  if (!peer) {
+    throw new Error("Reef target must be a handle");
+  }
   const id = await getActiveReef().flow.send(peer, text, {
     ...(threadId != null ? { thread: String(threadId) } : {}),
     ...(replyToId ? { replyTo: replyToId } : {}),

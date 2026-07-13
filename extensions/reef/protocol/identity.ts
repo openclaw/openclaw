@@ -85,9 +85,13 @@ export function formatHandleEpoch(handle: string, keyEpoch: number): string {
 
 export function parseHandleEpoch(value: string): { handle: string; keyEpoch: number } {
   const match = /^([a-z0-9](?:[a-z0-9_-]{0,62}))#([1-9][0-9]*)$/i.exec(value);
-  if (!match) throw new Error("invalid handle#key_epoch");
+  if (!match) {
+    throw new Error("invalid handle#key_epoch");
+  }
   const keyEpoch = Number(match[2]);
-  if (!Number.isSafeInteger(keyEpoch)) throw new Error("invalid key epoch");
+  if (!Number.isSafeInteger(keyEpoch)) {
+    throw new Error("invalid key epoch");
+  }
   return { handle: match[1]!, keyEpoch };
 }
 
@@ -127,8 +131,9 @@ function validateRotation(statement: RotationStatement): void {
   ) {
     throw new Error("invalid rotation statement");
   }
-  if (!Number.isSafeInteger(statement.newEpoch) || statement.newEpoch < 1)
+  if (!Number.isSafeInteger(statement.newEpoch) || statement.newEpoch < 1) {
     throw new Error("invalid new epoch");
+  }
   if (
     fromBase64url(statement.newEd25519Pub).length !== 32 ||
     fromBase64url(statement.newX25519Pub).length !== 32

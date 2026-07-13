@@ -133,7 +133,9 @@ export function seal(options: SealOptions): Envelope {
   );
   validateMessageBody(options.body);
   const plaintext = canonicalBytes(options.body);
-  if (plaintext.length > MAX_PLAINTEXT) throw new TooLargeError();
+  if (plaintext.length > MAX_PLAINTEXT) {
+    throw new TooLargeError();
+  }
   const ephemeral = x25519.keygen((options.rng ?? randomBytes)(32));
   const shared = x25519.getSharedSecret(
     ephemeral.secretKey,
@@ -141,7 +143,9 @@ export function seal(options: SealOptions): Envelope {
   );
   const key = hkdf(sha256, shared, undefined, HKDF_INFO, 32);
   const nonce = (options.rng ?? randomBytes)(12);
-  if (nonce.length !== 12) throw new MalformedError("rng returned invalid nonce");
+  if (nonce.length !== 12) {
+    throw new MalformedError("rng returned invalid nonce");
+  }
   const unsigned: UnsignedEnvelope = {
     v: 1,
     id: options.id,
@@ -160,7 +164,9 @@ export function seal(options: SealOptions): Envelope {
 
 export async function open(options: OpenOptions): Promise<MessageBody> {
   const result = await openClaimed(options);
-  if (result.claim === "duplicate") throw new ReplayedError("duplicate envelope");
+  if (result.claim === "duplicate") {
+    throw new ReplayedError("duplicate envelope");
+  }
   const peer = parseHandleEpoch(options.envelope.from).handle;
   try {
     await options.replayStore.consume(peer, options.envelope.id);
@@ -173,7 +179,9 @@ export async function open(options: OpenOptions): Promise<MessageBody> {
 
 export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResult> {
   const envelope = validateEnvelope(options.envelope);
-  if (!options.senderSigningPublicKey) throw new NotPinnedError();
+  if (!options.senderSigningPublicKey) {
+    throw new NotPinnedError();
+  }
   const { sig, ...unsigned } = envelope;
   let validSignature = false;
   try {
@@ -183,18 +191,30 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
       decodeKey(options.senderSigningPublicKey),
     );
   } catch {}
-  if (!validSignature) throw new BadSignatureError();
-  if (envelope.v !== 1) throw new MalformedError();
+  if (!validSignature) {
+    throw new BadSignatureError();
+  }
+  if (envelope.v !== 1) {
+    throw new MalformedError();
+  }
   validateEnvelopeMetadata(envelope.id, envelope.from, envelope.to, envelope.ts);
-  if (envelope.to !== options.self) throw new WrongRecipientError();
+  if (envelope.to !== options.self) {
+    throw new WrongRecipientError();
+  }
   const peer = parseHandleEpoch(envelope.from).handle;
   const hash = hex(sha256(canonicalBytes(envelope)));
   const claim = await options.replayStore.claim(peer, envelope.id, hash);
-  if (claim === "mismatch") throw new ReplayedError("replay id binding mismatch");
-  if (claim === "in_flight") throw new ReplayedError("in flight");
+  if (claim === "mismatch") {
+    throw new ReplayedError("replay id binding mismatch");
+  }
+  if (claim === "in_flight") {
+    throw new ReplayedError("in flight");
+  }
   if (claim === "duplicate") {
     const completed = await options.replayStore.completed(peer, envelope.id);
-    if (completed === undefined) return { claim };
+    if (completed === undefined) {
+      return { claim };
+    }
     return completed.body === undefined
       ? { claim, receipt: completed.receipt }
       : { claim, receipt: completed.receipt, body: completed.body };
@@ -203,20 +223,26 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
     const now = options.now ?? Math.floor(Date.now() / 1000);
     const maxAge = options.maxAgeSeconds ?? 2_592_000;
     const maxFutureSkew = options.maxFutureSkewSeconds ?? 300;
-    if (envelope.ts > now + maxFutureSkew || envelope.ts < now - maxAge) throw new ExpiredError();
+    if (envelope.ts > now + maxFutureSkew || envelope.ts < now - maxAge) {
+      throw new ExpiredError();
+    }
     const shared = x25519.getSharedSecret(
       decodeKey(options.recipientEncryptionSecretKey),
       fromBase64(envelope.epk),
     );
     const key = hkdf(sha256, shared, undefined, HKDF_INFO, 32);
     const plaintext = gcm(key, fromBase64(envelope.n)).decrypt(fromBase64(envelope.ct));
-    if (plaintext.length > MAX_PLAINTEXT) throw new TooLargeError();
+    if (plaintext.length > MAX_PLAINTEXT) {
+      throw new TooLargeError();
+    }
     const body = JSON.parse(decodeUtf8(plaintext)) as unknown;
     validateMessageBody(body);
     return { claim: "new", body, envelopeHash: hash };
   } catch (error) {
     await options.replayStore.release(peer, envelope.id);
-    if (error instanceof ProtocolError) throw error;
+    if (error instanceof ProtocolError) {
+      throw error;
+    }
     throw new MalformedError();
   }
 }
@@ -231,7 +257,9 @@ export function bodyHash(body: MessageBody): string {
 
 function decodeKey(value: string): Uint8Array {
   const key = fromBase64url(value);
-  if (key.length !== 32) throw new MalformedError("invalid key length");
+  if (key.length !== 32) {
+    throw new MalformedError("invalid key length");
+  }
   return key;
 }
 
@@ -248,8 +276,9 @@ export function validateEnvelopeMetadata(id: string, from: string, to: string, t
 }
 
 export function validateMessageBody(value: unknown): asserts value is MessageBody {
-  if (!isExactObject(value, ["text", "replyTo", "thread"]))
+  if (!isExactObject(value, ["text", "replyTo", "thread"])) {
     throw new MalformedError("invalid body");
+  }
   if (
     typeof value.text !== "string" ||
     (value.replyTo !== undefined && typeof value.replyTo !== "string") ||
@@ -264,14 +293,16 @@ export function validateMessageBody(value: unknown): asserts value is MessageBod
     throw new MalformedError("invalid body identifier");
   }
   for (const field of [value.text, value.replyTo, value.thread]) {
-    if (field !== undefined && decodeUtf8(utf8(field)) !== field)
+    if (field !== undefined && decodeUtf8(utf8(field)) !== field) {
       throw new MalformedError("invalid UTF-8 body");
+    }
   }
 }
 
 function validateEnvelope(value: unknown): Envelope {
-  if (!isExactObject(value, ["v", "id", "from", "to", "ts", "epk", "n", "ct", "sig"]))
+  if (!isExactObject(value, ["v", "id", "from", "to", "ts", "epk", "n", "ct", "sig"])) {
     throw new MalformedError();
+  }
   if (
     typeof value.v !== "number" ||
     typeof value.id !== "string" ||
@@ -285,7 +316,9 @@ function validateEnvelope(value: unknown): Envelope {
   ) {
     throw new MalformedError();
   }
-  if (value.id.length !== 26) throw new MalformedError("invalid envelope id length");
+  if (value.id.length !== 26) {
+    throw new MalformedError("invalid envelope id length");
+  }
   if (
     value.from.length > 80 ||
     value.to.length > 80 ||
@@ -301,18 +334,23 @@ function validateEnvelope(value: unknown): Envelope {
       fromBase64(value.epk).length !== 32 ||
       fromBase64(value.n).length !== 12 ||
       fromBase64(value.sig).length !== 64
-    )
+    ) {
       throw new Error();
+    }
     fromBase64(value.ct);
   } catch {
     throw new MalformedError();
   }
-  if (canonicalBytes(value).length > MAX_ENVELOPE_BYTES) throw new TooLargeError();
+  if (canonicalBytes(value).length > MAX_ENVELOPE_BYTES) {
+    throw new TooLargeError();
+  }
   return value as unknown as Envelope;
 }
 
 function isExactObject(value: unknown, keys: string[]): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
   return (
     Object.keys(value).every((key) => keys.includes(key)) &&
     keys.every((key) => key in value || ["replyTo", "thread"].includes(key))

@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAnthropicGuard, createOpenAiGuard, type FetchLike } from "./guard-adapters.js";
-import {
-  admitGuardAdapter,
-  type GuardRequest,
-  type RawGuardAdapter,
-  type Verdict,
-} from "./guard.js";
+import { admitGuardAdapter, type GuardRequest, type Verdict } from "./guard.js";
 
 const model = "guard-model-2026-07-12";
 const request: GuardRequest = {
@@ -274,7 +269,9 @@ describe.skipIf(process.env.REEF_LIVE_GUARD !== "1")("live guard smoke", () => {
   it("calls OpenAI only when explicitly enabled", async () => {
     const liveModel = process.env.REEF_OPENAI_MODEL;
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!liveModel || !apiKey) return;
+    if (!liveModel || !apiKey) {
+      return;
+    }
     const guard = createOpenAiGuard({ apiKey, pinnedModel: liveModel, fetch });
     expect((await guard.classify(request)).model).toBe(liveModel);
   });
@@ -282,7 +279,9 @@ describe.skipIf(process.env.REEF_LIVE_GUARD !== "1")("live guard smoke", () => {
   it("calls Anthropic only when explicitly enabled", async () => {
     const liveModel = process.env.REEF_ANTHROPIC_MODEL;
     const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!liveModel || !apiKey) return;
+    if (!liveModel || !apiKey) {
+      return;
+    }
     const guard = createAnthropicGuard({ apiKey, pinnedModel: liveModel, fetch });
     expect((await guard.classify(request)).model).toBe(liveModel);
   });

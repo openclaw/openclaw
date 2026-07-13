@@ -12,13 +12,17 @@ export function setReefRuntime(value: PluginRuntime): void {
   runtime = value;
 }
 export function getReefRuntime(): PluginRuntime {
-  if (!runtime) throw new Error("Reef runtime unavailable");
+  if (!runtime) {
+    throw new Error("Reef runtime unavailable");
+  }
   return runtime;
 }
 export function setActiveReef(value: typeof active): void {
   active = value;
 }
 export function getActiveReef() {
-  if (!active) throw new Error("Reef channel is not running");
+  if (!active) {
+    throw new Error("Reef channel is not running");
+  }
   return active;
 }

@@ -56,7 +56,9 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
           },
         }),
       });
-      if (!response.ok) throw new Error(`guard HTTP ${response.status}`);
+      if (!response.ok) {
+        throw new Error(`guard HTTP ${response.status}`);
+      }
       const envelope = await parseJsonResponse(response);
       if (
         !isRecord(envelope) ||
@@ -64,17 +66,23 @@ export function createOpenAiGuard(options: AdapterOptions): GuardAdapter {
         envelope.model !== options.pinnedModel ||
         envelope.status !== "completed" ||
         !Array.isArray(envelope.output)
-      )
+      ) {
         throw new Error("invalid OpenAI guard response");
+      }
       const outputTexts: string[] = [];
       for (const item of envelope.output) {
-        if (!isRecord(item) || item.type !== "message" || !Array.isArray(item.content)) continue;
+        if (!isRecord(item) || item.type !== "message" || !Array.isArray(item.content)) {
+          continue;
+        }
         for (const part of item.content) {
-          if (isRecord(part) && part.type === "output_text" && typeof part.text === "string")
+          if (isRecord(part) && part.type === "output_text" && typeof part.text === "string") {
             outputTexts.push(part.text);
+          }
         }
       }
-      if (outputTexts.length !== 1) throw new Error("guard must return one OpenAI output object");
+      if (outputTexts.length !== 1) {
+        throw new Error("guard must return one OpenAI output object");
+      }
       return attachProviderModel(parseStrictJson(outputTexts[0]!, true), envelope.model);
     },
   };
@@ -103,7 +111,9 @@ export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
           messages: [{ role: "user", content: JSON.stringify(request) }],
         }),
       });
-      if (!response.ok) throw new Error(`guard HTTP ${response.status}`);
+      if (!response.ok) {
+        throw new Error(`guard HTTP ${response.status}`);
+      }
       const envelope = await parseJsonResponse(response);
       if (
         !isRecord(envelope) ||
@@ -111,12 +121,16 @@ export function createAnthropicGuard(options: AdapterOptions): GuardAdapter {
         envelope.model !== options.pinnedModel ||
         !Array.isArray(envelope.content) ||
         envelope.stop_reason !== "end_turn"
-      )
+      ) {
         throw new Error("invalid Anthropic guard response");
-      if (envelope.content.length !== 1) throw new Error("invalid Anthropic guard content");
+      }
+      if (envelope.content.length !== 1) {
+        throw new Error("invalid Anthropic guard content");
+      }
       const part = envelope.content[0];
-      if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string")
+      if (!isRecord(part) || part.type !== "text" || typeof part.text !== "string") {
         throw new Error("missing Anthropic guard output");
+      }
       return attachProviderModel(parseStrictJson(part.text, true), envelope.model);
     },
   };
@@ -130,30 +144,37 @@ function instructionFor(request: GuardRequest): string {
 }
 
 function attachProviderModel(value: unknown, model: string): unknown {
-  if (!isRecord(value) || Object.hasOwn(value, "model"))
+  if (!isRecord(value) || Object.hasOwn(value, "model")) {
     throw new Error("invalid model guard verdict");
+  }
   return { ...value, model };
 }
 
 async function parseJsonResponse(response: Response): Promise<unknown> {
   const text = await response.text();
-  if (text.length > 256 * 1024) throw new Error("guard response too large");
+  if (text.length > 256 * 1024) {
+    throw new Error("guard response too large");
+  }
   return parseStrictJson(text);
 }
 
 function parseStrictJson(text: string, rejectDuplicateKeys = false): unknown {
   const trimmed = text.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}"))
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
     throw new Error("guard returned non-object JSON");
-  if (rejectDuplicateKeys && hasDuplicateKeys(trimmed))
+  }
+  if (rejectDuplicateKeys && hasDuplicateKeys(trimmed)) {
     throw new Error("guard returned duplicate JSON keys");
+  }
   return JSON.parse(trimmed) as unknown;
 }
 
 function hasDuplicateKeys(text: string): boolean {
   const keys = new Set<string>();
   for (let index = 0; index < text.length; index++) {
-    if (text[index] !== '"') continue;
+    if (text[index] !== '"') {
+      continue;
+    }
     const start = index;
     for (index++; index < text.length; index++) {
       if (text[index] === "\\") {
@@ -163,10 +184,16 @@ function hasDuplicateKeys(text: string): boolean {
       }
     }
     let next = index + 1;
-    while (/\s/.test(text[next] ?? "")) next++;
-    if (text[next] !== ":") continue;
+    while (/\s/.test(text[next] ?? "")) {
+      next++;
+    }
+    if (text[next] !== ":") {
+      continue;
+    }
     const key = JSON.parse(text.slice(start, index + 1)) as string;
-    if (keys.has(key)) return true;
+    if (keys.has(key)) {
+      return true;
+    }
     keys.add(key);
   }
   return false;

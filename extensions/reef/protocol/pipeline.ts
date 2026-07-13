@@ -162,7 +162,9 @@ export type InboundResult =
 export async function composeInbound(options: ComposeInboundOptions): Promise<InboundResult> {
   const opened = await openClaimed(options);
   if (opened.claim === "duplicate") {
-    if (opened.receipt === undefined) throw new ReplayedError("duplicate envelope");
+    if (opened.receipt === undefined) {
+      throw new ReplayedError("duplicate envelope");
+    }
     return opened.body === undefined
       ? { disposition: "duplicate", receipt: opened.receipt }
       : { disposition: "duplicate", body: opened.body, receipt: opened.receipt };
@@ -279,7 +281,9 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
     finalized = true;
     return { disposition: "accepted", body: opened.body, verdict, receipt };
   } catch (error) {
-    if (!finalized) await options.replayStore.release(peer, options.envelope.id);
+    if (!finalized) {
+      await options.replayStore.release(peer, options.envelope.id);
+    }
     throw error;
   }
 }
@@ -344,8 +348,9 @@ async function classifyWithReview(
     approvalDigest,
     ...verdict,
   });
-  if (verdict.decision === "deny")
+  if (verdict.decision === "deny") {
     throw new PipelineError("guard", "guard denied message", verdict);
+  }
   if (verdict.decision === "review") {
     const approval = await options.reviewGate?.({
       id,
@@ -356,7 +361,7 @@ async function classifyWithReview(
       approvalDigest,
       verdict,
     });
-    if (approval === undefined)
+    if (approval === undefined) {
       throw new PipelineError(
         "review",
         "review approval pending",
@@ -365,7 +370,8 @@ async function classifyWithReview(
         "pending",
         approvalDigest,
       );
-    if (approval.approvalDigest !== approvalDigest)
+    }
+    if (approval.approvalDigest !== approvalDigest) {
       throw new PipelineError(
         "review",
         "approval digest mismatch",
@@ -374,7 +380,8 @@ async function classifyWithReview(
         "pending",
         approvalDigest,
       );
-    if (!approval.approved)
+    }
+    if (!approval.approved) {
       throw new PipelineError(
         "review",
         "review explicitly denied",
@@ -383,6 +390,7 @@ async function classifyWithReview(
         "denied",
         approvalDigest,
       );
+    }
     await appendAudit(options.audit, "review_approval", {
       id,
       from: source,
@@ -407,8 +415,9 @@ async function classifyWithReview(
       afterApproval: true,
       ...verdict,
     });
-    if (verdict.decision === "deny")
+    if (verdict.decision === "deny") {
       throw new PipelineError("guard", "guard denied approved message", verdict);
+    }
   }
   return verdict;
 }

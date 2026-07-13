@@ -137,7 +137,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
   },
   gateway: {
     startAccount: async (ctx) => {
-      if (!ctx.account.configured) throw new Error("Reef requires handle, email, and guard config");
+      if (!ctx.account.configured) {
+        throw new Error("Reef requires handle, email, and guard config");
+      }
       const runtime = getReefRuntime();
       const stateDir = resolveStateDir(ctx.account.config.stateDir);
       const keys = await loadKeys(stateDir);
@@ -154,7 +156,6 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         channel: "reef",
         accountId: "default",
       });
-      let flow: ReefMessageFlow;
       const onIngress = async (message: ReefIngressMessage) => {
         const friend = ctx.account.config.friends[message.peer]!;
         const budget = autonomyBudget(friend.autonomy);
@@ -195,13 +196,16 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           deliver: async (payload) => {
             const text =
               payload && typeof payload === "object" && "text" in payload
-                ? String(payload.text ?? "")
+                ? typeof (payload as { text?: unknown }).text === "string"
+                  ? (payload as { text: string }).text
+                  : ""
                 : "";
-            if (text.trim())
+            if (text.trim()) {
               await flow.send(message.peer, text, {
                 thread: message.thread ?? message.id,
                 replyTo: message.id,
               });
+            }
           },
           onRecordError: (error) =>
             ctx.log?.error?.(`reef inbound record failed: ${String(error)}`),
@@ -221,7 +225,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
           contextKey: `reef:${ctx.account.config.handle}`,
         });
       };
-      flow = new ReefMessageFlow({
+      const flow: ReefMessageFlow = new ReefMessageFlow({
         config: ctx.account.config,
         keys,
         stateDir,
@@ -254,7 +258,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
             afterWrite: { mode: "auto" },
             mutate(draft) {
               const reef = draft.channels?.reef as { friends?: unknown } | undefined;
-              if (reef) reef.friends = snapshot;
+              if (reef) {
+                reef.friends = snapshot;
+              }
             },
           });
         }
@@ -268,7 +274,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
         (entries) => flow.processEntries(entries),
         socketFactory,
         (state) => {
-          if (ctx.abortSignal.aborted) return;
+          if (ctx.abortSignal.aborted) {
+            return;
+          }
           ctx.setStatus(
             state === "connected"
               ? {
@@ -284,7 +292,9 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       const reconciliationLoop = async () => {
         while (!ctx.abortSignal.aborted) {
           await abortableSleep(30_000, ctx.abortSignal);
-          if (!ctx.abortSignal.aborted) await reconcile();
+          if (!ctx.abortSignal.aborted) {
+            await reconcile();
+          }
         }
       };
       try {

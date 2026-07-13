@@ -34,7 +34,9 @@ describe("Reef configuration boundary", () => {
     });
 
     expect(result.success).toBe(true);
-    if (!result.success) throw result.error;
+    if (!result.success) {
+      throw result.error;
+    }
     expect(result.data).toMatchObject({
       relayUrl: "https://relay.owner.example",
       requestPolicy: "friends-of-friends",

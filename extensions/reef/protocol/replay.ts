@@ -33,9 +33,15 @@ export class MemoryReplayStore implements ReplayStore {
       this.#bindings.set(key, { envelopeHash, state: "in_flight" });
       return "new";
     }
-    if (existing.envelopeHash !== envelopeHash) return "mismatch";
-    if (existing.state === "completed" || existing.state === "consumed") return "duplicate";
-    if (existing.state === "in_flight") return "in_flight";
+    if (existing.envelopeHash !== envelopeHash) {
+      return "mismatch";
+    }
+    if (existing.state === "completed" || existing.state === "consumed") {
+      return "duplicate";
+    }
+    if (existing.state === "in_flight") {
+      return "in_flight";
+    }
     existing.state = "in_flight";
     return "new";
   }
@@ -47,17 +53,25 @@ export class MemoryReplayStore implements ReplayStore {
     body?: MessageBody,
   ): Promise<void> {
     const existing = this.#bindings.get(replayKey(peer, id));
-    if (existing?.state !== "in_flight") throw new Error("replay claim is not in flight");
-    if (receipt.id !== id) throw new Error("receipt id does not match replay claim");
+    if (existing?.state !== "in_flight") {
+      throw new Error("replay claim is not in flight");
+    }
+    if (receipt.id !== id) {
+      throw new Error("receipt id does not match replay claim");
+    }
     validateCompletion(receipt, body);
     existing.state = "completed";
     existing.receipt = structuredClone(receipt);
-    if (body !== undefined) existing.body = structuredClone(body);
+    if (body !== undefined) {
+      existing.body = structuredClone(body);
+    }
   }
 
   async consume(peer: string, id: string): Promise<void> {
     const existing = this.#bindings.get(replayKey(peer, id));
-    if (existing?.state !== "in_flight") throw new Error("replay claim is not in flight");
+    if (existing?.state !== "in_flight") {
+      throw new Error("replay claim is not in flight");
+    }
     existing.state = "consumed";
     delete existing.receipt;
     delete existing.body;
@@ -65,12 +79,16 @@ export class MemoryReplayStore implements ReplayStore {
 
   async release(peer: string, id: string): Promise<void> {
     const existing = this.#bindings.get(replayKey(peer, id));
-    if (existing?.state === "in_flight") existing.state = "available";
+    if (existing?.state === "in_flight") {
+      existing.state = "available";
+    }
   }
 
   async completed(peer: string, id: string): Promise<CompletedReplay | undefined> {
     const existing = this.#bindings.get(replayKey(peer, id));
-    if (existing?.state !== "completed" || existing.receipt === undefined) return undefined;
+    if (existing?.state !== "completed" || existing.receipt === undefined) {
+      return undefined;
+    }
     return existing.body === undefined
       ? { receipt: structuredClone(existing.receipt) }
       : { receipt: structuredClone(existing.receipt), body: structuredClone(existing.body) };

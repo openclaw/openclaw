@@ -56,7 +56,9 @@ describe("ReefTransportClient device authentication", () => {
     await expect(client.pull(5)).resolves.toEqual({ entries: [], cursor: 5 });
 
     const [requestUrl, init] = calls[0]!;
-    expect(String(requestUrl)).toBe("https://relay.example/v1/mail?after=5");
+    expect(requestUrl instanceof URL ? requestUrl.href : requestUrl).toBe(
+      "https://relay.example/v1/mail?after=5",
+    );
     expect(init?.method).toBe("GET");
     const headers = new Headers(init?.headers);
     expect(headers.get("x-reef-handle")).toBe("alice");

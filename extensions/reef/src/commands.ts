@@ -84,7 +84,9 @@ async function persistFriends(): Promise<void> {
     afterWrite: { mode: "auto" },
     mutate(draft) {
       const reef = draft.channels?.reef as { friends?: unknown } | undefined;
-      if (!reef) throw new Error("Reef config missing during friend update");
+      if (!reef) {
+        throw new Error("Reef config missing during friend update");
+      }
       reef.friends = friends;
     },
   });

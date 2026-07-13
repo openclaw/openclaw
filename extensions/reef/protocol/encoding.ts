@@ -21,8 +21,12 @@ export function base64url(value: Uint8Array): string {
     const bits = (a << 16) | (b << 8) | c;
     output += alphabet[(bits >>> 18) & 63];
     output += alphabet[(bits >>> 12) & 63];
-    if (index + 1 < value.length) output += alphabet[(bits >>> 6) & 63];
-    if (index + 2 < value.length) output += alphabet[bits & 63];
+    if (index + 1 < value.length) {
+      output += alphabet[(bits >>> 6) & 63];
+    }
+    if (index + 2 < value.length) {
+      output += alphabet[bits & 63];
+    }
   }
   return output;
 }
@@ -44,7 +48,9 @@ export function fromBase64url(value: string): Uint8Array {
       output[offset++] = (bits >>> count) & 0xff;
     }
   }
-  if (count > 0 && (bits & ((1 << count) - 1)) !== 0) throw new Error("invalid base64url padding");
+  if (count > 0 && (bits & ((1 << count) - 1)) !== 0) {
+    throw new Error("invalid base64url padding");
+  }
   return output;
 }
 
@@ -78,11 +84,19 @@ export function fromBase64(value: string): Uint8Array {
       (character) => (character === "=" ? 0 : base64Alphabet.indexOf(character)),
     );
     const bits = (digits[0]! << 18) | (digits[1]! << 12) | (digits[2]! << 6) | digits[3]!;
-    if (offset < output.length) output[offset++] = (bits >>> 16) & 0xff;
-    if (offset < output.length) output[offset++] = (bits >>> 8) & 0xff;
-    if (offset < output.length) output[offset++] = bits & 0xff;
+    if (offset < output.length) {
+      output[offset++] = (bits >>> 16) & 0xff;
+    }
+    if (offset < output.length) {
+      output[offset++] = (bits >>> 8) & 0xff;
+    }
+    if (offset < output.length) {
+      output[offset++] = bits & 0xff;
+    }
   }
-  if (base64(output) !== value) throw new Error("non-canonical base64");
+  if (base64(output) !== value) {
+    throw new Error("non-canonical base64");
+  }
   return output;
 }
 
@@ -91,8 +105,12 @@ export function hex(value: Uint8Array): string {
 }
 
 export function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
-  if (a.length !== b.length) return false;
+  if (a.length !== b.length) {
+    return false;
+  }
   let difference = 0;
-  for (let index = 0; index < a.length; index++) difference |= a[index]! ^ b[index]!;
+  for (let index = 0; index < a.length; index++) {
+    difference |= a[index]! ^ b[index]!;
+  }
   return difference === 0;
 }

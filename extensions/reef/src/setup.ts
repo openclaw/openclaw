@@ -33,7 +33,7 @@ export const reefSetupAdapter = {
       ...cfg,
       channels: {
         ...cfg.channels,
-        reef: { ...((cfg.channels?.reef as object) ?? {}), ...input, dmPolicy: "pairing" },
+        reef: { ...(cfg.channels?.reef as object), ...input, dmPolicy: "pairing" },
       },
     }) as OpenClawConfig,
 };
@@ -59,7 +59,7 @@ export const reefSetupWizard = {
     });
     const email = await prompter.text({
       message: "Email",
-      validate: (value) => (/@/.test(value) ? undefined : "Valid email required"),
+      validate: (value) => (value.includes("@") ? undefined : "Valid email required"),
     });
     let setupSession = (
       await prompter.text({
@@ -102,7 +102,9 @@ export const reefSetupWizard = {
     const client = new ReefTransportClient(relayUrl, handle, keys);
     if (!setupSession) {
       const started = await client.authStart(email);
-      if (started.magicLink) await prompter.note(started.magicLink, "Development magic link");
+      if (started.magicLink) {
+        await prompter.note(started.magicLink, "Development magic link");
+      }
       const token = await prompter.text({ message: "Magic-link token", sensitive: true });
       setupSession = (await client.authComplete(token)).session;
     }

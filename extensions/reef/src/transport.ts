@@ -139,11 +139,15 @@ export class ReefTransportClient {
       let message = `relay HTTP ${response.status}`;
       try {
         const parsed = (await response.json()) as { error?: string };
-        if (parsed.error) message = parsed.error;
+        if (parsed.error) {
+          message = parsed.error;
+        }
       } catch {}
       throw new ReefRelayError(response.status, message);
     }
-    if (response.status === 204) return undefined as T;
+    if (response.status === 204) {
+      return undefined as T;
+    }
     return (await response.json()) as T;
   }
 }
@@ -156,7 +160,10 @@ export interface WebSocketLike {
 
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise<void>((resolve) => {
-    if (signal?.aborted) return resolve();
+    if (signal?.aborted) {
+      resolve();
+      return;
+    }
     const timer = setTimeout(done, ms);
     function done(): void {
       clearTimeout(timer);
@@ -179,13 +186,17 @@ export class ReefInboxConnection {
 
   async start(signal?: AbortSignal): Promise<void> {
     let delay = 250;
-    while (!this.stopped && !signal?.aborted) {
+    for (;;) {
+      if (this.stopped || signal?.aborted) {
+        return;
+      }
       try {
         await this.drain();
         await this.live(signal);
         delay = 250;
       } catch {
         await abortableSleep(delay, signal);
+        // oxlint-disable-next-line no-useless-assignment -- Read by the next iteration's backoff sleep.
         delay = Math.min(delay * 2, 30_000);
       }
     }
@@ -198,10 +209,14 @@ export class ReefInboxConnection {
   async drain(): Promise<void> {
     while (true) {
       const page = await this.client.pull(this.cursor);
-      if (page.entries.length) await this.onEntries(page.entries);
+      if (page.entries.length) {
+        await this.onEntries(page.entries);
+      }
       const previous = this.cursor;
       this.cursor = page.cursor;
-      if (!page.entries.length || this.cursor === previous) return;
+      if (!page.entries.length || this.cursor === previous) {
+        return;
+      }
     }
   }
 
@@ -213,11 +228,16 @@ export class ReefInboxConnection {
       // overwrite the lifecycle state of its replacement (or of a stopped channel).
       let settled = false;
       const settle = (error?: Error) => {
-        if (settled) return;
+        if (settled) {
+          return;
+        }
         settled = true;
         this.onState?.("disconnected");
-        if (error) reject(error);
-        else resolve();
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
       };
       signal?.addEventListener(
         "abort",
@@ -228,14 +248,18 @@ export class ReefInboxConnection {
         { once: true },
       );
       socket.addEventListener("open", () => {
-        if (!settled) this.onState?.("connected");
+        if (!settled) {
+          this.onState?.("connected");
+        }
       });
       socket.addEventListener("message", (event) => {
         try {
           const frame = JSON.parse(String(event.data)) as { type?: string; entry?: InboxEntry };
-          if (frame.type !== "entry" || !frame.entry) return;
+          if (frame.type !== "entry" || !frame.entry) {
+            return;
+          }
           this.cursor = Math.max(this.cursor, frame.entry.seq);
-          void this.onEntries([frame.entry]).catch((error) =>
+          void this.onEntries([frame.entry]).catch((error: unknown) =>
             settle(error instanceof Error ? error : new Error(String(error))),
           );
         } catch (error) {

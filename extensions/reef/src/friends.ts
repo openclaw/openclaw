@@ -32,17 +32,22 @@ export class ReefFriendManager {
     const { friendships } = await this.transport.listFriends();
     return friendships.map((friend) => {
       const autonomy = this.config.friends[friend.peer]?.autonomy;
-      return {
-        ...friend,
-        fingerprint: fingerprint(friend.ed25519_pub, friend.x25519_pub),
-        ...(autonomy ? { autonomy } : {}),
-      };
+      const entry: RelayFriend & { fingerprint: string; autonomy?: ReefFriendConfig["autonomy"] } =
+        Object.assign({}, friend, {
+          fingerprint: fingerprint(friend.ed25519_pub, friend.x25519_pub),
+        });
+      if (autonomy) {
+        entry.autonomy = autonomy;
+      }
+      return entry;
     });
   }
 
   async surfacePending(issue: PairingChallenge): Promise<void> {
     for (const friend of await this.list()) {
-      if (friend.status !== "pending" && friend.status !== "reapprove_required") continue;
+      if (friend.status !== "pending" && friend.status !== "reapprove_required") {
+        continue;
+      }
       await issue({ peer: friend.peer, fingerprint: friend.fingerprint, code: friend.peer });
     }
   }
@@ -63,9 +68,12 @@ export class ReefFriendManager {
         changed.push(friend.peer);
         continue;
       }
-      if (!approved.has(friend.peer)) continue;
-      if (friend.status === "pending" || friend.status === "reapprove_required")
+      if (!approved.has(friend.peer)) {
+        continue;
+      }
+      if (friend.status === "pending" || friend.status === "reapprove_required") {
         await this.transport.respondFriend(friend.peer, true);
+      }
       this.config.friends[friend.peer] = {
         autonomy: local?.autonomy ?? "bounded",
         ed25519PublicKey: friend.ed25519_pub,

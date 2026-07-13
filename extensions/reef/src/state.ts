@@ -60,8 +60,9 @@ export class ReviewApprovalStore {
   async request(review: ReviewRequest): Promise<ReviewApproval | undefined> {
     const records = await this.read();
     const current = records[review.approvalDigest];
-    if (current?.approved !== undefined)
+    if (current?.approved !== undefined) {
       return { approved: current.approved, approvalDigest: review.approvalDigest };
+    }
     records[review.approvalDigest] = { review };
     await writePrivateJson(this.path, records);
     return undefined;
@@ -69,7 +70,9 @@ export class ReviewApprovalStore {
 
   async decide(digest: string, approved: boolean): Promise<boolean> {
     const records = await this.read();
-    if (!records[digest]) return false;
+    if (!records[digest]) {
+      return false;
+    }
     records[digest] = { ...records[digest], approved };
     await writePrivateJson(this.path, records);
     return true;
@@ -88,7 +91,9 @@ export class ReviewApprovalStore {
         { review: ReviewRequest; approved?: boolean }
       >;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return {};
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return {};
+      }
       throw error;
     }
   }

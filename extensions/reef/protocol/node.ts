@@ -22,7 +22,9 @@ export class JsonlAuditStore implements AuditStore {
     auditKey: Uint8Array,
     rng: (length: number) => Uint8Array = randomBytes,
   ) {
-    if (auditKey.length !== 32) throw new Error("audit key must be 32 bytes");
+    if (auditKey.length !== 32) {
+      throw new Error("audit key must be 32 bytes");
+    }
     this.#auditKey = auditKey.slice();
     this.#rng = rng;
   }
@@ -50,9 +52,13 @@ export class JsonlAuditStore implements AuditStore {
   }
 
   async #load(): Promise<void> {
-    if (this.#loaded) return;
+    if (this.#loaded) {
+      return;
+    }
     const entries = await readJsonl<AuditEntry>(this.path);
-    if (!verifyChain(entries)) throw new Error("invalid audit chain");
+    if (!verifyChain(entries)) {
+      throw new Error("invalid audit chain");
+    }
     this.#entries.push(...entries);
     const last = entries.at(-1);
     this.#head = { hash: last?.entryHash ?? "", seq: last?.event.seq ?? 0 };
@@ -98,7 +104,9 @@ export class FileReplayStore implements ReplayStore {
     bodyKey: Uint8Array,
     rng: (length: number) => Uint8Array = randomBytes,
   ) {
-    if (bodyKey.length !== 32) throw new Error("replay body key must be 32 bytes");
+    if (bodyKey.length !== 32) {
+      throw new Error("replay body key must be 32 bytes");
+    }
     this.#bodyKey = bodyKey.slice();
     this.#rng = rng;
   }
@@ -113,9 +121,15 @@ export class FileReplayStore implements ReplayStore {
         this.#bindings.set(key, { envelopeHash, state: "in_flight" });
         return "new";
       }
-      if (existing.envelopeHash !== envelopeHash) return "mismatch";
-      if (existing.state === "completed" || existing.state === "consumed") return "duplicate";
-      if (existing.state === "in_flight") return "in_flight";
+      if (existing.envelopeHash !== envelopeHash) {
+        return "mismatch";
+      }
+      if (existing.state === "completed" || existing.state === "consumed") {
+        return "duplicate";
+      }
+      if (existing.state === "in_flight") {
+        return "in_flight";
+      }
       await this.#append({ op: "claim", peer, id, envelopeHash });
       existing.state = "in_flight";
       return "new";
@@ -131,8 +145,12 @@ export class FileReplayStore implements ReplayStore {
     return this.#withLock(async () => {
       await this.#load();
       const existing = this.#bindings.get(replayKey(peer, id));
-      if (existing?.state !== "in_flight") throw new Error("replay claim is not in flight");
-      if (receipt.id !== id) throw new Error("receipt id does not match replay claim");
+      if (existing?.state !== "in_flight") {
+        throw new Error("replay claim is not in flight");
+      }
+      if (receipt.id !== id) {
+        throw new Error("receipt id does not match replay claim");
+      }
       validateCompletion(receipt, body);
       const record: ReplayLogRecord =
         body === undefined
@@ -147,7 +165,9 @@ export class FileReplayStore implements ReplayStore {
       await this.#append(record);
       existing.state = "completed";
       existing.receipt = structuredClone(receipt);
-      if (body !== undefined) existing.body = structuredClone(body);
+      if (body !== undefined) {
+        existing.body = structuredClone(body);
+      }
     });
   }
 
@@ -155,7 +175,9 @@ export class FileReplayStore implements ReplayStore {
     return this.#withLock(async () => {
       await this.#load();
       const existing = this.#bindings.get(replayKey(peer, id));
-      if (existing?.state !== "in_flight") throw new Error("replay claim is not in flight");
+      if (existing?.state !== "in_flight") {
+        throw new Error("replay claim is not in flight");
+      }
       await this.#append({ op: "consume", peer, id });
       existing.state = "consumed";
       delete existing.receipt;
@@ -178,7 +200,9 @@ export class FileReplayStore implements ReplayStore {
     return this.#withLock(async () => {
       await this.#load();
       const existing = this.#bindings.get(replayKey(peer, id));
-      if (existing?.state !== "completed" || existing.receipt === undefined) return undefined;
+      if (existing?.state !== "completed" || existing.receipt === undefined) {
+        return undefined;
+      }
       return existing.body === undefined
         ? { receipt: structuredClone(existing.receipt) }
         : { receipt: structuredClone(existing.receipt), body: structuredClone(existing.body) };
@@ -190,32 +214,43 @@ export class FileReplayStore implements ReplayStore {
   }
 
   async #load(): Promise<void> {
-    if (this.#loaded) return;
+    if (this.#loaded) {
+      return;
+    }
     for (const record of await readJsonl<ReplayLogRecord>(this.path)) {
       if (record.op === "claim") {
         const key = replayKey(record.peer, record.id);
         const existing = this.#bindings.get(key);
-        if (existing !== undefined && existing.envelopeHash !== record.envelopeHash)
+        if (existing !== undefined && existing.envelopeHash !== record.envelopeHash) {
           throw new Error("corrupt replay binding store");
+        }
         this.#bindings.set(key, { envelopeHash: record.envelopeHash, state: "available" });
       } else if (record.op === "complete") {
         const existing = this.#bindings.get(replayKey(record.peer, record.id));
-        if (existing === undefined) throw new Error("completed replay lacks claim");
+        if (existing === undefined) {
+          throw new Error("completed replay lacks claim");
+        }
         const body =
           record.body === undefined ? undefined : decryptReplayBody(record.body, this.#bodyKey);
         validateCompletion(record.receipt, body);
         existing.state = "completed";
         existing.receipt = record.receipt;
-        if (body !== undefined) existing.body = body;
+        if (body !== undefined) {
+          existing.body = body;
+        }
       } else if (record.op === "consume") {
         const existing = this.#bindings.get(replayKey(record.peer, record.id));
-        if (existing === undefined) throw new Error("consumed replay lacks claim");
+        if (existing === undefined) {
+          throw new Error("consumed replay lacks claim");
+        }
         existing.state = "consumed";
         delete existing.receipt;
         delete existing.body;
       } else {
         const existing = this.#bindings.get(replayKey(record.peer, record.id));
-        if (existing === undefined) throw new Error("released replay lacks claim");
+        if (existing === undefined) {
+          throw new Error("released replay lacks claim");
+        }
         existing.state = "available";
       }
     }
@@ -254,7 +289,9 @@ function encryptReplayBody(
 ): EncryptedReplayBody {
   validateMessageBody(body);
   const nonce = rng(12);
-  if (nonce.length !== 12) throw new Error("replay body rng returned invalid nonce");
+  if (nonce.length !== 12) {
+    throw new Error("replay body rng returned invalid nonce");
+  }
   const ciphertext = gcm(key, nonce).encrypt(canonicalBytes(body));
   const packed = new Uint8Array(nonce.length + ciphertext.length);
   packed.set(nonce);
@@ -264,7 +301,9 @@ function encryptReplayBody(
 
 function decryptReplayBody(body: EncryptedReplayBody, key: Uint8Array): MessageBody {
   const packed = fromBase64(body.enc);
-  if (packed.length < 28) throw new Error("invalid encrypted replay body");
+  if (packed.length < 28) {
+    throw new Error("invalid encrypted replay body");
+  }
   const plaintext = gcm(key, packed.slice(0, 12)).decrypt(packed.slice(12));
   const value = JSON.parse(decodeUtf8(plaintext)) as unknown;
   validateMessageBody(value);
@@ -294,18 +333,24 @@ async function readJsonl<T>(path: string): Promise<T[]> {
       const line = lines[index]!;
       const lineStart = characterOffset;
       characterOffset += line.length + (index < lines.length - 1 ? 1 : 0);
-      if (line.length === 0) continue;
+      if (line.length === 0) {
+        continue;
+      }
       try {
         records.push(JSON.parse(line) as T);
       } catch (error) {
-        if (index !== finalNonempty) throw error;
+        if (index !== finalNonempty) {
+          throw error;
+        }
         await truncateDurably(path, new TextEncoder().encode(contents.slice(0, lineStart)).length);
         break;
       }
     }
     return records;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
     throw error;
   }
 }

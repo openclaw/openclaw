@@ -47,8 +47,9 @@ export class ReefMessageFlow {
     context: { thread?: string; replyTo?: string } = {},
   ): Promise<string> {
     const friend = this.options.config.friends[peer];
-    if (!friend || friend.safetyNumberChanged)
+    if (!friend || friend.safetyNumberChanged) {
       throw new Error(`Reef peer @${peer} is not approved with current keys`);
+    }
     const id = this.ulid();
     const result = await composeOutbound({
       id,
@@ -71,7 +72,9 @@ export class ReefMessageFlow {
   }
 
   async processEntries(entries: InboxEntry[]): Promise<void> {
-    if (!entries.length) return;
+    if (!entries.length) {
+      return;
+    }
     await appendInboxRead(
       this.options.audit,
       entries.map((entry) => entry.id),
@@ -79,11 +82,14 @@ export class ReefMessageFlow {
     for (const entry of entries) {
       if (entry.kind === "receipt") {
         const friend = this.options.config.friends[entry.peer];
-        if (entry.receipt && friend)
+        if (entry.receipt && friend) {
           await confirmDelivery(entry.receipt, friend.ed25519PublicKey, this.options.audit);
+        }
         continue;
       }
-      if (entry.envelope) await this.processEnvelope(entry.peer, entry.envelope);
+      if (entry.envelope) {
+        await this.processEnvelope(entry.peer, entry.envelope);
+      }
     }
   }
 
@@ -92,7 +98,9 @@ export class ReefMessageFlow {
     envelope: NonNullable<InboxEntry["envelope"]>,
   ): Promise<void> {
     const parsed = parseHandleEpoch(envelope.from);
-    if (parsed.handle !== relayPeer) throw new Error("relay peer does not match envelope sender");
+    if (parsed.handle !== relayPeer) {
+      throw new Error("relay peer does not match envelope sender");
+    }
     const friend = this.options.config.friends[relayPeer];
     if (!friend || friend.safetyNumberChanged || parsed.keyEpoch !== friend.keyEpoch) {
       throw new Error(`unapproved Reef sender @${relayPeer}`);
@@ -148,25 +156,35 @@ export class ReefMessageFlow {
   }
 
   private async loadDelivered(): Promise<void> {
-    if (this.deliveredLoaded) return;
+    if (this.deliveredLoaded) {
+      return;
+    }
     try {
       const ids = JSON.parse(
         await readFile(join(this.options.stateDir, "delivered.json"), "utf8"),
       ) as string[];
-      for (const id of ids) this.delivered.add(id);
+      for (const id of ids) {
+        this.delivered.add(id);
+      }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw error;
+      }
     }
     this.deliveredLoaded = true;
   }
 
   private requireHandle(): string {
-    if (!this.options.config.handle) throw new Error("Reef handle is not configured");
+    if (!this.options.config.handle) {
+      throw new Error("Reef handle is not configured");
+    }
     return this.options.config.handle;
   }
 
   private requireGuardConfig() {
-    if (!this.options.config.guard) throw new Error("Reef guard is not configured");
+    if (!this.options.config.guard) {
+      throw new Error("Reef guard is not configured");
+    }
     return this.options.config.guard;
   }
 }
@@ -175,12 +193,15 @@ export function createConfiguredGuard(
   config: ReefChannelConfig,
   fetcher: typeof fetch = fetch,
 ): GuardAdapter {
-  if (!config.guard) throw new Error("Reef guard is not configured");
+  if (!config.guard) {
+    throw new Error("Reef guard is not configured");
+  }
   const apiKey = process.env[config.guard.apiKeyEnv];
-  if (!apiKey)
+  if (!apiKey) {
     throw new Error(
       `Reef guard credential environment variable ${config.guard.apiKeyEnv} is unset`,
     );
+  }
   const options = {
     apiKey,
     pinnedModel: config.guard.pinnedModel,

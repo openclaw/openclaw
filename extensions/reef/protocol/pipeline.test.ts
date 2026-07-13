@@ -105,7 +105,9 @@ describe("pipeline", () => {
     };
     const inbound = await composeInbound(inboundOptions);
     expect(inbound.disposition).toBe("accepted");
-    if (inbound.disposition !== "accepted") throw new Error("expected accepted result");
+    if (inbound.disposition !== "accepted") {
+      throw new Error("expected accepted result");
+    }
     expect(inbound.body.text).toBe("hello");
     expect(inbound.receipt).toMatchObject({ id: outbound.envelope.id, status: "accepted" });
     const outboundEntries = await outboundAudit.entries();
@@ -475,8 +477,11 @@ describe("pipeline", () => {
     try {
       await composeInbound(options);
     } catch (error) {
-      if (error instanceof PipelineError) rejection = error;
-      else throw error;
+      if (error instanceof PipelineError) {
+        rejection = error;
+      } else {
+        throw error;
+      }
     }
     expect(rejection?.receipt).toMatchObject({ status: "rejected", category: "guard_deny" });
     const entryCount = (await inboundAudit.entries()).length;
@@ -527,8 +532,11 @@ describe("pipeline", () => {
     try {
       await composeInbound(options);
     } catch (error) {
-      if (error instanceof PipelineError) rejection = error;
-      else throw error;
+      if (error instanceof PipelineError) {
+        rejection = error;
+      } else {
+        throw error;
+      }
     }
     expect(rejection).toMatchObject({
       stage: "review",

@@ -42,8 +42,9 @@ export async function confirmDelivery(
   recipientSigningPublicKey: string,
   audit: AuditStore,
 ): Promise<AuditEntry> {
-  if (!verifyReceipt(receipt, recipientSigningPublicKey))
+  if (!verifyReceipt(receipt, recipientSigningPublicKey)) {
     throw new Error("invalid delivery receipt");
+  }
   return appendAudit(audit, "confirm_delivery", {
     receipt,
     status: receipt.status,
@@ -80,17 +81,21 @@ function validateSignedReceipt(value: unknown): asserts value is SignedReceipt {
   }
   const { signature, ...body } = value;
   validateReceiptBody(body);
-  if (fromBase64(signature).length !== 64) throw new Error("invalid receipt");
+  if (fromBase64(signature).length !== 64) {
+    throw new Error("invalid receipt");
+  }
 }
 
 function isExactReceiptObject(value: unknown, signed: boolean): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
   const required = signed
     ? ["id", "bodyHash", "auditHead", "status", "signature"]
     : ["id", "bodyHash", "auditHead", "status"];
-  const allowed = [...required, "category"];
+  const allowed = new Set([...required, "category"]);
   const keys = Object.keys(value);
   return (
-    required.every((key) => Object.hasOwn(value, key)) && keys.every((key) => allowed.includes(key))
+    required.every((key) => Object.hasOwn(value, key)) && keys.every((key) => allowed.has(key))
   );
 }
