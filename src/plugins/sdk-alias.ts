@@ -442,7 +442,7 @@ function listPluginSdkAliasCandidates(params: {
   return candidates;
 }
 
-export function resolvePluginSdkAliasFile(params: {
+function resolvePluginSdkAliasFile(params: {
   srcFile: string;
   distFile: string;
   modulePath?: string;
@@ -1625,7 +1625,7 @@ function listPluginSdkExportedSubpaths(
   return subpaths;
 }
 
-export function resolvePluginSdkScopedAliasMap(
+function resolvePluginSdkScopedAliasMap(
   params: {
     modulePath?: string;
     argv1?: string;
