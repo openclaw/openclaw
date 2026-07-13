@@ -1450,6 +1450,8 @@ export const ko: TranslationMap = {
     blockedAgentFilter: "에이전트 필터에 의해 차단됨",
   },
   nav: {
+    back: "뒤로",
+    forward: "앞으로",
     chat: "채팅",
     settings: "설정",
     settingsGeneral: "일반",
@@ -3565,6 +3567,14 @@ export const ko: TranslationMap = {
       remove: "제거",
       more: "추가 작업",
       history: "기록",
+    },
+    runNotStarted: {
+      notDue: "이 자동화는 아직 실행할 시간이 아닙니다.",
+      alreadyRunning: "이 자동화는 이미 실행 중입니다.",
+      recoveryPending: "스케줄러 복구가 아직 진행 중입니다.",
+      invalidSpec: "이 자동화의 일정 또는 페이로드가 잘못되었습니다.",
+      stopped: "스케줄러가 중지되었습니다.",
+      unknown: "이 자동화를 시작할 수 없습니다.",
     },
     jobs: {
       schedule: "일정",
