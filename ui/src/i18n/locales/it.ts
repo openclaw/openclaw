@@ -218,10 +218,11 @@ export const it: TranslationMap = {
   lazyView: {
     loadingTitle: "Caricamento pannello",
     errorTitle: "Impossibile caricare il pannello",
-    errorSubtitle:
-      "Ricarica la pagina per caricare il bundle Control UI più recente oppure riprova se la richiesta di rete non è riuscita.",
+    genericSubtitle: "Si è verificato un problema durante il caricamento di questo pannello.",
+    staleTitle: "È disponibile una nuova versione",
+    staleSubtitle:
+      "OpenClaw è stato aggiornato in background. Ricarica per visualizzare il pannello più recente.",
     retry: "Riprova",
-    unknownError: "Errore sconosciuto di caricamento modulo.",
   },
   nodes: {
     pairing: {
@@ -231,6 +232,16 @@ export const it: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Scansiona questo codice QR nell'app mobile per connettere un nuovo telefono.",
       generating: "Creazione di un codice di configurazione sicuro…",
+      accessTitle: "Accesso da dispositivo mobile",
+      fullAccess: "Accesso completo (consigliato)",
+      fullAccessHint:
+        "Nodo e controlli completi del Gateway, incluse impostazioni e aggiornamenti.",
+      limitedAccess: "Accesso limitato",
+      limitedAccessHint: "Nodo, chat e approvazioni senza controlli amministrativi.",
+      generateCode: "Crea codice di configurazione",
+      transportLimitedTitle: "Limitato per la sicurezza della rete",
+      transportLimitedHint:
+        "Questo URL del Gateway usa ws:// in chiaro. Usa wss:// o Tailscale Serve, quindi crea un nuovo codice per ottenere l'accesso completo.",
       failed: "Impossibile creare un codice di configurazione.",
       qrAlt: "Codice QR di associazione di OpenClaw mobile",
       qrUnavailable: "QR non disponibile. Copia invece il codice di configurazione.",
@@ -265,7 +276,8 @@ export const it: TranslationMap = {
     },
     inventory: {
       title: "Dispositivi",
-      subtitle: "Una riga per ogni client accoppiato: stato, ruoli, token.",
+      summaryConnected: "{connected} di {total} connessi",
+      summaryPending: "{count} in attesa di approvazione",
       cleanupStale: "Rimuovi {count} obsoleti",
       pendingApproval: "In attesa di approvazione",
       paired: "Accoppiato",
@@ -394,12 +406,14 @@ export const it: TranslationMap = {
     confirmForceDelete: "Snapshot non riuscito: {error}\n\nEliminare senza uno snapshot?",
   },
   agentChip: {
-    openConversation: "Apri la tua conversazione con {name}",
     menuLabel: "Menu dell'agente",
     agents: "Agenti",
     working: "In elaborazione…",
     ready: "Pronto per chattare",
     whatCanAgentDo: "Cosa può fare {name}?",
+    getHelp: "Ottieni assistenza",
+    discord: "Community Discord",
+    viewChangelog: "Visualizza il registro delle modifiche",
   },
   newSession: {
     title: "Nuova sessione",
@@ -570,6 +584,7 @@ export const it: TranslationMap = {
     groupBy: "Raggruppa per",
     groupByNone: "Nessuno",
     groupByCategory: "Gruppi personalizzati",
+    showCronSessions: "Mostra le sessioni cron",
     groupByChannel: "Canale",
     groupByKind: "Tipo",
     groupByAgent: "Agente",
@@ -1211,6 +1226,10 @@ export const it: TranslationMap = {
         "per aggiungere un tema tweakcn locale del browser. In tweakcn, usa Condividi e incolla qui il link copiato.",
       textSize: "Dimensione del testo",
     },
+    chatPrefs: {
+      title: "Chat",
+      hint: "Preferenze della chat locali del browser.",
+    },
     connection: {
       title: "Connessione",
       gateway: "Gateway",
@@ -1466,6 +1485,8 @@ export const it: TranslationMap = {
     blockedAgentFilter: "bloccato dal filtro dell'agente",
   },
   nav: {
+    back: "Indietro",
+    forward: "Avanti",
     chat: "Chat",
     settings: "Impostazioni",
     settingsGeneral: "Generale",
@@ -1745,8 +1766,6 @@ export const it: TranslationMap = {
     cancel: "Annulla",
     removedRestart: "{name} rimosso. È necessario riavviare il Gateway per applicare la modifica.",
     verifiedSource: "Fonte verificata",
-    menuLabel: "Azioni {name}",
-    menuDetails: "Visualizza dettagli",
     enableAction: "Abilita",
     disableAction: "Disabilita",
     working: "Elaborazione…",
@@ -1885,6 +1904,10 @@ export const it: TranslationMap = {
       useCurrentChatAria: "Usa la chat corrente per le richieste di revisione",
       useCurrentChatTooltip:
         "Invia le richieste di revisione alla sessione di chat corrente invece che alla sessione di workshop della proposta.",
+      selfLearning: "Autoapprendimento",
+      selfLearningAria: "Attiva o disattiva le proposte di Skills basate sull'autoapprendimento",
+      selfLearningTooltip:
+        "Acquisisce le correzioni ed esamina il lavoro sostanziale completato per creare proposte di skill in sospeso. Utilizza token aggiuntivi in background; le bozze vengono pubblicate su questa bacheca come proposte in sospeso.",
       view: "Vista workshop",
       board: "Bacheca",
       today: "Oggi",
@@ -1964,6 +1987,14 @@ export const it: TranslationMap = {
       noProposalsTitle: "Ancora nessuna proposta",
       noProposalsBody: "{agent} non ha ancora redatto alcuna proposta di skill.",
       noProposalsFooter: "Le nuove proposte appariranno qui per la revisione.",
+    },
+    selfLearning: {
+      pitchTitle: "Attiva l'autoapprendimento",
+      pitchBody:
+        "OpenClaw esamina le correzioni e le esecuzioni sostanziali completate, quindi crea bozze di proposte di skill per questa bacheca. Utilizza token aggiuntivi in background e le bozze arrivano come proposte in sospeso.",
+      enable: "Abilita l'autoapprendimento",
+      enabling: "Abilitazione…",
+      updateError: "Impossibile aggiornare l'impostazione di autoapprendimento.",
     },
     today: {
       emptyTitle: "Niente in attesa oggi",
@@ -3105,24 +3136,16 @@ export const it: TranslationMap = {
       rateLimited:
         "Limite di frequenza dell'API GitHub raggiunto. Lo stato della pull request potrebbe non essere aggiornato finché il limite non viene reimpostato.",
     },
-    refreshTitle: "Aggiorna dati chat",
-    settings: "Impostazioni chat",
     usageRemaining: "Utilizzo rimanente",
-    voiceSettings: "Voce",
-    thinkingToggle: "Attiva/disattiva output di pensiero/elaborazione dell'assistente",
-    toolCallsToggle: "Attiva/disattiva chiamate agli strumenti e risultati strumenti",
-    commentaryToggle: "Mantieni il commento dopo la risposta finale",
-    commentaryLabel: "Commento",
-    autoScrollMode: "Modalità di scorrimento automatico",
-    autoScrollAlways: "Sempre",
-    autoScrollNearBottom: "Vicino al fondo",
-    autoScrollOff: "Disattivato",
+    view: {
+      menu: "Visualizza",
+      reasoning: "Ragionamento",
+      toolCalls: "Chiamate agli strumenti",
+      commentary: "Mantieni i commenti",
+    },
     sendShortcut: "Scorciatoia di invio",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Nascondi sessioni cron",
-    showCronSessions: "Mostra sessioni cron",
-    showCronSessionsHidden: "Mostra sessioni cron ({count} nascoste)",
     onboardingDisabled: "Disabilitato durante la configurazione",
     gatewayStatus: "Stato Gateway: {status}",
     commandPaletteTitle: "Cerca o passa a… (⌘K)",
@@ -3312,7 +3335,6 @@ export const it: TranslationMap = {
       },
       takePhoto: "Scatta una foto",
       dismissVoiceInputError: "Ignora errore di input vocale",
-      loadingMicrophones: "Caricamento microfoni…",
       microphoneAccessFailed: "Impossibile accedere agli ingressi del microfono.",
       microphoneBusy: "Gli ingressi del microfono sono occupati o non disponibili per il browser.",
       microphoneFallback: "Microfono {number}",
@@ -3332,20 +3354,6 @@ export const it: TranslationMap = {
       stillListening: "Ancora in ascolto",
       stopVoiceInput: "Interrompi input vocale",
       systemDefaultMicrophone: "Predefinito di sistema",
-      talkAdvancedSettingsRequiresAdmin:
-        "Le impostazioni avanzate richiedono l'accesso amministratore",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Le impostazioni avanzate di Talk richiedono l'accesso operator.admin.",
-      talkDefault: "Predefinito",
-      talkModel: "Modello",
-      talkModelAuto: "Automatico",
-      talkMoreInSettings: "Altro nelle Impostazioni",
-      talkSensitivity: "Sensibilità",
-      talkSensitivityHigh: "Alta",
-      talkSensitivityLow: "Bassa",
-      talkSensitivityMedium: "Media",
-      talkVoice: "Voce",
-      voiceOptions: "Opzioni voce",
       voiceTranscript: "Trascrizione vocale",
     },
     selectors: {
@@ -3430,6 +3438,8 @@ export const it: TranslationMap = {
       empty: "Nessuna attività in background per questo agente al momento.",
       running: "In esecuzione ({count})",
       finished: "Completate ({count})",
+      statusRunningOne: "1 attività in esecuzione",
+      statusRunningMany: "{count} attività in esecuzione",
       stopTask: "Interrompi {title}",
       viewTranscript: "Visualizza trascrizione",
       toolUseOne: "1 utilizzo dello strumento",
@@ -3589,7 +3599,6 @@ export const it: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Pianificatore",
       tasks: "Attività",
       failing: "Con errori",
       nextWake: "Prossima attivazione",
@@ -3614,7 +3623,14 @@ export const it: TranslationMap = {
       clone: "Clona",
       remove: "Rimuovi",
       more: "Altre azioni",
-      history: "Cronologia",
+    },
+    runNotStarted: {
+      notDue: "Questa automazione non è ancora prevista.",
+      alreadyRunning: "Questa automazione è già in esecuzione.",
+      recoveryPending: "Il ripristino dell'utilità di pianificazione è ancora in corso.",
+      invalidSpec: "Questa automazione presenta una pianificazione o un payload non valido.",
+      stopped: "L'utilità di pianificazione è arrestata.",
+      unknown: "Non è stato possibile avviare questa automazione.",
     },
     jobs: {
       schedule: "Pianificazione",

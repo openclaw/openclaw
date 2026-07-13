@@ -33,6 +33,8 @@ export const ChatHistoryParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
+    messageId: Type.Optional(NonEmptyString),
+    sessionId: Type.Optional(NonEmptyString),
     maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
   },
   { additionalProperties: false },

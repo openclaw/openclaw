@@ -546,6 +546,55 @@ func TestValidateDocChunkTranslationRejectsInventedI18NPlaceholder(t *testing.T)
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsAdditionalI18NPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\n__OC_I18N_900000__\n```\n"
+	translated := "```text\n__OC_I18N_900000__\n```\n__OC_I18N_900014__\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected additional i18n placeholder to be rejected")
+	}
+	if !strings.Contains(err.Error(), "protocol token leaked: __OC_I18N_") {
+		t.Fatalf("expected i18n placeholder leakage error, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsMalformedI18NPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	for _, leaked := range []string{"__oc_i18n_900014__", "__OC_I18N_invalid__", `\_\_OC\_I18N\_900014\_\_`} {
+		err := validateDocChunkTranslation("Regular paragraph.\n", "Обычный абзац.\n"+leaked+"\n")
+		if err == nil {
+			t.Fatalf("expected malformed i18n placeholder %q to be rejected", leaked)
+		}
+	}
+}
+
+func TestValidateDocBodyFencedLiteralsRejectsRestoredPlaceholderLeak(t *testing.T) {
+	t.Parallel()
+
+	source := "Before.\n\n```ts\nconst value = \"<user-id>\";\n```\n\nAfter.\n"
+	translated := "До.\n\n__OC_I18N_900014__\n\nПосле.\n"
+
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil {
+		t.Fatal("expected restored placeholder leak to be rejected")
+	}
+}
+
+func TestFinalDocOutputRejectsI18NPlaceholderLeak(t *testing.T) {
+	t.Parallel()
+
+	if sameI18NProtocolMarkers("Regular prose.\n", "Обычный текст.\n__OC_I18N_900014__\n") {
+		t.Fatal("expected final output placeholder leak to be rejected")
+	}
+	if !sameI18NProtocolMarkers("Example __OC_I18N_42__.\n", "Пример __OC_I18N_42__.\n") {
+		t.Fatal("expected source-authored placeholder example to remain valid")
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsHeadingLoss(t *testing.T) {
 	t.Parallel()
 
@@ -1268,6 +1317,35 @@ func TestValidateDocBodyFencedLiteralsRejectsFenceBalanceChange(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "code fence balance mismatch") {
 		t.Fatalf("expected code fence balance mismatch, got %v", err)
+	}
+}
+
+func TestValidateDocBodyFencedLiteralsRejectsBalancedFenceCountChange(t *testing.T) {
+	t.Parallel()
+
+	source := "```json5\n{ session: { enabled: true } }\n```\n"
+	translated := "```json5\n{ session: {\n```\n```json5\nenabled: true } }\n```\n"
+
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil {
+		t.Fatal("expected recombined fence count change to be rejected")
+	}
+	if !strings.Contains(err.Error(), "code fence mismatch: source=2 translated=4") {
+		t.Fatalf("expected code fence mismatch, got %v", err)
+	}
+}
+
+func TestMergeSplitPureFencedDocTranslationsRejectsAdjacentFences(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\nFirst block.\n```\n```text\nSecond block.\n```\n"
+	translatedGroups := []string{
+		"```text\nПервый блок.\n```\n",
+		"```text\nВторой блок.\n```\n",
+	}
+
+	if merged, ok := mergeSplitPureFencedDocTranslations(source, translatedGroups); ok {
+		t.Fatalf("expected adjacent source fences not to merge, got:\n%s", merged)
 	}
 }
 
@@ -2047,6 +2125,9 @@ func TestTranslateDocBodyChunkedRetriesSingletonFenceAfterValidationFailure(t *t
 	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Translated line 04") {
 		t.Fatalf("expected singleton fence retry to reassemble translated output:\n%s", translated)
 	}
+	if sourceCount, translatedCount := summarizeDocChunkStructure(body).fenceCount, summarizeDocChunkStructure(translated).fenceCount; sourceCount != translatedCount {
+		t.Fatalf("expected singleton fence retry to preserve one fenced block, source=%d translated=%d:\n%s", sourceCount, translatedCount, translated)
+	}
 }
 
 func TestTranslateDocBodyChunkedUnwrapsTaggedLeafProtocolLeakage(t *testing.T) {
@@ -2142,8 +2223,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 16") {
-		t.Fatalf("expected prompt version 15 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 21") {
+		t.Fatalf("expected prompt version 21 in output metadata:\n%s", text)
 	}
 }
 

@@ -24,12 +24,9 @@ const runtimeModelAuthMocks = vi.hoisted(() => ({
 
 vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
 
-import {
-  clearGatewaySubagentRuntime,
-  createPluginRuntime,
-  setGatewayNodesRuntime,
-  setGatewaySubagentRuntime,
-} from "./index.js";
+import { setGatewayNodesRuntime, setGatewaySubagentRuntime } from "./gateway-bindings.js";
+import { clearGatewaySubagentRuntime } from "./gateway-bindings.test-fixtures.js";
+import { createPluginRuntime } from "./index.js";
 
 function createCommandResult() {
   return {

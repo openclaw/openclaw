@@ -64,7 +64,7 @@ extension OpenClawChatViewModel {
         let normalizedCandidate = candidate.lowercased()
         let targetKey: String
         let targetAgentID: String?
-        if Self.agentID(fromSessionKey: candidate) != nil || normalizedCandidate == "unknown" {
+        if OpenClawChatSessionKey.agentID(from: candidate) != nil || normalizedCandidate == "unknown" {
             targetKey = candidate
             targetAgentID = nil
         } else if normalizedCandidate == "global" {

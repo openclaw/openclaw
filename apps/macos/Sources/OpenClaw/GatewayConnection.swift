@@ -155,6 +155,8 @@ actor GatewayConnection {
         case sessionsPreview = "sessions.preview"
         case chatSend = "chat.send"
         case skillsStatus = "skills.status"
+        case skillsSearch = "skills.search"
+        case skillsDetail = "skills.detail"
         case skillsInstall = "skills.install"
         case skillsUpdate = "skills.update"
         case voicewakeGet = "voicewake.get"
@@ -535,6 +537,25 @@ extension GatewayConnection {
         timeoutMs: Double? = nil) async throws -> T
     {
         let data = try await requestRaw(method: method, params: params, timeoutMs: timeoutMs)
+        do {
+            return try self.decoder.decode(T.self, from: data)
+        } catch {
+            throw GatewayDecodingError(method: method.rawValue, message: error.localizedDescription)
+        }
+    }
+
+    func requestDecoded<T: Decodable>(
+        method: Method,
+        params: [String: AnyCodable]? = nil,
+        timeoutMs: Double? = nil,
+        ifCurrentRoute route: Route) async throws -> T
+    {
+        let data = try await self.request(
+            method: method.rawValue,
+            params: params,
+            timeoutMs: timeoutMs,
+            ifCurrentRoute: route,
+            distinguishPreDispatchRouteChange: true)
         do {
             return try self.decoder.decode(T.self, from: data)
         } catch {

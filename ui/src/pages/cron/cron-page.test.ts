@@ -168,6 +168,25 @@ describe("CronPage editor state sync", () => {
     await vi.waitFor(() => expect(page.cron.cronCreateOpen).toBe(false));
   });
 
+  it("drills from the failing stat into run history filtered to errors", async () => {
+    const request = createRequest();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const gateway = createGateway(client, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await vi.waitFor(() =>
+      expect(page.querySelector('[data-test-id="cron-stat-failing"]')).not.toBeNull(),
+    );
+    (page.querySelector('[data-test-id="cron-stat-failing"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(page.querySelector(".cron-activity")).not.toBeNull());
+    expect(page.cron.cronRunsStatuses).toEqual(["error"]);
+    expect(request).toHaveBeenCalledWith(
+      "cron.runs",
+      expect.objectContaining({ statuses: ["error"] }),
+    );
+  });
+
   it("syncs form enabled after header pause and resets runs scope after remove", async () => {
     const job = {
       id: "job-1",

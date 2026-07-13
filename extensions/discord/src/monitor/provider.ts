@@ -688,4 +688,3 @@ export const testing = {
 };
 
 export const resolveDiscordRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
-export { testing as __testing };
