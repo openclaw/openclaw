@@ -274,6 +274,9 @@ async function withTimeout<T>(
 }
 
 async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime> {
+  // Joined specifier keeps bundlers from statically resolving
+  // @clawdbot/lobster/core; the plugin's declared @clawdbot/lobster dependency
+  // provides it at runtime, so it is a used direct dependency.
   const coreSpecifier = ["@clawdbot", "lobster", "core"].join("/");
   return (await import(coreSpecifier)) as EmbeddedToolRuntime;
 }
