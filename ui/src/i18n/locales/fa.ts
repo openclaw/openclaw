@@ -231,6 +231,15 @@ export const fa: TranslationMap = {
       title: "موبایل OpenClaw",
       subtitle: "برای اتصال یک تلفن جدید، این کد QR را در برنامه موبایل اسکن کنید.",
       generating: "در حال ایجاد کد راه‌اندازی امن…",
+      accessTitle: "دسترسی موبایل",
+      fullAccess: "دسترسی کامل (توصیه‌شده)",
+      fullAccessHint: "گره به‌همراه کنترل‌های کامل Gateway، شامل تنظیمات و ارتقاها.",
+      limitedAccess: "دسترسی محدود",
+      limitedAccessHint: "گره، چت و تأییدها بدون کنترل‌های مدیریتی.",
+      generateCode: "ایجاد کد راه‌اندازی",
+      transportLimitedTitle: "محدود برای ایمنی شبکه",
+      transportLimitedHint:
+        "این URL مربوط به Gateway از ws:// با متن ساده استفاده می‌کند. از wss:// یا Tailscale Serve استفاده کنید، سپس برای دسترسی کامل یک کد جدید ایجاد کنید.",
       failed: "امکان ایجاد کد راه‌اندازی وجود نداشت.",
       qrAlt: "کد QR جفت‌سازی موبایل OpenClaw",
       qrUnavailable: "کد QR در دسترس نیست. به‌جای آن کد راه‌اندازی را کپی کنید.",
@@ -265,7 +274,8 @@ export const fa: TranslationMap = {
     },
     inventory: {
       title: "دستگاه‌ها",
-      subtitle: "یک ردیف برای هر کلاینت جفت‌شده: وضعیت، نقش‌ها، توکن‌ها.",
+      summaryConnected: "{connected} از {total} متصل",
+      summaryPending: "{count} در انتظار تأیید",
       cleanupStale: "پاک‌سازی {count} مورد قدیمی",
       pendingApproval: "در انتظار تأیید",
       paired: "جفت‌شده",
@@ -401,6 +411,13 @@ export const fa: TranslationMap = {
     getHelp: "دریافت راهنمایی",
     discord: "انجمن Discord",
     viewChangelog: "مشاهده فهرست تغییرات",
+    agentSettings: "تنظیمات عامل",
+    filterAgents: "یافتن عامل…",
+    noAgentMatches: "هیچ عامل منطبقی یافت نشد",
+  },
+  agentScope: {
+    label: "دامنه عامل",
+    allAgents: "همه عامل‌ها",
   },
   newSession: {
     title: "جلسه جدید",
@@ -609,6 +626,8 @@ export const fa: TranslationMap = {
     setDefault: "تنظیم به‌عنوان پیش‌فرض",
     alreadyDefaultTitle: "همین حالا عامل پیش‌فرض است",
     setDefaultTitle: "تنظیم به‌عنوان عامل پیش‌فرض",
+    pinToSwitcher: "سنجاق کردن به تعویض‌گر",
+    unpinFromSwitcher: "برداشتن از تعویض‌گر",
     selectTitle: "انتخاب عامل",
     selectSubtitle: "یک عامل را انتخاب کنید تا فضای کاری و ابزارهای آن را بررسی کنید.",
     tabs: {
@@ -633,6 +652,18 @@ export const fa: TranslationMap = {
       default: "پیش‌فرض",
       configurationSubtitle: "پیکربندی فضای کاری، هویت و مدل.",
       schedulingSubtitle: "فضای کاری و اهداف زمان‌بندی.",
+    },
+    identity: {
+      title: "هویت",
+      subtitle: "نام، ایموجی و آواتاری که در گفت‌وگوها و نوار کناری نمایش داده می‌شود.",
+      name: "نام نمایشی",
+      namePlaceholder: "نام عامل",
+      emoji: "ایموجی",
+      chooseImage: "انتخاب تصویر…",
+      replaceImage: "جایگزینی تصویر…",
+      imageUnusable:
+        "نمی‌توان از این تصویر استفاده کرد. یک فایل تصویری با حجم حداکثر ۲ مگابایت انتخاب کنید.",
+      fileHint: "عامل‌ها می‌توانند با ویرایش IDENTITY.md در فضای کاری خود، این مورد را تنظیم کنند.",
     },
     overview: {
       title: "نمای کلی",

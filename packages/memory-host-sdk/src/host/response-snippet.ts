@@ -27,7 +27,7 @@ type ResponsePrefix = {
 };
 
 /** Read a small collapsed text snippet from a response body. */
-export async function readResponseTextSnippet(
+export async function readMemoryHostResponseTextSnippet(
   res: Response,
   options: ResponseTextSnippetOptions = {},
 ): Promise<string> {
