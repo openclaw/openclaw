@@ -107,12 +107,21 @@ struct DashboardWindowSmokeTests {
         #expect(requestCount == 0)
 
         let link = try #require(URL(string: "https://docs.openclaw.ai/"))
+        controller._testOpenLinkBrowser(link)
+        isEligible = true
+        controller.update(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        #expect(requestCount == 0)
+
+        isEligible = false
         controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
         #expect(requestCount == 0)
 
-        controller._testCloseLinkBrowser()
         isEligible = true
-        controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
+        controller.update(
+            url: dashboard,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         #expect(requestCount == 1)
 
         controller._testCloseLinkBrowser()

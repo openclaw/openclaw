@@ -78,6 +78,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var canGoBackObservation: NSKeyValueObservation?
     private var canGoForwardObservation: NSKeyValueObservation?
     private var didRequestBrowserProfileImportOffer = false
+    private var browserProfileImportOfferIsArmed = false
 
     init(
         url: URL,
@@ -267,6 +268,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             self.setUpdateBridgeEnabled(updateBridgeEnabled)
         }
         self.load(url)
+        self.requestBrowserProfileImportOfferIfNeeded()
     }
 
     /// Miniaturized windows report `isVisible == false` but must still follow
@@ -317,9 +319,18 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowserItem.isCollapsed = false
         self.linkBrowser.open(url)
         window?.makeFirstResponder(self.linkBrowser.activeWebView)
-        if requestBrowserProfileImportOffer, !self.didRequestBrowserProfileImportOffer {
-            self.didRequestBrowserProfileImportOffer = self.requestBrowserProfileImportOffer()
+        if requestBrowserProfileImportOffer {
+            self.browserProfileImportOfferIsArmed = true
+            self.requestBrowserProfileImportOfferIfNeeded()
         }
+    }
+
+    private func requestBrowserProfileImportOfferIfNeeded() {
+        guard self.browserProfileImportOfferIsArmed,
+              !self.linkBrowserItem.isCollapsed,
+              !self.didRequestBrowserProfileImportOffer
+        else { return }
+        self.didRequestBrowserProfileImportOffer = self.requestBrowserProfileImportOffer()
     }
 
     private func closeLinkBrowser(focusDashboard: Bool = true) {
