@@ -81,6 +81,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
+  resolveUiDefaultAgentId,
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -1419,11 +1420,15 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       normalized === normalizeAgentId(this.sessionsAgentId ?? "")
         ? (this.sessionsResult?.sessions ?? [])
         : (this.sessionRowsByAgent[normalized] ?? []);
-    // Both sources were fetched for this agent, so unprefixed keys in them are
-    // this agent's too; the route's selected agent must not adopt them here.
+    // Unprefixed keys belong to the system default agent (the filter's
+    // contract); keeping them for other agents would resume the wrong agent's
+    // session because resume navigates with the raw key.
     const visible = filterVisibleSessionRows(rows, {
       agentId: normalized,
-      defaultAgentId: normalized,
+      defaultAgentId: resolveUiDefaultAgentId({
+        agentsList: this.context?.agents.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      }),
       filterByAgent: true,
     });
     return visible.toSorted(compareSessionRowsByUpdatedAt)[0] ?? null;
