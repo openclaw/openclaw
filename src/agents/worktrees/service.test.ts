@@ -955,28 +955,42 @@ describe("ManagedWorktreeService", () => {
     expect(rows.map((entry) => [entry.id, entry.readiness])).toEqual([[first.id, "ready"]]);
   });
 
-  it("restore() revives a removed provisioning row as ready", async () => {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "restore-prov",
-      ownerKind: "workboard",
-      ownerId: "card-restore",
-    });
+  it("restore() refuses a snapshot taken from a provisioning row", async () => {
+    const created = await service.create({ repoRoot: repo, name: "restore-prov" });
     // Constructed post-claim crash: the row is left 'provisioning' over a real checkout,
-    // then the operator recovers it via the normal remove -> restore path.
+    // then an operator removes it; its snapshot captured an unprovisioned tree.
     updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
     await service.remove({ id: created.id, reason: "operator-recovery" });
 
-    const restored = await service.restore({ id: created.id });
+    await expect(service.restore({ id: created.id })).rejects.toThrow(
+      "cannot restore a worktree that never finished provisioning: restore-prov",
+    );
+    // The row keeps its removed state; nothing was rematerialized.
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeDefined();
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
 
-    expect(restored.readiness).toBe("ready");
-    expect(getRegistryWorktree(env, created.id)?.readiness).toBe("ready");
-    // The revived row must not be reapable via its original claim timestamp.
-    now += PROVISIONING_STALE_MS + 1;
-    await service.gc();
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-    expect(await fs.stat(restored.path)).toBeTruthy();
-    expect(service.findLiveByOwner("workboard", "card-restore")?.id).toBe(created.id);
+  it("create() after removing a provisioning row provisions fresh instead of restoring", async () => {
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    const script = path.join(repo, ".openclaw", "worktree-setup.sh");
+    await fs.writeFile(script, "#!/bin/sh\necho one > setup-marker.txt\n", { mode: 0o755 });
+    const created = await service.create({ repoRoot: repo, name: "prov-recreate" });
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    const removed = await service.remove({ id: created.id, reason: "operator-recovery" });
+    // A snapshot restore would resurrect the OLD marker; only a fresh full provision runs
+    // the updated setup script.
+    await fs.writeFile(script, "#!/bin/sh\necho two > setup-marker.txt\n", { mode: 0o755 });
+
+    const recreated = await service.create({ repoRoot: repo, name: "prov-recreate" });
+
+    expect(recreated.id).not.toBe(created.id);
+    expect(recreated.readiness).toBe("ready");
+    expect(await fs.readFile(path.join(recreated.path, "setup-marker.txt"), "utf8")).toBe("two\n");
+    // The stale removed provisioning row and its snapshot ref are gone.
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === recreated.path);
+    expect(rows.map((entry) => entry.id)).toEqual([recreated.id]);
   });
 
   it("create() fails closed when its provisioning row is reaped mid-flight", async () => {

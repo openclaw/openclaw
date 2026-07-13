@@ -80,6 +80,13 @@ export class WorktreeProvisioningReapedError extends Error {
     super(`worktree provisioning exceeded its window and was reclaimed: ${name}`);
   }
 }
+
+/** Snapshot restore refused: a provisioning-origin snapshot has no usable checkout. */
+export class WorktreeUnprovisionedRestoreError extends Error {
+  constructor(name: string) {
+    super(`cannot restore a worktree that never finished provisioning: ${name}; create it again`);
+  }
+}
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
 const log = createSubsystemLogger("agents/worktrees");
 
@@ -399,9 +406,17 @@ export class ManagedWorktreeService {
       if (!recordOwnerMatches(existing, params)) {
         throw worktreeNameInUseError(existing, name);
       }
-      // restore() re-activates this EXISTING row via updateRegistryWorktree — it operates on
-      // the row that already owns the path, so it cannot create a duplicate live row.
-      return await this.restore({ id: existing.id });
+      if (existing.readiness === "provisioning") {
+        // A provisioning-origin snapshot has no completed provisioning and no user work
+        // (same rationale as the missing-path heal); drop the row and its snapshot ref so
+        // the fresh create below provisions from scratch instead of restoring a stub.
+        await runGit(existing.repoRoot, ["update-ref", "-d", existing.snapshotRef]);
+        deleteRegistryWorktree(this.env, existing.id);
+      } else {
+        // restore() re-activates this EXISTING row via updateRegistryWorktree — it operates on
+        // the row that already owns the path, so it cannot create a duplicate live row.
+        return await this.restore({ id: existing.id });
+      }
     }
     const branch = `openclaw/${name}`;
     const branchExists = await runGit(repository.repoRoot, [
@@ -732,6 +747,11 @@ export class ManagedWorktreeService {
     const record = getRegistryWorktree(this.env, params.id);
     if (!record?.snapshotRef || record.removedAt === undefined) {
       throw new Error(`worktree ${params.id} is not restorable`);
+    }
+    // A provisioning-origin snapshot contains no completed provisioning and no user work;
+    // restoring it as ready would hand out an unusable checkout. Fresh create is the recovery.
+    if (record.readiness === "provisioning") {
+      throw new WorktreeUnprovisionedRestoreError(record.name);
     }
     if (!(await pathExists(record.repoRoot))) {
       throw new Error(`source repository no longer exists: ${record.repoRoot}`);
