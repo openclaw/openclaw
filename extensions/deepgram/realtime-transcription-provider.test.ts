@@ -172,7 +172,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     const provider = buildDeepgramRealtimeTranscriptionProvider();
     const session = provider.createSession({
       providerConfig: {
-        apiKey: "dg-test-value",
+        apiKey: "dummy",
         baseUrl: server.baseUrl,
       },
     });
@@ -183,6 +183,6 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url.pathname).toBe("/deepgram/v1/listen");
     expect(requests[0]?.url.searchParams.get("model")).toBe("nova-3");
-    expect(requests[0]?.headers.authorization).toBe("Token dg-test-value");
+    expect(requests[0]?.headers.authorization).toBe("Token dummy");
   });
 });
