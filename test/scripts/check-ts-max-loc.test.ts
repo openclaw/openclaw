@@ -117,42 +117,76 @@ describe("scripts/check-ts-max-loc", () => {
     expect(isProductionTypeScriptFile("ui/src/i18n/lib/translate.ts")).toBe(true);
   });
 
-  it("allows baseline updates only for decreases and removals", () => {
+  it("allows baseline updates only for decreases, removals, and drift already in the base", () => {
     const violations = findLocBaselineUpdateViolations({
       maxLines: 500,
       baseline: {
         "src/grew.ts": 700,
+        "src/base-grew.ts": 700,
+        "src/base-grew-again.ts": 700,
         "src/shrank.ts": 700,
         "src/removed.ts": 700,
       },
+      baseResults: [
+        { filePath: "src/grew.ts", lines: 700 },
+        { filePath: "src/base-grew.ts", lines: 710 },
+        { filePath: "src/base-grew-again.ts", lines: 710 },
+        { filePath: "src/base-new.ts", lines: 600 },
+      ],
       results: [
         { filePath: "src/grew.ts", lines: 701 },
+        { filePath: "src/base-grew.ts", lines: 710 },
+        { filePath: "src/base-grew-again.ts", lines: 711 },
+        { filePath: "src/base-new.ts", lines: 600 },
         { filePath: "src/shrank.ts", lines: 650 },
         { filePath: "src/new.ts", lines: 501 },
       ],
     });
 
     expect(violations).toEqual([
+      {
+        filePath: "src/base-grew-again.ts",
+        lines: 711,
+        baselineLines: 700,
+        reason: "grew",
+      },
       { filePath: "src/grew.ts", lines: 701, baselineLines: 700, reason: "grew" },
       { filePath: "src/new.ts", lines: 501, reason: "baseline-missing" },
     ]);
   });
 
-  it("rejects versioned baseline additions and increases", () => {
+  it("rejects versioned baseline changes beyond the base ref's existing LOC", () => {
     const violations = findVersionedBaselineViolations({
       baseBaseline: {
         "src/grew.ts": 700,
+        "src/base-grew.ts": 700,
+        "src/base-grew-again.ts": 700,
         "src/shrank.ts": 700,
         "src/removed.ts": 700,
       },
+      baseResults: [
+        { filePath: "src/grew.ts", lines: 700 },
+        { filePath: "src/base-grew.ts", lines: 710 },
+        { filePath: "src/base-grew-again.ts", lines: 710 },
+        { filePath: "src/base-new.ts", lines: 600 },
+      ],
       baseline: {
         "src/grew.ts": 701,
+        "src/base-grew.ts": 710,
+        "src/base-grew-again.ts": 711,
+        "src/base-new.ts": 600,
         "src/shrank.ts": 650,
         "src/new.ts": 501,
       },
     });
 
     expect(violations).toEqual([
+      {
+        filePath: "src/base-grew-again.ts",
+        lines: 711,
+        baselineLines: 700,
+        reason: "grew",
+      },
       { filePath: "src/grew.ts", lines: 701, baselineLines: 700, reason: "grew" },
       { filePath: "src/new.ts", lines: 501, reason: "baseline-missing" },
     ]);

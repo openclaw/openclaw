@@ -153,19 +153,28 @@ export function findLocRatchetViolations(params: {
 
 export function findLocBaselineUpdateViolations(params: {
   baseline: LocBaseline;
+  baseResults: LocResult[];
   maxLines: number;
   results: LocResult[];
 }): LocRatchetViolation[] {
+  const baseLinesByPath = new Map(
+    params.baseResults.map((result) => [result.filePath, result.lines]),
+  );
   const violations: LocRatchetViolation[] = [];
   for (const result of params.results) {
     if (result.lines <= params.maxLines) {
       continue;
     }
     const baselineLines = params.baseline[result.filePath];
+    const baseLines = baseLinesByPath.get(result.filePath);
     if (baselineLines === undefined) {
-      violations.push({ ...result, reason: "baseline-missing" });
+      if (baseLines === undefined || result.lines > baseLines) {
+        violations.push({ ...result, reason: "baseline-missing" });
+      }
     } else if (result.lines > baselineLines) {
-      violations.push({ ...result, baselineLines, reason: "grew" });
+      if (baseLines === undefined || result.lines > baseLines) {
+        violations.push({ ...result, baselineLines, reason: "grew" });
+      }
     }
   }
   return violations.toSorted(
@@ -176,14 +185,23 @@ export function findLocBaselineUpdateViolations(params: {
 export function findVersionedBaselineViolations(params: {
   baseline: LocBaseline;
   baseBaseline: LocBaseline;
+  baseResults: LocResult[];
 }): LocRatchetViolation[] {
+  const baseLinesByPath = new Map(
+    params.baseResults.map((result) => [result.filePath, result.lines]),
+  );
   const violations: LocRatchetViolation[] = [];
   for (const [filePath, lines] of Object.entries(params.baseline)) {
     const baselineLines = params.baseBaseline[filePath];
+    const baseLines = baseLinesByPath.get(filePath);
     if (baselineLines === undefined) {
-      violations.push({ filePath, lines, reason: "baseline-missing" });
+      if (baseLines === undefined || lines > baseLines) {
+        violations.push({ filePath, lines, reason: "baseline-missing" });
+      }
     } else if (lines > baselineLines) {
-      violations.push({ filePath, lines, baselineLines, reason: "grew" });
+      if (baseLines === undefined || lines > baseLines) {
+        violations.push({ filePath, lines, baselineLines, reason: "grew" });
+      }
     }
   }
   return violations.toSorted(
@@ -254,6 +272,49 @@ function readBaselineAtRef(
   return content === undefined ? undefined : parseBaseline(content, `${baseRef}:${baselinePath}`);
 }
 
+function readFileAtRef(baseRef: string, filePath: string): string | undefined {
+  try {
+    return execFileSync("git", ["show", `${baseRef}:${filePath}`], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function collectBaseComparisonPaths(params: {
+  baseline: LocBaseline;
+  baseBaseline: LocBaseline;
+  maxLines: number;
+  results: LocResult[];
+}): string[] {
+  const paths = new Set<string>();
+  for (const [filePath, lines] of Object.entries(params.baseline)) {
+    const baselineLines = params.baseBaseline[filePath];
+    if (baselineLines === undefined || lines > baselineLines) {
+      paths.add(filePath);
+    }
+  }
+  for (const result of params.results) {
+    const baselineLines = params.baseline[result.filePath];
+    if (
+      result.lines > params.maxLines &&
+      (baselineLines === undefined || result.lines > baselineLines)
+    ) {
+      paths.add(result.filePath);
+    }
+  }
+  return [...paths];
+}
+
+function readLocResultsAtRef(baseRef: string, filePaths: string[]): LocResult[] {
+  return filePaths.flatMap((filePath) => {
+    const content = readFileAtRef(baseRef, filePath);
+    return content === undefined ? [] : [{ filePath, lines: countPhysicalLines(content) }];
+  });
+}
+
 function buildBaseline(results: LocResult[], maxLines: number): LocBaseline {
   return Object.fromEntries(
     results
@@ -287,17 +348,29 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     files.map(async (filePath) => ({ filePath, lines: await countLines(filePath) })),
   );
 
+  const baseline = await readBaseline(baselinePath);
+  const comparisonBaseRef = resolveComparisonBaseRef(baselinePath, baseRef);
+  if (writeBaseline && !comparisonBaseRef) {
+    throw new Error("Unable to resolve a comparison ref for the TypeScript LOC baseline update");
+  }
+  const baseBaseline = readBaselineAtRef(comparisonBaseRef, baselinePath);
+  // A baseline may catch up only to drift already present in the comparison base.
+  // Branch-local growth still exceeds baseResults and fails both update and CI checks.
+  const baseResults =
+    comparisonBaseRef && baseBaseline
+      ? readLocResultsAtRef(
+          comparisonBaseRef,
+          collectBaseComparisonPaths({ baseline, baseBaseline, maxLines, results }),
+        )
+      : [];
+
   if (writeBaseline) {
-    const baseline = await readBaseline(baselinePath);
-    const comparisonBaseRef = resolveComparisonBaseRef(baselinePath, baseRef);
-    if (!comparisonBaseRef) {
-      throw new Error("Unable to resolve a comparison ref for the TypeScript LOC baseline update");
-    }
-    const baseBaseline = readBaselineAtRef(comparisonBaseRef, baselinePath);
     // A missing baseline at a valid base ref is the one-time initialization path.
     const violations = [
-      ...(baseBaseline ? findVersionedBaselineViolations({ baseline, baseBaseline }) : []),
-      ...findLocBaselineUpdateViolations({ baseline, maxLines, results }),
+      ...(baseBaseline
+        ? findVersionedBaselineViolations({ baseline, baseBaseline, baseResults })
+        : []),
+      ...findLocBaselineUpdateViolations({ baseline, baseResults, maxLines, results }),
     ];
     reportViolations(violations);
     if (violations.length > 0) {
@@ -309,13 +382,10 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     return 0;
   }
 
-  const baseline = await readBaseline(baselinePath);
-  const baseBaseline = readBaselineAtRef(
-    resolveComparisonBaseRef(baselinePath, baseRef),
-    baselinePath,
-  );
   const violations = [
-    ...(baseBaseline ? findVersionedBaselineViolations({ baseline, baseBaseline }) : []),
+    ...(baseBaseline
+      ? findVersionedBaselineViolations({ baseline, baseBaseline, baseResults })
+      : []),
     ...findLocRatchetViolations({ baseline, maxLines, results }),
   ];
   reportViolations(violations);
