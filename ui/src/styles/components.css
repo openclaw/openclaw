@@ -3201,6 +3201,52 @@ td.data-table-key-col {
   max-width: 280px;
 }
 
+.agent-scope-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.agent-scope-control__label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.agent-scope-control__select {
+  min-width: 150px;
+  max-width: min(240px, 40vw);
+  height: 34px;
+  padding: 0 30px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agent-scope-control__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .agent-scope-control__label {
+    display: none;
+  }
+
+  .agent-scope-control__select {
+    min-width: 128px;
+    max-width: 44vw;
+  }
+}
+
 .agent-select {
   position: relative;
   width: 100%;
@@ -3535,6 +3581,55 @@ td.data-table-key-col {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.agent-identity-editor {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.agent-identity-editor__avatar {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 24px;
+}
+
+.agent-identity-editor__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.agent-identity-editor__fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.agent-identity-editor__fields .field {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.agent-identity-editor__fields .agent-identity-editor__emoji {
+  flex: 0 1 96px;
+}
+
+.agent-identity-editor__hint {
+  margin-top: 8px;
+  font-size: 12px;
 }
 
 .agent-kv {

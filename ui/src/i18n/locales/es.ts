@@ -409,9 +409,17 @@ export const es: TranslationMap = {
     working: "Procesando…",
     ready: "Listo para chatear",
     whatCanAgentDo: "¿Qué puede hacer {name}?",
+    help: "Ayuda",
     getHelp: "Obtener ayuda",
     discord: "Comunidad de Discord",
     viewChangelog: "Ver registro de cambios",
+    agentSettings: "Configuración del agente",
+    filterAgents: "Buscar agente…",
+    noAgentMatches: "No hay agentes coincidentes",
+  },
+  agentScope: {
+    label: "Ámbito del agente",
+    allAgents: "Todos los agentes",
   },
   newSession: {
     title: "Nueva sesión",
@@ -621,6 +629,8 @@ export const es: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Fijar en el selector",
+    unpinFromSwitcher: "Desfijar del selector",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -645,6 +655,18 @@ export const es: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identidad",
+      subtitle: "Nombre, emoji y avatar que se muestran en los chats y en la barra lateral.",
+      name: "Nombre para mostrar",
+      namePlaceholder: "Nombre del agente",
+      emoji: "Emoji",
+      chooseImage: "Elegir imagen…",
+      replaceImage: "Reemplazar imagen…",
+      imageUnusable: "No se puede usar esa imagen. Elige un archivo de imagen de hasta 2 MB.",
+      fileHint:
+        "Los agentes pueden configurar esto por sí mismos editando IDENTITY.md en su espacio de trabajo.",
     },
     overview: {
       title: "Resumen",

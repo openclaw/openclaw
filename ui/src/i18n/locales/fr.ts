@@ -412,9 +412,17 @@ export const fr: TranslationMap = {
     working: "Traitement en cours…",
     ready: "Prêt à discuter",
     whatCanAgentDo: "Que peut faire {name} ?",
+    help: "Aide",
     getHelp: "Obtenir de l’aide",
     discord: "Communauté Discord",
     viewChangelog: "Voir le journal des modifications",
+    agentSettings: "Paramètres de l’agent",
+    filterAgents: "Rechercher un agent…",
+    noAgentMatches: "Aucun agent correspondant",
+  },
+  agentScope: {
+    label: "Portée de l’agent",
+    allAgents: "Tous les agents",
   },
   newSession: {
     title: "Nouvelle session",
@@ -627,6 +635,8 @@ export const fr: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Épingler au sélecteur",
+    unpinFromSwitcher: "Détacher du sélecteur",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -651,6 +661,19 @@ export const fr: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identité",
+      subtitle: "Nom, emoji et avatar affichés dans les discussions et la barre latérale.",
+      name: "Nom d’affichage",
+      namePlaceholder: "Nom de l’agent",
+      emoji: "Emoji",
+      chooseImage: "Choisir une image…",
+      replaceImage: "Remplacer l’image…",
+      imageUnusable:
+        "Cette image ne peut pas être utilisée. Choisissez un fichier image de 2 Mo maximum.",
+      fileHint:
+        "Les agents peuvent définir ces informations eux-mêmes en modifiant IDENTITY.md dans leur espace de travail.",
     },
     overview: {
       title: "Vue d'ensemble",

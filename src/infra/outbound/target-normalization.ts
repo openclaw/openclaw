@@ -142,12 +142,12 @@ export function normalizeTargetForProvider(
 /**
  * Directory target kinds accepted by plugin-backed target resolution.
  */
-export type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
+type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
 
 /**
  * Resolved outbound target returned by a channel plugin target resolver.
  */
-export type ResolvedPluginMessagingTarget = {
+type ResolvedPluginMessagingTarget = {
   to: string;
   kind: TargetResolveKindLike;
   display?: string;

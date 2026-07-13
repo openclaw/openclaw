@@ -259,7 +259,7 @@ describe("renderUsage", () => {
     expect(container.querySelector(".usage-header")).not.toBeNull();
   });
 
-  it("shows configured agents in the agent filter even before their usage sessions load", () => {
+  it("leaves agent scoping to the shared page header control", () => {
     const container = document.createElement("div");
 
     render(
@@ -282,10 +282,7 @@ describe("renderUsage", () => {
       container,
     );
 
-    const agentFilter = container.querySelector(".usage-filter-select");
-
-    expect(agentFilter?.textContent).toContain("main");
-    expect(agentFilter?.textContent).toContain("research");
+    expect(container.querySelector('input[name="usage-agent-scope"]')).toBeNull();
   });
 
   it("renders provider plans, quotas, and billing independently of session usage", () => {

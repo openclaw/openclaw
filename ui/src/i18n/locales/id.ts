@@ -407,9 +407,17 @@ export const id: TranslationMap = {
     working: "Sedang bekerja…",
     ready: "Siap mengobrol",
     whatCanAgentDo: "Apa yang dapat dilakukan {name}?",
+    help: "Bantuan",
     getHelp: "Dapatkan bantuan",
     discord: "Komunitas Discord",
     viewChangelog: "Lihat log perubahan",
+    agentSettings: "Pengaturan agen",
+    filterAgents: "Cari agen…",
+    noAgentMatches: "Tidak ada agen yang cocok",
+  },
+  agentScope: {
+    label: "Cakupan agen",
+    allAgents: "Semua agen",
   },
   newSession: {
     title: "Sesi baru",
@@ -619,6 +627,8 @@ export const id: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Sematkan ke pengalih",
+    unpinFromSwitcher: "Lepaskan sematan dari pengalih",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -643,6 +653,18 @@ export const id: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identitas",
+      subtitle: "Nama, emoji, dan avatar yang ditampilkan di obrolan dan bilah samping.",
+      name: "Nama tampilan",
+      namePlaceholder: "Nama agen",
+      emoji: "Emoji",
+      chooseImage: "Pilih gambar…",
+      replaceImage: "Ganti gambar…",
+      imageUnusable:
+        "Gambar tersebut tidak dapat digunakan. Pilih file gambar berukuran hingga 2 MB.",
+      fileHint: "Agen dapat mengaturnya sendiri dengan mengedit IDENTITY.md di ruang kerja mereka.",
     },
     overview: {
       title: "Ikhtisar",

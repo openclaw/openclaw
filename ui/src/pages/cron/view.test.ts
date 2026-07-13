@@ -29,6 +29,9 @@ function createProps(overrides: Partial<CronProps> = {}): CronProps {
     jobsLoadingMore: false,
     status: null,
     failingCount: null,
+    agentScoped: false,
+    scopedTotal: null,
+    scopedNextWakeAtMs: null,
     jobs: [],
     jobsTotal: 0,
     jobsHasMore: false,
@@ -116,6 +119,47 @@ function getElement<T extends Element>(
 }
 
 describe("cron view list pane", () => {
+  it("uses agent-scoped summary values", () => {
+    const container = renderView({
+      agentScoped: true,
+      scopedTotal: 3,
+      scopedNextWakeAtMs: Date.now() + 60_000,
+      status: { enabled: true, jobs: 99, nextWakeAtMs: null },
+    });
+    const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
+      entry.textContent?.trim(),
+    );
+
+    expect(values[0]).toBe("3");
+    expect(values[2]).not.toBe("n/a");
+  });
+
+  it("hides an agent-scoped next wake while the scheduler is disabled", () => {
+    const container = renderView({
+      agentScoped: true,
+      scopedNextWakeAtMs: Date.now() + 60_000,
+      status: { enabled: false, jobs: 3, nextWakeAtMs: null },
+    });
+    const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
+      entry.textContent?.trim(),
+    );
+
+    expect(values[2]).toBe("n/a");
+  });
+
+  it("keeps an agent-scoped next wake while scheduler status is loading", () => {
+    const container = renderView({
+      agentScoped: true,
+      scopedNextWakeAtMs: Date.now() + 60_000,
+      status: null,
+    });
+    const values = [...container.querySelectorAll(".cron-stat__value")].map((entry) =>
+      entry.textContent?.trim(),
+    );
+
+    expect(values[2]).not.toBe("n/a");
+  });
+
   it("wires the enabled tabs and marks the active one", () => {
     const onJobsFiltersChange = vi.fn();
     const container = renderView({ jobsEnabledFilter: "enabled", onJobsFiltersChange });

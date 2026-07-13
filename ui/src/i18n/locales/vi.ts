@@ -409,9 +409,17 @@ export const vi: TranslationMap = {
     working: "Đang làm việc…",
     ready: "Sẵn sàng trò chuyện",
     whatCanAgentDo: "{name} có thể làm gì?",
+    help: "Trợ giúp",
     getHelp: "Nhận trợ giúp",
     discord: "Cộng đồng Discord",
     viewChangelog: "Xem nhật ký thay đổi",
+    agentSettings: "Cài đặt agent",
+    filterAgents: "Tìm agent…",
+    noAgentMatches: "Không có agent phù hợp",
+  },
+  agentScope: {
+    label: "Phạm vi agent",
+    allAgents: "Tất cả agent",
   },
   newSession: {
     title: "Phiên mới",
@@ -620,6 +628,8 @@ export const vi: TranslationMap = {
     setDefault: "Đặt làm mặc định",
     alreadyDefaultTitle: "Đã là agent mặc định",
     setDefaultTitle: "Đặt làm agent mặc định",
+    pinToSwitcher: "Ghim vào trình chuyển đổi",
+    unpinFromSwitcher: "Bỏ ghim khỏi trình chuyển đổi",
     selectTitle: "Chọn một agent",
     selectSubtitle: "Chọn một agent để kiểm tra workspace và công cụ của agent đó.",
     tabs: {
@@ -644,6 +654,19 @@ export const vi: TranslationMap = {
       default: "Mặc định",
       configurationSubtitle: "Cấu hình workspace, danh tính và mô hình.",
       schedulingSubtitle: "Workspace và mục tiêu lập lịch.",
+    },
+    identity: {
+      title: "Danh tính",
+      subtitle: "Tên, emoji và ảnh đại diện hiển thị trong cuộc trò chuyện và thanh bên.",
+      name: "Tên hiển thị",
+      namePlaceholder: "Tên agent",
+      emoji: "Emoji",
+      chooseImage: "Chọn hình ảnh…",
+      replaceImage: "Thay thế hình ảnh…",
+      imageUnusable:
+        "Không thể sử dụng hình ảnh đó. Hãy chọn tệp hình ảnh có dung lượng tối đa 2 MB.",
+      fileHint:
+        "Agent có thể tự thiết lập bằng cách chỉnh sửa IDENTITY.md trong workspace của mình.",
     },
     overview: {
       title: "Tổng quan",

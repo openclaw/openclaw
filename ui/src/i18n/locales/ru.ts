@@ -410,9 +410,17 @@ export const ru: TranslationMap = {
     working: "Выполняется…",
     ready: "Готово к чату",
     whatCanAgentDo: "Что умеет {name}?",
+    help: "Справка",
     getHelp: "Получить помощь",
     discord: "Сообщество Discord",
     viewChangelog: "Посмотреть журнал изменений",
+    agentSettings: "Настройки агента",
+    filterAgents: "Найти агента…",
+    noAgentMatches: "Подходящие агенты не найдены",
+  },
+  agentScope: {
+    label: "Область действия агента",
+    allAgents: "Все агенты",
   },
   newSession: {
     title: "Новый сеанс",
@@ -623,6 +631,8 @@ export const ru: TranslationMap = {
     setDefault: "Сделать по умолчанию",
     alreadyDefaultTitle: "Уже агент по умолчанию",
     setDefaultTitle: "Сделать агентом по умолчанию",
+    pinToSwitcher: "Закрепить в переключателе",
+    unpinFromSwitcher: "Открепить от переключателя",
     selectTitle: "Выберите агента",
     selectSubtitle: "Выберите агента, чтобы просмотреть его рабочую область и инструменты.",
     tabs: {
@@ -647,6 +657,19 @@ export const ru: TranslationMap = {
       default: "По умолчанию",
       configurationSubtitle: "Настройка рабочей области, удостоверения и модели.",
       schedulingSubtitle: "Рабочая область и целевые объекты расписания.",
+    },
+    identity: {
+      title: "Профиль",
+      subtitle: "Имя, эмодзи и аватар, отображаемые в чатах и на боковой панели.",
+      name: "Отображаемое имя",
+      namePlaceholder: "Имя агента",
+      emoji: "Эмодзи",
+      chooseImage: "Выбрать изображение…",
+      replaceImage: "Заменить изображение…",
+      imageUnusable:
+        "Это изображение нельзя использовать. Выберите файл изображения размером до 2 МБ.",
+      fileHint:
+        "Агенты могут настроить это самостоятельно, отредактировав файл IDENTITY.md в своей рабочей области.",
     },
     overview: {
       title: "Обзор",

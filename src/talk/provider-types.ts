@@ -205,7 +205,7 @@ export type RealtimeVoiceBridge = {
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void | Promise<void>;
-  acknowledgeMark(): void;
+  acknowledgeMark(markName?: string): void;
   close(): void;
   isConnected(): boolean;
 };

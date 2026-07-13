@@ -50,6 +50,7 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   canPairDevice: boolean;
+  pinnedAgentIds: readonly string[];
   sessionKey: string;
   onNavigate: (routeId: string, options?: { search?: string }) => void;
   sessionCatalogs: SessionCatalog[];
@@ -203,6 +204,7 @@ function createContext(
   sessions: SessionCapability,
   agentsList: AgentsListResult | null = null,
 ): ApplicationContext<RouteId> {
+  const selectedAgentId = sessions.state.agentId ?? "main";
   return {
     gateway,
     sessions,
@@ -211,8 +213,9 @@ function createContext(
       subscribe: () => () => undefined,
     },
     agentSelection: {
-      state: { selectedId: "main" },
+      state: { selectedId: selectedAgentId, scopeId: selectedAgentId },
       set: () => undefined,
+      setScope: () => undefined,
       subscribe: () => () => undefined,
     },
   } as unknown as ApplicationContext<RouteId>;
@@ -417,15 +420,33 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector(".sidebar-pair-mobile")).not.toBeNull();
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
-    const linkHrefs = [...(menu?.querySelectorAll('a[role="menuitem"]') ?? [])].map((link) =>
-      link.getAttribute("href"),
-    );
+    // External help links fold into the Help flyout; they only render open.
+    expect(menu?.querySelector('a[role="menuitem"]')).toBeNull();
+    const helpRow = [
+      ...(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []),
+    ].find((row) => row.textContent?.includes("Help"));
+    expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
+    helpRow?.click();
+    await sidebar.updateComplete;
+
+    const linkHrefs = [
+      ...(menu?.querySelectorAll('.sidebar-customize-menu__submenu a[role="menuitem"]') ?? []),
+    ].map((link) => link.getAttribute("href"));
     expect(linkHrefs).toEqual([
       "https://docs.openclaw.ai",
       "https://docs.openclaw.ai/help",
       "https://discord.gg/clawd",
       "https://docs.openclaw.ai/releases",
     ]);
+
+    // Real mouse flow fires pointerenter before the click; the click must not
+    // invert the hover-opened state back to closed.
+    const helpHost = menu?.querySelector(".sidebar-customize-menu__submenu-host");
+    helpHost?.dispatchEvent(Object.assign(new Event("pointerenter"), { pointerType: "mouse" }));
+    await sidebar.updateComplete;
+    helpRow?.click();
+    await sidebar.updateComplete;
+    expect(menu?.querySelector(".sidebar-customize-menu__submenu")).not.toBeNull();
 
     const agentRows = [...(menu?.querySelectorAll('[role="menuitemradio"]') ?? [])];
     expect(agentRows).toHaveLength(2);
@@ -440,6 +461,147 @@ describe("AppSidebar agent chip", () => {
       search: "?session=agent%3Aresearch%3Amain",
     });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+  });
+
+  it("navigates to the agents settings page with the active agent preselected", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const onNavigate = vi.fn();
+    sidebar.connected = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const settingsRow = [
+      ...sidebar.querySelectorAll<HTMLButtonElement>('.sidebar-agent-menu [role="menuitem"]'),
+    ].find((row) => row.textContent?.includes("Agent settings"));
+    expect(settingsRow).toBeDefined();
+    settingsRow?.click();
+    await sidebar.updateComplete;
+    expect(onNavigate).toHaveBeenCalledWith("agents", { search: "?agent=main" });
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+  });
+
+  const manyAgents = (count: number) =>
+    ({
+      defaultId: "agent-1",
+      mainKey: "main",
+      scope: "agent",
+      agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
+    }) as AgentsListResult;
+
+  it("keeps the plain roster without a filter at ten agents or fewer", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("agent-1", ["agent:agent-1:main"]),
+      "panel",
+      manyAgents(10),
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
+  });
+
+  it("shows pinned agents plus filter for large rosters and filters on input", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("agent-1", ["agent:agent-1:main"]),
+      "panel",
+      manyAgents(12),
+    );
+    sidebar.connected = true;
+    sidebar.pinnedAgentIds = ["agent-7", "agent-12"];
+    // Two agents pinned while a third is active: the menu must keep all three.
+    context.agentSelection.state.selectedId = "agent-1";
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const input = sidebar.querySelector<HTMLInputElement>(".sidebar-agent-menu__filter input");
+    expect(input).not.toBeNull();
+    // Pinned agents plus the active one; pinned sort first.
+    const labels = () =>
+      [
+        ...sidebar.querySelectorAll(
+          '.sidebar-agent-menu [role="menuitemradio"] .sidebar-customize-menu__text',
+        ),
+      ].map((el) => el.textContent?.trim());
+    expect(labels()).toEqual(["agent-7", "agent-12", "agent-1"]);
+
+    if (!input) {
+      throw new Error("Expected agent menu filter input");
+    }
+    input.value = "agent-11";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    await sidebar.updateComplete;
+    expect(labels()).toEqual(["agent-11"]);
+  });
+
+  it("falls back to the first ten agents when nothing is pinned", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("agent-1", ["agent:agent-1:main"]),
+      "panel",
+      manyAgents(12),
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
+  });
+
+  it("ignores stale pins when choosing the large-roster fallback", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("agent-1", ["agent:agent-1:main"]),
+      "panel",
+      manyAgents(12),
+    );
+    sidebar.connected = true;
+    sidebar.pinnedAgentIds = ["deleted-agent"];
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
+  });
+
+  it("keeps an active agent outside the first ten reachable when nothing is pinned", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("agent-12", ["agent:agent-12:main"]),
+      "panel",
+      manyAgents(12),
+    );
+    context.agentSelection.state.selectedId = "agent-12";
+    context.agentSelection.state.scopeId = "agent-12";
+    sidebar.sessionKey = "agent:agent-12:main";
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const rows = [...sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')];
+    expect(rows).toHaveLength(10);
+    expect(rows.some((row) => row.textContent?.includes("agent-12"))).toBe(true);
   });
 });
 

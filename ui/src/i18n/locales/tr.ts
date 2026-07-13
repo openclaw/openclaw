@@ -410,9 +410,17 @@ export const tr: TranslationMap = {
     working: "Çalışıyor…",
     ready: "Sohbete hazır",
     whatCanAgentDo: "{name} neler yapabilir?",
+    help: "Yardım",
     getHelp: "Yardım alın",
     discord: "Discord topluluğu",
     viewChangelog: "Değişiklik günlüğünü görüntüleyin",
+    agentSettings: "Agent ayarları",
+    filterAgents: "Agent bul…",
+    noAgentMatches: "Eşleşen agent yok",
+  },
+  agentScope: {
+    label: "Ajan kapsamı",
+    allAgents: "Tüm ajanlar",
   },
   newSession: {
     title: "Yeni oturum",
@@ -622,6 +630,8 @@ export const tr: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Değiştiriciye sabitle",
+    unpinFromSwitcher: "Değiştiriciden kaldır",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -646,6 +656,18 @@ export const tr: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Kimlik",
+      subtitle: "Sohbetlerde ve kenar çubuğunda gösterilen ad, emoji ve avatar.",
+      name: "Görünen ad",
+      namePlaceholder: "Agent adı",
+      emoji: "Emoji",
+      chooseImage: "Görsel seç…",
+      replaceImage: "Görseli değiştir…",
+      imageUnusable: "Bu görsel kullanılamıyor. En fazla 2 MB boyutunda bir görsel dosyası seçin.",
+      fileHint:
+        "Agent'lar, çalışma alanlarındaki IDENTITY.md dosyasını düzenleyerek bunu kendileri ayarlayabilir.",
     },
     overview: {
       title: "Genel Bakış",
