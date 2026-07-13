@@ -26,7 +26,9 @@ Stable releases built from `main` ship `.deb` and AppImage bundles as assets on 
 named `OpenClaw-<version>-amd64.deb` and `OpenClaw-<version>-amd64.AppImage`,
 with a `SHA256SUMS.linux-app.txt` checksum file next to them. Download the
 `.deb` and install it with `sudo apt install ./OpenClaw-<version>-amd64.deb`,
-or mark the AppImage executable and run it directly.
+or mark the AppImage executable and run it directly. The AppImage runtime
+needs FUSE 2 (`sudo apt install libfuse2`, or `libfuse2t64` on Ubuntu 24.04+);
+without it, run the AppImage with `APPIMAGE_EXTRACT_AND_RUN=1`.
 
 You can also build the same bundles from a source checkout:
 
