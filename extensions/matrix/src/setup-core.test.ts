@@ -32,7 +32,7 @@ function expectPromotedDefaultAccount(next: CoreConfig): void {
     deviceName: "Legacy raw key",
     homeserver: "https://matrix.example.org",
     userId: "@default:example.org",
-    accessToken: "default-token",
+    accessToken: "tok-default",
     avatarUrl: "mxc://example.org/default-avatar",
   });
   expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
@@ -186,7 +186,7 @@ describe("matrixSetupAdapter", () => {
         matrix: {
           homeserver: "https://matrix.example.org",
           userId: "@default:example.org",
-          accessToken: "default-token",
+          accessToken: "tok-default",
           deviceName: "Default device",
           dangerouslyAllowNameMatching: true,
         },
@@ -211,7 +211,7 @@ describe("matrixSetupAdapter", () => {
     expectFields(next.channels?.matrix?.accounts?.default, {
       homeserver: "https://matrix.example.org",
       userId: "@default:example.org",
-      accessToken: "default-token",
+      accessToken: "tok-default",
       deviceName: "Default device",
       dangerouslyAllowNameMatching: true,
     });
@@ -232,7 +232,7 @@ describe("matrixSetupAdapter", () => {
           defaultAccount: "default",
           homeserver: "https://matrix.example.org",
           userId: "@default:example.org",
-          accessToken: "default-token",
+          accessToken: "tok-default",
           avatarUrl: "mxc://example.org/default-avatar",
           accounts: {
             Default: {
@@ -256,7 +256,7 @@ describe("matrixSetupAdapter", () => {
         matrix: {
           homeserver: "https://matrix.example.org",
           userId: "@default:example.org",
-          accessToken: "default-token",
+          accessToken: "tok-default",
           avatarUrl: "mxc://example.org/default-avatar",
           accounts: {
             Default: {
@@ -265,7 +265,7 @@ describe("matrixSetupAdapter", () => {
             },
             support: {
               homeserver: "https://matrix.example.org",
-              accessToken: "support-token",
+              accessToken: "tok-support",
             },
           },
         },
@@ -277,7 +277,7 @@ describe("matrixSetupAdapter", () => {
     expectPromotedDefaultAccount(next);
     expectFields(next.channels?.matrix?.accounts?.support, {
       homeserver: "https://matrix.example.org",
-      accessToken: "support-token",
+      accessToken: "tok-support",
     });
     expectOpsAccount(next);
   });
@@ -437,13 +437,13 @@ describe("matrixSetupAdapter", () => {
         matrix: {
           homeserver: "https://matrix.example.org",
           userId: "@default:example.org",
-          accessToken: "default-token",
+          accessToken: "tok-default",
           blockStreaming: true,
           accounts: {
             support: {
               homeserver: "https://matrix.example.org",
               userId: "@support:example.org",
-              accessToken: "support-token",
+              accessToken: "tok-support",
             },
           },
         },
