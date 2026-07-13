@@ -4810,6 +4810,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "ui/src/lib/workboard/index.ts: WorkboardWorkerLog",
   "ui/src/lib/workboard/index.ts: WorkboardWorkerProtocol",
   "ui/src/lib/workboard/index.ts: WorkboardWorkspace",
+  "ui/src/lib/workboard/mutations.ts: createWorkboardCard",
   "ui/src/lib/workspace/bridge.ts: BRIDGE_ENVELOPE_VERSION",
   "ui/src/lib/workspace/bridge.ts: isWellFormedInbound",
   "ui/src/lib/workspace/bridge.ts: resetPromptRateStatesForTest",
