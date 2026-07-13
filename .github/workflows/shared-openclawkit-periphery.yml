@@ -102,6 +102,11 @@ jobs:
         run: |
           brew update
           brew install xcodegen periphery
+          swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+          "$swift_tools_dir/swiftformat" --version
+          "$swift_tools_dir/swiftlint" version
 
       - name: Generate iOS project
         run: |
