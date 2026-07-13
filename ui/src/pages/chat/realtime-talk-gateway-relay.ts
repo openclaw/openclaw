@@ -1,4 +1,3 @@
-// Control UI chat module implements realtime talk gateway relay behavior.
 import {
   bytesToBase64,
   floatToPcm16,
@@ -114,7 +113,9 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.inputSource = null;
     this.inputMeter?.stop();
     this.inputMeter = null;
-    this.clearMarkAckTimers();
+    // Mark callbacks recurse until playback drains, so shutdown must cancel every owned timer.
+    this.markAckTimers.forEach((timer) => window.clearTimeout(timer));
+    this.markAckTimers.clear();
     this.discardDelayedToolResults();
     this.abortConsults();
     this.media?.getTracks().forEach((track) => track.stop());
@@ -258,13 +259,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         markName,
       })
       .catch((error: unknown) => this.reportToolResultSubmissionError(error));
-  }
-
-  private clearMarkAckTimers(): void {
-    for (const timer of this.markAckTimers) {
-      window.clearTimeout(timer);
-    }
-    this.markAckTimers.clear();
   }
 
   private async handleToolCall(event: Extract<GatewayRelayEvent, { type?: "toolCall" }>) {
