@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { __testing, seedQaAgentWorkspace } from "./qa-agent-workspace.js";
+import { seedQaAgentWorkspace, testing as __testing } from "./qa-agent-workspace.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();

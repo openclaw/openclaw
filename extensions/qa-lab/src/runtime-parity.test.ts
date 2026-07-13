@@ -8,7 +8,7 @@ import {
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  __testing,
+  testing as __testing,
   captureRuntimeParityCell,
   isRuntimeParityResultPass,
   resolveRuntimeParityUsagePolicy,

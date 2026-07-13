@@ -411,10 +411,7 @@ function resolveQaEvidenceCheckoutRef(repoRoot?: string) {
   }
 }
 
-export function resolveQaEvidenceEnvironment(params: {
-  env?: NodeJS.ProcessEnv;
-  repoRoot?: string;
-}) {
+function resolveQaEvidenceEnvironment(params: { env?: NodeJS.ProcessEnv; repoRoot?: string }) {
   return {
     // GitHub's GITHUB_SHA describes the workflow event, not necessarily the
     // checked-out ref selected by a manual or remote QA run.
