@@ -190,6 +190,36 @@ describe("draft-stream-controls", () => {
     expect(messageId).toBeUndefined();
   });
 
+  it("lifecycle does not retry a successful delete when its success callback fails", async () => {
+    const state = { stopped: false, final: false };
+    let messageId: string | undefined = "preview-old";
+    const deleteMessage = vi.fn(async () => {});
+    const warn = vi.fn();
+    const lifecycle = createFinalizableDraftLifecycle({
+      throttleMs: 250,
+      state,
+      sendOrEditStreamMessage: async () => true,
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      onDeleteSuccess: () => {
+        throw new Error("callback boom");
+      },
+      warn,
+      warnPrefix: "cleanup failed",
+    });
+
+    await lifecycle.clear();
+    await lifecycle.clear();
+
+    expect(deleteMessage).toHaveBeenCalledTimes(1);
+    expect(messageId).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("cleanup failed after delete: callback boom");
+  });
+
   it("controls ignore updates after final", async () => {
     const sendOrEditStreamMessage = vi.fn(async () => true);
     const controls = createFinalizableDraftStreamControlsForState({

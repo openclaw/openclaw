@@ -139,16 +139,20 @@ async function deleteFinalizableDraftMessage<T>(
 ): Promise<boolean> {
   try {
     await params.deleteMessage(messageId);
+  } catch (err) {
+    params.warn?.(`${params.warnPrefix}: ${formatErrorMessage(err)}`);
+    return false;
+  }
+  try {
     // A replacement preview may become current while deletion is in flight; never clear its ID.
     if (Object.is(params.readMessageId(), messageId)) {
       params.clearMessageId();
     }
     params.onDeleteSuccess?.(messageId);
-    return true;
   } catch (err) {
-    params.warn?.(`${params.warnPrefix}: ${formatErrorMessage(err)}`);
-    return false;
+    params.warn?.(`${params.warnPrefix} after delete: ${formatErrorMessage(err)}`);
   }
+  return true;
 }
 
 /**
