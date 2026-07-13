@@ -548,7 +548,7 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          "amazon-bedrock": { ...Object.fromEntries([["apiKey", "AWS_PROFILE"]]) },
+          "amazon-bedrock": Object.fromEntries([["apiKey", "AWS_PROFILE"]]),
         },
       },
     });
@@ -565,7 +565,7 @@ describe("models.authStatus", () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: {
         providers: {
-          openai: { ...Object.fromEntries([["apiKey", NON_ENV_SECRETREF_MARKER]]) },
+          openai: Object.fromEntries([["apiKey", NON_ENV_SECRETREF_MARKER]]),
         },
       },
     });
