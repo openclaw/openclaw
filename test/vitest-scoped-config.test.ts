@@ -176,6 +176,10 @@ describe("resolveVitestIsolation", () => {
         replacement: path.join(process.cwd(), "packages", "acp-core", "src", "runtime", "types.ts"),
       },
     );
+    expect(findAlias(sharedVitestConfig.resolve.alias, "@openclaw/retry")).toEqual({
+      find: "@openclaw/retry",
+      replacement: path.join(process.cwd(), "packages", "retry", "src", "index.ts"),
+    });
   });
 
   it("defaults shared scoped configs to the non-isolated runner", () => {

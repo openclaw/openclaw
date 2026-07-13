@@ -392,7 +392,6 @@ export const fa: TranslationMap = {
     confirmForceDelete: "snapshot ناموفق بود: {error}\n\nبدون snapshot حذف شود؟",
   },
   agentChip: {
-    openConversation: "گفت‌وگوی خود با {name} را باز کنید",
     menuLabel: "منوی عامل",
     agents: "عامل‌ها",
     working: "در حال کار…",
@@ -1454,6 +1453,8 @@ export const fa: TranslationMap = {
     blockedAgentFilter: "مسدودشده توسط فیلتر عامل",
   },
   nav: {
+    back: "بازگشت",
+    forward: "جلو",
     chat: "چت",
     settings: "تنظیمات",
     settingsGeneral: "عمومی",
@@ -3575,6 +3576,14 @@ export const fa: TranslationMap = {
       remove: "حذف",
       more: "اقدامات بیشتر",
       history: "تاریخچه",
+    },
+    runNotStarted: {
+      notDue: "هنوز زمان اجرای این خودکارسازی نرسیده است.",
+      alreadyRunning: "این خودکارسازی در حال اجرا است.",
+      recoveryPending: "بازیابی زمان‌بند هنوز در حال انجام است.",
+      invalidSpec: "زمان‌بندی یا محتوای این خودکارسازی نامعتبر است.",
+      stopped: "زمان‌بند متوقف شده است.",
+      unknown: "این خودکارسازی راه‌اندازی نشد.",
     },
     jobs: {
       schedule: "زمان‌بندی",

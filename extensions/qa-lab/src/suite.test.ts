@@ -1,7 +1,10 @@
 // Qa Lab tests cover suite plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { CRABLINE_SERVER_CHANNELS } from "@openclaw/crabline";
+import {
+  CRABLINE_SERVER_CHANNELS,
+  OPENCLAW_CRABLINE_ARTIFACT_POINTER_PATH,
+} from "@openclaw/crabline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -476,18 +479,27 @@ describe("qa suite", () => {
         },
       });
 
-      const matrix = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-fake-provider-capabilities.json"), "utf8"),
-      ) as {
+      const pointerPath = path.join(outputDir, OPENCLAW_CRABLINE_ARTIFACT_POINTER_PATH);
+      const pointer = JSON.parse(await fs.readFile(pointerPath, "utf8")) as {
+        capabilityMatrixPath?: string;
+        providerReadinessArtifactPath?: string;
+        smokeArtifactPath?: string;
+      };
+      const matrixPath = path.join(outputDir, pointer.capabilityMatrixPath ?? "");
+      const smokePath = path.join(
+        outputDir,
+        pointer.providerReadinessArtifactPath ?? pointer.smokeArtifactPath ?? "",
+      );
+      const matrix = JSON.parse(await fs.readFile(matrixPath, "utf8")) as {
         report?: { result?: { selectedChannel?: string; supportedChannels?: string[] } };
       };
       expect(matrix.report?.result?.selectedChannel).toBe("telegram");
       expect(matrix.report?.result?.supportedChannels?.toSorted()).toEqual(
         [...CRABLINE_SERVER_CHANNELS].toSorted(),
       );
-      const smoke = JSON.parse(
-        await fs.readFile(path.join(outputDir, "crabline-fake-provider-smoke.json"), "utf8"),
-      ) as { smoke?: { result?: { ok?: boolean; provider?: string } } };
+      const smoke = JSON.parse(await fs.readFile(smokePath, "utf8")) as {
+        smoke?: { result?: { ok?: boolean; provider?: string } };
+      };
       expect(smoke.smoke?.result).toMatchObject({ ok: true, provider: "telegram" });
       const evidence = JSON.parse(await fs.readFile(artifacts.evidencePath, "utf8")) as {
         entries?: Array<{ execution?: { channel?: { driver?: string; id?: string } } }>;
@@ -514,6 +526,12 @@ describe("qa suite", () => {
       "crabline-generations",
       "generation-1",
       "smoke.json",
+    );
+    const providerReadinessArtifactPath = path.join(
+      outputDir,
+      "crabline-generations",
+      "generation-1",
+      "provider-readiness.json",
     );
     await fs.mkdir(path.dirname(capabilityMatrixPath), { recursive: true });
     await fs.writeFile(capabilityMatrixPath, "authoritative capabilities\n", "utf8");
@@ -550,9 +568,18 @@ describe("qa suite", () => {
         smokeArtifactPath: "crabline-fake-provider-smoke.json",
       },
       runCrablineChannelDriverSmoke: vi.fn(async () => ({
+        artifactPointerPath: path.join(
+          outputDir,
+          "crabline-generations",
+          "generation-1",
+          "artifact-pointer.json",
+        ),
         capabilityMatrixPath,
         capabilityReport: {},
+        generation: "generation-1",
         manifestPath: path.join(outputDir, "crabline-generations", "generation-1", "manifest.json"),
+        providerReadiness: {},
+        providerReadinessArtifactPath,
         smoke: {},
         smokeArtifactPath,
       })),
@@ -588,8 +615,10 @@ describe("qa suite", () => {
       channelCapabilityMatrixPath: capabilityMatrixPath,
       channelDriverSmokePath: smokeArtifactPath,
     });
-    expect(artifacts.report).toContain(`Channel capability report: ${capabilityMatrixPath}.`);
-    expect(artifacts.report).toContain(`Channel driver smoke: ${smokeArtifactPath}.`);
+    expect(artifacts.report).toContain(`Generation capability filename: ${capabilityMatrixPath}.`);
+    expect(artifacts.report).toContain(
+      `Generation provider-readiness filename: ${smokeArtifactPath}.`,
+    );
     expect(artifacts.report).not.toContain("crabline-fake-provider-capabilities.json");
     expect(artifacts.report).not.toContain("crabline-fake-provider-smoke.json");
   });

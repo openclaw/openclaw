@@ -138,7 +138,7 @@ describe("token – secret credentials", () => {
           appId: "named-app-id",
           appPassword: "named-app-pw",
           tenantId: "tenant-id",
-        } as any,
+        } satisfies MSTeamsConfig,
         { allowEnvFallback: false },
       ),
     ).toEqual({

@@ -393,7 +393,6 @@ export const ru: TranslationMap = {
     confirmForceDelete: "Не удалось создать снимок: {error}\n\nУдалить без снимка?",
   },
   agentChip: {
-    openConversation: "Открыть беседу с {name}",
     menuLabel: "Меню агента",
     agents: "Агенты",
     working: "Выполняется…",
@@ -1465,6 +1464,8 @@ export const ru: TranslationMap = {
     blockedAgentFilter: "заблокировано фильтром агента",
   },
   nav: {
+    back: "Назад",
+    forward: "Вперед",
     chat: "Чат",
     settings: "Настройки",
     settingsGeneral: "Общие",
@@ -3604,6 +3605,14 @@ export const ru: TranslationMap = {
       remove: "Удалить",
       more: "Другие действия",
       history: "История",
+    },
+    runNotStarted: {
+      notDue: "Время запуска этой автоматизации ещё не наступило.",
+      alreadyRunning: "Эта автоматизация уже выполняется.",
+      recoveryPending: "Восстановление планировщика ещё не завершено.",
+      invalidSpec: "У этой автоматизации недопустимое расписание или содержимое.",
+      stopped: "Планировщик остановлен.",
+      unknown: "Не удалось запустить эту автоматизацию.",
     },
     jobs: {
       schedule: "Расписание",

@@ -389,7 +389,6 @@ export const en: TranslationMap = {
     confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
   },
   agentChip: {
-    openConversation: "Open your conversation with {name}",
     menuLabel: "Agent menu",
     agents: "Agents",
     working: "Working…",
@@ -1448,6 +1447,8 @@ export const en: TranslationMap = {
     blockedAgentFilter: "blocked by agent filter",
   },
   nav: {
+    back: "Back",
+    forward: "Forward",
     chat: "Chat",
     settings: "Settings",
     settingsGeneral: "General",
@@ -3557,6 +3558,14 @@ export const en: TranslationMap = {
       remove: "Remove",
       more: "More actions",
       history: "History",
+    },
+    runNotStarted: {
+      notDue: "This automation is not due yet.",
+      alreadyRunning: "This automation is already running.",
+      recoveryPending: "Scheduler recovery is still in progress.",
+      invalidSpec: "This automation has an invalid schedule or payload.",
+      stopped: "The scheduler is stopped.",
+      unknown: "This automation could not be started.",
     },
     jobs: {
       schedule: "Schedule",

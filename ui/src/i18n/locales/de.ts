@@ -394,7 +394,6 @@ export const de: TranslationMap = {
     confirmForceDelete: "Snapshot fehlgeschlagen: {error}\n\nOhne Snapshot löschen?",
   },
   agentChip: {
-    openConversation: "Öffne deine Unterhaltung mit {name}",
     menuLabel: "Agentenmenü",
     agents: "Agents",
     working: "Arbeitet…",
@@ -1460,6 +1459,8 @@ export const de: TranslationMap = {
     blockedAgentFilter: "durch Agentenfilter blockiert",
   },
   nav: {
+    back: "Zurück",
+    forward: "Weiter",
     chat: "Chat",
     settings: "Einstellungen",
     settingsGeneral: "Allgemein",
@@ -3611,6 +3612,15 @@ export const de: TranslationMap = {
       remove: "Entfernen",
       more: "Weitere Aktionen",
       history: "Verlauf",
+    },
+    runNotStarted: {
+      notDue: "Diese Automatisierung ist noch nicht fällig.",
+      alreadyRunning: "Diese Automatisierung wird bereits ausgeführt.",
+      recoveryPending: "Die Wiederherstellung des Schedulers läuft noch.",
+      invalidSpec:
+        "Diese Automatisierung hat einen ungültigen Zeitplan oder eine ungültige Nutzlast.",
+      stopped: "Der Scheduler wurde angehalten.",
+      unknown: "Diese Automatisierung konnte nicht gestartet werden.",
     },
     jobs: {
       schedule: "Zeitplan",
