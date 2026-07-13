@@ -161,7 +161,20 @@ export function projectRuntimeToolInputSchema(
   const violations = [...projection.violations];
   if (!isJsonObject(projection.schema)) {
     violations.push(`${path} must be a JSON object schema`);
-  } else if (projection.schema.type !== undefined && projection.schema.type !== "object") {
+    // Return a default empty object schema when the input is not a JSON object
+    // (e.g., null, primitive, array). This prevents provider rejections due to
+    // invalid schema types while still reporting the violation for debugging.
+    return {
+      schema: {
+        type: "object",
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      violations,
+    };
+  }
+  if (projection.schema.type !== undefined && projection.schema.type !== "object") {
     violations.push(`${path}.type must be "object"`);
   }
   violations.push(...findDynamicSchemaKeywordViolations(projection.schema, path));
