@@ -53,6 +53,7 @@ describe("createChatSendReplyDispatch", () => {
       },
       userTurnRecorder: { markBlocked },
     });
+    expect(dispatch.hasAppendedWebchatAgentMedia()).toBe(false);
     const blockedPayload = setReplyPayloadMetadata(
       { text: "blocked" },
       { beforeAgentRunBlocked: true },

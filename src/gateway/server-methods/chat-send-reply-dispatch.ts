@@ -224,5 +224,10 @@ export function createChatSendReplyDispatch(params: {
       }
     },
   });
-  return { deliveredReplies, dispatcher, onModelSelected };
+  return {
+    deliveredReplies,
+    dispatcher,
+    hasAppendedWebchatAgentMedia: () => appendedWebchatAgentMedia,
+    onModelSelected,
+  };
 }

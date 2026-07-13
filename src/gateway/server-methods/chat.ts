@@ -63,7 +63,7 @@ import {
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
 } from "../../utils/directive-tags.js";
-import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
+import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
@@ -1246,13 +1246,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
 
       let agentRunStarted = false;
-      const { deliveredReplies, dispatcher, onModelSelected } = createChatSendReplyDispatch({
-        accountId,
-        isAgentRunStarted: () => agentRunStarted,
-        logGateway: context.logGateway,
-        session: preparedSession.value,
-        userTurnRecorder,
-      });
+      const { deliveredReplies, dispatcher, hasAppendedWebchatAgentMedia, onModelSelected } =
+        createChatSendReplyDispatch({
+          accountId,
+          isAgentRunStarted: () => agentRunStarted,
+          logGateway: context.logGateway,
+          session: preparedSession.value,
+          userTurnRecorder,
+        });
       let queuedFollowupEnqueued = false;
       let pendingDispatchLifecycleError:
         | {
@@ -1789,7 +1790,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     : finalPayloadEntries;
                   // Non-agent command paths can enqueue only block replies. If no visible final
                   // supersedes them, fold those blocks into the final WebChat message.
-                  const rawFinalPayloads = appendedWebchatAgentMedia
+                  const rawFinalPayloads = hasAppendedWebchatAgentMedia()
                     ? []
                     : [
                         ...commandBlockPayloadEntriesForDelivery,
