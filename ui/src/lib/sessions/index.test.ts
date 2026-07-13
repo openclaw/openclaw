@@ -224,8 +224,7 @@ describe("createSessionCapability", () => {
     "keeps a confirmed group %s completed when its row refresh outlives the connection",
     async (operation) => {
       const refreshed = deferred<SessionsListResult>();
-      const method =
-        operation === "rename" ? "sessions.groups.rename" : "sessions.groups.delete";
+      const method = operation === "rename" ? "sessions.groups.rename" : "sessions.groups.delete";
       const request = vi.fn(async (requestedMethod: string) => {
         if (requestedMethod === method) {
           return { groups: [{ name: operation === "rename" ? "Beta" : "Other" }] };
