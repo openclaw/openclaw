@@ -1562,6 +1562,47 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("normalizes sender-less channel posts before fragment classification", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    });
+    createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+    const handler = getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
+    const channelPostBase = {
+      chat: { id: -9_876_543_233, type: "channel", title: "Sender-less channel" },
+      date: 1_736_380_800,
+    };
+    const contextBase = {
+      me: { id: 7_654_321_000, username: "openclaw_bot" },
+      getFile: async () => null,
+    };
+
+    await handler({
+      ...contextBase,
+      channelPost: {
+        ...channelPostBase,
+        message_id: 1,
+        text: "channel-start".padEnd(4_000, "A"),
+      },
+    });
+    await handler({
+      ...contextBase,
+      channelPost: { ...channelPostBase, message_id: 2, text: "channel-tail" },
+    });
+
+    await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+    expect(replySpy.mock.calls[0]?.[0].BodyForAgent).toBe(
+      `${"channel-start".padEnd(4_000, "A")}channel-tail`,
+    );
+  });
+
   it("keeps peer-bot abort controls out of buffered text fragments", async () => {
     loadConfig.mockReturnValue({
       commands: { native: false },
