@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -554,7 +555,11 @@ describe("official external plugin catalog", () => {
 
     expect(result.source).toBe("hosted");
     expect(result.entries.map((entry) => entry.id)).toEqual(["@openclaw/live-feed-proof"]);
-    expect(resolveOfficialExternalPluginInstall(result.entries[0])).toEqual({
+    expect(
+      resolveOfficialExternalPluginInstall(
+        expectDefined(result.entries[0], "result.entries[0] test invariant"),
+      ),
+    ).toEqual({
       clawhubSpec: "clawhub:@openclaw/live-feed-proof@1.0.0",
       defaultChoice: "clawhub",
       expectedIntegrity: "sha256-s1XdoEQDvsqri7qwaf0eewV4Ji50WeWYzFsZYVtb2rk=",
@@ -2009,6 +2014,83 @@ describe("official external plugin catalog", () => {
     expect(oversized.source).toBe("bundled-fallback");
     if (oversized.source === "bundled-fallback") {
       expect(oversized.error).toContain("exceeds 4 bytes");
+    }
+  });
+
+  it("rejects non-streaming hosted feeds before buffering underreported bodies", async () => {
+    const oversized = "x".repeat(8192);
+    const response = new Response(oversized, {
+      status: 200,
+      headers: { "content-length": "1" },
+    });
+    Object.defineProperty(response, "body", { value: null });
+    const arrayBuffer = vi.fn(response.arrayBuffer.bind(response));
+    Object.defineProperty(response, "arrayBuffer", { value: arrayBuffer });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
+      maxBytes: 4096,
+      fetchImpl: vi.fn(async () => response),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("streaming response body unavailable");
+    }
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-streaming hosted feeds without content-length", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 1,
+      entries: [],
+    });
+    const response = new Response(body, { status: 200 });
+    Object.defineProperty(response, "body", { value: null });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
+      fetchImpl: vi.fn(async () => response),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("streaming response body unavailable");
+    }
+  });
+
+  it("rejects oversized streaming hosted feeds incrementally", async () => {
+    const chunk = new Uint8Array(512 * 1024).fill("x".charCodeAt(0));
+    let emitted = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (emitted >= 3) {
+          controller.close();
+          return;
+        }
+        emitted += 1;
+        controller.enqueue(chunk);
+      },
+    });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: null,
+      maxBytes: 1024 * 1024,
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("exceeds 1048576 bytes");
     }
   });
 

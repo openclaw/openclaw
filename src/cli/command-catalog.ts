@@ -277,6 +277,10 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { loadPlugins: "never", networkProxy: "bypass" },
   },
   {
+    commandPath: ["fleet"],
+    policy: { loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["doctor"],
     policy: {
       bypassConfigGuard: true,
@@ -296,6 +300,16 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["node"],
     policy: { networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["node", "worker"],
+    exact: true,
+    policy: {
+      hideBanner: true,
+      loadPlugins: "never",
+      ownsProtocolStdout: true,
+      networkProxy: "bypass",
+    },
   },
   {
     commandPath: ["node", "run"],

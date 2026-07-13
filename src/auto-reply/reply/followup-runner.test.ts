@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setCliSessionBinding } from "../../agents/cli-session.js";
@@ -12,6 +13,7 @@ import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import type { GetReplyOptions } from "../types.js";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -34,6 +36,7 @@ let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRu
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
 let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
 let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
+let replaceSessionEntrySync: typeof import("../../config/sessions/session-accessor.js").replaceSessionEntrySync;
 let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
 let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
@@ -79,7 +82,7 @@ function joinPromptSections(...sections: Array<string | undefined>): string {
 function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
   return createUserTurnTranscriptRecorder({
     message,
-    target: { transcriptPath: "/tmp/session.jsonl" },
+    target: createTestUserTurnTranscriptTarget(),
     updateMode: "none",
   });
 }
@@ -149,7 +152,11 @@ function registerFollowupTestSessionStore(
   sessionStore: Record<string, SessionEntry>,
 ): void {
   fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
-  fsSync.writeFileSync(storePath, JSON.stringify(sessionStore));
+  // Seed the sqlite accessor so the runner's loadSessionEntry/admitReplyTurn reads
+  // observe these fixtures; the in-memory map still backs the mocked accounting helpers.
+  for (const [sessionKey, entry] of Object.entries(sessionStore)) {
+    replaceSessionEntrySync({ sessionKey, storePath }, entry);
+  }
   FOLLOWUP_TEST_SESSION_STORES.set(storePath, sessionStore);
   FOLLOWUP_TEST_SESSION_STORE_PATHS.add(storePath);
 }
@@ -496,6 +503,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
     await import("../../config/config.js"));
   ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
     await import("../../config/sessions/store.js"));
+  ({ replaceSessionEntrySync } = await import("../../config/sessions/session-accessor.js"));
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
@@ -3867,7 +3875,9 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(onCommandOutput).not.toHaveBeenCalled();
     expect(onCompactionStart).not.toHaveBeenCalled();
     expect(onCompactionEnd).not.toHaveBeenCalled();
-    expect(sessionStore.main.compactionCount).toBe(1);
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(1);
   });
 
   it("forwards opted-in queued tool lifecycle feedback while verbose progress is disabled", async () => {
@@ -4311,7 +4321,9 @@ describe("createFollowupRunner compaction", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
-    expect(sessionStore.main.compactionCount).toBe(1);
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(1);
   });
 
   it("suppresses queued auto-compaction notice when verbose is turned off", async () => {
@@ -4356,7 +4368,9 @@ describe("createFollowupRunner compaction", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectNoBlockReplyTextIncludes(onBlockReply, "Auto-compaction complete");
-    expect(sessionStore.main.compactionCount).toBe(1);
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(1);
   });
 
   it("tracks auto-compaction from embedded result metadata even when no compaction event is emitted", async () => {
@@ -4408,9 +4422,17 @@ describe("createFollowupRunner compaction", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toContain("Auto-compaction complete");
-    expect(sessionStore.main.compactionCount).toBe(2);
-    expect(sessionStore.main.sessionId).toBe("session-rotated");
-    expect(await normalizeComparablePath(sessionStore.main.sessionFile ?? "")).toBe(
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBe(2);
+    expect(expectDefined(sessionStore.main, "sessionStore.main test invariant").sessionId).toBe(
+      "session-rotated",
+    );
+    expect(
+      await normalizeComparablePath(
+        expectDefined(sessionStore.main, "sessionStore.main test invariant").sessionFile ?? "",
+      ),
+    ).toBe(
       await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
     );
   });
@@ -4531,7 +4553,9 @@ describe("createFollowupRunner compaction", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     const firstCall = (onBlockReply.mock.calls as unknown as Array<Array<{ text?: string }>>)[0];
     expect(firstCall?.[0]?.text).toBe("final");
-    expect(sessionStore.main.compactionCount).toBeUndefined();
+    expect(
+      expectDefined(sessionStore.main, "sessionStore.main test invariant").compactionCount,
+    ).toBeUndefined();
   });
 
   it("injects the post-compaction refresh prompt before followup runs after preflight compaction", async () => {
@@ -4951,7 +4975,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
     persistSpy.mockImplementationOnce(async (params) => {
       const nextEntry: SessionEntry = {
-        ...sessionStore[sessionKey],
+        ...expectDefined(sessionStore[sessionKey], "sessionStore[sessionKey] test invariant"),
         updatedAt: Date.now(),
         totalTokens: params.lastCallUsage?.input,
         totalTokensFresh: true,

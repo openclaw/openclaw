@@ -29,7 +29,7 @@ import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js"
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
-import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
+import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type {
   ProviderUsageBilling,
   ProviderUsageSnapshot,
@@ -37,7 +37,7 @@ import type {
   UsageWindow,
 } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
@@ -106,6 +106,7 @@ export type ModelAuthLogoutResult = {
 
 const CACHE_TTL_MS = 60_000;
 let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
+let cacheGeneration = 0;
 
 /**
  * Invalidate the in-memory cache. Reserved for future gateway-side auth
@@ -114,6 +115,7 @@ let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
  * `{refresh: true}` param cover the stale-data window.
  */
 export function invalidateModelAuthStatusCache(): void {
+  cacheGeneration += 1;
   cached = null;
   // The prepared provider-auth map (model-provider-auth.ts) was built from
   // the pre-mutation auth state, so it must be invalidated alongside this
@@ -126,7 +128,7 @@ export function invalidateModelAuthStatusCache(): void {
 async function refreshModelAuthStatusRuntimeState(): Promise<void> {
   invalidateModelAuthStatusCache();
   try {
-    if (await refreshActiveSecretsRuntimeSnapshot()) {
+    if (await refreshActiveProviderAuthRuntimeSnapshot()) {
       return;
     }
   } catch (err) {
@@ -204,8 +206,9 @@ function buildExpiry(
 
 function providerDisplayName(provider: string): string {
   const usageId = resolveUsageProviderId(provider);
-  if (usageId && PROVIDER_LABELS[usageId]) {
-    return PROVIDER_LABELS[usageId];
+  const usageLabel = usageId ? providerUsageLabel(usageId) : undefined;
+  if (usageLabel) {
+    return usageLabel;
   }
   return provider;
 }
@@ -431,9 +434,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      await refreshActiveSecretsRuntimeSnapshot();
+      // Fence status work that may have captured the removed profiles before
+      // it awaits auxiliary usage. It must not repopulate the cache afterward.
       invalidateModelAuthStatusCache();
-      clearCurrentProviderAuthState();
+      await refreshActiveProviderAuthRuntimeSnapshot();
       void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch(
         (err: unknown) => {
           log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
@@ -467,6 +471,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       if (bypassCache) {
         await refreshModelAuthStatusRuntimeState();
       }
+      const publishGeneration = cacheGeneration;
       const cfg = context.getRuntimeConfig();
       const agentDir = resolveDefaultAgentDir(cfg);
       // Use the external-profile-aware store for status reads so the dashboard
@@ -531,7 +536,9 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         mapProvider(prov, usageByProvider, configured.expectsOAuth),
       );
       const result: ModelAuthStatusResult = { ts: now, providers };
-      cached = { ts: now, result };
+      if (publishGeneration === cacheGeneration) {
+        cached = { ts: now, result };
+      }
       respond(true, result, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));

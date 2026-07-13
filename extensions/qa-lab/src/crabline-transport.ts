@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
-  OPENCLAW_CRABLINE_MANIFEST_PATH,
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
   type OpenClawCrablineInbound,
@@ -85,9 +84,13 @@ function readTelegramLifecycleEvent(params: {
   if (!previous && providerKey && providerMessageId) {
     const pending = params.pendingByChat.get(chatId) ?? [];
     if (pending.length === 1) {
-      previous = pending[0];
-      previous.id = providerMessageId;
-      params.messageByProviderId.set(providerKey, previous);
+      const pendingMessage = pending[0];
+      if (!pendingMessage) {
+        return null;
+      }
+      previous = pendingMessage;
+      pendingMessage.id = providerMessageId;
+      params.messageByProviderId.set(providerKey, pendingMessage);
       params.pendingByChat.delete(chatId);
     }
   }
@@ -469,11 +472,6 @@ export async function createQaCrablineTransportAdapter(params: {
     openclawConfig: {},
     recorderPath,
   });
-  await fs.writeFile(
-    path.join(params.outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH),
-    `${JSON.stringify(adapter.manifest, null, 2)}\n`,
-    "utf8",
-  );
 
   const state = createCrablineState({
     adapter,

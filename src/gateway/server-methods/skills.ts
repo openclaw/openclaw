@@ -27,7 +27,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { canExecRequestNode } from "../../agents/exec-defaults.js";
+import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
@@ -75,6 +75,37 @@ import type {
 } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
+type ClawHubInstallResult = Awaited<ReturnType<typeof installSkillFromClawHub>>;
+type ClawHubInstallParams = Parameters<typeof installSkillFromClawHub>[0];
+
+const clawHubInstallsInFlight = new Map<string, Promise<ClawHubInstallResult>>();
+
+function installClawHubSkillDeduped(params: ClawHubInstallParams): Promise<ClawHubInstallResult> {
+  // A WebSocket can disappear after the request reached the Gateway. Keep one
+  // exact install per workspace in flight so a reconnect can safely reattach.
+  const key = JSON.stringify([
+    params.workspaceDir,
+    params.slug,
+    params.version ?? null,
+    params.force ?? false,
+    params.acknowledgeClawHubRisk ?? false,
+  ]);
+  const active = clawHubInstallsInFlight.get(key);
+  if (active) {
+    return active;
+  }
+  const install = installSkillFromClawHub(params);
+  clawHubInstallsInFlight.set(key, install);
+  void install
+    .finally(() => {
+      if (clawHubInstallsInFlight.get(key) === install) {
+        clawHubInstallsInFlight.delete(key);
+      }
+    })
+    .catch(() => undefined);
+  return install;
+}
+
 function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
   const cfg = context.getRuntimeConfig();
   const agentIdRaw =
@@ -109,16 +140,16 @@ type ResolvedSkillsWorkspace = Extract<
 function buildRemoteAwareWorkspaceSkillStatus(resolved: ResolvedSkillsWorkspace) {
   // Remote skill availability depends on the agent's executable-node surface,
   // not only the workspace contents, so status reports include live eligibility.
+  const nodeSkills = resolveNodeExecEligibility({
+    cfg: resolved.cfg,
+    agentId: resolved.agentId,
+  });
   return buildWorkspaceSkillStatus(resolved.workspaceDir, {
     config: resolved.cfg,
     agentId: resolved.agentId,
     eligibility: {
-      remote: getRemoteSkillEligibility({
-        advertiseExecNode: canExecRequestNode({
-          cfg: resolved.cfg,
-          agentId: resolved.agentId,
-        }),
-      }),
+      nodeSkills,
+      remote: getRemoteSkillEligibility({ advertiseExecNode: nodeSkills.canExec }),
     },
   });
 }
@@ -610,7 +641,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         force?: boolean;
         acknowledgeClawHubRisk?: boolean;
       };
-      const result = await installSkillFromClawHub({
+      const result = await installClawHubSkillDeduped({
         workspaceDir: workspaceDirRaw,
         slug: p.slug,
         version: p.version,

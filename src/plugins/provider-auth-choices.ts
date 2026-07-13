@@ -1,6 +1,5 @@
 // Builds provider auth choice lists from plugin setup metadata.
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
@@ -30,6 +29,7 @@ export type ProviderAuthChoiceMetadata = {
   cliOption?: string;
   cliDescription?: string;
   appGuidedSecret?: boolean;
+  appGuidedAuth?: "oauth" | "device-code";
   onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
@@ -108,6 +108,7 @@ function toProviderAuthChoiceCandidate(params: {
     ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
     ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
     ...(choice.appGuidedSecret ? { appGuidedSecret: true } : {}),
+    ...(choice.appGuidedAuth ? { appGuidedAuth: choice.appGuidedAuth } : {}),
     ...(choice.onboardingScopes ? { onboardingScopes: choice.onboardingScopes } : {}),
   };
 }
@@ -299,25 +300,6 @@ export function resolveManifestProviderAuthChoice(
   return resolvePreferredManifestAuthChoiceMetadata({
     config: params,
     matches: (choice) => choice.choiceId === normalized,
-  });
-}
-
-export function resolveManifestProviderApiKeyChoice(params: {
-  providerId: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  includeUntrustedWorkspacePlugins?: boolean;
-}): ProviderAuthChoiceMetadata | undefined {
-  const normalizedProviderId = resolveProviderIdForAuth(params.providerId, params);
-  if (!normalizedProviderId) {
-    return undefined;
-  }
-  return resolvePreferredManifestAuthChoiceMetadata({
-    config: params,
-    matches: (choice) =>
-      Boolean(choice.optionKey) &&
-      resolveProviderIdForAuth(choice.providerId, params) === normalizedProviderId,
   });
 }
 

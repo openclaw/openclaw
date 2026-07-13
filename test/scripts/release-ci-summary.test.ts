@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   expectedChildDispatches,
@@ -137,7 +138,7 @@ function rawManifest({
   workflowRefType,
   workflowSha,
 }: {
-  evidenceReuse?: Record<string, unknown>;
+  evidenceReuse?: unknown;
   rerunGroup?: string;
   runId?: string;
   targetSha?: string;
@@ -145,7 +146,25 @@ function rawManifest({
   workflowFullRef?: string;
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
-}) {
+}): {
+  childRuns: Record<string, string | { blocking: boolean; conclusion: string; runId: string }>;
+  controls: Record<string, unknown>;
+  evidenceReuse?: unknown;
+  releaseProfile: string;
+  rerunGroup: string;
+  runAttempt: string;
+  runId: string;
+  runReleaseSoak: string;
+  targetRef?: string;
+  targetSha: string;
+  validationInputs: Record<string, string>;
+  version: 2 | 3;
+  workflowFullRef?: string;
+  workflowName: string;
+  workflowRef: string;
+  workflowRefType?: "branch" | "tag";
+  workflowSha?: string;
+} {
   return {
     childRuns: {
       normalCi: "101",
@@ -174,6 +193,7 @@ function rawManifest({
       packageAcceptancePackageSpec: "",
       provider: "openai",
       releasePackageSpec: "",
+      targetContextRef: "",
     },
     version,
     workflowName: "Full Release Validation",
@@ -312,10 +332,10 @@ function trustedMainPackageFixture({
       return [parentJob];
     },
     getRun(requestedRunId: string) {
-      if (String(requestedRunId) === runId) {
+      if (requestedRunId === runId) {
         return parentRun;
       }
-      if (String(requestedRunId) === childRunId) {
+      if (requestedRunId === childRunId) {
         return childRun;
       }
       throw new Error(`unexpected run: ${requestedRunId}`);
@@ -1152,17 +1172,17 @@ describe("release CI summary child correlation", () => {
       id: 999,
     };
     const pages = Array.from({ length: 10 }, (_, pageIndex) =>
-      Array.from({ length: 100 }, (_, runIndex) => ({
+      Array.from({ length: 100 }, (_unused, runIndex) => ({
         display_title: `decoy-${pageIndex}-${runIndex}`,
         event: "workflow_dispatch",
         head_branch: "main",
         id: pageIndex * 100 + runIndex,
       })),
     );
-    pages[9][99] = exact;
+    expectDefined(pages[9], "last child run page")[99] = exact;
 
     expect(selectExactChildRunFromPages(pages, expected, "main")).toBe(exact);
-    pages[0][0] = { ...exact, id: 1001 };
+    expectDefined(pages[0], "first child run page")[0] = { ...exact, id: 1001 };
     expect(() => selectExactChildRunFromPages(pages, expected, "main")).toThrow(
       "multiple child runs have exact dispatch title and branch",
     );
@@ -1473,7 +1493,10 @@ describe("release CI summary child correlation", () => {
   });
 
   it("validates manifest child workflow, dispatch tuple, branch, and attempt", () => {
-    const child = expectedChildDispatches("29090000000", 3, "main")[0];
+    const child = expectDefined(
+      expectedChildDispatches("29090000000", 3, "main")[0],
+      "expected CI child dispatch",
+    );
     const parentManifest = {
       runAttempt: 3,
       runId: "29090000000",

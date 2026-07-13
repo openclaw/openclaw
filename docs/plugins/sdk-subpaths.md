@@ -210,7 +210,8 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
     | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
     | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
-    | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway-resolution helper |
+    | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway resolver |
+    | `plugin-sdk/approval-reference-runtime` | Deterministic durable-locator helper for transport-limited approval callbacks |
     | `plugin-sdk/approval-handler-adapter-runtime` | Lightweight native approval adapter loading helpers for hot channel entrypoints |
     | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
     | `plugin-sdk/approval-native-runtime` | Native approval target, account-binding, route-gate, forwarding fallback, and local native exec prompt suppression helpers |
@@ -272,8 +273,8 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/reply-history` | Shared short-window reply-history helpers. New message-turn code should use `createChannelHistoryWindow`; lower-level map helpers remain deprecated compatibility exports only |
     | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
     | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), bounded recent user/assistant transcript text reads by session identity, legacy session store path/session-key helpers, updated-at reads, and transition-only whole-store/file-path compatibility helpers, without broad config writes/maintenance imports |
-    | `plugin-sdk/session-transcript-runtime` | Transcript identity, scoped target/read/write helpers, update publishing, write locks, and transcript memory hit keys |
+    | `plugin-sdk/session-store-runtime` | Session workflow helpers (`getSessionEntry`, `listSessionEntries`, `patchSessionEntry`, `upsertSessionEntry`), repair/lifecycle helpers (`deleteSessionEntry`, `cleanupSessionLifecycleArtifacts`, `resolveSessionStoreBackupPaths`), marker helpers for transitional `sessionFile` values, bounded recent user/assistant transcript text reads by session identity, session store path/session-key helpers, and updated-at reads, without broad config writes/maintenance imports |
+    | `plugin-sdk/session-transcript-runtime` | Transcript identity, scoped target/read/write helpers, visible message-entry projection, update publishing, write locks, and transcript memory hit keys |
     | `plugin-sdk/sqlite-runtime` | Focused SQLite agent-schema, path, and transaction helpers for first-party runtime, without database lifecycle controls |
     | `plugin-sdk/cron-store-runtime` | Cron store path/load/save helpers |
     | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
@@ -318,6 +319,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/delivery-queue-runtime` | Outbound pending-delivery drain helper |
     | `plugin-sdk/file-access-runtime` | Safe local-file and media-source path helpers |
     | `plugin-sdk/heartbeat-runtime` | Heartbeat wake, event, and visibility helpers |
+    | `plugin-sdk/expect-runtime` | Required-value assertion helper for provable runtime invariants |
     | `plugin-sdk/number-runtime` | Numeric coercion helper |
     | `plugin-sdk/secure-random-runtime` | Secure token/UUID helpers |
     | `plugin-sdk/system-event-runtime` | System event queue helpers |

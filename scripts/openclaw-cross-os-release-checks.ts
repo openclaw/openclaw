@@ -199,7 +199,7 @@ const providerConfig = {
     extensionId: "openai",
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
-    model: "openai/gpt-5.5",
+    model: "openai/gpt-5.6-luna",
     baseUrl: "https://api.openai.com/v1",
     timeoutSeconds: CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   },
@@ -236,7 +236,9 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "talk-voice",
 ];
 
-export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta: ProviderConfig) {
+export function buildCrossOsReleaseSmokePluginAllowlist(
+  providerMeta: Pick<ProviderConfig, "extensionId">,
+) {
   return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
 }
 
@@ -347,6 +349,9 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const parsed: ParsedArgs = {};
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
+    if (token === undefined) {
+      throw new Error(`Missing cross-OS release argument at index ${index}`);
+    }
     if (!token.startsWith("--")) {
       continue;
     }
@@ -1826,9 +1831,9 @@ function resolveExpectedDevUpdateRef(ref?: string) {
   return trimmed || "main";
 }
 
-export function resolveDevUpdateVerificationRef(ref: string, sourceSha: string) {
+export function resolveDevUpdateVerificationRef(ref: string, sourceSha?: string) {
   if (resolveExpectedDevUpdateRef(ref) === "main" && looksLikeCommitSha(sourceSha ?? "")) {
-    return sourceSha.trim();
+    return sourceSha!.trim();
   }
   return resolveExpectedDevUpdateRef(ref);
 }
@@ -4079,16 +4084,16 @@ function parseAgentPayloadTexts(stdout: string) {
       : Array.isArray(payload?.result?.payloads)
         ? payload.result.payloads
         : [];
-    const payloadTexts = Array.isArray(entries)
-      ? entries.flatMap((entry) => (typeof entry?.text === "string" ? [entry.text] : []))
-      : [];
+    const payloadTexts = entries.flatMap((entry) =>
+      typeof entry?.text === "string" ? [entry.text] : [],
+    );
     return [...directTexts, ...payloadTexts];
   } catch {
     const finalTextMatches = [
       ...stdout.matchAll(
         /"(?:finalAssistantVisibleText|finalAssistantRawText|text)"\s*:\s*"([^"]*)"/gu,
       ),
-    ].map((match) => match[1]);
+    ].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
     return finalTextMatches.length > 0 ? finalTextMatches : stdout.trim() ? [stdout] : [];
   }
 }

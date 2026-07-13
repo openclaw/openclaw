@@ -142,6 +142,7 @@ vi.mock("../../config/paths.js", () => ({
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
   normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   pinRuntimePaths: (env?: NodeJS.ProcessEnv) => pinRuntimePaths(env),
+  resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
