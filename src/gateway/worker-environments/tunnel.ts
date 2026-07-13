@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
+import { RetrySupervisor, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
@@ -379,9 +379,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   };
 
   const reconnectLoop = async (entry: TunnelEntry) => {
-    let retryAttempt = 0;
+    const reconnectSupervisor = new RetrySupervisor(backoff);
     while (isCurrent(entry)) {
-      entry.status = retryAttempt === 0 ? "connecting" : "reconnecting";
+      entry.status = reconnectSupervisor.attempts === 0 ? "connecting" : "reconnecting";
       let child: WorkerSshProcess | undefined;
       try {
         child = await connect(entry);
@@ -399,7 +399,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         const connectedAtMs = now();
         await child.exited;
         if (now() - connectedAtMs >= stableConnectionMs) {
-          retryAttempt = 0;
+          reconnectSupervisor.reset();
         }
       } catch {
         await child?.stop().catch(() => undefined);
@@ -412,9 +412,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         return;
       }
       entry.status = "reconnecting";
-      retryAttempt += 1;
       try {
-        await sleep(computeBackoff(backoff, retryAttempt), entry.abortController.signal);
+        const retry = reconnectSupervisor.next(entry.abortController.signal)!;
+        await sleep(retry.delayMs, retry.signal);
       } catch {
         return;
       }

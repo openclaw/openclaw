@@ -35,10 +35,23 @@ const hoisted = vi.hoisted(() => {
   return { computeBackoff, sleepWithAbort, startChannelApprovalHandlerBootstrap };
 });
 
-vi.mock("../infra/backoff.js", () => ({
-  computeBackoff: hoisted.computeBackoff,
-  sleepWithAbort: hoisted.sleepWithAbort,
-}));
+vi.mock("../infra/backoff.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/backoff.js")>();
+  class TestRetrySupervisor extends actual.RetrySupervisor {
+    constructor(
+      _policy: ConstructorParameters<typeof actual.RetrySupervisor>[0],
+      maxAttempts?: number,
+    ) {
+      super({ initialMs: 10, maxMs: 10, factor: 1, jitter: 0 }, maxAttempts);
+    }
+  }
+  return {
+    ...actual,
+    computeBackoff: hoisted.computeBackoff,
+    RetrySupervisor: TestRetrySupervisor,
+    sleepWithAbort: hoisted.sleepWithAbort,
+  };
+});
 
 vi.mock("../infra/approval-handler-bootstrap.js", () => ({
   startChannelApprovalHandlerBootstrap: hoisted.startChannelApprovalHandlerBootstrap,
