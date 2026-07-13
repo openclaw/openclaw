@@ -1623,17 +1623,24 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!next || next === group) {
       return;
     }
-    // The gateway renames the catalog entry and repoints member sessions.
-    void context.sessions.groupsRename(group, next).finally(() => {
-      const from = `category:${group}`;
-      if (this.collapsedSessionSections.has(from)) {
-        const collapsed = new Set(this.collapsedSessionSections);
-        collapsed.delete(from);
-        collapsed.add(`category:${next}`);
-        this.saveCollapsedSessionSections(collapsed);
-      }
-      this.requestUpdate();
-    });
+    // Collapse keys follow the confirmed Gateway rename only. Using finally
+    // rewrote local storage even when the RPC rejected and the old group remained.
+    void context.sessions
+      .groupsRename(group, next)
+      .then(() => {
+        const from = `category:${group}`;
+        if (this.collapsedSessionSections.has(from)) {
+          const collapsed = new Set(this.collapsedSessionSections);
+          collapsed.delete(from);
+          collapsed.add(`category:${next}`);
+          this.saveCollapsedSessionSections(collapsed);
+        }
+        this.requestUpdate();
+      })
+      .catch(() => {
+        // Session capability / Sessions page surface mutation errors; leave
+        // persisted collapsed state byte-for-byte unchanged on rejection.
+      });
   }
 
   private deleteSessionGroupFromMenu(group: string) {
@@ -1644,12 +1651,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     if (!window.confirm(t("sessionsView.deleteGroupConfirm", { group }))) {
       return;
     }
-    void context.sessions.groupsDelete(group).finally(() => {
-      const collapsed = new Set(this.collapsedSessionSections);
-      collapsed.delete(`category:${group}`);
-      this.saveCollapsedSessionSections(collapsed);
-      this.requestUpdate();
-    });
+    // Same success-only contract as rename: a failed delete must not drop the
+    // group's collapsed preference while the catalog entry still exists.
+    void context.sessions
+      .groupsDelete(group)
+      .then(() => {
+        const collapsed = new Set(this.collapsedSessionSections);
+        collapsed.delete(`category:${group}`);
+        this.saveCollapsedSessionSections(collapsed);
+        this.requestUpdate();
+      })
+      .catch(() => {
+        // Leave collapsed state alone when the Gateway rejects the delete.
+      });
   }
 
   private saveCollapsedSessionSections(sections: ReadonlySet<string>) {
