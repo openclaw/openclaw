@@ -22,7 +22,9 @@ export function buildStatPlan(
 ): SandboxFsCommandPlan {
   return {
     checks: [{ target, options: { action: "stat files" } }],
-    script: 'set -eu\ncd -- "$1"\nstat -c "%F|%s|%y" -- "$2"',
+    // Pin LC_ALL=C so the `%F` type word and the ENOENT stderr stay English on
+    // localized hosts; the caller matches both against fixed English strings.
+    script: 'set -eu\ncd -- "$1"\nLC_ALL=C stat -c "%F|%s|%y" -- "$2"',
     args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
     allowFailure: true,
   };

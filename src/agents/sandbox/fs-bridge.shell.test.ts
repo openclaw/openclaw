@@ -67,6 +67,15 @@ describe("sandbox fs bridge shell compatibility", () => {
     });
   });
 
+  it("pins LC_ALL=C on stat so localized hosts still parse the type word and absence", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.stat({ filePath: "c.txt" });
+
+    const scripts = getScriptsFromCalls();
+    expectSomeScriptContaining(scripts, "LC_ALL=C stat -c");
+  });
+
   it("path canonicalization recheck script is valid POSIX sh", async () => {
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
 
