@@ -2,12 +2,11 @@
 import {
   createRetryRunner,
   resolveRetryConfig,
+  toRetryError,
   type RetryConfig,
   type RetryInfo,
   type RetryOptions,
-} from "@openclaw/retry";
-import { sleep } from "../utils.js";
-import { toErrorObject } from "./errors.js";
+} from "../../packages/retry/src/index.js";
 import { getRetryAttemptErrors, recordRetryAttemptErrors } from "./retry-attempt-errors.js";
 import { generateSecureFraction } from "./secure-random.js";
 
@@ -15,7 +14,7 @@ export { resolveRetryConfig, type RetryConfig, type RetryInfo, type RetryOptions
 
 function createRetryFailure(rawAttemptErrors: readonly unknown[]): Error {
   const attemptErrors = rawAttemptErrors.flatMap((err) => getRetryAttemptErrors(err) ?? [err]);
-  const failure = toErrorObject(
+  const failure = toRetryError(
     attemptErrors.at(-1) ?? new Error("Retry failed"),
     "Non-Error thrown",
   );
@@ -29,7 +28,6 @@ function createRetryFailure(rawAttemptErrors: readonly unknown[]): Error {
 
 /** Runs an async operation until it succeeds, policy stops, or attempts are exhausted. */
 export const retryAsync = createRetryRunner({
-  sleep,
   random: generateSecureFraction,
   createFailure: createRetryFailure,
 });
