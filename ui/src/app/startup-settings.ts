@@ -2,7 +2,7 @@
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import type { UiSettings } from "./settings.ts";
 
-export type ApplicationStartupLocation = {
+type ApplicationStartupLocation = {
   pathname: string;
   search: string;
   hash: string;

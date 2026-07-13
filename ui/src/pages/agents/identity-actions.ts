@@ -50,6 +50,9 @@ export async function saveIdentityDraft(params: {
 }) {
   const { host, agentId, agents, agentIdentity } = params;
   const draft = host.identityDraft;
+  // Set/replace only: agents.update merges identity server-side, so empty
+  // strings cannot unset a field. Cleared inputs revert on save until the
+  // protocol grows an explicit clear.
   const name = draft.name?.trim();
   const emoji = draft.emoji?.trim();
   const avatar = draft.avatar ?? undefined;
