@@ -653,6 +653,7 @@ export async function startGatewayServer(
   const activateRuntimeSecrets = createRuntimeSecretsActivator({
     logSecrets,
     emitStateEvent: emitSecretsStateEvent,
+    channelAutostartSuppression: opts.channelAutostartSuppression,
     ...(startupConfigLoad.pluginMetadataSnapshot
       ? { pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot }
       : {}),
@@ -673,6 +674,7 @@ export async function startGatewayServer(
         tailscaleOverride: startupTailscaleOverride,
         activateRuntimeSecrets,
         log,
+        channelAutostartSuppression: opts.channelAutostartSuppression,
         measure: (name, run, measureOptions) => startupTrace.measure(name, run, measureOptions),
       }),
     { omitErrorMessage: true },

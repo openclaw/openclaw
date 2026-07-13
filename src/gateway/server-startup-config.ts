@@ -189,9 +189,14 @@ export function createRuntimeSecretsActivator(params: {
   activateRuntimeSecretsSnapshot?: ActivateRuntimeSecretsSnapshot;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
+  /** When the persisted crash-loop breaker is tripped, prune channel surfaces
+   * before eager SecretRef projection so an unavailable channel credential does
+   * not prevent the control plane from starting. */
+  channelAutostartSuppression?: { reason: string; message: string } | null;
 }): ActivateRuntimeSecrets {
   let secretsDegraded = false;
   let secretsActivationTail: Promise<void> = Promise.resolve();
+  const channelAutostartSuppression = params.channelAutostartSuppression;
   const loadSecretsRuntime = createLazyPromise(() => import("../secrets/runtime.js"), {
     cacheRejections: true,
   });
@@ -288,7 +293,7 @@ export function createRuntimeSecretsActivator(params: {
           !params.activateRuntimeSecretsSnapshot
         ) {
           const fastPath = prepareSecretsRuntimeFastPathSnapshot({
-            config: pruneSkippedStartupSecretSurfaces(config),
+            config: pruneSkippedStartupSecretSurfaces(config, channelAutostartSuppression),
             ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
           });
           if (fastPath) {
@@ -326,7 +331,7 @@ export function createRuntimeSecretsActivator(params: {
           "secrets.prepare",
           () =>
             prepareRuntimeSecretsSnapshot({
-              config: pruneSkippedStartupSecretSurfaces(config),
+              config: pruneSkippedStartupSecretSurfaces(config, channelAutostartSuppression),
               ...(activationParams.env ? { env: activationParams.env } : {}),
               includeAuthStoreRefs: activationParams.includeAuthStoreRefs,
               ...(startupManifestRegistry ? { manifestRegistry: startupManifestRegistry } : {}),
@@ -441,6 +446,10 @@ export async function prepareGatewayStartupConfig(params: {
   persistStartupAuth?: boolean;
   log?: GatewayStartupLog;
   measure?: GatewayStartupConfigMeasure;
+  /** When the persisted crash-loop breaker is tripped, prune channel surfaces
+   * before eager SecretRef projection so an unavailable channel credential does
+   * not prevent the control plane from starting. */
+  channelAutostartSuppression?: { reason: string; message: string } | null;
 }): Promise<Awaited<ReturnType<typeof ensureGatewayStartupAuth>>> {
   const measure = params.measure ?? (async (_name, run) => await run());
   await measure("config.auth.snapshot-validate", () =>
@@ -478,7 +487,10 @@ export async function prepareGatewayStartupConfig(params: {
     Boolean(
       preflightPrepared &&
       params.activateRuntimeSecrets.activatePreparedSnapshot &&
-      isDeepStrictEqual(pruneSkippedStartupSecretSurfaces(config), preflightPrepared.sourceConfig),
+      isDeepStrictEqual(
+        pruneSkippedStartupSecretSurfaces(config, params.channelAutostartSuppression),
+        preflightPrepared.sourceConfig,
+      ),
     );
   const activateStartupSecrets = async (config: OpenClawConfig) => {
     // Reuse the preflight snapshot only if generated startup auth did not
@@ -551,10 +563,19 @@ function hasActiveGatewayAuthSecretRef(config: OpenClawConfig): boolean {
   });
 }
 
-function pruneSkippedStartupSecretSurfaces(config: OpenClawConfig): OpenClawConfig {
+function pruneSkippedStartupSecretSurfaces(
+  config: OpenClawConfig,
+  channelAutostartSuppression?: { reason: string; message: string } | null,
+): OpenClawConfig {
+  // Channel surfaces are pruned before eager SecretRef resolution when:
+  // 1. operator explicitly skipped channels/providers via env vars, or
+  // 2. the persisted crash-loop breaker has already selected channel autostart
+  //    suppression — removing the surfaces prevents an unavailable channel
+  //    credential from terminating the entire Gateway startup (safe-mode contract).
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS) ||
+    channelAutostartSuppression != null;
   if (!skipChannels || !config.channels) {
     return config;
   }

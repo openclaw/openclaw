@@ -164,6 +164,7 @@ function runtimeSecretsActivatorForTest(params: {
   activateRuntimeSecretsSnapshot?: ActivateRuntimeSecretsSnapshotForTest;
   emitStateEvent?: GatewayStartupStateEmitterMock;
   logSecrets?: GatewayStartupLogMock;
+  channelAutostartSuppression?: { reason: string; message: string } | null;
 }) {
   const defaultActivatorOptions = runtimeSecretsActivatorOptionsForTest();
   return createRuntimeSecretsActivator({
@@ -171,6 +172,7 @@ function runtimeSecretsActivatorForTest(params: {
     emitStateEvent: params.emitStateEvent ?? defaultActivatorOptions.emitStateEvent,
     prepareRuntimeSecretsSnapshot: params.prepareRuntimeSecretsSnapshot,
     activateRuntimeSecretsSnapshot: params.activateRuntimeSecretsSnapshot ?? vi.fn(),
+    channelAutostartSuppression: params.channelAutostartSuppression,
   });
 }
 
@@ -1252,6 +1254,143 @@ describe("gateway startup config secret preflight", () => {
         },
       }),
     );
+  });
+
+  // Breaker suppression — when the persisted crash-loop breaker is tripped,
+  // channel surfaces must be pruned before eager SecretRef projection so an
+  // unavailable channel credential does not block control-plane startup.
+  it("prunes channel surfaces when crash-loop breaker suppression is active", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot,
+      channelAutostartSuppression: {
+        reason: "crash-loop-breaker",
+        message: "breaker tripped: 20 unclean boots",
+      },
+    });
+    const config = gatewayTokenConfig(
+      asConfig({
+        channels: {
+          telegram: {
+            botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+          },
+        },
+      }),
+    );
+
+    const result = await activateRuntimeSecrets(config, {
+      reason: "startup",
+      activate: false,
+    });
+    expect(typeof result.config.gateway).toBe("object");
+    const preflightInput = callArg<{
+      config?: OpenClawConfig;
+      loadAuthStore?: unknown;
+    }>(prepareRuntimeSecretsSnapshot);
+    expect(preflightInput.config?.channels).toBeUndefined();
+  });
+
+  it("keeps channel surfaces in secret preflight when breaker suppression is null", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot,
+      channelAutostartSuppression: null,
+    });
+    const config = gatewayTokenConfig(
+      asConfig({
+        channels: {
+          telegram: {
+            botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+          },
+        },
+      }),
+    );
+
+    await activateRuntimeSecrets(config, {
+      reason: "startup",
+      activate: false,
+    });
+    const preflightInput = callArg<{
+      config?: OpenClawConfig;
+      loadAuthStore?: unknown;
+    }>(prepareRuntimeSecretsSnapshot);
+    expect(preflightInput.config?.channels).toBeDefined();
+  });
+
+  it("still resolves gateway auth SecretRefs when breaker suppression prunes channels", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) =>
+      preparedSnapshotWithGatewayToken(config),
+    );
+    const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
+      prepareRuntimeSecretsSnapshot,
+      channelAutostartSuppression: {
+        reason: "crash-loop-breaker",
+        message: "breaker tripped: 20 unclean boots",
+      },
+    });
+    const config = gatewayTokenConfig(
+      asConfig({
+        channels: {
+          telegram: {
+            botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+          },
+        },
+      }),
+    );
+
+    const result = await activateRuntimeSecrets(config, {
+      reason: "startup",
+      activate: true,
+    });
+    // Gateway auth must remain funtional: token is resolved from SecretRef
+    expect(result.config.gateway?.auth?.token).toBe(RESOLVED_GATEWAY_TOKEN);
+    const preflightInput = callArg<{
+      config?: OpenClawConfig;
+      loadAuthStore?: unknown;
+    }>(prepareRuntimeSecretsSnapshot);
+    // Channels are pruned by breaker suppression
+    expect(preflightInput.config?.channels).toBeUndefined();
+    // Gateway auth surface remains intact
+    expect(preflightInput.config?.gateway?.auth?.token).toBe("startup-test-token");
+  });
+
+  it("prunes channels in prepareGatewayStartupConfig when breaker suppression is active", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
+    const activateRuntimeSecretsSnapshot = vi.fn();
+    const result = await prepareGatewayStartupConfig({
+      configSnapshot: buildSnapshot(
+        gatewayTokenConfig(
+          asConfig({
+            channels: {
+              telegram: {
+                botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+              },
+            },
+          }),
+        ),
+      ),
+      channelAutostartSuppression: {
+        reason: "crash-loop-breaker",
+        message: "breaker tripped: 20 unclean boots",
+      },
+      activateRuntimeSecrets: runtimeSecretsActivatorForTest({
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot,
+        channelAutostartSuppression: {
+          reason: "crash-loop-breaker",
+          message: "breaker tripped: 20 unclean boots",
+        },
+      }),
+    });
+
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe("startup-test-token");
+    const preflightInput = callArg<{
+      config?: OpenClawConfig;
+      loadAuthStore?: unknown;
+    }>(prepareRuntimeSecretsSnapshot);
+    expect(preflightInput.config?.channels).toBeUndefined();
+    expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
