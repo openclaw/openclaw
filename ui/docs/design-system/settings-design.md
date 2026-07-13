@@ -36,7 +36,7 @@ import {
   renderSettingsSection,
   renderSettingsRow,
   renderSettingsNavRow,
-  renderSettingsToggle,
+  renderSettingsToggleRow,
   renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsValue,
