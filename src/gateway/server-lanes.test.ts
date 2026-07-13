@@ -170,6 +170,33 @@ describe("applyGatewayLaneConcurrency", () => {
     expect(started).toBe(true);
   });
 
+  it("does not resume cleanup-held built-in lanes during live config publication", async () => {
+    const { testing } = await import("../agents/session-suspension.js");
+    testing.seedClearedLaneResumeForTest(CommandLane.Main, {
+      resumeConcurrency: 3,
+      resumeAtMs: Date.now() + 100,
+    });
+    setCommandLaneConcurrency(CommandLane.Main, 0);
+
+    applyConfigLaneConcurrency({ agents: { defaults: { maxConcurrent: 3 } } } as OpenClawConfig);
+
+    let started = false;
+    const mainRun = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        started = true;
+      },
+      { warnAfterMs: 10_000 },
+    );
+    await Promise.resolve();
+
+    expect(started).toBe(false);
+
+    setCommandLaneConcurrency(CommandLane.Main, 1);
+    await mainRun;
+    expect(started).toBe(true);
+  });
+
   it("does not resume an unexpired shared nested lane during gateway startup", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

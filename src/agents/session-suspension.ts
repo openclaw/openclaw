@@ -214,6 +214,11 @@ export function enableSessionSuspensionTimersForGatewayStart(
   return suspendedLaneIds;
 }
 
+export function getCleanupSuspendedLaneIdsForGatewayPublication(): Set<string> {
+  const state = getSessionSuspensionState();
+  return state.cleanupActive ? new Set(state.clearedLaneResumes.keys()) : new Set<string>();
+}
+
 export async function suspendSession(params: SessionSuspensionParams) {
   if (!params.cfg) {
     return;
@@ -233,6 +238,9 @@ export async function suspendSession(params: SessionSuspensionParams) {
   const now = Date.now();
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
   const state = getSessionSuspensionState();
+  if (state.cleanupActive) {
+    return;
+  }
   const suspensionGeneration = state.cleanupGeneration;
   let previousQuotaSuspension: QuotaSuspension | undefined;
 

@@ -155,10 +155,12 @@ describe("session suspension", () => {
     expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Nested, 0);
     expect(clearSessionSuspensionTimers()).toBe(1);
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
+    sessionAccessorMocks.patchSessionEntry.mockClear();
 
     await suspendLane(100, {} as OpenClawConfig, CommandLane.Nested);
 
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+    expect(sessionAccessorMocks.patchSessionEntry).not.toHaveBeenCalled();
 
     enableSessionSuspensionTimersForGatewayStart();
     await suspendLane(100, {} as OpenClawConfig, CommandLane.Nested);

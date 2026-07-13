@@ -1,4 +1,7 @@
-import { enableSessionSuspensionTimersForGatewayStart } from "../agents/session-suspension.js";
+import {
+  enableSessionSuspensionTimersForGatewayStart,
+  getCleanupSuspendedLaneIdsForGatewayPublication,
+} from "../agents/session-suspension.js";
 // Gateway command-lane concurrency applier.
 // Pushes config-derived agent/cron limits into the process command queue.
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
@@ -44,6 +47,8 @@ export function applyGatewayLaneConcurrency(
         }
       },
     );
+  } else {
+    suspendedLaneIds = getCleanupSuspendedLaneIdsForGatewayPublication();
   }
   // Resolution is deliberately separate: this commit-edge applier only updates
   // live queue state and cannot reject a config midway through publication.
