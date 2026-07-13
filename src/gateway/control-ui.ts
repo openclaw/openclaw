@@ -4,7 +4,6 @@ import { createHmac, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
 import { detectMime, kindFromMime } from "@openclaw/media-core/mime";
 import {
   asDateTimestampMs,
@@ -64,6 +63,14 @@ import {
   CONTROL_UI_AVATAR_PREFIX,
   normalizeControlUiBasePath,
 } from "./control-ui-shared.js";
+import {
+  isControlUiStaticAssetExtension,
+  readAndCloseControlUiFile,
+  readAndCloseControlUiFileText,
+  respondHeadForControlUiFile,
+  sendControlUiHtmlBody,
+  serveControlUiAsset,
+} from "./control-ui-static.js";
 import { buildMissingScopeForbiddenBody, sendGatewayAuthFailure } from "./http-common.js";
 import {
   getBearerToken,
@@ -83,19 +90,6 @@ const CONTROL_UI_ASSETS_MISSING_MESSAGE =
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
-const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
-const CONTROL_UI_COMPRESSIBLE_EXTENSIONS = new Set([
-  ".css",
-  ".html",
-  ".js",
-  ".json",
-  ".map",
-  ".svg",
-  ".txt",
-  ".webmanifest",
-]);
-
-type ControlUiContentEncoding = "br" | "gzip";
 
 function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
   // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
@@ -126,62 +120,6 @@ export type ControlUiRootState =
   | { kind: "resolved"; path: string }
   | { kind: "invalid"; path: string }
   | { kind: "missing" };
-
-function contentTypeForExt(ext: string): string {
-  switch (ext) {
-    case ".html":
-      return "text/html; charset=utf-8";
-    case ".js":
-      return "application/javascript; charset=utf-8";
-    case ".css":
-      return "text/css; charset=utf-8";
-    case ".json":
-    case ".map":
-      return "application/json; charset=utf-8";
-    case ".svg":
-      return "image/svg+xml";
-    case ".png":
-      return "image/png";
-    case ".jpg":
-    case ".jpeg":
-      return "image/jpeg";
-    case ".gif":
-      return "image/gif";
-    case ".webp":
-      return "image/webp";
-    case ".ico":
-      return "image/x-icon";
-    case ".txt":
-      return "text/plain; charset=utf-8";
-    case ".webmanifest":
-      return "application/manifest+json; charset=utf-8";
-    default:
-      return "application/octet-stream";
-  }
-}
-
-/**
- * Extensions recognised as static assets.  Missing files with these extensions
- * return 404 instead of the SPA index.html fallback.  `.html` is intentionally
- * excluded — actual HTML files on disk are served earlier, and missing `.html`
- * paths should fall through to the SPA router (client-side routers may use
- * `.html`-suffixed routes).
- */
-const STATIC_ASSET_EXTENSIONS = new Set([
-  ".js",
-  ".css",
-  ".json",
-  ".map",
-  ".svg",
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".ico",
-  ".txt",
-  ".webmanifest",
-]);
 
 const CONTROL_UI_NAMESPACE_PREFIX = "/__openclaw__/";
 const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
@@ -269,21 +207,6 @@ function respondControlUiAssetsUnavailable(
     return;
   }
   respondPlainText(res, 503, CONTROL_UI_ASSETS_MISSING_MESSAGE);
-}
-
-function respondHeadForControlUiFile(
-  req: IncomingMessage,
-  res: ServerResponse,
-  filePath: string,
-  options?: { immutable?: boolean },
-): boolean {
-  if (req.method !== "HEAD") {
-    return false;
-  }
-  res.statusCode = 200;
-  setControlUiFileHeaders(req, res, filePath, options);
-  res.end();
-  return true;
 }
 
 function isValidAgentId(agentId: string): boolean {
@@ -813,99 +736,6 @@ export async function handleControlUiAvatarRequest(
   }
 }
 
-function normalizedAcceptEncoding(req: IncomingMessage): string {
-  const value = req.headers?.["accept-encoding"];
-  return Array.isArray(value) ? value.join(",") : (value ?? "");
-}
-
-function resolveControlUiContentEncoding(req: IncomingMessage): ControlUiContentEncoding | null {
-  const qualities = new Map<string, number>();
-  for (const entry of normalizedAcceptEncoding(req).split(",")) {
-    const [rawName, ...rawParams] = entry.split(";");
-    const name = rawName?.trim().toLowerCase();
-    if (!name) {
-      continue;
-    }
-    const qualityParam = rawParams.find((param) => param.trim().toLowerCase().startsWith("q="));
-    const parsedQuality = qualityParam ? Number.parseFloat(qualityParam.trim().slice(2)) : 1;
-    const quality =
-      Number.isFinite(parsedQuality) && parsedQuality >= 0 && parsedQuality <= 1
-        ? parsedQuality
-        : 0;
-    qualities.set(name, Math.max(qualities.get(name) ?? 0, quality));
-  }
-
-  const wildcardQuality = qualities.get("*") ?? 0;
-  const qualityFor = (name: ControlUiContentEncoding) =>
-    qualities.has(name) ? (qualities.get(name) ?? 0) : wildcardQuality;
-  const brotliQuality = qualityFor("br");
-  const gzipQuality = qualityFor("gzip");
-  if (brotliQuality <= 0 && gzipQuality <= 0) {
-    return null;
-  }
-  return brotliQuality >= gzipQuality ? "br" : "gzip";
-}
-
-function setControlUiFileHeaders(
-  req: IncomingMessage,
-  res: ServerResponse,
-  filePath: string,
-  options?: { immutable?: boolean },
-) {
-  const ext = path.extname(filePath).toLowerCase();
-  res.setHeader("Content-Type", contentTypeForExt(ext));
-  res.setHeader(
-    "Cache-Control",
-    options?.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
-  );
-  if (CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(ext)) {
-    res.setHeader("Vary", "Accept-Encoding");
-    const encoding = resolveControlUiContentEncoding(req);
-    if (encoding) {
-      res.setHeader("Content-Encoding", encoding);
-    }
-  }
-}
-
-function compressControlUiBody(body: Buffer, encoding: ControlUiContentEncoding): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const callback = (error: Error | null, compressed: Buffer) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(compressed);
-    };
-    if (encoding === "br") {
-      brotliCompress(
-        body,
-        {
-          params: {
-            [zlibConstants.BROTLI_PARAM_QUALITY]: 4,
-          },
-        },
-        callback,
-      );
-      return;
-    }
-    gzip(body, { level: 6 }, callback);
-  });
-}
-
-async function serveControlUiAsset(
-  req: IncomingMessage,
-  res: ServerResponse,
-  filePath: string,
-  body: Buffer,
-  options?: { immutable?: boolean },
-) {
-  setControlUiFileHeaders(req, res, filePath, options);
-  const encoding = CONTROL_UI_COMPRESSIBLE_EXTENSIONS.has(path.extname(filePath).toLowerCase())
-    ? resolveControlUiContentEncoding(req)
-    : null;
-  res.end(encoding ? await compressControlUiBody(body, encoding) : body);
-}
-
 async function serveResolvedIndexHtml(
   req: IncomingMessage,
   res: ServerResponse,
@@ -933,38 +763,7 @@ async function serveResolvedIndexHtml(
   );
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Vary", "Accept-Encoding");
-  const encoding = resolveControlUiContentEncoding(req);
-  if (encoding) {
-    res.setHeader("Content-Encoding", encoding);
-  }
-  res.end(encoding ? await compressControlUiBody(Buffer.from(prepared), encoding) : prepared);
-}
-
-function readOpenedFile(fd: number): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    fs.readFile(fd, (error, data) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve(data);
-    });
-  });
-}
-
-// Compression can wait in zlib's worker queue, so release the pinned file as
-// soon as its bytes are loaded instead of retaining descriptors per request.
-async function readAndCloseOpenedFile(fd: number): Promise<Buffer> {
-  try {
-    return await readOpenedFile(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-async function readAndCloseOpenedFileText(fd: number): Promise<string> {
-  return (await readAndCloseOpenedFile(fd)).toString("utf8");
+  await sendControlUiHtmlBody(req, res, prepared);
 }
 
 function isExpectedSafePathError(error: unknown): boolean {
@@ -1261,21 +1060,21 @@ export async function handleControlUiHttpRequest(
       }
     }
     if (path.basename(safeFile.path) === "index.html") {
-      const body = await readAndCloseOpenedFileText(safeFile.fd);
+      const body = await readAndCloseControlUiFileText(safeFile.fd);
       await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
       return true;
     }
-    const body = await readAndCloseOpenedFile(safeFile.fd);
+    const body = await readAndCloseControlUiFile(safeFile.fd);
     await serveControlUiAsset(req, res, safeFile.path, body, { immutable: immutableAsset });
     return true;
   }
 
   // If the requested path looks like a static asset (known extension), return
   // 404 rather than falling through to the SPA index.html fallback.  We check
-  // against the same set of extensions that contentTypeForExt() recognises so
+  // against the same extension set used by the static response helper so
   // that dotted SPA routes (e.g. /user/jane.doe, /v2.0) still get the
   // client-side router fallback.
-  if (STATIC_ASSET_EXTENSIONS.has(path.extname(fileRel).toLowerCase())) {
+  if (isControlUiStaticAssetExtension(path.extname(fileRel).toLowerCase())) {
     respondControlUiNotFound(res);
     return true;
   }
@@ -1292,7 +1091,7 @@ export async function handleControlUiHttpRequest(
         fs.closeSync(safeIndex.fd);
       }
     }
-    const body = await readAndCloseOpenedFileText(safeIndex.fd);
+    const body = await readAndCloseControlUiFileText(safeIndex.fd);
     await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
     return true;
   }
