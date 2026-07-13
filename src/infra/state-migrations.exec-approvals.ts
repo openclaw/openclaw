@@ -24,7 +24,7 @@ function resolveExecApprovalsPathForStateDir(stateDir: string): string {
   return path.join(stateDir, EXEC_APPROVALS_FILENAME);
 }
 
-export function resolveExecApprovalsSocketPathForStateDir(stateDir: string): string {
+function resolveExecApprovalsSocketPathForStateDir(stateDir: string): string {
   return path.join(stateDir, EXEC_APPROVALS_SOCKET_FILENAME);
 }
 

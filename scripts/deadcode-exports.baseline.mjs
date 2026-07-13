@@ -2642,6 +2642,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/infra/stale-lock-file.ts: LockFileOwnerPayload",
   "src/infra/state-migrations.debug-proxy.ts: LegacyDebugProxyCaptureDetection",
   "src/infra/state-migrations.fs.ts: isLegacyWhatsAppAuthFile",
+  "src/infra/state-migrations.session-store.ts: sessionStoreTextMayNeedCanonicalization",
   "src/infra/state-migrations.ts: sessionStoreTextMayNeedCanonicalization",
   "src/infra/supervisor-markers.ts: DetectRespawnSupervisorOptions",
   "src/infra/system-run-approval-binding.ts: matchSystemRunApprovalEnvHash",
