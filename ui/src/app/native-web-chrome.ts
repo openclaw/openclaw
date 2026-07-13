@@ -5,8 +5,6 @@ export type NativeHistoryState = {
   canGoForward: boolean;
 };
 
-export type NativeHistoryStateEvent = CustomEvent<NativeHistoryState>;
-
 type NativeWebChromeWindow = Window & {
   __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
   __OPENCLAW_NATIVE_HISTORY__?: NativeHistoryState;
