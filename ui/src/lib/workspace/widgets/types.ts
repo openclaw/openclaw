@@ -13,6 +13,18 @@ import type { TemplateResult } from "lit";
 import type { ApplicationConfigCapability } from "../../../app/config.ts";
 import type { WorkspaceWidget } from "../types.ts";
 
+export type ApprovalDecision = "approve" | "reject";
+export type PendingApprovalItem = {
+  id: string;
+  kind: "widget";
+  title: string;
+  requestedBy: string | null;
+};
+export type ApprovalsWidgetSource = {
+  pending: PendingApprovalItem[];
+  onDecide: (item: PendingApprovalItem, decision: ApprovalDecision) => void;
+};
+
 /** Ambient context a builtin may need beyond its own binding value. */
 export type BuiltinWidgetContext = {
   /** Control UI mount path used by builtins that link to another app route. */
@@ -27,6 +39,8 @@ export type BuiltinWidgetContext = {
     getViewport: (widgetId: string, fallback: PreviewViewport) => PreviewViewport;
     setViewport: (widgetId: string, viewport: PreviewViewport) => void;
   };
+  /** Pending custom-widget approvals; no exec or plugin approval queues are exposed. */
+  approvals?: ApprovalsWidgetSource;
 };
 
 export type PreviewViewport = "desktop" | "tablet" | "mobile";

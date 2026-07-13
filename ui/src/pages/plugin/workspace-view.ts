@@ -63,6 +63,7 @@ import type {
   WorkspaceDocument,
   WidgetManifestView,
 } from "../../lib/workspace/types.ts";
+import { buildWidgetApprovalsSource } from "../../lib/workspace/widgets/approvals.ts";
 import type { BuiltinWidgetContext } from "../../lib/workspace/widgets/index.ts";
 import type { PreviewViewport } from "../../lib/workspace/widgets/types.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
@@ -544,6 +545,9 @@ function renderGrid(
         props.onRequestUpdate?.();
       },
     },
+    approvals: buildWidgetApprovalsSource(workspace, (name, decision) => {
+      void approveWidget(state, props.client, { name, decision });
+    }),
   };
   const rows = gridRowCount(tab.widgets);
   const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;

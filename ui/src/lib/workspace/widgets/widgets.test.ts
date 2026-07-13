@@ -6,6 +6,13 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
 import { renderActivity } from "./activity.ts";
+import { mapAgentStatus, renderAgentStatus } from "./agent-status.ts";
+import {
+  buildWidgetApprovalsSource,
+  mapApprovals,
+  renderApprovals,
+  toWidgetApprovalDecision,
+} from "./approvals.ts";
 import { renderChart } from "./chart.ts";
 import { renderCron } from "./cron.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
@@ -40,6 +47,86 @@ const STRICT_EMBED: BuiltinWidgetContext = {
   embed: { embedSandboxMode: "strict", allowExternalEmbedUrls: false },
   preview: { getViewport: (_widgetId, fallback) => fallback, setViewport: vi.fn() },
 };
+
+describe("agent-status mapping", () => {
+  it("maps only keyed sessions and clamps goal progress", () => {
+    const model = mapAgentStatus(widget({ props: { limit: 2 } }), {
+      sessions: [
+        {
+          key: "agent:one",
+          displayName: "One",
+          hasActiveRun: true,
+          goal: { objective: "Ship the workspace", tokensUsed: 125, tokenBudget: 100 },
+        },
+        { key: "agent:two", status: "idle" },
+        { displayName: "missing key" },
+      ],
+    });
+    expect(model).toMatchObject({ activeCount: 1, total: 2 });
+    expect(model.rows[0]).toMatchObject({
+      key: "agent:one",
+      active: true,
+      task: "Ship the workspace",
+      progress: 1,
+    });
+  });
+
+  it("renders accessible status text and an empty state", () => {
+    const populated = renderToContainer(
+      renderAgentStatus(widget(), { sessions: [{ key: "agent:one", hasActiveRun: true }] }),
+    );
+    expect(
+      populated.querySelector("[data-test-id='workspace-agent-status']")?.textContent,
+    ).toContain("Busy");
+    const empty = renderToContainer(renderAgentStatus(widget(), { sessions: [] }));
+    expect(empty.querySelector(".workspace-widget__placeholder")).not.toBeNull();
+  });
+});
+
+describe("approvals mapping", () => {
+  it("exposes only pending custom-widget registry entries", () => {
+    const decisions: Array<[string, "approved" | "rejected"]> = [];
+    const source = buildWidgetApprovalsSource(
+      {
+        schemaVersion: 1,
+        workspaceVersion: 3,
+        tabs: [],
+        prefs: { tabOrder: [] },
+        widgetsRegistry: {
+          pending: { status: "pending", createdBy: "agent:builder" },
+          approved: { status: "approved", createdBy: "agent:builder" },
+        },
+      },
+      (name, decision) => decisions.push([name, decision]),
+    );
+    expect(source.pending).toEqual([
+      { id: "pending", kind: "widget", title: "pending", requestedBy: "builder" },
+    ]);
+    source.onDecide(source.pending[0]!, "reject");
+    expect(decisions).toEqual([["pending", "rejected"]]);
+    expect(toWidgetApprovalDecision("approve")).toBe("approved");
+  });
+
+  it("limits rows and renders explicit approval controls", () => {
+    const source = {
+      pending: [
+        { id: "one", kind: "widget" as const, title: "one", requestedBy: null },
+        { id: "two", kind: "widget" as const, title: "two", requestedBy: "builder" },
+      ],
+      onDecide: () => undefined,
+    };
+    expect(mapApprovals(widget({ props: { limit: 1 } }), source)).toMatchObject({ total: 2 });
+    const container = renderToContainer(
+      renderApprovals(widget({ props: { limit: 1 } }), undefined, {
+        ...STRICT_EMBED,
+        approvals: source,
+      }),
+    );
+    expect(container.querySelectorAll("button")).toHaveLength(2);
+    expect(container.textContent).toContain("Approve");
+    expect(container.textContent).toContain("Reject");
+  });
+});
 
 describe("stat-card mapping", () => {
   it("renders the value and omits a duplicate label", () => {
