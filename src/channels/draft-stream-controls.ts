@@ -141,6 +141,7 @@ export async function clearFinalizableDraftMessage<T>(
   }
   try {
     await params.deleteMessage(messageId);
+    // A replacement preview may become current while deletion is in flight; never clear its ID.
     if (Object.is(params.readMessageId(), messageId)) {
       params.clearMessageId();
     }
