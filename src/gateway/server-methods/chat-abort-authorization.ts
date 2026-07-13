@@ -20,7 +20,7 @@ export type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
-export type PreRegisteredAgentDedupePayload = {
+type PreRegisteredAgentDedupePayload = {
   agentId?: unknown;
   attemptId?: unknown;
   controlUiVisible?: unknown;
@@ -35,7 +35,7 @@ export type PreRegisteredAgentDedupePayload = {
   turnKind?: unknown;
 };
 
-export type PreRegisteredAgentRun = {
+type PreRegisteredAgentRun = {
   runId: string;
   sessionKey: string;
   payload: PreRegisteredAgentDedupePayload;
