@@ -25523,7 +25523,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 149,
+      "line": 154,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "Browser import requires Local mode",
       "surface": "apple",
@@ -25531,7 +25531,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 151,
+      "line": 156,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "Switch this Mac app to a local Gateway before importing browser cookies.",
       "surface": "apple",
@@ -25539,7 +25539,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 171,
+      "line": 177,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "No Chrome, Brave, Edge, or Chromium profile with cookies was found on this Mac.",
       "surface": "apple",
@@ -25547,7 +25547,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 173,
+      "line": 179,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "System browser profile import is disabled in the local Gateway configuration.",
       "surface": "apple",
@@ -25555,7 +25555,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 174,
+      "line": 181,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "No browser login available",
       "surface": "apple",
@@ -25563,7 +25563,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 184,
+      "line": 193,
       "path": "apps/macos/Sources/OpenClaw/BrowserProfileImportModel.swift",
       "source": "Browser import unavailable",
       "surface": "apple",
@@ -27083,7 +27083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 685,
+      "line": 705,
       "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift",
       "source": "[\\(host)]",
       "surface": "apple",

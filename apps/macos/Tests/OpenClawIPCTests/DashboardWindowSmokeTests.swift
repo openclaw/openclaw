@@ -94,13 +94,18 @@ struct DashboardWindowSmokeTests {
     @Test func `browser import offer retries until the first completed inline browser request`() async throws {
         let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         var requestCount = 0
-        var didQuery = false
+        var firstRequestContinuation: CheckedContinuation<Bool, Never>?
         let controller = DashboardWindowController(
             url: dashboard,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
             requestBrowserProfileImportOffer: {
                 requestCount += 1
-                return didQuery
+                if requestCount == 1 {
+                    return await withCheckedContinuation { continuation in
+                        firstRequestContinuation = continuation
+                    }
+                }
+                return true
             })
         defer { controller.closeDashboard() }
 
@@ -115,18 +120,16 @@ struct DashboardWindowSmokeTests {
         #expect(requestCount == 0)
 
         controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
-        for _ in 0..<200 where requestCount == 0 {
+        for _ in 0..<200 where firstRequestContinuation == nil {
             await Task.yield()
         }
         #expect(requestCount == 1)
-        for _ in 0..<10 {
-            await Task.yield()
-        }
 
-        didQuery = true
         controller.update(
             url: dashboard,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        firstRequestContinuation?.resume(returning: false)
+        firstRequestContinuation = nil
         for _ in 0..<200 where requestCount == 1 {
             await Task.yield()
         }

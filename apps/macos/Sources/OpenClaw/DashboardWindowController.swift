@@ -80,6 +80,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var didRequestBrowserProfileImportOffer = false
     private var browserProfileImportOfferIsArmed = false
     private var browserProfileImportOfferRequestIsInFlight = false
+    private var browserProfileImportOfferRetryPending = false
 
     init(
         url: URL,
@@ -329,16 +330,25 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private func requestBrowserProfileImportOfferIfNeeded() {
         guard self.browserProfileImportOfferIsArmed,
               !self.linkBrowserItem.isCollapsed,
-              !self.didRequestBrowserProfileImportOffer,
-              !self.browserProfileImportOfferRequestIsInFlight
+              !self.didRequestBrowserProfileImportOffer
         else { return }
+        if self.browserProfileImportOfferRequestIsInFlight {
+            // Gateway readiness can arrive while the status poll awaits transport.
+            // Latch one retry so in-flight dedupe does not discard that reconnect signal.
+            self.browserProfileImportOfferRetryPending = true
+            return
+        }
         self.browserProfileImportOfferRequestIsInFlight = true
         Task { [weak self] in
             guard let self else { return }
             let didQuery = await self.requestBrowserProfileImportOffer()
             self.browserProfileImportOfferRequestIsInFlight = false
+            let shouldRetry = self.browserProfileImportOfferRetryPending && !didQuery
+            self.browserProfileImportOfferRetryPending = false
             if didQuery {
                 self.didRequestBrowserProfileImportOffer = true
+            } else if shouldRetry {
+                self.requestBrowserProfileImportOfferIfNeeded()
             }
         }
     }
