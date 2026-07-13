@@ -7,10 +7,9 @@ import pLimit, { type LimitFunction } from "p-limit";
 import { isLegacyContentInventoryCompatVersion } from "../../scripts/lib/content-inventory-compat.mjs";
 import { isLocalBuildMetadataDistPath } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import { root as openFsRoot } from "./fs-safe.js";
-import { readJsonIfExists, writeJson } from "./json-files.js";
+import { readJsonIfExists } from "./json-files.js";
 import { readPackageVersion } from "./package-json.js";
 
-export { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 export { isLegacyContentInventoryCompatVersion } from "../../scripts/lib/content-inventory-compat.mjs";
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
@@ -88,7 +87,6 @@ const OMITTED_DIST_SUBTREE_PATTERNS = [
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}(?:/|$)`, "u"),
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
 ] as const;
-const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 type ExternalizedBundledExtensionIds = ReadonlySet<string>;
 type PackageDistExclusionRules = {
   files: ReadonlySet<string>;
@@ -164,10 +162,6 @@ async function readPackageDistJsonIfExists<T>(
   }
 }
 
-function isInstallStageDirName(value: string): boolean {
-  return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
-}
-
 function splitRelativePath(relativePath: string): string[] {
   return normalizeRelativePath(relativePath).split("/");
 }
@@ -185,18 +179,6 @@ function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
 
   const pluginDependencyDir = parts[3] ?? "";
   return pluginDependencyDir.toLowerCase() === "node_modules";
-}
-
-/** Detects transient plugin dependency install-stage directories inside packaged extension dist. */
-export function isLegacyPluginDependencyInstallStagePath(relativePath: string): boolean {
-  const parts = splitRelativePath(relativePath);
-  return (
-    parts.length >= 4 &&
-    parts[0]?.toLowerCase() === "dist" &&
-    parts[1]?.toLowerCase() === "extensions" &&
-    Boolean(parts[2]) &&
-    isInstallStageDirName(parts[3] ?? "")
-  );
 }
 
 function escapeRegExp(value: string): string {
@@ -458,107 +440,6 @@ export async function collectPackageDistInventory(
     options,
     fsLimit,
   );
-}
-
-/** Lists legacy plugin dependency staging directories that must not ship in package dist. */
-export async function collectLegacyPluginDependencyStagingDebrisPaths(
-  packageRoot: string,
-): Promise<string[]> {
-  const distDirs: string[] = [];
-  try {
-    const packageRootEntries = await fs.readdir(packageRoot, { withFileTypes: true });
-    for (const entry of packageRootEntries) {
-      if (entry.isDirectory() && entry.name.toLowerCase() === "dist") {
-        distDirs.push(path.join(packageRoot, entry.name));
-      }
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  }
-
-  const debris: string[] = [];
-  for (const distDir of distDirs) {
-    let distEntries: import("node:fs").Dirent[];
-    try {
-      distEntries = await fs.readdir(distDir, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw error;
-    }
-
-    for (const distEntry of distEntries) {
-      if (!distEntry.isDirectory() || distEntry.name.toLowerCase() !== "extensions") {
-        continue;
-      }
-      const extensionsDir = path.join(distDir, distEntry.name);
-      let extensionEntries: import("node:fs").Dirent[];
-      try {
-        extensionEntries = await fs.readdir(extensionsDir, { withFileTypes: true });
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          continue;
-        }
-        throw error;
-      }
-
-      for (const extensionEntry of extensionEntries) {
-        if (!extensionEntry.isDirectory()) {
-          continue;
-        }
-        const extensionPath = path.join(extensionsDir, extensionEntry.name);
-        let stagingEntries: import("node:fs").Dirent[];
-        try {
-          stagingEntries = await fs.readdir(extensionPath, { withFileTypes: true });
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            continue;
-          }
-          throw error;
-        }
-        for (const stagingEntry of stagingEntries) {
-          if (!isInstallStageDirName(stagingEntry.name)) {
-            continue;
-          }
-          debris.push(
-            normalizeRelativePath(
-              path.relative(packageRoot, path.join(extensionPath, stagingEntry.name)),
-            ),
-          );
-        }
-      }
-    }
-  }
-  return debris.toSorted((left, right) => left.localeCompare(right));
-}
-
-/** Fails when transient plugin dependency staging debris remains in package dist. */
-export async function assertNoLegacyPluginDependencyStagingDebris(
-  packageRoot: string,
-): Promise<void> {
-  const debris = await collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
-  if (debris.length === 0) {
-    return;
-  }
-  throw new Error(
-    `unexpected legacy plugin dependency staging debris in package dist: ${debris.join(", ")}`,
-  );
-}
-
-/** Writes the current sorted package dist inventory and returns the entries written. */
-export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
-  await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
-  const inventory = sortUniqueStrings(await collectPackageDistInventory(packageRoot));
-  const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
-  await writeJson(inventoryPath, inventory, { trailingNewline: true });
-  const contentInventory = await collectPackageDistContentInventory(packageRoot, inventory);
-  const contentInventoryPath = path.join(packageRoot, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
-  await writeJson(contentInventoryPath, contentInventory, { trailingNewline: true });
-  return inventory;
 }
 
 function normalizeFileMode(mode: number): number {

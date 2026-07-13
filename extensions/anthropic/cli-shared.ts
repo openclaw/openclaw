@@ -1,6 +1,5 @@
 /**
- * Shared Claude CLI backend normalization. It sanitizes command args, maps
- * thinking levels, and keeps OpenClaw-managed CLI runs isolated from shell env.
+ * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
  */
 import type {
   CliBackendConfig,

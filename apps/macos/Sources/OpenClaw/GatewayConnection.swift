@@ -123,11 +123,6 @@ actor GatewayConnection {
         fileprivate let client: GatewayChannelActor
     }
 
-    struct SessionRoutingIdentity: Equatable {
-        let defaultAgentID: String
-        let contract: String
-    }
-
     enum Method: String {
         case agent
         case status
@@ -523,6 +518,30 @@ extension GatewayConnection {
         try await self.request(method: method.rawValue, params: params, timeoutMs: timeoutMs)
     }
 
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        retryTransportFailures: Bool = true) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            retryTransportFailures: retryTransportFailures)
+    }
+
+    func request(
+        _ request: OpenClawChatGatewayRequest,
+        ifCurrentRoute route: Route,
+        distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
+    {
+        try await self.request(
+            method: request.method,
+            params: request.params,
+            timeoutMs: request.timeoutMs,
+            ifCurrentRoute: route,
+            distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
+    }
+
     func requestRaw(
         method: String,
         params: [String: AnyCodable]? = nil,
@@ -776,23 +795,13 @@ extension GatewayConnection {
             self.lastSnapshot != nil
     }
 
-    func sessionRoutingIdentity(ifCurrentRoute route: Route) async throws -> SessionRoutingIdentity {
+    func sessionRoutingIdentity(
+        ifCurrentRoute route: Route) async throws -> OpenClawChatSessionRoutingIdentity
+    {
         let data = try await request(
-            method: "agents.list",
-            params: [:],
-            timeoutMs: 15000,
+            OpenClawChatGatewayRequests.agentsList(),
             ifCurrentRoute: route)
-        return try Self.decodeSessionRoutingIdentity(data)
-    }
-
-    static func decodeSessionRoutingIdentity(_ data: Data) throws -> SessionRoutingIdentity {
-        let result = try JSONDecoder().decode(AgentsListResult.self, from: data)
-        guard let contract = OpenClawChatSessionRoutingContract.make(
-            scope: result.scope.value as? String,
-            mainKey: result.mainkey,
-            defaultAgentID: result.defaultid)
-        else { throw CancellationError() }
-        return SessionRoutingIdentity(defaultAgentID: result.defaultid, contract: contract)
+        return try OpenClawChatGatewayPayloadCodec.decodeSessionRoutingIdentity(data)
     }
 
     func configuredInferenceModel(
@@ -800,9 +809,7 @@ extension GatewayConnection {
         timeoutMs: Double = 15000) async throws -> String?
     {
         let data = try await request(
-            method: "agents.list",
-            params: [:],
-            timeoutMs: timeoutMs,
+            OpenClawChatGatewayRequests.agentsList(timeoutMs: timeoutMs),
             ifCurrentRoute: route)
         guard await self.isCurrentRoute(route) else {
             throw CancellationError()
@@ -1293,6 +1300,10 @@ extension GatewayConnection {
         if let cached = cachedMainSessionKey() {
             return cached
         }
+        return await self.refreshMainSessionKey(timeoutMs: timeoutMs)
+    }
+
+    func refreshMainSessionKey(timeoutMs: Double = 15000) async -> String {
         do {
             let data = try await requestRaw(method: "config.get", params: nil, timeoutMs: timeoutMs)
             return try Self.mainSessionKey(fromConfigGetData: data)
@@ -1475,26 +1486,20 @@ extension GatewayConnection {
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        var params: [String: AnyCodable] = ["sessionKey": AnyCodable(resolvedKey)]
-        if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
-            params["agentId"] = AnyCodable(agentID)
-        }
-        if let limit {
-            params["limit"] = AnyCodable(limit)
-        }
-        if let maxChars {
-            params["maxChars"] = AnyCodable(maxChars)
-        }
-        let timeout = timeoutMs.map { Double($0) }
+        let request = OpenClawChatGatewayRequests.history(
+            sessionKey: resolvedKey,
+            agentID: agentID,
+            limit: limit,
+            maxChars: maxChars,
+            timeoutMs: timeoutMs)
         if let route {
-            let data = try await request(
-                method: Method.chatHistory.rawValue,
-                params: params,
-                timeoutMs: timeout,
+            let data = try await self.request(
+                request,
                 ifCurrentRoute: route)
             return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
         }
-        return try await self.requestDecoded(method: .chatHistory, params: params, timeoutMs: timeout)
+        let data = try await self.request(request)
+        return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
     }
 
     func chatSend(
@@ -1511,54 +1516,26 @@ extension GatewayConnection {
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
-        var params: [String: AnyCodable] = [
-            "sessionKey": AnyCodable(resolvedKey),
-            "message": AnyCodable(message),
-            "idempotencyKey": AnyCodable(idempotencyKey),
-        ]
-        if let runTimeoutMs {
-            params["timeoutMs"] = AnyCodable(runTimeoutMs)
-        }
-        if let agentID = agentID?.trimmingCharacters(in: .whitespacesAndNewlines), !agentID.isEmpty {
-            params["agentId"] = AnyCodable(agentID)
-        }
-        if let expectedSessionRoutingContract = expectedSessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !expectedSessionRoutingContract.isEmpty
-        {
-            params["expectedSessionRoutingContract"] = AnyCodable(expectedSessionRoutingContract)
-        }
-        if let thinking = thinking?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !thinking.isEmpty
-        {
-            params["thinking"] = AnyCodable(thinking)
-        }
-
-        if !attachments.isEmpty {
-            let encoded = attachments.map { att in
-                [
-                    "type": att.type,
-                    "mimeType": att.mimeType,
-                    "fileName": att.fileName,
-                    "content": att.content,
-                ]
-            }
-            params["attachments"] = AnyCodable(encoded)
-        }
+        let request = OpenClawChatGatewayRequests.sendMessage(
+            sessionKey: resolvedKey,
+            agentID: agentID,
+            expectedSessionRoutingContract: expectedSessionRoutingContract,
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments,
+            runTimeoutMs: runTimeoutMs,
+            requestTimeoutMs: requestTimeoutMs)
 
         if let route {
-            let data = try await request(
-                method: Method.chatSend.rawValue,
-                params: params,
-                timeoutMs: Double(requestTimeoutMs),
+            let data = try await self.request(
+                request,
                 ifCurrentRoute: route,
                 distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
             return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
         }
-        return try await self.requestDecoded(
-            method: .chatSend,
-            params: params,
-            timeoutMs: Double(requestTimeoutMs))
+        let data = try await self.request(request)
+        return try self.decoder.decode(OpenClawChatSendResponse.self, from: data)
     }
 
     func talkMode(enabled: Bool, phase: String? = nil) async {

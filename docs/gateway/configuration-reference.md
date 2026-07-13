@@ -1498,17 +1498,12 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
-    runLog: {
-      maxBytes: "2mb", // default 2_000_000 bytes
-      keepLines: 2000, // default 2000
-    },
   },
 }
 ```
 
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning SQLite session rows. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
-- `runLog.maxBytes`: accepted for compatibility with older file-backed cron run logs. Default: `2_000_000` bytes.
-- `runLog.keepLines`: newest SQLite run-history rows retained per job. Default: `2000`.
+- Run history automatically keeps the newest 2000 terminal rows per job. Lost rows retain their 24-hour cleanup window.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
 - `webhook`: deprecated legacy fallback webhook URL (http/https) used by `openclaw doctor --fix` to migrate stored jobs that still have `notify: true`; runtime delivery uses per-job `delivery.mode="webhook"` plus `delivery.to`, or `delivery.completionDestination` when preserving announce delivery.
 
@@ -1581,6 +1576,28 @@ One-shot jobs stay enabled until retry attempts are exhausted, then disable whil
 - `delivery.failureDestination` is only supported for `sessionTarget="isolated"` jobs unless the job's primary `delivery.mode` is `"webhook"`.
 
 See [Cron Jobs](/automation/cron-jobs). Isolated cron executions are tracked as [background tasks](/automation/tasks).
+
+---
+
+## Worktrees
+
+```json5
+{
+  worktrees: {
+    cleanup: {
+      maxCount: 25, // max managed worktrees across all repositories; 0 or unset disables
+      maxTotalSizeGb: 50, // max total size in GB across all managed worktrees; 0 or unset disables
+    },
+  },
+}
+```
+
+Retention limits for OpenClaw-managed worktrees, enforced by hourly cleanup, `openclaw worktrees gc`, and the Control UI **Clean up now** action. When a limit is exceeded, cleanup snapshots and removes the least recently active session- and Workboard-owned worktrees until the count and total size fit. Manual worktrees, worktrees with live locks or run leases, and worktrees owned by recently active sessions are never limit-evicted, so a limit can remain exceeded when only protected worktrees are left. Removed worktrees stay restorable from their snapshots for 30 days.
+
+- `cleanup.maxCount`: maximum number of managed worktrees to retain across all repositories. Default: unset (no limit).
+- `cleanup.maxTotalSizeGb`: maximum total disk size in GB across all managed worktrees, measured during cleanup. Fractional values such as `0.5` are accepted. Default: unset (no limit).
+
+The Control UI **Worktrees** page under Settings exposes both limits as stepper controls. See [Managed worktrees](/concepts/managed-worktrees).
 
 ---
 

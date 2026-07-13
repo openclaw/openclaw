@@ -45,9 +45,12 @@ type SidebarAgentMenuParams = {
   gatewayVersion: string | null;
   themeMode: ThemeMode;
   agentUnreadCount: (agentId: string) => number;
+  helpOpen: boolean;
+  onHelpOpenChange: (next: boolean) => void;
   onFilterChange: (next: string) => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
+  onOpenNewSession: (agentId: string) => void;
   onClose: () => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
@@ -114,27 +117,89 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const unread = active ? 0 : params.agentUnreadCount(agentId);
   const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
   return html`
-    <button
-      type="button"
-      class="sidebar-customize-menu__item"
-      role="menuitemradio"
-      tabindex="-1"
-      aria-checked=${String(active)}
-      @click=${() => params.onSwitchAgent(agentId)}
+    <div class="sidebar-agent-menu__agent-row">
+      <button
+        type="button"
+        class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
+        role="menuitemradio"
+        tabindex="-1"
+        aria-checked=${String(active)}
+        @click=${() => params.onSwitchAgent(agentId)}
+      >
+        <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
+        <span class="sidebar-customize-menu__text">${label}</span>
+        ${unread > 0
+          ? html`<span
+              class="session-unread-dot"
+              role="img"
+              aria-label=${t("sessionsView.unread")}
+            ></span>`
+          : nothing}
+        <span class="sidebar-customize-menu__check" aria-hidden="true">
+          ${active ? icons.check : nothing}
+        </span>
+      </button>
+      <button
+        type="button"
+        class="sidebar-session-sort sidebar-agent-menu__new"
+        role="menuitem"
+        tabindex="-1"
+        title=${`${t("chat.runControls.newSession")} — ${label}`}
+        aria-label=${`${t("chat.runControls.newSession")} — ${label}`}
+        ?disabled=${!params.connected}
+        @click=${() => {
+          params.onClose();
+          params.onOpenNewSession(agentId);
+        }}
+      >
+        ${icons.plus}
+      </button>
+    </div>
+  `;
+}
+
+// Prefer a right flyout, flip left when the right edge is tight, and on
+// viewports too narrow for two side-by-side menus overlay the parent
+// instead — a flipped submenu would land offscreen there. Menus are
+// shrink-to-fit (224-264px, localized labels vary), so measure the open
+// parent and budget the flyout at its max width; underestimating picks a
+// side placement whose flyout clips past the viewport.
+function agentMenuHelpPlacement(position: { x: number }): "" | "--left" | "--overlay" {
+  const flyoutMaxWidth = 264;
+  const parentWidth =
+    document.querySelector(".sidebar-agent-menu")?.getBoundingClientRect().width ?? flyoutMaxWidth;
+  const fitsRight = position.x + parentWidth + 4 + flyoutMaxWidth <= window.innerWidth - 8;
+  const fitsLeft = position.x >= flyoutMaxWidth + 4 + 8;
+  return fitsRight ? "" : fitsLeft ? "--left" : "--overlay";
+}
+
+function renderAgentMenuHelpSubmenu(position: { x: number }, params: SidebarAgentMenuParams) {
+  const placement = agentMenuHelpPlacement(position);
+  return html`
+    <div
+      class="sidebar-customize-menu sidebar-customize-menu__submenu ${placement
+        ? `sidebar-customize-menu__submenu${placement}`
+        : ""}"
+      role="menu"
+      aria-label=${t("agentChip.help")}
     >
-      <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
-      <span class="sidebar-customize-menu__text">${label}</span>
-      ${unread > 0
-        ? html`<span
-            class="session-unread-dot"
-            role="img"
-            aria-label=${t("sessionsView.unread")}
-          ></span>`
-        : nothing}
-      <span class="sidebar-customize-menu__check" aria-hidden="true">
-        ${active ? icons.check : nothing}
-      </span>
-    </button>
+      ${AGENT_MENU_LINKS.map(
+        (link) => html`
+          <a
+            class="sidebar-customize-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            href=${link.href}
+            target=${EXTERNAL_LINK_TARGET}
+            rel=${buildExternalLinkRel()}
+            @click=${() => params.onClose()}
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
+            <span class="sidebar-customize-menu__text">${link.label()}</span>
+          </a>
+        `,
+      )}
+    </div>
   `;
 }
 
@@ -236,22 +301,45 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
           <span class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
           <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
         </button>
-        ${AGENT_MENU_LINKS.map(
-          (link) => html`
-            <a
-              class="sidebar-customize-menu__item"
-              role="menuitem"
-              tabindex="-1"
-              href=${link.href}
-              target=${EXTERNAL_LINK_TARGET}
-              rel=${buildExternalLinkRel()}
-              @click=${() => params.onClose()}
-            >
-              <span class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
-              <span class="sidebar-customize-menu__text">${link.label()}</span>
-            </a>
-          `,
-        )}
+        <div
+          class="sidebar-customize-menu__submenu-host"
+          @pointerenter=${(event: PointerEvent) => {
+            // Hover open/close is mouse-only: on touch/pen taps the
+            // enter/leave pair would race the click below. Overlay placement
+            // covers this trigger row, so hover-opening there would land the
+            // pending click on a flyout link instead.
+            if (event.pointerType === "mouse" && agentMenuHelpPlacement(position) !== "--overlay") {
+              params.onHelpOpenChange(true);
+            }
+          }}
+          @pointerleave=${(event: PointerEvent) => {
+            if (event.pointerType === "mouse") {
+              params.onHelpOpenChange(false);
+            }
+          }}
+        >
+          <button
+            type="button"
+            class="sidebar-customize-menu__item"
+            role="menuitem"
+            tabindex="-1"
+            aria-haspopup="menu"
+            aria-expanded=${String(params.helpOpen)}
+            @click=${() => {
+              // Open-only: with hover-open, a toggle would close the flyout
+              // on the very click that follows the opening pointerenter.
+              // Closing happens by leaving the host or closing the menu.
+              params.onHelpOpenChange(true);
+            }}
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.circleQuestionMark}</span>
+            <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
+            <span class="sidebar-customize-menu__chevron" aria-hidden="true">
+              ${icons.chevronRight}
+            </span>
+          </button>
+          ${params.helpOpen ? renderAgentMenuHelpSubmenu(position, params) : nothing}
+        </div>
         <div class="sidebar-customize-menu__separator" role="separator"></div>
         <div class="sidebar-agent-menu__footer">
           <openclaw-sidebar-build-chip

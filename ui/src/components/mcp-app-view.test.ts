@@ -1,10 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import {
-  buildMcpAppHostCapabilities,
-  McpAppView,
-  resolveMcpAppSandboxUrl,
-} from "./mcp-app-view.ts";
+import { buildMcpAppHostCapabilities, resolveMcpAppSandboxUrl } from "./mcp-app-security.ts";
+import { McpAppView } from "./mcp-app-view.ts";
 
 const MCP_APP_VIEW_ELEMENT_NAME = `test-mcp-app-view-${crypto.randomUUID()}`;
 
@@ -106,4 +103,40 @@ describe("mcp-app-view localization", () => {
       .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
       .toBe("Aplicativo MCP indisponível: MCP App gateway unavailable");
   });
+
+  it.each([
+    ["foreign origin", "https://attacker.example/mcp-app-sandbox", 8444, undefined],
+    ["data URL", "data:text/html;base64,cHJveHk=", 8444, undefined],
+    ["same gateway port", "/mcp-app-sandbox", 8443, undefined],
+    ["host origin", "/mcp-app-sandbox", 8444, "host"],
+  ])(
+    "rejects a %s sandbox URL through the mounted view",
+    async (_label, sandboxUrl, sandboxPort, sandboxOrigin) => {
+      const resolvedSandboxOrigin =
+        sandboxOrigin === "host" ? window.location.origin : sandboxOrigin;
+      const request = vi.fn(async () => ({
+        sandboxUrl,
+        sandboxPort,
+        ...(resolvedSandboxOrigin ? { sandboxOrigin: resolvedSandboxOrigin } : {}),
+        html: "<p>unsafe</p>",
+        toolInput: null,
+        toolResult: null,
+      }));
+      const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppView;
+      Reflect.set(view, "context", {
+        gateway: {
+          snapshot: { client: { request } },
+          connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+        },
+      });
+      view.sessionKey = "agent:main:main";
+      view.viewId = crypto.randomUUID();
+      document.body.append(view);
+
+      await expect
+        .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+        .toContain("MCP App sandbox URL is invalid");
+      expect(view.shadowRoot?.querySelector("iframe")).toBeNull();
+    },
+  );
 });

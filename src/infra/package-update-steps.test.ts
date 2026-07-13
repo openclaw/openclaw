@@ -6,8 +6,8 @@ import path from "node:path";
 import { configureFsSafePython, getFsSafePythonConfig } from "@openclaw/fs-safe/config";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { writePackageDistInventory } from "./package-dist-inventory.js";
 import {
   applyLocalPackageOverrides,
   captureLocalPackageOverrides,
@@ -15,7 +15,6 @@ import {
 import {
   markPackagePostInstallDoctorAdvisory,
   runGlobalPackageUpdateSteps,
-  type PackageUpdateStepResult,
 } from "./package-update-steps.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
@@ -26,6 +25,10 @@ import {
   type CommandRunner,
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
+
+type PackageUpdateStepResult = Awaited<
+  ReturnType<typeof runGlobalPackageUpdateSteps>
+>["steps"][number];
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 let packageUpdateTestStateDir = "";

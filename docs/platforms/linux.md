@@ -11,9 +11,28 @@ The Gateway is fully supported on Linux and requires Node. Bun can still be used
 as a dependency installer or package-script runner, but it cannot run OpenClaw
 because it does not provide `node:sqlite`.
 
-There is no native Linux companion app yet. Contributions are welcome.
+## Desktop companion
 
-## Quick path (VPS)
+The OpenClaw Linux companion is a Tauri desktop app for a local Gateway. It:
+
+- installs the OpenClaw CLI and managed Node runtime when they are missing
+- attaches to a healthy Gateway before attempting service changes
+- delegates install, start, stop, and restart operations to the CLI-managed systemd user service
+- opens the Gateway-served Control UI with its resolved authentication URL
+- remains available from the system tray when its window is closed
+
+Hosted releases are not published yet. Build a `.deb` and AppImage from a source checkout:
+
+```bash
+cd apps/linux/src-tauri
+pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+```
+
+The `Linux App` CI workflow also uploads the same bundles as the `openclaw-linux-companion` artifact for pull requests touching the app and for manual runs. See `apps/linux/README.md` in the repository for Linux build dependencies and development commands.
+
+## CLI and SSH alternative
+
+The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
 
 1. Install Node 24.15+ (recommended), Node 22.22.3+ (LTS), or Node 25.9+.
 2. `npm i -g openclaw@latest`

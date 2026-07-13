@@ -3,7 +3,8 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { styleMap } from "lit/directives/style-map.js";
-import "../../components/file-preview-modal.ts";
+import "../../components/file-preview-modal-registration.ts";
+import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import "../../styles/plugins.css";
@@ -152,14 +153,13 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
     props.mode === "board" ? t("skillWorkshop.actions.revise") : t("skillWorkshop.actions.tweak");
 
   return html`
-    <div class="sw-revision-backdrop" role="presentation" @click=${props.onRevisionCancel}>
-      <section
-        class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="sw-revision-title"
-        @click=${(event: MouseEvent) => event.stopPropagation()}
-      >
+    <openclaw-modal-dialog
+      .label=${`${t("skillWorkshop.revision.title", { verb })}: ${proposal.slug}`}
+      .description=${t("skillWorkshop.revision.description")}
+      style="--openclaw-modal-width: 560px"
+      @modal-cancel=${props.onRevisionCancel}
+    >
+      <section class="sw-revision-dialog ${busy ? "sw-revision-dialog--sending" : ""}">
         <div class="sw-revision-dialog__head">
           <div>
             <div class="sw-revision-dialog__eyebrow">
@@ -169,6 +169,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           </div>
           <openclaw-tooltip content=${t("skillWorkshop.actions.close")}>
             <button
+              type="button"
               class="sw-revision-dialog__close"
               aria-label=${t("skillWorkshop.actions.close")}
               ?disabled=${Boolean(props.actionBusy)}
@@ -198,6 +199,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           : nothing}
         <div class="sw-revision-dialog__actions">
           <button
+            type="button"
             class="sw-btn sw-btn--ghost"
             ?disabled=${Boolean(props.actionBusy)}
             @click=${props.onRevisionCancel}
@@ -205,6 +207,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
             ${t("skillWorkshop.actions.cancel")}
           </button>
           <button
+            type="button"
             class="sw-btn sw-btn--primary ${busy ? "is-busy" : ""}"
             ?disabled=${!canSubmit}
             @click=${() => props.onRevisionSubmit(proposal.key)}
@@ -213,7 +216,7 @@ function renderRevisionDialog(props: SkillWorkshopProps, proposal: SkillWorkshop
           </button>
         </div>
       </section>
-    </div>
+    </openclaw-modal-dialog>
   `;
 }
 
@@ -300,7 +303,7 @@ function renderLifecycleTabs(props: SkillWorkshopProps) {
             class="sw-lifecycle-tab ${isActive ? "is-active" : ""}"
             @click=${() => props.onStatusFilterChange(status)}
           >
-            ${t(STATUS_LABEL[status])} <span class="sw-lifecycle-tab__count">${count}</span>
+            ${t(STATUS_LABEL[status])} <span class="settings-count">${count}</span>
           </button>
         `;
       })}
@@ -332,7 +335,7 @@ function renderQueue(
               (group) => html`
                 <div class="sw-queue__group">
                   ${t(group.label)}
-                  <span class="sw-queue__group-pill">${group.items.length}</span>
+                  <span class="settings-count">${group.items.length}</span>
                 </div>
                 ${group.items.map((proposal) => renderRow(props, proposal, selected))}
               `,

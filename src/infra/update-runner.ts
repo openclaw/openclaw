@@ -142,7 +142,7 @@ export type UpdateStepInfo = {
   total: number;
 };
 
-export type UpdateStepCompletion = UpdateStepInfo & {
+type UpdateStepCompletion = UpdateStepInfo & {
   durationMs: number;
   exitCode: number | null;
   stderrTail?: string | null;
@@ -176,7 +176,7 @@ type UpdateRunnerOptions = {
   progress?: UpdateStepProgress;
 };
 
-export type UpdateInstallSurface =
+type UpdateInstallSurface =
   | {
       kind: "git";
       mode: "git";

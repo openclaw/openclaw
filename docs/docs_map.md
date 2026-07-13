@@ -314,6 +314,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Account config keys
   - H2: Multiple bots
   - H2: Reply modes
+  - H2: Durable media delivery
   - H2: Agent activity rows
   - H2: Targets
   - H2: Permissions
@@ -806,6 +807,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Verify
   - H2: Troubleshooting
   - H2: References
+
+## channels/reef.md
+
+- Route: /channels/reef
+- Headings:
+  - H2: Quick start
+  - H2: Configuration
+  - H2: Adding a friend
+  - H2: Sending and receiving
+  - H2: Guards and owner review
+  - H2: Troubleshooting
 
 ## channels/signal.md
 
@@ -1427,6 +1439,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/dashboard
 - Headings:
   - H1: openclaw dashboard
+  - H2: Machine-readable output
   - H2: Related
 
 ## cli/devices.md
@@ -2628,6 +2641,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /concepts/model-providers
 - Headings:
   - H2: Quick rules
+  - H2: Configure providers in the Control UI
   - H2: Plugin-owned provider behavior
   - H2: API key rotation
   - H2: Official provider plugins
@@ -3184,6 +3198,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Troubleshooting
   - H2: Related
 
+## gateway/cloud-workers.md
+
+- Route: /gateway/cloud-workers
+- Headings:
+  - H2: What runs where
+  - H2: Requirements
+  - H2: Configuration
+  - H3: The setup command
+  - H3: Install channels
+  - H2: Dispatching a session
+  - H2: Security model
+  - H2: Troubleshooting
+  - H2: Related
+
 ## gateway/config-agents.md
 
 - Route: /gateway/config-agents
@@ -3360,6 +3388,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: cron.retry
   - H3: cron.failureAlert
   - H3: cron.failureDestination
+  - H2: Worktrees
   - H2: Media model template variables
   - H2: Config includes ($include)
   - H2: Related
@@ -5130,7 +5159,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/linux
 - Headings:
-  - H2: Quick path (VPS)
+  - H2: Desktop companion
+  - H2: CLI and SSH alternative
   - H2: Install
   - H2: Gateway service (systemd)
   - H2: Memory pressure and OOM kills
@@ -6869,6 +6899,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/raft
 - Headings:
   - H1: Raft plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/reef.md
+
+- Route: /plugins/reference/reef
+- Headings:
+  - H1: Reef plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs

@@ -170,7 +170,9 @@ public actor GatewayNodeSession {
     private var snapshotReceived = false
     private var serverMethods: Set<String>?
     private var serverCapabilities: Set<GatewayServerCapability>?
+    private var mainSessionKey: String?
     private var snapshotWaiters: [CheckedContinuation<Bool, Never>] = []
+    private var snapshotReadyWaiters: [CheckedContinuation<Bool, Never>] = []
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
     // replay the receipt without posting input twice. App restart intentionally
@@ -656,6 +658,24 @@ public actor GatewayNodeSession {
         return serverMethods.contains(method)
     }
 
+    public func currentMainSessionKey(
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) -> String?
+    {
+        guard self.isCurrentRoute(expectedRoute), self.channel != nil else { return nil }
+        return self.mainSessionKey
+    }
+
+    public func waitForCurrentMainSessionKey(
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute) async -> String?
+    {
+        guard self.isCurrentRoute(expectedRoute), self.channel != nil else { return nil }
+        if !self.snapshotReceived {
+            guard await self.waitForSnapshot() else { return nil }
+        }
+        guard self.isCurrentRoute(expectedRoute), self.channel != nil else { return nil }
+        return self.mainSessionKey
+    }
+
     @discardableResult
     public func sendEvent(
         event: String,
@@ -688,6 +708,22 @@ public actor GatewayNodeSession {
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
     {
+        let params = try decodeParamsJSON(paramsJSON)
+        return try await self.request(
+            method: method,
+            params: params,
+            timeoutMs: Double(timeoutSeconds * 1000),
+            ifCurrentRoute: expectedRoute,
+            distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
+    }
+
+    public func request(
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double = 15000,
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil,
+        distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
+    {
         if let expectedRoute, !self.isCurrentRoute(expectedRoute) {
             if distinguishPreDispatchRouteChange {
                 throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch
@@ -700,11 +736,10 @@ public actor GatewayNodeSession {
             ])
         }
 
-        let params = try decodeParamsJSON(paramsJSON)
         return try await channel.request(
             method: method,
             params: params,
-            timeoutMs: Double(timeoutSeconds * 1000))
+            timeoutMs: timeoutMs)
     }
 
     public func subscribeServerEvents(bufferingNewest: Int = 200) -> AsyncStream<EventFrame> {
@@ -749,6 +784,10 @@ extension GatewayNodeSession {
             self.serverMethods = ok.advertisedServerMethods()
             self.serverCapabilities = Set(
                 GatewayServerCapability.allCases.filter { ok.supportsServerCapability($0) })
+            let snapshotMainSessionKey = ok.snapshot.sessiondefaults?["mainSessionKey"]?.value as? String
+            let trimmedMainSessionKey = snapshotMainSessionKey?
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
+            self.mainSessionKey = trimmedMainSessionKey.isEmpty ? nil : trimmedMainSessionKey
             if self.hasEverConnected {
                 self.broadcastServerEvent(
                     EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
@@ -775,7 +814,9 @@ extension GatewayNodeSession {
         self.snapshotReceived = false
         self.serverMethods = nil
         self.serverCapabilities = nil
+        self.mainSessionKey = nil
         self.drainSnapshotWaiters(returning: false)
+        self.drainSnapshotReadyWaiters(returning: false)
     }
 
     private func handleChannelDisconnected(
@@ -817,6 +858,7 @@ extension GatewayNodeSession {
     private func markSnapshotReceived() {
         self.snapshotReceived = true
         self.drainSnapshotWaiters(returning: true)
+        self.drainSnapshotReadyWaiters(returning: true)
     }
 
     private func waitForSnapshot(timeoutMs: Int) async -> Bool {
@@ -834,6 +876,15 @@ extension GatewayNodeSession {
         }
     }
 
+    private func waitForSnapshot() async -> Bool {
+        if self.snapshotReceived {
+            return true
+        }
+        return await withCheckedContinuation { cont in
+            self.snapshotReadyWaiters.append(cont)
+        }
+    }
+
     private func timeoutSnapshotWaiters() {
         guard !self.snapshotReceived else { return }
         self.drainSnapshotWaiters(returning: false)
@@ -843,6 +894,16 @@ extension GatewayNodeSession {
         if !self.snapshotWaiters.isEmpty {
             let waiters = self.snapshotWaiters
             self.snapshotWaiters.removeAll()
+            for waiter in waiters {
+                waiter.resume(returning: value)
+            }
+        }
+    }
+
+    private func drainSnapshotReadyWaiters(returning value: Bool) {
+        if !self.snapshotReadyWaiters.isEmpty {
+            let waiters = self.snapshotReadyWaiters
+            self.snapshotReadyWaiters.removeAll()
             for waiter in waiters {
                 waiter.resume(returning: value)
             }
