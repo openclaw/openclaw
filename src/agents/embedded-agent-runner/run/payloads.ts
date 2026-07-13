@@ -54,7 +54,7 @@ import {
 } from "../../embedded-agent-utils.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
-import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../delivery-evidence.js";
+import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 
 type ToolMetaEntry = { toolName: string; meta?: string };
 type ToolErrorWarningPolicy = {
@@ -586,71 +586,21 @@ export function buildEmbeddedRunPayloads(params: {
   if (params.heartbeatToolResponse) {
     return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
-  const replyItems: Array<{
-    text: string;
-    media?: string[];
-    mediaUrl?: string;
-    isError?: boolean;
-    isReasoning?: boolean;
-    /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
-    isCommentary?: boolean;
-    audioAsVoice?: boolean;
-    replyToId?: string;
-    replyToTag?: boolean;
-    replyToCurrent?: boolean;
-    presentation?: ReplyPayload["presentation"];
-    interactive?: ReplyPayload["interactive"];
-    channelData?: Record<string, unknown>;
-    nonTerminalToolErrorWarning?: boolean;
-    sourceReplyMirror?: {
-      idempotencyKey?: string;
-    };
-  }> = [];
-  // Internal source replies always need transcript/UI mirror payloads. Only a
+  // Internal source replies always need transcript/UI mirrors. Only a
   // message_tool_only run suppresses the separate automatic final answer.
-  const sourceReplyPayloads = params.messagingToolSourceReplyPayloads ?? [];
-  const sourceReplyStartIndex = replyItems.length;
-  sourceReplyPayloads.forEach((payload, index) => {
-    const text = normalizeOptionalString(payload.text) ?? "";
-    const media = Array.from(
-      new Set([...(payload.mediaUrl ? [payload.mediaUrl] : []), ...(payload.mediaUrls ?? [])]),
-    ).filter((value) => value.trim().length > 0);
-    if (
-      !text &&
-      media.length === 0 &&
-      !payload.presentation &&
-      !payload.interactive &&
-      !payload.channelData
-    ) {
-      return;
-    }
-    // Message-tool-only replies were already sent by the tool. Mirror them into
-    // the transcript while marking payloads so channel delivery suppresses a duplicate send.
-    replyItems.push({
-      text,
-      ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
-      ...(media.length ? { media } : {}),
-      ...(payload.audioAsVoice ? { audioAsVoice: true } : {}),
-      ...(payload.presentation ? { presentation: payload.presentation } : {}),
-      ...(payload.interactive ? { interactive: payload.interactive } : {}),
-      ...(payload.channelData ? { channelData: payload.channelData } : {}),
-      sourceReplyMirror: {
-        idempotencyKey:
-          payload.idempotencyKey ??
-          (params.runId ? `${params.runId}:internal-source-reply:${index}` : undefined),
-      },
-    });
+  const {
+    replyItems,
+    hasSourceReplyPayload,
+    deliveredSourceReplyViaMessageTool,
+    explicitFinalSourceReply,
+    completedSourceReplyViaMessageTool,
+  } = buildSourceReplyPayloadState({
+    payloads: params.messagingToolSourceReplyPayloads,
+    sentTargets: params.messagingToolSentTargets,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    didDeliverSourceReplyViaMessageTool: params.didDeliverSourceReplyViaMessageTool,
+    runId: params.runId,
   });
-  const hasSourceReplyPayload = replyItems.length > sourceReplyStartIndex;
-  const deliveredSourceReplyViaMessageTool =
-    params.sourceReplyDeliveryMode === "message_tool_only" &&
-    params.didDeliverSourceReplyViaMessageTool === true;
-  const explicitFinalSourceReply = resolveExplicitFinalSourceReplyDeliveryEvidence({
-    messagingToolSentTargets: params.messagingToolSentTargets,
-    messagingToolSourceReplyPayloads: sourceReplyPayloads,
-  });
-  const completedSourceReplyViaMessageTool =
-    explicitFinalSourceReply ?? (hasSourceReplyPayload || deliveredSourceReplyViaMessageTool);
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
     params.didSendDeterministicApprovalPrompt === true ||
