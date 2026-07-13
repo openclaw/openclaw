@@ -3,6 +3,8 @@ import type { Agent } from "node:http";
 import type { RetryOptions, WebClientOptions } from "@slack/web-api";
 import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 
+export type SlackLookupClientOptions = Pick<WebClientOptions, "agent" | "slackApiUrl" | "timeout">;
+
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
   factor: 2,
@@ -77,10 +79,15 @@ export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): 
   return resolved;
 }
 
-export function resolveSlackLookupClientOptions(options: WebClientOptions = {}): WebClientOptions {
+export function resolveSlackLookupClientOptions(
+  options: SlackLookupClientOptions = {},
+): WebClientOptions {
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved);
-  resolved.retryConfig ??= SLACK_LOOKUP_RETRY_OPTIONS;
+  // Slack otherwise sleeps through the full Retry-After window after receiving 429,
+  // outside the Axios request timeout.
+  resolved.rejectRateLimitedCalls = true;
+  resolved.retryConfig = SLACK_LOOKUP_RETRY_OPTIONS;
   resolved.timeout ??= SLACK_LOOKUP_TIMEOUT_MS;
   return resolved;
 }

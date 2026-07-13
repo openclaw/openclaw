@@ -220,6 +220,7 @@ describe("slack web client config", () => {
     expect(options.timeout).toBe(SLACK_LOOKUP_TIMEOUT_MS);
     expect(options.retryConfig).toBe(SLACK_LOOKUP_RETRY_OPTIONS);
     expect(options.retryConfig).toEqual({ retries: 0 });
+    expect(options.rejectRateLimitedCalls).toBe(true);
   });
 
   it("passes the bounded lookup policy into WebClient", () => {
@@ -229,6 +230,7 @@ describe("slack web client config", () => {
 
     expect(WebClient).toHaveBeenCalledWith("lookup-fixture", {
       agent: customAgent,
+      rejectRateLimitedCalls: true,
       retryConfig: SLACK_LOOKUP_RETRY_OPTIONS,
       timeout: SLACK_LOOKUP_TIMEOUT_MS,
     });
