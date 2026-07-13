@@ -2372,20 +2372,24 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     const active = this.activeRouteId === "plugin" && this.activePluginTabId === pluginTabKey(ref);
     const iconName = tab.icon && Object.hasOwn(icons, tab.icon) ? (tab.icon as IconName) : "puzzle";
     return html`
-      <button
-        type="button"
+      <a
+        href=${`${pathForRoute("plugin", this.basePath)}${search}`}
         class="sidebar-customize-menu__item ${active ? "sidebar-customize-menu__item--active" : ""}"
         role="menuitem"
         tabindex="-1"
         aria-current=${active ? "page" : nothing}
-        @click=${() => {
+        @click=${(event: MouseEvent) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
           this.closeMoreMenu({ restoreFocus: true });
           this.onNavigate?.("plugin", { search });
         }}
       >
         <span class="nav-item__icon" aria-hidden="true">${icons[iconName]}</span>
         <span class="sidebar-customize-menu__text">${tab.label}</span>
-      </button>
+      </a>
     `;
   }
 
@@ -2948,15 +2952,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private renderMoreMenuRoute(routeId: SidebarNavRoute) {
     const active = this.isRouteActive(routeId);
     return html`
-      <button
-        type="button"
+      <a
+        href=${pathForRoute(routeId, this.basePath)}
         class="sidebar-customize-menu__item ${active ? "sidebar-customize-menu__item--active" : ""}"
         role="menuitem"
         tabindex="-1"
         aria-current=${active ? "page" : nothing}
         @pointerenter=${(event: Event) => this.preloadRoute(routeId, event)}
         @pointerleave=${this.cancelPreload}
-        @click=${() => {
+        @click=${(event: MouseEvent) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
           this.closeMoreMenu({ restoreFocus: true });
           this.onNavigate?.(routeId);
         }}
@@ -2965,7 +2973,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
           >${icons[navigationIconForRoute(routeId)]}</span
         >
         <span class="sidebar-customize-menu__text">${titleForRoute(routeId)}</span>
-      </button>
+      </a>
     `;
   }
 

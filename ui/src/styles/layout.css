@@ -1608,6 +1608,9 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   font: inherit;
   font-size: 13px;
   text-align: left;
+  /* More-menu route rows are anchors acting as chrome (see base.css cursor convention). */
+  cursor: default;
+  text-decoration: none;
 }
 
 .sidebar-customize-menu__item:hover {
