@@ -358,6 +358,8 @@ struct OpenClawTypographyTests {
     @Test func `accessibility metadata text does not require visual typography`() throws {
         let accessibilityTextSamples = [
             ".accessibilityLabel(Text(title))",
+            ".accessibilityLabel(Text(title))\n)",
+            ".accessibilityLabel(\n    Text(title)\n)",
             ".accessibilityValue(\n    Text(value))",
             ".accessibilityHint(\n\n    Text(hint))",
         ]
@@ -512,13 +514,22 @@ struct OpenClawTypographyTests {
 
     private static func isAccessibilityMetadataTextCall(at idx: Int, in lines: [String]) -> Bool {
         let contextStart = max(lines.startIndex, idx - 4)
-        let context = lines[contextStart...idx].joined(separator: "\n")
         let textArgument = #"(?:[^()"\\]|\\.|"(?:\\.|[^"\\])*")*"#
         let accessibilityExpression =
             #"(?s)(?:^|\n)\s*\.accessibility(?:Label|Value|Hint)\s*\(\s*Text\s*\(\#(textArgument)\)\s*\)\s*$"#
 
         // Direct accessibility metadata is announced, not rendered. Complex expressions fail closed.
-        return context.range(of: accessibilityExpression, options: .regularExpression) != nil
+        let context = lines[contextStart...idx].joined(separator: "\n")
+        if context.range(of: accessibilityExpression, options: .regularExpression) != nil {
+            return true
+        }
+
+        // Only extend an incomplete modifier; a following ")" can instead close an outer expression.
+        guard idx + 1 < lines.endIndex,
+              lines[idx + 1].trimmingCharacters(in: .whitespaces) == ")"
+        else { return false }
+        let extendedContext = lines[contextStart...idx + 1].joined(separator: "\n")
+        return extendedContext.range(of: accessibilityExpression, options: .regularExpression) != nil
     }
 
     private static func isShorthandControlCall(_ line: String) -> Bool {
