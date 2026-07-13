@@ -54,7 +54,7 @@ export type CliBackendThinkingLevel =
 export type CliBackendExecutionMode = "agent" | "side-question";
 
 /** Host-isolated tool grant for a CLI run with every native tool disabled. */
-export type CliBackendToolAvailability = {
+type CliBackendToolAvailability = {
   native: readonly [];
   /** MCP tools already isolated by the host transport that may be auto-approved. */
   mcp: readonly string[];

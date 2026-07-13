@@ -1597,10 +1597,7 @@ function createReplyHotPathTimingTracker(options: { profilerEnabled?: boolean } 
   };
 }
 
-export type {
-  DispatchFromConfigParams,
-  DispatchFromConfigResult,
-} from "./dispatch-from-config.types.js";
+export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
 /** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(

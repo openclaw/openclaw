@@ -218,10 +218,11 @@ export const it: TranslationMap = {
   lazyView: {
     loadingTitle: "Caricamento pannello",
     errorTitle: "Impossibile caricare il pannello",
-    errorSubtitle:
-      "Ricarica la pagina per caricare il bundle Control UI più recente oppure riprova se la richiesta di rete non è riuscita.",
+    genericSubtitle: "Si è verificato un problema durante il caricamento di questo pannello.",
+    staleTitle: "È disponibile una nuova versione",
+    staleSubtitle:
+      "OpenClaw è stato aggiornato in background. Ricarica per visualizzare il pannello più recente.",
     retry: "Riprova",
-    unknownError: "Errore sconosciuto di caricamento modulo.",
   },
   nodes: {
     pairing: {
@@ -1749,8 +1750,6 @@ export const it: TranslationMap = {
     cancel: "Annulla",
     removedRestart: "{name} rimosso. È necessario riavviare il Gateway per applicare la modifica.",
     verifiedSource: "Fonte verificata",
-    menuLabel: "Azioni {name}",
-    menuDetails: "Visualizza dettagli",
     enableAction: "Abilita",
     disableAction: "Disabilita",
     working: "Elaborazione…",
@@ -1889,6 +1888,10 @@ export const it: TranslationMap = {
       useCurrentChatAria: "Usa la chat corrente per le richieste di revisione",
       useCurrentChatTooltip:
         "Invia le richieste di revisione alla sessione di chat corrente invece che alla sessione di workshop della proposta.",
+      selfLearning: "Autoapprendimento",
+      selfLearningAria: "Attiva o disattiva le proposte di Skills basate sull'autoapprendimento",
+      selfLearningTooltip:
+        "Acquisisce le correzioni ed esamina il lavoro sostanziale completato per creare proposte di skill in sospeso. Utilizza token aggiuntivi in background; le bozze vengono pubblicate su questa bacheca come proposte in sospeso.",
       view: "Vista workshop",
       board: "Bacheca",
       today: "Oggi",
@@ -1968,6 +1971,14 @@ export const it: TranslationMap = {
       noProposalsTitle: "Ancora nessuna proposta",
       noProposalsBody: "{agent} non ha ancora redatto alcuna proposta di skill.",
       noProposalsFooter: "Le nuove proposte appariranno qui per la revisione.",
+    },
+    selfLearning: {
+      pitchTitle: "Attiva l'autoapprendimento",
+      pitchBody:
+        "OpenClaw esamina le correzioni e le esecuzioni sostanziali completate, quindi crea bozze di proposte di skill per questa bacheca. Utilizza token aggiuntivi in background e le bozze arrivano come proposte in sospeso.",
+      enable: "Abilita l'autoapprendimento",
+      enabling: "Abilitazione…",
+      updateError: "Impossibile aggiornare l'impostazione di autoapprendimento.",
     },
     today: {
       emptyTitle: "Niente in attesa oggi",
@@ -3434,6 +3445,8 @@ export const it: TranslationMap = {
       empty: "Nessuna attività in background per questo agente al momento.",
       running: "In esecuzione ({count})",
       finished: "Completate ({count})",
+      statusRunningOne: "1 attività in esecuzione",
+      statusRunningMany: "{count} attività in esecuzione",
       stopTask: "Interrompi {title}",
       viewTranscript: "Visualizza trascrizione",
       toolUseOne: "1 utilizzo dello strumento",
@@ -3593,7 +3606,6 @@ export const it: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Pianificatore",
       tasks: "Attività",
       failing: "Con errori",
       nextWake: "Prossima attivazione",

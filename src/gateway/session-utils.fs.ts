@@ -959,7 +959,6 @@ export {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
   resolveSessionTranscriptCandidates,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
 } from "./session-transcript-files.fs.js";
 
 export function capArrayByJsonBytes<T>(

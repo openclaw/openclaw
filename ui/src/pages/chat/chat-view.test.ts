@@ -1741,6 +1741,47 @@ describe("chat composer workbench", () => {
     expect(narrow.querySelector(".chat-tasks-rail")).not.toBeNull();
   });
 
+  it("shows the running-tasks status row after the turn settles, not while working", () => {
+    const backgroundTasks = {
+      agentId: "main",
+      collapsed: true,
+      narrowLayout: false,
+      connected: true,
+      canCancel: false,
+      loading: false,
+      error: null,
+      tasks: [
+        {
+          id: "task-1",
+          taskId: "task-1",
+          status: "running" as const,
+          agentId: "main",
+          createdAt: 1_000,
+          startedAt: 1_500,
+        },
+      ],
+      cancellingTaskIds: new Set<string>(),
+      finishedCollapsed: false,
+      onToggleCollapsed: () => undefined,
+      onToggleFinished: () => undefined,
+      onRefresh: () => undefined,
+      onCancel: () => undefined,
+      onOpenSession: () => undefined,
+    };
+    const messages = [{ role: "assistant", content: "done", timestamp: 1 }];
+
+    const settled = renderChatView({ messages, backgroundTasks });
+    const row = settled.querySelector(".chat-tasks-status");
+    expect(row).not.toBeNull();
+    expect(row?.querySelector(".chat-tasks-status__link")?.textContent?.trim()).toBe(
+      "1 running task",
+    );
+
+    // The working claw owns the signal while the run is live.
+    const working = renderChatView({ messages, backgroundTasks, canAbort: true });
+    expect(working.querySelector(".chat-tasks-status")).toBeNull();
+  });
+
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {
     const container = renderChatView({
       messages: [{ role: "assistant", content: "ready" }],

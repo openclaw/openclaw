@@ -47,11 +47,9 @@ export type ServiceConfigIssue = {
   level?: "recommended" | "aggressive";
 };
 
-export type ServiceConfigAudit = {
-  ok: boolean;
-  issues: ServiceConfigIssue[];
-};
-
+export type ServiceConfigAudit =
+  | { ok: true; issues: ServiceConfigIssue[] }
+  | { ok: false; issues: ServiceConfigIssue[] };
 export const SERVICE_AUDIT_CODES = {
   gatewayCommandMissing: "gateway-command-missing",
   gatewayEntrypointMismatch: "gateway-entrypoint-mismatch",
@@ -668,5 +666,5 @@ export async function auditGatewayServiceConfig(params: {
     await auditLaunchdPlist(params.env, issues);
   }
 
-  return { ok: issues.length === 0, issues };
+  return issues.length === 0 ? { ok: true, issues } : { ok: false, issues };
 }

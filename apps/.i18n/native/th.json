@@ -11319,11 +11319,6 @@
       "translated": "ใบอนุญาต"
     },
     {
-      "id": "native.apple.5c4427c5a67068d6",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
       "id": "native.apple.800b6502b5b49941",
       "source": "Address",
       "translated": "ที่อยู่"
@@ -11342,6 +11337,16 @@
       "id": "native.apple.8e3656d85f092897",
       "source": "Agents",
       "translated": "เอเจนต์"
+    },
+    {
+      "id": "native.apple.5c4427c5a67068d6",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.34444b9c6d74f472",
+      "source": "Scan QR to Pair",
+      "translated": "สแกนคิวอาร์โค้ดเพื่อจับคู่"
     },
     {
       "id": "native.apple.88835de05348122a",
@@ -11644,14 +11649,14 @@
       "translated": "ใช้สำหรับเซสชัน Chat และ Talk ใหม่"
     },
     {
-      "id": "native.apple.313eb24efcb8d4a0",
-      "source": "Paste setup code",
-      "translated": "วางรหัสตั้งค่า"
-    },
-    {
       "id": "native.apple.19552e71de246322",
       "source": "Scan QR",
       "translated": "สแกน QR"
+    },
+    {
+      "id": "native.apple.313eb24efcb8d4a0",
+      "source": "Paste setup code",
+      "translated": "วางรหัสตั้งค่า"
     },
     {
       "id": "native.apple.f4afcfbe4e4a72f8",
@@ -11659,19 +11664,14 @@
       "translated": "เชื่อมต่อ"
     },
     {
-      "id": "native.apple.d8a5510f1a2e1701",
-      "source": "Setup Code",
-      "translated": "รหัสตั้งค่า"
-    },
-    {
-      "id": "native.apple.adb22453596f1d78",
-      "source": "Discovered Gateways",
-      "translated": "Gateway ที่ค้นพบ"
-    },
-    {
       "id": "native.apple.64b89f4aa3a81aef",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "translated": "ยังไม่พบ Gateway ใช้การตั้งค่าด้วยตนเองหาก Bonjour ถูกบล็อก"
+    },
+    {
+      "id": "native.apple.784220b48f5c4af8",
+      "source": "Add Gateway",
+      "translated": "เพิ่ม Gateway"
     },
     {
       "id": "native.apple.75c61c4ee1ecc6d8",
@@ -13319,6 +13319,46 @@
       "translated": "\\(urlText.prefix(500))…"
     },
     {
+      "id": "native.apple.9dcd64ab340a6c15",
+      "source": "Allow access",
+      "translated": "อนุญาตการเข้าถึง"
+    },
+    {
+      "id": "native.apple.933a2ac28d1d2aec",
+      "source": "Choose what your agent can use on this iPhone. Nothing is on until you allow it.",
+      "translated": "เลือกสิ่งที่เอเจนต์ของคุณสามารถใช้ได้บน iPhone เครื่องนี้ โดยจะไม่มีสิ่งใดเปิดใช้งานจนกว่าคุณจะอนุญาต"
+    },
+    {
+      "id": "native.apple.47114a39f7a71c3b",
+      "source": "You can change any of these later in Settings.",
+      "translated": "คุณสามารถเปลี่ยนแปลงรายการเหล่านี้ภายหลังได้ในการตั้งค่า"
+    },
+    {
+      "id": "native.apple.eabf54e2b640a4a1",
+      "source": "Continue",
+      "translated": "ดำเนินการต่อ"
+    },
+    {
+      "id": "native.apple.5f425282ece878eb",
+      "source": "Limited",
+      "translated": "จำกัด"
+    },
+    {
+      "id": "native.apple.c5db9e6eae115f7a",
+      "source": "Allow",
+      "translated": "อนุญาต"
+    },
+    {
+      "id": "native.apple.f591e16105268e99",
+      "source": "Open Settings",
+      "translated": "เปิดการตั้งค่า"
+    },
+    {
+      "id": "native.apple.12ed416835c36555",
+      "source": "Manage",
+      "translated": "จัดการ"
+    },
+    {
       "id": "native.apple.11687a3d87afd0d7",
       "source": "Home Network",
       "translated": "เครือข่ายภายในบ้าน"
@@ -13499,24 +13539,24 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.c9419426ba8c2a2e",
-      "source": "Securely connect this iPhone to your gateway.",
-      "translated": "เชื่อมต่อ iPhone เครื่องนี้กับ Gateway ของคุณอย่างปลอดภัย"
+      "id": "native.apple.9b414850baa618da",
+      "source": "Your agent, in your pocket. Pair this iPhone with your gateway to get started.",
+      "translated": "เอเจนต์ของคุณในกระเป๋า จับคู่ iPhone เครื่องนี้กับ Gateway ของคุณเพื่อเริ่มต้นใช้งาน"
     },
     {
-      "id": "native.apple.3e233ba3ed3181d4",
-      "source": "Connect to your gateway",
-      "translated": "เชื่อมต่อกับ Gateway ของคุณ"
+      "id": "native.apple.7248e67848beebd9",
+      "source": "Your agent runs on your own computer",
+      "translated": "เอเจนต์ของคุณทำงานบนคอมพิวเตอร์ของคุณเอง"
     },
     {
-      "id": "native.apple.b6978424ac0a4d14",
-      "source": "Choose device permissions",
-      "translated": "เลือกสิทธิ์ของอุปกรณ์"
+      "id": "native.apple.acbdc9332988fa64",
+      "source": "Pair this iPhone by scanning a setup code",
+      "translated": "จับคู่ iPhone เครื่องนี้โดยสแกนรหัสตั้งค่า"
     },
     {
-      "id": "native.apple.4109460a5b8927d8",
-      "source": "Use OpenClaw from your phone",
-      "translated": "ใช้ OpenClaw จากโทรศัพท์ของคุณ"
+      "id": "native.apple.feb3e155748c2f05",
+      "source": "Chat, talk, and approve actions from anywhere",
+      "translated": "แชท พูดคุย และอนุมัติการดำเนินการได้จากทุกที่"
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -13784,6 +13824,101 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.apple.0e07e7044608f954",
+      "source": "Allowed",
+      "translated": "อนุญาตแล้ว"
+    },
+    {
+      "id": "native.apple.86796a6df9d0ff63",
+      "source": "Limited",
+      "translated": "จำกัด"
+    },
+    {
+      "id": "native.apple.4c7f5404e9c42402",
+      "source": "Off in Settings",
+      "translated": "ปิดอยู่ในการตั้งค่า"
+    },
+    {
+      "id": "native.apple.96d65a5563690719",
+      "source": "Notifications",
+      "translated": "การแจ้งเตือน"
+    },
+    {
+      "id": "native.apple.d290a46515add091",
+      "source": "Camera",
+      "translated": "กล้อง"
+    },
+    {
+      "id": "native.apple.0eeedbc8aaafcd2c",
+      "source": "Microphone",
+      "translated": "ไมโครโฟน"
+    },
+    {
+      "id": "native.apple.14fadad23dd36e44",
+      "source": "Photos",
+      "translated": "รูปภาพ"
+    },
+    {
+      "id": "native.apple.f0cfa9dcc57133b7",
+      "source": "Contacts",
+      "translated": "รายชื่อ"
+    },
+    {
+      "id": "native.apple.5ec2597d0b4a06fb",
+      "source": "Calendar",
+      "translated": "ปฏิทิน"
+    },
+    {
+      "id": "native.apple.9ed5c19cf1e84490",
+      "source": "Reminders",
+      "translated": "เตือนความจำ"
+    },
+    {
+      "id": "native.apple.866b9df8afcadf07",
+      "source": "Location",
+      "translated": "ตำแหน่งที่ตั้ง"
+    },
+    {
+      "id": "native.apple.f205ac6778705a7d",
+      "source": "Pairing approvals and replies from your agent.",
+      "translated": "การอนุมัติการจับคู่และการตอบกลับจากเอเจนต์ของคุณ"
+    },
+    {
+      "id": "native.apple.061a17077ee3be94",
+      "source": "Scan setup codes and take photos on request.",
+      "translated": "สแกนรหัสการตั้งค่าและถ่ายรูปเมื่อได้รับคำขอ"
+    },
+    {
+      "id": "native.apple.c735ac6b282765f9",
+      "source": "Talk with your agent using voice.",
+      "translated": "พูดคุยกับเอเจนต์ของคุณโดยใช้เสียง"
+    },
+    {
+      "id": "native.apple.ebe8aadcf512ecdb",
+      "source": "Share recent photos when you ask.",
+      "translated": "แชร์รูปภาพล่าสุดเมื่อคุณขอ"
+    },
+    {
+      "id": "native.apple.4c4bc12c0787383c",
+      "source": "Look up and add people you mention.",
+      "translated": "ค้นหาและเพิ่มบุคคลที่คุณกล่าวถึง"
+    },
+    {
+      "id": "native.apple.5a4006fbb9b23db1",
+      "source": "Check and add calendar events.",
+      "translated": "ตรวจสอบและเพิ่มกิจกรรมในปฏิทิน"
+    },
+    {
+      "id": "native.apple.2b2a4f1aab6a12ec",
+      "source": "List, add, and complete reminders.",
+      "translated": "แสดงรายการ เพิ่ม และทำรายการเตือนความจำให้เสร็จ"
+    },
+    {
+      "id": "native.apple.3854ae1f0606bafe",
+      "source": "Answer location and nearby questions.",
+      "translated": "ตอบคำถามเกี่ยวกับตำแหน่งที่ตั้งและสถานที่ใกล้เคียง"
+    },
+    {
       "id": "native.apple.e5f6435b9cb5a2d8",
       "source": "unknown relay error",
       "translated": "unknown relay error"
@@ -14049,94 +14184,14 @@
       "translated": "Headers แบบกำหนดเอง"
     },
     {
-      "id": "native.apple.e5a601c8fe47e9ed",
-      "source": "Add-Only",
-      "translated": "เพิ่มได้เท่านั้น"
-    },
-    {
-      "id": "native.apple.32aabe66f916a809",
-      "source": "Allowed",
-      "translated": "อนุญาตแล้ว"
-    },
-    {
-      "id": "native.apple.7b551f40d1a6148c",
-      "source": "Enabled",
-      "translated": "เปิดใช้แล้ว"
-    },
-    {
-      "id": "native.apple.94208c3068dae5b9",
-      "source": "Limited",
-      "translated": "จำกัด"
-    },
-    {
-      "id": "native.apple.92223852c90e286d",
-      "source": "Not Allowed",
-      "translated": "ไม่อนุญาต"
-    },
-    {
-      "id": "native.apple.aa6ff8becab99fdc",
-      "source": "Not Set",
-      "translated": "ยังไม่ได้ตั้งค่า"
-    },
-    {
-      "id": "native.apple.03e2f7265119d263",
-      "source": "Unknown",
-      "translated": "ไม่ทราบ"
-    },
-    {
-      "id": "native.apple.4dac301c7e0c921c",
-      "source": "Contacts",
-      "translated": "รายชื่อติดต่อ"
+      "id": "native.apple.bb572eab08269809",
+      "source": "Privacy & Access",
+      "translated": "ความเป็นส่วนตัวและการเข้าถึง"
     },
     {
       "id": "native.apple.01f362d70f6ddb4e",
       "source": "Search and add contacts from the assistant.",
       "translated": "ค้นหาและเพิ่มรายชื่อติดต่อจากผู้ช่วย"
-    },
-    {
-      "id": "native.apple.eda8d96e40bcc36a",
-      "source": "Photos",
-      "translated": "รูปภาพ"
-    },
-    {
-      "id": "native.apple.df0159ff34744870",
-      "source": "Calendar (Add Events)",
-      "translated": "ปฏิทิน (เพิ่มกิจกรรม)"
-    },
-    {
-      "id": "native.apple.c6db4240083c0435",
-      "source": "Add events with least privilege.",
-      "translated": "เพิ่มกิจกรรมด้วยสิทธิ์ขั้นต่ำ"
-    },
-    {
-      "id": "native.apple.dc62e22f0b2726c5",
-      "source": "Calendar (View Events)",
-      "translated": "ปฏิทิน (ดูกิจกรรม)"
-    },
-    {
-      "id": "native.apple.650091bc632b3120",
-      "source": "List and read calendar events.",
-      "translated": "แสดงรายการและอ่านกิจกรรมในปฏิทิน"
-    },
-    {
-      "id": "native.apple.7a81d1f17d9d90c0",
-      "source": "Reminders",
-      "translated": "รายการเตือนความจำ"
-    },
-    {
-      "id": "native.apple.d6fd5e9f85b0e298",
-      "source": "List, add, and complete reminders.",
-      "translated": "แสดงรายการ เพิ่ม และทำรายการเตือนความจำให้เสร็จสิ้น"
-    },
-    {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "สรุปข้อมูลสุขภาพ"
-    },
-    {
-      "id": "native.apple.bb572eab08269809",
-      "source": "Privacy & Access",
-      "translated": "ความเป็นส่วนตัวและการเข้าถึง"
     },
     {
       "id": "native.apple.ab998419291361da",
@@ -14149,24 +14204,44 @@
       "translated": "อ่านรูปภาพล่าสุดสำหรับผู้ช่วย"
     },
     {
-      "id": "native.apple.ac3ff8e4c6df7a2a",
-      "source": "Manage Access",
-      "translated": "จัดการสิทธิ์การเข้าถึง"
+      "id": "native.apple.94208c3068dae5b9",
+      "source": "Limited",
+      "translated": "จำกัด"
     },
     {
-      "id": "native.apple.c557c95fa2789089",
-      "source": "Request Full Access",
-      "translated": "ขอสิทธิ์การเข้าถึงแบบเต็ม"
+      "id": "native.apple.df0159ff34744870",
+      "source": "Calendar (Add Events)",
+      "translated": "ปฏิทิน (เพิ่มกิจกรรม)"
     },
     {
-      "id": "native.apple.4e50e2ab4c869464",
-      "source": "Request Access",
-      "translated": "ขอสิทธิ์การเข้าถึง"
+      "id": "native.apple.c6db4240083c0435",
+      "source": "Add events with least privilege.",
+      "translated": "เพิ่มกิจกรรมด้วยสิทธิ์ขั้นต่ำ"
     },
     {
-      "id": "native.apple.a9f30d4e86060dca",
-      "source": "Upgrade to Full Access",
-      "translated": "อัปเกรดเป็นสิทธิ์การเข้าถึงแบบเต็ม"
+      "id": "native.apple.650091bc632b3120",
+      "source": "List and read calendar events.",
+      "translated": "แสดงรายการและอ่านกิจกรรมในปฏิทิน"
+    },
+    {
+      "id": "native.apple.d6fd5e9f85b0e298",
+      "source": "List, add, and complete reminders.",
+      "translated": "แสดงรายการ เพิ่ม และทำรายการเตือนความจำให้เสร็จสิ้น"
+    },
+    {
+      "id": "native.apple.e5a601c8fe47e9ed",
+      "source": "Add-Only",
+      "translated": "เพิ่มได้เท่านั้น"
+    },
+    {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "สรุปข้อมูลสุขภาพ"
+    },
+    {
+      "id": "native.apple.0b10201d7e452dc4",
+      "source": "Allow",
+      "translated": "อนุญาต"
     },
     {
       "id": "native.apple.3cb9ed2ae352f95c",

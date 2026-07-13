@@ -41,7 +41,7 @@ const POLICY_INTERPRETER_NAMES = new Set([
 ]);
 const POLICY_SCRIPT_ARG_PATTERN = /\.(?:bash|cjs|cts|js|mjs|mts|pl|ps1|py|rb|sh|ts|zsh)$/i;
 
-export type InstallPolicyTarget = "skill" | "plugin";
+type InstallPolicyTarget = "skill" | "plugin";
 export type InstallPolicyRequestKind =
   | "skill-install"
   | "plugin-dir"
@@ -121,7 +121,7 @@ export type InstallPolicyRequest = {
   };
 };
 
-export type InstallPolicyResult =
+type InstallPolicyResult =
   | { blocked?: undefined; findings?: InstallPolicyFinding[] }
   | {
       blocked: {
@@ -141,7 +141,7 @@ type ExecRunResult = {
 
 type InstallPolicyExecConfig = NonNullable<NonNullable<SecurityConfig["installPolicy"]>["exec"]>;
 
-export type InstallPolicyValidationIssue = {
+type InstallPolicyValidationIssue = {
   severity: "error" | "warning";
   message: string;
 };

@@ -216,9 +216,10 @@ export const zh_TW: TranslationMap = {
   lazyView: {
     loadingTitle: "正在載入面板",
     errorTitle: "面板載入失敗",
-    errorSubtitle: "重新載入頁面以載入最新的 Control UI bundle，或在網路請求失敗時重試。",
+    genericSubtitle: "載入此面板時發生錯誤。",
+    staleTitle: "有新版本可用",
+    staleSubtitle: "OpenClaw 已在背景更新。請重新載入以取得最新面板。",
     retry: "重試",
-    unknownError: "未知的模組載入錯誤。",
   },
   nodes: {
     pairing: {
@@ -1705,8 +1706,6 @@ export const zh_TW: TranslationMap = {
     cancel: "取消",
     removedRestart: "已移除 {name}。需要重新啟動 Gateway 才能套用變更。",
     verifiedSource: "已驗證來源",
-    menuLabel: "{name} 動作",
-    menuDetails: "檢視詳細資料",
     enableAction: "啟用",
     disableAction: "停用",
     working: "處理中…",
@@ -1838,6 +1837,10 @@ export const zh_TW: TranslationMap = {
       useCurrentChat: "使用目前的對話",
       useCurrentChatAria: "使用目前的對話進行修訂請求",
       useCurrentChatTooltip: "將修訂請求傳送至目前的對話工作階段，而非提案的工作坊工作階段。",
+      selfLearning: "自我學習",
+      selfLearningAria: "切換自我學習技能提案",
+      selfLearningTooltip:
+        "擷取修正內容，並檢視已完成的重要工作，將其整理為待處理的技能提案。這會耗用額外的背景 token；草稿會以待處理提案的形式出現在此看板上。",
       view: "工作坊檢視",
       board: "看板",
       today: "今天",
@@ -1914,6 +1917,14 @@ export const zh_TW: TranslationMap = {
       noProposalsTitle: "尚無提案",
       noProposalsBody: "{agent} 尚未草擬任何技能提案。",
       noProposalsFooter: "新提案會顯示在此供審查。",
+    },
+    selfLearning: {
+      pitchTitle: "開啟自我學習",
+      pitchBody:
+        "OpenClaw 會檢視修正內容及已完成的重要執行結果，接著為此看板擬定技能提案。這會耗用額外的背景 token，而草稿會以待處理提案的形式送達。",
+      enable: "啟用自我學習",
+      enabling: "正在啟用…",
+      updateError: "無法更新自我學習設定。",
     },
     today: {
       emptyTitle: "今天沒有待處理項目",
@@ -3336,6 +3347,8 @@ export const zh_TW: TranslationMap = {
       empty: "此代理程式尚無背景任務。",
       running: "執行中 ({count})",
       finished: "已完成 ({count})",
+      statusRunningOne: "1 個執行中的任務",
+      statusRunningMany: "{count} 個執行中的任務",
       stopTask: "停止 {title}",
       viewTranscript: "檢視文字記錄",
       toolUseOne: "使用 1 次工具",
@@ -3493,7 +3506,6 @@ export const zh_TW: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "排程器",
       tasks: "任務",
       failing: "失敗中",
       nextWake: "下次喚醒",

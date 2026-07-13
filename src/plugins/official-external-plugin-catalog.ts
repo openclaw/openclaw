@@ -45,7 +45,7 @@ export type OfficialExternalProviderAuthChoice = {
   onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
 };
 
-export type OfficialExternalProviderCatalogProvider = {
+type OfficialExternalProviderCatalogProvider = {
   id?: string;
   aliases?: readonly string[];
   name?: string;
@@ -71,7 +71,7 @@ export type OfficialExternalWebSearchProvider = {
 };
 
 /** Manifest-like metadata stored in official external catalog entries. */
-export type OfficialExternalPluginCatalogManifest = {
+type OfficialExternalPluginCatalogManifest = {
   plugin?: {
     id?: string;
     label?: string;
@@ -114,7 +114,7 @@ export type OfficialExternalPluginCatalogEntry = {
   };
 } & Partial<Record<ManifestKey, OfficialExternalPluginCatalogManifest>>;
 
-export type OfficialExternalPluginCatalogInstallCandidate = {
+type OfficialExternalPluginCatalogInstallCandidate = {
   sourceRef?: string;
   package?: string;
   version?: string;
@@ -124,7 +124,7 @@ export type OfficialExternalPluginCatalogInstallCandidate = {
   commit?: string;
 };
 
-export type OfficialExternalPluginCatalogSourceProfile =
+type OfficialExternalPluginCatalogSourceProfile =
   | {
       type: "npm";
       registry?: string;
@@ -138,12 +138,12 @@ export type OfficialExternalPluginCatalogSourceProfile =
       baseUrl?: string;
     };
 
-export type OfficialExternalPluginCatalogFeedProfile = {
+type OfficialExternalPluginCatalogFeedProfile = {
   url: string;
   verification?: OfficialExternalPluginCatalogFeedVerification;
 };
 
-export type OfficialExternalPluginCatalogFeedVerification =
+type OfficialExternalPluginCatalogFeedVerification =
   | {
       mode: "unsigned";
     }
@@ -153,12 +153,12 @@ export type OfficialExternalPluginCatalogFeedVerification =
       threshold?: number;
     };
 
-export type OfficialExternalPluginCatalogFeedSigningKey = {
+type OfficialExternalPluginCatalogFeedSigningKey = {
   keyId: string;
   publicKey: string;
 };
 
-export type OfficialExternalPluginCatalogProfileConfig = {
+type OfficialExternalPluginCatalogProfileConfig = {
   feeds?: Record<string, OfficialExternalPluginCatalogFeedProfile>;
   sources?: Record<string, OfficialExternalPluginCatalogSourceProfile>;
 };
@@ -244,11 +244,10 @@ type OfficialExternalProviderContract =
   | "webFetchProviders";
 
 const SUPPORTED_OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS = new Set([1, 2]);
-export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL =
-  "https://clawhub.ai/v1/feeds/plugins";
-export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE = "clawhub-public";
-export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF = "public-clawhub";
-export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF = "public-npm";
+const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL = "https://clawhub.ai/v1/feeds/plugins";
+const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE = "clawhub-public";
+const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF = "public-clawhub";
+const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF = "public-npm";
 const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalPluginCatalogProfileConfig =
   {
     feeds: {
@@ -294,7 +293,7 @@ export function isOfficialExternalPluginCatalogFeed(
   );
 }
 
-export function parseOfficialExternalPluginCatalogEntries(
+function parseOfficialExternalPluginCatalogEntries(
   raw: unknown,
 ): OfficialExternalPluginCatalogEntry[] {
   if (Array.isArray(raw)) {
@@ -495,7 +494,7 @@ function getManifestInstallSourceRefCandidate(
   };
 }
 
-export function validateOfficialExternalPluginCatalogEntrySourceRefs(
+function validateOfficialExternalPluginCatalogEntrySourceRefs(
   entry: OfficialExternalPluginCatalogEntry,
   params?: {
     catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
@@ -524,7 +523,7 @@ export function validateOfficialExternalPluginCatalogEntrySourceRefs(
   return errors;
 }
 
-export function filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+function filterOfficialExternalPluginCatalogEntriesBySourceRefs(
   entries: OfficialExternalPluginCatalogEntry[],
   params?: {
     catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
@@ -791,24 +790,6 @@ async function snapshotOrBundledFallbackResult(params: {
   }
   return bundledFallbackResult(params.error, params.metadata);
 }
-
-export function createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(
-  initialSnapshots: HostedOfficialExternalPluginCatalogSnapshot[] = [],
-): HostedOfficialExternalPluginCatalogSnapshotStore {
-  const snapshots = new Map<string, HostedOfficialExternalPluginCatalogSnapshot>();
-  for (const snapshot of initialSnapshots) {
-    snapshots.set(snapshot.metadata.url, snapshot);
-  }
-  return {
-    async read(url) {
-      return snapshots.get(url) ?? null;
-    },
-    async write(snapshot) {
-      snapshots.set(snapshot.metadata.url, snapshot);
-    },
-  };
-}
-
 async function resolveHostedCatalogSnapshotStore(params: {
   snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore | null;
   env?: NodeJS.ProcessEnv;
@@ -827,7 +808,7 @@ async function resolveHostedCatalogSnapshotStore(params: {
   });
 }
 
-export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
+async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   feedUrl?: string;
   feedProfile?: string;
   catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
@@ -1267,7 +1248,7 @@ export function resolveOfficialExternalPluginInstall(
   };
 }
 
-export function resolveOfficialExternalPluginCatalogProfileConfigFromConfig(config?: {
+function resolveOfficialExternalPluginCatalogProfileConfigFromConfig(config?: {
   marketplaces?: OfficialExternalPluginCatalogProfileConfig;
 }): OfficialExternalPluginCatalogProfileConfig | undefined {
   return config?.marketplaces;
@@ -1276,7 +1257,7 @@ export function resolveOfficialExternalPluginCatalogProfileConfigFromConfig(conf
 export async function loadConfiguredHostedOfficialExternalPluginCatalogEntries(
   config: { marketplaces?: OfficialExternalPluginCatalogProfileConfig } | undefined,
   params?: Omit<
-    Parameters<typeof loadHostedOfficialExternalPluginCatalogEntries>[0],
+    NonNullable<Parameters<typeof loadHostedOfficialExternalPluginCatalogEntries>[0]>,
     "catalogConfig"
   >,
 ): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
