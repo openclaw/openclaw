@@ -40,6 +40,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   private loadedClient: GatewayBrowserClient | null = null;
   private requestedClient: GatewayBrowserClient | null = null;
   private refreshEpoch = 0;
+  private applyEpoch = 0;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.gateway,
@@ -56,6 +57,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.refreshEpoch += 1;
+    this.applyEpoch += 1;
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -114,6 +116,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
 
   private resetPlanState() {
     this.refreshEpoch += 1;
+    this.applyEpoch += 1;
     this.plan = null;
     this.loading = false;
     this.error = null;
@@ -234,7 +237,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const applyEpoch = this.refreshEpoch;
+    const applyEpoch = ++this.applyEpoch;
     this.applyingProviderId = providerId;
     this.applyError = null;
     try {
@@ -248,7 +251,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
           overwrite: this.replaceExisting,
         },
       );
-      if (applyEpoch !== this.refreshEpoch) {
+      if (applyEpoch !== this.applyEpoch) {
         return;
       }
       this.lastResults = { ...this.lastResults, [providerId]: result };
@@ -259,12 +262,12 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       this.requestedClient = null;
       await this.refresh(true);
     } catch (error) {
-      if (applyEpoch === this.refreshEpoch) {
+      if (applyEpoch === this.applyEpoch) {
         this.pendingProviderId = null;
         this.applyError = toErrorMessage(error);
       }
     } finally {
-      if (applyEpoch === this.refreshEpoch) {
+      if (applyEpoch === this.applyEpoch) {
         this.applyingProviderId = null;
       }
     }

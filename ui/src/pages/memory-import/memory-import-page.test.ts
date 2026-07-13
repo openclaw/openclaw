@@ -213,6 +213,56 @@ describe("MemoryImportPage", () => {
     ).toBe(true);
   });
 
+  it("unlocks the page after a successful import refresh", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "migrations.memory.plan") {
+        return createPlan();
+      }
+      if (method === "migrations.memory.apply") {
+        return {
+          providerId: "codex",
+          source: "/tmp/codex",
+          summary: {
+            total: 1,
+            planned: 0,
+            migrated: 1,
+            skipped: 0,
+            conflicts: 0,
+            errors: 0,
+            sensitive: 0,
+          },
+          items: [{ id: "memory:codex:MEMORY.md", status: "migrated" }],
+          reportDir: "/tmp/migration-report",
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const page = await mountPage(createContext(request));
+
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']"),
+      ).not.toBeNull(),
+    );
+    page
+      .querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
+      ?.click();
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
+      ).not.toBeNull(),
+    );
+    page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']")?.click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() =>
+      expect(
+        page.querySelector<HTMLButtonElement>("[data-test-id='memory-import-provider-button']")
+          ?.disabled,
+      ).toBe(false),
+    );
+  });
+
   it("drops pending state and rejects confirmation when shared agent selection changes", async () => {
     const request = vi.fn(async (method: string, params: { agentId?: string }) => {
       if (method === "migrations.memory.plan") {
