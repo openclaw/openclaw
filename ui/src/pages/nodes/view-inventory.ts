@@ -5,6 +5,10 @@ import {
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../../../../src/shared/device-pairing-access.js";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -34,6 +38,92 @@ function toRemovalRequest(entry: NodesInventoryEntry): InventoryRemovalRequest {
   return { id: entry.id, name: entry.name, ...removal };
 }
 
+type DeviceIconSource = {
+  clientId?: string;
+  clientMode?: string;
+  platform?: string;
+};
+
+const MOBILE_PLATFORM_PATTERN = /\b(ios|ipados|watchos|android|iphone|ipad)\b/;
+const MOBILE_CLIENT_IDS: ReadonlySet<string> = new Set([
+  GATEWAY_CLIENT_IDS.IOS_APP,
+  GATEWAY_CLIENT_IDS.WATCHOS_APP,
+  GATEWAY_CLIENT_IDS.ANDROID_APP,
+]);
+const BROWSER_CLIENT_IDS: ReadonlySet<string> = new Set([
+  GATEWAY_CLIENT_IDS.CONTROL_UI,
+  GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+  GATEWAY_CLIENT_IDS.WEBCHAT,
+]);
+const TERMINAL_CLIENT_MODES: ReadonlySet<string> = new Set([
+  GATEWAY_CLIENT_MODES.CLI,
+  GATEWAY_CLIENT_MODES.BACKEND,
+  GATEWAY_CLIENT_MODES.PROBE,
+  GATEWAY_CLIENT_MODES.TEST,
+]);
+
+/** Rough form-factor icon: phone, browser, terminal, or desktop machine. */
+function deviceIcon(source: DeviceIconSource): TemplateResult {
+  const platform = source.platform?.trim().toLowerCase() ?? "";
+  const clientId = source.clientId?.trim().toLowerCase() ?? "";
+  const mode = source.clientMode?.trim().toLowerCase() ?? "";
+  if (MOBILE_PLATFORM_PATTERN.test(platform) || MOBILE_CLIENT_IDS.has(clientId)) {
+    return icons.smartphone;
+  }
+  if (BROWSER_CLIENT_IDS.has(clientId) || mode === GATEWAY_CLIENT_MODES.WEBCHAT) {
+    return icons.globe;
+  }
+  if (TERMINAL_CLIENT_MODES.has(mode) || clientId === GATEWAY_CLIENT_IDS.CLI) {
+    return icons.terminal;
+  }
+  return icons.monitor;
+}
+
+function renderDeviceTile(icon: TemplateResult, connected: boolean | null) {
+  return html`
+    <div class="nodes-entry__tile">
+      <span class="nodes-entry__tile-icon" aria-hidden="true">${icon}</span>
+      ${connected === null
+        ? nothing
+        : html`
+            <span
+              class="status-dot ${connected ? "status-dot--connected" : "status-dot--offline"}"
+              role="img"
+              aria-label=${connected
+                ? t("nodes.inventory.connected")
+                : t("nodes.inventory.offline")}
+              title=${connected ? t("nodes.inventory.connected") : t("nodes.inventory.offline")}
+            ></span>
+          `}
+    </div>
+  `;
+}
+
+function renderSectionLabel(label: string) {
+  return html`<div class="nodes-section-label">${label}</div>`;
+}
+
+function inventorySummary(
+  groups: NodesInventoryGroup[],
+  pendingCount: number,
+  loading: boolean,
+): string {
+  if (loading && groups.length === 0) {
+    return t("common.loading");
+  }
+  const connected = groups.filter((group) => group.primary.connected).length;
+  const parts = [
+    t("nodes.inventory.summaryConnected", {
+      connected: String(connected),
+      total: String(groups.length),
+    }),
+  ];
+  if (pendingCount > 0) {
+    parts.push(t("nodes.inventory.summaryPending", { count: String(pendingCount) }));
+  }
+  return parts.join(" · ");
+}
+
 export function renderNodesInventory(props: NodesProps) {
   const list = props.devicesList ?? { pending: [], paired: [] };
   const pending = Array.isArray(list.pending) ? list.pending : [];
@@ -50,19 +140,19 @@ export function renderNodesInventory(props: NodesProps) {
   const loading = props.loading || props.devicesLoading;
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+      <div class="nodes-toolbar">
         <div>
           <div class="card-title">${t("nodes.inventory.title")}</div>
-          <div class="card-sub">${t("nodes.inventory.subtitle")}</div>
+          <div class="card-sub">${inventorySummary(groups, pending.length, loading)}</div>
         </div>
-        <div class="row" style="gap: 8px; flex-wrap: wrap; justify-content: flex-end;">
+        <div class="nodes-toolbar__actions">
           ${stale.length > 0
             ? html`
                 <button
-                  class="btn btn--sm danger"
+                  class="btn danger"
                   @click=${() => props.onInventoryCleanup(stale.map(toRemovalRequest))}
                 >
-                  ${t("nodes.inventory.cleanupStale", { count: String(stale.length) })}
+                  ${icons.trash} ${t("nodes.inventory.cleanupStale", { count: String(stale.length) })}
                 </button>
               `
             : nothing}
@@ -72,10 +162,7 @@ export function renderNodesInventory(props: NodesProps) {
             ?disabled=${!props.canPairDevice}
             @click=${props.onDevicePairSetupOpen}
           >
-            ${icons.smartphone} ${t("nodes.pairing.button")}
-          </button>
-          <button class="btn" ?disabled=${loading} @click=${props.onRefresh}>
-            ${loading ? t("common.loading") : t("common.refresh")}
+            ${icons.plus} ${t("nodes.pairing.button")}
           </button>
         </div>
       </div>
@@ -86,20 +173,16 @@ export function renderNodesInventory(props: NodesProps) {
         ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
         : nothing}
       <div class="list" style="margin-top: 16px;">
-        ${gatewayPresence ? renderGatewayEntry(gatewayPresence) : nothing}
         ${pending.length > 0
           ? html`
-              <div class="muted" style="margin-bottom: 8px;">
-                ${t("nodes.inventory.pendingApproval")}
-              </div>
+              ${renderSectionLabel(t("nodes.inventory.pendingApproval"))}
               ${pending.map((req) =>
                 renderPendingDevice(req, props, lookupPairedDevice(pairedByDeviceId, req)),
               )}
-              <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">
-                ${t("nodes.inventory.paired")}
-              </div>
+              ${renderSectionLabel(t("nodes.inventory.paired"))}
             `
           : nothing}
+        ${gatewayPresence ? renderGatewayEntry(gatewayPresence) : nothing}
         ${groups.length === 0 &&
         pending.length === 0 &&
         !gatewayPresence &&
@@ -108,9 +191,7 @@ export function renderNodesInventory(props: NodesProps) {
           : groups.map((group) => renderInventoryGroup(group, props))}
         ${unpairedPresence.length > 0
           ? html`
-              <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">
-                ${t("nodes.inventory.connectedWithoutPairing")}
-              </div>
+              ${renderSectionLabel(t("nodes.inventory.connectedWithoutPairing"))}
               ${unpairedPresence.map((entry) => renderPresenceOnlyEntry(entry))}
             `
           : nothing}
@@ -325,16 +406,9 @@ function renderInventoryEntry(entry: NodesInventoryEntry, props: NodesProps) {
       : undefined;
   return html`
     <div class="list-item nodes-entry">
+      ${renderDeviceTile(deviceIcon(entry), entry.connected)}
       <div class="list-main">
         <div class="nodes-entry__head">
-          <span
-            class="status-dot ${entry.connected ? "status-dot--connected" : "status-dot--offline"}"
-            role="img"
-            aria-label=${entry.connected
-              ? t("nodes.inventory.connected")
-              : t("nodes.inventory.offline")}
-            title=${entry.connected ? t("nodes.inventory.connected") : t("nodes.inventory.offline")}
-          ></span>
           <span class="list-title">${entry.name}</span>
           ${entryStatusChips(entry, props.gatewayVersion)}
         </div>
@@ -389,6 +463,7 @@ function renderGatewayEntry(entry: PresenceEntry) {
   const parts = presenceMetaParts(entry);
   return html`
     <div class="list-item nodes-entry nodes-entry--gateway">
+      ${renderDeviceTile(icons.server, true)}
       <div class="list-main">
         <div class="nodes-entry__head">
           <span class="list-title">${entry.host ?? t("nodes.execApprovals.gateway")}</span>
@@ -404,15 +479,10 @@ function renderPresenceOnlyEntry(entry: PresenceEntry) {
   const roles = Array.isArray(entry.roles) ? entry.roles.filter(Boolean) : [];
   const parts = presenceMetaParts(entry);
   return html`
-    <div class="list-item nodes-entry">
+    <div class="list-item nodes-entry nodes-entry--presence-only">
+      ${renderDeviceTile(deviceIcon({ clientMode: entry.mode ?? undefined, platform: entry.platform ?? undefined }), true)}
       <div class="list-main">
         <div class="nodes-entry__head">
-          <span
-            class="status-dot status-dot--connected"
-            role="img"
-            aria-label=${t("nodes.inventory.connected")}
-            title=${t("nodes.inventory.connected")}
-          ></span>
           <span class="list-title">
             ${entry.host ?? entry.mode ?? t("nodes.inventory.unknownClient")}
           </span>
@@ -509,7 +579,8 @@ function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: Pai
   const repair = req.isRepair ? ` · ${t("nodes.inventory.repair")}` : "";
   const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
   return html`
-    <div class="list-item">
+    <div class="list-item nodes-entry nodes-entry--pending">
+      ${renderDeviceTile(icons.monitorSmartphone, null)}
       <div class="list-main">
         <div class="list-title">${name}</div>
         <div class="list-sub">${req.deviceId}${ip}</div>

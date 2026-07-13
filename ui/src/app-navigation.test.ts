@@ -54,6 +54,7 @@ const SETTINGS_ROUTE_PATHS = [
   },
   { routeId: "worktrees", path: "/settings/worktrees", alias: "/worktrees" },
   { routeId: "sessions", path: "/settings/sessions", alias: "/sessions" },
+  { routeId: "nodes", path: "/settings/devices", alias: "/nodes" },
   { routeId: "ai-agents", path: "/settings/ai-agents", alias: "/ai-agents" },
   {
     routeId: "model-providers",
@@ -86,7 +87,7 @@ describe("navigationIconForRoute", () => {
       skills: "zap",
       plugins: "puzzle",
       "skill-workshop": "wrench",
-      nodes: "monitor",
+      nodes: "monitorSmartphone",
       config: "settings",
       profile: "lobster",
       communications: "send",

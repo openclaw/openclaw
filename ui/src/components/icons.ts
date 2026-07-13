@@ -70,6 +70,22 @@ export const icons = {
       <line x1="12" x2="12" y1="17" y2="21" />
     </svg>
   `,
+  monitorSmartphone: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M18 8V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h8" />
+      <path d="M10 19v-3.96 3.15" />
+      <path d="M7 19h5" />
+      <rect width="6" height="10" x="16" y="12" rx="2" />
+    </svg>
+  `,
+  server: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="20" height="8" x="2" y="2" rx="2" ry="2" />
+      <rect width="20" height="8" x="2" y="14" rx="2" ry="2" />
+      <line x1="6" x2="6.01" y1="6" y2="6" />
+      <line x1="6" x2="6.01" y1="18" y2="18" />
+    </svg>
+  `,
   sun: html`
     <svg viewBox="0 0 24 24">
       <circle cx="12" cy="12" r="4" />

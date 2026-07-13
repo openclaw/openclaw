@@ -269,8 +269,9 @@ export const en: TranslationMap = {
       any: "any",
     },
     inventory: {
-      title: "Devices",
-      subtitle: "One row per paired client: status, roles, tokens.",
+      title: "Paired devices",
+      summaryConnected: "{connected} of {total} connected",
+      summaryPending: "{count} awaiting approval",
       cleanupStale: "Clean up {count} stale",
       pendingApproval: "Pending approval",
       paired: "Paired",
