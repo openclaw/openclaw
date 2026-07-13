@@ -557,6 +557,7 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "extensions/qqbot/src/engine/group/message-gating.ts: GroupMessageGateInput",
   "extensions/qqbot/src/engine/messaging/markdown-table-chunking.ts: QQBotBaseMarkdownChunker",
   "extensions/qqbot/src/engine/messaging/markdown-table-chunking.ts: testing",
+  "extensions/qqbot/src/engine/messaging/race-with-timeout.ts: TimeoutRaceState",
   "extensions/qqbot/src/engine/ref/store.ts: RefAttachmentSummary",
   "extensions/qqbot/src/engine/ref/store.ts: RefIndexEntry",
   "extensions/qqbot/src/engine/session/session-store.ts: SessionState",
