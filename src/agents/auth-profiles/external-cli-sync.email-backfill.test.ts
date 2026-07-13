@@ -46,10 +46,11 @@ describe("external cli sync email backfill", () => {
 
     const profiles = resolveExternalCliAuthProfiles(storeWithClaudeProfile());
 
+    const backfilledEmail = "cli-login@example.com";
     expect(profiles).toEqual([
       {
         profileId: "anthropic:claude-cli",
-        credential: expect.objectContaining({ email: "cli-login@example.com" }),
+        credential: expect.objectContaining({ email: backfilledEmail }),
         persistence: "persisted",
       },
     ]);
