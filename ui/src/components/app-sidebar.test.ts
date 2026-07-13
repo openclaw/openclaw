@@ -435,7 +435,7 @@ describe("AppSidebar agent chip", () => {
     expect(onOpenNewSession).toHaveBeenCalledWith("research");
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
 
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__menu-toggle")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     const researchRow = [...sidebar.querySelectorAll('[role="menuitemradio"]')].find((row) =>
       row.textContent?.includes("research"),
