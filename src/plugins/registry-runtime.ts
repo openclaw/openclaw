@@ -619,9 +619,16 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                   ...(params.env !== undefined ? { env: params.env } : {}),
                   ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
                 });
-                return await session.resetSessionEntryLifecycle({
+                const resetParams = {
                   ...params,
-                  releasePhysicalOwner: async (context) => {
+                  releasePhysicalOwner: async (context: {
+                    agentId?: string;
+                    entry: SessionEntry;
+                    reason: "reset";
+                    sessionFile?: string;
+                    sessionId: string;
+                    sessionKey: string;
+                  }) => {
                     const locked = resolveLockedSessionHarnessRegistration(
                       context.sessionKey,
                       context.entry,
@@ -649,7 +656,8 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                       sessionKey: context.sessionKey,
                     });
                   },
-                });
+                };
+                return await session.resetSessionEntryLifecycle(resetParams);
               }),
             upsertSessionEntry: async (params) =>
               await runWithPluginScope(async () => {

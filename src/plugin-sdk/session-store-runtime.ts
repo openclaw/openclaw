@@ -10,7 +10,6 @@ import {
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
 import {
-  resolveSessionFilePath,
   resolveSessionFilePath as resolveLegacySessionFilePath,
   resolveSessionFilePathOptions,
   resolveStorePath as resolveSessionStorePath,

@@ -23,7 +23,6 @@ import {
   resolveSessionStoreBackupPaths,
   resolveStorePath,
   resetSessionEntryLifecycle,
-  saveSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
   upsertSessionEntry,
@@ -564,7 +563,7 @@ describe("session-store-runtime compatibility surface", () => {
     });
   });
 
-  it("resets a session through the lifecycle owner and archives the old transcript", async () => {
+  it("resets a session through the lifecycle owner without retaining the old transcript", async () => {
     const sessionKey = "agent:main:main";
     const oldTranscriptPath = path.join(tempDir, "old-session.jsonl");
     fs.writeFileSync(oldTranscriptPath, '{"type":"session","id":"old-session"}\n', "utf-8");
@@ -596,14 +595,11 @@ describe("session-store-runtime compatibility surface", () => {
     });
     expect(result?.sessionId).not.toBe("old-session");
     expect(result?.sessionFile).toContain(`${result?.sessionId}.jsonl`);
-    expect(fs.existsSync(oldTranscriptPath)).toBe(false);
-    expect(fs.existsSync(result?.sessionFile ?? "")).toBe(true);
-    expect(fs.readFileSync(result?.sessionFile ?? "", "utf-8")).toContain(
-      `"id":"${result?.sessionId}"`,
-    );
-    expect(
-      fs.readdirSync(tempDir).filter((file) => file.startsWith("old-session.jsonl.reset.")),
-    ).toHaveLength(1);
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionFile: result?.sessionFile,
+      sessionId: result?.sessionId,
+    });
+    expect(result?.sessionFile).not.toBe(oldTranscriptPath);
   });
 
   it("interrupts active work before lifecycle reset rotation", async () => {
