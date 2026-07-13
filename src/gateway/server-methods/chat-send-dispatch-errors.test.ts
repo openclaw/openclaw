@@ -17,7 +17,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           registered: true,
         } as never,
         cleanupAdmittedRun,
-        lifecycleGeneration: 1,
+        lifecycleGeneration: "test-generation",
         restartSafeAdmission: undefined,
       },
       context: {
