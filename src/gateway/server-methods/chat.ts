@@ -1511,6 +1511,10 @@ export const chatHandlers: GatewayRequestHandlers = {
           performance.now() - prepareAttachmentsStartedAtMs,
         );
       } catch (err) {
+        if (activeRunAbort.controller.signal.aborted && context.chatAbortedRuns.has(clientRunId)) {
+          finishAbortedChatSend();
+          return;
+        }
         cleanupAdmittedRun({ force: true });
         clearAgentRunContext(clientRunId, lifecycleGeneration);
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
