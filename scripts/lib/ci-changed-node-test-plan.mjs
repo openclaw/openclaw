@@ -10,7 +10,7 @@ import { createNodeTestShards } from "./ci-node-test-plan.mjs";
 
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const DIST_DEPENDENT_CONFIGS = new Set(["test/vitest/vitest.boundary.config.ts"]);
-const MAX_CHANGED_NODE_TEST_TARGETS = 200;
+const MAX_CHANGED_NODE_TEST_TARGETS = 20;
 
 const fullNodeTestShards = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
 const configsRequiringFullSuiteMetadata = new Set(

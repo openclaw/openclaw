@@ -80,4 +80,17 @@ describe("CI changed Node test plan", () => {
       createChangedNodeTestShards(["ui/src/app-routes.ts", "ui/src/app-navigation.ts"]),
     ).toBeNull();
   });
+
+  it("fails safe before serial target processes can dominate job time", () => {
+    const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-many-targets-"));
+    try {
+      writeFileSync(path.join(cwd, "value.ts"), "export const value = 1;\n");
+      for (let index = 0; index < 21; index += 1) {
+        writeFileSync(path.join(cwd, `consumer-${index}.test.ts`), 'import "./value.js";\n');
+      }
+      expect(createChangedNodeTestShards(["value.ts"], { cwd })).toBeNull();
+    } finally {
+      rmSync(cwd, { force: true, recursive: true });
+    }
+  });
 });
