@@ -17,7 +17,9 @@ type Cursor = { pos: number };
 function lineAtOffset(raw: string, offset: number): number {
   let line = 1;
   for (let i = 0; i < offset && i < raw.length; i++) {
-    if (raw[i] === "\n") line++;
+    if (raw[i] === "\n") {
+      line++;
+    }
   }
   return line;
 }
@@ -32,7 +34,9 @@ function skipWS(raw: string, c: Cursor): void {
     }
     if (ch === "/" && raw[c.pos + 1] === "/") {
       c.pos += 2;
-      while (c.pos < raw.length && raw[c.pos] !== "\n") c.pos++;
+      while (c.pos < raw.length && raw[c.pos] !== "\n") {
+        c.pos++;
+      }
       continue;
     }
     if (ch === "/" && raw[c.pos + 1] === "*") {
@@ -70,7 +74,9 @@ function skipStr(raw: string, c: Cursor): void {
 /** Skip a JSON5 value (string, number, boolean, null, object, array). */
 function skipVal(raw: string, c: Cursor): void {
   skipWS(raw, c);
-  if (c.pos >= raw.length) return;
+  if (c.pos >= raw.length) {
+    return;
+  }
   const ch = raw[c.pos];
   if (ch === '"' || ch === "'") {
     skipStr(raw, c);
@@ -79,7 +85,18 @@ function skipVal(raw: string, c: Cursor): void {
   } else {
     while (c.pos < raw.length) {
       const ch2 = raw[c.pos];
-      if (ch2 === "," || ch2 === "}" || ch2 === "]" || ch2 === "/" || ch2 === " " || ch2 === "\t" || ch2 === "\r" || ch2 === "\n") return;
+      if (
+        ch2 === "," ||
+        ch2 === "}" ||
+        ch2 === "]" ||
+        ch2 === "/" ||
+        ch2 === " " ||
+        ch2 === "\t" ||
+        ch2 === "\r" ||
+        ch2 === "\n"
+      ) {
+        return;
+      }
       c.pos++;
     }
   }
@@ -105,7 +122,9 @@ function skipComposite(raw: string, c: Cursor): void {
       c.pos++;
     } else if (ch === "/" && raw[c.pos + 1] === "/") {
       c.pos += 2;
-      while (c.pos < raw.length && raw[c.pos] !== "\n") c.pos++;
+      while (c.pos < raw.length && raw[c.pos] !== "\n") {
+        c.pos++;
+      }
     } else if (ch === "/" && raw[c.pos + 1] === "*") {
       c.pos += 2;
       while (c.pos < raw.length - 1) {
@@ -125,14 +144,18 @@ function skipComposite(raw: string, c: Cursor): void {
 function readStr(raw: string, c: Cursor): string | null {
   skipWS(raw, c);
   const quote = raw[c.pos];
-  if (quote !== '"' && quote !== "'") return null;
+  if (quote !== '"' && quote !== "'") {
+    return null;
+  }
   c.pos++;
   let value = "";
   while (c.pos < raw.length) {
     const ch = raw[c.pos];
     if (ch === "\\") {
       const next = raw[c.pos + 1];
-      if (next !== undefined) value += next;
+      if (next !== undefined) {
+        value += next;
+      }
       c.pos += 2;
     } else if (ch === quote) {
       c.pos++;
@@ -149,11 +172,15 @@ function readStr(raw: string, c: Cursor): string | null {
 function readKey(raw: string, c: Cursor): string | null {
   skipWS(raw, c);
   const ch = raw[c.pos];
-  if (ch === '"' || ch === "'") return readStr(raw, c);
+  if (ch === '"' || ch === "'") {
+    return readStr(raw, c);
+  }
   if (ch !== undefined && /[A-Za-z_$]/.test(ch)) {
     const start = c.pos;
     c.pos++;
-    while (c.pos < raw.length && /[A-Za-z0-9_$]/.test(raw[c.pos] ?? "")) c.pos++;
+    while (c.pos < raw.length && /[A-Za-z0-9_$]/.test(raw[c.pos] ?? "")) {
+      c.pos++;
+    }
     return raw.slice(start, c.pos);
   }
   return null;
@@ -162,7 +189,9 @@ function readKey(raw: string, c: Cursor): string | null {
 /** Expect and consume a specific character (skipping whitespace). */
 function expect(raw: string, c: Cursor, ch: string): boolean {
   skipWS(raw, c);
-  if (raw[c.pos] !== ch) return false;
+  if (raw[c.pos] !== ch) {
+    return false;
+  }
   c.pos++;
   return true;
 }
@@ -175,7 +204,9 @@ function navigateToOffset(
   raw: string,
   segments: readonly ConfigIssuePathSegment[],
 ): number | undefined {
-  if (segments.length === 0 || raw.trim().length === 0) return undefined;
+  if (segments.length === 0 || raw.trim().length === 0) {
+    return undefined;
+  }
   const c: Cursor = { pos: 0 };
   skipWS(raw, c);
   return navigateAt(raw, c, segments, 0);
@@ -191,10 +222,14 @@ function navigateAt(
   const isLeaf = depth === segments.length - 1;
 
   if (typeof segment === "number") {
-    if (!expect(raw, c, "[")) return undefined;
+    if (!expect(raw, c, "[")) {
+      return undefined;
+    }
     for (let i = 0; i < segment; i++) {
       skipVal(raw, c);
-      if (!expect(raw, c, ",")) return undefined;
+      if (!expect(raw, c, ",")) {
+        return undefined;
+      }
     }
     if (isLeaf) {
       skipWS(raw, c);
@@ -203,13 +238,21 @@ function navigateAt(
     return navigateAt(raw, c, segments, depth + 1);
   }
 
-  if (!expect(raw, c, "{")) return undefined;
+  if (!expect(raw, c, "{")) {
+    return undefined;
+  }
   while (c.pos < raw.length) {
     skipWS(raw, c);
-    if (raw[c.pos] === "}") return undefined;
+    if (raw[c.pos] === "}") {
+      return undefined;
+    }
     const key = readKey(raw, c);
-    if (key === null) return undefined;
-    if (!expect(raw, c, ":")) return undefined;
+    if (key === null) {
+      return undefined;
+    }
+    if (!expect(raw, c, ":")) {
+      return undefined;
+    }
     if (key === segment) {
       if (isLeaf) {
         skipWS(raw, c);
@@ -223,7 +266,9 @@ function navigateAt(
       c.pos++;
       continue;
     }
-    if (raw[c.pos] === "}") return undefined;
+    if (raw[c.pos] === "}") {
+      return undefined;
+    }
     return undefined;
   }
   return undefined;
@@ -235,7 +280,9 @@ function navigateAt(
 
 /** Format config issue path segments with bracket notation for array indexes. */
 export function formatConfigIssuePath(segments: readonly ConfigIssuePathSegment[]): string {
-  if (segments.length === 0) return "";
+  if (segments.length === 0) {
+    return "";
+  }
   let out = "";
   for (const s of segments) {
     if (typeof s === "number") {
@@ -257,7 +304,9 @@ export function parseConfigIssuePath(
   opts?: { numericDotSegments?: boolean },
 ): ConfigIssuePathSegment[] {
   const trimmed = pathValue.trim();
-  if (!trimmed || trimmed === "<root>") return [];
+  if (!trimmed || trimmed === "<root>") {
+    return [];
+  }
   const segments: ConfigIssuePathSegment[] = [];
   let i = 0;
   while (i < trimmed.length) {
@@ -267,14 +316,20 @@ export function parseConfigIssuePath(
     }
     if (trimmed[i] === "[") {
       const close = trimmed.indexOf("]", i + 1);
-      if (close === -1) break;
+      if (close === -1) {
+        break;
+      }
       const n = Number(trimmed.slice(i + 1, close));
-      if (Number.isInteger(n) && n >= 0) segments.push(n);
+      if (Number.isInteger(n) && n >= 0) {
+        segments.push(n);
+      }
       i = close + 1;
       continue;
     }
     let end = i;
-    while (end < trimmed.length && trimmed[end] !== "." && trimmed[end] !== "[") end++;
+    while (end < trimmed.length && trimmed[end] !== "." && trimmed[end] !== "[") {
+      end++;
+    }
     const seg = trimmed.slice(i, end);
     if (seg) {
       const n = Number(seg);
@@ -301,11 +356,14 @@ export function resolveConfigValueAtPath(
   let current: unknown = root;
   for (const s of segments) {
     if (typeof s === "number") {
-      if (!Array.isArray(current) || s < 0 || s >= current.length) return undefined;
+      if (!Array.isArray(current) || s < 0 || s >= current.length) {
+        return undefined;
+      }
       current = current[s];
     } else {
-      if (!current || typeof current !== "object" || Array.isArray(current))
+      if (!current || typeof current !== "object" || Array.isArray(current)) {
         return undefined;
+      }
       current = (current as Record<string, unknown>)[s];
     }
   }
@@ -352,10 +410,14 @@ function resolveSegmentsAgainstParsed(
 // ---------------------------------------------------------------------------
 
 function safeStringify(v: unknown): string | null {
-  if (v === undefined) return null;
+  if (v === undefined) {
+    return null;
+  }
   try {
     const s = JSON.stringify(v);
-    if (s === undefined) return null;
+    if (s === undefined) {
+      return null;
+    }
     return s.length > 160 ? `${s.slice(0, 157)}...` : s;
   } catch {
     return null;
@@ -368,10 +430,18 @@ function messageAlreadyHasReceived(message: string): boolean {
 }
 
 function shouldOmitReceivedValue(pathValue: string, value: unknown): boolean {
-  if (value === undefined) return true;
-  if (isSecretRef(value)) return true;
-  if (isSensitiveConfigPath(pathValue)) return true;
-  if (typeof value === "object" && value !== null) return true;
+  if (value === undefined) {
+    return true;
+  }
+  if (isSecretRef(value)) {
+    return true;
+  }
+  if (isSensitiveConfigPath(pathValue)) {
+    return true;
+  }
+  if (typeof value === "object" && value !== null) {
+    return true;
+  }
   return safeStringify(value) === null;
 }
 
@@ -381,9 +451,13 @@ export function appendReceivedValueHint(
   pathValue: string,
   value: unknown,
 ): string {
-  if (shouldOmitReceivedValue(pathValue, value)) return message;
+  if (shouldOmitReceivedValue(pathValue, value)) {
+    return message;
+  }
   const label = safeStringify(value);
-  if (!label || messageAlreadyHasReceived(message)) return message;
+  if (!label || messageAlreadyHasReceived(message)) {
+    return message;
+  }
   return `${message}, got: ${label}`;
 }
 
@@ -397,7 +471,9 @@ export function resolveConfigIssueLineInRaw(
   segments: readonly ConfigIssuePathSegment[],
 ): number | undefined {
   const offset = navigateToOffset(raw, segments);
-  if (offset === undefined) return undefined;
+  if (offset === undefined) {
+    return undefined;
+  }
   return lineAtOffset(raw, offset);
 }
 
