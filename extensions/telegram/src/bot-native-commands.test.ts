@@ -2,6 +2,7 @@
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createCommandBot,
   createNativeCommandTestParams,
@@ -15,6 +16,7 @@ import {
 } from "./bot-native-commands.menu-test-support.js";
 import { resetTelegramForumFlagCacheForTest } from "./bot/helpers.js";
 import { TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
+import type { TelegramPeerBotAdmissionCoordinator } from "./peer-bot-admission.js";
 import { pluginCommandMocks, resetPluginCommandMocks } from "./test-support/plugin-command.js";
 
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
@@ -105,6 +107,25 @@ function firstDeliverRepliesParams() {
   return firstCallArg(deliverReplies as unknown as { mock: { calls: Array<Array<unknown>> } });
 }
 
+function deliverRepliesParamsAt(index: number) {
+  const calls = (deliverReplies as unknown as { mock: { calls: Array<Array<unknown>> } }).mock
+    .calls;
+  const params = calls[index]?.[0];
+  if (!params) {
+    throw new Error(`expected deliverReplies call ${index}`);
+  }
+  return params as Record<string, unknown>;
+}
+
+function requireTelegramDeps(
+  params: ReturnType<typeof createNativeCommandTestParams>,
+): TelegramNativeCommandDeps {
+  if (!params.telegramDeps) {
+    throw new Error("expected telegram native command dependencies");
+  }
+  return params.telegramDeps;
+}
+
 function firstExecutePluginCommandParams() {
   return firstCallArg(
     pluginCommandMocks.executePluginCommand as unknown as {
@@ -144,6 +165,21 @@ function registerCustomTelegramCommandMenu(
   });
 
   return { runtimeLog, setMyCommands };
+}
+
+function createPeerBotAdmissionTestCoordinator(): {
+  coordinator: TelegramPeerBotAdmissionCoordinator;
+  cancel: ReturnType<typeof vi.fn>;
+} {
+  const cancel = vi.fn(async () => undefined);
+  return {
+    cancel,
+    coordinator: {
+      cancel,
+      registerCancellation: vi.fn(() => () => undefined),
+      reserve: vi.fn(() => async () => false),
+    },
+  };
 }
 
 describe("registerTelegramNativeCommands", () => {
@@ -410,6 +446,335 @@ describe("registerTelegramNativeCommands", () => {
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast status")).toBe("/fast status");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:/fast default")).toBe("/fast default");
     expect(parseTelegramNativeCommandCallbackData("tgcmd:fast status")).toBeNull();
+  });
+
+  it("commits the peer reply target after partially visible native delivery", async () => {
+    const { bot, commandHandlers } = createCommandBot();
+    const cfg: OpenClawConfig = {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    };
+    const baseParams = createNativeCommandTestParams(cfg, {
+      bot,
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
+      replyToMode: "first",
+      opts: { token: "token", replyToMode: "first" },
+    });
+    const dispatchReplyWithBufferedBlockDispatcher: TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"] =
+      async (params) => {
+        const deliver = params.dispatcherOptions.deliver;
+        const info = { kind: "block" } as Parameters<typeof deliver>[1];
+        try {
+          await deliver({ text: "partially visible" }, info);
+        } catch {}
+        await deliver({ text: "next payload" }, info);
+        return { queuedFinal: false, counts: { block: 2, final: 0, tool: 0 } };
+      };
+    const visibleError = Object.assign(new Error("second chunk failed"), {
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    deliverReplies.mockRejectedValueOnce(visibleError).mockResolvedValueOnce({ delivered: true });
+
+    registerTelegramNativeCommands({
+      ...baseParams,
+      telegramDeps: {
+        ...requireTelegramDeps(baseParams),
+        dispatchReplyWithBufferedBlockDispatcher,
+      },
+    });
+    const handler = commandHandlers.get("compact");
+    if (!handler) {
+      throw new Error("expected compact command handler to be registered");
+    }
+    await handler({
+      message: {
+        chat: { id: -1234, type: "group", title: "Bot commands" },
+        from: { id: 42, is_bot: true, first_name: "Peer", username: "peer_bot" },
+        text: "/compact",
+        date: 1_736_380_800,
+        message_id: 5,
+      },
+      me: { id: 99, username: "openclaw_bot" },
+      match: "",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(replyAt(deliverRepliesParamsAt(0)).replyToId).toBe("5");
+    expect(replyAt(deliverRepliesParamsAt(1)).replyToId).toBeUndefined();
+  });
+
+  it("sends a peer native-command fallback after an invisible delivery failure", async () => {
+    const { bot, commandHandlers } = createCommandBot();
+    const cfg: OpenClawConfig = {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    };
+    const baseParams = createNativeCommandTestParams(cfg, {
+      bot,
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
+      replyToMode: "first",
+      opts: { token: "token", replyToMode: "first" },
+    });
+    const dispatchReplyWithBufferedBlockDispatcher: TelegramNativeCommandDeps["dispatchReplyWithBufferedBlockDispatcher"] =
+      async (params) => {
+        const info = { kind: "block" } as Parameters<typeof params.dispatcherOptions.deliver>[1];
+        try {
+          await params.dispatcherOptions.deliver({ text: "failed framed response" }, info);
+        } catch (error) {
+          await params.dispatcherOptions.onError?.(error, info);
+        }
+        return { queuedFinal: false, counts: { block: 1, final: 0, tool: 0 } };
+      };
+    deliverReplies
+      .mockRejectedValueOnce(new Error("second chunk failed"))
+      .mockResolvedValueOnce({ delivered: true });
+
+    registerTelegramNativeCommands({
+      ...baseParams,
+      telegramDeps: {
+        ...requireTelegramDeps(baseParams),
+        dispatchReplyWithBufferedBlockDispatcher,
+      },
+    });
+    const handler = commandHandlers.get("compact");
+    if (!handler) {
+      throw new Error("expected compact command handler to be registered");
+    }
+    await handler({
+      message: {
+        chat: { id: -1236, type: "group", title: "Bot commands" },
+        from: { id: 44, is_bot: true, first_name: "Peer", username: "peer_bot" },
+        text: "/compact",
+        date: 1_736_380_800,
+        message_id: 7,
+      },
+      me: { id: 99, username: "openclaw_bot" },
+      match: "",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(replyAt(deliverRepliesParamsAt(1))).toMatchObject({
+      text: "No response generated. Please try again.",
+      replyToId: "7",
+    });
+  });
+
+  it("does not let an unauthorized peer stop cancel buffered work", async () => {
+    const { bot, commandHandlers, sendMessage } = createCommandBot();
+    const { coordinator, cancel } = createPeerBotAdmissionTestCoordinator();
+    const cfg: OpenClawConfig = {
+      commands: { native: true, allowFrom: { telegram: ["999"] } },
+      channels: {
+        defaults: {
+          botLoopProtection: {
+            enabled: true,
+            maxEventsPerWindow: 1,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+          },
+        },
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    };
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(cfg, {
+        bot,
+        allowFrom: ["*"],
+        groupAllowFrom: ["*"],
+      }),
+      peerBotAdmission: coordinator,
+    });
+    const handler = commandHandlers.get("stop");
+    if (!handler) {
+      throw new Error("expected stop command handler to be registered");
+    }
+
+    await handler({
+      message: {
+        chat: { id: -2234, type: "group", title: "Bot commands" },
+        from: { id: 42, is_bot: true, first_name: "Peer", username: "peer_bot" },
+        text: "/stop",
+        date: 1_736_380_800,
+        message_id: 5,
+      },
+      me: { id: 99, username: "openclaw_bot" },
+      match: "",
+    });
+    await handler({
+      message: {
+        chat: { id: -2234, type: "group", title: "Bot commands" },
+        from: { id: 42, is_bot: true, first_name: "Peer", username: "peer_bot" },
+        text: "/stop",
+        date: 1_736_380_800,
+        message_id: 6,
+      },
+      me: { id: 99, username: "openclaw_bot" },
+      match: "",
+    });
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(
+      sendMessage.mock.calls.filter(
+        (call) => call[1] === "You are not authorized to use this command.",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("loop-suppresses unmatched peer plugin-command replies", async () => {
+    const { handler, sendMessage } = registerPlugCommand({
+      cfg: {
+        channels: {
+          defaults: {
+            botLoopProtection: {
+              enabled: true,
+              maxEventsPerWindow: 1,
+              windowSeconds: 60,
+              cooldownSeconds: 60,
+            },
+          },
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      },
+    });
+    pluginCommandMocks.matchPluginCommand.mockReturnValue(null as never);
+    const context = {
+      message: {
+        chat: { id: -1235, type: "group", title: "Bot plugins" },
+        from: { id: 43, is_bot: true, first_name: "Peer", username: "peer_bot" },
+        text: "/plug",
+        date: 1_736_380_800,
+        message_id: 1,
+      },
+      me: { id: 99, username: "openclaw_bot" },
+      match: "",
+    };
+
+    await handler(context);
+    await handler({
+      ...context,
+      message: { ...context.message, message_id: 2 },
+    });
+
+    expect(sendMessage.mock.calls.filter((call) => call[1] === "Command not found.")).toHaveLength(
+      1,
+    );
+  });
+
+  it("uses the canonical General topic and cancels even when peer stop is loop-suppressed", async () => {
+    const getChat = vi.fn(async () => ({ id: -3234, type: "supergroup", is_forum: true }));
+    const { bot, commandHandlers } = createCommandBot({ api: { getChat } });
+    const { coordinator, cancel } = createPeerBotAdmissionTestCoordinator();
+    const cfg: OpenClawConfig = {
+      commands: { native: true, allowFrom: { telegram: ["42"] } },
+      channels: {
+        defaults: {
+          botLoopProtection: {
+            enabled: true,
+            maxEventsPerWindow: 1,
+            windowSeconds: 60,
+            cooldownSeconds: 60,
+          },
+        },
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    };
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(cfg, { bot }),
+      peerBotAdmission: coordinator,
+    });
+    const handler = commandHandlers.get("stop");
+    if (!handler) {
+      throw new Error("expected stop command handler to be registered");
+    }
+
+    await handler({
+      message: {
+        chat: { id: -3234, type: "supergroup", title: "Forum commands" },
+        from: { id: 42, is_bot: true, first_name: "Peer", username: "peer_bot" },
+        text: "/stop",
+        date: 1_736_380_800,
+        message_id: 5,
+      },
+      me: { id: 99, username: "openclaw_bot" },
+      match: "",
+    });
+    await handler({
+      message: {
+        chat: { id: -3234, type: "supergroup", title: "Forum commands" },
+        from: { id: 42, is_bot: true, first_name: "Peer", username: "peer_bot" },
+        text: "/stop",
+        date: 1_736_380_800,
+        message_id: 6,
+      },
+      me: { id: 99, username: "openclaw_bot" },
+      match: "",
+    });
+
+    expect(cancel.mock.calls).toEqual([["default:-3234:1:42:99"], ["default:-3234:1:42:99"]]);
+  });
+
+  it("omits non-forum reply threads from peer stop cancellation", async () => {
+    const getChat = vi.fn(async () => ({ id: -4234, type: "supergroup", is_forum: false }));
+    const { bot, commandHandlers } = createCommandBot({ api: { getChat } });
+    const { coordinator, cancel } = createPeerBotAdmissionTestCoordinator();
+    const cfg: OpenClawConfig = {
+      commands: { native: true, allowFrom: { telegram: ["42"] } },
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: false } },
+        },
+      },
+    };
+    registerTelegramNativeCommands({
+      ...createNativeCommandTestParams(cfg, { bot }),
+      peerBotAdmission: coordinator,
+    });
+    const handler = commandHandlers.get("stop");
+    if (!handler) {
+      throw new Error("expected stop command handler to be registered");
+    }
+
+    await handler({
+      message: {
+        chat: { id: -4234, type: "supergroup", title: "Group commands" },
+        message_thread_id: 77,
+        from: { id: 42, is_bot: true, first_name: "Peer", username: "peer_bot" },
+        text: "/stop",
+        date: 1_736_380_800,
+        message_id: 5,
+      },
+      me: { id: 99, username: "openclaw_bot" },
+      match: "",
+    });
+
+    expect(cancel).toHaveBeenCalledWith("default:-4234:main:42:99");
   });
 
   it("passes agent-scoped media roots for plugin command replies with media", async () => {

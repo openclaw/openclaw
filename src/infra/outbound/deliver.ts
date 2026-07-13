@@ -1208,6 +1208,11 @@ function toOutboundDeliveryError(params: {
     cause: params.error,
     results: params.results,
     payloadOutcomes: params.payloadOutcomes,
+    sentBeforeError:
+      typeof params.error === "object" &&
+      params.error !== null &&
+      "sentBeforeError" in params.error &&
+      params.error.sentBeforeError === true,
     stage: params.stage,
   });
 }
@@ -1935,7 +1940,12 @@ async function deliverOutboundPayloadsCore(
         index: payloadIndex,
         status: "failed",
         error: err,
-        sentBeforeError: results.length > 0,
+        sentBeforeError:
+          results.length > 0 ||
+          (typeof err === "object" &&
+            err !== null &&
+            "sentBeforeError" in err &&
+            err.sentBeforeError === true),
         stage: "platform_send",
       });
       errorDeliveryDiagnostics(err);

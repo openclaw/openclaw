@@ -6,6 +6,7 @@ import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
 import type { SessionEntry } from "../../../config/sessions.js";
+import type { ReplyToMode } from "../../../config/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
@@ -16,6 +17,7 @@ import type {
   QueuedReplyLifecycle,
   SourceReplyDeliveryMode,
 } from "../../get-reply-options.types.js";
+import type { ReplyPayload } from "../../reply-payload.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
@@ -58,6 +60,10 @@ export type FollowupRun = {
   abortSignal?: AbortSignal;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   queuedLifecycle?: QueuedReplyLifecycle;
+  queuedDeliveryPayloadTransform?: (payload: ReplyPayload) => ReplyPayload;
+  queuedDeliveryReplyToMode?: ReplyToMode;
+  queuedDeliveryPayloadDidDeliver?: (payload: ReplyPayload) => void;
+  queuedExecutionContext?: <T>(run: () => Promise<T>) => Promise<T>;
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;

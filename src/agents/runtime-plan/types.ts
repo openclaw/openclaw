@@ -241,6 +241,7 @@ export type AgentRuntimeReplyPayload = {
     question: string;
   };
   replyToId?: string;
+  replyToIdSource?: "explicit" | "implicit";
   replyToTag?: boolean;
   replyToCurrent?: boolean;
   audioAsVoice?: boolean;

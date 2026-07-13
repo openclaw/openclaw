@@ -2,6 +2,11 @@
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveTelegramStandardFragmentFrame,
+  stripTelegramStandardFragmentMarker,
+  TELEGRAM_STANDARD_FRAGMENT_MAX_PARTS,
+} from "../standard-text.js";
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -813,6 +818,58 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("marks later media failures as partial after visible delivery", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 13, chat: { id: "123" } });
+    const bot = createBot({ sendPhoto });
+    loadWebMedia
+      .mockResolvedValueOnce({
+        buffer: Buffer.from("first"),
+        contentType: "image/jpeg",
+        fileName: "first.jpg",
+      })
+      .mockRejectedValueOnce(new Error("second media load failed"));
+
+    await expect(
+      deliverWith({
+        replies: [
+          {
+            mediaUrls: ["https://example.com/first.jpg", "https://example.com/second.jpg"],
+          },
+        ],
+        runtime,
+        bot,
+      }),
+    ).rejects.toMatchObject({ sentBeforeError: true, visibleReplySent: true });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps peer reply targeting on standard media follow-up text", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 13, chat: { id: "123" } });
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 14, chat: { id: "123" } });
+    const bot = createBot({ sendPhoto, sendMessage });
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/photo.jpg",
+          text: "A".repeat(1_100),
+          replyToId: "700",
+        },
+      ],
+      runtime,
+      bot,
+      standardMessages: true,
+      replyToMode: "first",
+    });
+
+    expectRecordFields(mockCallArg(sendPhoto, 0, 2), { reply_to_message_id: 700 });
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { reply_to_message_id: 700 });
+  });
+
   it("skips rich entity detection when link previews are disabled", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
@@ -831,6 +888,230 @@ describe("deliverReplies", () => {
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
     firstSendText(sendMessage);
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { skip_entity_detection: true });
+  });
+
+  it("uses standard messages for bot-originated reply delivery", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const sendRichMessage = vi.fn();
+    const bot = { api: { sendMessage, raw: { sendRichMessage } } } as unknown as Bot;
+
+    await deliverWith({
+      replies: [{ text: "**Ready**" }],
+      runtime,
+      bot,
+      standardMessages: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      "<b>Ready</b>",
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+    expect(sendRichMessage).not.toHaveBeenCalled();
+  });
+
+  it("chunks standard bot-originated replies at the sendMessage limit", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverWith({
+      replies: [{ text: "A".repeat(40_000), replyToId: "700" }],
+      runtime,
+      bot,
+      standardMessages: true,
+      textLimit: 100_000,
+      replyToMode: "all",
+    });
+
+    expect(sendMessage.mock.calls).toHaveLength(10);
+    expect(sendMessage.mock.calls.every((call) => String(call[1]).length <= 4096)).toBe(true);
+    expect(sendMessage.mock.calls.every((call) => String(call[1]).startsWith("\u2060"))).toBe(true);
+    expect(
+      sendMessage.mock.calls.slice(0, -1).every((call) => String(call[1]).length >= 4000),
+    ).toBe(true);
+    expect(
+      sendMessage.mock.calls.every(
+        (call) => (call[2] as { reply_to_message_id?: number }).reply_to_message_id === 700,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects standard replies that exceed the framed receiver limit before sending", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn();
+    const bot = { api: { sendMessage } } as unknown as Bot;
+    const oversizedText = "A".repeat(4_094 * TELEGRAM_STANDARD_FRAGMENT_MAX_PARTS + 1);
+
+    await expect(
+      deliverWith({
+        replies: [{ text: oversizedText }],
+        runtime,
+        bot,
+        standardMessages: true,
+        textLimit: oversizedText.length,
+      }),
+    ).rejects.toThrow(/fragment safety limit/);
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps single-use peer reply targets on every standard transport fragment", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverWith({
+      replies: [{ text: "A".repeat(5_000), replyToId: "700" }],
+      runtime,
+      bot,
+      standardMessages: true,
+      textLimit: 100_000,
+      replyToMode: "first",
+    });
+
+    expect(sendMessage.mock.calls).toHaveLength(2);
+    expect(
+      sendMessage.mock.calls.every(
+        (call) => (call[2] as { reply_to_message_id?: number }).reply_to_message_id === 700,
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "/status continuation",
+    "stop",
+    `${" ".repeat(96)}/reset`,
+    `${" ".repeat(96)}stop`,
+    `/${"B".repeat(4_095)}`,
+  ])("keeps %s from starting a standard-message continuation chunk", async (continuation) => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+    const text = `${"A".repeat(4_094)}${continuation}`;
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      standardMessages: true,
+      textLimit: 100_000,
+    });
+
+    const sentChunks = sendMessage.mock.calls.map((call) => String(call[1]));
+    expect(sentChunks.length).toBeGreaterThanOrEqual(2);
+    expect(sentChunks.every((chunk) => chunk.length <= 4_096)).toBe(true);
+    expect(sentChunks.every((chunk) => chunk.startsWith("\u2060"))).toBe(true);
+    expect(sentChunks.map(stripTelegramStandardFragmentMarker).join("")).toBe(text);
+    expect(sentChunks[0]?.length).toBeGreaterThanOrEqual(4_000);
+    expect(sentChunks[1]?.trimStart()).not.toMatch(/^\//);
+    expect(sentChunks[1]?.trimStart().toLowerCase()).not.toBe("stop");
+  });
+
+  it("keeps incomplete standard-message batches eligible for fallback", async () => {
+    const runtime = createRuntime();
+    const failure = new Error("second chunk failed");
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 3, chat: { id: "123" } })
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({ message_id: 4, chat: { id: "123" } });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "A".repeat(5_000) }],
+        runtime,
+        bot,
+        standardMessages: true,
+        textLimit: 100_000,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    const startFrame = resolveTelegramStandardFragmentFrame(String(sendMessage.mock.calls[0]?.[1]));
+    expect(resolveTelegramStandardFragmentFrame(String(sendMessage.mock.calls[2]?.[1]))).toEqual({
+      batchId: startFrame?.batchId,
+      kind: "abort",
+    });
+    expect(failure).not.toHaveProperty("sentBeforeError");
+    expect(failure).not.toHaveProperty("visibleReplySent");
+  });
+
+  it("keeps an incomplete standard follow-up partial after visible media", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 13, chat: { id: "123" } });
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 14, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("second follow-up fragment failed"))
+      .mockResolvedValueOnce({ message_id: 15, chat: { id: "123" } });
+    const bot = createBot({ sendPhoto, sendMessage });
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await expect(
+      deliverWith({
+        replies: [
+          {
+            mediaUrl: "https://example.com/photo.jpg",
+            text: "A".repeat(6_000),
+          },
+        ],
+        runtime,
+        bot,
+        standardMessages: true,
+        textLimit: 100_000,
+      }),
+    ).rejects.toMatchObject({
+      message: "second follow-up fragment failed",
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(resolveTelegramStandardFragmentFrame(String(sendMessage.mock.calls[2]?.[1]))?.kind).toBe(
+      "abort",
+    );
+  });
+
+  it("chunks long parser-empty standard-message fallbacks", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverWith({
+      replies: [{ text: Array.from({ length: 5_000 }, () => ">").join("\n") }],
+      runtime,
+      bot,
+      standardMessages: true,
+      textLimit: 100_000,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(sendMessage.mock.calls.every((call) => String(call[1]).length <= 4096)).toBe(true);
+  });
+
+  it("retries standard bot-originated replies as plain text after HTML parse errors", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 3, chat: { id: "123" } });
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await deliverWith({
+      replies: [{ text: "[docs](https://example.com)" }],
+      runtime,
+      bot,
+      standardMessages: true,
+    });
+
+    expect(firstMockCallArg(sendMessage, 1)).toBe('<a href="https://example.com">docs</a>');
+    expect(mockCallArg(sendMessage, 0, 2)).toHaveProperty("parse_mode", "HTML");
+    expect(mockCallArg(sendMessage, 1, 1)).toBe("docs (https://example.com)");
+    expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("parse_mode");
   });
 
   it("includes message_thread_id for DM topics", async () => {
@@ -1132,7 +1413,13 @@ describe("deliverReplies", () => {
     const bot = createBot({ sendMessage });
 
     await deliverWith({
-      replies: [{ text: "Hello there", replyToId: "500" }],
+      replies: [
+        {
+          text: "Hello there",
+          replyToId: "500",
+          replyToIdSource: "implicit",
+        },
+      ],
       runtime,
       bot,
       replyToMode: "off",
@@ -1332,6 +1619,7 @@ describe("deliverReplies", () => {
           mediaUrl: "https://example.com/note.ogg",
           text: "chunk-one\n\nchunk-two",
           replyToId: "77",
+          replyToIdSource: "implicit",
           audioAsVoice: true,
           channelData: {
             telegram: {
@@ -1365,6 +1653,80 @@ describe("deliverReplies", () => {
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_markup");
   });
 
+  it("keeps peer reply targeting on every standard voice-fallback fragment", async () => {
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: { message_id: 6, chat: { id: "123" } },
+    });
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          text: "A".repeat(5_000),
+          replyToId: "77",
+          audioAsVoice: true,
+        },
+      ],
+      runtime,
+      bot,
+      replyToMode: "first",
+      standardMessages: true,
+      textLimit: 100_000,
+    });
+
+    expect(sendVoice).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls).toHaveLength(2);
+    expect(
+      sendMessage.mock.calls.every(
+        (call) => (call[2] as { reply_to_message_id?: number }).reply_to_message_id === 77,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps incomplete standard voice fallbacks eligible for fallback", async () => {
+    const runtime = createRuntime();
+    const sendVoice = vi.fn().mockRejectedValue(createVoiceMessagesForbiddenError());
+    const failure = new Error("second fallback chunk failed");
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 6, chat: { id: "123" } })
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({ message_id: 7, chat: { id: "123" } });
+    const bot = createBot({ sendVoice, sendMessage });
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await expect(
+      deliverWith({
+        replies: [
+          {
+            mediaUrl: "https://example.com/note.ogg",
+            text: "A".repeat(5_000),
+            replyToId: "77",
+            audioAsVoice: true,
+          },
+        ],
+        runtime,
+        bot,
+        replyToMode: "first",
+        standardMessages: true,
+        textLimit: 100_000,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(resolveTelegramStandardFragmentFrame(String(sendMessage.mock.calls[2]?.[1]))?.kind).toBe(
+      "abort",
+    );
+    expectRecordFields(mockCallArg(sendMessage, 2, 2), {
+      reply_to_message_id: 77,
+      allow_sending_without_reply: true,
+    });
+    expect(failure).not.toHaveProperty("sentBeforeError");
+    expect(failure).not.toHaveProperty("visibleReplySent");
+  });
+
   it("rethrows non-VOICE_MESSAGES_FORBIDDEN errors from sendVoice", async () => {
     const runtime = createRuntime();
     const sendVoice = vi.fn().mockRejectedValue(new Error("Network error"));
@@ -1396,7 +1758,13 @@ describe("deliverReplies", () => {
 
     // Use a small textLimit to force multiple chunks
     await deliverReplies({
-      replies: [{ text: "chunk-one\n\nchunk-two", replyToId: "700" }],
+      replies: [
+        {
+          text: "chunk-one\n\nchunk-two",
+          replyToId: "700",
+          replyToIdSource: "implicit",
+        },
+      ],
       chatId: "123",
       token: "tok",
       runtime,
@@ -1413,6 +1781,63 @@ describe("deliverReplies", () => {
     });
     // Second chunk should NOT have reply_to_message_id
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id");
+  });
+
+  it("preserves explicit reply targets across chunks when reply mode is off", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 20,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [
+        {
+          text: "chunk-one\n\nchunk-two",
+          replyToId: "701",
+          replyToTag: true,
+        },
+      ],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 12,
+    });
+
+    expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
+    for (const call of sendMessage.mock.calls) {
+      expectRecordFields(call[2], {
+        reply_to_message_id: 701,
+        allow_sending_without_reply: true,
+      });
+    }
+  });
+
+  it("treats an unstamped payload reply target as explicit when reply mode is off", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 20,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "plugin reply", replyToId: "702" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "off",
+      textLimit: 4096,
+    });
+
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_to_message_id: 702,
+      allow_sending_without_reply: true,
+    });
   });
 
   it("clamps reply chunks to Telegram rich message limit", async () => {
@@ -1477,7 +1902,13 @@ describe("deliverReplies", () => {
     mockMediaLoad("b.jpg", "image/jpeg", "img2");
 
     await deliverReplies({
-      replies: [{ mediaUrls: ["https://a.jpg", "https://b.jpg"], replyToId: "900" }],
+      replies: [
+        {
+          mediaUrls: ["https://a.jpg", "https://b.jpg"],
+          replyToId: "900",
+          replyToIdSource: "implicit",
+        },
+      ],
       chatId: "123",
       token: "tok",
       runtime,

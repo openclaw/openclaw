@@ -173,8 +173,10 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
   });
 
   it("lets explicit topic requireMention=true override always activation", async () => {
+    const afterAdmissionShouldDrop = vi.fn(async () => false);
     const ctx = await buildTelegramMessageContextForTest({
       message: buildForumMessage(),
+      options: { afterAdmissionShouldDrop },
       resolveGroupActivation: () => false,
       resolveGroupRequireMention: () => false,
       resolveTelegramGroupConfig: () => ({
@@ -184,6 +186,44 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     expect(ctx).toBeNull();
+    expect(afterAdmissionShouldDrop).toHaveBeenCalledOnce();
+    expect(afterAdmissionShouldDrop).toHaveBeenCalledWith(false);
+  });
+
+  it("lets deferred admission suppress an addressed group turn", async () => {
+    const afterAdmissionShouldDrop = vi.fn(async () => true);
+    const ctx = await buildTelegramMessageContextForTest({
+      message: { ...buildForumMessage(), text: "@bot hello" },
+      options: { afterAdmissionShouldDrop },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: true },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx).toBeNull();
+    expect(afterAdmissionShouldDrop).toHaveBeenCalledOnce();
+    expect(afterAdmissionShouldDrop).toHaveBeenCalledWith(true);
+  });
+
+  it("finalizes deferred admission when group policy drops before body admission", async () => {
+    const afterAdmissionShouldDrop = vi.fn(async () => false);
+    const ctx = await buildTelegramMessageContextForTest({
+      message: buildForumMessage(),
+      options: { afterAdmissionShouldDrop },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { enabled: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx).toBeNull();
+    expect(afterAdmissionShouldDrop).toHaveBeenCalledOnce();
+    expect(afterAdmissionShouldDrop).toHaveBeenCalledWith(false);
   });
 
   it("keeps activation fallback when no topic requireMention is configured", async () => {

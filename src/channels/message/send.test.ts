@@ -486,6 +486,34 @@ describe("withDurableMessageSendContext", () => {
     expect(onSendFailure).toHaveBeenCalledWith(error);
   });
 
+  it("preserves receiptless partial delivery from best-effort adapters", async () => {
+    const error = new Error("later adapter chunk failed");
+    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "failed",
+        error,
+        sentBeforeError: true,
+        stage: "platform_send",
+      });
+      return [];
+    });
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "long peer reply" }],
+      bestEffort: true,
+    });
+
+    expectBatchStatus(result, "partial_failed");
+    expect(result.results).toEqual([]);
+    expect(result.receipt?.platformMessageIds).toEqual([]);
+    expect(result.error).toBe(error);
+    expect(result.sentBeforeError).toBe(true);
+  });
+
   it("reports best-effort partial failures with the delivered receipt prefix", async () => {
     const error = new Error("second payload failed");
     deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
@@ -559,6 +587,37 @@ describe("withDurableMessageSendContext", () => {
     expect(result.error).toBe(error);
     expect(result.sentBeforeError).toBe(true);
     expect(onSendFailure).toHaveBeenCalledWith(error);
+  });
+
+  it("maps receiptless adapter partial delivery errors to partial_failed", async () => {
+    const cause = new Error("later adapter chunk failed");
+    const error = new OutboundDeliveryError("later adapter chunk failed", {
+      cause,
+      sentBeforeError: true,
+      payloadOutcomes: [
+        {
+          index: 0,
+          status: "failed",
+          error: cause,
+          sentBeforeError: true,
+          stage: "platform_send",
+        },
+      ],
+      stage: "platform_send",
+    });
+    deliverOutboundPayloads.mockRejectedValueOnce(error);
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "telegram",
+      to: "chat-1",
+      payloads: [{ text: "long peer reply" }],
+    });
+
+    expectBatchStatus(result, "partial_failed");
+    expect(result.results).toEqual([]);
+    expect(result.receipt?.platformMessageIds).toEqual([]);
+    expect(result.sentBeforeError).toBe(true);
   });
 
   it("runs the failure hook when send-context orchestration throws", async () => {

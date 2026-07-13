@@ -57,7 +57,9 @@ export function createReplyToDeliveryPolicy(params: {
 
   const resolveCurrentReplyTo = (payload: ReplyPayload): ReplyToResolution => {
     if (payload.replyToId != null) {
-      return payload.replyToId ? { replyToId: payload.replyToId, source: "explicit" } : {};
+      return payload.replyToId
+        ? { replyToId: payload.replyToId, source: payload.replyToIdSource ?? "explicit" }
+        : {};
     }
     const replyToId = (params.replyToMode === "off" ? undefined : params.replyToId) ?? undefined;
     if (!replyToId) {

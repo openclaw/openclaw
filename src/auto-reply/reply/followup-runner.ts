@@ -368,7 +368,12 @@ export function createFollowupRunner(params: {
       }
       await opts.onBlockReply(payload);
     };
-    for (const payload of sendablePayloads) {
+    for (const sourcePayload of sendablePayloads) {
+      // Transform at routing time so channel-owned single-use state observes the
+      // previous payload's actual delivery outcome, not just its queue position.
+      const payload = queued.queuedDeliveryPayloadTransform
+        ? queued.queuedDeliveryPayloadTransform(sourcePayload)
+        : sourcePayload;
       const providerRoute = deliveryPlan.resolveFollowupRoute({
         payload,
         originatingChannel,
@@ -411,6 +416,7 @@ export function createFollowupRunner(params: {
           requesterSenderUsername: queued.run.senderUsername,
           requesterSenderE164: queued.run.senderE164,
           threadId: queued.originatingThreadId,
+          replyToMode: queued.queuedDeliveryReplyToMode,
           cfg: runtimeConfig,
           mirror: hasTranscriptOwner ? false : options.mirror,
           replyKind,
@@ -419,22 +425,43 @@ export function createFollowupRunner(params: {
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          const provider = resolveOriginMessageProvider({
-            provider: queued.run.messageProvider,
-          });
-          const origin = resolveOriginMessageProvider({
-            originatingChannel,
-          });
-          if (opts?.onBlockReply) {
-            if (origin && origin === provider) {
-              await sendDispatcherPayload(payload);
-            } else {
-              crossChannelRouteFailureNeedsNotice = true;
+          if (result.delivered) {
+            const provider = resolveOriginMessageProvider({
+              provider: queued.run.messageProvider,
+            });
+            const origin = resolveOriginMessageProvider({
+              originatingChannel,
+            });
+            if (origin && provider && origin !== provider) {
+              routedAnyCrossChannelPayloadToOrigin = true;
             }
+            defaultRuntime.error?.(
+              `followup queue: route-reply partially failed after visible delivery: ${errorMsg}`,
+            );
+            queued.queuedDeliveryPayloadDidDeliver?.(payload);
           } else {
-            defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
+            const provider = resolveOriginMessageProvider({
+              provider: queued.run.messageProvider,
+            });
+            const origin = resolveOriginMessageProvider({
+              originatingChannel,
+            });
+            if (opts?.onBlockReply) {
+              if (origin && origin === provider) {
+                await sendDispatcherPayload(payload);
+              } else {
+                crossChannelRouteFailureNeedsNotice = true;
+              }
+            } else {
+              defaultRuntime.error?.(`followup queue: route-reply failed: ${errorMsg}`);
+            }
           }
         } else {
+          if (result.partialFailure) {
+            defaultRuntime.error?.(
+              `followup queue: route-reply partially failed after visible delivery: ${result.error ?? "unknown error"}`,
+            );
+          }
           const provider = resolveOriginMessageProvider({
             provider: queued.run.messageProvider,
           });
@@ -443,6 +470,9 @@ export function createFollowupRunner(params: {
           });
           if (origin && provider && origin !== provider) {
             routedAnyCrossChannelPayloadToOrigin = true;
+          }
+          if (result.delivered) {
+            queued.queuedDeliveryPayloadDidDeliver?.(payload);
           }
         }
       } else if (deliveryRoute === "dispatcher") {
@@ -464,7 +494,7 @@ export function createFollowupRunner(params: {
     }
   };
 
-  return async (queued: FollowupRun) => {
+  const runQueuedFollowup = async (queued: FollowupRun) => {
     if (isFollowupRunAborted(queued)) {
       completeFollowupRunLifecycle(queued);
       typing.markRunComplete();
@@ -1348,4 +1378,8 @@ export function createFollowupRunner(params: {
       typing.markDispatchIdle();
     }
   };
+  return async (queued: FollowupRun) =>
+    queued.queuedExecutionContext
+      ? await queued.queuedExecutionContext(() => runQueuedFollowup(queued))
+      : await runQueuedFollowup(queued);
 }

@@ -56,7 +56,11 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     clearAgentHarnesses();
     setDiscordTestRegistry();
     resetInboundDedupe();
-    mocks.routeReply.mockReset().mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply.mockReset().mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "mock",
+    });
     mocks.tryFastAbortFromMessage.mockReset().mockResolvedValue({
       handled: false,
       aborted: false,
@@ -194,7 +198,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
     });
-    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
 
     const result = await dispatchReplyFromConfig({
       ctx: createHookCtx(),

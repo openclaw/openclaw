@@ -32,8 +32,11 @@ import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+import {
+  normalizeAccountId,
+  resolveAgentRoute,
+  resolveThreadSessionKeys,
+} from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
@@ -42,7 +45,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
-import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
+import { resolveDefaultTelegramAccountId, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
   normalizeDmAllowFromWithStore,
@@ -109,6 +112,11 @@ import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
 } from "./conversation-route.js";
+import {
+  combineTelegramDeferredAdmissionCallbacks,
+  settleTelegramDeferredAdmissionCallbacks,
+  type TelegramDeferredAdmissionCallback,
+} from "./deferred-admission.js";
 import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.js";
 import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
 import {
@@ -157,7 +165,19 @@ import {
   isTelegramEditTargetMissingError,
   isTelegramMessageHasNoTextError,
 } from "./network-errors.js";
+import {
+  buildTelegramPeerBotAdmissionKey,
+  createTelegramPeerBotAdmissionCoordinator,
+} from "./peer-bot-admission.js";
+import { shouldSuppressTelegramPeerBotTurn } from "./peer-bot-loop.js";
 import { buildInlineKeyboard } from "./send.js";
+import {
+  resolveTelegramStandardFragmentFrame,
+  stripTelegramStandardFragmentMarker,
+  TELEGRAM_STANDARD_FRAGMENT_ADMISSION_FLOOR,
+  TELEGRAM_STANDARD_FRAGMENT_MAX_PARTS,
+  TELEGRAM_STANDARD_FRAGMENT_MAX_WIRE_CHARS,
+} from "./standard-text.js";
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -176,6 +196,7 @@ export const registerTelegramHandlers = ({
   processMessage,
   logger,
   telegramDeps,
+  peerBotAdmission = createTelegramPeerBotAdmissionCoordinator(),
   resolveGroupActivation,
   resolveGroupRequireMention,
 }: RegisterTelegramHandlerParams) => {
@@ -186,15 +207,24 @@ export const registerTelegramHandlers = ({
     transport: telegramTransport,
   });
   const DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS = 1500;
-  const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = 4000;
+  const DEFAULT_PEER_BOT_TEXT_FRAGMENT_MAX_GAP_MS = 120_000;
+  const TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS = TELEGRAM_STANDARD_FRAGMENT_ADMISSION_FLOOR;
   const TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS =
     typeof opts.testTimings?.textFragmentGapMs === "number" &&
     Number.isFinite(opts.testTimings.textFragmentGapMs)
       ? Math.max(10, Math.floor(opts.testTimings.textFragmentGapMs))
       : DEFAULT_TEXT_FRAGMENT_MAX_GAP_MS;
+  const peerBotTextFragmentGapMsForTest =
+    opts.testTimings?.peerBotTextFragmentGapMs ?? opts.testTimings?.textFragmentGapMs;
+  const TELEGRAM_PEER_BOT_TEXT_FRAGMENT_MAX_GAP_MS =
+    typeof peerBotTextFragmentGapMsForTest === "number" &&
+    Number.isFinite(peerBotTextFragmentGapMsForTest)
+      ? Math.max(10, Math.floor(peerBotTextFragmentGapMsForTest))
+      : DEFAULT_PEER_BOT_TEXT_FRAGMENT_MAX_GAP_MS;
   const TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP = 1;
   const TELEGRAM_TEXT_FRAGMENT_MAX_PARTS = 12;
   const TELEGRAM_TEXT_FRAGMENT_MAX_TOTAL_CHARS = 50_000;
+  const TELEGRAM_PEER_BOT_MAX_ACTIVE_TEXT_BATCHES = 4;
   const mediaGroupTimeoutMs =
     typeof opts.testTimings?.mediaGroupFlushMs === "number" &&
     Number.isFinite(opts.testTimings.mediaGroupFlushMs)
@@ -205,6 +235,10 @@ export const registerTelegramHandlers = ({
         : MEDIA_GROUP_TIMEOUT_MS;
 
   type BufferedMediaGroupEntry = MediaGroupEntry & {
+    afterAdmissionCallbacks: Array<{
+      messageId: number;
+      callback: TelegramDeferredAdmissionCallback;
+    }>;
     storeAllowFrom: string[];
     isGroup: boolean;
     isForum: boolean;
@@ -217,6 +251,9 @@ export const registerTelegramHandlers = ({
     topicConfig?: TelegramTopicConfig;
     dispatchDedupeKeys: string[];
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
+    cancelPeerBotAdmission?: () => void;
+    peerBotAdmissionCanceled?: boolean;
+    peerBotCancellationCleanupComplete?: boolean;
   };
 
   const mediaGroupBuffer = new Map<string, BufferedMediaGroupEntry>();
@@ -234,13 +271,38 @@ export const registerTelegramHandlers = ({
     key: string;
     threadId?: number;
     messages: Array<{ msg: Message; ctx: TelegramContext; receivedAtMs: number }>;
+    afterAdmissionCallbacks: Array<{
+      messageId: number;
+      callback: TelegramDeferredAdmissionCallback;
+    }>;
     promptContextMinTimestampMs?: number;
     dispatchDedupeKeys: string[];
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
+    frameBatchId?: string;
+    maxGapMs: number;
     timer: ReturnType<typeof setTimeout>;
+    cancelPeerBotAdmission?: () => void;
+    peerBotAdmissionCanceled?: boolean;
+    peerBotCancellationCleanupComplete?: boolean;
   };
   const textFragmentBuffer = new Map<string, TextFragmentEntry>();
   const textFragmentProcessingByKey = new Map<string, Promise<void>>();
+  const buildTextFragmentBufferKey = (params: {
+    chatId: number;
+    threadId?: number;
+    senderId: string;
+    frameBatchId?: string;
+  }) => {
+    const baseKey = `text:${params.chatId}:${params.threadId ?? "main"}:${params.senderId}`;
+    return params.frameBatchId ? `${baseKey}:frame:${params.frameBatchId}` : baseKey;
+  };
+  const listFramedTextFragmentEntries = (baseKey: string) =>
+    [...textFragmentBuffer.values()]
+      .filter((entry) => entry.key.startsWith(`${baseKey}:frame:`))
+      .toSorted(
+        (left, right) =>
+          (left.messages[0]?.receivedAtMs ?? 0) - (right.messages[0]?.receivedAtMs ?? 0),
+      );
 
   const queueBufferedProcessing = async (
     processingByKey: Map<string, Promise<void>>,
@@ -260,6 +322,7 @@ export const registerTelegramHandlers = ({
   const FORWARD_BURST_DEBOUNCE_MS = 80;
   type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
+    afterAdmissionShouldDrop?: TelegramDeferredAdmissionCallback;
     ctx: TelegramContext;
     msg: Message;
     allMedia: TelegramMediaRef[];
@@ -345,6 +408,17 @@ export const registerTelegramHandlers = ({
   ) => {
     for (const participant of new Set(participants)) {
       participant.settle(result);
+    }
+  };
+  const settleDeferredAdmissions = async (params: {
+    callbacks: TelegramDeferredAdmissionCallback[];
+    admitted: boolean;
+    cacheMessage: boolean;
+    context: string;
+  }) => {
+    const errors = await settleTelegramDeferredAdmissionCallbacks(params);
+    for (const error of errors) {
+      runtime.error?.(danger(`${params.context} admission cleanup failed: ${String(error)}`));
     }
   };
   const createSpooledReplayParticipantForBufferedWork = (
@@ -557,8 +631,10 @@ export const registerTelegramHandlers = ({
             allMedia: last.allMedia,
             storeAllowFrom: last.storeAllowFrom,
             options: {
+              afterAdmissionShouldDrop: last.afterAdmissionShouldDrop,
               receivedAtMs: last.receivedAtMs,
               ingressBuffer: "inbound-debounce",
+              ...(last.threadId !== undefined ? { promptContextThreadId: last.threadId } : {}),
               ...promptContextBoundaryOptions(last.promptContextMinTimestampMs),
               ...spooledReplayOptions(spooledReplayParticipants),
             },
@@ -573,6 +649,11 @@ export const registerTelegramHandlers = ({
           .join("\n");
         const combinedMedia = entries.flatMap((entry) => entry.allMedia);
         if (!combinedText.trim() && combinedMedia.length === 0) {
+          await Promise.all(
+            entries.flatMap((entry) =>
+              entry.afterAdmissionShouldDrop ? [entry.afterAdmissionShouldDrop(false)] : [],
+            ),
+          );
           settleSpooledReplayParticipants(spooledReplayParticipants, { kind: "skipped" });
           return;
         }
@@ -588,15 +669,29 @@ export const registerTelegramHandlers = ({
         });
         const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
         const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
+        const deferredAdmissions = entries
+          .map((entry) => entry.afterAdmissionShouldDrop)
+          .filter(
+            (callback): callback is TelegramDeferredAdmissionCallback => callback !== undefined,
+          );
+        const hasAlreadyAdmittedEntry = entries.some(
+          (entry) => entry.afterAdmissionShouldDrop === undefined,
+        );
         const result = await processMessageWithReplyChain({
           ctx: syntheticCtx,
           msg: syntheticMessage,
           allMedia: combinedMedia,
           storeAllowFrom: first.storeAllowFrom,
           options: {
+            afterAdmissionShouldDrop: combineTelegramDeferredAdmissionCallbacks(
+              deferredAdmissions,
+              deferredAdmissions[0],
+              !hasAlreadyAdmittedEntry,
+            ),
             ...(messageIdOverride ? { messageIdOverride } : {}),
             receivedAtMs: first.receivedAtMs,
             ingressBuffer: "inbound-debounce",
+            ...(first.threadId !== undefined ? { promptContextThreadId: first.threadId } : {}),
             ...promptContextBoundaryOptions(promptContextMinTimestampMs),
             ...spooledReplayOptions(spooledReplayParticipants),
           },
@@ -622,7 +717,21 @@ export const registerTelegramHandlers = ({
         );
       settleSpooledReplayParticipants(spooledReplayParticipants, buildFailedProcessingResult(err));
       runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
-      if (spooledReplayParticipants.length > 0) {
+      const deferredAdmissions = items
+        .map((item) => item.afterAdmissionShouldDrop)
+        .filter(
+          (callback): callback is (admitted: boolean) => Promise<boolean> => callback !== undefined,
+        );
+      if (deferredAdmissions.length > 0) {
+        void Promise.all(deferredAdmissions.map((callback) => callback(false))).catch(
+          (admissionErr: unknown) => {
+            runtime.error?.(
+              danger(`telegram deferred admission cleanup failed: ${String(admissionErr)}`),
+            );
+          },
+        );
+      }
+      if (spooledReplayParticipants.length > 0 || deferredAdmissions.length > 0) {
         return;
       }
       const chatId = items[0]?.msg.chat.id;
@@ -652,6 +761,18 @@ export const registerTelegramHandlers = ({
       releaseDispatchDedupeKeys(
         mergeDispatchDedupeKeys(...items.map((item) => item.dispatchDedupeKeys)),
       );
+      const deferredAdmissions = items
+        .map((item) => item.afterAdmissionShouldDrop)
+        .filter(
+          (callback): callback is TelegramDeferredAdmissionCallback => callback !== undefined,
+        );
+      void Promise.all(deferredAdmissions.map((callback) => callback(false))).catch(
+        (admissionErr: unknown) => {
+          runtime.error?.(
+            danger(`telegram deferred admission cancellation failed: ${String(admissionErr)}`),
+          );
+        },
+      );
     },
   });
 
@@ -666,6 +787,9 @@ export const registerTelegramHandlers = ({
     runtimeCfg?: OpenClawConfig;
   }): {
     agentId: string;
+    bindingMode: ReturnType<typeof resolveTelegramConversationRoute>["bindingMode"];
+    route: ReturnType<typeof resolveTelegramConversationRoute>["route"];
+    runtimeCfg: OpenClawConfig;
     sessionEntry: ReturnType<typeof resolveSessionStoreEntry>["existing"];
     sessionKey: string;
     model?: string;
@@ -680,7 +804,7 @@ export const registerTelegramHandlers = ({
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const topicThreadId = resolvedThreadId ?? dmThreadId;
     const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
-    const { route } = resolveTelegramConversationRoute({
+    const { route, bindingMode } = resolveTelegramConversationRoute({
       cfg: runtimeCfg,
       accountId,
       chatId: params.chatId,
@@ -710,6 +834,7 @@ export const registerTelegramHandlers = ({
     });
     const store = (telegramDeps.loadSessionStore ?? loadSessionStore)(storePath);
     const entry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+    const routeState = { bindingMode, route, runtimeCfg };
     const storedOverride = resolveStoredModelOverride({
       sessionEntry: entry,
       sessionStore: store,
@@ -721,6 +846,7 @@ export const registerTelegramHandlers = ({
     });
     if (storedOverride) {
       return {
+        ...routeState,
         agentId: route.agentId,
         sessionEntry: entry,
         sessionKey,
@@ -733,6 +859,7 @@ export const registerTelegramHandlers = ({
     const model = entry?.model?.trim();
     if (provider && model) {
       return {
+        ...routeState,
         agentId: route.agentId,
         sessionEntry: entry,
         sessionKey,
@@ -741,6 +868,7 @@ export const registerTelegramHandlers = ({
     }
     const modelCfg = runtimeCfg.agents?.defaults?.model;
     return {
+      ...routeState,
       agentId: route.agentId,
       sessionEntry: entry,
       sessionKey,
@@ -757,7 +885,8 @@ export const registerTelegramHandlers = ({
     return Boolean(msg.audio ?? msg.voice ?? documentMime?.startsWith("audio/"));
   };
 
-  const shouldSkipMediaDownloadForUnaddressedMentionGroup = async (params: {
+  type TelegramMentionAdmission = "accepted" | "deferred" | "skipped";
+  const resolveMediaDownloadMentionAdmission = async (params: {
     ctx: TelegramContext;
     msg: Message;
     chatId: number;
@@ -770,7 +899,7 @@ export const registerTelegramHandlers = ({
     effectiveDmAllow: NormalizedAllowFrom;
     groupConfig?: TelegramGroupConfig;
     topicConfig?: TelegramTopicConfig;
-  }): Promise<boolean> => {
+  }): Promise<TelegramMentionAdmission> => {
     const {
       ctx,
       msg,
@@ -785,10 +914,9 @@ export const registerTelegramHandlers = ({
       groupConfig,
       topicConfig,
     } = params;
-    if (!isGroup || mediaMayNeedDownloadForMentionDetection(msg)) {
-      return false;
+    if (!isGroup) {
+      return "accepted";
     }
-
     const runtimeCfg = telegramDeps.getRuntimeConfig();
     const sessionState = resolveTelegramSessionState({
       chatId,
@@ -812,7 +940,7 @@ export const registerTelegramHandlers = ({
       resolveGroupRequireMention(chatId),
     );
     if (!requireMention) {
-      return false;
+      return "accepted";
     }
 
     const botUsername = ctx.me?.username?.trim().toLowerCase();
@@ -874,15 +1002,41 @@ export const registerTelegramHandlers = ({
         commandAuthorized: commandGate.authorized,
       },
     });
-    if (mentionDecision.shouldSkip) {
-      logger.info({ chatId, reason: "no-mention" }, "skipping group media before download");
-      return true;
+    if (!mentionDecision.shouldSkip) {
+      return "accepted";
     }
-    return false;
+    if (mediaMayNeedDownloadForMentionDetection(msg)) {
+      return "deferred";
+    }
+    logger.info({ chatId, reason: "no-mention" }, "skipping group media before download");
+    return "skipped";
+  };
+
+  const releasePeerBotAdmissionCancellation = (entry: { cancelPeerBotAdmission?: () => void }) => {
+    entry.cancelPeerBotAdmission?.();
+    entry.cancelPeerBotAdmission = undefined;
+  };
+
+  const completeCanceledBufferedEntry = (
+    entry: Pick<
+      BufferedMediaGroupEntry | TextFragmentEntry,
+      "dispatchDedupeKeys" | "spooledReplayParticipants" | "peerBotCancellationCleanupComplete"
+    >,
+  ) => {
+    if (entry.peerBotCancellationCleanupComplete) {
+      return;
+    }
+    entry.peerBotCancellationCleanupComplete = true;
+    releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
+    settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
   };
 
   const processMediaGroup = async (entry: BufferedMediaGroupEntry) => {
     try {
+      if (entry.peerBotAdmissionCanceled) {
+        completeCanceledBufferedEntry(entry);
+        return;
+      }
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
       const captionMsg = entry.messages.find((m) => m.msg.caption || m.msg.text);
@@ -893,25 +1047,62 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      const mentionAdmission = await resolveMediaDownloadMentionAdmission({
+        ctx: primaryEntry.ctx,
+        msg: primaryEntry.msg,
+        chatId: primaryEntry.msg.chat.id,
+        isGroup: entry.isGroup,
+        isForum: entry.isForum,
+        resolvedThreadId: entry.resolvedThreadId,
+        dmThreadId: entry.dmThreadId,
+        senderId: entry.senderId,
+        effectiveGroupAllow: entry.effectiveGroupAllow,
+        effectiveDmAllow: entry.effectiveDmAllow,
+        groupConfig: entry.groupConfig,
+        topicConfig: entry.topicConfig,
+      });
+      if (mentionAdmission === "skipped") {
+        await Promise.all(entry.afterAdmissionCallbacks.map(({ callback }) => callback(false)));
+        releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
+        settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
+        return;
+      }
+
+      const admissionOwnerCallback = entry.afterAdmissionCallbacks[0]?.callback;
+      const deferredMessageIds = new Set(
+        entry.afterAdmissionCallbacks.map(({ messageId }) => messageId),
+      );
+      const hasAlreadyAdmittedEntry = entry.messages.some(
+        ({ msg }) => !deferredMessageIds.has(msg.message_id),
+      );
+      const combinedAdmission = combineTelegramDeferredAdmissionCallbacks(
+        entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+        admissionOwnerCallback,
+        !hasAlreadyAdmittedEntry,
+      );
+      let afterAdmissionShouldDrop: TelegramDeferredAdmissionCallback | undefined =
+        combinedAdmission
+          ? async (admitted, cacheMessage) => {
+              if (entry.peerBotAdmissionCanceled) {
+                await combinedAdmission(false, false);
+                return true;
+              }
+              return await combinedAdmission(admitted, cacheMessage);
+            }
+          : undefined;
       if (
-        await shouldSkipMediaDownloadForUnaddressedMentionGroup({
-          ctx: primaryEntry.ctx,
-          msg: primaryEntry.msg,
-          chatId: primaryEntry.msg.chat.id,
-          isGroup: entry.isGroup,
-          isForum: entry.isForum,
-          resolvedThreadId: entry.resolvedThreadId,
-          dmThreadId: entry.dmThreadId,
-          senderId: entry.senderId,
-          effectiveGroupAllow: entry.effectiveGroupAllow,
-          effectiveDmAllow: entry.effectiveDmAllow,
-          groupConfig: entry.groupConfig,
-          topicConfig: entry.topicConfig,
-        })
+        mentionAdmission === "accepted" &&
+        afterAdmissionShouldDrop &&
+        (await afterAdmissionShouldDrop(true))
       ) {
         releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
+      }
+      if (mentionAdmission === "accepted") {
+        // Accepted peer albums spend loop budget before any download; deferred
+        // mention detection retains the callback until media is available.
+        afterAdmissionShouldDrop = undefined;
       }
 
       const allMedia: TelegramMediaRef[] = [];
@@ -945,7 +1136,12 @@ export const registerTelegramHandlers = ({
         }
       }
 
-      if (skippedCount > 0) {
+      if (entry.peerBotAdmissionCanceled) {
+        completeCanceledBufferedEntry(entry);
+        return;
+      }
+
+      if (skippedCount > 0 && entry.afterAdmissionCallbacks.length === 0) {
         const total = entry.messages.length;
         const wasOrWere = skippedCount === 1 ? "was" : "were";
         await withTelegramApiErrorLogging({
@@ -971,6 +1167,10 @@ export const registerTelegramHandlers = ({
         allMedia,
         storeAllowFrom: entry.storeAllowFrom,
         options: {
+          afterAdmissionShouldDrop,
+          ...(entry.resolvedThreadId !== undefined || entry.dmThreadId !== undefined
+            ? { promptContextThreadId: entry.resolvedThreadId ?? entry.dmThreadId }
+            : {}),
           ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
           ...spooledReplayOptions(entry.spooledReplayParticipants),
         },
@@ -978,53 +1178,124 @@ export const registerTelegramHandlers = ({
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (err) {
+      await settleDeferredAdmissions({
+        callbacks: entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+        admitted: false,
+        cacheMessage: false,
+        context: "media group",
+      });
       releaseDispatchDedupeKeys(entry.dispatchDedupeKeys, err);
       settleSpooledReplayParticipants(
         entry.spooledReplayParticipants,
         buildFailedProcessingResult(err),
       );
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
+    } finally {
+      releasePeerBotAdmissionCancellation(entry);
     }
+  };
+
+  const detachMediaGroupEntry = (key: string, entry: BufferedMediaGroupEntry) => {
+    clearTimeout(entry.timer);
+    if (mediaGroupBuffer.get(key) === entry) {
+      mediaGroupBuffer.delete(key);
+    }
+  };
+
+  const dropMediaGroupEntry = async (key: string, entry: BufferedMediaGroupEntry) => {
+    detachMediaGroupEntry(key, entry);
+    await settleDeferredAdmissions({
+      callbacks: entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+      admitted: false,
+      cacheMessage: false,
+      context: "media group cancellation",
+    });
+    completeCanceledBufferedEntry(entry);
+    releasePeerBotAdmissionCancellation(entry);
   };
 
   const flushTextFragments = async (entry: TextFragmentEntry) => {
     try {
+      if (entry.peerBotAdmissionCanceled) {
+        completeCanceledBufferedEntry(entry);
+        return;
+      }
       entry.messages.sort((a, b) => a.msg.message_id - b.msg.message_id);
 
       const first = entry.messages[0];
       const last = entry.messages.at(-1);
       if (!first || !last) {
+        await Promise.all(entry.afterAdmissionCallbacks.map(({ callback }) => callback(false)));
         releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
 
-      const combinedText = entry.messages.map((m) => m.msg.text ?? "").join("");
+      const combinedText = entry.messages
+        .map((m) => {
+          const text = m.msg.text ?? "";
+          return stripTelegramStandardFragmentMarker(text);
+        })
+        .join("");
       if (!combinedText.trim()) {
+        await Promise.all(entry.afterAdmissionCallbacks.map(({ callback }) => callback(false)));
         releaseDispatchDedupeKeys(entry.dispatchDedupeKeys);
         settleSpooledReplayParticipants(entry.spooledReplayParticipants, { kind: "skipped" });
         return;
       }
 
       const syntheticMessage = buildSyntheticTextMessage({
-        base: first.msg,
+        base: { ...first.msg, message_id: last.msg.message_id },
         text: combinedText,
         date: last.msg.date ?? first.msg.date,
       });
 
       const storeAllowFrom = await loadStoreAllowFrom(first.msg);
+      if (entry.peerBotAdmissionCanceled) {
+        completeCanceledBufferedEntry(entry);
+        return;
+      }
       const baseCtx = first.ctx;
 
       const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
+      const deferredMessageIds = new Set(
+        entry.afterAdmissionCallbacks.map(({ messageId }) => messageId),
+      );
+      const hasAlreadyAdmittedEntry = entry.messages.some(
+        ({ msg }) => !deferredMessageIds.has(msg.message_id),
+      );
+      const combinedAdmission = combineTelegramDeferredAdmissionCallbacks(
+        entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+        entry.afterAdmissionCallbacks[0]?.callback,
+        !hasAlreadyAdmittedEntry,
+      );
+      let syntheticMessageRecorded = false;
+      const normalizedCombinedAdmission: TelegramDeferredAdmissionCallback | undefined =
+        combinedAdmission
+          ? async (admitted) => {
+              if (entry.peerBotAdmissionCanceled) {
+                await combinedAdmission(false, false);
+                return true;
+              }
+              const shouldDrop = await combinedAdmission(admitted, false);
+              if (!shouldDrop && !syntheticMessageRecorded) {
+                await recordMessageForReplyChain(syntheticMessage, entry.threadId);
+                syntheticMessageRecorded = true;
+              }
+              return shouldDrop;
+            }
+          : undefined;
       const result = await processMessageWithReplyChain({
         ctx: syntheticCtx,
         msg: syntheticMessage,
         allMedia: [],
         storeAllowFrom,
         options: {
+          afterAdmissionShouldDrop: normalizedCombinedAdmission,
           messageIdOverride: String(last.msg.message_id),
           receivedAtMs: first.receivedAtMs,
           ingressBuffer: "text-fragment",
+          ...(entry.threadId !== undefined ? { promptContextThreadId: entry.threadId } : {}),
           ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
           ...spooledReplayOptions(entry.spooledReplayParticipants),
         },
@@ -1032,12 +1303,20 @@ export const registerTelegramHandlers = ({
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (err) {
+      await settleDeferredAdmissions({
+        callbacks: entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+        admitted: false,
+        cacheMessage: false,
+        context: "text fragment",
+      });
       releaseDispatchDedupeKeys(entry.dispatchDedupeKeys, err);
       settleSpooledReplayParticipants(
         entry.spooledReplayParticipants,
         buildFailedProcessingResult(err),
       );
       runtime.error?.(danger(`text fragment handler failed: ${String(err)}`));
+    } finally {
+      releasePeerBotAdmissionCancellation(entry);
     }
   };
 
@@ -1047,7 +1326,24 @@ export const registerTelegramHandlers = ({
     });
   };
 
+  const dropTextFragmentEntry = async (entry: TextFragmentEntry) => {
+    clearTimeout(entry.timer);
+    textFragmentBuffer.delete(entry.key);
+    await settleDeferredAdmissions({
+      callbacks: entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+      admitted: false,
+      cacheMessage: false,
+      context: "text fragment cancellation",
+    });
+    completeCanceledBufferedEntry(entry);
+    releasePeerBotAdmissionCancellation(entry);
+  };
+
   const runTextFragmentFlush = async (entry: TextFragmentEntry) => {
+    if (entry.frameBatchId !== undefined) {
+      await dropTextFragmentEntry(entry);
+      return;
+    }
     textFragmentBuffer.delete(entry.key);
     await queueTextFragmentFlush(entry);
   };
@@ -1056,7 +1352,7 @@ export const registerTelegramHandlers = ({
     clearTimeout(entry.timer);
     entry.timer = setTimeout(() => {
       void runTextFragmentFlush(entry);
-    }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS);
+    }, entry.maxGapMs);
   };
 
   const loadStoreAllowFrom = async (msg: Message) => {
@@ -1139,7 +1435,9 @@ export const registerTelegramHandlers = ({
       chatId: msg.chat.id,
       messageId,
     });
-    const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
+    const threadId =
+      options?.promptContextThreadId ??
+      (currentNode?.threadId ? Number(currentNode.threadId) : undefined);
     const conversationContext = await buildTelegramConversationContext({
       cache: messageCache,
       messageId,
@@ -1750,8 +2048,13 @@ export const registerTelegramHandlers = ({
     topicConfig?: TelegramTopicConfig;
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
+    afterAdmissionShouldDrop?: TelegramDeferredAdmissionCallback;
+    onAdmissionCallbackChanged?: (callback: TelegramDeferredAdmissionCallback) => void;
+    peerBotAdmissionKey?: string;
+    mentionAdmissionAccepted?: boolean;
     promptContextMinTimestampMs?: number;
     dispatchDedupeKeys: string[];
+    spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
   }) => {
     const {
       ctx,
@@ -1770,9 +2073,15 @@ export const registerTelegramHandlers = ({
       topicConfig,
       sendOversizeWarning,
       oversizeLogMessage,
+      afterAdmissionShouldDrop,
+      onAdmissionCallbackChanged,
+      peerBotAdmissionKey,
+      mentionAdmissionAccepted,
       promptContextMinTimestampMs,
       dispatchDedupeKeys,
+      spooledReplayParticipant,
     } = params;
+    let effectiveAfterAdmissionShouldDrop = afterAdmissionShouldDrop;
 
     const messageText = getTelegramTextParts(msg).text;
     const botUsername = ctx.me?.username;
@@ -1805,26 +2114,47 @@ export const registerTelegramHandlers = ({
     // Text fragment handling - Telegram splits long pastes into multiple inbound messages (~4096 chars).
     // We buffer “near-limit” messages and append immediately-following parts.
     const text = typeof msg.text === "string" ? msg.text : undefined;
+    const isPeerBotMessage = msg.from?.is_bot === true && msg.sender_chat == null;
     const isCommandLike = (text ?? "").trim().startsWith("/");
+    const nowMs = Date.now();
+    const senderIdValue = msg.from?.id != null ? String(msg.from.id) : "unknown";
+    // Use resolvedThreadId for forum groups, dmThreadId for DM topics.
+    const threadId = resolvedThreadId ?? dmThreadId;
+    const standardFragment =
+      text && isPeerBotMessage ? resolveTelegramStandardFragmentFrame(text) : undefined;
+    const key = buildTextFragmentBufferKey({
+      chatId,
+      threadId,
+      senderId: senderIdValue,
+      frameBatchId: standardFragment?.batchId,
+    });
+    const existing = text ? textFragmentBuffer.get(key) : undefined;
     if (text && !isCommandLike && !isAbortControlMessage) {
-      const nowMs = Date.now();
-      const senderIdValue = msg.from?.id != null ? String(msg.from.id) : "unknown";
-      // Use resolvedThreadId for forum groups, dmThreadId for DM topics
-      const threadId = resolvedThreadId ?? dmThreadId;
-      const key = `text:${chatId}:${threadId ?? "main"}:${senderIdValue}`;
-      const existing = textFragmentBuffer.get(key);
-
+      const standardFragmentKind = standardFragment?.kind;
       if (existing) {
         const last = existing.messages.at(-1);
         const lastMsgId = last?.msg.message_id;
         const lastReceivedAtMs = last?.receivedAtMs ?? nowMs;
         const idGap = typeof lastMsgId === "number" ? msg.message_id - lastMsgId : Infinity;
         const timeGapMs = nowMs - lastReceivedAtMs;
-        const canAppend =
+        const isMarkedPeerBotContinuation =
+          standardFragmentKind === "continuation" || standardFragmentKind === "end";
+        const matchesFramedBatch =
+          existing.frameBatchId !== undefined &&
+          isMarkedPeerBotContinuation &&
+          standardFragment?.batchId === existing.frameBatchId;
+        // Framed peer batches accept only continuation/end frames across group IDs;
+        // unframed pastes retain adjacency so separate turns cannot collapse.
+        const preservesFragmentOrder =
+          standardFragmentKind !== "start" &&
           idGap > 0 &&
-          idGap <= TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP &&
-          timeGapMs >= 0 &&
-          timeGapMs <= TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS;
+          (matchesFramedBatch ||
+            (!isPeerBotMessage &&
+              standardFragment === undefined &&
+              existing.frameBatchId === undefined &&
+              idGap <= TELEGRAM_TEXT_FRAGMENT_MAX_ID_GAP));
+        const canAppend =
+          preservesFragmentOrder && timeGapMs >= 0 && timeGapMs <= existing.maxGapMs;
 
         if (canAppend) {
           const currentTotalChars = existing.messages.reduce(
@@ -1832,17 +2162,30 @@ export const registerTelegramHandlers = ({
             0,
           );
           const nextTotalChars = currentTotalChars + text.length;
-          if (
-            existing.messages.length + 1 <= TELEGRAM_TEXT_FRAGMENT_MAX_PARTS &&
-            nextTotalChars <= TELEGRAM_TEXT_FRAGMENT_MAX_TOTAL_CHARS
-          ) {
-            const spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+          const maxParts =
+            existing.frameBatchId !== undefined
+              ? TELEGRAM_STANDARD_FRAGMENT_MAX_PARTS
+              : TELEGRAM_TEXT_FRAGMENT_MAX_PARTS;
+          const maxTotalChars =
+            existing.frameBatchId !== undefined
+              ? TELEGRAM_STANDARD_FRAGMENT_MAX_WIRE_CHARS
+              : TELEGRAM_TEXT_FRAGMENT_MAX_TOTAL_CHARS;
+          const withinBatchLimits =
+            existing.messages.length + 1 <= maxParts && nextTotalChars <= maxTotalChars;
+          if (withinBatchLimits) {
+            const continuationReplayParticipant = createSpooledReplayParticipantForBufferedWork(
               `text-fragment:${key}:${msg.message_id}`,
             );
-            if (spooledReplayParticipant) {
-              existing.spooledReplayParticipants.push(spooledReplayParticipant);
+            if (continuationReplayParticipant) {
+              existing.spooledReplayParticipants.push(continuationReplayParticipant);
             }
             existing.messages.push({ msg, ctx, receivedAtMs: nowMs });
+            if (effectiveAfterAdmissionShouldDrop) {
+              existing.afterAdmissionCallbacks.push({
+                messageId: msg.message_id,
+                callback: effectiveAfterAdmissionShouldDrop,
+              });
+            }
             existing.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
               existing.promptContextMinTimestampMs,
               promptContextMinTimestampMs,
@@ -1851,82 +2194,192 @@ export const registerTelegramHandlers = ({
               existing.dispatchDedupeKeys,
               dispatchDedupeKeys,
             );
-            scheduleTextFragmentFlush(existing);
+            if (standardFragmentKind === "end") {
+              clearTimeout(existing.timer);
+              textFragmentBuffer.delete(key);
+              // A later batch can complete before an earlier admission owner.
+              // Flush off-lane so Telegram's sequentializer can receive that owner.
+              void queueTextFragmentFlush(existing);
+            } else {
+              scheduleTextFragmentFlush(existing);
+            }
+            return;
+          }
+          if (existing.frameBatchId !== undefined && matchesFramedBatch) {
+            // A framed overflow is one invalid transport batch. Drop it whole so
+            // no prefix or tail can become an independent agent turn.
+            await dropTextFragmentEntry(existing);
+            await effectiveAfterAdmissionShouldDrop?.(false, false);
+            releaseDispatchDedupeKeys(dispatchDedupeKeys);
+            runtime.error?.(
+              danger(
+                `telegram framed text batch exceeded ${maxParts} parts or ${maxTotalChars} characters`,
+              ),
+            );
             return;
           }
         }
 
-        // Not appendable (or limits exceeded): flush buffered entry first, then continue normally.
-        clearTimeout(existing.timer);
-        textFragmentBuffer.delete(key);
-        await queueTextFragmentFlush(existing);
+        // An incomplete framed transport batch is not an agent turn. A new
+        // start or ordinary message abandons it rather than exposing a prefix.
+        if (existing.frameBatchId !== undefined) {
+          await dropTextFragmentEntry(existing);
+        } else {
+          clearTimeout(existing.timer);
+          textFragmentBuffer.delete(key);
+          await queueTextFragmentFlush(existing);
+        }
+        if (isPeerBotMessage) {
+          const priorAdmission = effectiveAfterAdmissionShouldDrop;
+          const replacementAdmission = peerBotAdmission.reserve(
+            buildTelegramPeerBotAdmissionKey({
+              accountId,
+              chatId,
+              threadId,
+              senderId,
+              receiverId: ctx.me?.id,
+            }),
+            async (admitted, cacheMessage = true) => {
+              if (admitted && shouldSuppressTelegramPeerBotTurn({ ctx, cfg, accountId })) {
+                await priorAdmission?.(false, false);
+                return true;
+              }
+              return (await priorAdmission?.(admitted, cacheMessage)) ?? false;
+            },
+          );
+          effectiveAfterAdmissionShouldDrop = replacementAdmission;
+          onAdmissionCallbackChanged?.(replacementAdmission);
+        }
       }
 
-      const shouldStart = text.length >= TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS;
+      if (standardFragment && standardFragment.kind !== "start") {
+        // Continuations are valid only while their exact batch owns this key.
+        // Orphans must never surface hidden transport framing to the agent.
+        await effectiveAfterAdmissionShouldDrop?.(false, false);
+        releaseDispatchDedupeKeys(dispatchDedupeKeys);
+        return;
+      }
+
+      const shouldStart =
+        !isCommandLike &&
+        !isAbortControlMessage &&
+        text.length >= TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS;
       if (shouldStart) {
-        const spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+        const initialReplayParticipant = createSpooledReplayParticipantForBufferedWork(
           `text-fragment:${key}:${msg.message_id}`,
         );
         const entry: TextFragmentEntry = {
           key,
+          ...(threadId !== undefined ? { threadId } : {}),
           messages: [{ msg, ctx, receivedAtMs: nowMs }],
+          afterAdmissionCallbacks: effectiveAfterAdmissionShouldDrop
+            ? [{ messageId: msg.message_id, callback: effectiveAfterAdmissionShouldDrop }]
+            : [],
           dispatchDedupeKeys,
-          spooledReplayParticipants: spooledReplayParticipant ? [spooledReplayParticipant] : [],
+          spooledReplayParticipants: initialReplayParticipant ? [initialReplayParticipant] : [],
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
+          ...(standardFragment?.kind === "start" ? { frameBatchId: standardFragment.batchId } : {}),
+          maxGapMs:
+            standardFragmentKind === "start"
+              ? TELEGRAM_PEER_BOT_TEXT_FRAGMENT_MAX_GAP_MS
+              : TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS,
           timer: setTimeout(() => {}, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
         };
         textFragmentBuffer.set(key, entry);
+        if (peerBotAdmissionKey) {
+          entry.cancelPeerBotAdmission = peerBotAdmission.registerCancellation(
+            peerBotAdmissionKey,
+            async () => {
+              entry.peerBotAdmissionCanceled = true;
+              if (textFragmentBuffer.get(entry.key) === entry) {
+                await dropTextFragmentEntry(entry);
+                return;
+              }
+              await Promise.all(
+                entry.afterAdmissionCallbacks.map(({ callback }) => callback(false, false)),
+              );
+            },
+          );
+        }
         scheduleTextFragmentFlush(entry);
         return;
       }
-    } else if (text && isAbortControlMessage && (await isAuthorizedAbortControlMessage())) {
-      const senderIdLocal = msg.from?.id != null ? String(msg.from.id) : "unknown";
-      const threadId = resolvedThreadId ?? dmThreadId;
-      const key = `text:${chatId}:${threadId ?? "main"}:${senderIdLocal}`;
-      const existing = textFragmentBuffer.get(key);
-      if (existing) {
-        clearTimeout(existing.timer);
-        textFragmentBuffer.delete(key);
-        releaseDispatchDedupeKeys(existing.dispatchDedupeKeys);
-        settleSpooledReplayParticipants(existing.spooledReplayParticipants, { kind: "skipped" });
+    }
+    const authorizedAbortControl =
+      text && isAbortControlMessage ? await isAuthorizedAbortControlMessage() : false;
+    if (authorizedAbortControl && peerBotAdmissionKey) {
+      // Stop cancels both buffered and already-flushing peer work before loop
+      // protection can suppress the visible control turn.
+      await peerBotAdmission.cancel(peerBotAdmissionKey);
+    }
+    if (text && authorizedAbortControl) {
+      const baseKey = buildTextFragmentBufferKey({
+        chatId,
+        threadId,
+        senderId: senderIdValue,
+      });
+      const bufferedTextEntry = textFragmentBuffer.get(baseKey);
+      const bufferedEntries = [
+        ...(bufferedTextEntry ? [bufferedTextEntry] : []),
+        ...listFramedTextFragmentEntries(baseKey),
+      ];
+      for (const entry of bufferedEntries) {
+        await dropTextFragmentEntry(entry);
       }
+    }
+    if (
+      authorizedAbortControl &&
+      peerBotAdmissionKey &&
+      shouldSuppressTelegramPeerBotTurn({ ctx, cfg, accountId })
+    ) {
+      releaseDispatchDedupeKeys(dispatchDedupeKeys);
+      return;
     }
 
     // Media group handling - buffer multi-image messages
     const mediaGroupId = msg.media_group_id;
     if (mediaGroupId) {
-      const threadId = resolvedThreadId ?? dmThreadId;
-      const mediaGroupKey = `media:${chatId}:${threadId ?? "main"}:${mediaGroupId}`;
-      const existing = mediaGroupBuffer.get(mediaGroupKey);
-      if (existing) {
-        const spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+      const mediaThreadId = resolvedThreadId ?? dmThreadId;
+      const mediaGroupKey = `media:${chatId}:${mediaThreadId ?? "main"}:${mediaGroupId}`;
+      const mediaGroupEntry = mediaGroupBuffer.get(mediaGroupKey);
+      if (mediaGroupEntry) {
+        const continuationReplayParticipant = createSpooledReplayParticipantForBufferedWork(
           `media-group:${mediaGroupKey}:${msg.message_id}`,
         );
-        if (spooledReplayParticipant) {
-          existing.spooledReplayParticipants.push(spooledReplayParticipant);
+        if (continuationReplayParticipant) {
+          mediaGroupEntry.spooledReplayParticipants.push(continuationReplayParticipant);
         }
-        clearTimeout(existing.timer);
-        existing.messages.push({ msg, ctx });
-        existing.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
-          existing.promptContextMinTimestampMs,
+        clearTimeout(mediaGroupEntry.timer);
+        mediaGroupEntry.messages.push({ msg, ctx });
+        if (effectiveAfterAdmissionShouldDrop) {
+          mediaGroupEntry.afterAdmissionCallbacks.push({
+            messageId: msg.message_id,
+            callback: effectiveAfterAdmissionShouldDrop,
+          });
+        }
+        mediaGroupEntry.promptContextMinTimestampMs = latestPromptContextMinTimestampMs(
+          mediaGroupEntry.promptContextMinTimestampMs,
           promptContextMinTimestampMs,
         );
-        existing.dispatchDedupeKeys = mergeDispatchDedupeKeys(
-          existing.dispatchDedupeKeys,
+        mediaGroupEntry.dispatchDedupeKeys = mergeDispatchDedupeKeys(
+          mediaGroupEntry.dispatchDedupeKeys,
           dispatchDedupeKeys,
         );
-        existing.timer = setTimeout(() => {
-          mediaGroupBuffer.delete(mediaGroupKey);
+        mediaGroupEntry.timer = setTimeout(() => {
+          detachMediaGroupEntry(mediaGroupKey, mediaGroupEntry);
           void queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
-            await processMediaGroup(existing);
+            await processMediaGroup(mediaGroupEntry);
           });
         }, mediaGroupTimeoutMs);
       } else {
-        const spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+        const initialReplayParticipant = createSpooledReplayParticipantForBufferedWork(
           `media-group:${mediaGroupKey}:${msg.message_id}`,
         );
         const entry: BufferedMediaGroupEntry = {
           messages: [{ msg, ctx }],
+          afterAdmissionCallbacks: effectiveAfterAdmissionShouldDrop
+            ? [{ messageId: msg.message_id, callback: effectiveAfterAdmissionShouldDrop }]
+            : [],
           storeAllowFrom,
           isGroup,
           isForum,
@@ -1938,22 +2391,38 @@ export const registerTelegramHandlers = ({
           groupConfig,
           topicConfig,
           dispatchDedupeKeys,
-          spooledReplayParticipants: spooledReplayParticipant ? [spooledReplayParticipant] : [],
+          spooledReplayParticipants: initialReplayParticipant ? [initialReplayParticipant] : [],
           ...promptContextBoundaryOptions(promptContextMinTimestampMs),
           timer: setTimeout(() => {
-            mediaGroupBuffer.delete(mediaGroupKey);
+            detachMediaGroupEntry(mediaGroupKey, entry);
             void queueBufferedProcessing(mediaGroupProcessingByKey, mediaGroupKey, async () => {
               await processMediaGroup(entry);
             });
           }, mediaGroupTimeoutMs),
         };
         mediaGroupBuffer.set(mediaGroupKey, entry);
+        if (peerBotAdmissionKey) {
+          entry.cancelPeerBotAdmission = peerBotAdmission.registerCancellation(
+            peerBotAdmissionKey,
+            async () => {
+              entry.peerBotAdmissionCanceled = true;
+              if (mediaGroupBuffer.get(mediaGroupKey) === entry) {
+                await dropMediaGroupEntry(mediaGroupKey, entry);
+                return;
+              }
+              await Promise.all(
+                entry.afterAdmissionCallbacks.map(({ callback }) => callback(false, false)),
+              );
+            },
+          );
+        }
       }
       return;
     }
 
     if (
-      await shouldSkipMediaDownloadForUnaddressedMentionGroup({
+      mentionAdmissionAccepted !== true &&
+      (await resolveMediaDownloadMentionAdmission({
         ctx,
         msg,
         chatId,
@@ -1966,8 +2435,9 @@ export const registerTelegramHandlers = ({
         effectiveDmAllow,
         groupConfig,
         topicConfig,
-      })
+      })) === "skipped"
     ) {
+      await effectiveAfterAdmissionShouldDrop?.(false);
       releaseDispatchDedupeKeys(dispatchDedupeKeys);
       return;
     }
@@ -1981,7 +2451,9 @@ export const registerTelegramHandlers = ({
       });
     } catch (mediaErr) {
       if (isMediaSizeLimitError(mediaErr)) {
-        if (sendOversizeWarning) {
+        if (effectiveAfterAdmissionShouldDrop) {
+          await effectiveAfterAdmissionShouldDrop(false);
+        } else if (sendOversizeWarning) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
             operation: "sendMessage",
@@ -2000,17 +2472,21 @@ export const registerTelegramHandlers = ({
         return;
       }
       logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      await withTelegramApiErrorLogging({
-        operation: "sendMessage",
-        runtime,
-        fn: () =>
-          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
-            reply_parameters: {
-              message_id: msg.message_id,
-              allow_sending_without_reply: true,
-            },
-          }),
-      }).catch(() => {});
+      if (effectiveAfterAdmissionShouldDrop) {
+        await effectiveAfterAdmissionShouldDrop(false);
+      } else {
+        await withTelegramApiErrorLogging({
+          operation: "sendMessage",
+          runtime,
+          fn: () =>
+            bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+              reply_parameters: {
+                message_id: msg.message_id,
+                allow_sending_without_reply: true,
+              },
+            }),
+        }).catch(() => {});
+      }
       releaseDispatchDedupeKeys(dispatchDedupeKeys);
       return;
     }
@@ -2020,6 +2496,7 @@ export const registerTelegramHandlers = ({
     const hasText = Boolean(getTelegramTextParts(msg).text.trim());
     if (msg.sticker && !media && !hasText) {
       logVerbose("telegram: skipping sticker-only message (unsupported sticker type)");
+      await effectiveAfterAdmissionShouldDrop?.(false);
       releaseDispatchDedupeKeys(dispatchDedupeKeys);
       return;
     }
@@ -2067,15 +2544,18 @@ export const registerTelegramHandlers = ({
       debounceKey: isAbortControlMessage ? null : debounceKey,
       debounceLane,
       botUsername,
+      afterAdmissionShouldDrop: effectiveAfterAdmissionShouldDrop,
+      threadId: resolvedThreadId ?? dmThreadId,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs),
       dispatchDedupeKeys,
+      ...(spooledReplayParticipant ? { spooledReplayParticipant } : {}),
     };
     if (
       debounceEntry.debounceKey &&
       resolveTelegramDebounceEntryMs(debounceEntry) > 0 &&
       shouldDebounceTelegramEntry(debounceEntry)
     ) {
-      debounceEntry.spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+      debounceEntry.spooledReplayParticipant ??= createSpooledReplayParticipantForBufferedWork(
         `inbound-debounce:${debounceEntry.debounceKey}`,
       );
     }
@@ -3039,6 +3519,7 @@ export const registerTelegramHandlers = ({
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
     let dispatchDedupeKeys: string[] = [];
+    let pendingPeerBotAdmission: TelegramDeferredAdmissionCallback | undefined;
     try {
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
@@ -3068,17 +3549,19 @@ export const registerTelegramHandlers = ({
         effectiveGroupAllow,
       } = gate.context;
 
+      const inboundRuntimeCfg = telegramDeps.getRuntimeConfig();
+      const inboundSessionState = resolveTelegramSessionState({
+        chatId: event.chatId,
+        isGroup: event.isGroup,
+        isForum: event.isForum,
+        messageThreadId: event.messageThreadId,
+        resolvedThreadId,
+        botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(event.ctx.me),
+        senderId: event.senderId,
+        runtimeCfg: inboundRuntimeCfg,
+      });
       const promptContextMinTimestampMs = normalizePromptContextMinTimestampMs(
-        resolveTelegramSessionState({
-          chatId: event.chatId,
-          isGroup: event.isGroup,
-          isForum: event.isForum,
-          messageThreadId: event.messageThreadId,
-          resolvedThreadId,
-          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(event.ctx.me),
-          senderId: event.senderId,
-          runtimeCfg: cfg,
-        }).sessionEntry?.sessionStartedAt,
+        inboundSessionState.sessionEntry?.sessionStartedAt,
       );
 
       const dispatchDedupe = await claimMessageDispatchDedupe(event.msg);
@@ -3086,8 +3569,175 @@ export const registerTelegramHandlers = ({
         return;
       }
       dispatchDedupeKeys = dispatchDedupe.keys;
-      await recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
-      await processInboundMessage({
+      const isPeerBotEvent = event.msg.from?.is_bot === true && event.msg.sender_chat == null;
+      const botMentionAdmission = isPeerBotEvent
+        ? await resolveMediaDownloadMentionAdmission({
+            ctx: event.ctx,
+            msg: event.msg,
+            chatId: event.chatId,
+            isGroup: event.isGroup,
+            isForum: event.isForum,
+            resolvedThreadId,
+            dmThreadId,
+            senderId: event.senderId,
+            effectiveGroupAllow,
+            effectiveDmAllow,
+            groupConfig: event.isGroup
+              ? (groupConfig as TelegramGroupConfig | undefined)
+              : undefined,
+            topicConfig,
+          })
+        : undefined;
+      const deferPeerBotMediaGroupAdmission = isPeerBotEvent && Boolean(event.msg.media_group_id);
+      const eventText = typeof event.msg.text === "string" ? event.msg.text : undefined;
+      const isPeerBotAbortControl =
+        isPeerBotEvent &&
+        eventText !== undefined &&
+        isAbortRequestText(eventText, { botUsername: event.ctx.me?.username });
+      const eventStandardFragment =
+        isPeerBotEvent && eventText !== undefined
+          ? resolveTelegramStandardFragmentFrame(eventText)
+          : undefined;
+      const textFragmentKey = buildTextFragmentBufferKey({
+        chatId: event.chatId,
+        threadId: resolvedThreadId ?? dmThreadId,
+        senderId: event.senderId || "unknown",
+        frameBatchId: eventStandardFragment?.batchId,
+      });
+      const textFragmentBaseKey = buildTextFragmentBufferKey({
+        chatId: event.chatId,
+        threadId: resolvedThreadId ?? dmThreadId,
+        senderId: event.senderId || "unknown",
+      });
+      const activeFramedBatches = isPeerBotEvent
+        ? listFramedTextFragmentEntries(textFragmentBaseKey)
+        : [];
+      if (isPeerBotEvent) {
+        if (eventStandardFragment?.kind === "abort") {
+          const abortedBatch = textFragmentBuffer.get(textFragmentKey);
+          if (abortedBatch) {
+            await dropTextFragmentEntry(abortedBatch);
+          }
+          releaseDispatchDedupeKeys(dispatchDedupeKeys);
+          return;
+        }
+        if (eventStandardFragment?.kind === "start") {
+          const sameBatch = textFragmentBuffer.get(textFragmentKey);
+          if (sameBatch) {
+            await dropTextFragmentEntry(sameBatch);
+          }
+          const retireCount = Math.max(
+            0,
+            activeFramedBatches.length - TELEGRAM_PEER_BOT_MAX_ACTIVE_TEXT_BATCHES + 1,
+          );
+          for (const entry of activeFramedBatches.slice(0, retireCount)) {
+            await dropTextFragmentEntry(entry);
+          }
+        } else if (
+          eventStandardFragment !== undefined &&
+          !textFragmentBuffer.has(textFragmentKey)
+        ) {
+          // Lost or retired batches cannot own admission or message-cache state.
+          releaseDispatchDedupeKeys(dispatchDedupeKeys);
+          return;
+        }
+      }
+      const mediaGroupKey = event.msg.media_group_id
+        ? `media:${event.chatId}:${resolvedThreadId ?? dmThreadId ?? "main"}:${event.msg.media_group_id}`
+        : undefined;
+      const deferPeerBotTextFragmentAdmission =
+        isPeerBotEvent &&
+        eventText !== undefined &&
+        !eventText.trim().startsWith("/") &&
+        !isPeerBotAbortControl &&
+        (eventText.length >= TELEGRAM_TEXT_FRAGMENT_START_THRESHOLD_CHARS ||
+          textFragmentBuffer.has(textFragmentKey));
+      const deferStandalonePeerBehindFrames =
+        isPeerBotEvent &&
+        eventStandardFragment === undefined &&
+        !isPeerBotAbortControl &&
+        !deferPeerBotMediaGroupAdmission &&
+        activeFramedBatches.length > 0;
+      const deferPeerBotBufferedAdmission =
+        deferPeerBotMediaGroupAdmission ||
+        deferPeerBotTextFragmentAdmission ||
+        deferStandalonePeerBehindFrames;
+      const recordCurrentMessage = async () =>
+        await recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
+      let currentMessageRecorded = false;
+      const isFirstBufferedPeerBotEvent =
+        (deferPeerBotMediaGroupAdmission &&
+          mediaGroupKey !== undefined &&
+          !mediaGroupBuffer.has(mediaGroupKey)) ||
+        (deferPeerBotTextFragmentAdmission && !textFragmentBuffer.has(textFragmentKey)) ||
+        deferStandalonePeerBehindFrames;
+      const shouldReservePeerBotAdmission =
+        isPeerBotEvent &&
+        // Abort controls must bypass ordering so they can cancel the reservation
+        // they would otherwise wait behind.
+        !isPeerBotAbortControl &&
+        (botMentionAdmission === "accepted" ||
+          botMentionAdmission === "deferred" ||
+          deferPeerBotBufferedAdmission) &&
+        (!deferPeerBotBufferedAdmission || isFirstBufferedPeerBotEvent);
+      const peerBotAdmissionKey = isPeerBotEvent
+        ? buildTelegramPeerBotAdmissionKey({
+            accountId,
+            chatId: event.chatId,
+            threadId: resolvedThreadId ?? dmThreadId,
+            senderId: event.senderId,
+            receiverId: event.ctx.me?.id,
+          })
+        : undefined;
+      const orderedPeerBotAdmission =
+        shouldReservePeerBotAdmission && peerBotAdmissionKey
+          ? peerBotAdmission.reserve(
+              peerBotAdmissionKey,
+              async (admitted) =>
+                admitted && shouldSuppressTelegramPeerBotTurn({ ctx: event.ctx, cfg, accountId }),
+            )
+          : undefined;
+      const shouldFinalizePeerBotAdmission =
+        orderedPeerBotAdmission !== undefined ||
+        botMentionAdmission === "deferred" ||
+        deferPeerBotBufferedAdmission;
+      let afterAdmissionShouldDrop: TelegramDeferredAdmissionCallback | undefined =
+        shouldFinalizePeerBotAdmission
+          ? async (admitted: boolean, cacheMessage = true) => {
+              if (orderedPeerBotAdmission && (await orderedPeerBotAdmission(admitted))) {
+                return true;
+              }
+              if (cacheMessage && !currentMessageRecorded) {
+                await recordCurrentMessage();
+                currentMessageRecorded = true;
+              }
+              return false;
+            }
+          : undefined;
+      pendingPeerBotAdmission = afterAdmissionShouldDrop ?? orderedPeerBotAdmission;
+      const routeNeedsLateAdmission =
+        inboundSessionState.bindingMode.kind === "configured" ||
+        (event.isGroup &&
+          inboundSessionState.route.matchedBy === "default" &&
+          normalizeAccountId(inboundSessionState.route.accountId) !==
+            normalizeAccountId(resolveDefaultTelegramAccountId(inboundSessionState.runtimeCfg)));
+      const canFinalizePeerBotBeforeMedia =
+        botMentionAdmission === "accepted" &&
+        !deferPeerBotBufferedAdmission &&
+        !routeNeedsLateAdmission;
+      if (afterAdmissionShouldDrop && canFinalizePeerBotBeforeMedia) {
+        if (await afterAdmissionShouldDrop(true)) {
+          releaseDispatchDedupeKeys(dispatchDedupeKeys);
+          return;
+        }
+        pendingPeerBotAdmission = undefined;
+        afterAdmissionShouldDrop = undefined;
+      }
+      if (!afterAdmissionShouldDrop && !currentMessageRecorded) {
+        await recordCurrentMessage();
+        currentMessageRecorded = true;
+      }
+      const processInboundParams: Parameters<typeof processInboundMessage>[0] = {
         ctx: event.ctx,
         msg: event.msg,
         chatId: event.chatId,
@@ -3104,11 +3754,54 @@ export const registerTelegramHandlers = ({
         topicConfig,
         sendOversizeWarning: event.sendOversizeWarning,
         oversizeLogMessage: event.oversizeLogMessage,
+        afterAdmissionShouldDrop,
+        onAdmissionCallbackChanged: (callback) => {
+          pendingPeerBotAdmission = callback;
+        },
+        peerBotAdmissionKey,
+        mentionAdmissionAccepted: botMentionAdmission === "accepted",
         dispatchDedupeKeys,
         ...promptContextBoundaryOptions(promptContextMinTimestampMs),
-      });
+      };
+      if (deferStandalonePeerBehindFrames) {
+        // Wait off the Telegram sequential lane so the framed batch's end can
+        // arrive, while preserving admission order for this standalone turn.
+        const spooledReplayParticipant = createSpooledReplayParticipantForBufferedWork(
+          `peer-standalone:${peerBotAdmissionKey}:${event.msg.message_id}`,
+        );
+        void (async () => {
+          try {
+            await processInboundMessage({
+              ...processInboundParams,
+              ...(spooledReplayParticipant ? { spooledReplayParticipant } : {}),
+            });
+            if (spooledReplayParticipant) {
+              settleSpooledReplayParticipants([spooledReplayParticipant], { kind: "completed" });
+            }
+          } catch (err) {
+            releaseDispatchDedupeKeys(dispatchDedupeKeys, err);
+            await afterAdmissionShouldDrop?.(false, false);
+            if (spooledReplayParticipant) {
+              settleSpooledReplayParticipants(
+                [spooledReplayParticipant],
+                buildFailedProcessingResult(err),
+              );
+            }
+            runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
+          }
+        })();
+        return;
+      }
+      await processInboundMessage(processInboundParams);
     } catch (err) {
       releaseDispatchDedupeKeys(dispatchDedupeKeys, err);
+      try {
+        await pendingPeerBotAdmission?.(false, false);
+      } catch (cleanupErr) {
+        runtime.error?.(
+          danger(`${event.errorMessage} admission cleanup failed: ${String(cleanupErr)}`),
+        );
+      }
       runtime.error?.(danger(`${event.errorMessage}: ${String(err)}`));
       if (err instanceof TelegramPairingStoreReadError) {
         await withTelegramApiErrorLogging({
@@ -3135,6 +3828,11 @@ export const registerTelegramHandlers = ({
     if (!msg) {
       return;
     }
+    // Bot-authored message updates can be echoed back by Telegram. Skip them here
+    // and rely on the dedicated channel_post handler for channel-originated posts.
+    if (msg.from?.id != null && msg.from.id === ctx.me?.id) {
+      return;
+    }
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const isForum = await resolveTelegramForumFlag({
       chatId: msg.chat.id,
@@ -3145,11 +3843,6 @@ export const registerTelegramHandlers = ({
       getChat,
     });
     const normalizedMsg = withResolvedTelegramForumFlag(msg, isForum);
-    // Bot-authored message updates can be echoed back by Telegram. Skip them here
-    // and rely on the dedicated channel_post handler for channel-originated posts.
-    if (normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
-      return;
-    }
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, normalizedMsg),

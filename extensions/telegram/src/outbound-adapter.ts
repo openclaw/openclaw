@@ -17,9 +17,11 @@ import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
 } from "openclaw/plugin-sdk/reply-payload";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
+import { markTelegramDeliveryErrorVisible } from "./delivery-error.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
 import { splitTelegramRichTextChunks, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
@@ -66,6 +68,8 @@ async function resolveTelegramSendContext(params: {
   deps?: OutboundSendDeps;
   accountId?: string | null;
   replyToId?: string | null;
+  replyToMode?: TelegramSendOpts["replyToMode"];
+  replyToIdSource?: TelegramSendOpts["replyToIdSource"];
   threadId?: string | number | null;
   formatting?: OutboundDeliveryFormattingOptions;
   silent?: boolean;
@@ -79,6 +83,8 @@ async function resolveTelegramSendContext(params: {
     textMode?: "html";
     messageThreadId?: number;
     replyToMessageId?: number;
+    replyToMode?: TelegramSendOpts["replyToMode"];
+    replyToIdSource?: TelegramSendOpts["replyToIdSource"];
     accountId?: string;
     silent?: boolean;
     gatewayClientScopes?: readonly string[];
@@ -92,6 +98,8 @@ async function resolveTelegramSendContext(params: {
       cfg: params.cfg,
       messageThreadId: parseTelegramThreadId(params.threadId),
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
+      ...(params.replyToMode ? { replyToMode: params.replyToMode } : {}),
+      ...(params.replyToIdSource ? { replyToIdSource: params.replyToIdSource } : {}),
       accountId: params.accountId ?? undefined,
       silent: params.silent,
       gatewayClientScopes: params.gatewayClientScopes,
@@ -125,7 +133,7 @@ export async function sendTelegramPayloadMessages(params: {
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
   const telegramData = params.payload.channelData?.telegram as
-    | { buttons?: TelegramInlineButtons; quoteText?: string }
+    | { buttons?: TelegramInlineButtons; quoteText?: string; standardMessage?: boolean }
     | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
@@ -145,7 +153,36 @@ export async function sendTelegramPayloadMessages(params: {
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
+    standardMessage: telegramData?.standardMessage === true,
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
+  };
+  const singleUseImplicitReply =
+    payloadOpts.standardMessage &&
+    payloadOpts.replyToMessageId != null &&
+    payloadOpts.replyToIdSource !== "explicit" &&
+    payloadOpts.replyToMode != null &&
+    isSingleUseReplyToMode(payloadOpts.replyToMode);
+  let implicitReplyAvailable = true;
+  let deliveredSendCount = 0;
+  const sendWithReplyFanout = async (textLocal: string, options: TelegramSendOpts) => {
+    const effectiveOptions =
+      singleUseImplicitReply && !implicitReplyAvailable
+        ? { ...options, replyToMessageId: undefined }
+        : options;
+    let result: Awaited<ReturnType<TelegramSendFn>>;
+    try {
+      result = await params.send(params.to, textLocal, effectiveOptions);
+    } catch (error) {
+      if (deliveredSendCount > 0) {
+        throw markTelegramDeliveryErrorVisible(error);
+      }
+      throw error;
+    }
+    deliveredSendCount += 1;
+    if (singleUseImplicitReply && effectiveOptions.replyToMessageId != null) {
+      implicitReplyAvailable = false;
+    }
+    return result;
   };
 
   // Telegram allows reply_markup on media; attach buttons only to the first send.
@@ -154,12 +191,12 @@ export async function sendTelegramPayloadMessages(params: {
     mediaUrls,
     fallbackResult: { messageId: "unknown", chatId: params.to },
     sendNoMedia: async () =>
-      await params.send(params.to, text, {
+      await sendWithReplyFanout(text, {
         ...payloadOpts,
         buttons,
       }),
     send: async ({ text: textLocal, mediaUrl, isFirst }) =>
-      await params.send(params.to, textLocal, {
+      await sendWithReplyFanout(textLocal, {
         ...payloadOpts,
         mediaUrl,
         ...(isFirst ? { buttons } : {}),

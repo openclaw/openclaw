@@ -15,12 +15,17 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
+import type { RouteReplyResult } from "./route-reply.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
 
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn<(_params: unknown) => Promise<RouteReplyResult>>(async () => ({
+    ok: true,
+    delivered: true,
+    messageId: "mock",
+  })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,

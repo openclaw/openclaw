@@ -59,6 +59,7 @@ export function createNativeCommandTestParams(
     shouldSkipUpdate: params.shouldSkipUpdate ?? (() => false),
     telegramDeps: params.telegramDeps,
     opts: params.opts ?? { token: "token" },
+    peerBotAdmission: params.peerBotAdmission,
   };
 }
 
