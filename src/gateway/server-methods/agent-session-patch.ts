@@ -226,7 +226,10 @@ export function buildAgentSessionPatch(params: {
     groupId: nextGroup.groupId,
     groupChannel: nextGroup.groupChannel,
     space: nextGroup.groupSpace,
-    ...(params.pluginOwnerId ? { pluginOwnerId: params.pluginOwnerId } : {}),
+    // Plugin ownership is creation-only; existing sessions keep their original owner.
+    ...(params.freshEntry === undefined && params.pluginOwnerId
+      ? { pluginOwnerId: params.pluginOwnerId }
+      : {}),
     ...(shouldClearRotatedState || shouldClearTerminalState
       ? {
           status: undefined,
