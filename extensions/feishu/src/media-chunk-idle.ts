@@ -6,7 +6,7 @@ import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-stor
  * Matches Telegram `TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000` so a stalled
  * Lark SDK body cannot block inbound dispatch indefinitely after headers/start.
  */
-export const FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
+const FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
 
 class FeishuInboundMediaTimeoutError extends Error {
   readonly chunkTimeoutMs: number;
@@ -20,7 +20,7 @@ class FeishuInboundMediaTimeoutError extends Error {
 // Bound each AsyncIterable `next()` so a stalled Lark download cannot hang
 // inbound dispatch. On timeout, call `return()` so Node Readable streams are
 // destroyed; silence the losing `nextPromise` to avoid unhandledRejection.
-export function withChunkIdleTimeout<T>(
+function withChunkIdleTimeout<T>(
   source: AsyncIterable<T>,
   chunkTimeoutMs: number,
 ): AsyncIterable<T> {
@@ -70,9 +70,10 @@ export function saveMediaStreamWithIdleTimeout(
   contentType: string | undefined,
   maxBytes: number,
   fileName?: string,
+  chunkTimeoutMs: number = FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS,
 ): Promise<SavedMedia> {
   return saveMediaStream(
-    withChunkIdleTimeout(stream, FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS),
+    withChunkIdleTimeout(stream, chunkTimeoutMs),
     contentType,
     "inbound",
     maxBytes,

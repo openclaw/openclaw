@@ -1,8 +1,32 @@
 // Feishu tests cover inbound media chunk-idle timeout helpers.
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS, withChunkIdleTimeout } from "./media-chunk-idle.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("withChunkIdleTimeout", () => {
+const saveMediaStreamMock = vi.hoisted(() =>
+  vi.fn(async (stream: AsyncIterable<unknown>) => {
+    let size = 0;
+    for await (const chunk of stream) {
+      if (Buffer.isBuffer(chunk)) {
+        size += chunk.byteLength;
+      }
+    }
+    return { id: "saved", path: "/tmp/saved", size, contentType: "image/jpeg" };
+  }),
+);
+
+vi.mock("openclaw/plugin-sdk/media-store", () => ({
+  saveMediaStream: saveMediaStreamMock,
+}));
+
+describe("saveMediaStreamWithIdleTimeout", () => {
+  let saveMediaStreamWithIdleTimeout: typeof import("./media-chunk-idle.js").saveMediaStreamWithIdleTimeout;
+  const FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    saveMediaStreamMock.mockClear();
+    ({ saveMediaStreamWithIdleTimeout } = await import("./media-chunk-idle.js"));
+  });
+
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -41,11 +65,13 @@ describe("withChunkIdleTimeout", () => {
 
   it("rejects when the source stalls past chunkTimeoutMs", async () => {
     const startedAt = Date.now();
-    const promise = (async () => {
-      for await (const _chunk of withChunkIdleTimeout(neverYieldingStream(), 50)) {
-        void _chunk;
-      }
-    })();
+    const promise = saveMediaStreamWithIdleTimeout(
+      neverYieldingStream(),
+      "image/jpeg",
+      1024,
+      undefined,
+      50,
+    );
     await expect(promise).rejects.toMatchObject({
       name: "FeishuInboundMediaTimeoutError",
       chunkTimeoutMs: 50,
@@ -59,23 +85,19 @@ describe("withChunkIdleTimeout", () => {
 
   it("does not reject when chunks arrive within chunkTimeoutMs", async () => {
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
-    const chunks: Buffer[] = [];
-    for await (const chunk of withChunkIdleTimeout(delayedStream(jpeg, 10), 500)) {
-      chunks.push(chunk);
-    }
-    expect(Buffer.concat(chunks)).toEqual(jpeg);
+    const result = await saveMediaStreamWithIdleTimeout(
+      delayedStream(jpeg, 10),
+      "image/jpeg",
+      1024,
+      undefined,
+      500,
+    );
+    expect(result.size).toBe(jpeg.byteLength);
   });
 
   it("defaults to a 30s production idle floor", async () => {
     vi.useFakeTimers();
-    const promise = (async () => {
-      for await (const _chunk of withChunkIdleTimeout(
-        neverYieldingStream(),
-        FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS,
-      )) {
-        void _chunk;
-      }
-    })();
+    const promise = saveMediaStreamWithIdleTimeout(neverYieldingStream(), "image/jpeg", 1024);
     const expectation = expect(promise).rejects.toMatchObject({
       name: "FeishuInboundMediaTimeoutError",
       chunkTimeoutMs: FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS,
@@ -105,11 +127,7 @@ describe("withChunkIdleTimeout", () => {
       },
     };
     await expect(
-      (async () => {
-        for await (const _chunk of withChunkIdleTimeout(stream, 50)) {
-          void _chunk;
-        }
-      })(),
+      saveMediaStreamWithIdleTimeout(stream, "image/jpeg", 1024, undefined, 50),
     ).rejects.toMatchObject({ name: "FeishuInboundMediaTimeoutError" });
     expect(returnSpy).toHaveBeenCalledTimes(1);
   });
