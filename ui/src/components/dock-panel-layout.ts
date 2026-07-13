@@ -1,6 +1,6 @@
 export type DockPanelSide = "bottom" | "right";
 
-export type DockPanelLayout = {
+type DockPanelLayout = {
   open: boolean;
   dock: DockPanelSide;
   height: number;
