@@ -195,9 +195,21 @@ pub fn act(cli: &OpenClawCli, action: GatewayAction) -> Result<GatewaySnapshot, 
 }
 
 pub fn dashboard(cli: &OpenClawCli, snapshot: GatewaySnapshot) -> Result<ReadyGateway, String> {
-    let (response, output) = cli
-        .json::<DashboardResponse, _, _>(["dashboard", "--json", "--no-open"])
-        .map_err(|error| error.to_string())?;
+    // CLIs released before `dashboard --json` reject the flag without JSON output;
+    // surface an upgrade path instead of a raw parse error.
+    let (response, output) =
+        match cli.json::<DashboardResponse, _, _>(["dashboard", "--json", "--no-open"]) {
+            Ok(result) => result,
+            Err(crate::cli::CliError::InvalidJson(_)) => {
+                return Err(
+                    "The installed OpenClaw CLI does not support the desktop dashboard \
+                 integration. Update OpenClaw (for example: npm install -g openclaw@latest), \
+                 then retry."
+                        .to_string(),
+                );
+            }
+            Err(error) => return Err(error.to_string()),
+        };
     if response.ok && output.status.success() {
         let dashboard_url = response
             .url
