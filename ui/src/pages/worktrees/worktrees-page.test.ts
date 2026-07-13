@@ -283,6 +283,64 @@ describe("WorktreesPage lifecycle", () => {
     expect(page.error).toBeNull();
   });
 
+  it("keeps a mutation error when the follow-up list refresh succeeds", async () => {
+    let listRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.list") {
+        listRequests += 1;
+        return Promise.resolve({ worktrees: [] });
+      }
+      if (method === "worktrees.restore") {
+        return Promise.reject(new Error("restore denied"));
+      }
+      return Promise.resolve({});
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+    await vi.waitFor(() => expect(page.loading).toBe(false));
+
+    await page.restore(worktree());
+    await page.updateComplete;
+
+    expect(listRequests).toBe(2);
+    expect(page.error).toBe("Error: restore denied");
+    expect(page.querySelector(".callout.danger")?.textContent).toContain("restore denied");
+  });
+
+  it("replaces a mutation error when the follow-up list refresh fails", async () => {
+    let listRequests = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "worktrees.list") {
+        listRequests += 1;
+        return listRequests === 1
+          ? Promise.resolve({ worktrees: [] })
+          : Promise.reject(new Error("refresh unavailable"));
+      }
+      if (method === "worktrees.restore") {
+        return Promise.reject(new Error("restore denied"));
+      }
+      return Promise.resolve({});
+    });
+    const page = document.createElement("openclaw-worktrees-page") as WorktreesPageTestElement;
+    page.context = contextWithGateway(
+      gatewayWithClient({ request } as unknown as GatewayBrowserClient),
+    );
+    document.body.append(page);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("worktrees.list", {}));
+    await vi.waitFor(() => expect(page.loading).toBe(false));
+
+    await page.restore(worktree());
+    await page.updateComplete;
+
+    expect(listRequests).toBe(2);
+    expect(page.error).toBe("Error: refresh unavailable");
+    expect(page.querySelector(".callout.danger")?.textContent).toContain("refresh unavailable");
+  });
+
   it("discards a restore error across a same-client reconnect", async () => {
     const pendingRestore = deferred<unknown>();
     const request = vi.fn((method: string) => {
