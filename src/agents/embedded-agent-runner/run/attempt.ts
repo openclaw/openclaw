@@ -26,7 +26,6 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
-import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import {
@@ -105,6 +104,7 @@ import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
+import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
@@ -140,7 +140,6 @@ import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
 import {
   cloneHookMessages,
-  flushSessionManagerTranscript,
   removeTrailingMidTurnPrecheckAssistantError,
   repairAttemptToolUseResultPairing,
   resolveAttemptTrajectorySessionFile,
@@ -183,10 +182,7 @@ import { installHistoryImagePruneContextTransform } from "./history-image-prune.
 import { detectAndLoadPromptImages } from "./images.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
-import {
-  detachPrePersistedCurrentUserTurn,
-  sessionMessagesContainIdempotencyKey,
-} from "./pre-persisted-user-turn.js";
+import { detachPrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { PREEMPTIVE_OVERFLOW_ERROR_TEXT } from "./preemptive-compaction.js";
 import {
   buildCurrentInboundPrompt,
@@ -1688,102 +1684,23 @@ export async function runEmbeddedAttempt(
           }
           const systemPromptForHook = systemPromptText;
 
-          const persistBlockedBeforeAgentRun = async (block: {
-            message: string;
-            pluginId: string;
-          }): Promise<boolean> => {
-            const idempotencyKey = `hook-block:before_agent_run:user:${params.runId}`;
-            if (sessionMessagesContainIdempotencyKey(activeSession.messages, idempotencyKey)) {
-              return true;
-            }
-            const nowMs = Date.now();
-            const redactedUserMessage = {
-              role: "user" as const,
-              content: [{ type: "text" as const, text: block.message }],
-              timestamp: nowMs,
-              idempotencyKey,
-              __openclaw: {
-                beforeAgentRunBlocked: {
-                  blockedBy: block.pluginId,
-                  blockedAt: nowMs,
-                },
-              },
-            };
-            try {
-              await withOwnedSessionWriteLock(() => {
-                activeSessionManager.appendMessage(
-                  redactedUserMessage as Parameters<typeof activeSessionManager.appendMessage>[0],
-                );
-                flushSessionManagerTranscript(activeSessionManager);
-              });
-              activeSession.agent.state.messages =
-                activeSessionManager.buildSessionContext().messages;
-              return true;
-            } catch (err) {
-              log.warn(
-                `before_agent_run block: failed to persist redacted user message: ${
-                  (err as Error)?.message ?? String(err)
-                }`,
-              );
-              return false;
-            }
-          };
-
-          if (hookRunner?.hasHooks("before_agent_run")) {
-            const beforeRunMessages = cloneHookMessages(hookMessagesForCurrentPrompt);
-            let beforeRunResult:
-              | Awaited<ReturnType<NonNullable<typeof hookRunner>["runBeforeAgentRun"]>>
-              | undefined;
-            try {
-              beforeRunResult = await hookRunner.runBeforeAgentRun(
-                {
-                  prompt: promptForModel,
-                  systemPrompt: systemPromptForHook,
-                  messages: beforeRunMessages,
-                  channelId: hookCtx.channelId,
-                  accountId: params.agentAccountId ?? undefined,
-                  senderId: params.senderId ?? undefined,
-                  senderIsOwner: params.senderIsOwner ?? undefined,
-                },
-                hookCtx,
-              );
-            } catch {
-              log.warn("before_agent_run hook failed; blocking request");
-              beforeAgentRunBlocked = true;
-              beforeAgentRunBlockedBy = "before_agent_run";
-              await persistBlockedBeforeAgentRun({
-                message: resolveBlockMessage(
-                  { outcome: "block", reason: "before_agent_run hook failed" },
-                  { blockedBy: "before_agent_run" },
-                ),
-                pluginId: "before_agent_run",
-              });
-              promptError = new Error(
-                resolveBlockMessage(
-                  { outcome: "block", reason: "before_agent_run hook failed" },
-                  { blockedBy: "before_agent_run" },
-                ),
-              );
-              promptErrorSource = "hook:before_agent_run";
-              skipPromptSubmission = true;
-            }
-            const beforeRunDecision = beforeRunResult?.decision;
-            const beforeRunPluginId = beforeRunResult?.pluginId ?? "unknown";
-            if (beforeRunDecision?.outcome === "block") {
-              beforeAgentRunBlocked = true;
-              beforeAgentRunBlockedBy = beforeRunPluginId;
-              const blockReplacementMsg = resolveBlockMessage(beforeRunDecision, {
-                blockedBy: beforeRunPluginId,
-              });
-              log.warn(`before_agent_run hook blocked by ${beforeRunPluginId}`);
-              await persistBlockedBeforeAgentRun({
-                message: blockReplacementMsg,
-                pluginId: beforeRunPluginId,
-              });
-              promptError = new Error(blockReplacementMsg);
-              promptErrorSource = "hook:before_agent_run";
-              skipPromptSubmission = true;
-            }
+          const beforeAgentRunOutcome = await runEmbeddedAttemptBeforeAgentRun({
+            attempt: params,
+            activeSession,
+            hookContext: hookCtx,
+            hookMessages: hookMessagesForCurrentPrompt,
+            hookRunner,
+            modelPrompt: promptForModel,
+            sessionManager: activeSessionManager,
+            systemPrompt: systemPromptForHook,
+            withOwnedSessionWriteLock,
+          });
+          if (beforeAgentRunOutcome) {
+            beforeAgentRunBlocked = true;
+            beforeAgentRunBlockedBy = beforeAgentRunOutcome.blockedBy;
+            promptError = beforeAgentRunOutcome.promptError;
+            promptErrorSource = "hook:before_agent_run";
+            skipPromptSubmission = true;
           }
 
           if (!skipPromptSubmission) {
