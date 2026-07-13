@@ -9,9 +9,10 @@ import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
-import { ChannelWizardController } from "./wizard-controller.ts";
+import { ChannelWizardHost } from "./wizard-host.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
 
@@ -24,32 +25,6 @@ type NostrOperation = {
   accountId: string;
   headers: Record<string, string>;
 };
-
-function parseValidationErrors(details: unknown): Record<string, string> {
-  if (!Array.isArray(details)) {
-    return {};
-  }
-  const errors: Record<string, string> = {};
-  for (const entry of details) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const [rawField, ...rest] = entry.split(":");
-    if (!rawField || rest.length === 0) {
-      continue;
-    }
-    const field = rawField.trim();
-    const message = rest.join(":").trim();
-    if (field && message) {
-      errors[field] = message;
-    }
-  }
-  return errors;
-}
-
-function buildNostrProfileUrl(accountId: string, suffix = ""): string {
-  return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
-}
 
 class ChannelsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -64,77 +39,13 @@ class ChannelsPage extends OpenClawLightDomElement {
   @state()
   private selectedChannel: string | null = null;
 
-  @state()
-  private wizardMultiselect: unknown[] = [];
-
-  private wizardMultiselectStepId: string | null = null;
-
-  @state()
-  private setupBlockedByDirtyConfig = false;
-
-  private readonly wizardController = new ChannelWizardController(
-    () => this.context?.gateway.snapshot.client ?? null,
-    () => {
-      // Pending multiselect toggles survive busy re-renders but reset per step.
-      const wizard = this.wizardController.state;
-      const stepId = wizard.phase === "step" ? wizard.step.id : null;
-      if (stepId !== this.wizardMultiselectStepId) {
-        this.wizardMultiselectStepId = stepId;
-        const initial =
-          wizard.phase === "step" && Array.isArray(wizard.step.initialValue)
-            ? [...wizard.step.initialValue]
-            : [];
-        this.wizardMultiselect = initial;
-      }
-      if (wizard.phase === "done" && this.lastWizardPhase !== "done") {
-        void this.handleWizardCompleted(wizard.channels);
-      }
-      this.lastWizardPhase = wizard.phase;
-      this.requestUpdate();
+  private readonly wizardHost = new ChannelWizardHost({
+    getContext: () => this.context,
+    requestUpdate: () => this.requestUpdate(),
+    clearSelection: () => {
+      this.selectedChannel = null;
     },
-  );
-
-  private lastWizardPhase = "idle";
-
-  private async handleWizardCompleted(channels: readonly string[]) {
-    const context = this.context;
-    if (!context) {
-      return;
-    }
-    // The wizard rewrote openclaw.json on the gateway; resync the local draft.
-    await context.runtimeConfig.refresh({ discardPendingChanges: true });
-    await context.channels.refresh(true);
-    if (channels.includes("whatsapp")) {
-      // Jump straight into QR pairing; the wizard modal renders the QR phase.
-      await context.channels.startWhatsApp(false);
-    }
-  }
-
-  private startSetup(channel: string | null) {
-    // Wizard completion resyncs config from disk (discarding local drafts), so
-    // refuse to start while the advanced form holds unsaved edits.
-    if (this.context?.runtimeConfig.state.configFormDirty) {
-      this.setupBlockedByDirtyConfig = true;
-      return;
-    }
-    this.setupBlockedByDirtyConfig = false;
-    this.selectedChannel = null;
-    void this.wizardController.start(channel);
-  }
-
-  private closeWizard() {
-    const wasActive = this.wizardController.state.phase !== "idle";
-    void this.wizardController.cancel();
-    if (wasActive) {
-      void this.context?.channels.refresh(true);
-    }
-  }
-
-  private toggleWizardMultiselect(value: unknown) {
-    this.wizardMultiselect = this.wizardMultiselect.includes(value)
-      ? this.wizardMultiselect.filter((entry) => entry !== value)
-      : [...this.wizardMultiselect, value];
-  }
+  });
 
   private schemaLoadStarted = false;
   private gatewaySource?: ApplicationContext["gateway"];
@@ -242,9 +153,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    // Cancel (not just reset): the gateway keeps a running WizardSession and
-    // rejects future wizard.start calls until it is cancelled or purged.
-    void this.wizardController.cancel();
+    this.wizardHost.cancelOnDisconnect();
     this.selectedChannel = null;
     this.gatewaySource = undefined;
     this.channelsSource = undefined;
@@ -400,21 +309,11 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileFormState = pendingForm;
 
     try {
-      const response = await fetch(buildNostrProfileUrl(operation.accountId), {
-        method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          ...operation.headers,
-        },
-        body: JSON.stringify(form.values),
+      const { data, response } = await putNostrProfile({
+        accountId: operation.accountId,
+        headers: operation.headers,
+        values: form.values,
       });
-      const data = (await response.json().catch(() => null)) as {
-        ok?: boolean;
-        error?: string;
-        details?: unknown;
-        persisted?: boolean;
-      } | null;
-
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
         return;
@@ -480,22 +379,10 @@ class ChannelsPage extends OpenClawLightDomElement {
     };
 
     try {
-      const response = await fetch(buildNostrProfileUrl(operation.accountId, "/import"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...operation.headers,
-        },
-        body: JSON.stringify({ autoMerge: true }),
+      const { data, response } = await importNostrProfile({
+        accountId: operation.accountId,
+        headers: operation.headers,
       });
-      const data = (await response.json().catch(() => null)) as {
-        ok?: boolean;
-        error?: string;
-        imported?: NostrProfile;
-        merged?: NostrProfile;
-        saved?: boolean;
-      } | null;
-
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
         return;
@@ -571,19 +458,19 @@ class ChannelsPage extends OpenClawLightDomElement {
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
           selectedChannel: this.selectedChannel,
-          wizard: this.wizardController.state,
-          wizardMultiselect: this.wizardMultiselect,
-          setupBlockedByDirtyConfig: this.setupBlockedByDirtyConfig,
+          wizard: this.wizardHost.state,
+          wizardMultiselect: this.wizardHost.multiselect,
+          setupBlockedByDirtyConfig: this.wizardHost.blockedByDirtyConfig,
           onShowDetail: (channelId) => {
             this.selectedChannel = channelId;
           },
           onCloseDetail: () => {
             this.selectedChannel = null;
           },
-          onStartSetup: (channelId) => this.startSetup(channelId),
-          onWizardAnswer: (value) => void this.wizardController.answer(value),
-          onWizardToggleMultiselect: (value) => this.toggleWizardMultiselect(value),
-          onWizardClose: () => this.closeWizard(),
+          onStartSetup: (channelId) => this.wizardHost.startSetup(channelId),
+          onWizardAnswer: (value) => this.wizardHost.answer(value),
+          onWizardToggleMultiselect: (value) => this.wizardHost.toggleMultiselect(value),
+          onWizardClose: () => this.wizardHost.close(),
           onRefresh: (probe) => void context.channels.refresh(probe),
           onWhatsAppStart: (force) => void context.channels.startWhatsApp(force),
           onWhatsAppWait: () => void context.channels.waitWhatsApp(),

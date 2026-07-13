@@ -4,12 +4,12 @@
 import { html, type TemplateResult } from "lit";
 import { pluginArtPath, pluginFallbackGradient, pluginMonogram } from "../plugins/presentation.ts";
 
-export type ChannelSetupLink = {
+type ChannelSetupLink = {
   label: string;
   url: string;
 };
 
-export type ChannelHubMeta = {
+type ChannelHubMeta = {
   /** External helper destinations shown while the setup wizard is open. */
   setupLinks?: ChannelSetupLink[];
 };

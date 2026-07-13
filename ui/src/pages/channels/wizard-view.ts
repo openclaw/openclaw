@@ -10,7 +10,7 @@ import type {
   ChannelWizardStepOption,
 } from "./wizard-controller.ts";
 
-export type ChannelWizardViewProps = {
+type ChannelWizardViewProps = {
   wizard: ChannelWizardState;
   channelLabel: (channelId: string) => string;
   // Pending multiselect toggles live in page state so re-renders keep them.

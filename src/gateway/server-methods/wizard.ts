@@ -10,11 +10,35 @@ import {
   validateWizardStartParams,
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { defaultRuntime } from "../../runtime.js";
+import type { OnboardOptions } from "../../commands/onboard-types.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import type { WizardPrompter } from "../../wizard/prompts.js";
 import { WizardSession } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+export type SetupWizardRunner = (
+  opts: OnboardOptions,
+  runtime: RuntimeEnv,
+  prompter: WizardPrompter,
+) => Promise<void>;
+
+export type ChannelSetupWizardRunner = (
+  opts: { channel?: string; onConfigured?: (channels: string[]) => void },
+  runtime: RuntimeEnv,
+  prompter: WizardPrompter,
+) => Promise<void>;
+
+export const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
+  const { runSetupWizard } = await import("../../wizard/setup.js");
+  return runSetupWizard(...args);
+};
+
+export const runDefaultChannelSetupWizard: ChannelSetupWizardRunner = async (...args) => {
+  const { runChannelsSetupWizard } = await import("../../commands/channels/add-wizard.js");
+  return runChannelsSetupWizard(...args);
+};
 
 function readWizardStatus(session: WizardSession) {
   return {

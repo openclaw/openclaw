@@ -48,7 +48,7 @@ export async function resolveInitialWizardChannel(
   )?.id;
 }
 
-export type ChannelsAddWizardFlowParams = {
+type ChannelsAddWizardFlowParams = {
   cfg: OpenClawConfig;
   baseHash?: string;
   runtime: RuntimeEnv;

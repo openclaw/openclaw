@@ -553,22 +553,10 @@ export type GatewayServerOptions = {
    * Override gateway Tailscale exposure configuration (merges with config).
    */
   tailscale?: import("../config/config.js").GatewayTailscaleConfig;
-  /**
-   * Test-only: override the setup wizard runner.
-   */
-  wizardRunner?: (
-    opts: import("../commands/onboard-types.js").OnboardOptions,
-    runtime: import("../runtime.js").RuntimeEnv,
-    prompter: import("../wizard/prompts.js").WizardPrompter,
-  ) => Promise<void>;
-  /**
-   * Test-only: override the channel-setup wizard runner (wizard.start flow "channels").
-   */
-  channelWizardRunner?: (
-    opts: { channel?: string; onConfigured?: (channels: string[]) => void },
-    runtime: import("../runtime.js").RuntimeEnv,
-    prompter: import("../wizard/prompts.js").WizardPrompter,
-  ) => Promise<void>;
+  /** Test-only: override the setup wizard runner. */
+  wizardRunner?: import("./server-methods/wizard.js").SetupWizardRunner;
+  /** Test-only: override the channel-setup wizard runner (wizard.start flow "channels"). */
+  channelWizardRunner?: import("./server-methods/wizard.js").ChannelSetupWizardRunner;
   sidecarStartup?: GatewaySidecarStartupMode;
   channelAutostartSuppression?: ChannelAutostartSuppression;
   /**
@@ -582,19 +570,6 @@ export type GatewayServerOptions = {
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
   /** Restart request override; direct servers fail closed on restart-required reloads. */
   hotReloadRecovery?: GatewayRestartEmitter;
-};
-
-type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
-type ChannelSetupWizardRunner = NonNullable<GatewayServerOptions["channelWizardRunner"]>;
-
-const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
-  const { runSetupWizard } = await import("../wizard/setup.js");
-  return runSetupWizard(...args);
-};
-
-const runDefaultChannelSetupWizard: ChannelSetupWizardRunner = async (...args) => {
-  const { runChannelsSetupWizard } = await import("../commands/channels/add-wizard.js");
-  return runChannelsSetupWizard(...args);
 };
 
 export async function startGatewayServer(
@@ -1088,6 +1063,8 @@ export async function startGatewayServer(
   const { createTerminalLaunchPolicy } = await import("./terminal/launch.js");
   const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
+  const { runDefaultChannelSetupWizard, runDefaultSetupWizard } =
+    await import("./server-methods/wizard.js");
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
   const channelWizardRunner = opts.channelWizardRunner ?? runDefaultChannelSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
