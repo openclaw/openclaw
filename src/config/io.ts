@@ -1471,6 +1471,67 @@ function createConfigFileSnapshot(params: {
   };
 }
 
+/**
+ * Returns true when `raw` contains JSON5 comments (// or /*) outside of string
+ * literals. Uses a character-by-character lexical scan that handles every JSON5
+ * escape sequence including U+2028 / U+2029 line continuations, so comment-like
+ * text inside strings never produces a false positive.
+ */
+export function hasJSON5Comments(raw: string): boolean {
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    // Fast path: skip non-comment, non-string characters.
+    if (ch !== "/" && ch !== '"' && ch !== "'" && ch !== "`") {
+      continue;
+    }
+    if (ch === "/") {
+      const next = raw[i + 1];
+      if (next === "/") return true;
+      if (next === "*") return true;
+      continue;
+    }
+    // Entered a string literal — consume it including escapes.
+    const quote = ch;
+    i++;
+    while (i < raw.length) {
+      const c = raw[i];
+      if (c === "\\") {
+        i++;
+        // JSON5 line continuation: backslash + line terminator skips both.
+        // Terminators: LF (U+000A), CR (U+000D), CRLF, LS (U+2028), PS (U+2029).
+        if (i < raw.length) {
+          const escaped = raw[i];
+          if (escaped === "\n") {
+            i++;
+            continue;
+          }
+          if (escaped === "\r") {
+            i++;
+            if (i < raw.length && raw[i] === "\n") i++;
+            continue;
+          }
+          if (escaped === " " || escaped === " ") {
+            i++;
+            continue;
+          }
+          // Standard escape: consume the escaped character and continue.
+          i++;
+          continue;
+        }
+        continue;
+      }
+      if (c === quote) {
+        i++;
+        break;
+      }
+      i++;
+    }
+    // Back up one because the for-loop increment will advance past the closing quote.
+    i--;
+  }
+  return false;
+}
+
 async function finalizeReadConfigSnapshotInternalResult(
   deps: Required<ConfigIoDeps>,
   result: ReadConfigFileSnapshotInternalResult,
@@ -2610,6 +2671,16 @@ export function createConfigIO(
           changedPathCount,
         }),
       );
+      // JSON5 comments are stripped by the parse-modify-stringify roundtrip.
+      // Warn only after a successful write so a later rejection or failure
+      // does not alarm users about a file that was never changed.
+      if (typeof snapshot.raw === "string" && hasJSON5Comments(snapshot.raw)) {
+        deps.logger.warn(
+          `Config write removed JSON5 comments from ${configPath}. ` +
+            `A pre-write backup was saved to the config directory; ` +
+            `diff it against the current file to recover commented-out settings.`,
+        );
+      }
     };
     const logConfigWriteAnomalies = () => {
       if (suspiciousReasons.length === 0) {
