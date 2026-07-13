@@ -112,6 +112,9 @@ const taskRegistryMocks = vi.hoisted(() => ({
 
 vi.mock("../../tasks/task-registry.js", () => ({
   listTasksForOwnerKey: taskRegistryMocks.listTasksForOwnerKey,
+}));
+
+vi.mock("../../tasks/task-executor-policy.js", () => ({
   isTerminalTaskStatus: taskRegistryMocks.isTerminalTaskStatus,
 }));
 
