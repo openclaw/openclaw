@@ -17,7 +17,11 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
-import type { SessionCapability, SessionState } from "../lib/sessions/index.ts";
+import type {
+  SessionCapability,
+  SessionDeleteOutcome,
+  SessionState,
+} from "../lib/sessions/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-sidebar.ts";
 import {
@@ -137,6 +141,25 @@ function createSessionState(agentId: string, keys: string[]): SessionState {
   };
 }
 
+function successfulSessionPatch(key: string) {
+  return {
+    ok: true as const,
+    path: "",
+    key,
+    entry: { sessionId: key },
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
@@ -144,9 +167,19 @@ function createSessionsHarness(agentId: string, keys: string[]) {
   const groupsPut = vi.fn(() => Promise.resolve());
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
-  const patch = vi.fn(() => Promise.resolve(null));
+  const create = vi.fn(() => Promise.resolve("agent:main:fork"));
+  const patch = vi.fn((key: string, _patch: Parameters<SessionCapability["patch"]>[1]) =>
+    Promise.resolve(successfulSessionPatch(key)),
+  );
+  const deleteSession = vi.fn(
+    (): Promise<SessionDeleteOutcome> => Promise.resolve({ deleted: false }),
+  );
   const deleteMany = vi.fn(() =>
-    Promise.resolve({ deleted: [] as string[], errors: [], preservedWorktrees: [] }),
+    Promise.resolve({
+      deleted: [] as string[],
+      errors: [] as string[],
+      preservedWorktrees: [] as Array<{ id: string; branch: string; path: string }>,
+    }),
   );
   const sessions = {
     get state() {
@@ -164,7 +197,9 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     groupsPut,
     groupsRename,
     groupsDelete,
+    create,
     patch,
+    delete: deleteSession,
     deleteMany,
     refresh: () => Promise.resolve(),
   } as unknown as SessionCapability;
@@ -179,7 +214,9 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     groupsPut,
     groupsRename,
     groupsDelete,
+    create,
     patch,
+    deleteSession,
     deleteMany,
     publish,
     publishList(statePatch: Partial<SessionState>) {
@@ -1568,6 +1605,210 @@ describe("AppSidebar session source lifecycle", () => {
   });
 });
 
+describe("AppSidebar session mutation feedback", () => {
+  async function mountMutationHarness(client: GatewayBrowserClient = {} as GatewayBrowserClient) {
+    const gateway = createGatewayHarness(client);
+    const harness = createSessionsHarness("main", [
+      "agent:main:main",
+      "agent:main:a",
+      "agent:main:b",
+    ]);
+    const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    return { gateway, harness, sidebar };
+  }
+
+  async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
+    const button = sidebar.querySelector<HTMLButtonElement>(
+      `[data-session-key="${key}"] [data-session-menu="true"]`,
+    );
+    if (!button) {
+      throw new Error(`expected menu button for ${key}`);
+    }
+    button.click();
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    if (!menu) {
+      throw new Error("expected session menu");
+    }
+    await menu.updateComplete;
+    return menu;
+  }
+
+  function selectSession(sidebar: SidebarLifecycleState, key: string) {
+    const link = sidebar.querySelector<HTMLAnchorElement>(
+      `[data-session-key="${key}"] .sidebar-recent-session__link`,
+    );
+    if (!link) {
+      throw new Error(`expected row link for ${key}`);
+    }
+    link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, metaKey: true }));
+  }
+
+  it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
+    const { harness, sidebar } = await mountMutationHarness();
+    harness.patch.mockRejectedValueOnce(new Error("rename rejected by Gateway"));
+    const promptSpy = vi.spyOn(window, "prompt").mockReturnValue("Rejected rename");
+    try {
+      const menu = await openSessionMenu(sidebar, "agent:main:a");
+      menu.querySelector<HTMLButtonElement>('[data-shortcut="r"]')?.click();
+
+      await vi.waitFor(() => {
+        expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
+          "rename rejected by Gateway",
+        );
+      });
+      const error = sidebar.querySelector("[data-sidebar-session-error]");
+      expect(error?.parentElement?.classList.contains("sidebar-sessions")).toBe(true);
+      expect(error?.closest(".sidebar-recent-sessions")).toBeNull();
+
+      error?.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
+      await sidebar.updateComplete;
+      expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
+    } finally {
+      promptSpy.mockRestore();
+    }
+  });
+
+  it("surfaces partial batch-delete errors", async () => {
+    const { harness, sidebar } = await mountMutationHarness();
+    harness.deleteMany.mockResolvedValueOnce({
+      deleted: ["agent:main:a"],
+      errors: ["agent:main:b: permission denied"],
+      preservedWorktrees: [],
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    try {
+      selectSession(sidebar, "agent:main:a");
+      selectSession(sidebar, "agent:main:b");
+      await sidebar.updateComplete;
+      const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
+      row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+      await menu?.updateComplete;
+      menu?.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+
+      await vi.waitFor(() => {
+        expect(sidebar.querySelector("[data-sidebar-session-error]")?.textContent).toContain(
+          "agent:main:b: permission denied",
+        );
+      });
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it("suppresses a late rejection after a same-client reconnect", async () => {
+    const { gateway, harness, sidebar } = await mountMutationHarness();
+    const pending = deferred<ReturnType<typeof successfulSessionPatch>>();
+    harness.patch.mockImplementationOnce(() => pending.promise);
+    const menu = await openSessionMenu(sidebar, "agent:main:a");
+    menu.querySelector<HTMLButtonElement>('[data-shortcut="p"]')?.click();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+
+    gateway.publish({ connected: false, reconnecting: true });
+    gateway.publish({ connected: true, reconnecting: false });
+    pending.reject(new Error("late old-connection rejection"));
+    await pending.promise.catch(() => undefined);
+    await Promise.resolve();
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
+  });
+
+  it("does not continue a batch patch on a reconnected Gateway", async () => {
+    const { gateway, harness, sidebar } = await mountMutationHarness();
+    const pending = deferred<ReturnType<typeof successfulSessionPatch>>();
+    harness.patch.mockImplementationOnce(() => pending.promise);
+    selectSession(sidebar, "agent:main:a");
+    selectSession(sidebar, "agent:main:b");
+    await sidebar.updateComplete;
+    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await menu?.updateComplete;
+    menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+
+    gateway.publish({ connected: false, reconnecting: true });
+    gateway.publish({ connected: true, reconnecting: false });
+    pending.resolve(successfulSessionPatch("agent:main:a"));
+    await pending.promise;
+    await new Promise<void>((resolve) => {
+      globalThis.setTimeout(resolve, 0);
+    });
+
+    expect(harness.patch).toHaveBeenCalledOnce();
+  });
+
+  it("does not truncate a pending batch when another mutation starts", async () => {
+    const { harness, sidebar } = await mountMutationHarness();
+    const firstPatch = deferred<ReturnType<typeof successfulSessionPatch>>();
+    harness.patch.mockImplementationOnce(() => firstPatch.promise);
+    selectSession(sidebar, "agent:main:a");
+    selectSession(sidebar, "agent:main:b");
+    await sidebar.updateComplete;
+    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
+
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    let menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await menu?.updateComplete;
+    menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledOnce());
+
+    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await sidebar.updateComplete;
+    menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+    await menu?.updateComplete;
+    menu?.querySelector<HTMLButtonElement>('[data-shortcut="u"]')?.click();
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(3));
+
+    firstPatch.resolve(successfulSessionPatch("agent:main:a"));
+    await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(4));
+    expect(harness.patch.mock.calls.map(([, patch]) => patch)).toEqual(
+      expect.arrayContaining([
+        { archived: true },
+        { archived: true },
+        { unread: true },
+        { unread: true },
+      ]),
+    );
+  });
+
+  it("never force-removes a preserved worktree through a reconnected client", async () => {
+    const request = vi.fn(() => Promise.resolve({}));
+    const { gateway, harness, sidebar } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    harness.deleteSession.mockResolvedValueOnce({
+      deleted: true,
+      worktreePreserved: { id: "wt-1", branch: "feature", path: "/tmp/worktree" },
+    });
+    let confirmations = 0;
+    const confirmSpy = vi.spyOn(window, "confirm").mockImplementation(() => {
+      confirmations += 1;
+      if (confirmations === 2) {
+        gateway.publish({ connected: false, reconnecting: true });
+        gateway.publish({ connected: true, reconnecting: false });
+      }
+      return true;
+    });
+    try {
+      const menu = await openSessionMenu(sidebar, "agent:main:a");
+      menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
+      await vi.waitFor(() => expect(confirmations).toBe(2));
+
+      expect(request).not.toHaveBeenCalled();
+    } finally {
+      confirmSpy.mockRestore();
+    }
+  });
+});
+
 function createDataTransferStub() {
   const data = new Map<string, string>();
   return {
@@ -1766,6 +2007,7 @@ describe("AppSidebar custom group reordering", () => {
     const gateway = createGateway(client);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    sidebar.connected = true;
     harness.publish({ groups });
     await sidebar.updateComplete;
     return { sidebar, harness };
