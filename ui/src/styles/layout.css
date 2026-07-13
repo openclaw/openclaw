@@ -471,6 +471,41 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   text-overflow: ellipsis;
 }
 
+.settings-sidebar__subitem {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin-inline-start: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: default;
+  text-decoration: none;
+}
+
+.settings-sidebar__subitem:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  text-decoration: none;
+}
+
+.settings-sidebar__subitem--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+}
+
+.settings-sidebar__subitem:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__subitem-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .settings-sidebar__footer {
   flex-shrink: 0;
   display: flex;
@@ -1700,6 +1735,10 @@ html.openclaw-native-nav .topbar .topbar-nav-toggle {
   box-shadow: var(--shadow-lg);
 }
 
+/* Popover hosts live in the top layer so menus escape in-page stacking
+   contexts (e.g. the sidebar resizer above the nav); the host itself must
+   stay a zero-size shell around its fixed-position menu. */
+openclaw-menu-surface[popover],
 openclaw-native-link-menu[popover],
 openclaw-session-menu[popover] {
   width: 0;

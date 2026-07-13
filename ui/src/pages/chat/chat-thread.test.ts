@@ -1,14 +1,18 @@
 // Control UI tests cover build chat items behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractToolCards } from "../../lib/chat/tool-cards.ts";
 import {
   buildCachedChatItems,
   buildChatItems,
+  coalesceStreamRuns,
+  collapseCompletedTurnWork,
   getExpandedToolCards,
   resetChatThreadState,
   syncToolCardExpansionState,
   type BuildChatItemsProps,
+  type WorkGroupRenderItem,
 } from "./chat-thread.ts";
 
 const SENDER_METADATA_BLOCK =
@@ -49,9 +53,206 @@ function requireGroup(value: unknown): MessageGroup {
   return value as MessageGroup;
 }
 
+function groupAt(groups: readonly MessageGroup[], index: number): MessageGroup {
+  return expectDefined(groups[index], `message group ${index}`);
+}
+
+function messageAt(group: MessageGroup, index: number) {
+  return expectDefined(group.messages[index], `message ${index} in group ${group.key}`);
+}
+
 function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> {
   return requireRecord(group.messages[index]?.message);
 }
+
+describe("collapseCompletedTurnWork", () => {
+  const collapsedItems = (props: Partial<BuildChatItemsProps>, runWorking = false) =>
+    collapseCompletedTurnWork(coalesceStreamRuns(buildChatItems(createProps(props))), {
+      runWorking,
+    });
+
+  function requireWorkGroup(value: unknown): WorkGroupRenderItem {
+    const record = requireRecord(value);
+    expect(record.kind).toBe("work-group");
+    return value as WorkGroupRenderItem;
+  }
+
+  const toolResult = (id: string, timestamp: number, isError = false) => ({
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "bash",
+    isError,
+    content: isError ? "boom" : "ok",
+    timestamp,
+  });
+
+  it("collapses a completed turn's work behind one worked-for rollup", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "do it", timestamp: 1_000 },
+        { role: "assistant", content: "Checking…", timestamp: 2_000 },
+        toolResult("call-1", 3_000),
+        { role: "assistant", content: "All done.", timestamp: 10_000 },
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+    const work = requireWorkGroup(items[1]);
+    expect(work.groups).toHaveLength(2);
+    expect(work.durationMs).toBe(9_000);
+    expect(work.hasError).toBe(false);
+    expect(requireGroup(items[2]).role).toBe("assistant");
+  });
+
+  it("keeps the trailing turn expanded while the run works", () => {
+    const items = collapsedItems(
+      {
+        runWorking: true,
+        messages: [
+          { role: "user", content: "do it", timestamp: 1_000 },
+          toolResult("call-1", 2_000),
+        ],
+      },
+      true,
+    );
+
+    expect(items.some((item) => item.kind === "work-group")).toBe(false);
+  });
+
+  it("collapses reply-less turns only once the run is idle", () => {
+    const messages = [
+      { role: "user", content: "do it", timestamp: 1_000 },
+      toolResult("call-1", 2_000),
+    ];
+
+    // Mid-run the executing turn can trail a queued send, so reply-less turns
+    // stay expanded until the run reaches terminal.
+    expect(collapsedItems({ messages }, true).some((item) => item.kind === "work-group")).toBe(
+      false,
+    );
+
+    const idle = collapsedItems({ messages });
+    expect(idle.map((item) => item.kind)).toEqual(["group", "work-group"]);
+    expect(requireWorkGroup(idle[1]).durationMs).toBe(1_000);
+  });
+
+  it("flags failed work in turns that never replied", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "go", timestamp: 1_000 },
+        toolResult("call-1", 2_000, true),
+      ],
+    });
+
+    expect(requireWorkGroup(items[1]).hasError).toBe(true);
+  });
+
+  it("does not flag errors once the turn recovered with a reply", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "go", timestamp: 1_000 },
+        toolResult("call-1", 2_000, true),
+        { role: "assistant", content: "Recovered via another route.", timestamp: 3_000 },
+      ],
+    });
+
+    expect(requireWorkGroup(items[1]).hasError).toBe(false);
+  });
+
+  it("keeps work after the final reply visible", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "go", timestamp: 1_000 },
+        toolResult("call-1", 2_000),
+        { role: "assistant", content: "Done.", timestamp: 3_000 },
+        toolResult("call-2", 4_000),
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group", "group"]);
+    expect(requireGroup(items[3]).role).toBe("tool");
+  });
+
+  it("does not collapse across dividers", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "go", timestamp: 1_000 },
+        toolResult("call-1", 2_000),
+        {
+          role: "system",
+          content: "",
+          timestamp: 3_000,
+          __openclaw: { kind: "compaction", id: "c1" },
+        },
+        { role: "assistant", content: "Done.", timestamp: 4_000 },
+      ],
+    });
+
+    expect(items.some((item) => item.kind === "work-group")).toBe(false);
+    expect(items.some((item) => item.kind === "divider")).toBe(true);
+  });
+
+  it("keeps attachment-only final replies outside the work rollup", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "render it", timestamp: 1_000 },
+        toolResult("call-1", 2_000),
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "image",
+              url: "/media/screenshot.png",
+              source: { type: "url", url: "/media/screenshot.png" },
+            },
+          ],
+          timestamp: 3_000,
+        },
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(["group", "work-group", "group"]);
+    expect(requireGroup(items[2]).role).toBe("assistant");
+  });
+
+  it("keeps search matches visible instead of folding them into a rollup", () => {
+    const items = collapseCompletedTurnWork(
+      coalesceStreamRuns(
+        buildChatItems(
+          createProps({
+            messages: [
+              { role: "user", content: "do it", timestamp: 1_000 },
+              toolResult("call-1", 2_000),
+              { role: "assistant", content: "All done.", timestamp: 3_000 },
+            ],
+            searchOpen: true,
+            searchQuery: "ok",
+          }),
+        ),
+      ),
+      { runWorking: false, searchActive: true },
+    );
+
+    expect(items.some((item) => item.kind === "work-group")).toBe(false);
+  });
+
+  it("collapses each completed turn independently", () => {
+    const items = collapsedItems({
+      messages: [
+        { role: "user", content: "first", timestamp: 1_000 },
+        toolResult("call-1", 2_000),
+        { role: "assistant", content: "First done.", timestamp: 3_000 },
+        { role: "user", content: "second", timestamp: 4_000 },
+        toolResult("call-2", 5_000),
+        { role: "assistant", content: "Second done.", timestamp: 6_000 },
+      ],
+    });
+
+    const workGroups = items.filter((item) => item.kind === "work-group");
+    expect(workGroups).toHaveLength(2);
+    expect(new Set(workGroups.map((item) => item.key)).size).toBe(2);
+  });
+});
 
 describe("buildChatItems working spark", () => {
   const hasReadingIndicator = (props: Partial<BuildChatItemsProps>) =>
@@ -142,8 +343,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].role).toBe("user");
-    expect(groups[0].messages).toHaveLength(2);
+    expect(groupAt(groups, 0).role).toBe("user");
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
   });
 
   it("groups and hides top-level tool-use id results consistently", () => {
@@ -157,7 +358,7 @@ describe("buildChatItems", () => {
 
     const visibleGroups = messageGroups({ messages: [message] });
     expect(visibleGroups).toHaveLength(1);
-    expect(visibleGroups[0].role).toBe("tool");
+    expect(groupAt(visibleGroups, 0).role).toBe("tool");
 
     const hiddenGroups = messageGroups({ messages: [message], showToolCalls: false });
     expect(hiddenGroups).toHaveLength(0);
@@ -243,16 +444,16 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].role).toBe("tool");
-    expect(groups[0].messages).toHaveLength(1);
-    const cards = extractToolCards(groups[0].messages[0]?.message, "coalesced");
+    expect(groupAt(groups, 0).role).toBe("tool");
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "coalesced");
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "call-shell",
       name: "bash",
       outputText: "Doctor complete",
     });
-    expect(firstMessageContent(groups[0])).toContainEqual({
+    expect(firstMessageContent(groupAt(groups, 0))).toContainEqual({
       type: "image",
       data: "fixture-image",
       mimeType: "image/png",
@@ -290,9 +491,9 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].role).toBe("tool");
-    expect(groups[0].messages).toHaveLength(2);
-    const cards = groups[0].messages.flatMap((entry, index) =>
+    expect(groupAt(groups, 0).role).toBe("tool");
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
       extractToolCards(entry.message, `interleaved-${index}`),
     );
     expect(cards).toHaveLength(2);
@@ -324,8 +525,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(1);
-    const cards = extractToolCards(groups[0].messages[0]?.message, "repeated-snapshot");
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "repeated-snapshot");
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "call-x",
@@ -360,8 +561,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(17);
-    const cards = groups[0].messages.flatMap((entry, index) =>
+    expect(groupAt(groups, 0).messages).toHaveLength(17);
+    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
       extractToolCards(entry.message, `many-open-${index}`),
     );
     expect(cards).toHaveLength(17);
@@ -395,8 +596,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(2);
-    const cards = groups[0].messages.flatMap((entry, index) =>
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    const cards = groupAt(groups, 0).messages.flatMap((entry, index) =>
       extractToolCards(entry.message, `bundled-results-${index}`),
     );
     expect(cards.map((card) => [card.callId, card.outputText])).toEqual([
@@ -434,9 +635,9 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].role).toBe("tool");
-    expect(groups[0].messages).toHaveLength(1);
-    const cards = extractToolCards(groups[0].messages[0]?.message, "canonical-parallel");
+    expect(groupAt(groups, 0).role).toBe("tool");
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "canonical-parallel");
     expect(cards).toHaveLength(2);
     expect(cards[0]).toMatchObject({
       callId: "call-a",
@@ -473,9 +674,9 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].role).toBe("tool");
-    expect(groups[0].messages).toHaveLength(1);
-    const cards = extractToolCards(groups[0].messages[0]?.message, "canonical-provider");
+    expect(groupAt(groups, 0).role).toBe("tool");
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "canonical-provider");
     expect(cards.map((card) => [card.callId, card.outputText])).toEqual([
       ["call-a", "contents of a"],
       ["call-b", "contents of b"],
@@ -536,8 +737,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(1);
-    const cards = extractToolCards(groups[0].messages[0]?.message, "provider-coalesced");
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    const cards = extractToolCards(messageAt(groupAt(groups, 0), 0).message, "provider-coalesced");
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({
       callId: "provider-call",
@@ -565,7 +766,7 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(2);
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
   });
 
   it("keeps empty forwarded assistant display groups", () => {
@@ -581,9 +782,9 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].role).toBe("assistant");
-    expect(groups[0].senderLabel).toBe("Forwarded from main");
-    expect(groups[0].messages).toHaveLength(1);
+    expect(groupAt(groups, 0).role).toBe("assistant");
+    expect(groupAt(groups, 0).senderLabel).toBe("Forwarded from main");
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
   });
 
   it("collapses consecutive duplicate text messages into one rendered item with a count", () => {
@@ -596,8 +797,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(1);
-    expect(groups[0].messages[0].duplicateCount).toBe(3);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBe(3);
   });
 
   it("deduplicates relay-labeled assistant copies by source message id", () => {
@@ -620,9 +821,9 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].senderLabel).toBeNull();
-    expect(groups[0].messages).toHaveLength(1);
-    expect(messageRecord(groups[0]).content).toStrictEqual([
+    expect(groupAt(groups, 0).senderLabel).toBeNull();
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
       { type: "text", text: "There it is." },
     ]);
   });
@@ -647,9 +848,11 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].senderLabel).toBeNull();
-    expect(groups[0].messages).toHaveLength(1);
-    expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "Found it." }]);
+    expect(groupAt(groups, 0).senderLabel).toBeNull();
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
+      { type: "text", text: "Found it." },
+    ]);
   });
 
   it("deduplicates relay-labeled assistant copies by OpenClaw transcript metadata id", () => {
@@ -672,9 +875,11 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].senderLabel).toBeNull();
-    expect(groups[0].messages).toHaveLength(1);
-    expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "On it." }]);
+    expect(groupAt(groups, 0).senderLabel).toBeNull();
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
+      { type: "text", text: "On it." },
+    ]);
   });
 
   it("deduplicates relay-labeled assistant copies by OpenClaw metadata before surface ids", () => {
@@ -699,9 +904,11 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].senderLabel).toBeNull();
-    expect(groups[0].messages).toHaveLength(1);
-    expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "Ship it." }]);
+    expect(groupAt(groups, 0).senderLabel).toBeNull();
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
+      { type: "text", text: "Ship it." },
+    ]);
   });
 
   it("keeps native assistant updates separate when source message id repeats with new text", () => {
@@ -723,11 +930,11 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(2);
-    expect(messageRecord(groups[0], 0).content).toStrictEqual([
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0).content).toStrictEqual([
       { type: "text", text: "Draft one" },
     ]);
-    expect(messageRecord(groups[0], 1).content).toStrictEqual([
+    expect(messageRecord(groupAt(groups, 0), 1).content).toStrictEqual([
       { type: "text", text: "Draft two" },
     ]);
   });
@@ -752,10 +959,10 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(2);
-    expect(messageRecord(groups[0]).content).toStrictEqual([
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
       { type: "text", text: "Parzival first\n\nsecond" },
     ]);
-    expect(messageRecord(groups[1]).content).toStrictEqual([
+    expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
       { type: "text", text: "first second" },
     ]);
   });
@@ -780,10 +987,12 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(2);
-    expect(messageRecord(groups[0]).content).toStrictEqual([
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
       { type: "text", text: "PARZIVAL answer" },
     ]);
-    expect(messageRecord(groups[1]).content).toStrictEqual([{ type: "text", text: "answer" }]);
+    expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
+      { type: "text", text: "answer" },
+    ]);
   });
 
   it("keeps relay-labeled assistant updates separate when source message id repeats with new text", () => {
@@ -807,12 +1016,12 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].senderLabel).toBe("Parzival");
-    expect(groups[0].messages).toHaveLength(2);
-    expect(messageRecord(groups[0], 0).content).toStrictEqual([
+    expect(groupAt(groups, 0).senderLabel).toBe("Parzival");
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0).content).toStrictEqual([
       { type: "text", text: "Parzival Draft one" },
     ]);
-    expect(messageRecord(groups[0], 1).content).toStrictEqual([
+    expect(messageRecord(groupAt(groups, 0), 1).content).toStrictEqual([
       { type: "text", text: "Parzival Draft two" },
     ]);
   });
@@ -838,9 +1047,9 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(2);
-    expect(groups[0].messages[0].duplicateCount).toBeUndefined();
-    expect(groups[0].messages[1].duplicateCount).toBeUndefined();
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
   it("keeps same-id user relay copies separate so sender identity is preserved", () => {
@@ -864,8 +1073,8 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.senderLabel)).toEqual(["Alice", null]);
-    expect(groups[0].messages).toHaveLength(1);
-    expect(groups[1].messages).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(groupAt(groups, 1).messages).toHaveLength(1);
   });
 
   it("suppresses assistant HEARTBEAT_OK acknowledgements before rendering history", () => {
@@ -879,9 +1088,9 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(2);
-    expect(groups[0].role).toBe("user");
-    expect(groups[1].role).toBe("assistant");
-    expect(messageRecord(groups[1]).content).toStrictEqual([
+    expect(groupAt(groups, 0).role).toBe("user");
+    expect(groupAt(groups, 1).role).toBe("assistant");
+    expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
       { type: "text", text: "Visible reply" },
     ]);
   });
@@ -921,8 +1130,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(1);
-    expect(messageRecord(groups[0]).content).toStrictEqual([
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
       { type: "thinking", thinking: "Useful hidden reasoning." },
       { type: "text", text: "Visible reply" },
     ]);
@@ -941,8 +1150,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(1);
-    expect(canvasBlocksIn(groups[0])).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(canvasBlocksIn(groupAt(groups, 0))).toHaveLength(1);
   });
 
   it("suppresses active HEARTBEAT_OK streams before rendering", () => {
@@ -1195,8 +1404,27 @@ describe("buildChatItems", () => {
     expect(noticeMessage.role).toBe("system");
     expect(noticeMessage.content).toBe("Showing last 100 messages (5 hidden).");
     expect(groups).toHaveLength(101);
-    expect(messageRecord(groups[1]).content).toBe("message 5");
-    expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
+    expect(messageRecord(groupAt(groups, 1)).content).toBe("message 5");
+    expect(groups.map((group) => messageRecord(group).content).at(-1)).toBe("message 104");
+  });
+
+  it("renders native history beyond the tail cap after scroll-back expands it", () => {
+    const items = buildChatItems(
+      createProps({
+        allowExpandedHistoryRenderLimit: true,
+        historyRenderLimit: 140,
+        messages: Array.from({ length: 140 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message ${index}`,
+          timestamp: index,
+        })),
+      }),
+    );
+    const groups = items.filter((item) => item.kind === "group");
+
+    expect(groups).toHaveLength(140);
+    expect(messageRecord(groupAt(groups, 0)).content).toBe("message 0");
+    expect(messageRecord(groupAt(groups, 139)).content).toBe("message 139");
   });
 
   it("honors a smaller history render window and preserves the hidden-count notice", () => {
@@ -1216,8 +1444,8 @@ describe("buildChatItems", () => {
     const noticeGroup = requireGroup(items[0]);
     expect(messageRecord(noticeGroup).content).toBe("Showing last 30 messages (75 hidden).");
     expect(groups).toHaveLength(31);
-    expect(messageRecord(groups[1]).content).toBe("message 75");
-    expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
+    expect(messageRecord(groupAt(groups, 1)).content).toBe("message 75");
+    expect(groups.map((group) => messageRecord(group).content).at(-1)).toBe("message 104");
   });
 
   it("budgets rendered history by tool-result content size", () => {
@@ -1242,9 +1470,9 @@ describe("buildChatItems", () => {
     const noticeGroup = requireGroup(items[0]);
     expect(messageRecord(noticeGroup).content).toBe("Showing last 2 messages (4 hidden).");
     expect(groups).toHaveLength(2);
-    expect(groups[1].messages).toHaveLength(2);
-    expect(messageRecord(groups[1], 0).timestamp).toBe(4);
-    expect(messageRecord(groups[1], 1).timestamp).toBe(5);
+    expect(groupAt(groups, 1).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 1), 0).timestamp).toBe(4);
+    expect(messageRecord(groupAt(groups, 1), 1).timestamp).toBe(5);
   });
 
   it("does not crash when history contains malformed entries", () => {
@@ -1264,7 +1492,7 @@ describe("buildChatItems", () => {
 
     const groups = items.filter((item) => item.kind === "group");
     expect(groups).toHaveLength(1);
-    expect(messageRecord(groups[0]).content).toBe("still visible");
+    expect(messageRecord(groupAt(groups, 0)).content).toBe("still visible");
   });
 
   it("does not collapse duplicate text messages separated by another message", () => {
@@ -1277,8 +1505,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(3);
-    expect(groups[0].messages[0].duplicateCount).toBeUndefined();
-    expect(groups[2].messages[0].duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 2), 0).duplicateCount).toBeUndefined();
   });
 
   it("does not collapse messages that carry canvas previews", () => {
@@ -1299,8 +1527,8 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(2);
-    expect(groups[0].messages[0].duplicateCount).toBeUndefined();
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
   });
 
   it("orders live tool messages before newer history messages", () => {
@@ -1325,8 +1553,8 @@ describe("buildChatItems", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.role)).toEqual(["tool", "assistant"]);
-    expect(messageRecord(groups[0]).content).toBe("Older live tool output.");
-    expect(messageRecord(groups[1]).content).toStrictEqual([
+    expect(messageRecord(groupAt(groups, 0)).content).toBe("Older live tool output.");
+    expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
       { type: "text", text: "Newer history reply." },
     ]);
   });
@@ -1413,8 +1641,25 @@ describe("buildChatItems", () => {
     });
 
     expect(groups.map((group) => group.role)).toEqual(["assistant", "user"]);
-    expect(messageRecord(groups[1]).content).toStrictEqual([
+    expect(messageRecord(groupAt(groups, 1)).content).toStrictEqual([
       { type: "text", text: "first visible send" },
+    ]);
+  });
+
+  it("keeps steerable queued sends out of the thread until sending starts", () => {
+    const queued = {
+      id: "pending-send-1",
+      text: "wait above the composer",
+      createdAt: 2,
+      sendSubmittedAtMs: 10,
+    };
+
+    expect(messageGroups({ queue: [{ ...queued, sendState: "waiting-idle" }] })).toStrictEqual([]);
+
+    const groups = messageGroups({ queue: [{ ...queued, sendState: "sending" }] });
+    expect(groups).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
+      { type: "text", text: "wait above the composer" },
     ]);
   });
 
@@ -1440,7 +1685,7 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(messageRecord(groups[0]).content).toStrictEqual([
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
       { type: "text", text: "see attached" },
       {
         type: "image",
@@ -1465,9 +1710,9 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0].messages).toHaveLength(2);
-    expect(groups[0].messages[0].duplicateCount).toBeUndefined();
-    expect(groups[0].messages[1].duplicateCount).toBeUndefined();
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
   it("keeps failed queued sends out of the thread", () => {
@@ -1509,7 +1754,7 @@ describe("buildChatItems", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(messageRecord(groups[0]).content).toStrictEqual([
+    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
       { type: "text", text: "matching prompt" },
     ]);
   });
@@ -1554,8 +1799,40 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(canvasBlocksIn(groups[0])).toHaveLength(1);
-    expect(canvasBlocksIn(groups[1])).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(groups, 0))).toHaveLength(1);
+    expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
+  });
+
+  it("keeps a live App preview on an assistant search match", () => {
+    const groups = messageGroups({
+      messages: [{ role: "assistant", content: "Matching preview", timestamp: 1_000 }],
+      toolMessages: [mcpAppResult("mcp-app-search", "call-search", 1_001)],
+      searchOpen: true,
+      searchQuery: "matching",
+      showToolCalls: false,
+    });
+
+    expect(canvasBlocksIn(groupAt(groups, 0))).toHaveLength(1);
+  });
+
+  it("keeps a persisted App preview on an assistant search match", () => {
+    for (const showToolCalls of [false, true]) {
+      const groups = messageGroups({
+        messages: [
+          { role: "user", content: "Show the App", timestamp: 1_000 },
+          mcpAppResult("mcp-app-persisted-search", "call-persisted-search", 1_001),
+          { role: "assistant", content: "Matching preview", timestamp: 1_002 },
+        ],
+        toolMessages: [],
+        searchOpen: true,
+        searchQuery: "matching",
+        showToolCalls,
+      });
+
+      const assistant = groups.find((group) => group.role === "assistant");
+      expect(assistant).toBeDefined();
+      expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+    }
   });
 
   it("preserves a metadata-only assistant anchor when lifting canvas previews", () => {
@@ -1597,6 +1874,184 @@ describe("buildChatItems", () => {
     ).toBe(true);
   });
 
+  it("creates an assistant anchor for a silent App turn", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "First request", timestamp: 1_000 },
+        { role: "assistant", content: "First response", timestamp: 1_001 },
+        { role: "user", content: "Show the App", timestamp: 2_000 },
+      ],
+      toolMessages: [mcpAppResult("mcp-app-silent", "call-silent", 2_001)],
+      queue: [
+        {
+          id: "queued-next-turn",
+          text: "Next request",
+          createdAt: 2_100,
+          sendSubmittedAtMs: 2_100,
+          sendState: "sending",
+        },
+      ],
+      showToolCalls: false,
+    });
+
+    const assistants = groups.filter((group) => group.role === "assistant");
+    expect(assistants).toHaveLength(2);
+    expect(canvasBlocksIn(groupAt(assistants, 0))).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(assistants, 1))).toHaveLength(1);
+  });
+
+  it("keeps an earlier silent App preview before the next user turn", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "Show the App", timestamp: 1_000 },
+        { role: "user", content: "Next request", timestamp: 2_000 },
+      ],
+      toolMessages: [mcpAppResult("mcp-app-earlier", "call-earlier", 1_001)],
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user"]);
+    expect(canvasBlocksIn(groupAt(groups, 1))).toHaveLength(1);
+  });
+
+  it("places an App preview after its queued user prompt", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "First request", timestamp: 1_000 },
+        { role: "assistant", content: "First response", timestamp: 1_001 },
+      ],
+      queue: [
+        {
+          id: "queued-app-turn",
+          text: "Show the App",
+          createdAt: 2_000,
+          sendSubmittedAtMs: 2_000,
+          sendState: "waiting-model",
+        },
+        {
+          id: "queued-future-turn",
+          text: "Later request",
+          createdAt: 2_001,
+          sendSubmittedAtMs: 2_001,
+          sendState: "waiting-reconnect",
+        },
+      ],
+      toolMessages: [mcpAppResult("mcp-app-queued", "call-queued", 2_002)],
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual([
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+    ]);
+    expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
+  });
+
+  it("restores a persisted App preview without the live tool cache", () => {
+    for (const showToolCalls of [false, true]) {
+      const groups = messageGroups({
+        messages: [
+          { role: "user", content: "Show the App", timestamp: 1_000 },
+          mcpAppResult("mcp-app-persisted", "call-persisted", 1_001),
+        ],
+        toolMessages: [],
+        showToolCalls,
+      });
+
+      const assistant = groups.find((group) => group.role === "assistant");
+      expect(assistant).toBeDefined();
+      expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+    }
+  });
+
+  it("deduplicates persisted and live copies of an App preview", () => {
+    const result = mcpAppResult("mcp-app-overlap", "call-overlap", 1_001);
+    const groups = messageGroups({
+      messages: [{ role: "user", content: "Show the App", timestamp: 1_000 }, result],
+      toolMessages: [result],
+      showToolCalls: false,
+    });
+
+    const assistant = groups.find((group) => group.role === "assistant");
+    expect(assistant).toBeDefined();
+    expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+  });
+
+  it("deduplicates timestamp-less persisted and live copies in the same turn", () => {
+    const persisted = {
+      ...mcpAppResult("mcp-app-untimestamped", "call-untimestamped", 1_001),
+      timestamp: undefined,
+    };
+    const groups = messageGroups({
+      messages: [{ role: "user", content: "Show the App", timestamp: 1_000 }, persisted],
+      toolMessages: [mcpAppLiveResult("mcp-app-untimestamped", "call-untimestamped", 1_001)],
+      showToolCalls: false,
+    });
+
+    expect(groups.flatMap((group) => canvasBlocksIn(group))).toHaveLength(1);
+  });
+
+  it("keeps distinct App previews when a tool-call ID is reused", () => {
+    const first = {
+      ...mcpAppResult("mcp-app-first", "call-reused", 1_001),
+      timestamp: undefined,
+    };
+    const second = mcpAppLiveResult("mcp-app-second", "call-reused", undefined);
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "First App", timestamp: 1_000 },
+        first,
+        { role: "user", content: "Second App", timestamp: 2_000 },
+      ],
+      toolMessages: [second],
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(canvasBlocksIn(groupAt(groups, 1))).toHaveLength(1);
+    expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
+  });
+
+  it("keeps a persisted App preview with its history-cutoff assistant", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "Show the App", timestamp: 1_000 },
+        mcpAppResult("mcp-app-cutoff", "call-cutoff", 1_001),
+        { role: "assistant", content: "Done", timestamp: 1_002 },
+      ],
+      toolMessages: [],
+      showToolCalls: false,
+      historyRenderLimit: 1,
+    });
+
+    const assistant = groups.find((group) => group.role === "assistant");
+    expect(assistant).toBeDefined();
+    expect(canvasBlocksIn(assistant as MessageGroup)).toHaveLength(1);
+  });
+
+  it("does not expand a persisted preview across a cutoff user turn", () => {
+    const firstResult = {
+      ...mcpAppResult("mcp-app-first", "call-first", 1_001),
+      timestamp: undefined,
+    };
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "First request", timestamp: 1_000 },
+        firstResult,
+        { role: "user", content: "Second request", timestamp: 2_000 },
+        { role: "assistant", content: "Second response", timestamp: 2_001 },
+      ],
+      toolMessages: [{ ...firstResult }],
+      showToolCalls: false,
+      historyRenderLimit: 2,
+    });
+
+    expect(groups.flatMap((group) => canvasBlocksIn(group))).toStrictEqual([]);
+  });
+
   it("does not lift generic view handles from non-canvas payloads", () => {
     const groups = messageGroups({
       messages: [
@@ -1633,7 +2088,7 @@ describe("buildChatItems", () => {
       ],
     });
 
-    expect(canvasBlocksIn(groups[0])).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(groups, 0))).toStrictEqual([]);
   });
 
   it("lifts streamed canvas toolresult blocks into the assistant bubble", () => {
@@ -1824,6 +2279,51 @@ function createAssistantCanvasBlock(params: { suffix: string }) {
   };
 }
 
+function mcpAppResult(viewId: string, toolCallId: string, timestamp: number) {
+  return {
+    role: "toolResult",
+    toolCallId,
+    toolName: "demo__show",
+    content: [{ type: "text", text: "ok" }],
+    details: {
+      mcpAppPreview: {
+        kind: "canvas",
+        view: { id: viewId, title: "Demo App" },
+        presentation: { target: "assistant_message", sandbox: "scripts" },
+        mcpApp: {
+          viewId,
+          serverName: "demo",
+          toolName: "show",
+          uiResourceUri: "ui://demo/app.html",
+          toolCallId,
+        },
+      },
+    },
+    timestamp,
+  };
+}
+
+function mcpAppLiveResult(viewId: string, toolCallId: string, timestamp: number | undefined) {
+  const persisted = mcpAppResult(viewId, toolCallId, timestamp ?? 0);
+  return {
+    role: "assistant",
+    toolCallId,
+    runId: "run-live",
+    content: [
+      { type: "toolcall", name: "demo__show", arguments: {} },
+      {
+        type: "toolresult",
+        name: "demo__show",
+        text: "ok",
+        details: persisted.details,
+      },
+    ],
+    ...(timestamp == null ? {} : { timestamp }),
+    __openclawToolStreamLive: true,
+    __openclawToolStreamResultReceived: true,
+  };
+}
+
 describe("tool turn outcome annotation (#89683)", () => {
   function failedTool(timestamp: number) {
     return {
@@ -1851,13 +2351,13 @@ describe("tool turn outcome annotation (#89683)", () => {
       assistantReply("No matches found.", 3),
     ]);
     expect(tools).toHaveLength(1);
-    expect(tools[0].turnSucceeded).toBe(true);
+    expect(groupAt(tools, 0).turnSucceeded).toBe(true);
   });
 
   it("leaves a terminal failed tool (no assistant reply) as not-succeeded", () => {
     const tools = toolGroups([userMsg("search foo", 1), failedTool(2)]);
     expect(tools).toHaveLength(1);
-    expect(tools[0].turnSucceeded).toBe(false);
+    expect(groupAt(tools, 0).turnSucceeded).toBe(false);
   });
 
   it("does not count an assistant group without reply text as success", () => {
@@ -1866,7 +2366,7 @@ describe("tool turn outcome annotation (#89683)", () => {
       failedTool(2),
       { role: "assistant", content: [], timestamp: 3 },
     ]);
-    expect(tools[0].turnSucceeded).toBe(false);
+    expect(groupAt(tools, 0).turnSucceeded).toBe(false);
   });
 
   it("scopes adjacent autonomous turns at an empty forwarded boundary", () => {
@@ -1912,7 +2412,7 @@ describe("tool turn outcome annotation (#89683)", () => {
         timestamp: 3,
       },
     ]);
-    expect(tools[0].turnSucceeded).toBe(true);
+    expect(groupAt(tools, 0).turnSucceeded).toBe(true);
   });
 
   it("does not treat non-text assistant content as a turn boundary", () => {

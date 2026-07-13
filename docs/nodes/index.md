@@ -11,7 +11,12 @@ A **node** is a companion device (macOS/iOS/watchOS/Android/headless) that conne
 
 Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; historical only for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway's WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac). In remote gateway mode, browser automation is handled by the CLI node host (`openclaw node run` or the installed node service), not by the native app node.
+macOS can also run in **node mode**: the menu bar app connects to the Gateway's
+WS server as one node (so `openclaw nodes …` works against this Mac). The app
+adds native Canvas, camera, screen, notification, and computer-control commands
+to the same node-host command surface used by `openclaw node run`. Do not start a
+second CLI node on that Mac; the app runs the matching CLI node-host runtime as
+an internal worker and remains the sole Gateway connection and node identity.
 
 Nodes are **peripherals**, not gateways: they don't run the gateway service, and channel messages (Telegram, WhatsApp, etc.) land on the gateway, not on nodes.
 
@@ -474,6 +479,7 @@ Notes:
 - Mobile nodes use a bundled app-owned A2UI page for action-capable rendering.
 - Only A2UI v0.8 JSONL is supported (v0.9/createSurface is rejected).
 - iOS and Android render remote Gateway Canvas pages, but A2UI button actions are dispatched only from the bundled app-owned A2UI page. Gateway-hosted HTTP/HTTPS A2UI pages are render-only on those mobile clients.
+- macOS can dispatch actions from the exact capability-scoped Gateway A2UI page selected by the app. Other HTTP/HTTPS pages remain render-only.
 
 ## Photos + videos (node camera)
 

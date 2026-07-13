@@ -84,6 +84,8 @@ When the check fails, update the PR body instead of pushing another code commit.
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed.
 
+Separate iOS and macOS Periphery workflows enforce a zero-findings dead-code policy. Each runs only when a non-draft pull request touches its native scan scope, or when manually dispatched.
+
 - **CI workflow edits** validate the Node CI graph, workflow linting, and the Windows lane (`ci.yml` executes it), but do not force iOS, Android, or macOS native builds by themselves; those platform lanes stay scoped to platform source changes.
 - **Workflow Sanity** runs `actionlint`, `zizmor` over all workflow YAML files, the composite-action interpolation guard, and the conflict-marker guard. The PR-scoped `security-fast` job also runs `zizmor` over changed workflow files so workflow security findings fail early in the main CI graph.
 - **Docs on `main` pushes** are checked by the standalone `Docs` workflow with the same ClawHub docs mirror used by CI, so mixed code+docs pushes do not also queue the CI `check-docs` shard. Pull requests and manual CI still run `check-docs` from CI when docs changed.
@@ -111,7 +113,7 @@ job budget.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push.
 
-The `check-dependencies` shard runs `pnpm deadcode:dependencies` (a production Knip dependency-only pass pinned to an exact Knip version, with pnpm's minimum release age disabled for the `dlx` install) and `pnpm deadcode:unused-files`, which compares Knip's production unused-file findings against `scripts/deadcode-unused-files.allowlist.mjs`, plus an advisory `pnpm deadcode:report:ci:ts-unused` report uploaded as the `deadcode-reports` artifact. The unused-file guard fails when a PR adds a new unreviewed unused file or leaves a stale allowlist entry, while preserving intentional dynamic plugin, generated, build, live-test, and package bridge surfaces that Knip cannot resolve statically.
+The `check-dependencies` shard runs a production Knip dependency-only pass and the unused-file allowlist check. The unused-file guard fails when a PR adds a new unreviewed unused file or leaves a stale allowlist entry, while preserving intentional dynamic plugin, generated, build, live-test, and package bridge surfaces that Knip cannot resolve statically. The unused-exports baseline remains available as an advisory maintenance scan through `pnpm deadcode:exports`; after deleting dead code, regenerate it with `pnpm deadcode:exports:update`.
 
 ## ClawSweeper activity forwarding
 

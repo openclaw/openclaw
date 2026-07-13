@@ -125,7 +125,7 @@ Block streaming sends partial replies as the model produces text blocks; chunkin
 - `agents.defaults.blockStreamingChunk` (`minChars|maxChars|breakPreference`)
 - `agents.defaults.blockStreamingCoalesce` (idle-based batching)
 - `agents.defaults.humanDelay` (human-like pause between block replies)
-- Channel overrides: `*.streaming.block.enabled` and `*.streaming.block.coalesce` on nested-streaming channels (Telegram, Discord, Slack, iMessage, Microsoft Teams); flat `*.blockStreaming` / `*.blockStreamingCoalesce` on channels without a nested streaming config. Block streaming is off unless explicitly enabled, on every channel including Telegram.
+- Channel overrides: `*.streaming.block.enabled` and `*.streaming.block.coalesce` on bundled channels (Matrix and Feishu still use the flat `*.blockStreaming` / `*.blockStreamingCoalesce` spellings); stale flat keys elsewhere are migrated by `openclaw doctor --fix`. Block streaming is off unless explicitly enabled, on every channel including Telegram.
 
 Details: [Streaming + chunking](/concepts/streaming).
 
