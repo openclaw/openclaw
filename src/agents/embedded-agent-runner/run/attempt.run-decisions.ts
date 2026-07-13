@@ -42,20 +42,33 @@ export function resolveAttemptStreamAuthProfileId(
   return params.runtimePlan?.auth.forwardedAuthProfileId;
 }
 
-/** Re-resolves model metadata whenever a concrete auth profile can change provider limits. */
+/** Re-resolves metadata whenever the prepared credential can change provider limits. */
 export function shouldMaterializeAuthPlanModel(
-  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "modelRoute">,
+  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "modelRoute" | "selectedAuthMode">,
   requestedProfileId?: string,
+  providerUsesProfileScopedModelMetadata = false,
 ): boolean {
-  return Boolean(plan.modelRoute || plan.forwardedAuthProfileId || requestedProfileId);
+  return Boolean(
+    plan.modelRoute ||
+    shouldForceCredentialScopedModelResolve(
+      plan,
+      requestedProfileId,
+      providerUsesProfileScopedModelMetadata,
+    ),
+  );
 }
 
-/** Forces re-resolution only when a concrete profile can change provider model metadata. */
-export function shouldForceProfileScopedModelResolve(
-  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId">,
+/** Re-resolves when the selected profile or direct credential can change provider metadata. */
+export function shouldForceCredentialScopedModelResolve(
+  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "selectedAuthMode">,
   requestedProfileId?: string,
+  providerUsesProfileScopedModelMetadata = false,
 ): boolean {
-  return Boolean(plan.forwardedAuthProfileId || requestedProfileId);
+  return Boolean(
+    plan.forwardedAuthProfileId ||
+    requestedProfileId ||
+    (providerUsesProfileScopedModelMetadata && plan.selectedAuthMode),
+  );
 }
 
 /**

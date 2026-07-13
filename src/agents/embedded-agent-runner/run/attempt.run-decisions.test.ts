@@ -5,7 +5,7 @@ import {
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
   resolveUnknownToolGuardThreshold,
-  shouldForceProfileScopedModelResolve,
+  shouldForceCredentialScopedModelResolve,
   shouldMaterializeAuthPlanModel,
   shouldRunLlmOutputHooksForAttempt,
 } from "./attempt.run-decisions.js";
@@ -57,17 +57,29 @@ describe("resolveAttemptStreamAuthProfileId", () => {
         }),
       ).toBe(true);
       expect(shouldMaterializeAuthPlanModel({}, "github-copilot:requested")).toBe(true);
+      expect(shouldMaterializeAuthPlanModel({ selectedAuthMode: "api-key" }, undefined, true)).toBe(
+        true,
+      );
+      expect(
+        shouldMaterializeAuthPlanModel({ selectedAuthMode: "api-key" }, undefined, false),
+      ).toBe(false);
       expect(shouldMaterializeAuthPlanModel({})).toBe(false);
     });
 
-    it("forces re-resolution for profiles but not route-only plans", () => {
+    it("forces re-resolution for profiles and provider-scoped direct credentials", () => {
       expect(
-        shouldForceProfileScopedModelResolve({
+        shouldForceCredentialScopedModelResolve({
           forwardedAuthProfileId: "github-copilot:work",
         }),
       ).toBe(true);
-      expect(shouldForceProfileScopedModelResolve({}, "github-copilot:requested")).toBe(true);
-      expect(shouldForceProfileScopedModelResolve({})).toBe(false);
+      expect(shouldForceCredentialScopedModelResolve({}, "github-copilot:requested")).toBe(true);
+      expect(
+        shouldForceCredentialScopedModelResolve({ selectedAuthMode: "api-key" }, undefined, true),
+      ).toBe(true);
+      expect(
+        shouldForceCredentialScopedModelResolve({ selectedAuthMode: "api-key" }, undefined, false),
+      ).toBe(false);
+      expect(shouldForceCredentialScopedModelResolve({})).toBe(false);
     });
   });
 });

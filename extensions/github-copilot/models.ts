@@ -144,8 +144,9 @@ type CopilotApiModelEntry = {
 
 const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
-type CopilotCatalogModel = ModelDefinitionConfig & {
+type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
   api: NonNullable<ModelDefinitionConfig["api"]>;
+  input: ProviderRuntimeModel["input"];
 };
 
 function resolveCopilotApiForVendor(
@@ -220,7 +221,7 @@ function mapCopilotApiModelToDefinition(
     ? supports.reasoning_effort.length > 0
     : false;
   const supportsVision = supports?.vision === true;
-  const input: ModelDefinitionConfig["input"] = supportsVision ? ["text", "image"] : ["text"];
+  const input: CopilotCatalogModel["input"] = supportsVision ? ["text", "image"] : ["text"];
 
   const contextWindow =
     asPositiveSafeInteger(limits?.max_context_window_tokens) ?? DEFAULT_CONTEXT_WINDOW;

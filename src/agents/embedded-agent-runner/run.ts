@@ -186,7 +186,7 @@ import {
 } from "./run/attempt-stage-timing.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
 import {
-  shouldForceProfileScopedModelResolve,
+  shouldForceCredentialScopedModelResolve,
   shouldMaterializeAuthPlanModel,
 } from "./run/attempt.run-decisions.js";
 import {
@@ -926,6 +926,19 @@ async function runEmbeddedAgentInternal(
               context,
             }),
         });
+      const providerUsesProfileScopedModelMetadata = shouldPreferProviderRuntimeResolvedModel({
+        provider,
+        config: params.config,
+        workspaceDir: resolvedWorkspace,
+        env: process.env,
+        context: {
+          config: params.config,
+          agentDir,
+          workspaceDir: resolvedWorkspace,
+          provider,
+          modelId,
+        },
+      });
 
       const materializedRouteModels = new WeakMap<
         AgentRuntimeAuthPlan,
@@ -941,7 +954,12 @@ async function runEmbeddedAgentInternal(
           return runtimeModel;
         }
         const requiresCredentialScopedResolve =
-          forceResolve || shouldForceProfileScopedModelResolve(plan, params.authProfileId);
+          forceResolve ||
+          shouldForceCredentialScopedModelResolve(
+            plan,
+            params.authProfileId,
+            providerUsesProfileScopedModelMetadata,
+          );
         return (
           (await materializePreparedRuntimeModel({
             plan,
@@ -949,8 +967,8 @@ async function runEmbeddedAgentInternal(
             modelId,
             config: params.config,
             model: runtimeModel,
-            // Unscoped direct auth cannot change credential-scoped metadata.
-            // Reuse an already matching tuple; route mismatches still resolve.
+            // Credential-scoped providers must replace metadata whenever the
+            // prepared profile or direct auth source changes.
             forceResolve: requiresCredentialScopedResolve,
             resolveModel: ({ config, authProfileId, authProfileMode }) =>
               resolveModelAsync(provider, modelId, agentDir, config, {
@@ -1103,19 +1121,6 @@ async function runEmbeddedAgentInternal(
             : preparedAuthAttempts[attemptIndex];
         return attempt?.profileId === profileId ? attempt : undefined;
       };
-      const providerUsesProfileScopedModelMetadata = shouldPreferProviderRuntimeResolvedModel({
-        provider,
-        config: params.config,
-        workspaceDir: resolvedWorkspace,
-        env: process.env,
-        context: {
-          config: params.config,
-          agentDir,
-          workspaceDir: resolvedWorkspace,
-          provider,
-          modelId,
-        },
-      });
       let preparedProfileAttempted = false;
       const prepareAuthAttempt = async (attempt: (typeof preparedAuthAttempts)[number]) => {
         if (
@@ -1134,8 +1139,11 @@ async function runEmbeddedAgentInternal(
           priorProfileAttempted: preparedProfileAttempted,
         });
         const shouldMaterializeModel =
-          shouldMaterializeAuthPlanModel(attempt.plan, params.authProfileId) ||
-          forceDirectFallbackResolve;
+          shouldMaterializeAuthPlanModel(
+            attempt.plan,
+            params.authProfileId,
+            providerUsesProfileScopedModelMetadata,
+          ) || forceDirectFallbackResolve;
         const nextRuntimeModel = shouldMaterializeModel
           ? forceDirectFallbackResolve
             ? await materializeAuthPlanUncached(attempt.plan, true)

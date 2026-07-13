@@ -13,6 +13,7 @@ import {
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
+import { resolveProviderModelMaterializationAuthMode } from "../agents/provider-model-route-auth.js";
 import {
   protectPreparedProviderRuntimeAuth,
   unwrapSecretSentinelsForProviderEgress,
@@ -30,6 +31,7 @@ import {
   COPILOT_INTEGRATION_ID,
   resolveCopilotApiToken,
 } from "../plugin-sdk/provider-auth.js";
+import { shouldPreferProviderRuntimeResolvedModel } from "../plugins/provider-runtime.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
@@ -68,6 +70,29 @@ function isNativeResponsesReasoningPayload(model: Model): boolean {
 
 function formatModelInputCapabilities(input: Model["input"] | undefined): string {
   return input && input.length > 0 ? input.join(", ") : "none";
+}
+
+function requireImageCapableModel(params: {
+  model: Model | undefined;
+  resolvedProvider: string;
+  resolvedModel: string;
+  requestedProvider: string;
+  requestedModel: string;
+}): Model {
+  if (!params.model) {
+    throw new Error(`Unknown model: ${params.resolvedProvider}/${params.resolvedModel}`);
+  }
+  if (params.model.input?.includes("image")) {
+    return params.model;
+  }
+  // Keep MiniMax's unknown-model signal so its dedicated VLM fallback remains reachable.
+  if (isMinimaxVlmModel(params.resolvedProvider, params.resolvedModel)) {
+    throw new Error(`Unknown model: ${params.resolvedProvider}/${params.resolvedModel}`);
+  }
+  throw new Error(
+    `Model does not support images: ${params.requestedProvider}/${params.requestedModel} ` +
+      `(resolved ${params.model.provider}/${params.model.id} input: ${formatModelInputCapabilities(params.model.input)})`,
+  );
 }
 
 function removeReasoningInclude(value: unknown): unknown {
@@ -150,6 +175,10 @@ async function resolveImageRuntime(params: {
   // Fast static resolution avoids provider runtime hooks during tool discovery;
   // execution falls back to full model discovery when the static path lacks image metadata.
   const resolvedRef = normalizeModelRef(params.provider, params.model);
+  const authProfileOptions = {
+    ...(params.profile ? { authProfileId: params.profile } : {}),
+    ...(params.preferredProfile ? { preferredProfile: params.preferredProfile } : {}),
+  };
   const fastResolved = await resolveModelAsync(
     resolvedRef.provider,
     resolvedRef.model,
@@ -160,6 +189,7 @@ async function resolveImageRuntime(params: {
       skipAgentDiscovery: true,
       skipProviderRuntimeHooks: true,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      ...authProfileOptions,
     },
   );
   if (fastResolved.model?.input?.includes("image")) {
@@ -172,6 +202,7 @@ async function resolveImageRuntime(params: {
         allowBundledStaticCatalogFallback: true,
         skipAgentDiscovery: true,
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        ...authProfileOptions,
       },
     );
     if (normalizedResolved.model?.input?.includes("image")) {
@@ -179,6 +210,7 @@ async function resolveImageRuntime(params: {
         params,
         normalizedResolved.model,
         normalizedResolved.authStorage,
+        normalizedResolved.modelRegistry,
       );
     }
   }
@@ -193,27 +225,22 @@ async function resolveImageRuntime(params: {
     {
       allowBundledStaticCatalogFallback: true,
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      ...authProfileOptions,
     },
   );
-  const { authStorage } = resolved;
-  const { model } = resolved;
-  if (!model) {
-    throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
-  }
-  if (!model.input?.includes("image")) {
-    // resolveModelWithRegistry may synthesize a text-only fallback for configured
-    // providers, which would change "Unknown model" → "Model does not support images"
-    // and skip the MiniMax VLM recovery path. Throw Unknown model for MiniMax VLM
-    // models so the caller can attempt the fallback.
-    if (isMinimaxVlmModel(resolvedRef.provider, resolvedRef.model)) {
-      throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
-    }
-    throw new Error(
-      `Model does not support images: ${params.provider}/${params.model} ` +
-        `(resolved ${model.provider}/${model.id} input: ${formatModelInputCapabilities(model.input)})`,
-    );
-  }
-  return await prepareResolvedImageRuntime(params, model, authStorage);
+  const model = requireImageCapableModel({
+    model: resolved.model,
+    resolvedProvider: resolvedRef.provider,
+    resolvedModel: resolvedRef.model,
+    requestedProvider: params.provider,
+    requestedModel: params.model,
+  });
+  return await prepareResolvedImageRuntime(
+    params,
+    model,
+    resolved.authStorage,
+    resolved.modelRegistry,
+  );
 }
 
 async function prepareResolvedImageRuntime(
@@ -229,6 +256,7 @@ async function prepareResolvedImageRuntime(
   },
   resolvedModel: Model,
   authStorage: Awaited<ReturnType<typeof resolveModelAsync>>["authStorage"],
+  modelRegistry: Awaited<ReturnType<typeof resolveModelAsync>>["modelRegistry"],
 ): Promise<{ apiKey: string; model: Model }> {
   let model = resolvedModel;
   const apiKeyInfo = await getApiKeyForModel({
@@ -241,6 +269,47 @@ async function prepareResolvedImageRuntime(
     store: params.authStore,
     secretSentinels: true,
   });
+  const providerUsesProfileScopedModelMetadata = shouldPreferProviderRuntimeResolvedModel({
+    provider: model.provider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+    context: {
+      config: params.cfg,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      provider: model.provider,
+      modelId: model.id,
+    },
+  });
+  if (providerUsesProfileScopedModelMetadata) {
+    const authProfileMode = resolveProviderModelMaterializationAuthMode(apiKeyInfo.mode);
+    const authoritative = await resolveModelAsync(
+      model.provider,
+      model.id,
+      params.agentDir,
+      params.cfg,
+      {
+        authStorage,
+        modelRegistry,
+        skipAgentDiscovery: true,
+        allowBundledStaticCatalogFallback: true,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+        ...(apiKeyInfo.profileId
+          ? { authProfileId: apiKeyInfo.profileId }
+          : authProfileMode
+            ? { authProfileMode }
+            : {}),
+      },
+    );
+    model = requireImageCapableModel({
+      model: authoritative.model,
+      resolvedProvider: model.provider,
+      resolvedModel: model.id,
+      requestedProvider: params.provider,
+      requestedModel: params.model,
+    });
+  }
   // Bedrock's runtime client owns AWS credential-chain resolution. Keep the
   // empty sentinel out of auth storage and pass it through to the stream.
   if (

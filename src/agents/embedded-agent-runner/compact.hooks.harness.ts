@@ -663,6 +663,7 @@ export async function loadCompactHooksHarness(): Promise<{
     resolveProviderReasoningOutputModeWithPlugin: vi.fn(() => undefined),
     resolveProviderSystemPromptContribution: vi.fn(() => undefined),
     resolveProviderTextTransforms: vi.fn(() => undefined),
+    shouldPreferProviderRuntimeResolvedModel: vi.fn(() => false),
     transformProviderSystemPrompt: vi.fn(
       (params: { systemPrompt?: string; context?: { systemPrompt?: string } }) =>
         params.context?.systemPrompt ?? params.systemPrompt,

@@ -96,6 +96,15 @@ async function createAgentDir() {
   return dir;
 }
 
+function createModelRegistry() {
+  return {
+    getAll: vi.fn(() => []),
+    getAvailable: vi.fn(() => []),
+    find: vi.fn(() => undefined),
+    hasConfiguredAuth: vi.fn(() => false),
+  };
+}
+
 function writeExistingCopilotTokenProfile(agentDir: string) {
   saveAuthProfileStore(
     {
@@ -498,7 +507,7 @@ describe("github-copilot plugin", () => {
           .mockResolvedValueOnce(catalogResponse(400_000, 272_000)),
       );
       const provider = registerProviderWithPluginConfig({});
-      const modelRegistry = { find: vi.fn(() => null) };
+      const modelRegistry = createModelRegistry();
       const selectedContext = {
         config: {},
         agentDir,
@@ -599,11 +608,15 @@ describe("github-copilot plugin", () => {
           .mockResolvedValueOnce(catalogResponse(1_050_000, 922_000)),
       );
       const provider = registerProviderWithPluginConfig({});
-      const modelRegistry = { find: vi.fn(() => null) };
+      const modelRegistry = createModelRegistry();
       const config = {
         models: {
           providers: {
-            "github-copilot": { apiKey: "test-token-placeholder" },
+            "github-copilot": {
+              apiKey: "test-token-placeholder",
+              baseUrl: "https://api.githubcopilot.test",
+              models: [],
+            },
           },
         },
       } as OpenClawConfig;

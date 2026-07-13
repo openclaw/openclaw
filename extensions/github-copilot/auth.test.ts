@@ -11,6 +11,8 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   coerceSecretRef: coerceSecretRefMock,
   ensureAuthProfileStore: ensureAuthProfileStoreMock,
   listProfilesForProvider: listProfilesForProviderMock,
+  normalizeOptionalSecretInput: (value: unknown) =>
+    typeof value === "string" && value.trim() ? value.trim() : undefined,
 }));
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
@@ -92,11 +94,38 @@ describe("resolveFirstGithubToken", () => {
     });
   });
 
-  it("uses configured direct auth without falling back to the first profile", async () => {
+  it("uses environment direct auth without falling back to config or the first profile", async () => {
     const config = {
       models: {
         providers: {
           "github-copilot": { apiKey: "test-token-placeholder" },
+        },
+      },
+    } as never;
+    const env = { GH_TOKEN: "test-auth-token" } as NodeJS.ProcessEnv;
+
+    const result = await resolveFirstGithubToken({
+      config,
+      env,
+      authProfileMode: "api_key",
+    });
+
+    expect(result).toEqual({
+      githubToken: "test-auth-token",
+      hasProfile: false,
+    });
+    expect(resolveConfiguredSecretInputWithFallbackMock).not.toHaveBeenCalled();
+    expect(resolveRequiredConfiguredSecretRefInputStringMock).not.toHaveBeenCalled();
+  });
+
+  it("lets explicit api-key config outrank environment direct auth", async () => {
+    const config = {
+      models: {
+        providers: {
+          "github-copilot": {
+            auth: "api-key",
+            apiKey: "test-token-placeholder",
+          },
         },
       },
     } as never;
@@ -120,6 +149,44 @@ describe("resolveFirstGithubToken", () => {
       readFallback: expect.any(Function),
     });
     expect(resolveRequiredConfiguredSecretRefInputStringMock).not.toHaveBeenCalled();
+  });
+
+  it("skips empty higher-priority environment variables", async () => {
+    const result = await resolveFirstGithubToken({
+      env: {
+        COPILOT_GITHUB_TOKEN: "",
+        GH_TOKEN: "test-auth-token",
+      } as NodeJS.ProcessEnv,
+      authProfileMode: "api_key",
+    });
+
+    expect(result).toEqual({
+      githubToken: "test-auth-token",
+      hasProfile: false,
+    });
+  });
+
+  it("resolves config-only direct auth for unscoped model discovery", async () => {
+    ensureAuthProfileStoreMock.mockReturnValue({ profiles: {} });
+    listProfilesForProviderMock.mockReturnValue([]);
+    const config = {
+      models: {
+        providers: {
+          "github-copilot": { apiKey: "test-token-placeholder" },
+        },
+      },
+    } as never;
+
+    const result = await resolveFirstGithubToken({
+      config,
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(result).toEqual({
+      githubToken: "test-token-placeholder",
+      hasProfile: false,
+    });
+    expect(resolveConfiguredSecretInputWithFallbackMock).toHaveBeenCalledOnce();
   });
 
   it("does not report stored profiles for a missing direct credential", async () => {

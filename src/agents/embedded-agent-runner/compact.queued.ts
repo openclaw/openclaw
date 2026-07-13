@@ -26,6 +26,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { shouldPreferProviderRuntimeResolvedModel } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
@@ -579,12 +580,27 @@ async function compactResolvedContextEngine(
     }
     preparedHarnessRuntime = selectedPreparedHarness.id;
     const runtimeAuthPlan = runtimeAuthPreparation.plan;
+    const providerUsesProfileScopedModelMetadata = shouldPreferProviderRuntimeResolvedModel({
+      provider: ceRuntimeProvider,
+      config: params.config,
+      workspaceDir: resolvedWorkspaceDir,
+      env: process.env,
+      context: {
+        config: params.config,
+        agentDir,
+        workspaceDir: resolvedWorkspaceDir,
+        provider: ceRuntimeProvider,
+        modelId: ceModelId,
+      },
+    });
     effectiveRuntimeModel = await materializePreparedRuntimeModel<ProviderRuntimeModel>({
       plan: runtimeAuthPlan,
       provider: ceProvider,
       modelId: ceModelId,
       config: params.config,
       model: ceRuntimeModel,
+      forceResolve:
+        providerUsesProfileScopedModelMetadata && Boolean(runtimeAuthPlan.selectedAuthMode),
       resolveModel: async ({ config, authProfileId, authProfileMode }) => {
         const resolved = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, config, {
           authStorage,

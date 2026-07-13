@@ -569,6 +569,41 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     expect(materializeModel.mock.calls.map(([input]) => input.forceResolve)).toEqual([false, true]);
   });
 
+  it("forces the first direct model when provider metadata is credential-scoped", async () => {
+    const directPlan = {
+      providerForAuth: "github-copilot",
+      authProfileProviderForAuth: "github-copilot",
+      selectedAuthMode: "api-key",
+    };
+    const directModel = { ...platformModel, contextWindow: 1_050_000 };
+    const materializeModel = vi.fn(async () => directModel);
+
+    const result = await resolvePreparedRuntimeAuthAttempts({
+      attempts: [
+        {
+          kind: "direct",
+          plan: directPlan,
+          allowAuthProfileFallback: false,
+          requiresPriorProfileAttempt: false,
+        },
+      ],
+      store: authStore({}),
+      modelId: "gpt-5.6-sol",
+      model: platformModel,
+      materializeModel,
+      resolveAuth: async () => ({ plan: directPlan, auth: "direct" }),
+      forceCredentialScopedDirectModelResolve: true,
+      errorMessage: "prepared auth failed",
+    });
+
+    expect(result.model).toBe(directModel);
+    expect(materializeModel).toHaveBeenCalledWith({
+      plan: directPlan,
+      model: platformModel,
+      forceResolve: true,
+    });
+  });
+
   it("keeps a single bound prepared profile terminal", async () => {
     const store = authStore({
       "openai:bound": {

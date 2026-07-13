@@ -37,6 +37,7 @@ import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.
 import {
   prepareProviderRuntimeAuth,
   resolveProviderTextTransforms,
+  shouldPreferProviderRuntimeResolvedModel,
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
 import {
@@ -839,6 +840,19 @@ async function compactEmbeddedAgentSessionDirectOnce(
     : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
         allowKeychainPrompt: false,
       });
+  const providerUsesProfileScopedModelMetadata = shouldPreferProviderRuntimeResolvedModel({
+    provider: runtimeProvider,
+    config: params.config,
+    workspaceDir: resolvedWorkspace,
+    env: process.env,
+    context: {
+      config: params.config,
+      agentDir,
+      workspaceDir: resolvedWorkspace,
+      provider: runtimeProvider,
+      modelId,
+    },
+  });
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native
   // transcript compaction stays gated on selectedHarnessRuntime.
@@ -944,6 +958,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       modelId,
       model,
       materializeModel: materializeAuthAttemptModel,
+      forceCredentialScopedDirectModelResolve: providerUsesProfileScopedModelMetadata,
       resolveAuth: async ({ attempt: preparedAttempt, model: attemptModel }) =>
         await resolvePreparedRuntimeModelAuth({
           plan: preparedAttempt.plan,

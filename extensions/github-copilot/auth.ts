@@ -5,6 +5,7 @@ import {
   coerceSecretRef,
   ensureAuthProfileStore,
   listProfilesForProvider,
+  normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import {
   resolveConfiguredSecretInputWithFallback,
@@ -28,28 +29,50 @@ export async function resolveFirstGithubToken(params: {
   const profileIds = listProfilesForProvider(authStore, PROVIDER_ID);
   const hasProfile = profileIds.length > 0;
   const requestedProfileId = params.profileId?.trim();
-  const envToken =
-    params.env.COPILOT_GITHUB_TOKEN ?? params.env.GH_TOKEN ?? params.env.GITHUB_TOKEN ?? "";
-  const githubToken = envToken.trim();
-  if (!requestedProfileId && params.authProfileMode) {
+  const githubToken =
+    [params.env.COPILOT_GITHUB_TOKEN, params.env.GH_TOKEN, params.env.GITHUB_TOKEN]
+      .map((value) => normalizeOptionalSecretInput(value))
+      .find((value) => value !== undefined) ?? "";
+  const providerConfig = params.config?.models?.providers?.[PROVIDER_ID];
+  const preferConfiguredToken =
+    providerConfig?.auth === "api-key" &&
+    Boolean(
+      normalizeOptionalSecretInput(providerConfig.apiKey) || coerceSecretRef(providerConfig.apiKey),
+    );
+  const resolveConfiguredGithubToken = async () => {
     if (!params.config) {
-      return { githubToken, hasProfile: false };
+      return "";
     }
+    const resolved = await resolveConfiguredSecretInputWithFallback({
+      config: params.config,
+      env: params.env,
+      value: providerConfig?.apiKey,
+      path: `models.providers.${PROVIDER_ID}.apiKey`,
+      readFallback: () => "",
+    });
+    return resolved.value?.trim() ?? "";
+  };
+  const resolveDirectGithubToken = async () => {
+    if (preferConfiguredToken) {
+      const configuredToken = await resolveConfiguredGithubToken();
+      if (configuredToken) {
+        return configuredToken;
+      }
+    }
+    if (githubToken) {
+      return githubToken;
+    }
+    return preferConfiguredToken ? "" : await resolveConfiguredGithubToken();
+  };
+  if (!requestedProfileId && params.authProfileMode) {
     // A missing profile id plus an explicit mode is a prepared direct-auth
     // attempt. Do not let it fall back into the first stored profile: model
     // limits and the later runtime exchange must use the same source token.
     // Stored profiles are therefore ineligible even when the store has one.
-    const resolved = await resolveConfiguredSecretInputWithFallback({
-      config: params.config,
-      env: params.env,
-      value: params.config.models?.providers?.[PROVIDER_ID]?.apiKey,
-      path: `models.providers.${PROVIDER_ID}.apiKey`,
-      readFallback: () => githubToken,
-    });
-    return { githubToken: resolved.value?.trim() ?? "", hasProfile: false };
+    return { githubToken: await resolveDirectGithubToken(), hasProfile: false };
   }
   if (!requestedProfileId && (githubToken || !hasProfile)) {
-    return { githubToken, hasProfile };
+    return { githubToken: await resolveDirectGithubToken(), hasProfile };
   }
 
   const profileId = requestedProfileId

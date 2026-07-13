@@ -62,6 +62,7 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
     attempt: PreparedAgentRuntimeAuthAttempt;
     model: Model;
   }): Promise<{ plan: AgentRuntimeAuthPlan; auth: Auth }>;
+  forceCredentialScopedDirectModelResolve?: boolean;
   errorMessage: string;
 }): Promise<PreparedRuntimeAuthAttemptResolution<Model, Auth>> {
   let firstError: unknown;
@@ -91,10 +92,14 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       let model = await params.materializeModel({
         plan: attempt.plan,
         model: params.model,
-        forceResolve: shouldForceDirectAuthFallbackModelResolve({
-          attempt,
-          priorProfileAttempted,
-        }),
+        forceResolve:
+          (params.forceCredentialScopedDirectModelResolve === true &&
+            attempt.kind === "direct" &&
+            Boolean(attempt.plan.selectedAuthMode)) ||
+          shouldForceDirectAuthFallbackModelResolve({
+            attempt,
+            priorProfileAttempted,
+          }),
       });
       if (
         attempt.kind === "profile" &&
