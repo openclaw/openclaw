@@ -4,6 +4,8 @@ import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
   buildCollectPrompt,
+  buildQueueSummaryLine,
+  buildQueueSummaryPrompt,
   beginQueueDrain,
   clearQueueSummaryState,
   drainCollectQueueStep,
@@ -52,39 +54,29 @@ export function kickFollowupDrainIfIdle(key: string): void {
 
 type OriginRoutingMetadata = Pick<
   FollowupRun,
-  "originatingChannel" | "originatingTo" | "originatingAccountId" | "originatingThreadId"
+  | "originatingChannel"
+  | "originatingTo"
+  | "originatingAccountId"
+  | "originatingThreadId"
+  | "originatingReplyToId"
+  | "originatingChatType"
 >;
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
-  const metadata: OriginRoutingMetadata = {};
-  for (const item of items) {
-    if (!metadata.originatingChannel && item.originatingChannel) {
-      metadata.originatingChannel = item.originatingChannel;
-    }
-    if (!metadata.originatingTo && item.originatingTo) {
-      metadata.originatingTo = item.originatingTo;
-    }
-    if (!metadata.originatingAccountId && item.originatingAccountId) {
-      metadata.originatingAccountId = item.originatingAccountId;
-    }
-    // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
-    if (
-      metadata.originatingThreadId == null &&
-      item.originatingThreadId != null &&
-      item.originatingThreadId !== ""
-    ) {
-      metadata.originatingThreadId = item.originatingThreadId;
-    }
-    if (
-      metadata.originatingChannel &&
-      metadata.originatingTo &&
-      metadata.originatingAccountId &&
-      metadata.originatingThreadId != null
-    ) {
-      break;
-    }
+  const owner = items.find((item) => item.originatingChannel && item.originatingTo) ?? items.at(-1);
+  if (!owner) {
+    return {};
   }
-  return metadata;
+  return {
+    ...(owner.originatingChannel ? { originatingChannel: owner.originatingChannel } : {}),
+    ...(owner.originatingTo ? { originatingTo: owner.originatingTo } : {}),
+    ...(owner.originatingAccountId ? { originatingAccountId: owner.originatingAccountId } : {}),
+    ...(owner.originatingThreadId != null && owner.originatingThreadId !== ""
+      ? { originatingThreadId: owner.originatingThreadId }
+      : {}),
+    ...(owner.originatingReplyToId ? { originatingReplyToId: owner.originatingReplyToId } : {}),
+    ...(owner.originatingChatType ? { originatingChatType: owner.originatingChatType } : {}),
+  };
 }
 
 // Keep this key aligned with the fields that affect per-message authorization or
@@ -137,6 +129,15 @@ function splitCollectItemsByAuthorization(items: FollowupRun[]): FollowupRun[][]
   return groups;
 }
 
+function hasMixedSummarySourceContexts(items: FollowupRun[]): boolean {
+  return (
+    items.length > 1 &&
+    (hasCrossChannelItems(items, resolveCrossChannelKey) ||
+      splitCollectItemsByAuthorization(items).length > 1 ||
+      items.some(hasRuntimeOnlyFollowupMetadata))
+  );
+}
+
 function renderCollectItem(item: FollowupRun, idx: number): string {
   const senderLabel =
     item.run.senderName ?? item.run.senderUsername ?? item.run.senderId ?? item.run.senderE164;
@@ -169,6 +170,10 @@ type FollowupRuntimeMetadata = Pick<
   | "abortSignal"
   | "deliveryCorrelations"
   | "queuedLifecycle"
+  | "queuedDeliveryPayloadTransform"
+  | "queuedDeliveryReplyToMode"
+  | "queuedDeliveryPayloadDidDeliver"
+  | "queuedExecutionContext"
 >;
 
 function hasCurrentTurnRuntimeMetadata(item: FollowupRun): boolean {
@@ -184,7 +189,11 @@ function hasRuntimeOnlyFollowupMetadata(item: FollowupRun): boolean {
     hasCurrentTurnRuntimeMetadata(item) ||
     item.abortSignal ||
     item.deliveryCorrelations?.length ||
-    item.queuedLifecycle,
+    item.queuedLifecycle ||
+    item.queuedDeliveryPayloadTransform ||
+    item.queuedDeliveryReplyToMode ||
+    item.queuedDeliveryPayloadDidDeliver ||
+    item.queuedExecutionContext,
   );
 }
 
@@ -237,11 +246,98 @@ function collectRuntimeMetadata(
     queuedLifecycle:
       singletonOwner?.queuedLifecycle ??
       (items.length === 1 ? lifecycleSource?.queuedLifecycle : undefined),
+    queuedDeliveryPayloadTransform:
+      singletonOwner?.queuedDeliveryPayloadTransform ??
+      (items.length === 1 ? items[0]?.queuedDeliveryPayloadTransform : undefined),
+    queuedDeliveryReplyToMode:
+      singletonOwner?.queuedDeliveryReplyToMode ??
+      (items.length === 1 ? items[0]?.queuedDeliveryReplyToMode : undefined),
+    queuedDeliveryPayloadDidDeliver:
+      singletonOwner?.queuedDeliveryPayloadDidDeliver ??
+      (items.length === 1 ? items[0]?.queuedDeliveryPayloadDidDeliver : undefined),
+    queuedExecutionContext:
+      singletonOwner?.queuedExecutionContext ??
+      (items.length === 1 ? items[0]?.queuedExecutionContext : undefined),
   };
 }
 
-function collectSummaryRuntimeMetadata(items: FollowupRun[]): FollowupRuntimeMetadata {
-  return collectRuntimeMetadata(items, items.length === 1 ? items[0] : undefined);
+function collectSummaryRuntimeMetadata(
+  items: FollowupRun[],
+): FollowupRuntimeMetadata & OriginRoutingMetadata {
+  const runtimeOwner = items.findLast(
+    (item) =>
+      item.queuedDeliveryPayloadTransform ||
+      item.queuedDeliveryReplyToMode ||
+      item.queuedDeliveryPayloadDidDeliver ||
+      item.queuedExecutionContext,
+  );
+  const summaryOwner = runtimeOwner ?? items.at(-1);
+  return {
+    ...resolveOriginRoutingMetadata(summaryOwner ? [summaryOwner] : []),
+    ...collectRuntimeMetadata(items, runtimeOwner ?? (items.length === 1 ? items[0] : undefined)),
+  };
+}
+
+type FollowupSummaryGroup = {
+  sources: FollowupRun[];
+  summaryLines: string[];
+  droppedCount: number;
+};
+
+function resolveFollowupSummaryGroupKey(item: FollowupRun): string {
+  return JSON.stringify([
+    item.originatingChannel ?? "",
+    item.originatingTo ?? "",
+    item.originatingAccountId ?? "",
+    item.originatingThreadId ?? "",
+    resolveFollowupAuthorizationKey(item.run),
+  ]);
+}
+
+function buildFollowupSummaryGroups(queue: {
+  droppedCount: number;
+  summaryLines: string[];
+  summarySources?: FollowupRun[];
+}): FollowupSummaryGroup[] {
+  const groups = new Map<string, FollowupSummaryGroup>();
+  const sources = queue.summarySources ?? [];
+  for (const [index, source] of sources.entries()) {
+    const key = resolveFollowupSummaryGroupKey(source);
+    const group = groups.get(key) ?? { sources: [], summaryLines: [], droppedCount: 0 };
+    group.sources.push(source);
+    group.summaryLines.push(
+      queue.summaryLines[index] ??
+        buildQueueSummaryLine(source.summaryLine?.trim() || source.prompt.trim()),
+    );
+    group.droppedCount += 1;
+    groups.set(key, group);
+  }
+  const retainedCount = sources.length;
+  const unretainedCount = Math.max(0, queue.droppedCount - retainedCount);
+  const firstGroup = groups.values().next().value as FollowupSummaryGroup | undefined;
+  if (firstGroup) {
+    firstGroup.droppedCount += unretainedCount;
+  }
+  return [...groups.values()];
+}
+
+function consumeFollowupSummaryGroup(
+  queue: {
+    droppedCount: number;
+    summaryLines: string[];
+    summarySources?: FollowupRun[];
+  },
+  group: FollowupSummaryGroup,
+): void {
+  for (const source of group.sources) {
+    const index = queue.summarySources?.indexOf(source) ?? -1;
+    if (index >= 0) {
+      queue.summarySources?.splice(index, 1);
+      queue.summaryLines.splice(index, 1);
+    }
+    completeFollowupRunLifecycle(source);
+  }
+  queue.droppedCount = Math.max(0, queue.droppedCount - group.droppedCount);
 }
 
 function clearFollowupQueueSummaryState(queue: {
@@ -398,9 +494,17 @@ export function scheduleFollowupDrain(
           // Debug: `pnpm test src/auto-reply/reply/reply-flow.test.ts`
           // Check if messages span multiple channels.
           // If so, process individually to preserve per-message routing.
+          // Retained overflow sources still own their original route and auth
+          // context. Drain live items first when combining them would deliver a
+          // summary through a different owner.
+          const summarySources = queue.summarySources ?? [];
           const isCrossChannel =
             hasCrossChannelItems(queue.items, resolveCrossChannelKey) ||
-            queue.items.some(hasRuntimeOnlyFollowupMetadata);
+            queue.items.some(hasRuntimeOnlyFollowupMetadata) ||
+            hasMixedSummarySourceContexts(summarySources) ||
+            summarySources.some(hasRuntimeOnlyFollowupMetadata) ||
+            (summarySources.length > 0 &&
+              hasCrossChannelItems([...queue.items, ...summarySources], resolveCrossChannelKey));
           if (collectState.forceIndividualCollect && !isCrossChannel && queue.items.length > 1) {
             collectState.forceIndividualCollect = false;
           }
@@ -419,13 +523,49 @@ export function scheduleFollowupDrain(
             const summaryOnlyPrompt = summaryOnly.prompt;
             const run = queue.lastRun;
             if (summaryOnlyPrompt && run) {
+              const summaryGroups = buildFollowupSummaryGroups(queue);
+              if (summaryGroups.length > 0) {
+                for (const group of summaryGroups) {
+                  const owner = group.sources.at(-1);
+                  if (!owner) {
+                    continue;
+                  }
+                  const prompt = buildQueueSummaryPrompt({
+                    state: {
+                      dropPolicy: "summarize",
+                      droppedCount: group.droppedCount,
+                      summaryLines: [...group.summaryLines],
+                    },
+                    noun: "message",
+                  });
+                  if (!prompt) {
+                    continue;
+                  }
+                  try {
+                    await effectiveRunFollowup({
+                      prompt,
+                      run: owner.run,
+                      enqueuedAt: Date.now(),
+                      ...collectSummaryRuntimeMetadata(group.sources),
+                      ...collectQueuedImages(group.sources),
+                    });
+                  } catch (err) {
+                    if (!isFollowupRunDeferredError(err)) {
+                      consumeFollowupSummaryGroup(queue, group);
+                    }
+                    throw err;
+                  }
+                  consumeFollowupSummaryGroup(queue, group);
+                }
+                continue;
+              }
               await runWithDeferredSummaryRestore(summaryOnly.restore, async () => {
                 await runWithSummarySourceCleanup(queue, async () => {
                   await effectiveRunFollowup({
                     prompt: summaryOnlyPrompt,
                     run,
                     enqueuedAt: Date.now(),
-                    ...collectSummaryRuntimeMetadata([]),
+                    ...collectSummaryRuntimeMetadata(queue.summarySources ?? []),
                     ...collectQueuedImages(queue.items),
                   });
                 });
@@ -459,7 +599,7 @@ export function scheduleFollowupDrain(
                   prompt: summary,
                   run,
                   enqueuedAt: Date.now(),
-                  ...collectSummaryRuntimeMetadata([]),
+                  ...collectSummaryRuntimeMetadata(queue.summarySources ?? []),
                 });
               });
             });

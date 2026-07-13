@@ -107,7 +107,10 @@ export async function deliverPrivateCommandReply(params: {
       }),
     ),
   );
-  return results.some((result) => result.status === "fulfilled" && result.value.ok);
+  return results.some(
+    (result) =>
+      result.status === "fulfilled" && (result.value.ok || result.value.delivered === true),
+  );
 }
 
 /** Reads the command message thread id from command context. */

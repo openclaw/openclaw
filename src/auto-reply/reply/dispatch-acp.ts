@@ -266,7 +266,7 @@ async function finalizeAcpTurnOutput(params: {
 }): Promise<boolean> {
   await params.delivery.settleVisibleText();
   let queuedFinal =
-    params.delivery.hasDeliveredVisibleText() && !params.delivery.hasFailedVisibleTextDelivery();
+    params.delivery.hasDeliveredVisibleText() && !params.delivery.requiresVisibleTextFallback();
   const ttsMode = resolveConfiguredTtsMode(params.cfg, {
     agentId: params.agentId,
     channelId: params.ttsChannel,
@@ -328,7 +328,7 @@ async function finalizeAcpTurnOutput(params: {
     accumulatedVisibleBlockText.trim().length > 0 &&
     !finalMediaDelivered &&
     !params.delivery.hasDeliveredFinalReply() &&
-    (!params.delivery.hasDeliveredVisibleText() || params.delivery.hasFailedVisibleTextDelivery());
+    (!params.delivery.hasDeliveredVisibleText() || params.delivery.requiresVisibleTextFallback());
   if (shouldDeliverTextFallback) {
     const delivered = await params.delivery.deliver(
       "final",

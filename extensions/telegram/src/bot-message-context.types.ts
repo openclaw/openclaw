@@ -19,11 +19,13 @@ export type TelegramMediaRef = {
 };
 
 export type TelegramMessageContextOptions = {
+  afterAdmissionShouldDrop?: (admitted: boolean, cacheMessage?: boolean) => Promise<boolean>;
   commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
+  promptContextThreadId?: number;
   promptContextMinTimestampMs?: number;
   spooledReplay?: boolean;
 };

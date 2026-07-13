@@ -295,9 +295,14 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 - DM messages can carry `message_thread_id`; OpenClaw preserves it for replies. DM topic sessions split only when Telegram `getMe` reports `has_topics_enabled: true` for the bot; otherwise DMs stay on the flat session.
 - Long polling uses grammY runner with per-chat/per-thread sequencing. Overall runner sink concurrency uses `agents.defaults.maxConcurrent`.
 - Multi-account startup bounds concurrent Telegram `getMe` probes so large bot fleets do not fan out every account probe at once.
+- Accepted bot-authored messages use shared [bot loop protection](/channels/bot-loop-protection), including combined media albums and long-message fragments. Configure `channels.defaults.botLoopProtection`; set `enabled: false` there only when you intentionally allow unrestricted bot-to-bot conversations.
 - Long polling is guarded inside each gateway process so only one active poller can use a bot token at a time. If you still see `getUpdates` 409 conflicts, another OpenClaw gateway, script, or external poller is likely using the same token.
 - Long-polling watchdog restarts trigger after 120 seconds without completed `getUpdates` liveness by default. Increase `channels.telegram.pollingStallThresholdMs` only if your deployment still sees false polling-stall restarts during long-running work. The value is in milliseconds and is allowed from `30000` to `600000`; per-account overrides are supported.
 - Telegram Bot API has no read-receipt support (`sendReadReceipts` does not apply).
+
+<Note>
+  Bot loop protection does not enable Telegram delivery. Enable **Bot-to-Bot Communication Mode** for the OpenClaw bot in BotFather. In groups, an explicit command mention or reply works when at least one participating bot enables the mode; ambient bot messages additionally require the receiving bot to enable it and either be a group admin or have Group Privacy Mode disabled. Private bot-to-bot chats require the mode on both bots. For accepted bot-authored turns, OpenClaw defaults to explicit reply targeting so every standard-message fragment remains observable; an explicit `replyToMode: "off"` disables this peer-bot exception. See [Telegram's bot-to-bot communication rules](https://core.telegram.org/bots/features#bot-to-bot-communication).
+</Note>
 
 <Note>
   `channels.telegram.dm.threadReplies` and `channels.telegram.direct.<chatId>.threadReplies` were removed. Run `openclaw doctor --fix` after upgrading if your config still has those keys. DM topic routing now follows the bot capability from Telegram `getMe.has_topics_enabled`, which is controlled by BotFather threaded mode: topics-enabled bots use thread-scoped DM sessions when Telegram sends `message_thread_id`; other DMs stay on the flat session.

@@ -11,6 +11,7 @@ import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
+import type { ReplyPayload } from "../reply-payload.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 
 const runEmbeddedAgentMock = vi.fn();
@@ -3592,8 +3593,160 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("commits queued delivery state only after a payload survives routing", async () => {
+    routeReplyMock.mockResolvedValue({ ok: true, delivered: true });
+    resolveProviderFollowupFallbackRouteMock.mockImplementation(
+      (params: { context?: { payload?: ReplyPayload } }) =>
+        params.context?.payload?.text === "drop me"
+          ? { route: "drop", reason: "already delivered out of band" }
+          : undefined,
+    );
+    let implicitReplyAvailable = true;
+    const queuedDeliveryPayloadTransform = vi.fn((payload: ReplyPayload) =>
+      implicitReplyAvailable
+        ? { ...payload, replyToId: "root", replyToIdSource: "implicit" as const }
+        : payload,
+    );
+    const queuedDeliveryPayloadDidDeliver = vi.fn((payload: ReplyPayload) => {
+      if (payload.replyToIdSource === "implicit") {
+        implicitReplyAvailable = false;
+      }
+    });
+
+    await runMessagingCase({
+      agentResult: { payloads: [{ text: "drop me" }, { text: "deliver me" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        queuedDeliveryPayloadTransform,
+        queuedDeliveryReplyToMode: "first",
+        queuedDeliveryPayloadDidDeliver,
+      } as FollowupRun,
+    });
+
+    expect(queuedDeliveryPayloadTransform).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toMatchObject({
+      text: "deliver me",
+      replyToId: "root",
+      replyToIdSource: "implicit",
+    });
+    expect(requireMockCallArg(routeReplyMock, 0).replyToMode).toBe("first");
+    expect(queuedDeliveryPayloadDidDeliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not commit queued delivery state for a successful no-send route", async () => {
+    routeReplyMock
+      .mockResolvedValueOnce({ ok: true, delivered: false })
+      .mockResolvedValueOnce({ ok: true, delivered: true });
+    let implicitReplyAvailable = true;
+    const queuedDeliveryPayloadTransform = vi.fn((payload: ReplyPayload) =>
+      implicitReplyAvailable
+        ? { ...payload, replyToId: "root", replyToIdSource: "implicit" as const }
+        : payload,
+    );
+    const queuedDeliveryPayloadDidDeliver = vi.fn((payload: ReplyPayload) => {
+      if (payload.replyToIdSource === "implicit") {
+        implicitReplyAvailable = false;
+      }
+    });
+
+    await runMessagingCase({
+      agentResult: { payloads: [{ text: "hidden" }, { text: "visible" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        queuedDeliveryPayloadTransform,
+        queuedDeliveryPayloadDidDeliver,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(routeReplyMock, 1).payload).toMatchObject({
+      text: "visible",
+      replyToId: "root",
+      replyToIdSource: "implicit",
+    });
+    expect(queuedDeliveryPayloadDidDeliver).toHaveBeenCalledTimes(1);
+    expect(queuedDeliveryPayloadDidDeliver).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "visible" }),
+    );
+  });
+
+  it("commits queued delivery state without fallback after a partial send", async () => {
+    routeReplyMock.mockResolvedValue({
+      ok: false,
+      delivered: true,
+      partialFailure: true,
+      error: "second chunk failed",
+    });
+    const queuedDeliveryPayloadDidDeliver = vi.fn();
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "partially visible" }] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        queuedDeliveryPayloadDidDeliver,
+      } as FollowupRun,
+    });
+
+    expect(queuedDeliveryPayloadDidDeliver).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not report cross-channel failure after an earlier partial visible delivery", async () => {
+    routeReplyMock
+      .mockResolvedValueOnce({
+        ok: false,
+        delivered: true,
+        partialFailure: true,
+        error: "second chunk failed",
+      })
+      .mockResolvedValueOnce({ ok: false, delivered: false, error: "provider unavailable" });
+    const queuedDeliveryPayloadDidDeliver = vi.fn();
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "partially visible" }, { text: "fully failed" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+        queuedDeliveryPayloadDidDeliver,
+      } as FollowupRun,
+    });
+
+    expect(queuedDeliveryPayloadDidDeliver).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not commit queued delivery state when dispatcher only accepts the payload", async () => {
+    resolveProviderFollowupFallbackRouteMock.mockReturnValue({ route: "dispatcher" });
+    const queuedDeliveryPayloadDidDeliver = vi.fn();
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "dispatcher queued" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        queuedDeliveryPayloadDidDeliver,
+      } as FollowupRun,
+    });
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "dispatcher queued" }),
+    );
+    expect(queuedDeliveryPayloadDidDeliver).not.toHaveBeenCalled();
+  });
+
   it("suppresses exact NO_REPLY followups without origin or dispatcher delivery", async () => {
     const typing = createMockTypingController();
+    const queuedDeliveryPayloadTransform = vi.fn((payload: ReplyPayload) => ({
+      ...payload,
+      channelData: { telegram: { standardMessage: true } },
+    }));
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: `  ${DELIVERY_NO_REPLY_RUNTIME_CONTRACT.silentText}  ` }],
       meta: {},
@@ -3604,9 +3757,16 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       defaultModel: "anthropic/claude-opus-4-6",
     });
 
-    await runner(createQueuedRun({ originatingChannel: undefined, originatingTo: undefined }));
+    await runner(
+      createQueuedRun({
+        originatingChannel: undefined,
+        originatingTo: undefined,
+        queuedDeliveryPayloadTransform,
+      }),
+    );
 
     expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(queuedDeliveryPayloadTransform).not.toHaveBeenCalled();
     expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
     expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
   });

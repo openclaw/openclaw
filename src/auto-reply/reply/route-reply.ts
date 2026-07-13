@@ -13,6 +13,7 @@ import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
+import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -62,6 +63,8 @@ export type RouteReplyParams = {
   requesterSenderE164?: string;
   /** Thread id for replies (Telegram topic id or Matrix thread event id). */
   threadId?: string | number;
+  /** Source reply fan-out policy for transports that split one payload. */
+  replyToMode?: ReplyToMode;
   /** Config for provider-specific settings. */
   cfg: OpenClawConfig;
   /** Optional abort signal for cooperative cancellation. */
@@ -81,8 +84,12 @@ export type RouteReplyParams = {
 export type RouteReplyResult = {
   /** Whether the reply was sent successfully. */
   ok: boolean;
+  /** Whether provider-visible delivery actually occurred. */
+  delivered: boolean;
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
+  /** True when part of the payload was visible before a later send failed. */
+  partialFailure?: boolean;
   /** Suppression reason when delivery was intentionally skipped. */
   reason?: "cancelled_by_reply_payload_sending_hook" | "empty_after_reply_payload_sending_hook";
   /** Optional message ID from the provider. */
@@ -102,7 +109,7 @@ export type RouteReplyResult = {
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
   if (shouldSuppressReasoningPayload(payload)) {
-    return { ok: true };
+    return { ok: true, delivered: false };
   }
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
@@ -140,7 +147,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       : undefined,
   });
   if (!normalized) {
-    return { ok: true };
+    return { ok: true, delivered: false };
   }
   const externalPayload: ReplyPayload = {
     ...normalized,
@@ -175,21 +182,22 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       },
     )
   ) {
-    return { ok: true };
+    return { ok: true, delivered: false };
   }
 
   if (channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
+      delivered: false,
       error: "Webchat routing not supported for queued replies",
     };
   }
 
   if (!channelId) {
-    return { ok: false, error: `Unknown channel: ${String(channel)}` };
+    return { ok: false, delivered: false, error: `Unknown channel: ${String(channel)}` };
   }
   if (abortSignal?.aborted) {
-    return { ok: false, error: "Reply routing aborted" };
+    return { ok: false, delivered: false, error: "Reply routing aborted" };
   }
 
   const replyTransport =
@@ -243,6 +251,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         },
       },
       replyToId: resolvedReplyToId ?? null,
+      replyToMode: params.replyToMode,
       threadId: resolvedThreadId,
       session: outboundSession,
       signal: abortSignal,
@@ -258,8 +267,18 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
             }
           : undefined,
     });
-    if (send.status === "failed" || send.status === "partial_failed") {
+    if (send.status === "failed") {
       throw send.error;
+    }
+    if (send.status === "partial_failed") {
+      const last = send.results.at(-1);
+      return {
+        ok: false,
+        delivered: true,
+        partialFailure: true,
+        messageId: last?.messageId,
+        error: `Partially routed reply to ${channel}: ${formatErrorMessage(send.error)}`,
+      };
     }
     if (
       send.status === "suppressed" &&
@@ -268,6 +287,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     ) {
       return {
         ok: true,
+        delivered: false,
         suppressed: true,
         reason: send.reason,
       };
@@ -275,11 +295,12 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     const results = send.status === "sent" ? send.results : [];
 
     const last = results.at(-1);
-    return { ok: true, messageId: last?.messageId };
+    return { ok: true, delivered: results.length > 0, messageId: last?.messageId };
   } catch (err) {
     const message = formatErrorMessage(err);
     return {
       ok: false,
+      delivered: false,
       error: `Failed to route reply to ${channel}: ${message}`,
     };
   }

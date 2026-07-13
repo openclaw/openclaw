@@ -41,8 +41,13 @@ const policyMocks = vi.hoisted(() => ({
 
 const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn<
-    (_params: unknown) => Promise<{ ok: true; messageId: string } | { ok: false; error: string }>
-  >(async () => ({ ok: true, messageId: "mock" })),
+    (
+      _params: unknown,
+    ) => Promise<
+      | { ok: true; delivered: true; messageId: string }
+      | { ok: false; error: string; delivered?: boolean; partialFailure?: boolean }
+    >
+  >(async () => ({ ok: true, delivered: true, messageId: "mock" })),
 }));
 
 const channelPluginMocks = vi.hoisted(() => ({
@@ -445,7 +450,7 @@ describe("tryDispatchAcpReply", () => {
     policyMocks.resolveAcpAgentPolicyError.mockReset();
     policyMocks.resolveAcpAgentPolicyError.mockReturnValue(null);
     routeMocks.routeReply.mockReset();
-    routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    routeMocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     channelPluginMocks.getChannelPlugin.mockClear();
     messageActionMocks.runMessageAction.mockReset();
     messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
@@ -575,7 +580,11 @@ describe("tryDispatchAcpReply", () => {
   it("edits ACP tool lifecycle updates in place when supported", async () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-1");
-    routeMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "tool-msg-1" });
+    routeMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      delivered: true,
+      messageId: "tool-msg-1",
+    });
 
     const { dispatcher } = createDispatcher();
     await runDispatch({
@@ -596,8 +605,12 @@ describe("tryDispatchAcpReply", () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-2");
     routeMocks.routeReply
-      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2" })
-      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2-fallback" });
+      .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "tool-msg-2" })
+      .mockResolvedValueOnce({
+        ok: true,
+        delivered: true,
+        messageId: "tool-msg-2-fallback",
+      });
     messageActionMocks.runMessageAction.mockRejectedValueOnce(new Error("edit unsupported"));
 
     const { dispatcher } = createDispatcher();
@@ -1708,6 +1721,28 @@ describe("tryDispatchAcpReply", () => {
     expect(result?.counts.block).toBe(0);
     expect(result?.counts.final).toBe(1);
     expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay a routed ACP block after partial visible delivery", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    routeMocks.routeReply.mockResolvedValue({
+      ok: false,
+      delivered: true,
+      partialFailure: true,
+      error: "second chunk failed",
+    });
+    mockRoutedTextTurn("partially visible block");
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "run acp",
+      dispatcher,
+      shouldRouteToOriginating: true,
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(routePayload().text).toBe("partially visible block");
   });
 
   it("routes default ACP text as one final reply to Discord", async () => {

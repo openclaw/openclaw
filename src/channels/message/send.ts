@@ -230,7 +230,7 @@ export async function withDurableMessageSendContext<T>(
         });
         const failedOutcome = payloadOutcomes.find((outcome) => outcome.status === "failed");
         if (failedOutcome) {
-          if (results.length > 0) {
+          if (results.length > 0 || failedOutcome.sentBeforeError) {
             return {
               status: "partial_failed",
               results,
@@ -269,7 +269,7 @@ export async function withDurableMessageSendContext<T>(
         };
       } catch (error: unknown) {
         if (isOutboundDeliveryError(error)) {
-          if (error.results.length > 0) {
+          if (error.sentBeforeError) {
             const receipt = createMessageReceiptFromOutboundResults({
               results: error.results,
               threadId: params.threadId == null ? undefined : String(params.threadId),

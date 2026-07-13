@@ -28,6 +28,8 @@ export type ReplyPayload = {
     question: string;
   };
   replyToId?: string;
+  /** Internal reply-policy provenance; implicit ids honor single-use reply modes. */
+  replyToIdSource?: "explicit" | "implicit";
   replyToTag?: boolean;
   /** True when [[reply_to_current]] was present but not yet mapped to a message id. */
   replyToCurrent?: boolean;

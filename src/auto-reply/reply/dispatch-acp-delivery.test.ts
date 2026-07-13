@@ -19,10 +19,13 @@ const deliveryMocks = vi.hoisted(() => ({
       _params: unknown,
     ): Promise<{
       ok: boolean;
+      delivered?: boolean;
+      error?: string;
       messageId?: string;
+      partialFailure?: boolean;
       suppressed?: boolean;
       reason?: string;
-    }> => ({ ok: true, messageId: "mock-message" }),
+    }> => ({ ok: true, delivered: true, messageId: "mock-message" }),
   ),
   runMessageAction: vi.fn(async (_params: unknown) => ({ ok: true as const })),
 }));
@@ -153,7 +156,11 @@ async function expectVisibleChatBlockRoutesToAccount(
 describe("createAcpDispatchDeliveryCoordinator", () => {
   beforeEach(() => {
     deliveryMocks.routeReply.mockClear();
-    deliveryMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock-message" });
+    deliveryMocks.routeReply.mockResolvedValue({
+      ok: true,
+      delivered: true,
+      messageId: "mock-message",
+    });
     deliveryMocks.runMessageAction.mockClear();
     deliveryMocks.runMessageAction.mockResolvedValue({ ok: true as const });
     channelPluginMocks.getChannelPlugin.mockClear();
@@ -831,6 +838,36 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
     expect(coordinator.getRoutedCounts().block).toBe(1);
+  });
+
+  it("records partial routed block delivery as visible and failed without fallback", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({
+      ok: false,
+      delivered: true,
+      partialFailure: true,
+      error: "second chunk failed",
+      messageId: "visible-1",
+    });
+    const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
+
+    const delivered = await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(true);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(true);
+    expect(coordinator.getRoutedCounts().block).toBe(1);
+  });
+
+  it("does not count a successful routed no-op as ACP delivery", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true, delivered: false });
+    const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
+
+    const delivered = await coordinator.deliver("block", { text: "hello" }, { skipTts: true });
+
+    expect(delivered).toBe(false);
+    expect(coordinator.hasDeliveredVisibleText()).toBe(false);
+    expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
+    expect(coordinator.getRoutedCounts().block).toBe(0);
   });
 
   it("treats hook-suppressed routed ACP block text as handled", async () => {

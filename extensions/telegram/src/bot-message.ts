@@ -50,7 +50,7 @@ type TelegramMessageProcessorDeps = Omit<
   streamMode: TelegramStreamMode;
   textLimit: number;
   telegramDeps: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token">;
+  opts: Pick<TelegramBotOptions, "token" | "replyToMode">;
 };
 
 export type TelegramMessageProcessorLifecycle = {
