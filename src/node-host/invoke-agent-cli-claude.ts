@@ -9,8 +9,7 @@ import { resolveSafeChildProcessInvocation } from "../process/windows-command.js
 import { signalProcessTree } from "../process/kill-tree.js";
 import { truncateUtf8Prefix, truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
-import type { RunResult } from "./invoke-types.js";
-import type { NodeInvokeRequestPayload } from "./invoke-types.js";
+import type { NodeInvokeRequestPayload, RunResult } from "./invoke-types.js";
 
 const MAX_ARG_COUNT = 128;
 const MAX_ARG_BYTES = 1024 * 1024;
