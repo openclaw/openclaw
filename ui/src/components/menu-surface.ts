@@ -22,7 +22,7 @@ export function promoteToPopoverTopLayer(element: HTMLElement) {
  * layer on connect. Hosts render fixed-position menu markup as children;
  * closing removes the element, which auto-hides the popover.
  */
-export class MenuSurface extends HTMLElement {
+class MenuSurface extends HTMLElement {
   connectedCallback() {
     promoteToPopoverTopLayer(this);
   }

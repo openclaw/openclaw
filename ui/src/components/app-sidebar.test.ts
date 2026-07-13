@@ -8,7 +8,7 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { SessionsListResult } from "../api/types.ts";
+import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import {
   applicationContext,
@@ -48,6 +48,9 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
+  canPairDevice: boolean;
+  sessionKey: string;
+  onNavigate: (routeId: string, options?: { search?: string }) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;
@@ -155,6 +158,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     groupsPut,
     patch,
     deleteMany,
+    refresh: () => Promise.resolve(),
   } as unknown as SessionCapability;
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -196,12 +200,13 @@ beforeEach(() => {
 function createContext(
   gateway: ApplicationGateway,
   sessions: SessionCapability,
+  agentsList: AgentsListResult | null = null,
 ): ApplicationContext<RouteId> {
   return {
     gateway,
     sessions,
     agents: {
-      state: { agentsList: null },
+      state: { agentsList },
       subscribe: () => () => undefined,
     },
     agentSelection: {
@@ -216,17 +221,19 @@ async function mountSidebar(
   gateway: ApplicationGateway,
   sessions: SessionCapability,
   variant: SidebarLifecycleState["variant"] = "panel",
+  agentsList: AgentsListResult | null = null,
 ) {
   const provider = document.createElement(PROVIDER_ELEMENT_NAME) as AppSidebarContextProvider;
   const sidebar = document.createElement(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
   sidebar.variant = variant;
-  provider.setContext(createContext(gateway, sessions));
+  const context = createContext(gateway, sessions, agentsList);
+  provider.setContext(context);
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
-  return { provider, sidebar };
+  return { provider, sidebar, context };
 }
 
 afterEach(() => {
@@ -258,6 +265,171 @@ describe("AppSidebar update card wiring", () => {
     expect(card).not.toBeNull();
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onUpdate).toHaveBeenCalledOnce();
+  });
+});
+
+describe("AppSidebar agent chip", () => {
+  const TWO_AGENTS = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "agent",
+    agents: [{ id: "main", identity: { name: "Molty" } }, { id: "research" }],
+  } as AgentsListResult;
+
+  it("resumes the newest session when the menu switches to an agent with cached rows", async () => {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const setSessionKey = vi.fn();
+    (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
+      setSessionKey;
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main", "agent:main:task"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const onNavigate = vi.fn();
+    sidebar.connected = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const rows = [
+      ...(sidebar.querySelectorAll<HTMLButtonElement>(
+        '.sidebar-agent-menu [role="menuitemradio"]',
+      ) ?? []),
+    ];
+    rows.find((row) => row.textContent?.includes("Molty"))?.click();
+    // createSessionState stamps ascending updatedAt, so the last key is newest.
+    expect(setSessionKey).toHaveBeenCalledWith("agent:main:task");
+    expect(onNavigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Atask" });
+  });
+
+  it("shows offline in the chip subtitle when disconnected", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    sidebar.connected = false;
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(".sidebar-agent-chip__subtitle")?.textContent?.trim()).toBe(
+      "Offline",
+    );
+  });
+
+  it("shows a working subtitle while the agent has an active run", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gateway, harness.sessions);
+    sidebar.connected = true;
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5, hasActiveRun: true }],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(".sidebar-agent-chip__subtitle")?.textContent).toContain(
+      "Working",
+    );
+  });
+
+  it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const harness = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar, context } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
+    sidebar.connected = true;
+    const defaults = { modelProvider: null, model: null, contextTokens: null };
+    harness.publishList({
+      result: {
+        ts: 2,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [
+          {
+            key: "agent:research:one",
+            kind: "direct",
+            label: "Research task",
+            updatedAt: 3,
+            unread: true,
+          },
+        ],
+      },
+      agentId: "research",
+    });
+    harness.publishList({
+      result: {
+        ts: 3,
+        path: "",
+        count: 1,
+        defaults,
+        sessions: [{ key: "agent:main:main", kind: "direct", updatedAt: 5 }],
+      },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    // No per-agent sections: the chip menu owns agent switching now.
+    expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
+    expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(1);
+    expect(sidebar.querySelector(".sidebar-agent-chip__menu-unread")).not.toBeNull();
+
+    // Mid-switch (selected agent != loaded result agent) the list renders the
+    // target agent's cached rows instead of flashing empty until refresh.
+    // Chip switch and chat-pane both sync agentSelection with the route.
+    context.agentSelection.state.selectedId = "research";
+    sidebar.sessionKey = "agent:research:one";
+    await sidebar.updateComplete;
+    const rows = [...sidebar.querySelectorAll(".sidebar-recent-session")];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("Research task");
+  });
+
+  it("opens the footer menu with agent switching and folded-in utilities", async () => {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const setSessionKey = vi.fn();
+    (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
+      setSessionKey;
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const onNavigate = vi.fn();
+    sidebar.connected = true;
+    sidebar.canPairDevice = true;
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+
+    const menu = sidebar.querySelector(".sidebar-agent-menu");
+    expect(menu).not.toBeNull();
+    expect(menu?.querySelector(".sidebar-pair-mobile")).not.toBeNull();
+    expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
+    expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
+
+    const agentRows = [...(menu?.querySelectorAll('[role="menuitemradio"]') ?? [])];
+    expect(agentRows).toHaveLength(2);
+    const researchRow = agentRows.find((row) => row.textContent?.includes("research"));
+    expect(researchRow).toBeDefined();
+    (researchRow as HTMLButtonElement).click();
+    await sidebar.updateComplete;
+
+    // No cached sessions for the other agent: resume falls back to its main key.
+    expect(setSessionKey).toHaveBeenCalledWith("agent:research:main");
+    expect(onNavigate).toHaveBeenCalledWith("chat", {
+      search: "?session=agent%3Aresearch%3Amain",
+    });
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
   });
 });
 
