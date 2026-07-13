@@ -357,8 +357,10 @@ describe("streamOpenAICodexResponses transport", () => {
       });
     let connections = 0;
     const sockets: Array<EventTarget & { connectionId: number; readyState: number }> = [];
-    let holdFirstReuse: Promise<void> | undefined;
     let releaseFirstReuse: (() => void) | undefined;
+    const holdFirstReuse = new Promise<void>((resolve) => {
+      releaseFirstReuse = resolve;
+    });
     let connectionOneSendCount = 0;
 
     class ReplacementRaceWebSocket extends EventTarget {
@@ -392,7 +394,7 @@ describe("streamOpenAICodexResponses transport", () => {
 
         if (this.connectionId === 1) {
           connectionOneSendCount++;
-          if (connectionOneSendCount > 1 && holdFirstReuse) {
+          if (connectionOneSendCount > 1) {
             void holdFirstReuse.then(complete);
             return;
           }
@@ -416,9 +418,6 @@ describe("streamOpenAICodexResponses transport", () => {
       transport: "websocket-cached",
     }).result();
 
-    holdFirstReuse = new Promise<void>((resolve) => {
-      releaseFirstReuse = resolve;
-    });
     const staleReuse = streamOpenAICodexResponses(model, context, {
       apiKey: makeTestCodexJwt(),
       sessionId,
