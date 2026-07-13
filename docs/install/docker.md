@@ -570,6 +570,63 @@ scripts/sandbox-setup.sh
 
 For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
 
+## RISC-V (linux/riscv64)
+
+Experimental riscv64 images are published from a dedicated `Dockerfile.riscv64`.
+The per-arch tag is pushed on every release and folded into the default tags, so
+both of these work on riscv64 hardware:
+
+```bash
+docker pull ghcr.io/openclaw/openclaw:<version>-riscv64
+docker pull ghcr.io/openclaw/openclaw:<version>   # multi-arch, includes riscv64
+```
+
+The riscv64 build differs from amd64/arm64 for two reasons:
+
+- **Base image**: the official `node:24-bookworm` image has no riscv64 variant,
+  so the runtime is built on `debian:trixie-slim` with Node.js from
+  [unofficial-builds](https://unofficial-builds.nodejs.org).
+- **Cross-built JS**: rolldown (the bundler) ships no riscv64 binary, so the
+  JavaScript bundle is built on the host architecture and only native addons are
+  installed natively on riscv64. The build is therefore emulated (QEMU) in CI and
+  runs as a non-blocking job.
+
+### Quick start (riscv64)
+
+The gateway detects a container environment and binds to `0.0.0.0`, which it
+refuses to do without authentication. Provide a token (or password):
+
+```bash
+docker run -d \
+  --name openclaw \
+  -e OPENCLAW_GATEWAY_TOKEN=<your-token> \
+  -p 18789:18789 \
+  ghcr.io/openclaw/openclaw:<version>-riscv64 \
+  node openclaw.mjs gateway --allow-unconfigured
+```
+
+The gateway is ready when the logs show `[gateway] ready`; `GET /healthz` then
+returns `{"ok":true,"status":"live"}` and `GET /readyz` returns
+`{"ready":true,"failing":[]}`.
+
+### riscv64 notes
+
+- **Authentication is required in containers.** Because the gateway binds to a
+  non-loopback address inside a container, set `OPENCLAW_GATEWAY_TOKEN` or
+  `OPENCLAW_GATEWAY_PASSWORD` (or pass `--token`/`--password`). Without one the
+  gateway logs `Refusing to bind gateway to auto without auth` and exits.
+- **No slim or browser variant.** Only the full runtime is built for riscv64.
+- **No browser automation.** Chromium has no riscv64 build, so Playwright-based
+  browser control is unavailable even though the browser plugin loads.
+- **Startup.** On a SpaceMiT K1 the gateway reaches `[gateway] ready` in roughly
+  10-20 seconds with the bundled plugins loaded.
+
+### Verified hardware
+
+| Board | SoC | Result |
+|---|---|---|
+| Banana Pi BPI-F3 | SpaceMiT K1 (riscv64) | Gateway starts and serves `/healthz` + `/readyz` natively |
+
 ## Troubleshooting
 
 <AccordionGroup>
