@@ -137,8 +137,9 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
             // user's install); a raw auth error reads like an app bug.
             if error.to_ascii_lowercase().contains("unauthorized") {
                 format!(
-                    "{error}\nA Gateway this profile is not authorized for is already \
-                     listening on the configured port. Stop that instance or run \
+                    "{error}\nThe Gateway on the configured port rejected this profile's \
+                     credentials. This may indicate another user's Gateway is using the \
+                     port, or that this profile's stored token is stale. Run \
                      `openclaw gateway status` in a terminal to inspect it, then retry."
                 )
             } else {
