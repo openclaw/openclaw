@@ -90,4 +90,3 @@ export function buildSkillWorkshopMocks(baseTime: number) {
     },
   };
 }
-
