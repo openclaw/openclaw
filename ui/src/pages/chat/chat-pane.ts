@@ -58,6 +58,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import {
   applyChatAgentsList,
@@ -256,6 +257,11 @@ function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boole
 }
 
 class ChatPane extends OpenClawLightDomElement {
+  // One lifecycle-owned minute tick refreshes both relative labels and external PR state.
+  readonly minutePoll = new PollController(this, 60_000, () => {
+    this.requestUpdate();
+    void this.refreshSessionPullRequests();
+  });
   @consume({ context: applicationContext, subscribe: true })
   private context!: ChatPageContext;
   @property({ attribute: false }) paneId = "single";
@@ -1474,13 +1480,6 @@ class ChatPane extends OpenClawLightDomElement {
         this.applyGatewaySnapshot(snapshot);
       }),
     );
-    // PRs open, merge, and finish CI outside any gateway event stream, so the
-    // chip row refreshes on a coarse timer between session/connect refreshes.
-    const pullRequestTimer = window.setInterval(
-      () => void this.refreshSessionPullRequests(),
-      60_000,
-    );
-    chatState.addCleanup(() => window.clearInterval(pullRequestTimer));
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;
