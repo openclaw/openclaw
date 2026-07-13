@@ -99,6 +99,9 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     agentIdentityLoading: false,
     agentIdentityError: null,
     agentIdentityById: {},
+    identityDraft: { name: null, emoji: null, avatar: null },
+    identitySaving: false,
+    identityError: null,
     agentSkills: {
       report: null,
       loading: false,
@@ -119,6 +122,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
     modelCatalog: [],
+    pinnedAgentIds: [],
     onRefresh: () => undefined,
     onSelectAgent: () => undefined,
     onSelectPanel: () => undefined,
@@ -142,11 +146,33 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onAgentSkillsClear: () => undefined,
     onAgentSkillsDisableAll: () => undefined,
     onSetDefault: () => undefined,
+    onIdentityFieldChange: () => undefined,
+    onIdentityAvatarSelect: () => undefined,
+    onIdentitySave: () => undefined,
+    onTogglePinnedAgent: () => undefined,
     ...overrides,
   };
 }
 
 describe("renderAgents", () => {
+  it("prefills the identity editor from the fetched agent identity", () => {
+    const container = document.createElement("div");
+    render(
+      renderAgents(
+        createProps({
+          agentIdentityById: {
+            beta: { agentId: "beta", name: "Fetched Beta", avatar: "" },
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.value,
+    ).toBe("Fetched Beta");
+  });
+
   it("renders Memory after Automations and scopes the panel to the selected agent", () => {
     const container = document.createElement("div");
     render(renderAgents(createProps({ activePanel: "memory" })), container);
