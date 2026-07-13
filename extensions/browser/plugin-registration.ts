@@ -14,6 +14,7 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
@@ -78,7 +79,7 @@ function createLazyBrowserTool(opts?: {
     chatType?: string;
   };
 }): AnyAgentTool {
-  const sessionKey = opts?.agentSessionKey?.trim();
+  const sessionKey = normalizeLowercaseStringOrEmpty(opts?.agentSessionKey);
   const ownerClaim =
     sessionKey && opts?.runId ? claimBrowserSessionOwner(sessionKey, opts.runId) : undefined;
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";

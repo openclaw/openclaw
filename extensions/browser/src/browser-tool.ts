@@ -887,13 +887,16 @@ export function createBrowserTool(opts?: {
           touchTrackedTab(readStringValue(result.targetId) ?? targetId);
           return jsonResult(result);
         }
-        case "console":
-          return await executeConsoleAction({
+        case "console": {
+          const result = await executeConsoleAction({
             input: params,
             baseUrl,
             profile,
             proxyRequest,
           });
+          touchTrackedTab(normalizeOptionalString(params.targetId));
+          return result;
+        }
         case "pdf": {
           const targetId = normalizeOptionalString(params.targetId);
           const result = proxyRequest
