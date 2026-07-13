@@ -813,6 +813,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/reef
 - Headings:
   - H2: Quick start
+  - H2: Agent-driven setup
   - H2: Configuration
   - H2: Adding a friend
   - H2: Sending and receiving
