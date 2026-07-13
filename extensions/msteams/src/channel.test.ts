@@ -1,6 +1,6 @@
 // Msteams tests cover channel plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
 import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import {
@@ -10,6 +10,18 @@ import {
 } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsPlugin } from "./channel.js";
+
+const probeMSTeamsMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./channel.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./channel.runtime.js")>();
+  return {
+    msTeamsChannelRuntime: {
+      ...actual.msTeamsChannelRuntime,
+      probeMSTeams: probeMSTeamsMock,
+    },
+  };
+});
 
 function createConfiguredMSTeamsCfg(): OpenClawConfig {
   return {
@@ -24,6 +36,10 @@ function createConfiguredMSTeamsCfg(): OpenClawConfig {
 }
 
 describe("msteamsPlugin", () => {
+  afterEach(() => {
+    probeMSTeamsMock.mockReset();
+  });
+
   it("exposes approval auth through approvalCapability", () => {
     expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalAuth);
   });
@@ -83,6 +99,69 @@ describe("msteamsPlugin", () => {
         accountId: "support",
       })?.actions,
     ).toContain("upload-file");
+  });
+
+  it("probes the resolved named account config", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          tenantId: "tenant-id",
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = msteamsPlugin.config.resolveAccount(cfg, "support");
+    probeMSTeamsMock.mockResolvedValueOnce({ ok: true, appId: "support-app-id" });
+
+    await msteamsPlugin.status?.probeAccount?.({ cfg, account, timeoutMs: 1_000 });
+
+    expect(probeMSTeamsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "support-app-id",
+        appPassword: "support-secret",
+        tenantId: "tenant-id",
+        webhook: { port: 3979 },
+      }),
+      { accountId: "support" },
+    );
+  });
+
+  it("evaluates group-policy warnings for the requested account", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          groupPolicy: "allowlist",
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              tenantId: "tenant-id",
+              groupPolicy: "open",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = msteamsPlugin.config.resolveAccount(cfg, "support");
+
+    expect(
+      msteamsPlugin.security?.collectWarnings?.({ cfg, accountId: "support", account }),
+    ).toEqual([expect.stringContaining("MS Teams[support]")]);
+    expect(
+      msteamsPlugin.security?.collectWarnings?.({
+        cfg,
+        accountId: "default",
+        account: msteamsPlugin.config.resolveAccount(cfg, "default"),
+      }),
+    ).toEqual([]);
   });
 
   it("does not advertise message tools for disabled or unconfigured named accounts", () => {

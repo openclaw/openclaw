@@ -154,6 +154,7 @@ const ssoTokenStore = vi.hoisted(() => ({
   save: vi.fn(async () => {}),
   remove: vi.fn(async () => false),
 }));
+const createMSTeamsSsoTokenStoreFs = vi.hoisted(() => vi.fn(() => ssoTokenStore));
 
 vi.mock("@microsoft/teams.apps", () => ({
   ExpressAdapter: vi.fn(),
@@ -216,7 +217,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 vi.mock("./sso-token-store.js", () => ({
-  createMSTeamsSsoTokenStoreFs: () => ssoTokenStore,
+  createMSTeamsSsoTokenStoreFs,
 }));
 
 import { monitorMSTeamsProvider } from "./monitor.js";
@@ -295,6 +296,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     ssoTokenStore.get.mockClear();
     ssoTokenStore.save.mockClear();
     ssoTokenStore.remove.mockClear();
+    createMSTeamsSsoTokenStoreFs.mockClear();
   });
 
   it("stays active until aborted", async () => {
@@ -355,6 +357,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
       channels: {
         msteams: {
           tenantId: "tenant-id",
+          sso: { enabled: true, connectionName: "graph" },
           accounts: {
             support: {
               appId: "support-app-id",
@@ -388,8 +391,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
         tenantId: "tenant-id",
         type: "secret",
       },
-      expect.objectContaining({ cloud: "Public" }),
+      expect.objectContaining({ cloud: "Public", oauthDefaultConnectionName: "graph" }),
     );
+    expect(createMSTeamsSsoTokenStoreFs).toHaveBeenCalledWith({ accountId: "support" });
 
     abort.abort();
     const result = await task;
@@ -605,6 +609,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     });
     expect(ssoTokenStore.save).toHaveBeenCalledWith(
       expect.objectContaining({
+        accountId: "default",
         connectionName: "graph",
         userId: "29:user",
         token: "delegated-graph-token",
@@ -613,6 +618,7 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     );
     expect(ssoTokenStore.save).toHaveBeenCalledWith(
       expect.objectContaining({
+        accountId: "default",
         connectionName: "graph",
         userId: "aad-user",
         token: "delegated-graph-token",

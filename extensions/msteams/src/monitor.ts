@@ -290,7 +290,7 @@ export async function monitorMSTeamsProvider(
 
   const ssoDeps = ssoConnectionName
     ? {
-        tokenStore: createMSTeamsSsoTokenStoreFs(),
+        tokenStore: createMSTeamsSsoTokenStoreFs({ accountId }),
         connectionName: ssoConnectionName,
       }
     : undefined;
@@ -503,6 +503,7 @@ export async function monitorMSTeamsProvider(
         await Promise.all(
           userIds.map((userId) =>
             ssoDeps.tokenStore.save({
+              accountId,
               connectionName,
               userId,
               token: ctx.token.token,

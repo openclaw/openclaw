@@ -48,7 +48,9 @@ function makeKey(
   messageId: string,
   options?: MSTeamsSentMessageScope,
 ): string {
-  return `${normalizeSentMessageAccountId(options?.accountId)}:${conversationId}:${messageId}`;
+  const accountId = normalizeSentMessageAccountId(options?.accountId);
+  const messageKey = `${conversationId}:${messageId}`;
+  return accountId === "default" ? messageKey : `${accountId}:${messageKey}`;
 }
 
 export function recordMSTeamsSentMessage(
