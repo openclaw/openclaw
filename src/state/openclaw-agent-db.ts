@@ -53,11 +53,12 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-// v6 = session/transcript hot-path indexes. v5 added transcript mutation watermarks.
+// v7 = per-entry lifecycle status projection. v6 added session/transcript hot-path indexes.
+// v5 added transcript mutation watermarks.
 // The v4 session/transcript flip and main's v2 memory-identity
 // change is folded in structure-gated (migrateMemoryIndexSourcesIdentity), so
 // v2 main DBs and pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 6;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 7;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 const OPENCLAW_AGENT_DB_SLOW_OPEN_MS = 1_000;
@@ -155,17 +156,41 @@ function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): 
   }
 }
 
-function readSqliteSessionColumns(db: DatabaseSync): Set<string> | null {
+function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set<string> | null {
   const table = db
     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get("sessions");
+    .get(tableName);
   if (!table) {
     return null;
   }
-  const rows = db.prepare("PRAGMA table_info(sessions)").all() as Array<{
+  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
     name?: unknown;
   }>;
   return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
+}
+
+function migrateSessionEntryStatusProjection(db: DatabaseSync): void {
+  const columns = readSqliteTableColumns(db, "session_entries");
+  if (!columns) {
+    return;
+  }
+  if (!columns.has("status")) {
+    db.exec(
+      "ALTER TABLE session_entries ADD COLUMN status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout'));",
+    );
+  }
+  const rows = db.prepare("SELECT session_key, entry_json FROM session_entries").all() as Array<{
+    entry_json?: unknown;
+    session_key?: unknown;
+  }>;
+  const update = db.prepare("UPDATE session_entries SET status = ? WHERE session_key = ?");
+  for (const row of rows) {
+    if (typeof row.session_key !== "string") {
+      continue;
+    }
+    const entry = parseMigratedSessionEntry(row.entry_json);
+    update.run(entry ? migratedStatus(entry.status) : null, row.session_key);
+  }
 }
 
 function migratedSessionColumn(
@@ -235,13 +260,17 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
     return;
   }
+  if (userVersion < 7) {
+    db.exec("DROP INDEX IF EXISTS idx_agent_sessions_status;");
+    migrateSessionEntryStatusProjection(db);
+  }
   if (userVersion < 6) {
     db.exec("DROP INDEX IF EXISTS idx_agent_session_entries_session_id;");
   }
   if (userVersion < 3) {
     db.exec("DROP INDEX IF EXISTS idx_agent_transcript_events_session;");
   }
-  const columns = readSqliteSessionColumns(db);
+  const columns = readSqliteTableColumns(db, "sessions");
   if (columns && !columns.has("transcript_updated_at")) {
     db.exec("ALTER TABLE sessions ADD COLUMN transcript_updated_at INTEGER DEFAULT NULL;");
   }

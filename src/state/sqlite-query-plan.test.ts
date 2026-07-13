@@ -207,13 +207,12 @@ describe("sqlite hot query plans", () => {
     });
     expectPlanUsesIndex({
       db: database.db,
-      indexName: "idx_agent_sessions_status",
+      indexName: "idx_agent_session_entries_status",
       params: ["running"],
       sql: `
-        SELECT se.session_key, se.entry_json
-          FROM sessions AS s
-          JOIN session_entries AS se ON se.session_id = s.session_id
-         WHERE s.status = ?
+        SELECT session_key, entry_json
+          FROM session_entries
+         WHERE status = ?
       `,
     });
     const latestMessagePlan = explainQueryPlan(

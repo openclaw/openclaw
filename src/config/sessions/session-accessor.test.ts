@@ -1436,6 +1436,22 @@ describe("session accessor seam", () => {
             updatedAt: 25,
           },
         },
+        {
+          sessionKey: "agent:main:shared-running",
+          entry: {
+            sessionId: "session-shared",
+            status: "running",
+            updatedAt: 26,
+          },
+        },
+        {
+          sessionKey: "agent:main:shared-done",
+          entry: {
+            sessionId: "session-shared",
+            status: "done",
+            updatedAt: 27,
+          },
+        },
       ],
       skipMaintenance: true,
     });
@@ -1484,10 +1500,14 @@ describe("session accessor seam", () => {
       storePath,
       update: (entries) => ({ result: entries.map((entry) => entry.sessionKey) }),
     });
-    expect(runningKeys).toEqual(["agent:main:main", "agent:main:other"]);
+    expect(runningKeys).toEqual([
+      "agent:main:main",
+      "agent:main:other",
+      "agent:main:shared-running",
+    ]);
     expect(
       listSessionEntriesByStatus({ storePath }, ["done"]).map((entry) => entry.sessionKey),
-    ).toEqual(["agent:main:done"]);
+    ).toEqual(["agent:main:done", "agent:main:shared-done"]);
 
     const other = loadSessionEntry({ sessionKey: "agent:main:other", storePath });
     expect(other).toBeDefined();

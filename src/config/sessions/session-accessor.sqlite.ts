@@ -3194,17 +3194,11 @@ function readSqliteSessionEntriesByStatus(
   }
   const db = getSessionKysely(database.db);
   let query = db
-    .selectFrom("sessions")
-    .innerJoin("session_entries", "session_entries.session_id", "sessions.session_id")
-    .select([
-      "session_entries.session_key",
-      "session_entries.entry_json",
-      "session_entries.session_id",
-      "session_entries.updated_at",
-    ])
-    .where("sessions.status", "in", selectedStatuses);
+    .selectFrom("session_entries")
+    .select(["session_key", "entry_json", "session_id", "updated_at"])
+    .where("status", "in", selectedStatuses);
   if (selectedSessionKeys) {
-    query = query.where("session_entries.session_key", "in", selectedSessionKeys);
+    query = query.where("session_key", "in", selectedSessionKeys);
   }
   return executeSqliteQuerySync(database.db, query)
     .rows.flatMap((row) => {
@@ -4391,12 +4385,14 @@ function writeSessionEntry(
         session_id: normalizedEntry.sessionId,
         entry_json: JSON.stringify(normalizedEntry),
         updated_at: updatedAt,
+        status: normalizeSqliteStatus(normalizedEntry.status),
       })
       .onConflict((conflict) =>
         conflict.column("session_key").doUpdateSet({
           session_id: normalizedEntry.sessionId,
           entry_json: JSON.stringify(normalizedEntry),
           updated_at: updatedAt,
+          status: normalizeSqliteStatus(normalizedEntry.status),
         }),
       ),
   );
