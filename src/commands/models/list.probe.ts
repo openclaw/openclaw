@@ -546,6 +546,20 @@ export async function buildProbeTargets(params: {
             boundValue: configuredValue,
             ...(configuredReference.kind === "marker" ? { useRuntimeAuth: true } : {}),
           });
+        } else {
+          // Config credential resolved but no probe model exists: report the
+          // defined no_model status instead of dropping the target, matching
+          // the environment branch below.
+          results.push({
+            provider: providerKey,
+            model: undefined,
+            label: "config",
+            source: "models.json",
+            mode: configuredMode,
+            status: "no_model",
+            reasonCode: "no_model",
+            error: "No model available for probe",
+          });
         }
       }
       if (environmentValue) {
@@ -743,10 +757,15 @@ async function probeTarget(params: {
   maxTokens: number;
 }): Promise<AuthProbeResult> {
   const { cfg, agentId, agentDir, workspaceDir, sessionDir, target, timeoutMs, maxTokens } = params;
-  const probeConfig =
-    target.boundValue && !target.useRuntimeAuth
-      ? withDirectCredential(cfg, target.provider, target.boundValue, target.mode)
-      : cfg;
+  // Marker credentials must be resolved by the runtime from config, but the
+  // "config" probe must reflect only that credential — empty the provider auth
+  // order and isolate the agent dir so stored profiles cannot satisfy it via
+  // failover. Direct bound values instead pin an isolated synthetic profile.
+  const probeConfig = !target.boundValue
+    ? cfg
+    : target.useRuntimeAuth
+      ? withoutProfileFallback(cfg, target.provider)
+      : withDirectCredential(cfg, target.provider, target.boundValue, target.mode);
   if (!target.model) {
     return {
       provider: target.provider,
@@ -781,8 +800,14 @@ async function probeTarget(params: {
     latencyMs: Date.now() - start,
   });
   try {
-    if (target.boundValue && !target.useRuntimeAuth) {
+    // Any bound-value target runs in an empty agent dir so stored profiles are
+    // absent and cannot satisfy the probe via failover. Direct values pin a
+    // synthetic profile; marker values are resolved by the runtime from the
+    // profile-order-cleared config.
+    if (target.boundValue) {
       isolatedAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-probe-"));
+    }
+    if (target.boundValue && !target.useRuntimeAuth && isolatedAgentDir) {
       isolatedProfileId = `${target.provider}:probe-${crypto.randomUUID()}`;
       const value = target.boundValue;
       const profile: ProfileEntry =

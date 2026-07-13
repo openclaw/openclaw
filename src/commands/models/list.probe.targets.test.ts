@@ -370,6 +370,42 @@ describe("buildProbeTargets reason codes", () => {
     ]);
   });
 
+  it("emits a no_model result for a resolved config credential with no probe model", async () => {
+    mockStore = { version: 1, profiles: {}, order: {} };
+    const plan = await buildProbeTargets({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com/v1",
+              api: "anthropic-messages",
+              apiKey: "test",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: [],
+      options: {
+        includeDirectKeys: true,
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.targets).toEqual([]);
+    expect(plan.results).toContainEqual(
+      expect.objectContaining({
+        label: "config",
+        source: "models.json",
+        status: "no_model",
+        reasonCode: "no_model",
+      }),
+    );
+  });
+
   it("resolves configured SecretRefs before binding a direct probe", async () => {
     mockStore = { version: 1, profiles: {}, order: {} };
     const plan = await buildProbeTargets({

@@ -239,8 +239,12 @@ describe("runAuthProbes", () => {
     }
   });
 
-  it("keeps environment markers out of generated runtime config", async () => {
-    const runEmbeddedAgent = vi.fn(async () => ({ text: "OK" }));
+  it("isolates marker credentials from stored profiles without pinning a synthetic one", async () => {
+    const runEmbeddedAgent = vi.fn(
+      async (_params: { agentDir?: string; authProfileId?: string; config?: OpenClawConfig }) => ({
+        text: "OK",
+      }),
+    );
     const upsertAuthProfileWithLock = vi.fn();
     vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
     vi.doMock("../../agents/auth-profiles.js", () => ({
@@ -300,12 +304,17 @@ describe("runAuthProbes", () => {
         },
       });
 
-      expect(runEmbeddedAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentDir: "/tmp/openclaw-probe-agent",
-          config: cfg,
-        }),
+      // Runs in an isolated agent dir (no stored profiles) with the provider's
+      // auth order cleared, so only the marker credential is exercised — and no
+      // synthetic profile is pinned, letting the runtime resolve the marker.
+      const call = runEmbeddedAgent.mock.calls[0]?.[0];
+      expect(call?.agentDir).not.toBe("/tmp/openclaw-probe-agent");
+      expect(call?.agentDir).toContain("openclaw-auth-probe-");
+      expect(call?.config?.auth?.order?.openai).toEqual([]);
+      expect(call?.config?.models?.providers?.openai?.apiKey).toBe(
+        cfg.models.providers.openai.apiKey,
       );
+      expect(call?.authProfileId).toBeUndefined();
       expect(upsertAuthProfileWithLock).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock("../../agents/embedded-agent.js");
