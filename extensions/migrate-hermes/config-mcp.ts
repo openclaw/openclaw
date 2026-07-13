@@ -116,10 +116,6 @@ const MCP_CONNECTION_FIELDS = [
   "timeout",
 ] as const;
 
-function mcpValueHasEnvReferences(value: unknown): boolean {
-  return value !== undefined && resolveMcpEnvReferences(value, {}).unresolved;
-}
-
 export function importsMcpSensitiveValues(
   value: Record<string, unknown>,
   includeSecrets: boolean,
