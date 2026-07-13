@@ -18,6 +18,9 @@ const rootEntries = [
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
+  // Runtime modules loaded by path or namespace; static export tracing cannot see their contract.
+  "src/plugins/runtime/index.ts!",
+  "src/plugins/source-display.ts!",
   "src/mcp/codex-supervision-tools-serve.ts!",
   "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
