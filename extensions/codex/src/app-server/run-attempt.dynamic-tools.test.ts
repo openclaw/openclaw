@@ -11,9 +11,14 @@ import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
+  resolveCodexAppServerHookChannelId,
+  resolveOpenClawCodingToolsSessionKeys,
+} from "./dynamic-tool-build.js";
+import {
   emitDynamicToolStartedDiagnostic,
   emitDynamicToolTerminalDiagnostic,
 } from "./dynamic-tool-diagnostics.js";
+import { hasPendingDynamicToolTerminalDiagnostic } from "./dynamic-tool-execution.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import type { CodexDynamicToolCallParams } from "./protocol.js";
 import {
@@ -24,7 +29,11 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
-import { testing } from "./run-attempt.js";
+const testing = {
+  hasPendingDynamicToolTerminalDiagnostic,
+  resolveCodexAppServerHookChannelId,
+  resolveOpenClawCodingToolsSessionKeys,
+};
 
 function flushDiagnosticEvents() {
   return waitForDiagnosticEventsDrained();

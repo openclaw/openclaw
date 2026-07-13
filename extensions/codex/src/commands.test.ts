@@ -23,17 +23,14 @@ import {
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
 import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
-import {
-  resetCodexDiagnosticsFeedbackStateForTests,
-  type CodexCommandDeps,
-  type CodexCommandDepsOverride,
-} from "./command-handlers.js";
+import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
+import { handleCodexCommand } from "./command-dispatch.js";
+import type { CodexCommandDepsOverride } from "./command-handlers.js";
 import type {
   CodexPluginsConfigBlock,
   CodexPluginConfigEntry,
   CodexPluginsManagementIO,
 } from "./command-plugins-management.js";
-import { handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
 
@@ -82,6 +79,8 @@ function createNodeExecContext(
     ...overrides,
   } as Partial<PluginCommandContext>);
 }
+
+type CodexCommandDeps = CodexCommandDepsOverride & Record<string, unknown>;
 
 function createDeps(overrides: Partial<CodexCommandDeps> = {}): CodexCommandDepsOverride {
   return {
@@ -334,7 +333,7 @@ describe("codex command", () => {
   });
 
   afterEach(async () => {
-    resetCodexDiagnosticsFeedbackStateForTests();
+    codexDiagnosticsFeedbackState.clear();
     resetSharedCodexAppServerClientForTests();
     clearRuntimeAuthProfileStoreSnapshots();
     vi.unstubAllEnvs();

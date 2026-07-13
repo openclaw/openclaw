@@ -22,7 +22,7 @@ import type { CodexThread, JsonValue } from "./protocol.js";
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
 
-export type CodexAppServerTranscriptMirrorResult = {
+type CodexAppServerTranscriptMirrorResult = {
   assistantMirrorIdentitiesOwned: string[];
   userMessagesPresent: MirroredUserMessage[];
 };
@@ -46,12 +46,12 @@ const CODEX_HISTORY_ZERO_USAGE: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-export type CodexThreadHistoryImportResult = {
+type CodexThreadHistoryImportResult = {
   importedMessages: number;
   omittedMessages: number;
 };
 
-export type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
+type BoundedCodexThreadHistoryProjection = CodexThreadHistoryImportResult & {
   responseItems: JsonValue[];
   transcriptMessages: AgentMessage[];
 };
@@ -386,7 +386,7 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): A
   );
 }
 
-export async function buildResolvedCodexUserPromptMessage(
+async function buildResolvedCodexUserPromptMessage(
   params: EmbeddedRunAttemptParams,
 ): Promise<AgentMessage> {
   const resolvedMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
@@ -396,7 +396,7 @@ export async function buildResolvedCodexUserPromptMessage(
   );
 }
 
-export async function mirrorTranscriptBestEffort(params: {
+async function mirrorTranscriptBestEffort(params: {
   params: EmbeddedRunAttemptParams;
   agentId?: string;
   notifyUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
@@ -443,7 +443,7 @@ export async function mirrorTranscriptBestEffort(params: {
   }
 }
 
-export async function resolveFinalCodexMirrorMessages(params: {
+async function resolveFinalCodexMirrorMessages(params: {
   params: EmbeddedRunAttemptParams;
   messagesSnapshot: AgentMessage[];
   turnId: string;
@@ -577,7 +577,7 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
   return `${message.role}:${fingerprintMirrorMessageContent(message)}`;
 }
 
-export async function mirrorCodexAppServerTranscript(params: {
+async function mirrorCodexAppServerTranscript(params: {
   sessionId: string;
   cwd?: string;
   sessionKey?: string;
@@ -717,6 +717,11 @@ export async function mirrorCodexAppServerTranscript(params: {
 
   return { assistantMirrorIdentitiesOwned, userMessagesPresent };
 }
+
+export const codexTranscriptMirrorRuntime = {
+  mirror: mirrorCodexAppServerTranscript,
+  mirrorBestEffort: mirrorTranscriptBestEffort,
+};
 
 function resolveCodexMirrorTranscriptTarget(params: {
   agentId?: string;

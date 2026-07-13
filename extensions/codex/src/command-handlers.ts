@@ -40,6 +40,7 @@ import {
 } from "./app-server/session-binding.js";
 import { readCodexAccountAuthOverview } from "./command-account.js";
 import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
+import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
 import {
   buildHelp,
   formatAccount,
@@ -91,7 +92,7 @@ import {
   resolveCodexCliSessionForBindingOnNode,
 } from "./node-cli-sessions.js";
 
-export type CodexCommandDeps = {
+type CodexCommandDeps = {
   bindingStore: CodexAppServerBindingStore;
   codexControlRequest: CodexControlRequestFn;
   listCodexAppServerModels: typeof listAllCodexAppServerModels;
@@ -222,7 +223,7 @@ type CodexDiagnosticsCandidate = Omit<
   | "authProfileId"
 >;
 
-type PendingCodexDiagnosticsConfirmation = {
+export type PendingCodexDiagnosticsConfirmation = {
   token: string;
   targets: CodexDiagnosticsTarget[];
   note?: string;
@@ -266,17 +267,12 @@ const CODEX_NATIVE_CONTROL_SUBCOMMANDS = new Set([
   "stop",
 ]);
 
-const lastCodexDiagnosticsUploadByThread = new Map<string, number>();
-const lastCodexDiagnosticsUploadByScope = new Map<string, number>();
-const pendingCodexDiagnosticsConfirmations = new Map<string, PendingCodexDiagnosticsConfirmation>();
-const pendingCodexDiagnosticsConfirmationTokensByScope = new Map<string, string[]>();
-
-export function resetCodexDiagnosticsFeedbackStateForTests(): void {
-  lastCodexDiagnosticsUploadByThread.clear();
-  lastCodexDiagnosticsUploadByScope.clear();
-  pendingCodexDiagnosticsConfirmations.clear();
-  pendingCodexDiagnosticsConfirmationTokensByScope.clear();
-}
+const {
+  lastUploadByThread: lastCodexDiagnosticsUploadByThread,
+  lastUploadByScope: lastCodexDiagnosticsUploadByScope,
+  pendingConfirmations: pendingCodexDiagnosticsConfirmations,
+  pendingTokensByScope: pendingCodexDiagnosticsConfirmationTokensByScope,
+} = codexDiagnosticsFeedbackState;
 
 /**
  * No-arg `/codex` picker. Codex owns the command tree; channels render the

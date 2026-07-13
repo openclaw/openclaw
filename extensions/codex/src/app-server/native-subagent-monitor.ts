@@ -14,7 +14,7 @@ import {
 import { asFiniteNumber, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import {
-  extractCodexNativeSubagentCompletions,
+  codexNativeSubagentNotifications,
   type CodexNativeSubagentCompletion,
 } from "./native-subagent-notification.js";
 import {
@@ -146,7 +146,7 @@ const monitors = new WeakMap<CodexAppServerClient, CodexNativeSubagentMonitor>()
 const completionDeliveryOwners = new Map<string, ChildState>();
 
 /** Registers or updates the sole monitor bound to an app-server client. */
-export function registerCodexNativeSubagentMonitor(params: {
+function registerCodexNativeSubagentMonitor(params: {
   client: CodexAppServerClient;
   parentThreadId: string;
   requesterSessionKey?: string;
@@ -171,7 +171,7 @@ export function registerCodexNativeSubagentMonitor(params: {
 }
 
 /** Tracks native subagent notifications, history recovery, and parent delivery. */
-export class CodexNativeSubagentMonitor {
+class CodexNativeSubagentMonitor {
   private readonly parentStates = new Map<string, ParentState>();
   private readonly childStates = new Map<string, ChildState>();
   private readonly childThreadIdsByAgentPath = new Map<string, string>();
@@ -657,7 +657,9 @@ export class CodexNativeSubagentMonitor {
     if (!state) {
       return;
     }
-    for (const nativeCompletion of extractCodexNativeSubagentCompletions(notification)) {
+    for (const nativeCompletion of codexNativeSubagentNotifications.fromNotification(
+      notification,
+    )) {
       const childThreadId = this.childThreadIdsByAgentPath.get(
         buildParentAgentPathKey(state.parentThreadId, nativeCompletion.agentPath),
       );
@@ -1431,6 +1433,11 @@ export class CodexNativeSubagentMonitor {
     });
   }
 }
+
+export const codexNativeSubagentMonitorRuntime = {
+  Monitor: CodexNativeSubagentMonitor,
+  register: registerCodexNativeSubagentMonitor,
+};
 
 function readThreadTurnRecovery(
   thread: JsonObject,

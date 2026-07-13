@@ -5,11 +5,11 @@ import type {
   AgentHarnessTaskRuntimeScope,
 } from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { describe, expect, it, vi } from "vitest";
-import {
-  CodexNativeSubagentMonitor,
-  registerCodexNativeSubagentMonitor,
-} from "./native-subagent-monitor.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import type { CodexServerNotification, CodexThreadReadResponse, JsonValue } from "./protocol.js";
+
+const CodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.Monitor;
+const registerCodexNativeSubagentMonitor = codexNativeSubagentMonitorRuntime.register;
 
 function createClient() {
   type ThreadReadParams = { threadId?: string; includeTurns?: boolean };
