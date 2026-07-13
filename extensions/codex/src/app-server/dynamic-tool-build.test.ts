@@ -14,18 +14,13 @@ import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   buildDynamicTools,
   disableCodexPluginThreadConfig,
-  filterCodexDynamicToolsForAllowlist,
-  includeForcedCodexDynamicToolAllow,
   resolveCodexAppServerExecutionCwd,
-  resolveOpenClawCodingToolsSessionKeys,
   resolveCodexMessageToolProvider,
   shouldEnableCodexAppServerNativeToolSurface,
-  shouldForceMessageTool,
 } from "./dynamic-tool-build.js";
 import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoading,
-  resolveCodexDynamicToolsLoadingForModel,
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -528,11 +523,11 @@ describe("Codex app-server dynamic tool build", () => {
     const toolBridge = createCodexDynamicToolBridge({
       tools,
       signal: new AbortController().signal,
-      loading: resolveCodexDynamicToolsLoadingForModel({}, "openai/gpt-5.4-nano"),
+      loading: resolveCodexDynamicToolsLoadingForRuntime({}, "openai/gpt-5.4-nano"),
     });
 
-    expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.4-nano")).toBe("direct");
-    expect(resolveCodexDynamicToolsLoadingForModel({}, "gpt-5.5")).toBe("searchable");
+    expect(resolveCodexDynamicToolsLoadingForRuntime({}, "gpt-5.4-nano")).toBe("direct");
+    expect(resolveCodexDynamicToolsLoadingForRuntime({}, "gpt-5.5")).toBe("searchable");
     const webSearch = flattenCodexDynamicToolFunctions(toolBridge.specs).find(
       (tool) => tool.name === "web_search",
     );
@@ -1368,45 +1363,6 @@ describe("Codex app-server dynamic tool build", () => {
     expect(tools.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
   });
 
-  it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
-    const tools = [
-      "exec",
-      "sandbox_exec",
-      "sandbox_process",
-      "node_exec",
-      "node_process",
-      "apply_patch",
-      "read",
-      "message",
-    ].map((name) => ({ name }));
-
-    expect(
-      filterCodexDynamicToolsForAllowlist(tools, [" BASH ", "apply-patch", "READ"]).map(
-        (tool) => tool.name,
-      ),
-    ).toEqual([
-      "exec",
-      "sandbox_exec",
-      "sandbox_process",
-      "node_exec",
-      "node_process",
-      "apply_patch",
-      "read",
-    ]);
-  });
-
-  it("treats an explicit empty Codex dynamic toolsAllow as no tools", () => {
-    const tools = ["message", "web_search"].map((name) => ({ name }));
-
-    expect(filterCodexDynamicToolsForAllowlist(tools, [])).toEqual([]);
-  });
-
-  it("treats wildcard Codex dynamic toolsAllow as unrestricted", () => {
-    const tools = ["message", "web_search"].map((name) => ({ name }));
-
-    expect(filterCodexDynamicToolsForAllowlist(tools, [" * "])).toEqual(tools);
-  });
-
   it("disables Codex native tool surfaces for restricted runtime allowlists", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -1588,23 +1544,6 @@ describe("Codex app-server dynamic tool build", () => {
       }),
     ).toBe(false);
   });
-
-  it("forces the message dynamic tool for message-tool-only source replies", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.sourceReplyDeliveryMode = "message_tool_only";
-
-    expect(shouldForceMessageTool(params)).toBe(true);
-    expect(includeForcedCodexDynamicToolAllow([], params)).toEqual(["message"]);
-
-    params.disableMessageTool = true;
-    expect(shouldForceMessageTool(params)).toBe(false);
-
-    params.disableMessageTool = false;
-    params.sourceReplyDeliveryMode = "automatic";
-    expect(shouldForceMessageTool(params)).toBe(false);
-  });
-
   it("exposes the final delivery control only on Codex message-tool-only schemas", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -1642,41 +1581,5 @@ describe("Codex app-server dynamic tool build", () => {
     };
 
     expect(automaticSchema.properties).not.toHaveProperty("final");
-  });
-
-  it("retains forced message policy for the registered schema override", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.disableMessageTool = true;
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = [];
-
-    expect(shouldForceMessageTool(params)).toBe(false);
-    expect(includeForcedCodexDynamicToolAllow(params.toolsAllow, params)).toEqual([]);
-
-    const registeredPolicyParams = { ...params, disableMessageTool: false };
-    expect(shouldForceMessageTool(registeredPolicyParams)).toBe(true);
-    expect(includeForcedCodexDynamicToolAllow(params.toolsAllow, registeredPolicyParams)).toEqual([
-      "message",
-    ]);
-  });
-
-  it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.sessionKey = "agent:main:main";
-
-    expect(
-      resolveOpenClawCodingToolsSessionKeys(params, "agent:main:telegram:default:direct:1234"),
-    ).toEqual({
-      sessionKey: "agent:main:telegram:default:direct:1234",
-      runSessionKey: "agent:main:main",
-    });
-
-    expect(resolveOpenClawCodingToolsSessionKeys(params, "agent:main:main")).toEqual({
-      sessionKey: "agent:main:main",
-      runSessionKey: undefined,
-    });
   });
 });

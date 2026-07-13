@@ -86,7 +86,7 @@ export function shouldDisableCodexToolSearchForModel(modelId: string | undefined
 }
 
 /** Resolves dynamic-tool loading after applying model-specific restrictions. */
-export function resolveCodexDynamicToolsLoadingForModel(
+function resolveCodexDynamicToolsLoadingForModel(
   config: Pick<CodexPluginConfig, "codexDynamicToolsLoading">,
   modelId: string | undefined,
   env: CodexDynamicToolProfileEnv = process.env,

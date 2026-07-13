@@ -104,7 +104,7 @@ type DynamicToolBuildParams = {
   };
 };
 /** Splits sandbox and run session keys so tool calls can bind to both scopes when needed. */
-export function resolveOpenClawCodingToolsSessionKeys(
+function resolveOpenClawCodingToolsSessionKeys(
   params: EmbeddedRunAttemptParams,
   sandboxSessionKey: string,
 ): Pick<OpenClawCodingToolsOptions, "sessionKey" | "runSessionKey"> {
@@ -459,7 +459,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
   return exposedTools;
 }
 /** Preserves delivery-critical tools when a narrow allowlist would otherwise hide them. */
-export function includeForcedCodexDynamicToolAllow(
+function includeForcedCodexDynamicToolAllow(
   toolsAllow: string[] | undefined,
   params: EmbeddedRunAttemptParams,
 ): string[] | undefined {
@@ -952,7 +952,7 @@ function resolveNodeExecToolOverrides(
   };
 }
 /** Applies a normalized tool allowlist while preserving shell aliases for exec/process. */
-export function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
+function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
 ): T[] {
@@ -985,7 +985,7 @@ function hasWildcardCodexToolsAllow(toolsAllow: string[]): boolean {
   return toolsAllow.some((name) => normalizeCodexDynamicToolName(name) === "*");
 }
 /** Forces message delivery through the message tool when the source channel requires it. */
-export function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
+function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
   return (
     params.disableMessageTool !== true && params.sourceReplyDeliveryMode === "message_tool_only"
   );

@@ -14,7 +14,7 @@ type CodexSubcommandHandler = (
   options: CodexCommandOptions,
 ) => Promise<PluginCommandResult>;
 
-export type CodexCommandInternalOptions = CodexCommandOptions & {
+type CodexCommandInternalOptions = CodexCommandOptions & {
   loadSubcommandHandler?: () => Promise<CodexSubcommandHandler>;
 };
 

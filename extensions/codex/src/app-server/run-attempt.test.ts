@@ -41,8 +41,6 @@ import {
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   buildDynamicTools,
-  filterCodexDynamicToolsForAllowlist,
-  includeForcedCodexDynamicToolAllow,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
@@ -108,8 +106,6 @@ const testing = {
   buildDeveloperInstructions,
   buildDynamicTools,
   filterCodexDynamicTools,
-  filterCodexDynamicToolsForAllowlist,
-  includeForcedCodexDynamicToolAllow,
   resolveCodexDynamicToolDirectNames(
     params: EmbeddedRunAttemptParams,
     hostCrestodianActive = false,
@@ -502,14 +498,6 @@ async function startThreadWithDisabledNativeSurfaceForTest(
   });
 
   return { request, nativeToolSurfaceEnabled };
-}
-
-function filterAllowedRuntimeToolNamesForTest(
-  params: EmbeddedRunAttemptParams,
-  tools: RuntimeDynamicToolForTest[],
-) {
-  const toolsAllow = testing.includeForcedCodexDynamicToolAllow(params.toolsAllow, params);
-  return testing.filterCodexDynamicToolsForAllowlist(tools, toolsAllow).map((tool) => tool.name);
 }
 
 type RuntimeDynamicToolForTest = Parameters<
@@ -1668,57 +1656,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(snapshotJson).toContain('"toolCallId":"cmd-orphan"');
     expect(snapshotJson).toContain('"isError":true');
     expect(snapshotJson).toContain("without a matching tool.result");
-  });
-
-  it("keeps forced message dynamic tool when toolsAllow omits it", () => {
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = ["music_generate"];
-
-    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("music_generate"),
-    ]);
-
-    expect(dynamicToolNames).toContain("message");
-    expect(dynamicToolNames).toContain("music_generate");
-  });
-
-  it("keeps forced message dynamic tool when toolsAllow is empty", () => {
-    const tools = [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("music_generate"),
-      createRuntimeDynamicTool("heartbeat_respond"),
-    ];
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.sourceReplyDeliveryMode = "message_tool_only";
-    params.toolsAllow = [];
-
-    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, tools);
-
-    expect(dynamicToolNames).toEqual(["message"]);
-  });
-
-  it("keeps forced heartbeat registration inside narrow toolsAllow policy", () => {
-    const tools = [
-      createRuntimeDynamicTool("message"),
-      createRuntimeDynamicTool("heartbeat_respond"),
-    ];
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-    params.toolsAllow = ["message"];
-
-    const dynamicToolNames = filterAllowedRuntimeToolNamesForTest(params, tools);
-
-    expect(dynamicToolNames).toEqual(["message"]);
   });
 
   it("keeps OpenClaw control-path tools direct when code-mode-only is enabled", () => {
