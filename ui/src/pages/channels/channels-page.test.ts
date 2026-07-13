@@ -209,6 +209,7 @@ describe("ChannelsPage lifecycle", () => {
     document.body.append(page);
     await page.updateComplete;
     page.editNostrProfile("default", { name: "local" });
+    page.changeNostrProfileField("name", "draft");
 
     const load = page.importNostrProfile();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
@@ -218,17 +219,17 @@ describe("ChannelsPage lifecycle", () => {
     expect(page.nostrProfileFormState?.importing).toBe(true);
 
     page.changeNostrProfileField("name", "edited while importing");
-    expect(page.nostrProfileFormState?.values.name).toBe("local");
+    expect(page.nostrProfileFormState?.values.name).toBe("draft");
 
     response.resolve(
-      new Response(JSON.stringify({ ok: true, imported: { name: "imported" } }), {
+      new Response(JSON.stringify({ ok: true, merged: { name: "local", about: "imported" } }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
     );
     await load;
 
-    expect(page.nostrProfileFormState?.values.name).toBe("imported");
+    expect(page.nostrProfileFormState?.values).toMatchObject({ name: "draft", about: "imported" });
     expect(page.nostrProfileFormState?.importing).toBe(false);
     source.runtimeConfig.dispose();
     source.channels.dispose();

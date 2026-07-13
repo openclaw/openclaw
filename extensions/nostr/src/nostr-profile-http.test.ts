@@ -618,7 +618,11 @@ describe("nostr-profile-http", () => {
 
       const data = expectImportSuccessResponse(res);
       expect(data.saved).toBe(false);
-      expect(data.merged).toBeUndefined();
+      expect(data.merged).toEqual({
+        name: "imported",
+        displayName: "Imported User",
+        about: "local bio",
+      });
       expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
 

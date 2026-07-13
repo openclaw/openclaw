@@ -518,9 +518,10 @@ async function handleImportProfile(
     return true;
   }
 
+  const localProfile = ctx.getConfigProfile(accountId);
+  const merged = mergeProfiles(localProfile, result.profile);
+
   if (autoMerge && result.profile) {
-    const localProfile = ctx.getConfigProfile(accountId);
-    const merged = mergeProfiles(localProfile, result.profile);
     await ctx.updateConfigProfile(accountId, merged);
     ctx.log?.info(`[${accountId}] Profile imported and merged`);
 
@@ -540,6 +541,7 @@ async function handleImportProfile(
   sendJson(res, 200, {
     ok: true,
     imported: result.profile,
+    merged,
     saved: false,
     event: result.event,
     sourceRelay: result.sourceRelay,
