@@ -1303,10 +1303,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".markdown-plain-text-fallback").getByText("working **tail").waitFor({
+      await page.locator(".chat-bubble.streaming strong").getByText("tail").waitFor({
         timeout: 10_000,
       });
-      expect(await page.locator(".markdown-plain-text-fallback strong").count()).toBe(0);
+      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
@@ -1362,9 +1362,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".markdown-plain-text-fallback").getByText("working **tail").waitFor({
+      await page.locator(".chat-bubble.streaming strong").getByText("tail").waitFor({
         timeout: 10_000,
       });
+      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       await gateway.emitChatFinal({
