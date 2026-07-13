@@ -20,7 +20,7 @@ export type TranscriptsRuntimeContext = {
   logger: TranscriptsLogger;
 };
 
-export type ActiveTranscriptsSession = {
+type ActiveTranscriptsSession = {
   session: TranscriptSessionDescriptor;
   providerId: string;
   // Aborted starts stay active until a later stop confirms provider cleanup.
