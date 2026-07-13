@@ -109,6 +109,9 @@ importers:
       croner:
         specifier: 10.0.1
         version: 10.0.1
+      defu:
+        specifier: 6.1.5
+        version: 6.1.5
       diff:
         specifier: 9.0.0
         version: 9.0.0
@@ -1732,6 +1735,9 @@ importers:
       commander:
         specifier: 15.0.0
         version: 15.0.0
+      defu:
+        specifier: 6.1.5
+        version: 6.1.5
       typebox:
         specifier: 1.3.3
         version: 1.3.3

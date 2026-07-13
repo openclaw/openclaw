@@ -50,6 +50,11 @@ type QaCrablineTransportState = QaTransportState & {
   rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
 };
 
+function formatLogicalQaTarget({ conversation, threadId }: QaBusInboundMessageInput) {
+  const prefix = conversation.kind === "direct" ? "dm" : conversation.kind;
+  return threadId ? `thread:${conversation.id}/${threadId}` : `${prefix}:${conversation.id}`;
+}
+
 const TELEGRAM_LIFECYCLE_METHOD_RE = /\/(sendMessage|editMessageText|deleteMessage)$/u;
 
 function resolveTelegramQaSenderId(senderId: string) {
@@ -303,7 +308,9 @@ function createCrablineState(params: {
           senderId: providerSenderId,
         },
       });
-      targetByProviderTarget.set(providerInbound.providerTargetKey, providerInbound.qaTarget);
+      // Providers may coerce channel conversations to groups; preserve the scenario's logical
+      // target so outbound waits and assertions still match the original input.
+      targetByProviderTarget.set(providerInbound.providerTargetKey, formatLogicalQaTarget(input));
       const providerMessageId = await postCrablineInbound({
         adapter: params.adapter,
         providerInbound,
