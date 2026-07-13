@@ -41,6 +41,7 @@ export async function execDockerRaw(
       cancelSignal: opts?.signal,
       encoding: "buffer",
       input: opts?.input ?? Buffer.alloc(0),
+      maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
       reject: false,
       stripFinalNewline: false,
     });
@@ -93,7 +94,11 @@ import {
   computeSandboxConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
 } from "./config-hash.js";
-import { DEFAULT_SANDBOX_IMAGE, SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./constants.js";
+import {
+  DEFAULT_SANDBOX_IMAGE,
+  SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+  SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
+} from "./constants.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";

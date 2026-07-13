@@ -8,6 +8,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../../test-utils/env.js";
+import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 
 const { spawnMock, spawnCommandMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -68,14 +69,17 @@ function spawnOptionsAt(index: number): SpawnOptions {
   return options;
 }
 
-function spawnCommandBaseEnv(): Record<string, string> {
+function spawnCommandOptions(): {
+  baseEnv: Record<string, string>;
+  maxBuffer?: number;
+} {
   const options = spawnCommandMock.mock.calls[0]?.[1] as
-    | { baseEnv?: Record<string, string> }
+    | { baseEnv?: Record<string, string>; maxBuffer?: number }
     | undefined;
   if (!options?.baseEnv) {
-    throw new Error("expected spawnCommand baseEnv");
+    throw new Error("expected spawnCommand options");
   }
-  return options.baseEnv;
+  return { ...options, baseEnv: options.baseEnv };
 }
 
 let runSshSandboxCommand: typeof import("./ssh.js").runSshSandboxCommand;
@@ -121,9 +125,11 @@ describe("ssh subprocess env sanitization", () => {
       remoteCommand: "true",
     });
 
-    const baseEnv = spawnCommandBaseEnv();
+    const options = spawnCommandOptions();
+    const baseEnv = options.baseEnv;
     expect(baseEnv.OPENAI_API_KEY).toBeUndefined();
     expect(baseEnv.LANG).toBe("en_US.UTF-8");
+    expect(options.maxBuffer).toBe(SANDBOX_COMMAND_MAX_BUFFER_BYTES);
   });
 
   it("rejects transport failures even when ssh exits zero", async () => {

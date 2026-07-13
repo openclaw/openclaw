@@ -15,6 +15,7 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
+import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 export type SshSandboxSettings = {
@@ -688,6 +689,7 @@ export async function runSshSandboxCommand(
     cancelSignal: params.signal,
     encoding: "buffer",
     input: params.stdin ?? Buffer.alloc(0),
+    maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
     reject: false,
     stripFinalNewline: false,
   });

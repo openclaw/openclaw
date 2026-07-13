@@ -1,25 +1,31 @@
 // Docker image tests cover sandbox image inspection and actionable setup errors
 // without invoking a real Docker daemon.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
+import { DEFAULT_SANDBOX_IMAGE, SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 
 type SpawnCall = {
   command: string;
   args: string[];
 };
 
+type SpawnCallOptions = {
+  maxBuffer?: number;
+};
+
 const spawnState = vi.hoisted(() => ({
   calls: [] as SpawnCall[],
   imageExists: true,
   inspectError: "",
+  lastOptions: undefined as SpawnCallOptions | undefined,
   executionError: undefined as Error | undefined,
   transportFailure: false,
   transportExitCode: 0,
 }));
 
-async function spawnDockerProcess(commandAndArgs: string[]) {
+async function spawnDockerProcess(commandAndArgs: string[], options?: SpawnCallOptions) {
   const [command = "", ...args] = commandAndArgs;
   spawnState.calls.push({ command, args });
+  spawnState.lastOptions = options;
   if (spawnState.executionError) {
     throw spawnState.executionError;
   }
@@ -79,6 +85,7 @@ describe("ensureDockerImage", () => {
     spawnState.calls.length = 0;
     spawnState.imageExists = true;
     spawnState.inspectError = "";
+    spawnState.lastOptions = undefined;
     spawnState.executionError = undefined;
     spawnState.transportFailure = false;
     spawnState.transportExitCode = 0;
@@ -142,6 +149,7 @@ describe("execDockerRaw", () => {
     spawnState.calls.length = 0;
     spawnState.imageExists = true;
     spawnState.inspectError = "";
+    spawnState.lastOptions = undefined;
     spawnState.executionError = undefined;
     spawnState.transportFailure = false;
     spawnState.transportExitCode = 0;
@@ -154,6 +162,12 @@ describe("execDockerRaw", () => {
     await expect(
       execDockerRaw(["image", "inspect", DEFAULT_SANDBOX_IMAGE], { allowFailure: true }),
     ).rejects.toThrow("docker execution failed");
+  });
+
+  it("applies the sandbox output cap explicitly", async () => {
+    await execDockerRaw(["image", "inspect", DEFAULT_SANDBOX_IMAGE]);
+
+    expect(spawnState.lastOptions?.maxBuffer).toBe(SANDBOX_COMMAND_MAX_BUFFER_BYTES);
   });
 
   it("rejects transport failures even when Docker exits zero", async () => {
