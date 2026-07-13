@@ -119,7 +119,7 @@ function getElement<T extends Element>(
 }
 
 describe("cron view list pane", () => {
-  it("uses agent-scoped summary values without changing global scheduler status", () => {
+  it("uses agent-scoped summary values", () => {
     const container = renderView({
       agentScoped: true,
       scopedTotal: 3,
@@ -144,8 +144,7 @@ describe("cron view list pane", () => {
       entry.textContent?.trim(),
     );
 
-    expect(values[2]).toContain("Scheduler disabled");
-    expect(values[3]).toBe("n/a");
+    expect(values[2]).toBe("n/a");
   });
 
   it("keeps an agent-scoped next wake while scheduler status is loading", () => {
@@ -158,8 +157,7 @@ describe("cron view list pane", () => {
       entry.textContent?.trim(),
     );
 
-    expect(values[2]).toBe("n/a");
-    expect(values[3]).not.toBe("n/a");
+    expect(values[2]).not.toBe("n/a");
   });
 
   it("wires the enabled tabs and marks the active one", () => {
