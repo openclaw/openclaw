@@ -53,6 +53,8 @@ The bundled Anthropic plugin auto-configures pruning and heartbeat cadence the f
 
 If you set `agents.defaults.contextPruning.mode` or `agents.defaults.heartbeat.every` yourself, OpenClaw does not override them. This auto-default only fires for Anthropic-family auth; other providers get pruning `off` unless you configure it.
 
+Direct OpenAI models can run `cache-ttl` pruning when configured manually. OpenClaw uses the TTL marker only to time pruning against OpenAI's automatic prompt-cache path; it does not inject provider-specific cache markers for OpenAI.
+
 ## Enable or disable
 
 Pruning is off by default for non-Anthropic providers. To enable:

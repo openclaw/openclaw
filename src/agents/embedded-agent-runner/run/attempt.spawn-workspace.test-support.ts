@@ -786,6 +786,8 @@ vi.mock("../cache-ttl.js", () => ({
     data: unknown,
   ) => sessionManager.appendCustomEntry?.("openclaw.cache-ttl", data),
   isCacheTtlEligibleProvider: (provider?: string) => provider === "anthropic",
+  isContextPruningCacheTtlProvider: (provider?: string) =>
+    provider === "anthropic" || provider === "openai",
   readLastCacheTtlTimestamp: (
     sessionManager: {
       appendCustomEntry?: { mock?: { calls?: unknown[][] } };

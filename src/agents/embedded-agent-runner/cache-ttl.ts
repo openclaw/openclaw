@@ -57,6 +57,21 @@ export function isCacheTtlEligibleProvider(
   );
 }
 
+/** Returns whether cache-TTL context pruning can use session markers for this model. */
+export function isContextPruningCacheTtlProvider(
+  provider: string,
+  modelId: string,
+  modelApi?: string,
+): boolean {
+  const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
+  if (isCacheTtlEligibleProvider(normalizedProvider, modelId, modelApi)) {
+    return true;
+  }
+  // OpenAI prompt caching is automatic. Context pruning only needs the marker
+  // clock; it must not require Anthropic-style explicit cache-control support.
+  return normalizedProvider === "openai";
+}
+
 function normalizeCacheTtlKey(value: string | undefined): string | undefined {
   return normalizeOptionalLowercaseString(value);
 }

@@ -166,7 +166,7 @@ import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { isRunnerAbortError } from "../abort.js";
-import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
+import { isContextPruningCacheTtlProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
 import {
   rotateTranscriptAfterCompaction,
@@ -3991,7 +3991,7 @@ export async function runEmbeddedAttempt(
             provider: params.provider,
             modelId: params.modelId,
             modelApi: params.model.api,
-            isCacheTtlEligibleProvider,
+            isContextPruningCacheTtlProvider,
           });
 
           if (timedOutDuringCompaction) {

@@ -23,7 +23,7 @@ import type { AgentToolResult } from "../runtime/index.js";
 import type { ExtensionFactory, SessionManager } from "../sessions/index.js";
 import { isToolResultError } from "../tool-result-error.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import { isContextPruningCacheTtlProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 import { recordEmbeddedToolSendReceipt } from "./tool-send-receipts.js";
 
 type AgentToolResultEvent = {
@@ -143,7 +143,7 @@ function buildContextPruningFactory(params: {
   if (raw?.mode !== "cache-ttl") {
     return undefined;
   }
-  if (!isCacheTtlEligibleProvider(params.provider, params.modelId, params.model?.api)) {
+  if (!isContextPruningCacheTtlProvider(params.provider, params.modelId, params.model?.api)) {
     return undefined;
   }
 
