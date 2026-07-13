@@ -64,6 +64,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
     },
     speechLocale: "ru-RU",
     silenceTimeoutMs: 1500,
+    idleTimeoutS: 30,
     interruptOnSpeech: true,
     realtime: {
       provider: "openai",
@@ -92,6 +93,7 @@ Supported keys: `voice` / `voice_id` / `voiceId`, `model` / `model_id` / `modelI
 | `providers.elevenlabs.apiKey`            | -                                          | Falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available).                                                                                                                                                                                                |
 | `speechLocale`                           | device default                             | BCP 47 locale id for on-device Talk speech recognition on iOS/macOS.                                                                                                                                                                                                       |
 | `silenceTimeoutMs`                       | `700` ms macOS/Android, `900` ms iOS       | Pause window before Talk sends the transcript.                                                                                                                                                                                                                             |
+| `idleTimeoutS`                           | unset                                      | Optional seconds without recognized user speech or an assistant reply before macOS Talk Mode deactivates; Voice Wake resumes when enabled. Set `30` for the common wake-word idle timeout; leave unset to keep Talk active until manually stopped.                         |
 | `interruptOnSpeech`                      | `true`                                     |                                                                                                                                                                                                                                                                            |
 | `outputFormat`                           | `pcm_44100` macOS/iOS, `pcm_24000` Android | Set `mp3_*` to force MP3 streaming.                                                                                                                                                                                                                                        |
 | `consultThinkingLevel`                   | unset                                      | Thinking level override for the agent run behind realtime `openclaw_agent_consult` calls.                                                                                                                                                                                  |

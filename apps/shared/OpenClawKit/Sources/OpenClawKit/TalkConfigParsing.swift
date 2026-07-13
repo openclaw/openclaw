@@ -56,6 +56,25 @@ public enum TalkConfigParsing {
         self.resolvedPositiveInt(talk?["silenceTimeoutMs"], fallback: fallback)
     }
 
+    public static func resolvedOptionalPositiveInt(_ value: AnyCodable?) -> Int? {
+        if let timeout = value?.intValue, timeout > 0 {
+            return timeout
+        }
+        if
+            let timeout = value?.doubleValue,
+            timeout > 0,
+            timeout.rounded(.towardZero) == timeout,
+            timeout <= Double(Int.max)
+        {
+            return Int(timeout)
+        }
+        return nil
+    }
+
+    public static func resolvedIdleTimeoutS(_ talk: [String: AnyCodable]?) -> Int? {
+        self.resolvedOptionalPositiveInt(talk?["idleTimeoutS"])
+    }
+
     public static func normalizedSpeechLocaleID(_ value: String?) -> String? {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed.replacingOccurrences(of: "_", with: "-")

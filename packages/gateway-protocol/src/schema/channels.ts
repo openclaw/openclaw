@@ -665,6 +665,7 @@ const TalkConfigSchema = Type.Object(
     speechLocale: Type.Optional(Type.String()),
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
+    idleTimeoutS: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
 );

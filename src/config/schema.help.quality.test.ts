@@ -343,6 +343,7 @@ const TARGET_KEYS = [
   "talk.consultFastMode",
   "talk.interruptOnSpeech",
   "talk.silenceTimeoutMs",
+  "talk.idleTimeoutS",
   "talk.consultThinkingLevel",
   "meta",
   "env",
@@ -695,6 +696,12 @@ describe("config help copy quality", () => {
       TARGET_KEYS,
       /(default|keep|use|enable|disable|controls|selects|sets|defines)/i,
     );
+  });
+
+  it("conditions Talk idle timeout recovery on Voice Wake being enabled", () => {
+    const help = requireHelp("talk.idleTimeoutS");
+    expect(help).toMatch(/if Voice Wake is enabled/i);
+    expect(help).not.toMatch(/deactivates and returns to wake-word waiting/i);
   });
 
   it("covers tools/hooks help keys with non-trivial operational guidance", () => {

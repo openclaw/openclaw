@@ -117,6 +117,20 @@ struct TalkConfigParsingTests {
         #expect(TalkConfigParsing.resolvedPositiveInt(AnyCodable("1500"), fallback: 700) == 700)
     }
 
+    @Test func resolvesOptionalPositiveIntegerTimeout() {
+        #expect(TalkConfigParsing.resolvedOptionalPositiveInt(AnyCodable(30)) == 30)
+        #expect(TalkConfigParsing.resolvedOptionalPositiveInt(AnyCodable(30.0)) == 30)
+        #expect(TalkConfigParsing.resolvedOptionalPositiveInt(AnyCodable(0)) == nil)
+        #expect(TalkConfigParsing.resolvedOptionalPositiveInt(AnyCodable(true)) == nil)
+        #expect(TalkConfigParsing.resolvedOptionalPositiveInt(AnyCodable("30")) == nil)
+    }
+
+    @Test func resolvesIdleTimeoutS() {
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(["idleTimeoutS": AnyCodable(30)]) == 30)
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(["idleTimeoutS": AnyCodable(0)]) == nil)
+        #expect(TalkConfigParsing.resolvedIdleTimeoutS(nil) == nil)
+    }
+
     @Test func resolvesSpeechLocaleID() {
         #expect(TalkConfigParsing.resolvedSpeechLocaleID(["speechLocale": AnyCodable(" ru_RU ")]) == "ru-RU")
         #expect(TalkConfigParsing.resolvedSpeechLocaleID(["speechLocale": AnyCodable("")], fallback: "en-US") == "en-US")

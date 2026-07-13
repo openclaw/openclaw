@@ -41,6 +41,7 @@ See [Configuration - agents](/gateway/config-agents) for:
   - `talk.consultFastMode`: one-shot fast-mode override for Control UI Talk realtime consults
   - `talk.speechLocale`: optional BCP 47 locale id for Talk speech recognition on iOS/macOS
   - `talk.silenceTimeoutMs`: when unset, Talk keeps the platform default pause window before sending the transcript (`700 ms on macOS and Android, 900 ms on iOS`)
+  - `talk.idleTimeoutS`: optional seconds without recognized user speech or an assistant reply before macOS Talk Mode deactivates; if Voice Wake is enabled, wake-word listening resumes after teardown
   - `talk.realtime.consultRouting`: Gateway relay fallback for finalized realtime Talk transcripts that skip `openclaw_agent_consult`
 
 ## Tools and custom providers
