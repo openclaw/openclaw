@@ -2,6 +2,7 @@
  * Resolves per-attempt runtime decisions from config and channel context.
  */
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { AgentRuntimeAuthPlan } from "../../runtime-plan/types.js";
 import {
   resolveSessionLockMaxHoldFromTimeout,
   resolveSessionWriteLockOptions,
@@ -39,6 +40,22 @@ export function resolveAttemptStreamAuthProfileId(
   params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
 ): string | undefined {
   return params.runtimePlan?.auth.forwardedAuthProfileId;
+}
+
+/** Re-resolves model metadata whenever a concrete auth profile can change provider limits. */
+export function shouldMaterializeAuthPlanModel(
+  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "modelRoute">,
+  requestedProfileId?: string,
+): boolean {
+  return Boolean(plan.modelRoute || plan.forwardedAuthProfileId || requestedProfileId);
+}
+
+/** Forces re-resolution only when a concrete profile can change provider model metadata. */
+export function shouldForceProfileScopedModelResolve(
+  plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId">,
+  requestedProfileId?: string,
+): boolean {
+  return Boolean(plan.forwardedAuthProfileId || requestedProfileId);
 }
 
 /**

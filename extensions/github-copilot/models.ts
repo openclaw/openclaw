@@ -144,6 +144,9 @@ type CopilotApiModelEntry = {
 
 const COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS = 10_000;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
+type CopilotCatalogModel = ModelDefinitionConfig & {
+  api: NonNullable<ModelDefinitionConfig["api"]>;
+};
 
 function resolveCopilotApiForVendor(
   vendor: string | undefined,
@@ -195,7 +198,7 @@ function resolveCopilotThinkingLevelMap(
 
 function mapCopilotApiModelToDefinition(
   entry: CopilotApiModelEntry,
-): ModelDefinitionConfig | undefined {
+): CopilotCatalogModel | undefined {
   const id = entry.id?.trim();
   if (!id) {
     return undefined;
@@ -227,7 +230,7 @@ function mapCopilotApiModelToDefinition(
   const api = resolveCopilotApiForVendor(entry.vendor, id);
   const thinkingLevelMap = resolveCopilotThinkingLevelMap(api, id, compat);
 
-  const definition: ModelDefinitionConfig = {
+  const definition: CopilotCatalogModel = {
     id,
     name: entry.name?.trim() || id,
     api,
@@ -273,7 +276,7 @@ type FetchCopilotModelCatalogParams = {
  */
 export async function fetchCopilotModelCatalog(
   params: FetchCopilotModelCatalogParams,
-): Promise<ModelDefinitionConfig[]> {
+): Promise<CopilotCatalogModel[]> {
   const fetchImpl = params.fetchImpl ?? fetch;
   const trimmedBase = params.baseUrl.replace(/\/+$/, "");
   if (!trimmedBase) {
@@ -303,7 +306,7 @@ export async function fetchCopilotModelCatalog(
     }
     const data = await readProviderJsonArrayFieldResponse(res, "Copilot /models", "data");
     const seen = new Set<string>();
-    const out: ModelDefinitionConfig[] = [];
+    const out: CopilotCatalogModel[] = [];
     for (const rawEntry of data) {
       const entry = asCopilotApiModelEntry(rawEntry);
       const def = mapCopilotApiModelToDefinition(entry);

@@ -51,6 +51,7 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
 } from "../model-auth.js";
 import { isOpenAIProvider } from "../openai-routing.js";
+import { resolveProviderModelMaterializationAuthMode } from "../provider-model-route-auth.js";
 import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import {
@@ -449,6 +450,26 @@ async function compactResolvedContextEngine(
   const ceRuntimeProvider = resolvedCompactionTarget.runtimeProvider ?? ceProvider;
   const ceContextConfigProvider = resolvedCompactionTarget.contextProvider ?? ceProvider;
   const ceModelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
+  const providedRuntimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
+  const reusableRuntimeAuthPlan =
+    providedRuntimeAuthPlan &&
+    agentRuntimeAuthPlanMatchesTarget(providedRuntimeAuthPlan, {
+      provider: ceProvider,
+      modelId: ceModelId,
+    })
+      ? providedRuntimeAuthPlan
+      : undefined;
+  const ceAuthProfileId =
+    resolvedCompactionTarget.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId;
+  const ceAuthProfileMode = resolveProviderModelMaterializationAuthMode(
+    reusableRuntimeAuthPlan?.selectedAuthMode,
+  );
+  const initialModelAuth =
+    ceAuthProfileId !== undefined
+      ? { authProfileId: ceAuthProfileId }
+      : ceAuthProfileMode !== undefined
+        ? { authProfileMode: ceAuthProfileMode }
+        : undefined;
   const attemptNativeHarnessCompaction = shouldAttemptNativeHarnessCompaction({
     provider: ceProvider,
     nativeHarnessCompaction: resolvedCompactionTarget.nativeHarnessCompaction,
@@ -473,9 +494,14 @@ async function compactResolvedContextEngine(
       model: ceModel,
       authStorage,
       modelRegistry,
-    } = await resolveModelAsync(ceRuntimeProvider, ceModelId, agentDir, params.config);
+    } = await resolveModelAsync(
+      ceRuntimeProvider,
+      ceModelId,
+      agentDir,
+      params.config,
+      initialModelAuth,
+    );
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
-    const providedRuntimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
     const runtimeAuthProfileStore = isOpenAIProvider(ceProvider)
       ? ensureAuthProfileStore(agentDir, {
           externalCliProviderIds: ["openai"],
@@ -484,14 +510,6 @@ async function compactResolvedContextEngine(
       : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
           allowKeychainPrompt: false,
         });
-    const reusableRuntimeAuthPlan =
-      providedRuntimeAuthPlan &&
-      agentRuntimeAuthPlanMatchesTarget(providedRuntimeAuthPlan, {
-        provider: ceProvider,
-        modelId: ceModelId,
-      })
-        ? providedRuntimeAuthPlan
-        : undefined;
     // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
     // selection can pick the credential-owning harness (codex for ChatGPT OAuth).
     const selectHarnessForPreparedAttempts = (

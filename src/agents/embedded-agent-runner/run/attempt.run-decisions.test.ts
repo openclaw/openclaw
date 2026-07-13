@@ -5,6 +5,8 @@ import {
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
   resolveUnknownToolGuardThreshold,
+  shouldForceProfileScopedModelResolve,
+  shouldMaterializeAuthPlanModel,
   shouldRunLlmOutputHooksForAttempt,
 } from "./attempt.run-decisions.js";
 
@@ -45,6 +47,28 @@ describe("resolveAttemptStreamAuthProfileId", () => {
         } as never,
       }),
     ).toBeUndefined();
+  });
+
+  describe("shouldMaterializeAuthPlanModel", () => {
+    it("materializes route-less plans when a provider profile scopes model metadata", () => {
+      expect(
+        shouldMaterializeAuthPlanModel({
+          forwardedAuthProfileId: "github-copilot:work",
+        }),
+      ).toBe(true);
+      expect(shouldMaterializeAuthPlanModel({}, "github-copilot:requested")).toBe(true);
+      expect(shouldMaterializeAuthPlanModel({})).toBe(false);
+    });
+
+    it("forces re-resolution for profiles but not route-only plans", () => {
+      expect(
+        shouldForceProfileScopedModelResolve({
+          forwardedAuthProfileId: "github-copilot:work",
+        }),
+      ).toBe(true);
+      expect(shouldForceProfileScopedModelResolve({}, "github-copilot:requested")).toBe(true);
+      expect(shouldForceProfileScopedModelResolve({})).toBe(false);
+    });
   });
 });
 

@@ -125,6 +125,7 @@ import { ensureOpenClawModelsJson } from "../models-config.js";
 import { isOpenAIProvider } from "../openai-routing.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
+import { resolveProviderModelMaterializationAuthMode } from "../provider-model-route-auth.js";
 import { applyPreparedRuntimeAuthToModel } from "../provider-request-config.js";
 import {
   protectPreparedProviderRuntimeAuth,
@@ -220,6 +221,7 @@ import {
 } from "./sandbox-skills.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import {
+  resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
   resolveEmbeddedAgentStreamFn,
 } from "./stream-resolution.js";
@@ -257,7 +259,7 @@ function createCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
-function prepareCompactionSessionAgent(params: {
+async function prepareCompactionSessionAgent(params: {
   session: { agent: { streamFn?: unknown } };
   providerStreamFn: unknown;
   sessionId: string;
@@ -286,6 +288,22 @@ function prepareCompactionSessionAgent(params: {
   senderUsername?: string | null;
   senderE164?: string | null;
 }) {
+  const authStorage =
+    params.authStorage &&
+    typeof params.authStorage === "object" &&
+    "getApiKey" in params.authStorage &&
+    typeof params.authStorage.getApiKey === "function"
+      ? (params.authStorage as {
+          getApiKey(provider: string): Promise<string | undefined>;
+        })
+      : undefined;
+  const transportApiKey = authStorage
+    ? await resolveEmbeddedAgentApiKey({
+        provider: params.effectiveModel.provider,
+        resolvedApiKey: params.resolvedApiKey,
+        authStorage,
+      })
+    : params.resolvedApiKey;
   params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
     providerStreamFn: params.providerStreamFn as never,
@@ -293,6 +311,7 @@ function prepareCompactionSessionAgent(params: {
     signal: params.signal,
     model: params.effectiveModel,
     resolvedApiKey: params.resolvedApiKey,
+    transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: params.authStorage as never,
   });
@@ -742,8 +761,23 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const runtimeProvider = resolvedCompactionTarget.runtimeProvider ?? provider;
   const contextConfigProvider = resolvedCompactionTarget.contextProvider ?? provider;
   const modelId = resolvedCompactionTarget.model ?? DEFAULT_MODEL;
-  const authProfileId = resolvedCompactionTarget.authProfileId;
   const providedRuntimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
+  const reusableRuntimeAuthPlan =
+    providedRuntimeAuthPlan &&
+    agentRuntimeAuthPlanMatchesTarget(providedRuntimeAuthPlan, { provider, modelId })
+      ? providedRuntimeAuthPlan
+      : undefined;
+  const authProfileId =
+    resolvedCompactionTarget.authProfileId ?? reusableRuntimeAuthPlan?.forwardedAuthProfileId;
+  const authProfileMode = resolveProviderModelMaterializationAuthMode(
+    reusableRuntimeAuthPlan?.selectedAuthMode,
+  );
+  const initialModelAuth =
+    authProfileId !== undefined
+      ? { authProfileId }
+      : authProfileMode !== undefined
+        ? { authProfileMode }
+        : undefined;
   // Ensure the policy-selected harness plugin so selection can pick implicit codex.
   await ensureSelectedAgentHarnessPlugin({
     config: params.config,
@@ -791,6 +825,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     modelId,
     agentDir,
     params.config,
+    initialModelAuth,
   );
   if (!model) {
     const reason = error ?? `Unknown model: ${runtimeProvider}/${modelId}`;
@@ -804,11 +839,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
     : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
         allowKeychainPrompt: false,
       });
-  const reusableRuntimeAuthPlan =
-    providedRuntimeAuthPlan &&
-    agentRuntimeAuthPlanMatchesTarget(providedRuntimeAuthPlan, { provider, modelId })
-      ? providedRuntimeAuthPlan
-      : undefined;
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native
   // transcript compaction stays gated on selectedHarnessRuntime.
@@ -879,7 +909,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
   const resolvePreparedModel = ({
     config,
     authProfileId: profileId,
-    authProfileMode,
+    authProfileMode: resolvedAuthProfileMode,
   }: Parameters<
     Parameters<typeof materializePreparedRuntimeModel<ProviderRuntimeModel>>[0]["resolveModel"]
   >[0]) =>
@@ -891,7 +921,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
       preferBundledStaticCatalogTransport: true,
       workspaceDir: resolvedWorkspace,
       authProfileId: profileId,
-      authProfileMode,
+      authProfileMode: resolvedAuthProfileMode,
     });
   const materializeAuthAttemptModel = async (materializeParams: {
     plan: AgentRuntimeAuthPlan;
@@ -1619,7 +1649,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           applySystemPromptToSession(session, systemPromptText);
           // Compaction builds the same embedded system prompt, so it must flow
           // through the same transport/payload shaping stack as normal turns.
-          prepareCompactionSessionAgent({
+          await prepareCompactionSessionAgent({
             session,
             providerStreamFn,
             sessionId: params.sessionId,

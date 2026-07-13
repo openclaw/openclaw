@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
 const coerceSecretRefMock = vi.hoisted(() => vi.fn());
+const resolveConfiguredSecretInputWithFallbackMock = vi.hoisted(() => vi.fn());
 const resolveRequiredConfiguredSecretRefInputStringMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
@@ -13,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
+  resolveConfiguredSecretInputWithFallback: resolveConfiguredSecretInputWithFallbackMock,
   resolveRequiredConfiguredSecretRefInputString: resolveRequiredConfiguredSecretRefInputStringMock,
 }));
 
@@ -41,6 +43,11 @@ describe("resolveFirstGithubToken", () => {
       id: "/providers/github-copilot/token",
     });
     resolveRequiredConfiguredSecretRefInputStringMock.mockResolvedValue("resolved-profile-token");
+    resolveConfiguredSecretInputWithFallbackMock.mockResolvedValue({
+      value: "test-token-placeholder",
+      source: "config",
+      secretRefConfigured: false,
+    });
   });
 
   afterEach(() => {
@@ -48,6 +55,7 @@ describe("resolveFirstGithubToken", () => {
     ensureAuthProfileStoreMock.mockReset();
     listProfilesForProviderMock.mockReset();
     coerceSecretRefMock.mockReset();
+    resolveConfiguredSecretInputWithFallbackMock.mockReset();
     resolveRequiredConfiguredSecretRefInputStringMock.mockReset();
   });
 
@@ -82,6 +90,54 @@ describe("resolveFirstGithubToken", () => {
       githubToken: "profile-token",
       hasProfile: true,
     });
+  });
+
+  it("uses configured direct auth without falling back to the first profile", async () => {
+    const config = {
+      models: {
+        providers: {
+          "github-copilot": { apiKey: "test-token-placeholder" },
+        },
+      },
+    } as never;
+    const env = { GH_TOKEN: "test-auth-token" } as NodeJS.ProcessEnv;
+
+    const result = await resolveFirstGithubToken({
+      config,
+      env,
+      authProfileMode: "api_key",
+    });
+
+    expect(result).toEqual({
+      githubToken: "test-token-placeholder",
+      hasProfile: false,
+    });
+    expect(resolveConfiguredSecretInputWithFallbackMock).toHaveBeenCalledWith({
+      config,
+      env,
+      value: "test-token-placeholder",
+      path: "models.providers.github-copilot.apiKey",
+      readFallback: expect.any(Function),
+    });
+    expect(resolveRequiredConfiguredSecretRefInputStringMock).not.toHaveBeenCalled();
+  });
+
+  it("does not report stored profiles for a missing direct credential", async () => {
+    resolveConfiguredSecretInputWithFallbackMock.mockResolvedValue({
+      secretRefConfigured: false,
+    });
+
+    const result = await resolveFirstGithubToken({
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      authProfileMode: "api_key",
+    });
+
+    expect(result).toEqual({
+      githubToken: "",
+      hasProfile: false,
+    });
+    expect(resolveRequiredConfiguredSecretRefInputStringMock).not.toHaveBeenCalled();
   });
 
   it("resolves non-env SecretRefs when config is available", async () => {

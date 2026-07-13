@@ -8,6 +8,8 @@ import {
   type ProviderAuthContext,
   type ProviderAuthResult,
   type ProviderAuthMethodNonInteractiveContext,
+  type ProviderPrepareDynamicModelContext,
+  type ProviderRuntimeModel,
   type UnifiedModelCatalogEntry,
   type UnifiedModelCatalogProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -49,6 +51,14 @@ type GithubCopilotPluginConfig = {
   discovery?: {
     enabled?: boolean;
   };
+};
+
+type GithubCopilotCatalogContext = {
+  agentDir?: string;
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  profileId?: string;
+  authProfileMode?: ProviderPrepareDynamicModelContext["authProfileMode"];
 };
 
 async function loadGithubCopilotRuntime() {
@@ -341,6 +351,21 @@ export default definePluginEntry({
   description: "Bundled GitHub Copilot provider plugin",
   register(api) {
     const startupPluginConfig = (api.pluginConfig ?? {}) as GithubCopilotPluginConfig;
+    const preparedDynamicModels = new WeakMap<
+      object,
+      Map<string, ReadonlyMap<string, ProviderRuntimeModel>>
+    >();
+    const dynamicModelScope = (
+      profileId?: string,
+      authProfileMode?: ProviderPrepareDynamicModelContext["authProfileMode"],
+    ) => {
+      const normalizedProfileId = profileId?.trim();
+      return normalizedProfileId
+        ? `profile:${normalizedProfileId}`
+        : authProfileMode
+          ? `direct:${authProfileMode}`
+          : "unscoped";
+    };
 
     function resolveCurrentPluginConfig(config?: OpenClawConfig): GithubCopilotPluginConfig {
       const runtimePluginConfig = resolvePluginConfigObject(config, "github-copilot");
@@ -350,9 +375,7 @@ export default definePluginEntry({
       return config ? {} : startupPluginConfig;
     }
 
-    async function runGithubCopilotCatalog(
-      ctx: ProviderCatalogContext,
-    ): Promise<ProviderCatalogResult> {
+    async function resolveGithubCopilotCatalog(ctx: GithubCopilotCatalogContext) {
       const pluginConfig = resolveCurrentPluginConfig(ctx.config);
       const discoveryEnabled = pluginConfig.discovery?.enabled;
       if (discoveryEnabled === false) {
@@ -362,8 +385,10 @@ export default definePluginEntry({
         await loadGithubCopilotRuntime();
       const { githubToken, hasProfile } = await resolveFirstGithubToken({
         agentDir: ctx.agentDir,
-        config: ctx.config,
         env: ctx.env,
+        ...(ctx.config ? { config: ctx.config } : {}),
+        ...(ctx.profileId ? { profileId: ctx.profileId } : {}),
+        ...(ctx.authProfileMode ? { authProfileMode: ctx.authProfileMode } : {}),
       });
       if (!hasProfile && !githubToken) {
         return null;
@@ -403,12 +428,42 @@ export default definePluginEntry({
           discoveredModels = [];
         }
       }
-      return {
-        provider: {
-          baseUrl,
-          models: discoveredModels,
-        },
-      };
+      return { baseUrl, models: discoveredModels };
+    }
+
+    async function runGithubCopilotCatalog(
+      ctx: ProviderCatalogContext,
+    ): Promise<ProviderCatalogResult> {
+      const catalog = await resolveGithubCopilotCatalog(ctx);
+      return catalog ? { provider: catalog } : null;
+    }
+
+    async function prepareGithubCopilotDynamicModel(
+      ctx: ProviderPrepareDynamicModelContext,
+    ): Promise<void> {
+      const catalog = await resolveGithubCopilotCatalog({
+        agentDir: ctx.agentDir,
+        env: process.env,
+        ...(ctx.config ? { config: ctx.config } : {}),
+        ...(ctx.authProfileId ? { profileId: ctx.authProfileId } : {}),
+        ...(ctx.authProfileMode ? { authProfileMode: ctx.authProfileMode } : {}),
+      });
+      const models = new Map<string, ProviderRuntimeModel>();
+      if (catalog) {
+        for (const model of catalog.models) {
+          models.set(model.id, {
+            ...model,
+            provider: PROVIDER_ID,
+            baseUrl: catalog.baseUrl,
+          });
+        }
+      }
+      let scopedModels = preparedDynamicModels.get(ctx.modelRegistry);
+      if (!scopedModels) {
+        scopedModels = new Map();
+        preparedDynamicModels.set(ctx.modelRegistry, scopedModels);
+      }
+      scopedModels.set(dynamicModelScope(ctx.authProfileId, ctx.authProfileMode), models);
     }
 
     async function runGithubCopilotUnifiedLiveCatalog(
@@ -664,7 +719,14 @@ export default definePluginEntry({
         order: "late",
         run: runGithubCopilotCatalog,
       },
-      resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
+      prepareDynamicModel: prepareGithubCopilotDynamicModel,
+      resolveDynamicModel: (ctx) =>
+        preparedDynamicModels
+          .get(ctx.modelRegistry)
+          ?.get(dynamicModelScope(ctx.authProfileId, ctx.authProfileMode))
+          ?.get(ctx.modelId) ?? resolveCopilotForwardCompatModel(ctx),
+      preferRuntimeResolvedModel: ({ config }) =>
+        resolveCurrentPluginConfig(config).discovery?.enabled !== false,
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,

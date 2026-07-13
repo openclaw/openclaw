@@ -1,4 +1,5 @@
 // Provider auth helpers define auth methods, credential resolution, and setup status contracts.
+import { createHash } from "node:crypto";
 import path from "node:path";
 import {
   asDateTimestampMs,
@@ -144,6 +145,10 @@ const COPILOT_PROVIDER_ID = "github-copilot";
 
 const DEFAULT_GITHUB_COPILOT_DOMAIN = "github.com";
 const COPILOT_TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
+const COPILOT_CACHE_NAMESPACE = "github-copilot-token";
+// Retain ordinary multi-account rotation without letting credential-derived
+// bearer tokens grow unbounded in shared state.
+const COPILOT_TOKEN_CACHE_MAX_ENTRIES = 8;
 
 // Matches a data-residency GHE tenant root (`<tenant>.ghe.com`, single label).
 // GitHub defines a GHE.com enterprise as a dedicated `SUBDOMAIN.ghe.com` domain;
@@ -256,6 +261,8 @@ export type CachedCopilotToken = {
   updatedAt: number;
   /** Copilot integration id that produced this cached token. */
   integrationId?: string;
+  /** SHA-256 fingerprint of the GitHub credential exchanged for this token. */
+  sourceCredentialFingerprint?: string;
   /**
    * GitHub host this token was minted for. Guards against reusing a public
    * `github.com` Copilot token against a `*.ghe.com` tenant host (or vice
@@ -266,13 +273,14 @@ export type CachedCopilotToken = {
   domain?: string;
 };
 
-function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
+function resolveLegacyCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
   return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
 }
 
 function isCopilotTokenUsable(
   cache: CachedCopilotToken,
   domain: string,
+  sourceCredentialFingerprint: string,
   now = Date.now(),
 ): boolean {
   const expiresAt = asDateTimestampMs(cache.expiresAt);
@@ -283,9 +291,65 @@ function isCopilotTokenUsable(
   return (
     cache.integrationId === COPILOT_INTEGRATION_ID &&
     cacheDomain === domain &&
+    cache.sourceCredentialFingerprint === sourceCredentialFingerprint &&
     expiresAt !== undefined &&
     expiresAt - now > 5 * 60 * 1000
   );
+}
+
+function fingerprintCopilotSourceCredential(githubToken: string): string {
+  return createHash("sha256").update(githubToken).digest("hex");
+}
+
+type CopilotTokenCache = {
+  path: string;
+  load(): CachedCopilotToken | undefined;
+  save(value: CachedCopilotToken): void;
+};
+
+async function resolveCopilotTokenCache(params: {
+  env: NodeJS.ProcessEnv;
+  domain: string;
+  sourceCredentialFingerprint: string;
+  cachePath?: string;
+  loadJsonFileImpl?: (path: string) => unknown;
+  saveJsonFileImpl?: (path: string, value: CachedCopilotToken) => void;
+}): Promise<CopilotTokenCache> {
+  const usesLegacyCacheAdapter =
+    params.cachePath !== undefined ||
+    params.loadJsonFileImpl !== undefined ||
+    params.saveJsonFileImpl !== undefined;
+  if (usesLegacyCacheAdapter) {
+    // Kept only for the deprecated public helper's explicit cache adapters.
+    // Normal runtime state uses the bounded SQLite namespace below.
+    const cachePath = params.cachePath?.trim() || resolveLegacyCopilotTokenCachePath(params.env);
+    const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
+    const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
+    return {
+      path: cachePath,
+      load: () => loadJsonFileFn(cachePath) as CachedCopilotToken | undefined,
+      save: (value) => saveJsonFileFn(cachePath, value),
+    };
+  }
+
+  const { createCorePluginStateSyncKeyedStore } =
+    await import("../plugin-state/plugin-state-store.js");
+  const store = createCorePluginStateSyncKeyedStore<CachedCopilotToken>({
+    ownerId: "core:provider-auth",
+    namespace: COPILOT_CACHE_NAMESPACE,
+    maxEntries: COPILOT_TOKEN_CACHE_MAX_ENTRIES,
+    overflowPolicy: "evict-oldest",
+    env: params.env,
+  });
+  const key = `${params.domain}:${params.sourceCredentialFingerprint}`;
+  return {
+    path: "plugin-state",
+    load: () => store.lookup(key),
+    save: (value) =>
+      store.register(key, value, {
+        ttlMs: Math.max(1, value.expiresAt - Date.now()),
+      }),
+  };
 }
 
 function resolveCopilotTokenExpiresAtMs(expiresAt: unknown): number | undefined {
@@ -426,17 +490,24 @@ export async function resolveCopilotApiToken(params: {
     explicit: params.githubDomain,
     config: params.config,
   });
-  const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
   const tokenUrl = copilotTokenUrl(domain);
   const apiBaseFallback = copilotApiBaseFallback(domain);
-  const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
-  const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
-  const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
+  const sourceCredentialFingerprint = fingerprintCopilotSourceCredential(params.githubToken);
+  const cache = await resolveCopilotTokenCache({
+    env,
+    domain,
+    sourceCredentialFingerprint,
+    ...(params.cachePath !== undefined ? { cachePath: params.cachePath } : {}),
+    ...(params.loadJsonFileImpl ? { loadJsonFileImpl: params.loadJsonFileImpl } : {}),
+    ...(params.saveJsonFileImpl ? { saveJsonFileImpl: params.saveJsonFileImpl } : {}),
+  });
+  const cachePath = cache.path;
+  const cached = cache.load();
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
     // Token cache entries are scoped to the current Copilot integration id and
     // GitHub host so stale tokens from older editor identities or a different
     // domain are exchanged again.
-    if (isCopilotTokenUsable(cached, domain)) {
+    if (isCopilotTokenUsable(cached, domain, sourceCredentialFingerprint)) {
       return {
         token: cached.token,
         expiresAt: cached.expiresAt,
@@ -483,9 +554,10 @@ export async function resolveCopilotApiToken(params: {
     expiresAt: json.expiresAt,
     updatedAt: Date.now(),
     integrationId: COPILOT_INTEGRATION_ID,
+    sourceCredentialFingerprint,
     domain,
   };
-  saveJsonFileFn(cachePath, payload);
+  cache.save(payload);
 
   return {
     token: payload.token,

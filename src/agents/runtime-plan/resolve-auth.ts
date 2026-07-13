@@ -8,6 +8,7 @@ import { sameAgentRuntimeAuthModelRoute } from "./model-route.js";
 import {
   canRunPreparedAgentRuntimeAuthAttempt,
   preparedAgentRuntimeProfileAttemptHasCandidate,
+  shouldForceDirectAuthFallbackModelResolve,
   type PreparedAgentRuntimeAuthAttempt,
 } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
@@ -90,6 +91,10 @@ export async function resolvePreparedRuntimeAuthAttempts<Model, Auth>(params: {
       let model = await params.materializeModel({
         plan: attempt.plan,
         model: params.model,
+        forceResolve: shouldForceDirectAuthFallbackModelResolve({
+          attempt,
+          priorProfileAttempted,
+        }),
       });
       if (
         attempt.kind === "profile" &&
