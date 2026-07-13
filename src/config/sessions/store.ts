@@ -2,10 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
+  isAgentHarnessSessionKey,
   isValidAgentHarnessSessionStoreEntry,
+  MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
   resolveAgentHarnessSessionStoreError,
   resolveAgentHarnessSessionStoreTransitionError,
 } from "../../sessions/agent-harness-session-key.js";
@@ -107,11 +110,8 @@ export { getSessionStoreCacheVersion, pruneStaleEntries };
 export type { ResolvedSessionMaintenanceConfigInput };
 
 type SaveSessionStoreOptions = {
-  /** Skip pruning, capping, and rotation (e.g. during one-time migrations). */
   skipMaintenance?: boolean;
-  /** Caller already proved the store serialization is unchanged unless maintenance mutates it. */
   skipSerializeForUnchangedStore?: boolean;
-  /** Internal hot paths can hand writer-owned stores to the cache after persistence. */
   takeCacheOwnership?: boolean;
   /** Active session key for warn-only maintenance. */
   activeSessionKey?: string;
