@@ -32,6 +32,8 @@ type WizardNextResult = {
   step?: ChannelWizardStep;
   status?: "running" | "done" | "cancelled" | "error";
   error?: string;
+  // Channels the gateway flow actually configured (terminal result only).
+  channels?: string[];
 };
 
 export type ChannelWizardState =
@@ -56,17 +58,12 @@ export class ChannelWizardController {
   private currentState: ChannelWizardState = { phase: "idle" };
   private sessionId: string | null = null;
   private channel: string | null = null;
-  private adoptedChannels = new Set<string>();
   private stepIndex = 0;
   private generation = 0;
 
   constructor(
     private readonly getClient: () => WizardGatewayClient | null,
     private readonly onChange: () => void,
-    // Known channel ids from the status snapshot; lets a browse-all session
-    // adopt the channel picked in the wizard's select step so channel-specific
-    // completion (WhatsApp QR linking) still runs.
-    private readonly isKnownChannel: (value: string) => boolean = () => false,
   ) {}
 
   get state(): ChannelWizardState {
@@ -85,7 +82,6 @@ export class ChannelWizardController {
     const generation = ++this.generation;
     this.sessionId = null;
     this.channel = channel;
-    this.adoptedChannels = new Set(channel ? [channel] : []);
     this.stepIndex = 0;
     this.setState({ phase: "starting", channel });
     try {
@@ -119,7 +115,6 @@ export class ChannelWizardController {
       return;
     }
     const generation = this.generation;
-    this.maybeAdoptChannel(current.step, value);
     this.setState({ ...current, busy: true, validationError: null });
     try {
       const result = await client.request<WizardNextResult>(
@@ -158,24 +153,6 @@ export class ChannelWizardController {
     }
   }
 
-  // Browse-all sessions start with channel null; adopt every known channel the
-  // user picks in the wizard's own select/multiselect steps so channel-specific
-  // completion (WhatsApp QR linking) runs regardless of pick order.
-  private maybeAdoptChannel(step: ChannelWizardStep, value: unknown): void {
-    const candidates =
-      step.type === "select"
-        ? [value]
-        : step.type === "multiselect" && Array.isArray(value)
-          ? value
-          : [];
-    for (const entry of candidates) {
-      if (typeof entry === "string" && this.isKnownChannel(entry)) {
-        this.adoptedChannels.add(entry);
-        this.channel ??= entry;
-      }
-    }
-  }
-
   private applyResult(result: WizardNextResult): void {
     if (!result.done && result.step) {
       this.stepIndex += 1;
@@ -191,7 +168,14 @@ export class ChannelWizardController {
     }
     if (result.status === "done") {
       this.sessionId = null;
-      this.setState({ phase: "done", channel: this.channel, channels: [...this.adoptedChannels] });
+      // The gateway reports what the flow actually configured; the initially
+      // requested channel is only a preselection and may have been skipped.
+      const channels = result.channels ?? [];
+      this.setState({
+        phase: "done",
+        channel: this.channel ?? channels[0] ?? null,
+        channels,
+      });
       return;
     }
     if (result.status === "cancelled") {

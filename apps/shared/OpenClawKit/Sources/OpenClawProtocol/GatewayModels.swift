@@ -6466,19 +6466,22 @@ public struct CrestodianSetupAuthStartResult: Codable, Sendable {
     public let step: WizardStep?
     public let status: AnyCodable?
     public let error: String?
+    public let channels: [String]?
 
     public init(
         sessionid: String,
         done: Bool,
         step: WizardStep? = nil,
         status: AnyCodable? = nil,
-        error: String? = nil)
+        error: String? = nil,
+        channels: [String]? = nil)
     {
         self.sessionid = sessionid
         self.done = done
         self.step = step
         self.status = status
         self.error = error
+        self.channels = channels
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6487,6 +6490,7 @@ public struct CrestodianSetupAuthStartResult: Codable, Sendable {
         case step
         case status
         case error
+        case channels
     }
 }
 
@@ -6625,17 +6629,20 @@ public struct WizardNextResult: Codable, Sendable {
     public let step: WizardStep?
     public let status: AnyCodable?
     public let error: String?
+    public let channels: [String]?
 
     public init(
         done: Bool,
         step: WizardStep? = nil,
         status: AnyCodable? = nil,
-        error: String? = nil)
+        error: String? = nil,
+        channels: [String]? = nil)
     {
         self.done = done
         self.step = step
         self.status = status
         self.error = error
+        self.channels = channels
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6643,6 +6650,7 @@ public struct WizardNextResult: Codable, Sendable {
         case step
         case status
         case error
+        case channels
     }
 }
 
@@ -6652,19 +6660,22 @@ public struct WizardStartResult: Codable, Sendable {
     public let step: WizardStep?
     public let status: AnyCodable?
     public let error: String?
+    public let channels: [String]?
 
     public init(
         sessionid: String,
         done: Bool,
         step: WizardStep? = nil,
         status: AnyCodable? = nil,
-        error: String? = nil)
+        error: String? = nil,
+        channels: [String]? = nil)
     {
         self.sessionid = sessionid
         self.done = done
         self.step = step
         self.status = status
         self.error = error
+        self.channels = channels
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6673,6 +6684,7 @@ public struct WizardStartResult: Codable, Sendable {
         case step
         case status
         case error
+        case channels
     }
 }
 

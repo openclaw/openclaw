@@ -4,14 +4,10 @@ import { ChannelWizardController } from "./wizard-controller.ts";
 
 type RequestHandler = (method: string, params?: unknown) => Promise<unknown>;
 
-function createController(handler: RequestHandler, isKnownChannel?: (value: string) => boolean) {
+function createController(handler: RequestHandler) {
   const request = vi.fn(handler);
   const onChange = vi.fn();
-  const controller = new ChannelWizardController(
-    () => ({ request: request as never }),
-    onChange,
-    isKnownChannel,
-  );
+  const controller = new ChannelWizardController(() => ({ request: request as never }), onChange);
   return { controller, request, onChange };
 }
 
@@ -36,7 +32,7 @@ describe("ChannelWizardController", () => {
         return { sessionId: "s1", done: false, status: "running", step: selectStep };
       }
       if (method === "wizard.next") {
-        return { done: true, status: "done" };
+        return { done: true, status: "done", channels: ["telegram"] };
       }
       throw new Error(`unexpected ${method}`);
     });
@@ -131,53 +127,34 @@ describe("ChannelWizardController", () => {
     expect(cancelled).toContain("s-stale");
   });
 
-  it("adopts the channel picked in a browse-all select step", async () => {
-    const { controller } = createController(
-      async (method) => {
-        if (method === "wizard.start") {
-          return { sessionId: "s1", done: false, status: "running", step: selectStep };
-        }
-        return { done: true, status: "done" };
-      },
-      (value) => value === "whatsapp",
-    );
+  it("uses the gateway-reported channels for completion", async () => {
+    const { controller } = createController(async (method) => {
+      if (method === "wizard.start") {
+        return { sessionId: "s1", done: false, status: "running", step: selectStep };
+      }
+      return { done: true, status: "done", channels: ["telegram", "whatsapp"] };
+    });
 
     await controller.start(null);
     await controller.answer("whatsapp");
     expect(controller.state).toEqual({
       phase: "done",
-      channel: "whatsapp",
-      channels: ["whatsapp"],
-    });
-  });
-
-  it("tracks every known channel from a multiselect answer regardless of order", async () => {
-    const multiStep = {
-      id: "step-multi",
-      type: "multiselect" as const,
-      message: "Pick channels",
-      options: [
-        { value: "telegram", label: "Telegram" },
-        { value: "whatsapp", label: "WhatsApp" },
-      ],
-    };
-    const { controller } = createController(
-      async (method) => {
-        if (method === "wizard.start") {
-          return { sessionId: "s1", done: false, status: "running", step: multiStep };
-        }
-        return { done: true, status: "done" };
-      },
-      (value) => value === "whatsapp" || value === "telegram",
-    );
-
-    await controller.start(null);
-    await controller.answer(["telegram", "whatsapp"]);
-    expect(controller.state).toEqual({
-      phase: "done",
       channel: "telegram",
       channels: ["telegram", "whatsapp"],
     });
+  });
+
+  it("reports no channels when the flow ends without configuring any", async () => {
+    const { controller } = createController(async (method) => {
+      if (method === "wizard.start") {
+        return { sessionId: "s1", done: false, status: "running", step: selectStep };
+      }
+      return { done: true, status: "done" };
+    });
+
+    await controller.start("whatsapp");
+    await controller.answer("__skip__");
+    expect(controller.state).toEqual({ phase: "done", channel: "whatsapp", channels: [] });
   });
 
   it("cancel clears the session and notifies the gateway", async () => {
@@ -212,7 +189,7 @@ describe("ChannelWizardController", () => {
     await Promise.resolve();
     await controller.answer("again");
     expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(1);
-    resolveNext({ done: true, status: "done" });
+    resolveNext({ done: true, status: "done", channels: ["telegram"] });
     await first;
     expect(controller.state).toEqual({
       phase: "done",

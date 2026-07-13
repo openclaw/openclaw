@@ -813,6 +813,7 @@ module.exports = {
             message: "channel",
             options: [{ value: opts.channel ?? "none", label: opts.channel ?? "none" }],
           });
+          opts.onConfigured?.([String(choice)]);
           await prompter.outro(`configured ${choice}`);
         },
       });
@@ -829,6 +830,7 @@ module.exports = {
           done: boolean;
           status: "running" | "done" | "cancelled" | "error";
           step?: { id: string; type: string };
+          channels?: string[];
         }>("wizard.start", { flow: "channels", channel: "telegram" });
         const sessionId = start.sessionId;
         expect(typeof sessionId).toBe("string");
@@ -854,6 +856,7 @@ module.exports = {
         expect(next.status, `seenSteps=${seenSteps.join(",")}`).toBe("done");
         expect(seenSteps).toContain("select");
         expect(channelRuns).toEqual(["telegram"]);
+        expect(next.channels).toEqual(["telegram"]);
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "wizard channels flow complete" });

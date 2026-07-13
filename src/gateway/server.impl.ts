@@ -565,7 +565,7 @@ export type GatewayServerOptions = {
    * Test-only: override the channel-setup wizard runner (wizard.start flow "channels").
    */
   channelWizardRunner?: (
-    opts: { channel?: string },
+    opts: { channel?: string; onConfigured?: (channels: string[]) => void },
     runtime: import("../runtime.js").RuntimeEnv,
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;

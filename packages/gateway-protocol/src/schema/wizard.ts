@@ -89,6 +89,10 @@ const WizardResultFields = {
   step: Type.Optional(WizardStepSchema),
   status: Type.Optional(WizardRunStatusSchema),
   error: Type.Optional(Type.String()),
+  // Channel ids the flow actually configured; set on the terminal result of
+  // wizard.start flow "channels" sessions so clients run channel-specific
+  // completion (e.g. WhatsApp QR linking) from the real outcome.
+  channels: Type.Optional(Type.Array(NonEmptyString)),
 };
 
 /** Result after advancing a wizard session. */

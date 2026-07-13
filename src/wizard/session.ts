@@ -37,6 +37,7 @@ type WizardNextResult = {
   step?: WizardStep;
   status: WizardSessionStatus;
   error?: string;
+  channels?: string[];
 };
 
 function normalizeTextAnswer(value: unknown): string | undefined {
@@ -230,9 +231,14 @@ export class WizardSession {
   >();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
+  private configuredChannels: string[] | undefined;
 
   constructor(
-    private runner: (prompter: WizardPrompter, signal: AbortSignal) => Promise<void>,
+    private runner: (
+      prompter: WizardPrompter,
+      signal: AbortSignal,
+      session: WizardSession,
+    ) => Promise<void>,
     options?: { timeoutMs?: number },
   ) {
     const prompter = new WizardSessionPrompter(this);
@@ -249,10 +255,10 @@ export class WizardSession {
     }
     if (this.pendingTerminalResolution) {
       this.pendingTerminalResolution = false;
-      return { done: true, status: this.status, error: this.error };
+      return this.terminalResult();
     }
     if (this.status !== "running") {
-      return { done: true, status: this.status, error: this.error };
+      return this.terminalResult();
     }
     if (!this.stepDeferred) {
       this.stepDeferred = createDeferred();
@@ -261,7 +267,21 @@ export class WizardSession {
     if (step) {
       return { done: false, step, status: this.status };
     }
-    return { done: true, status: this.status, error: this.error };
+    return this.terminalResult();
+  }
+
+  private terminalResult(): WizardNextResult {
+    return {
+      done: true,
+      status: this.status,
+      error: this.error,
+      ...(this.configuredChannels ? { channels: [...this.configuredChannels] } : {}),
+    };
+  }
+
+  /** Record which channels the flow actually configured (channels flow only). */
+  setConfiguredChannels(channels: readonly string[]) {
+    this.configuredChannels = [...channels];
   }
 
   async answer(stepId: string, value: unknown): Promise<string | undefined> {
@@ -327,7 +347,7 @@ export class WizardSession {
 
   private async run(prompter: WizardPrompter) {
     try {
-      await this.runner(prompter, this.signal);
+      await this.runner(prompter, this.signal, this);
       if (this.status === "running") {
         this.status = "done";
       }

@@ -364,7 +364,7 @@ function buildChannelWizardMocks() {
           },
           response: { done: false, status: "running", step: tokenStep },
         },
-        { response: { done: true, status: "done" } },
+        { response: { done: true, status: "done", channels: ["telegram"] } },
       ],
     },
   };

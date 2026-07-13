@@ -52,9 +52,12 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const flow = params.flow ?? "setup";
     const session =
       flow === "channels"
-        ? new WizardSession((prompter) =>
+        ? new WizardSession((prompter, _signal, wizardSession) =>
             context.channelWizardRunner(
-              { channel: readStringValue(params.channel) },
+              {
+                channel: readStringValue(params.channel),
+                onConfigured: (channels) => wizardSession.setConfiguredChannels(channels),
+              },
               defaultRuntime,
               prompter,
             ),

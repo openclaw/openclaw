@@ -210,7 +210,7 @@ export type GatewayRequestContext = {
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
   channelWizardRunner: (
-    opts: { channel?: string },
+    opts: { channel?: string; onConfigured?: (channels: string[]) => void },
     runtime: import("../../runtime.js").RuntimeEnv,
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;

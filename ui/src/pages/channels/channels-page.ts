@@ -92,10 +92,6 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.lastWizardPhase = wizard.phase;
       this.requestUpdate();
     },
-    (value) =>
-      this.context?.channels.state.channelsSnapshot?.channelMeta?.some(
-        (entry) => entry.id === value,
-      ) ?? false,
   );
 
   private lastWizardPhase = "idle";
