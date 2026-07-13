@@ -1,13 +1,12 @@
 // Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { compare as compareSemver, valid as validSemver } from "semver";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
-import { normalizeLegacyDotBetaVersion } from "./semver.js";
+import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
@@ -683,9 +682,7 @@ export function compareSemverStrings(a: string | null, b: string | null): number
   }
   const normalizedA = normalizeLegacyDotBetaVersion(a);
   const normalizedB = normalizeLegacyDotBetaVersion(b);
-  return validSemver(normalizedA) && validSemver(normalizedB)
-    ? compareSemver(normalizedA, normalizedB)
-    : null;
+  return compareValidSemver(normalizedA, normalizedB);
 }
 
 export async function checkUpdateStatus(params: {

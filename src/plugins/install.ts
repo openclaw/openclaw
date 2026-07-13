@@ -5,7 +5,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { compare as compareSemver, valid as validSemver } from "semver";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { sha256HexPrefix } from "../infra/crypto-digest.js";
@@ -47,6 +46,7 @@ import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
+import { compareValidSemver } from "../infra/semver.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -317,9 +317,7 @@ function compareNpmSemver(a: string, b: string): number {
   if (releaseCmp !== null) {
     return releaseCmp;
   }
-  const validA = validSemver(a);
-  const validB = validSemver(b);
-  return validA && validB ? compareSemver(validA, validB) : 0;
+  return compareValidSemver(a, b) ?? 0;
 }
 
 type TrustedOfficialPrereleaseResolution =

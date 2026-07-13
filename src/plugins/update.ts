@@ -1,7 +1,6 @@
 /** Updates installed plugins across npm, ClawHub, marketplace, Git, and bundled bridge sources. */
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { compare as compareSemver, valid as validSemver } from "semver";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
@@ -24,6 +23,7 @@ import {
   readInstalledPackagePeerDependencies,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
+import { compareValidSemver } from "../infra/semver.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
@@ -397,9 +397,7 @@ function compareNpmSemverForUpdate(left: string, right: string): number {
   if (releaseCmp !== null) {
     return releaseCmp;
   }
-  const validLeft = validSemver(left);
-  const validRight = validSemver(right);
-  return validLeft && validRight ? compareSemver(validLeft, validRight) : 0;
+  return compareValidSemver(left, right) ?? 0;
 }
 
 async function resolveNewerExactPinnedNpmDefaultLine(params: {
@@ -586,9 +584,7 @@ function isBundledVersionNewer(bundledVersion: string, installedVersion: string)
   if (releaseCmp !== null) {
     return releaseCmp > 0;
   }
-  const bundled = validSemver(bundledVersion);
-  const installed = validSemver(installedVersion);
-  return Boolean(bundled && installed && compareSemver(bundled, installed) > 0);
+  return (compareValidSemver(bundledVersion, installedVersion) ?? 0) > 0;
 }
 
 function pathsEqual(

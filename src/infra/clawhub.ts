@@ -9,11 +9,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import {
-  compare as compareSemverVersions,
-  parse as parseSemverVersion,
-  prerelease as parseSemverPrerelease,
-} from "semver";
+import { parse as parseSemverVersion, prerelease as parseSemverPrerelease } from "semver";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
@@ -23,6 +19,7 @@ import {
   parseStrictPositiveInteger,
 } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
+import { compareValidSemver } from "./semver.js";
 import { createTempDownloadTarget } from "./temp-download.js";
 export { parseClawHubPluginSpec } from "./clawhub-spec.js";
 
@@ -555,9 +552,7 @@ function normalizePartialComparableVersion(version: string): {
 function compareSemver(left: string, right: string): number | null {
   const normalizedLeft = normalizePartialComparableVersion(left).version;
   const normalizedRight = normalizePartialComparableVersion(right).version;
-  return parseSemverVersion(normalizedLeft) && parseSemverVersion(normalizedRight)
-    ? compareSemverVersions(normalizedLeft, normalizedRight)
-    : null;
+  return compareValidSemver(normalizedLeft, normalizedRight);
 }
 
 function upperBoundForCaret(version: string): string | null {

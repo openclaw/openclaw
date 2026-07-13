@@ -1,3 +1,11 @@
+import { compare, valid } from "semver";
+
+export function compareValidSemver(left: string, right: string): number | null {
+  const validLeft = valid(left);
+  const validRight = valid(right);
+  return validLeft && validRight ? compare(validLeft, validRight) : null;
+}
+
 /** Converts legacy OpenClaw `1.2.3.beta.N` tags into valid SemVer prereleases. */
 export function normalizeLegacyDotBetaVersion(version: string): string {
   const trimmed = version.trim();
