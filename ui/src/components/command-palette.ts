@@ -12,10 +12,7 @@ import { getVisibleSessionRows } from "../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import {
-  COMMAND_PALETTE_TARGET_EVENT,
-  isCommandPaletteShortcut,
-} from "./command-palette-contract.ts";
+import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
 import { icons, type IconName } from "./icons.ts";
 
 type PaletteItem = {
