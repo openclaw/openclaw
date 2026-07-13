@@ -135,6 +135,7 @@ const PLUGIN_ART_SLUGS: ReadonlySet<string> = new Set([
   "qwen",
   "raft",
   "reddit",
+  "reef",
   "runway",
   "searxng",
   "senseaudio",

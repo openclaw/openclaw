@@ -12,6 +12,7 @@ import type {
   RealtimeVoiceBridgeCreateRequest,
 } from "../talk/provider-types.js";
 import {
+  acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
   clearTalkRealtimeRelaySessionsForTest,
   createTalkRealtimeRelaySession,
@@ -295,6 +296,7 @@ describe("talk realtime gateway relay", () => {
       connect: vi.fn(async () => {
         bridgeRequest?.onReady?.();
         bridgeRequest?.onAudio(Buffer.from("audio-out"));
+        bridgeRequest?.onMark?.("mark-1");
         bridgeRequest?.onTranscript?.("user", "hello", true);
         bridgeRequest?.onTranscript?.("assistant", "hi there", true);
         bridgeRequest?.onToolCall?.({
@@ -400,6 +402,15 @@ describe("talk realtime gateway relay", () => {
     const audioEvent = events.find((entry) => entry.payload === audioPayload);
     expectRecordFields(audioEvent?.opts, { dropIfSlow: true });
 
+    const markPayload = findEventPayload(events, (payload) => payload.type === "mark");
+    expectRecordFields(markPayload, {
+      relaySessionId: session.relaySessionId,
+      type: "mark",
+      markName: "mark-1",
+    });
+    const markEvent = events.find((entry) => entry.payload === markPayload);
+    expectRecordFields(markEvent?.opts, { dropIfSlow: false });
+
     const userTranscript = findEventPayload(
       events,
       (payload) => payload.type === "transcript" && payload.role === "user",
@@ -471,6 +482,11 @@ describe("talk realtime gateway relay", () => {
       result: { status: "already_delivered" },
       options: { suppressResponse: true },
     });
+    acknowledgeTalkRealtimeRelayMark({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      markName: "mark-1",
+    });
     cancelTalkRealtimeRelayTurn({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
@@ -506,6 +522,7 @@ describe("talk realtime gateway relay", () => {
       { suppressResponse: true },
     );
     expect(bridge.handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+    expect(bridge.acknowledgeMark).toHaveBeenCalledWith("mark-1");
     expect(bridge.close).toHaveBeenCalled();
     const inputAudioPayload = findEventPayload(
       events,

@@ -300,6 +300,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   @state() private agentMenuPosition: { x: number; bottom: number } | null = null;
   @state() private agentMenuFilter = "";
+  @state() private agentMenuHelpOpen = false;
   @state() private visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
@@ -1482,6 +1483,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.agentMenuTrigger = null;
     this.agentMenuPosition = null;
     this.agentMenuFilter = "";
+    this.agentMenuHelpOpen = false;
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
@@ -1978,6 +1980,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       gatewayVersion: this.gatewayVersion,
       themeMode: this.themeMode,
       agentUnreadCount: (agentId) => this.agentUnreadCount(agentId),
+      helpOpen: this.agentMenuHelpOpen,
+      onHelpOpenChange: (next) => {
+        this.agentMenuHelpOpen = next;
+      },
       onFilterChange: (next) => {
         this.agentMenuFilter = next;
       },

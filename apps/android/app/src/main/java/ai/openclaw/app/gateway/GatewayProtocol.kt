@@ -155,6 +155,7 @@ enum class GatewayMethod(
   TalkSessionEndTurn("talk.session.endTurn"),
   TalkSessionCancelTurn("talk.session.cancelTurn"),
   TalkSessionCancelOutput("talk.session.cancelOutput"),
+  TalkSessionAcknowledgeMark("talk.session.acknowledgeMark"),
   TalkSessionSubmitToolResult("talk.session.submitToolResult"),
   TalkSessionSteer("talk.session.steer"),
   TalkSessionClose("talk.session.close"),
