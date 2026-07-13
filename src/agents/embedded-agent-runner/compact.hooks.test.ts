@@ -1711,12 +1711,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
 
   it("fires after_compaction on the no-op skip so paired observers are not left waiting", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
-    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
-      model: { provider, api: "responses", id: modelId, input: [] },
-      error: null,
-      authStorage: { setRuntimeApiKey: vi.fn() },
-      modelRegistry: {},
-    }));
     sessionMessages.splice(0, sessionMessages.length, {
       role: "user",
       content: "<b>HEARTBEAT_OK</b>",

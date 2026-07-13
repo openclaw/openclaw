@@ -4,7 +4,6 @@ import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provide
 import * as protocol from "./index.js";
 import {
   formatValidationErrors,
-  messageReportsUnexpectedProperty,
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatMetadataParams,
@@ -42,6 +41,7 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import { messageReportsUnexpectedProperty } from "./validation-errors.js";
 
 /**
  * Broad protocol validator smoke tests.

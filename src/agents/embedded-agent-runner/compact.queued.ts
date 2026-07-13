@@ -73,6 +73,7 @@ import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { afterCompactionSkipFields } from "./compaction-skip.js";
 import {
   rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
@@ -911,29 +912,15 @@ async function compactResolvedContextEngine(
               sessionId: postCompactionSessionId,
             };
             await hookRunner.runAfterCompaction(
-              result.compacted
-                ? {
-                    messageCount: -1,
-                    compactedCount: -1,
-                    tokenCount: result.result?.tokensAfter,
-                    sessionFile: postCompactionSessionFile,
-                    ...(postCompactionSessionId !== params.sessionId
-                      ? { previousSessionId: params.sessionId }
-                      : {}),
-                  }
-                : {
-                    messageCount: -1,
-                    compactedCount: 0,
-                    tokenCount: result.result?.tokensAfter,
-                    sessionFile: postCompactionSessionFile,
-                    ...(postCompactionSessionId !== params.sessionId
-                      ? { previousSessionId: params.sessionId }
-                      : {}),
-                    reason:
-                      typeof result.reason === "string" && result.reason.trim()
-                        ? result.reason
-                        : "policy_skipped",
-                  },
+              {
+                messageCount: -1,
+                tokenCount: result.result?.tokensAfter,
+                sessionFile: postCompactionSessionFile,
+                ...(postCompactionSessionId !== params.sessionId
+                  ? { previousSessionId: params.sessionId }
+                  : {}),
+                ...afterCompactionSkipFields(result),
+              },
               afterHookCtx,
             );
           } catch (err) {

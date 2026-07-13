@@ -75,7 +75,14 @@ export function formatValidationErrors(errors: ValidationError[] | null | undefi
   return unique.length > 0 ? unique.join("; ") : "unknown validation error";
 }
 
-export function messageReportsUnexpectedProperty(message: string, propertyName: string): boolean {
+export function messageReportsUnexpectedProperty(
+  message: string,
+  propertyName: string,
+  requestContext?: string,
+): boolean {
+  if (requestContext !== undefined && !message.includes(requestContext)) {
+    return false;
+  }
   return (
     message.includes(`unexpected property '${propertyName}'`) ||
     message.includes(`unexpected property ${JSON.stringify(propertyName)}`)

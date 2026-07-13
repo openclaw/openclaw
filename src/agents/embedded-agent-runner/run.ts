@@ -186,6 +186,7 @@ import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
+import { afterCompactionSkipFields } from "./compaction-skip.js";
 import { resolveContextEngineCapabilities } from "./context-engine-capabilities.js";
 import {
   runContextEngineMaintenance,
@@ -2476,29 +2477,15 @@ async function runEmbeddedAgentInternal(
           }
           try {
             await hookRunner.runAfterCompaction(
-              compactResult.compacted
-                ? {
-                    messageCount: -1,
-                    compactedCount: -1,
-                    tokenCount: compactResult.result?.tokensAfter,
-                    sessionFile:
-                      resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
-                      activeSessionFile,
-                    ...(previousSessionId ? { previousSessionId } : {}),
-                  }
-                : {
-                    messageCount: -1,
-                    compactedCount: 0,
-                    tokenCount: compactResult.result?.tokensAfter,
-                    sessionFile:
-                      resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
-                      activeSessionFile,
-                    ...(previousSessionId ? { previousSessionId } : {}),
-                    reason:
-                      typeof compactResult.reason === "string" && compactResult.reason.trim()
-                        ? compactResult.reason
-                        : "policy_skipped",
-                  },
+              {
+                messageCount: -1,
+                tokenCount: compactResult.result?.tokensAfter,
+                sessionFile:
+                  resolveCompactionSuccessorTranscript(compactResult).sessionFile ??
+                  activeSessionFile,
+                ...(previousSessionId ? { previousSessionId } : {}),
+                ...afterCompactionSkipFields(compactResult),
+              },
               resolveActiveHookContext(),
             );
           } catch (hookErr) {

@@ -424,9 +424,8 @@ function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
     return true;
   }
   return (
-    message.includes("invalid connect params") &&
     message.includes("/auth") &&
-    messageReportsUnexpectedProperty(message, "agentRuntimeIdentityToken")
+    messageReportsUnexpectedProperty(message, "agentRuntimeIdentityToken", "invalid connect params")
   );
 }
 
@@ -445,11 +444,8 @@ function isStaleGatewayNodeInvokeTurnSourceRejection(error: unknown): boolean {
     return false;
   }
   const message = formatErrorMessage(error);
-  if (!message.includes("invalid node.invoke params:")) {
-    return false;
-  }
   return ["turnSourceChannel", "turnSourceTo", "turnSourceAccountId", "turnSourceThreadId"].some(
-    (field) => messageReportsUnexpectedProperty(message, field),
+    (field) => messageReportsUnexpectedProperty(message, field, "invalid node.invoke params:"),
   );
 }
 
