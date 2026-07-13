@@ -171,4 +171,50 @@ describe("controller scoped snapshot equivalence", () => {
     expect(result.size).toBe(0);
     expect(mocks.loadSubagentRunsForControllerFromSqlite).not.toHaveBeenCalled();
   });
+
+  it("caches scoped SQL results and reuses them for repeated calls", () => {
+    const ctrlRun = createRun("cached-ctrl");
+    ctrlRun.controllerSessionKey = "agent:main:ctrl-cache";
+    ctrlRun.requesterSessionKey = "agent:main:other";
+
+    mocks.loadSubagentRunsForControllerFromSqlite.mockReturnValue([ctrlRun]);
+
+    // First call — queries SQLite
+    const first = getSubagentRunsSnapshotForController(new Map(), "agent:main:ctrl-cache");
+    expect(first.has(ctrlRun.runId)).toBe(true);
+    expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledTimes(1);
+
+    // Second call — uses cache, no additional SQLite query
+    mocks.loadSubagentRunsForControllerFromSqlite.mockReturnValue([]);
+    const second = getSubagentRunsSnapshotForController(new Map(), "agent:main:ctrl-cache");
+    expect(second.has(ctrlRun.runId)).toBe(true);
+    // Still 1 — cache short-circuits the store call
+    expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledTimes(1);
+  });
+
+  it("invalidates scoped controller cache on persist", () => {
+    const ctrlRun = createRun("inval-ctrl");
+    ctrlRun.controllerSessionKey = "agent:main:ctrl-inval";
+    ctrlRun.requesterSessionKey = "agent:main:other";
+
+    mocks.loadSubagentRunsForControllerFromSqlite.mockReturnValue([ctrlRun]);
+
+    // Populate the scoped cache
+    const first = getSubagentRunsSnapshotForController(new Map(), "agent:main:ctrl-inval");
+    expect(first.has(ctrlRun.runId)).toBe(true);
+    expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledTimes(1);
+
+    // Persist should invalidate scoped caches
+    persistSubagentRunsToDisk(new Map([["some-run", createRun("some-run")]]));
+
+    // Next call should query SQLite again (cache was cleared)
+    const updated = createRun("updated-ctrl");
+    updated.controllerSessionKey = "agent:main:ctrl-inval";
+    updated.requesterSessionKey = "agent:main:other";
+    mocks.loadSubagentRunsForControllerFromSqlite.mockReturnValue([updated]);
+
+    const second = getSubagentRunsSnapshotForController(new Map(), "agent:main:ctrl-inval");
+    expect(second.has(updated.runId)).toBe(true);
+    expect(mocks.loadSubagentRunsForControllerFromSqlite).toHaveBeenCalledTimes(2);
+  });
 });

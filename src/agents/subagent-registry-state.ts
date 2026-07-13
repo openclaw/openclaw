@@ -20,6 +20,24 @@ let persistedSubagentRunsReadCache:
     }
   | undefined;
 
+// Scoped per-controller-key caches avoid repeated SQLite queries for the
+// same controller inside the TTL window (e.g. repeated status/control calls
+// and recursive multi-controller traversals).  Invalidation is tied to
+// persistSubagentRunsToDisk so stale data lasts at most one TTL window.
+let scopedControllerCache:
+  | Map<string, { loadedAtMs: number; runs: Map<string, SubagentRunRecord> }>
+  | undefined;
+
+function getScopedControllerCache(): Map<
+  string,
+  { loadedAtMs: number; runs: Map<string, SubagentRunRecord> }
+> {
+  if (!scopedControllerCache) {
+    scopedControllerCache = new Map();
+  }
+  return scopedControllerCache;
+}
+
 function cloneSubagentRunsSnapshot(
   runs: Map<string, SubagentRunRecord>,
 ): Map<string, SubagentRunRecord> {
@@ -53,12 +71,49 @@ function loadPersistedSubagentRunsForRead(): Map<string, SubagentRunRecord> {
 
 export function clearSubagentRunsReadCacheForTest(): void {
   persistedSubagentRunsReadCache = undefined;
+  scopedControllerCache = undefined;
+}
+
+function invalidateScopedControllerCache(): void {
+  if (scopedControllerCache) {
+    scopedControllerCache.clear();
+  }
+}
+
+function getCachedControllerRuns(
+  controllerKey: string,
+): Map<string, SubagentRunRecord> | undefined {
+  const cache = scopedControllerCache;
+  if (!cache) {
+    return undefined;
+  }
+  const entry = cache.get(controllerKey);
+  if (!entry) {
+    return undefined;
+  }
+  const nowMs = Date.now();
+  if (nowMs - entry.loadedAtMs >= SUBAGENT_RUNS_READ_CACHE_TTL_MS) {
+    cache.delete(controllerKey);
+    return undefined;
+  }
+  return entry.runs;
+}
+
+function setCachedControllerRuns(
+  controllerKey: string,
+  runs: Map<string, SubagentRunRecord>,
+): void {
+  getScopedControllerCache().set(controllerKey, {
+    loadedAtMs: Date.now(),
+    runs,
+  });
 }
 
 export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) {
   try {
     saveSubagentRegistryToSqlite(runs);
     rememberPersistedSubagentRunsSnapshot(runs);
+    invalidateScopedControllerCache();
   } catch {
     // ignore persistence failures
   }
@@ -161,6 +216,11 @@ function resolveControllerSessionKey(entry: SubagentRunRecord): string {
  * Loads only persisted rows matching the controller (including the fallback
  * from null controller to requester key), then overlays in-memory runs that
  * also match through the same resolution.
+ *
+ * Caches SQL results per controller key with the same TTL used by the
+ * full-snapshot path ({@link SUBAGENT_RUNS_READ_CACHE_TTL_MS}), so repeated
+ * status/control calls and recursive controller traversals reuse indexed
+ * reads instead of issuing a synchronous SQLite query on every lookup.
  */
 export function getSubagentRunsSnapshotForController(
   inMemoryRuns: Map<string, SubagentRunRecord>,
@@ -176,8 +236,18 @@ export function getSubagentRunsSnapshotForController(
     !(process.env.VITEST || process.env.NODE_ENV === "test");
   if (shouldReadDisk) {
     try {
-      for (const entry of loadSubagentRunsForControllerFromSqlite(key)) {
-        merged.set(entry.runId, entry);
+      const cached = getCachedControllerRuns(key);
+      if (cached) {
+        for (const [runId, entry] of cached.entries()) {
+          merged.set(runId, entry);
+        }
+      } else {
+        const loaded = new Map<string, SubagentRunRecord>();
+        for (const entry of loadSubagentRunsForControllerFromSqlite(key)) {
+          merged.set(entry.runId, entry);
+          loaded.set(entry.runId, entry);
+        }
+        setCachedControllerRuns(key, loaded);
       }
     } catch {
       // Ignore disk read failures and fall back to local memory.
