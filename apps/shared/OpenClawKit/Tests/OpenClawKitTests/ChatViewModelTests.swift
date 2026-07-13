@@ -226,6 +226,7 @@ private func makeViewModel(
     sessionsResponses: [OpenClawChatSessionsListResponse] = [],
     modelResponses: [[OpenClawChatModelChoice]] = [],
     modelPatchResults: [OpenClawChatModelPatchResult?] = [],
+    thinkingPatchResults: [OpenClawChatModelPatchResult?] = [],
     commandResponses: [[OpenClawChatCommandChoice]] = [],
     requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
     historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
@@ -262,6 +263,7 @@ private func makeViewModel(
         sessionsResponses: sessionsResponses,
         modelResponses: modelResponses,
         modelPatchResults: modelPatchResults,
+        thinkingPatchResults: thinkingPatchResults,
         commandResponses: commandResponses,
         requestHistoryHook: requestHistoryHook,
         historyResponseHook: historyResponseHook,
@@ -532,6 +534,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
     private let modelResponses: [[OpenClawChatModelChoice]]
     private let modelPatchResults: [OpenClawChatModelPatchResult?]
+    private let thinkingPatchResults: [OpenClawChatModelPatchResult?]
     private let commandResponses: [[OpenClawChatCommandChoice]]
     private let requestHistoryHook: (@Sendable (String) async throws -> Void)?
     private let historyResponseHook:
@@ -562,6 +565,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         sessionsResponses: [OpenClawChatSessionsListResponse] = [],
         modelResponses: [[OpenClawChatModelChoice]] = [],
         modelPatchResults: [OpenClawChatModelPatchResult?] = [],
+        thinkingPatchResults: [OpenClawChatModelPatchResult?] = [],
         commandResponses: [[OpenClawChatCommandChoice]] = [],
         requestHistoryHook: (@Sendable (String) async throws -> Void)? = nil,
         historyResponseHook: (@Sendable (String, Int, [String]) async throws -> OpenClawChatHistoryPayload?)? = nil,
@@ -586,6 +590,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.sessionsResponses = sessionsResponses
         self.modelResponses = modelResponses
         self.modelPatchResults = modelPatchResults
+        self.thinkingPatchResults = thinkingPatchResults
         self.commandResponses = commandResponses
         self.requestHistoryHook = requestHistoryHook
         self.historyResponseHook = historyResponseHook
@@ -825,11 +830,58 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         }
     }
 
-    func setSessionThinking(sessionKey _: String, thinkingLevel: String) async throws {
-        await self.state.patchedThinkingLevelsAppend(thinkingLevel)
+    func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
+        _ = try await self.patchSessionThinking(sessionKey: sessionKey, thinkingLevel: thinkingLevel)
+    }
+
+    func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
+    {
+        var result: OpenClawChatModelPatchResult?
+        if let model = patch.model {
+            result = try await self.patchSessionModel(sessionKey: sessionKey, agentID: agentID, model: model)
+        }
+        if let thinkingLevelUpdate = patch.thinkingLevel {
+            guard let thinkingLevel = thinkingLevelUpdate else {
+                throw NSError(
+                    domain: "TestChatTransport",
+                    code: 0,
+                    userInfo: [NSLocalizedDescriptionKey: "thinkingLevel cannot be cleared"])
+            }
+            let thinkingResult = try await self.patchSessionThinking(
+                sessionKey: sessionKey,
+                thinkingLevel: thinkingLevel)
+            result = OpenClawChatModelPatchResult(
+                key: thinkingResult?.key ?? result?.key ?? sessionKey,
+                modelProvider: thinkingResult?.modelProvider ?? result?.modelProvider,
+                model: thinkingResult?.model ?? result?.model,
+                thinkingLevel: thinkingResult?.thinkingLevel ?? thinkingLevel,
+                thinkingLevels: thinkingResult?.thinkingLevels ?? result?.thinkingLevels)
+        }
+        return result
+    }
+
+    private func patchSessionThinking(
+        sessionKey: String,
+        thinkingLevel: String) async throws -> OpenClawChatModelPatchResult?
+    {
+        let index = await self.state.recordPatchedThinkingLevel(thinkingLevel)
         if let setSessionThinkingHook {
             try await setSessionThinkingHook(thinkingLevel)
         }
+        if index < self.thinkingPatchResults.count {
+            return self.thinkingPatchResults[index]
+        }
+        if let last = thinkingPatchResults.last {
+            return last
+        }
+        return OpenClawChatModelPatchResult(
+            key: sessionKey,
+            modelProvider: nil,
+            model: nil,
+            thinkingLevel: thinkingLevel)
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
@@ -1030,8 +1082,10 @@ extension TestChatTransportState {
         return index
     }
 
-    fileprivate func patchedThinkingLevelsAppend(_ v: String) {
+    fileprivate func recordPatchedThinkingLevel(_ v: String) -> Int {
+        let index = self.patchedThinkingLevels.count
         self.patchedThinkingLevels.append(v)
+        return index
     }
 
     fileprivate func resetSessionKeysAppend(_ v: String) {
@@ -8524,6 +8578,236 @@ struct ChatViewModelTests {
 
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
         #expect(await MainActor.run { vm.sessions.first?.thinkingLevel } == "high")
+    }
+
+    @Test func `failed thinking overlap does not restore an older successful model`() async throws {
+        let staleListGate = AsyncGate()
+        let listCallCount = AsyncCounter()
+        let levels = ["off", "high", "max"].map { thinkingOption($0) }
+        let initialSessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "model-a",
+                modelProvider: "openai",
+                thinkingLevel: "off",
+                thinkingLevels: levels))
+        let refreshedSessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 2,
+                model: "model-c",
+                modelProvider: "openai",
+                thinkingLevel: "high",
+                thinkingLevels: levels))
+        let models = [
+            modelChoice(id: "model-a", name: "A", provider: "openai", reasoning: true),
+            modelChoice(id: "model-b", name: "B", provider: "openai", reasoning: true),
+            modelChoice(id: "model-c", name: "C", provider: "openai", reasoning: true),
+        ]
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            modelResponses: [models],
+            modelPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "model-b",
+                    thinkingLevel: "off",
+                    thinkingLevels: levels),
+            ],
+            setSessionThinkingHook: { _ in
+                throw NSError(
+                    domain: "ChatViewModelTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "rejected"])
+            },
+            listSessionsHook: { _ in
+                let call = await listCallCount.increment()
+                if call == 1 { return initialSessions }
+                if call == 2 {
+                    await staleListGate.wait()
+                    return initialSessions
+                }
+                return refreshedSessions
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await MainActor.run { vm.selectModel("openai/model-b") }
+        await vm.waitForPendingSessionSettings(in: "main")
+
+        let refresh = Task { await vm.fetchSessions(limit: nil) }
+        try await waitUntil("sessions refresh starts before thinking patch") {
+            await listCallCount.current() == 2
+        }
+        await MainActor.run { vm.selectThinkingLevel("max") }
+        await vm.waitForPendingSessionSettings(in: "main")
+        await staleListGate.open()
+        await refresh.value
+
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-c")
+        #expect(await MainActor.run { vm.sessions.first?.model } == "model-c")
+        #expect(await MainActor.run { vm.thinkingLevel } == "high")
+    }
+
+    @Test func `sessions refresh preserves a patch that succeeds while retry waits`() async throws {
+        let staleListGate = AsyncGate()
+        let modelPatchGate = AsyncGate()
+        let modelPatchStarted = AsyncGate()
+        let listCallCount = AsyncCounter()
+        let levels = ["off", "high"].map { thinkingOption($0) }
+        let initialSessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "model-a",
+                modelProvider: "openai",
+                thinkingLevel: "off",
+                thinkingLevels: levels))
+        let models = [
+            modelChoice(id: "model-a", name: "A", provider: "openai", reasoning: true),
+            modelChoice(id: "model-b", name: "B", provider: "openai", reasoning: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            modelResponses: [models],
+            modelPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "model-b",
+                    thinkingLevel: "high",
+                    thinkingLevels: levels),
+            ],
+            setSessionModelHook: { _ in
+                await modelPatchStarted.open()
+                await modelPatchGate.wait()
+            },
+            listSessionsHook: { _ in
+                let call = await listCallCount.increment()
+                if call == 1 { return initialSessions }
+                if call == 2 { await staleListGate.wait() }
+                return initialSessions
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        let refresh = Task { await vm.fetchSessions(limit: nil) }
+        try await waitUntil("stale sessions refresh starts") {
+            await listCallCount.current() == 2
+        }
+        await MainActor.run { vm.selectModel("openai/model-b") }
+        await modelPatchStarted.wait()
+
+        await staleListGate.open()
+        try await Task.sleep(for: .milliseconds(50))
+        await modelPatchGate.open()
+        await vm.waitForPendingSessionSettings(in: "main")
+        await refresh.value
+
+        #expect(await transport.listSessionsQueries().count == 3)
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
+        #expect(await MainActor.run { vm.sessions.first?.model } == "model-b")
+        #expect(await MainActor.run { vm.thinkingLevel } == "high")
+    }
+
+    @Test func `sessions refresh preserves consecutive patches that overlap its retry`() async throws {
+        let staleListGate = AsyncGate()
+        let thinkingPatchGate = AsyncGate()
+        let thinkingPatchStarted = AsyncGate()
+        let listCallCount = AsyncCounter()
+        let levels = ["off", "high"].map { thinkingOption($0) }
+        let initialSessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "model-a",
+                modelProvider: "openai",
+                thinkingLevel: "off",
+                thinkingLevels: levels))
+        let models = [
+            modelChoice(id: "model-a", name: "A", provider: "openai", reasoning: true),
+            modelChoice(id: "model-b", name: "B", provider: "openai", reasoning: true),
+        ]
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            modelResponses: [models],
+            modelPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "model-b",
+                    thinkingLevel: "off",
+                    thinkingLevels: levels),
+            ],
+            thinkingPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "model-b",
+                    thinkingLevel: "high",
+                    thinkingLevels: levels),
+            ],
+            setSessionThinkingHook: { _ in
+                await thinkingPatchStarted.open()
+                await thinkingPatchGate.wait()
+            },
+            listSessionsHook: { _ in
+                let call = await listCallCount.increment()
+                if call == 1 { return initialSessions }
+                if call == 2 { await staleListGate.wait() }
+                return initialSessions
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        let refresh = Task { await vm.fetchSessions(limit: nil) }
+        try await waitUntil("stale sessions refresh starts") {
+            await listCallCount.current() == 2
+        }
+        await MainActor.run { vm.selectModel("openai/model-b") }
+        await vm.waitForPendingSessionSettings(in: "main")
+        await MainActor.run { vm.selectThinkingLevel("high") }
+        await thinkingPatchStarted.wait()
+
+        await staleListGate.open()
+        try await Task.sleep(for: .milliseconds(50))
+        await thinkingPatchGate.open()
+        await vm.waitForPendingSessionSettings(in: "main")
+        await refresh.value
+
+        #expect(await transport.listSessionsQueries().count == 3)
+        #expect(await MainActor.run { vm.modelSelectionID } == "openai/model-b")
+        #expect(await MainActor.run { vm.sessions.first?.model } == "model-b")
+        #expect(await MainActor.run { vm.thinkingLevel } == "high")
+    }
+
+    @Test func `normalized thinking patch persists the accepted level`() async throws {
+        let callbackState = await MainActor.run { CallbackBox() }
+        let levels = ["off", "high", "ultra"].map { thinkingOption($0) }
+        let sessions = sessionsResponse(
+            sessionEntry(
+                key: "main",
+                updatedAt: 1,
+                model: "gpt-sol",
+                modelProvider: "openai",
+                thinkingLevel: "off",
+                thinkingLevels: levels))
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload(sessionId: "sess-main")],
+            sessionsResponses: [sessions],
+            thinkingPatchResults: [
+                OpenClawChatModelPatchResult(
+                    modelProvider: "openai",
+                    model: "gpt-sol",
+                    thinkingLevel: "high",
+                    thinkingLevels: levels),
+            ],
+            onThinkingLevelChanged: { level in
+                callbackState.values.append(level)
+            })
+
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+        await MainActor.run { vm.selectThinkingLevel("ultra") }
+        await vm.waitForPendingSessionSettings(in: "main")
+
+        #expect(await MainActor.run { vm.preferredThinkingLevel } == "high")
+        #expect(await MainActor.run { vm.thinkingLevel } == "high")
+        #expect(await MainActor.run { callbackState.values } == ["ultra", "high"])
     }
 
     @Test func `failed thinking patch restores preferred level separately from applied level`() async throws {

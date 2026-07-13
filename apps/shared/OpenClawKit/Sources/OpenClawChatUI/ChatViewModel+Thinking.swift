@@ -69,6 +69,7 @@ extension OpenClawChatViewModel {
                 self.acceptedThinkingLevelsByTarget[target] = acceptedLevel
                 self.acceptedPreferredThinkingLevelsByTarget[target] = acceptedLevel
                 self.acceptedExplicitThinkingPreferencesByTarget[target] = true
+                self.lastSuccessfulSettingsPatchRequestIDsByTarget[target] = settingsRequestID
                 guard requestID == self.latestThinkingSelectionRequestIDsByTarget[target] else { return }
                 let targetIsCurrent = target == self.currentModelPatchTarget()
                 let stateKey: String
@@ -92,6 +93,9 @@ extension OpenClawChatViewModel {
                         exactMatchOnly: exactMatchOnly)
                 }
                 guard targetIsCurrent else { return }
+                if acceptedLevel != next {
+                    self.onThinkingLevelChanged?(acceptedLevel)
+                }
                 self.preferredThinkingLevel = acceptedLevel
                 self.thinkingLevel = acceptedLevel
                 self.syncThinkingLevelOptions()

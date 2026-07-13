@@ -881,6 +881,54 @@ class ChatControllerModelSelectionTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun modelPatchPreservesAcceptedThinkingWhenResolutionOmitsThinkingMetadata() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "sessions.list" ->
+                """
+                {"sessions":[{"key":"main","thinkingLevel":"off","thinkingLevels":[
+                  {"id":"off","label":"off"},{"id":"ultra","label":"ultra"}
+                ]}]}
+                """.trimIndent()
+              "sessions.patch" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                if ("model" in params) {
+                  """{"resolved":{"modelProvider":"openai","model":"gpt-5.6-sol"}}"""
+                } else {
+                  """
+                  {"resolved":{"thinkingLevel":"ultra","thinkingLevels":[
+                    {"id":"off","label":"off"},{"id":"ultra","label":"ultra"}
+                  ]}}
+                  """.trimIndent()
+                }
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.setThinkingLevel("ultra")
+      advanceUntilIdle()
+      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5.6-sol"))
+
+      assertEquals("ultra", controller.thinkingLevel.value)
+      assertTrue(controller.thinkingLevelSelection.value.isGatewayProvided)
+      assertEquals(
+        listOf("off", "ultra"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+    }
+
+  @Test
   fun olderThinkingCompletionDoesNotReplaceNewerQueuedIntent() =
     runTest {
       val firstPatchStarted = CompletableDeferred<Unit>()

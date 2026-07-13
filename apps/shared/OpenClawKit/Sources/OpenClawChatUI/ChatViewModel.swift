@@ -207,6 +207,7 @@ public final class OpenClawChatViewModel {
     private var nextSessionSettingsRequestID: UInt64 = 0
     private var latestModelSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
     private var lastSuccessfulModelSelectionIDsByTarget: [ModelPatchTarget: String] = [:]
+    var lastSuccessfulSettingsPatchRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
     /// Rollback and pre-refresh sends need the authoritative state from the latest settings patch.
     var lastSuccessfulSettingsPatchResultsByTarget: [ModelPatchTarget: OpenClawChatModelPatchResult] = [:]
     var completedModelPatchTargets: Set<ModelPatchTarget> = []
@@ -1080,12 +1081,22 @@ extension OpenClawChatViewModel {
             canonicalSessionKey: self.isCurrentSession(session) ? self.currentSessionEntry()?.key : nil,
             agentID: session.deliveryAgentID,
             sessionRoutingContract: session.sessionRoutingContract)
-        var preservesOverlappingSettingsPatch = false
+        var overlappingSuccessfulSettingsPatchRequestID: UInt64?
+        // Request IDs start at one, so zero represents no earlier success.
+        var pendingSettingsPatchOverlapBaseline: UInt64?
         while true {
             await self.waitForPendingSessionSettings(for: target)
+            if let pendingBaseline = pendingSettingsPatchOverlapBaseline {
+                let completedRequestID = self.lastSuccessfulSettingsPatchRequestIDsByTarget[target] ?? 0
+                if completedRequestID != pendingBaseline {
+                    overlappingSuccessfulSettingsPatchRequestID = completedRequestID
+                }
+                pendingSettingsPatchOverlapBaseline = nil
+            }
             if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             let metadataGeneration = self.sessionMetadataGeneration
             let settingsPatchRevision = self.settingsPatchRevisionsByTarget[target, default: 0]
+            let successfulSettingsPatchRequestID = self.lastSuccessfulSettingsPatchRequestIDsByTarget[target]
             let res: OpenClawChatSessionsListResponse
             do {
                 res = try await self.transport.listSessions(limit: limit, search: nil, archived: false)
@@ -1100,20 +1111,31 @@ extension OpenClawChatViewModel {
             // A list that straddles a patch or reconnect is stale. Retry in this
             // owner so bootstrap cannot discard its only authoritative refresh.
             guard metadataGeneration == self.sessionMetadataGeneration else {
-                preservesOverlappingSettingsPatch = false
+                overlappingSuccessfulSettingsPatchRequestID = nil
+                pendingSettingsPatchOverlapBaseline = nil
                 continue
             }
             guard settingsPatchRevision == self.settingsPatchRevisionsByTarget[target, default: 0],
                   self.inFlightSettingsPatchCountsByTarget[target] == nil
             else {
-                preservesOverlappingSettingsPatch = true
+                let completedRequestID = self.lastSuccessfulSettingsPatchRequestIDsByTarget[target]
+                if let completedRequestID,
+                   completedRequestID != successfulSettingsPatchRequestID
+                {
+                    overlappingSuccessfulSettingsPatchRequestID = completedRequestID
+                }
+                if self.inFlightSettingsPatchCountsByTarget[target] != nil {
+                    pendingSettingsPatchOverlapBaseline = completedRequestID ?? 0
+                }
                 continue
             }
             self.latestAppliedSessionsFetchRequestID = sessionsFetchRequestID
             let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
             self.sessions = organized
             self.sessionDefaults = res.defaults
-            if preservesOverlappingSettingsPatch {
+            if let overlappingRequestID = overlappingSuccessfulSettingsPatchRequestID,
+               self.lastSuccessfulSettingsPatchRequestIDsByTarget[target] == overlappingRequestID
+            {
                 // A post-patch list retry may still carry the pre-patch row.
                 // Preserve only the route whose patch overlapped this fetch.
                 let patchResult = self.lastSuccessfulSettingsPatchResultsByTarget[target]
@@ -1364,6 +1386,7 @@ extension OpenClawChatViewModel {
                 sessionKey: request.target.canonicalSessionKey,
                 agentID: request.target.agentID,
                 patch: OpenClawChatSessionSettingsPatch(model: .some(request.modelRef)))
+            self.lastSuccessfulSettingsPatchRequestIDsByTarget[request.target] = request.id
             guard request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else {
                 // Keep older successful patches as rollback state, but do not replay
                 // stale UI/session state over a newer queued or completed selection.

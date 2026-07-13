@@ -3387,27 +3387,26 @@ class ChatController internal constructor(
                 _sessionKey.value == key && _thinkingLevelSelection.value.isGatewayProvided
               },
         )
-    if (resolution?.thinkingLevel != null || resolution?.thinkingLevels != null) {
-      latestAcceptedThinkingStates[settingsKey] =
+    val acceptedThinkingState =
+      if (resolution?.thinkingLevel != null || resolution?.thinkingLevels != null) {
         AcceptedThinkingState(
           level = resolution.thinkingLevel?.let(::normalizeThinking) ?: previousThinkingState.level,
           thinkingLevels = resolution.thinkingLevels ?: previousThinkingState.thinkingLevels,
         )
-    }
+      } else {
+        previousThinkingState
+      }
+    latestAcceptedThinkingStates[settingsKey] = acceptedThinkingState
     if (settingsKey != sessionSettingsKey(key)) return
     val fallbackProvider = modelRef?.substringBefore('/', missingDelimiterValue = "")?.takeIf { it.isNotEmpty() }
     val fallbackModel =
       modelRef?.let { ref -> ref.substringAfter('/', missingDelimiterValue = ref) }?.takeIf { it.isNotEmpty() }
-    val acceptedThinkingState = latestAcceptedThinkingStates[settingsKey]
-    val hasResolvedThinkingMetadata = resolution?.thinkingLevel != null || resolution?.thinkingLevels != null
     val applied =
       (existing ?: ChatSessionEntry(key = key, updatedAtMs = null)).copy(
         modelProvider = resolution?.modelProvider ?: fallbackProvider ?: existing?.modelProvider,
         model = resolution?.model ?: fallbackModel ?: existing?.model,
-        thinkingLevel = acceptedThinkingState?.level.takeIf { hasResolvedThinkingMetadata },
-        thinkingLevels =
-          resolution?.thinkingLevels
-            ?: acceptedThinkingState?.thinkingLevels.takeIf { hasResolvedThinkingMetadata },
+        thinkingLevel = acceptedThinkingState.level,
+        thinkingLevels = resolution?.thinkingLevels ?: acceptedThinkingState.thinkingLevels,
         thinkingDefault = null,
       )
     if (index >= 0) {
