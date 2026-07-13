@@ -22,6 +22,29 @@ export const DATA_READ_RPC_ALLOWLIST = [
   "cron.runs",
 ] as const;
 
+/** Gateway events that stream bindings may consume over the existing UI socket. */
+export const STREAM_EVENT_ALLOWLIST = ["presence", "sessions.changed"] as const;
+
+/** Fixed client-side operations available to computed bindings. */
+export const COMPUTED_OPS = [
+  "sum",
+  "avg",
+  "min",
+  "max",
+  "last",
+  "count",
+  "pick",
+  "format",
+] as const;
+
+export type ComputedOp = (typeof COMPUTED_OPS)[number];
+
+/** Server-owned capabilities returned with `workspaces.get` for fail-closed UI use. */
+export const WORKSPACE_BINDING_CONTRACT = {
+  streamEvents: STREAM_EVENT_ALLOWLIST,
+  computedOps: COMPUTED_OPS,
+} as const;
+
 type WorkspaceBindingErrorCode =
   | "binding_denied"
   | "binding_not_found"

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { WORKSPACE_BINDING_CONTRACT } from "./binding-contract.js";
 import { rememberWorkspaceBroadcast } from "./broadcast.js";
 import { resolveBinding, type ResolveBindingOptions } from "./data-read.js";
 import { snapshotApprovedWidget } from "./manifest.js";
@@ -247,12 +248,23 @@ function readWidgetInput(
   }
   for (const key of Object.keys(value)) {
     if (
-      !["id", "kind", "title", "grid", "collapsed", "hidden", "bindings", "props"].includes(key)
+      ![
+        "id",
+        "kind",
+        "title",
+        "grid",
+        "collapsed",
+        "hidden",
+        "bindings",
+        "outputBinding",
+        "props",
+      ].includes(key)
     ) {
       throw new Error(`widget.${key} is not allowed`);
     }
   }
   const title = readOptionalString(value, "title");
+  const outputBinding = readOptionalString(value, "outputBinding");
   return {
     id: makeUniqueWidgetId(value, doc),
     kind: readRequiredString(value, "kind", "widget.kind"),
@@ -264,6 +276,7 @@ function readWidgetInput(
     ...(value.bindings !== undefined
       ? { bindings: value.bindings as Record<string, WorkspaceBinding> }
       : {}),
+    ...(outputBinding !== undefined ? { outputBinding } : {}),
     ...(value.props !== undefined ? { props: value.props as JsonValue } : {}),
   };
 }
@@ -295,8 +308,17 @@ function readTabPatch(value: unknown): Partial<Pick<WorkspaceTab, "title" | "ico
 }
 
 function readWidgetPatch(value: unknown): Partial<WorkspaceWidget> {
-  const patch = readParams(value, ["title", "grid", "collapsed", "hidden", "bindings", "props"]);
+  const patch = readParams(value, [
+    "title",
+    "grid",
+    "collapsed",
+    "hidden",
+    "bindings",
+    "outputBinding",
+    "props",
+  ]);
   const title = readOptionalString(patch, "title");
+  const outputBinding = readOptionalString(patch, "outputBinding");
   if (title !== undefined && title.length > 80) {
     throw new Error("patch.title must be 80 characters or fewer");
   }
@@ -312,6 +334,7 @@ function readWidgetPatch(value: unknown): Partial<WorkspaceWidget> {
     ...(patch.bindings !== undefined
       ? { bindings: patch.bindings as Record<string, WorkspaceBinding> }
       : {}),
+    ...(outputBinding !== undefined ? { outputBinding } : {}),
     ...(patch.props !== undefined ? { props: patch.props as JsonValue } : {}),
   };
 }
@@ -372,7 +395,11 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
       try {
         rememberWorkspaceBroadcast(context.broadcast);
         const doc = store.read();
-        respond(true, { doc, workspaceVersion: doc.workspaceVersion });
+        respond(true, {
+          doc,
+          workspaceVersion: doc.workspaceVersion,
+          bindingContract: WORKSPACE_BINDING_CONTRACT,
+        });
       } catch (error) {
         respondError(respond, error);
       }
@@ -562,7 +589,11 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
         await respondWrite(opts, RPC_ACTOR, slug, async () =>
           store.mutate(
             (draft) => {
-              Object.assign(findWidget(findTab(draft, slug), id), patch);
+              const widget = findWidget(findTab(draft, slug), id);
+              if (patch.bindings !== undefined && patch.outputBinding === undefined) {
+                delete widget.outputBinding;
+              }
+              Object.assign(widget, patch);
             },
             { actor: RPC_ACTOR },
           ),

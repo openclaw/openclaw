@@ -7,6 +7,7 @@ import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkspaceCli } from "./cli.js";
 import { registerWorkspaceGatewayMethods } from "./gateway.js";
+import type { WorkspaceDoc } from "./schema.js";
 import { WorkspaceStore } from "./store.js";
 import { createWorkspaceTools } from "./tools.js";
 
@@ -98,6 +99,11 @@ describe("workspace tools", () => {
         tab: "main",
         kind: "builtin:markdown",
         grid: { x: 0, y: 0, w: 4, h: 2 },
+        outputBinding: "value",
+        bindings: {
+          base: { source: "static", value: 40 },
+          value: { source: "computed", op: "sum", inputs: ["base"] },
+        },
       },
       workspace_widget_update: { tab: "main", id: "cost-today", collapsed: true },
       workspace_widget_move: { tab: "main", id: "cost-today", grid: { x: 4, y: 0, w: 4, h: 2 } },
@@ -133,6 +139,15 @@ describe("workspace tools", () => {
         false,
       );
     }
+    expect(
+      Value.Check(tools.get("workspace_widget_add")!.parameters, {
+        tab: "main",
+        kind: "builtin:stat-card",
+        grid: { x: 0, y: 0, w: 4, h: 2 },
+        outputBinding: "live",
+        bindings: { live: { source: "stream", event: "presence", pointer: "/presence/0" } },
+      }),
+    ).toBe(true);
   });
 
   it("stamps tool provenance from context and rejects createdBy override params", async () => {
@@ -262,6 +277,7 @@ describe("workspace tools", () => {
           title: "Notes",
           grid: { x: 0, y: 0, w: 4, h: 2 },
           bindings: { value: { source: "static", value: "hello" } },
+          outputBinding: "value",
         }),
       );
       expect(addResult.doc).toMatchObject({
@@ -269,22 +285,58 @@ describe("workspace tools", () => {
           expect.any(Object),
           expect.objectContaining({
             slug: "ops",
-            widgets: [expect.objectContaining({ id: "notes", title: "Notes" })],
+            widgets: [
+              expect.objectContaining({ id: "notes", title: "Notes", outputBinding: "value" }),
+            ],
           }),
         ],
       });
-      await tools.get("workspace_widget_move")?.execute("call-3", {
+      const updateResult = details(
+        await tools.get("workspace_widget_update")?.execute("call-3", {
+          tab: "ops",
+          id: "notes",
+          bindings: { live: { source: "stream", event: "presence" } },
+          outputBinding: "live",
+        }),
+      );
+      expect(updateResult.doc).toMatchObject({
+        tabs: expect.arrayContaining([
+          expect.objectContaining({
+            slug: "ops",
+            widgets: [
+              expect.objectContaining({
+                id: "notes",
+                outputBinding: "live",
+                bindings: { live: { source: "stream", event: "presence" } },
+              }),
+            ],
+          }),
+        ]),
+      });
+      const clearResult = details(
+        await tools.get("workspace_widget_update")?.execute("call-3b", {
+          tab: "ops",
+          id: "notes",
+          bindings: {},
+        }),
+      );
+      const clearedWidget = (clearResult.doc as WorkspaceDoc).tabs
+        .find((tab) => tab.slug === "ops")
+        ?.widgets.find((widget) => widget.id === "notes");
+      expect(clearedWidget?.bindings).toEqual({});
+      expect(clearedWidget).not.toHaveProperty("outputBinding");
+      await tools.get("workspace_widget_move")?.execute("call-4", {
         tab: "ops",
         id: "notes",
         grid: { x: 4, y: 0, w: 4, h: 2 },
       });
       const data = details(
-        await tools.get("workspace_data_read")?.execute("call-4", {
+        await tools.get("workspace_data_read")?.execute("call-5", {
           binding: { source: "static", value: { ok: true } },
         }),
       );
       expect(data).toEqual({ data: { ok: true } });
-      expect(broadcast).toHaveBeenCalledTimes(3);
+      expect(broadcast).toHaveBeenCalledTimes(5);
     });
   });
 

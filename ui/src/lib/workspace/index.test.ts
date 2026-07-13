@@ -18,12 +18,14 @@ import {
   removeWidgetFromTab,
   resolveActiveSlug,
   resolveBinding,
+  resolveComputedBinding,
   setWidgetCollapsed,
   updateWidgetTitle,
   startBindingPolling,
   stopBindingPolling,
   stopWorkspace,
   subscribeToWorkspaceEvents,
+  subscribeToStreamBinding,
   visibleTabs,
 } from "./index.ts";
 
@@ -130,7 +132,14 @@ describe("loadWorkspace", () => {
     const state = getWorkspaceState(host);
     const client = mockClient({
       // Real gateway shape: workspaces.get returns { doc, workspaceVersion }.
-      request: vi.fn(async () => ({ doc: sampleDoc, workspaceVersion: 3 })) as never,
+      request: vi.fn(async () => ({
+        doc: sampleDoc,
+        workspaceVersion: 3,
+        bindingContract: {
+          streamEvents: ["presence", "sessions.changed"],
+          computedOps: ["sum", "count"],
+        },
+      })) as never,
     });
     await loadWorkspace(state, client, { requestedSlug: "archive" });
     expect(state.loaded).toBe(true);
@@ -138,6 +147,10 @@ describe("loadWorkspace", () => {
     expect(state.workspace?.workspaceVersion).toBe(3);
     expect(state.workspace?.tabs).toHaveLength(2);
     expect(state.activeSlug).toBe("archive");
+    expect(state.bindingContract).toEqual({
+      streamEvents: ["presence", "sessions.changed"],
+      computedOps: ["sum", "count"],
+    });
   });
 
   it("records an error on failure", async () => {
@@ -453,6 +466,80 @@ describe("binding resolution", () => {
     });
     const result = await resolveBinding(client, { source: "rpc", method: "x" });
     expect(result).toEqual({ error: "no data" });
+  });
+});
+
+describe("computed binding resolution", () => {
+  it("reduces finite numeric inputs and handles empty reductions", () => {
+    expect(resolveComputedBinding("sum", [[1, 2], 3])).toEqual({ value: 6 });
+    expect(resolveComputedBinding("avg", [1, 2, 3])).toEqual({ value: 2 });
+    expect(resolveComputedBinding("min", [3, 1, 2])).toEqual({ value: 1 });
+    expect(resolveComputedBinding("max", [3, 1, 2])).toEqual({ value: 3 });
+    expect(resolveComputedBinding("sum", [])).toEqual({ value: 0 });
+    expect(resolveComputedBinding("avg", [])).toEqual({ value: null });
+  });
+
+  it("reduces large min/max inputs without spreading them into function arguments", () => {
+    const values = Array.from({ length: 1_000_000 }, (_, index) => index);
+
+    expect(resolveComputedBinding("min", [values])).toEqual({ value: 0 });
+    expect(resolveComputedBinding("max", [values])).toEqual({ value: 999_999 });
+  });
+
+  it("supports count, last, pick, and format without evaluating expressions", () => {
+    expect(resolveComputedBinding("count", [[1, 2, 3], 4])).toEqual({ value: 4 });
+    expect(resolveComputedBinding("last", [1, "final"])).toEqual({ value: "final" });
+    expect(resolveComputedBinding("pick", [{ a: { b: 7 } }], "/a/b")).toEqual({ value: 7 });
+    expect(resolveComputedBinding("format", [42, { unit: "USD" }], "{0} {1}")).toEqual({
+      value: '42 {"unit":"USD"}',
+    });
+  });
+
+  it("returns an error for unknown operations", () => {
+    expect(resolveComputedBinding("eval", [1])).toEqual({
+      error: expect.stringContaining("Unknown computed op"),
+    });
+  });
+});
+
+describe("stream binding subscription", () => {
+  it("pushes matching event payloads with the pointer applied and unsubscribes", () => {
+    let listener: GatewayEventListener | null = null;
+    const unsubscribe = vi.fn();
+    const client = mockClient({
+      addEventListener: vi.fn((next: GatewayEventListener) => {
+        listener = next;
+        return unsubscribe;
+      }) as never,
+    });
+    const results: unknown[] = [];
+    const dispose = subscribeToStreamBinding(
+      client,
+      { source: "stream", event: "presence", pointer: "/online" } as never,
+      ["presence", "sessions.changed"],
+      (result) => results.push(result),
+    );
+
+    listener!({ type: "event", event: "presence", payload: { online: 5 } });
+    listener!({ type: "event", event: "sessions.changed", payload: { online: 9 } });
+    expect(results).toEqual([{ value: 5 }]);
+
+    dispose();
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a non-allowlisted event without subscribing", () => {
+    const addEventListener = vi.fn(() => () => {});
+    const client = mockClient({ addEventListener: addEventListener as never });
+
+    subscribeToStreamBinding(
+      client,
+      { source: "stream", event: "plugin.workspaces.changed" } as never,
+      ["presence", "sessions.changed"],
+      () => {},
+    );
+
+    expect(addEventListener).not.toHaveBeenCalled();
   });
 });
 

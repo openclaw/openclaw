@@ -45,9 +45,11 @@ import {
   resolveActiveSlug,
   registerActiveDrag,
   resolveBinding,
+  resolveComputedBinding,
   setWidgetCollapsed,
   startBindingPolling,
   subscribeToWorkspaceEvents,
+  subscribeToStreamBinding,
   updateWidgetTitle,
   visibleTabs,
   type WorkspaceBindingResult,
@@ -92,6 +94,10 @@ type WorkspaceViewState = {
   bindingResults: Map<string, WorkspaceBindingResult>;
   bindingLoads: Set<string>;
   bindingVersion: number;
+  /** Live stream subscriptions are versioned by the document, not polling ticks. */
+  streamSubscriptions: Map<string, StreamSubscription>;
+  /** Latest pushed value, retained when polling clears one-shot binding results. */
+  streamValues: Map<string, WorkspaceBindingResult>;
   /** Loaded custom-widget manifests keyed by widget name for one workspace version. */
   manifestCache: Map<string, WidgetManifestView>;
   manifestLoads: Set<string>;
@@ -108,6 +114,12 @@ type WorkspaceViewState = {
   dialog: WorkspaceDialogState | null;
   /** First-visit onboarding banner dismissed this session (#5); mirrors localStorage. */
   onboardingDismissed: boolean;
+};
+
+type StreamSubscription = {
+  event: string;
+  pointer?: string;
+  unsubscribe: () => void;
 };
 
 /** localStorage flag so the first-visit onboarding banner (#5) stays dismissed across reloads. */
@@ -205,9 +217,21 @@ function syncMenuDismiss(
   workspaceMenuDismiss.set(host, { onPointerDown, onKeyDown });
 }
 
-/** View-level teardown: drop any menu-dismiss listeners. Called from the controller's stop. */
+/** View-level teardown for document listeners and live data subscriptions. */
 export function stopWorkspaceView(host: object): void {
   teardownMenuDismiss(host);
+  teardownStreamSubscriptions(host);
+}
+
+function teardownStreamSubscriptions(host: object): void {
+  const state = workspaceViewStates.get(host);
+  if (!state) {
+    return;
+  }
+  for (const subscription of state.streamSubscriptions.values()) {
+    subscription.unsubscribe();
+  }
+  state.streamSubscriptions.clear();
 }
 
 function getViewState(host: object): WorkspaceViewState {
@@ -219,6 +243,8 @@ function getViewState(host: object): WorkspaceViewState {
       bindingResults: new Map(),
       bindingLoads: new Set(),
       bindingVersion: -1,
+      streamSubscriptions: new Map(),
+      streamValues: new Map(),
       manifestCache: new Map(),
       manifestLoads: new Set(),
       manifestVersion: -1,
@@ -256,14 +282,17 @@ export function navigateToWorkspaceTab(slug: string): void {
   window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
-/** Primary binding for a widget (first declared), if any. */
+/** Resolve the server-validated output contract without relying on object insertion order. */
 function primaryBinding(widget: WorkspaceWidget): WorkspaceBinding | null {
   const bindings = widget.bindings;
   if (!bindings) {
     return null;
   }
-  const first = Object.values(bindings)[0];
-  return first ?? null;
+  if (widget.outputBinding) {
+    return bindings[widget.outputBinding] ?? null;
+  }
+  const values = Object.values(bindings);
+  return values.length === 1 ? (values[0] ?? null) : null;
 }
 
 /**
@@ -275,12 +304,91 @@ function bindingCacheKey(workspace: WorkspaceDocument, viewState: WorkspaceViewS
   return workspace.workspaceVersion * 1_000_003 + viewState.dataVersion;
 }
 
+function reconcileStreamSubscriptions(
+  viewState: WorkspaceViewState,
+  client: GatewayBrowserClient | null,
+  tab: WorkspaceTab,
+  allowedEvents: readonly string[],
+  requestUpdate: (() => void) | null,
+): void {
+  if (!client) {
+    for (const subscription of viewState.streamSubscriptions.values()) {
+      subscription.unsubscribe();
+    }
+    viewState.streamSubscriptions.clear();
+    return;
+  }
+
+  const wanted = new Map<string, WorkspaceBinding>();
+  for (const widget of tab.widgets) {
+    const binding = primaryBinding(widget);
+    if (binding?.source === "stream" && binding.event && allowedEvents.includes(binding.event)) {
+      wanted.set(widget.id, binding);
+    }
+  }
+
+  for (const [widgetId, subscription] of viewState.streamSubscriptions) {
+    const binding = wanted.get(widgetId);
+    if (
+      !binding ||
+      subscription.event !== binding.event ||
+      subscription.pointer !== binding.pointer
+    ) {
+      subscription.unsubscribe();
+      viewState.streamSubscriptions.delete(widgetId);
+      viewState.streamValues.delete(widgetId);
+    }
+  }
+
+  for (const [widgetId, binding] of wanted) {
+    if (viewState.streamSubscriptions.has(widgetId)) {
+      continue;
+    }
+    const unsubscribe = subscribeToStreamBinding(client, binding, allowedEvents, (result) => {
+      viewState.streamValues.set(widgetId, result);
+      viewState.bindingResults.set(widgetId, result);
+      requestUpdate?.();
+    });
+    viewState.streamSubscriptions.set(widgetId, {
+      event: binding.event as string,
+      ...(binding.pointer !== undefined ? { pointer: binding.pointer } : {}),
+      unsubscribe,
+    });
+  }
+}
+
+async function resolveComputedForWidget(
+  client: GatewayBrowserClient | null,
+  widget: WorkspaceWidget,
+  binding: WorkspaceBinding,
+  allowedOps: readonly string[],
+): Promise<WorkspaceBindingResult> {
+  if (!binding.op || !allowedOps.includes(binding.op)) {
+    return { error: `Computed op is not advertised by the workspace server: ${binding.op ?? ""}` };
+  }
+  const siblings = widget.bindings ?? {};
+  const values: unknown[] = [];
+  for (const inputId of binding.inputs ?? []) {
+    const input = siblings[inputId];
+    if (!input) {
+      return { error: `Computed input not found: ${inputId}` };
+    }
+    const result = await resolveBinding(client, input);
+    if ("error" in result) {
+      return result;
+    }
+    values.push(result.value);
+  }
+  return resolveComputedBinding(binding.op ?? "", values, binding.arg);
+}
+
 /** Kick off binding resolution for widgets on the active tab; cache per version. */
 function ensureBindings(
   viewState: WorkspaceViewState,
   client: GatewayBrowserClient | null,
   workspace: WorkspaceDocument,
   tab: WorkspaceTab,
+  bindingContract: WorkspaceUiState["bindingContract"],
   requestUpdate: (() => void) | null,
 ): void {
   const key = bindingCacheKey(workspace, viewState);
@@ -289,6 +397,7 @@ function ensureBindings(
     viewState.bindingLoads.clear();
     viewState.bindingVersion = key;
   }
+  reconcileStreamSubscriptions(viewState, client, tab, bindingContract.streamEvents, requestUpdate);
   for (const widget of tab.widgets) {
     const binding = primaryBinding(widget);
     if (
@@ -298,8 +407,19 @@ function ensureBindings(
     ) {
       continue;
     }
+    if (binding.source === "stream") {
+      const streamed = viewState.streamValues.get(widget.id);
+      if (streamed) {
+        viewState.bindingResults.set(widget.id, streamed);
+      }
+      continue;
+    }
     viewState.bindingLoads.add(widget.id);
-    void resolveBinding(client, binding).then((result) => {
+    const pending =
+      binding.source === "computed"
+        ? resolveComputedForWidget(client, widget, binding, bindingContract.computedOps)
+        : resolveBinding(client, binding);
+    void pending.then((result) => {
       if (viewState.bindingVersion !== key) {
         return;
       }
@@ -551,7 +671,14 @@ function renderGrid(
   workspace: WorkspaceDocument,
   tab: WorkspaceTab,
 ): TemplateResult {
-  ensureBindings(viewState, props.client, workspace, tab, props.onRequestUpdate ?? null);
+  ensureBindings(
+    viewState,
+    props.client,
+    workspace,
+    tab,
+    state.bindingContract,
+    props.onRequestUpdate ?? null,
+  );
   ensureManifests(viewState, props, workspace, tab);
   if (tab.widgets.length === 0) {
     // #15: dashed placeholder card with an icon so an empty tab reads as an

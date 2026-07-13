@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import { getWorkspaceState } from "../../lib/workspace/index.ts";
 import { stopWorkspace } from "./workspace-controller.ts";
 import {
@@ -147,6 +147,10 @@ describe("renderWorkspace", () => {
     const state = getWorkspaceState(host);
     state.loaded = true;
     state.activeSlug = "main";
+    state.bindingContract = {
+      streamEvents: ["presence", "sessions.changed"],
+      computedOps: ["sum", "avg", "min", "max", "last", "count", "pick", "format"],
+    };
     state.workspace = {
       schemaVersion: 1,
       workspaceVersion: 1,
@@ -192,6 +196,147 @@ describe("renderWorkspace", () => {
       expect(host.querySelector(".workspace-stat__value")?.textContent).toBe("2");
     } finally {
       stopWorkspace(host);
+      host.remove();
+    }
+  });
+
+  it("renders a computed primary binding from static sibling bindings", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const state = getWorkspaceState(host);
+    state.loaded = true;
+    state.activeSlug = "main";
+    state.bindingContract = {
+      streamEvents: ["presence", "sessions.changed"],
+      computedOps: ["sum", "avg", "min", "max", "last", "count", "pick", "format"],
+    };
+    state.workspace = {
+      schemaVersion: 1,
+      workspaceVersion: 1,
+      tabs: [
+        {
+          slug: "main",
+          title: "Main",
+          hidden: false,
+          widgets: [
+            {
+              id: "total",
+              kind: "builtin:stat-card",
+              title: "Total",
+              grid: { x: 0, y: 0, w: 4, h: 2 },
+              collapsed: false,
+              bindings: {
+                a: { source: "static", value: 2 },
+                b: { source: "static", value: 3 },
+                value: { source: "computed", op: "sum", inputs: ["a", "b"] },
+              },
+              outputBinding: "value",
+            },
+          ],
+        },
+      ],
+      widgetsRegistry: {},
+      prefs: { tabOrder: ["main"] },
+    } as never;
+
+    try {
+      render(renderWorkspace({ host, client: null, connected: true }), host);
+      await vi.waitFor(() => {
+        render(renderWorkspace({ host, client: null, connected: true }), host);
+        expect(host.querySelector(".workspace-stat__value")?.textContent).toBe("5");
+      });
+    } finally {
+      stopWorkspace(host);
+      host.remove();
+    }
+  });
+
+  it("renders pushed stream values without resubscribing on a polling refresh", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const listeners: GatewayEventListener[] = [];
+    const unsubscribers: Array<ReturnType<typeof vi.fn>> = [];
+    let nextWorkspace: unknown;
+    const addEventListener = vi.fn((next: GatewayEventListener) => {
+      listeners.push(next);
+      const unsubscribe = vi.fn();
+      unsubscribers.push(unsubscribe);
+      return unsubscribe;
+    });
+    const client = {
+      request: vi.fn(async () => ({
+        doc: nextWorkspace,
+        bindingContract: {
+          streamEvents: ["presence", "sessions.changed"],
+          computedOps: ["sum", "avg", "min", "max", "last", "count", "pick", "format"],
+        },
+      })),
+      addEventListener,
+    } as unknown as GatewayBrowserClient;
+    const state = getWorkspaceState(host);
+    state.loaded = true;
+    state.activeSlug = "main";
+    state.bindingContract = {
+      streamEvents: ["presence", "sessions.changed"],
+      computedOps: ["sum", "avg", "min", "max", "last", "count", "pick", "format"],
+    };
+    state.workspace = {
+      schemaVersion: 1,
+      workspaceVersion: 1,
+      tabs: [
+        {
+          slug: "main",
+          title: "Main",
+          hidden: false,
+          widgets: [
+            {
+              id: "online",
+              kind: "builtin:stat-card",
+              title: "Online",
+              grid: { x: 0, y: 0, w: 4, h: 2 },
+              collapsed: false,
+              bindings: {
+                value: { source: "stream", event: "presence", pointer: "/online" },
+              },
+            },
+          ],
+        },
+      ],
+      widgetsRegistry: {},
+      prefs: { tabOrder: ["main"] },
+    } as never;
+
+    try {
+      render(renderWorkspace({ host, client, connected: true }), host);
+      // One document-change listener plus one stream listener.
+      expect(addEventListener).toHaveBeenCalledTimes(2);
+      for (const listener of listeners) {
+        listener({ type: "event", event: "presence", payload: { online: 8 } });
+      }
+      render(renderWorkspace({ host, client, connected: true }), host);
+      expect(host.querySelector(".workspace-stat__value")?.textContent).toBe("8");
+
+      bumpWorkspaceDataVersion(host);
+      render(renderWorkspace({ host, client, connected: true }), host);
+      expect(addEventListener).toHaveBeenCalledTimes(2);
+
+      nextWorkspace = { ...(state.workspace as object), workspaceVersion: 2 };
+      for (const listener of listeners) {
+        listener({
+          type: "event",
+          event: "plugin.workspaces.changed",
+          payload: { workspaceVersion: 2 },
+        });
+      }
+      await vi.waitFor(() => expect(state.workspace?.workspaceVersion).toBe(2));
+      render(renderWorkspace({ host, client, connected: true }), host);
+      expect(host.querySelector(".workspace-stat__value")?.textContent).toBe("8");
+      expect(addEventListener).toHaveBeenCalledTimes(2);
+    } finally {
+      stopWorkspace(host);
+      for (const unsubscribe of unsubscribers) {
+        expect(unsubscribe).toHaveBeenCalledOnce();
+      }
       host.remove();
     }
   });

@@ -45,14 +45,27 @@ Nine trusted widgets ship with the plugin and render as first-party UI:
 
 Widgets declare data through **bindings**, they never fetch on their own:
 
-| Binding  | Resolves to                                                                                               |
-| -------- | --------------------------------------------------------------------------------------------------------- |
-| `static` | A literal value stored in the document (8 KB max).                                                        |
-| `file`   | A JSON, Markdown, or CSV file under `<stateDir>/workspaces/data/`, optionally narrowed by a JSON pointer. |
-| `rpc`    | One of a fixed allowlist of read-only gateway methods, resolved by the trusted Control UI.                |
+| Binding    | Resolves to                                                                                               |
+| ---------- | --------------------------------------------------------------------------------------------------------- |
+| `static`   | A literal value stored in the document (8 KB max).                                                        |
+| `file`     | A JSON, Markdown, or CSV file under `<stateDir>/workspaces/data/`, optionally narrowed by a JSON pointer. |
+| `rpc`      | One of a fixed allowlist of read-only gateway methods, resolved by the trusted Control UI.                |
+| `stream`   | The latest observed payload from `presence` or `sessions.changed`, optionally narrowed by a JSON pointer. |
+| `computed` | A fixed `sum`, `avg`, `min`, `max`, `last`, `count`, `pick`, or `format` operation over sibling bindings. |
 
 The `file` binding is the simplest way to put your own numbers in a workspace: write a
 JSON file into the data directory and point a `stat-card` at it.
+
+When a widget has more than one binding, set `outputBinding` to the binding id the
+widget renders. This is an explicit contract, not object-key order. Computed inputs can
+reference static, file, or RPC siblings, but not another computed or stream binding.
+OpenClaw never evaluates expressions from a workspace document.
+
+Stream bindings use only events visible to a read-scoped Control UI connection.
+`plugin.workspaces.changed` still tells the shell to refetch the document after an edit,
+but it is write-scoped and therefore is not a valid stream binding event. An unchanged
+stream binding retains its last value across that document refetch. A newly mounted stream
+starts empty until its first event; it does not replay events sent before subscription.
 
 ## Provenance
 
@@ -88,9 +101,20 @@ per-invocation confirmation quoting the exact text, and passes a rate limit.
 ```sh
 openclaw workspaces tabs list
 openclaw workspaces tabs create --title Financials
+openclaw workspaces widgets add --tab financials --kind builtin:stat-card \
+  --binding subtotal=static:40 \
+  --binding tax=static:2 \
+  --binding 'value=computed:{"op":"sum","inputs":["subtotal","tax"]}' \
+  --output-binding value
+openclaw workspaces widgets add --tab financials --kind builtin:stat-card \
+  --binding 'value=stream:presence#/presence/0' \
+  --output-binding value
 openclaw workspaces widget-scaffold revenue-chart --title "Revenue Chart"
 openclaw workspaces widget-approve revenue-chart
 ```
+
+The `workspace_widget_add` and `workspace_widget_update` agent tools expose the same
+`stream` and `computed` binding objects plus `outputBinding` in their schemas.
 
 `widget-approve` needs a device paired with the `operator.approvals` scope; approving from
 the Control UI does not, because the browser already holds it.

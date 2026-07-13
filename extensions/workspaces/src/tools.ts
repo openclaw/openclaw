@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
 import { Type } from "typebox";
+import { COMPUTED_OPS, STREAM_EVENT_ALLOWLIST } from "./binding-contract.js";
 import { workspaceBroadcast, type WorkspaceBroadcast } from "./broadcast.js";
 import {
   WorkspaceBindingResolutionError,
@@ -106,6 +107,35 @@ const BindingSchema = Type.Union([
     },
     { additionalProperties: false },
   ),
+  Type.Object(
+    {
+      source: Type.Literal("stream"),
+      event: Type.String({
+        enum: [...STREAM_EVENT_ALLOWLIST],
+        description: "Readable gateway event delivered on the Control UI connection.",
+      }),
+      pointer: Type.Optional(Type.String({ description: "Optional JSON pointer." })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      source: Type.Literal("computed"),
+      op: Type.String({
+        enum: [...COMPUTED_OPS],
+        description: "Fixed operation; arbitrary expressions are never evaluated.",
+      }),
+      inputs: Type.Array(Type.String(), {
+        minItems: 1,
+        maxItems: 32,
+        description: "Sibling binding ids used as operation inputs.",
+      }),
+      arg: Type.Optional(
+        Type.String({ description: "Required JSON pointer for pick or template for format." }),
+      ),
+    },
+    { additionalProperties: false },
+  ),
 ]);
 const BindingsRecordSchema = Type.Record(Type.String(), BindingSchema, {
   description: "Widget binding map keyed by binding id.",
@@ -117,6 +147,9 @@ const WidgetPatchSchema = Type.Object(
     collapsed: Type.Optional(Type.Boolean({ description: "Collapse widget body." })),
     hidden: Type.Optional(Type.Boolean({ description: "Hide widget." })),
     bindings: Type.Optional(BindingsRecordSchema),
+    outputBinding: Type.Optional(
+      Type.String({ description: "Binding id rendered by the widget; required for 2+ bindings." }),
+    ),
     props: Type.Optional(JsonSchema),
   },
   { additionalProperties: false },
@@ -130,6 +163,9 @@ const WidgetInputSchema = Type.Object(
     collapsed: Type.Optional(Type.Boolean({ description: "Initial collapsed state." })),
     hidden: Type.Optional(Type.Boolean({ description: "Initial hidden state." })),
     bindings: Type.Optional(BindingsRecordSchema),
+    outputBinding: Type.Optional(
+      Type.String({ description: "Binding id rendered by the widget; required for 2+ bindings." }),
+    ),
     props: Type.Optional(JsonSchema),
   },
   { additionalProperties: false },
@@ -334,10 +370,12 @@ function readWidgetInput(
     "collapsed",
     "hidden",
     "bindings",
+    "outputBinding",
     "props",
   ]);
   const title = readOptionalString(record, "title");
   const bindings = readBindings(record.bindings);
+  const outputBinding = readOptionalString(record, "outputBinding");
   return {
     id: makeUniqueWidgetId(record, doc),
     kind: readRequiredString(record, "kind", "kind"),
@@ -347,22 +385,33 @@ function readWidgetInput(
     hidden: readOptionalBoolean(record, "hidden") ?? false,
     createdBy: actor,
     ...(bindings !== undefined ? { bindings } : {}),
+    ...(outputBinding !== undefined ? { outputBinding } : {}),
     ...(record.props !== undefined ? { props: record.props as JsonValue } : {}),
   };
 }
 
 function readWidgetPatch(value: unknown): Partial<WorkspaceWidget> {
-  const record = readRecord(value, ["title", "grid", "collapsed", "hidden", "bindings", "props"]);
+  const record = readRecord(value, [
+    "title",
+    "grid",
+    "collapsed",
+    "hidden",
+    "bindings",
+    "outputBinding",
+    "props",
+  ]);
   const title = readOptionalString(record, "title");
   const collapsed = readOptionalBoolean(record, "collapsed");
   const hidden = readOptionalBoolean(record, "hidden");
   const bindings = readBindings(record.bindings);
+  const outputBinding = readOptionalString(record, "outputBinding");
   return {
     ...(title !== undefined ? { title } : {}),
     ...(record.grid !== undefined ? { grid: readGrid(record.grid) } : {}),
     ...(collapsed !== undefined ? { collapsed } : {}),
     ...(hidden !== undefined ? { hidden } : {}),
     ...(bindings !== undefined ? { bindings } : {}),
+    ...(outputBinding !== undefined ? { outputBinding } : {}),
     ...(record.props !== undefined ? { props: record.props as JsonValue } : {}),
   };
 }
@@ -639,6 +688,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
           "collapsed",
           "hidden",
           "bindings",
+          "outputBinding",
           "props",
         ]);
         const tabSlug = readSlug(record, "tab");
@@ -674,6 +724,7 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
           "collapsed",
           "hidden",
           "bindings",
+          "outputBinding",
           "props",
         ]);
         const tabSlug = readSlug(record, "tab");
@@ -687,7 +738,11 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
           ...mutationBase,
           changedTabSlug: tabSlug,
           mutate: (draft) => {
-            Object.assign(findWidget(findTab(draft, tabSlug), id), patch);
+            const widget = findWidget(findTab(draft, tabSlug), id);
+            if (patch.bindings !== undefined && patch.outputBinding === undefined) {
+              delete widget.outputBinding;
+            }
+            Object.assign(widget, patch);
           },
         });
       },
@@ -880,17 +935,18 @@ export function createWorkspaceTools(params: WorkspaceToolParams): AnyAgentTool[
       label: "Workspace Data Read",
       description:
         "Resolve a workspace binding exactly as a widget sees it. `file` and `static` bindings " +
-        'return their data; an `rpc` binding returns { status: "binding_client_resolved" } ' +
-        "because only the trusted Control UI may call the gateway on a widget's behalf.",
+        "return their data; `rpc`, `stream`, and `computed` bindings return " +
+        '{ status: "binding_client_resolved" } because the trusted Control UI owns their ' +
+        "gateway subscription or sibling-value context.",
       parameters: Type.Object({ binding: BindingSchema }, { additionalProperties: false }),
       execute: async (_toolCallId, rawParams) => {
         const record = readRecord(rawParams, ["binding"]);
         try {
           return jsonResult({ data: await resolveBinding(record.binding, params.dataRead) });
         } catch (error) {
-          // `rpc` bindings are resolved by the trusted Control UI over its own
-          // authenticated socket. That is the documented answer, not an error, so
-          // return it as a result the model can act on.
+          // Client-owned bindings need the authenticated socket or sibling values.
+          // That is the documented answer, not an error, so return it as a result
+          // the model can act on.
           if (
             error instanceof WorkspaceBindingResolutionError &&
             error.code === "binding_client_resolved"
