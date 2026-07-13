@@ -2,7 +2,7 @@ import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js"
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
-} from "./session-accessor.sqlite-contract.js";
+} from "./session-transcript-turn-lifecycle.types.js";
 import type { SessionEntry } from "./types.js";
 
 export function sessionMatchesExpectedTranscriptTurn<T extends { entry: SessionEntry }>(

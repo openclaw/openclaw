@@ -16,7 +16,7 @@ import {
 
 type DiagnosticsAttributes = Record<string, string | number | boolean | null>;
 
-export type GatewayChatUserTurnController = {
+type GatewayChatUserTurnController = {
   baseInput: UserTurnInput;
   persist: ReturnType<typeof createUserTurnTranscriptRecorder>["persistFallback"];
   persistBestEffort: () => Promise<void>;

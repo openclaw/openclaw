@@ -38,7 +38,7 @@ const RESTART_SAFE_CHAT_UNSAFE_HOOKS = [
 ] as const;
 const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v1";
 
-export type RestartSafeChatRequest = {
+type RestartSafeChatRequest = {
   fingerprint: string;
 };
 
@@ -57,7 +57,7 @@ type RetryableUnadoptedChatClaim = SessionEntry & {
   status: "failed" | "killed";
 };
 
-export type DurableChatClaimResolution =
+type DurableChatClaimResolution =
   | { kind: "continue"; entry?: SessionEntry }
   | { kind: "accepted" }
   | { kind: "pending"; message: string }
@@ -129,7 +129,7 @@ export function isRetryableUnadoptedChatClaim(
   );
 }
 
-export function isAdoptedRestartRecoveryClaim(
+function isAdoptedRestartRecoveryClaim(
   entry: SessionEntry | undefined,
   clientRunId: string,
 ): entry is SessionEntry & {

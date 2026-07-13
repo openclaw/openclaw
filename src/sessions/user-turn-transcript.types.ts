@@ -3,11 +3,10 @@ import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
-} from "../config/sessions/session-accessor.sqlite-contract.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+} from "../config/sessions/session-transcript-turn-lifecycle.types.js";
 import type { InputProvenance } from "./input-provenance.js";
 
-export type UserTurnSessionEntry = {
+type UserTurnSessionEntry = {
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -44,12 +43,12 @@ export type UserTurnMessagePersistenceParams = {
   agentId?: string;
   sessionKey?: string;
   cwd?: string;
-  config?: OpenClawConfig;
+  config?: unknown;
   updateMode?: UserTurnTranscriptUpdateMode;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
-export type UserTurnBeforeMessageWrite = (params: {
+type UserTurnBeforeMessageWrite = (params: {
   message: PersistedUserTurnMessage;
   agentId?: string;
   sessionKey?: string;
@@ -65,7 +64,7 @@ type UserTurnTranscriptPersistenceTarget = {
   agentId: string;
   threadId?: string | number;
   cwd?: string;
-  config?: OpenClawConfig;
+  config?: unknown;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 };
 
@@ -96,7 +95,7 @@ export type PersistUserTurnTranscriptParams = {
   agentId: string;
   threadId?: string | number;
   cwd?: string;
-  config?: OpenClawConfig;
+  config?: unknown;
   updateMode?: UserTurnTranscriptUpdateMode;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
   expectedSessionState?: SessionTranscriptTurnExpectedState;

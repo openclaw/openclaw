@@ -2,7 +2,10 @@
 import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
-import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
+import {
+  persistSessionTranscriptTurn,
+  type SessionTranscriptTurnPersistOptions,
+} from "../config/sessions/session-accessor.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
@@ -428,7 +431,9 @@ export async function persistUserTurnTranscript(
     },
     {
       ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.config ? { config: params.config } : {}),
+      ...(params.config
+        ? { config: params.config as SessionTranscriptTurnPersistOptions["config"] }
+        : {}),
       ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
       ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
       ...(params.sessionLifecyclePatch

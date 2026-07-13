@@ -5,7 +5,7 @@ import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/sess
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 
-export type ReplyRestartRecoveryClaimController = {
+type ReplyRestartRecoveryClaimController = {
   clear: () => Promise<void>;
   isArmed: () => boolean;
   persist: () => Promise<void>;

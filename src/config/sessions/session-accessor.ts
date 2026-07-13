@@ -29,10 +29,6 @@ import {
   shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
-import type {
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
-} from "./session-accessor.sqlite-contract.js";
 import {
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptEventSync,
@@ -82,6 +78,10 @@ import {
   resolveFreshestTargetEntry,
   resolveProjectionExistingEntry,
 } from "./session-entry-selection.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -131,7 +131,7 @@ export type {
 export type {
   SessionTranscriptTurnExpectedState,
   SessionTranscriptTurnLifecyclePatch,
-} from "./session-accessor.sqlite-contract.js";
+} from "./session-transcript-turn-lifecycle.types.js";
 
 /**
  * Session access API for callers that need entries or transcripts without

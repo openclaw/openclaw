@@ -7,7 +7,7 @@ function normalizeRunId(value: unknown): string | undefined {
 }
 
 /** Keeps a bounded durable set of client runs that must never execute again. */
-export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | undefined {
+function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }

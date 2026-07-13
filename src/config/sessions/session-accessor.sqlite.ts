@@ -86,8 +86,6 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptStats,
   SessionTranscriptTurnMessageAppend,
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
   SessionTranscriptTurnWriteContext,
   SessionTranscriptWriteScope,
   SessionParentForkDecision,
@@ -106,6 +104,10 @@ import {
   deleteSessionTranscriptIndexInTransaction,
   indexAppendedTranscriptEventInTransaction,
 } from "./session-transcript-index.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
 import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
