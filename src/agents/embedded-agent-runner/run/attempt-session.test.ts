@@ -91,14 +91,15 @@ function createInput(options?: { activationError?: Error }) {
       events.push("resource-reload");
     }),
   };
+  const setActiveToolsByName = vi.fn(() => {
+    events.push("activate-tools");
+    if (options?.activationError) {
+      throw options.activationError;
+    }
+  });
   const activeSession = {
     agent: { id: "agent" },
-    setActiveToolsByName: vi.fn(() => {
-      events.push("activate-tools");
-      if (options?.activationError) {
-        throw options.activationError;
-      }
-    }),
+    setActiveToolsByName,
   } as unknown as AgentSession;
   const sessionManager = { id: "session-manager" };
   const sessionLockController = {
@@ -172,6 +173,7 @@ function createInput(options?: { activationError?: Error }) {
     },
     onDeliveredSourceReply: () => onDeliveredSourceReply?.(),
     resourceLoader,
+    setActiveToolsByName,
     sessionToolAllowlist,
     settingsManager,
   };
@@ -200,9 +202,7 @@ describe("prepareEmbeddedAttemptAgentSession", () => {
     ]);
     expect(hoisted.applyAgentAutoCompactionGuard).toHaveBeenCalledTimes(2);
     expect(hoisted.applyAgentCompactionSettingsFromConfig).toHaveBeenCalledOnce();
-    expect(fixture.activeSession.setActiveToolsByName).toHaveBeenCalledWith(
-      fixture.sessionToolAllowlist,
-    );
+    expect(fixture.setActiveToolsByName).toHaveBeenCalledWith(fixture.sessionToolAllowlist);
     expect(result).toEqual(
       expect.objectContaining({
         activeSession: fixture.activeSession,
