@@ -1459,6 +1459,8 @@ export const uk: TranslationMap = {
     blockedAgentFilter: "заблоковано фільтром агента",
   },
   nav: {
+    back: "Назад",
+    forward: "Вперед",
     chat: "Чат",
     settings: "Налаштування",
     settingsGeneral: "Загальні",
@@ -3586,6 +3588,14 @@ export const uk: TranslationMap = {
       remove: "Видалити",
       more: "Більше дій",
       history: "Історія",
+    },
+    runNotStarted: {
+      notDue: "Час запуску цієї автоматизації ще не настав.",
+      alreadyRunning: "Ця автоматизація вже виконується.",
+      recoveryPending: "Відновлення планувальника ще триває.",
+      invalidSpec: "Ця автоматизація має некоректний розклад або корисне навантаження.",
+      stopped: "Планувальник зупинено.",
+      unknown: "Не вдалося запустити цю автоматизацію.",
     },
     jobs: {
       schedule: "Розклад",

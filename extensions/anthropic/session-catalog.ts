@@ -1442,11 +1442,10 @@ function toGenericClaudeHost(
 }
 
 export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
-  const createSession = resolveClaudeCatalogCreateSession(api);
   const provider: SessionCatalogProvider = {
     id: "claude",
     label: "Claude Code",
-    ...(createSession ? { createSession } : {}),
+    resolveCreateSession: () => resolveClaudeCatalogCreateSession(api),
     list: async (query) => {
       const adopted = listBoundClaudeSessions(api);
       const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });

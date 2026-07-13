@@ -20,8 +20,8 @@ export type SessionCatalogArchiveProviderParams = Omit<SessionsCatalogArchivePar
 export type SessionCatalogProvider = {
   id: string;
   label: string;
-  /** Opens the core new-session flow with this model preselected. */
-  createSession?: NonNullable<SessionCatalogCapabilities["createSession"]>;
+  /** Resolves the current core new-session target when the catalog is listed. */
+  resolveCreateSession?: () => NonNullable<SessionCatalogCapabilities["createSession"]> | undefined;
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
   continueSession?: (

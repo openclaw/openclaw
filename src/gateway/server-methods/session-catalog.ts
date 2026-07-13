@@ -52,6 +52,7 @@ function catalogResult(
   provider: SessionCatalogProvider,
   hosts: SessionCatalog["hosts"],
   error?: SessionCatalog["error"],
+  createSession?: NonNullable<SessionCatalog["capabilities"]["createSession"]>,
 ): SessionCatalog {
   const result: SessionCatalog = {
     id: provider.id,
@@ -59,7 +60,7 @@ function catalogResult(
     capabilities: {
       continueSession: Boolean(provider.continueSession),
       archive: Boolean(provider.archive),
-      ...(provider.createSession ? { createSession: provider.createSession } : {}),
+      ...(createSession ? { createSession } : {}),
     },
     hosts,
   };
@@ -101,7 +102,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             hostIds: request.hostIds,
             ...("cursors" in request ? { cursors: request.cursors } : {}),
           });
-          return catalogResult(provider, hosts);
+          return catalogResult(provider, hosts, undefined, provider.resolveCreateSession?.());
         } catch (error) {
           return catalogResult(provider, [], catalogError(error));
         }

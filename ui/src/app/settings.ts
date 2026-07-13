@@ -109,8 +109,7 @@ export type UiSettings = {
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
-  sidebarMoreExpanded: boolean; // Whether the sidebar "More" section is expanded
+  sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" menu row
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
@@ -520,7 +519,6 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
-    sidebarMoreExpanded: false,
     textScale: 100,
   };
 
@@ -586,10 +584,6 @@ export function loadSettings(): UiSettings {
           : defaults.navWidth,
       sidebarPinnedRoutes:
         normalizeSidebarPinnedRoutes(parsed.sidebarPinnedRoutes) ?? defaults.sidebarPinnedRoutes,
-      sidebarMoreExpanded:
-        typeof parsed.sidebarMoreExpanded === "boolean"
-          ? parsed.sidebarMoreExpanded
-          : defaults.sidebarMoreExpanded,
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
@@ -685,7 +679,6 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,
-    sidebarMoreExpanded: next.sidebarMoreExpanded,
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
@@ -141,7 +142,9 @@ describe("Claude session catalog", () => {
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
 
-    expect(provider?.createSession).toEqual({ model: "anthropic/claude-opus-4-8" });
+    expect(provider?.resolveCreateSession?.()).toEqual({
+      model: "anthropic/claude-opus-4-8",
+    });
 
     await expect(
       provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
@@ -167,12 +170,13 @@ describe("Claude session catalog", () => {
   });
 
   it("does not advertise creation without a configured Claude CLI route", () => {
+    let config: OpenClawConfig = {};
     let provider: SessionCatalogProvider | undefined;
     const api = {
       id: "anthropic",
       config: {},
       runtime: {
-        config: { current: () => ({}) },
+        config: { current: () => config },
       },
       registerSessionCatalog: (candidate: SessionCatalogProvider) => {
         provider = candidate;
@@ -181,7 +185,23 @@ describe("Claude session catalog", () => {
 
     registerClaudeSessionCatalog(api);
 
-    expect(provider?.createSession).toBeUndefined();
+    expect(provider?.resolveCreateSession?.()).toBeUndefined();
+
+    config = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    expect(provider?.resolveCreateSession?.()).toEqual({
+      model: "anthropic/claude-opus-4-8",
+    });
+
+    config = {};
+    expect(provider?.resolveCreateSession?.()).toBeUndefined();
   });
 
   it.each([

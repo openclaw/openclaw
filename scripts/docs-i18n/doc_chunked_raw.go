@@ -288,6 +288,8 @@ func validateDocChunkTranslation(source, translated string) error {
 }
 
 func sameI18NProtocolMarkers(source, translated string) bool {
+	source = strings.ReplaceAll(source, `\_`, "_")
+	translated = strings.ReplaceAll(translated, `\_`, "_")
 	if !sameStringMultiset(placeholderRe.FindAllString(source, -1), placeholderRe.FindAllString(translated, -1)) {
 		return false
 	}

@@ -34,7 +34,7 @@ type CliProcessDiagnostics = {
   useResume: boolean;
 };
 
-export type CliTerminalFailure = {
+type CliTerminalFailure = {
   reason: "max_turns";
   limit?: number;
 };

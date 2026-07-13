@@ -58,11 +58,14 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("advertises a provider's core new-session target", async () => {
+  it("refreshes a provider's core new-session target when listing", async () => {
+    let createSession: { model: string } | undefined = {
+      model: "anthropic/claude-opus-4-8",
+    };
     activeRegistry.sessionCatalogs = [
       {
         provider: provider("claude", {
-          createSession: { model: "anthropic/claude-opus-4-8" },
+          resolveCreateSession: () => createSession,
         }),
       },
     ];
@@ -77,6 +80,20 @@ describe("session catalog Gateway methods", () => {
             continueSession: false,
             archive: false,
             createSession: { model: "anthropic/claude-opus-4-8" },
+          },
+        }),
+      ],
+    });
+
+    createSession = undefined;
+    const refreshed = await call("sessions.catalog.list", {});
+    expect(refreshed).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          id: "claude",
+          capabilities: {
+            continueSession: false,
+            archive: false,
           },
         }),
       ],
