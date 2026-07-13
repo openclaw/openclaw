@@ -130,6 +130,30 @@ describe("rewriteUpdateFlagArgv", () => {
       "--json",
     ]);
   });
+
+  it("does not rewrite --update after -- positional terminator", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "foo", "--", "--update"]);
+  });
+
+  it("does not rewrite --update when a subcommand appears before it", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "update.channel", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "update.channel", "--update"]);
+  });
+
+  it("does not rewrite --update that appears as a value after a subcommand", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--update"])).toEqual(
+      ["node", "entry.js", "config", "set", "foo", "--update"],
+    );
+  });
+
+  it("rewrites --update when it appears before any subcommand", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--update", "config", "set", "foo"])).toEqual(
+      ["node", "entry.js", "update", "config", "set", "foo"],
+    );
+  });
 });
 
 describe("shouldEnsureCliPath", () => {

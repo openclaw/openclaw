@@ -37,13 +37,43 @@ function isBareParentDefaultHelpArgv(argv: string[]): boolean {
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   // Preserve the old root --update spelling by rewriting before Commander registration.
-  const index = argv.indexOf("--update");
-  if (index === -1) {
+  // Only rewrite --update when it appears as a root-level flag: before any subcommand
+  // and before the -- positional argument terminator.
+  const dashDashIndex = argv.indexOf("--");
+  const updateIndex = argv.indexOf("--update");
+  if (updateIndex === -1) {
     return argv;
   }
 
+  // If --update appears after --, it is a positional value, not a root flag.
+  if (dashDashIndex !== -1 && updateIndex > dashDashIndex) {
+    return argv;
+  }
+
+  // Check if a subcommand appears before --update.
+  // Track --flag value pairs so flag values (e.g. "p" in "--profile p") are not
+  // mistaken for subcommands.
+  for (let i = 2; i < updateIndex; i++) {
+    const arg = argv[i];
+    if (arg === undefined) continue;
+    // Non-flag argument before --update → a subcommand is present.
+    if (!arg.startsWith("-")) {
+      return argv;
+    }
+    // --flag=value form: a flag, not a subcommand.
+    if (arg.startsWith("--") && arg.includes("=")) continue;
+    // --flag without =: the next argument may be its value.
+    // Only skip it when it looks like a value (does not start with -).
+    if (arg.startsWith("--") && arg !== "--") {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("-")) {
+        i++; // skip the flag's value
+      }
+    }
+  }
+
   const next = [...argv];
-  next.splice(index, 1, "update");
+  next.splice(updateIndex, 1, "update");
   return next;
 }
 
