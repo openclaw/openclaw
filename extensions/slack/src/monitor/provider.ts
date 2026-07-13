@@ -501,10 +501,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     });
   }
 
-  registerSlackMonitorEvents({ ctx, account, handleSlackMessage, trackEvent });
-  if (installationIdentity.kind !== "enterprise") {
-    await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
-  }
+  // Resolve command registration first so App Home never advertises an inactive single command.
+  const commandRegistration =
+    installationIdentity.kind === "enterprise"
+      ? ({ mode: "disabled" } as const)
+      : await registerSlackMonitorSlashCommands({ ctx, account, trackEvent });
+  const appHomeSlashCommandName =
+    commandRegistration.mode === "single" ? commandRegistration.name : undefined;
+  registerSlackMonitorEvents({
+    ctx,
+    account,
+    handleSlackMessage,
+    appHomeSlashCommandName,
+    trackEvent,
+  });
   if (slackMode === "http" && slackHttpHandler) {
     unregisterHttpHandler = registerSlackHttpHandler({
       path: slackWebhookPath,
@@ -540,7 +550,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
                 unresolved.push(entry.input);
                 continue;
               }
-              mapping.push(formatSlackChannelResolved(entry));
+              const resolvedLabel = formatSlackChannelResolved(entry);
+              if (resolvedLabel) {
+                mapping.push(resolvedLabel);
+              }
               const existing = nextChannels[entry.id] ?? {};
               nextChannels[entry.id] = { ...source, ...existing };
             }
@@ -765,8 +778,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   }
 }
 
-export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
-
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 
 export const testing = {
@@ -785,4 +796,3 @@ export const testing = {
   getSocketEmitter,
   waitForSlackSocketDisconnect,
 };
-export { testing as __testing };

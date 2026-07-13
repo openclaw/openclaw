@@ -292,6 +292,7 @@ export type ConfigSchemaResponse = {
 };
 
 export type PresenceEntry = {
+  deviceId?: string | null;
   instanceId?: string | null;
   host?: string | null;
   ip?: string | null;
@@ -312,6 +313,7 @@ export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  agentRuntime?: GatewayAgentRuntime;
   thinkingLevels?: GatewayThinkingLevelOption[];
   thinkingOptions?: string[];
   thinkingDefault?: string;
@@ -378,6 +380,8 @@ type SessionWorkspaceFileEntry = {
   size?: number;
   updatedAtMs?: number;
   content?: string;
+  /** sha256 hex of the file bytes; the CAS token for sessions.files.set. */
+  hash?: string;
 };
 
 type SessionWorkspaceBrowserEntry = {
@@ -423,6 +427,12 @@ export type SessionWorkspaceGetResult = {
   file: SessionWorkspaceFileEntry;
 };
 
+export type SessionWorkspaceSetResult = {
+  sessionKey: string;
+  root?: string;
+  file: SessionWorkspaceFileEntry;
+};
+
 export type ArtifactDownloadResult = {
   artifact: SessionWorkspaceArtifactEntry;
   encoding?: "base64";
@@ -439,7 +449,7 @@ type SessionCompactionCheckpointReason =
   | "overflow-retry"
   | "timeout-retry";
 
-export type SessionCompactionTranscriptReference = {
+type SessionCompactionTranscriptReference = {
   sessionId: string;
   sessionFile?: string;
   leafId?: string;
@@ -468,6 +478,10 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  /** Managed worktree bound to this session (repo checkout + branch). */
+  worktree?: { id: string; branch: string; repoRoot: string };
+  /** Session-scoped exec node binding (exec host=node routing). */
+  execNode?: string;
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   /** User-defined organization bucket; unrelated to chat-group kind/groupChannel. */
@@ -508,6 +522,8 @@ export type GatewaySessionRow = {
   status?: SessionRunStatus;
   hasActiveRun?: boolean;
   activeRunIds?: string[];
+  /** An enabled cron job is bound to this session (runs in it or delivers to it). */
+  hasAutomation?: boolean;
   subagentRunState?: SubagentRunState;
   hasActiveSubagentRun?: boolean;
   startedAt?: number;
@@ -516,6 +532,7 @@ export type GatewaySessionRow = {
   childSessions?: string[];
   model?: string;
   modelProvider?: string;
+  modelSelectionLocked?: boolean;
   effectiveResponseUsage?: "on" | "off" | "tokens" | "full";
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
@@ -568,16 +585,14 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
     modelProvider?: string;
     model?: string;
     agentRuntime?: GatewayAgentRuntime;
+    thinkingLevel?: string;
+    thinkingLevels?: GatewayThinkingLevelOption[];
   };
 };
 
 export type {
-  CostUsageDailyEntry,
   CostUsageSummary,
-  SessionsUsageEntry,
   SessionsUsageResult,
-  SessionsUsageTotals,
-  SessionUsageTimePoint,
   SessionUsageTimeSeries,
 } from "../pages/usage/data-types.ts";
 
@@ -626,7 +641,7 @@ export type CronPayload =
       bestEffortDeliver?: boolean;
     };
 
-export type CronDelivery = {
+type CronDelivery = {
   mode: "none" | "announce" | "webhook";
   channel?: string;
   to?: string;
@@ -686,6 +701,21 @@ export type CronStatus = {
   jobs: number;
   nextWakeAtMs?: number | null;
 };
+
+export type CronRunResult =
+  | { ok: true; ran: true }
+  | { ok: true; enqueued: true; runId: string }
+  | {
+      ok: true;
+      ran: false;
+      reason:
+        | "not-due"
+        | "already-running"
+        | "restart-recovery-pending"
+        | "invalid-spec"
+        | "stopped";
+    }
+  | { ok: false };
 
 export type CronRunLogEntry = {
   ts: number;
@@ -848,16 +878,3 @@ export type ModelAuthStatusProvider =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusProvider;
 export type ModelAuthStatusResult =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthStatusResult;
-
-// ── Attention ───────────────────────────────────────
-
-type AttentionSeverity = "error" | "warning" | "info";
-
-export type AttentionItem = {
-  severity: AttentionSeverity;
-  icon: string;
-  title: string;
-  description: string;
-  href?: string;
-  external?: boolean;
-};

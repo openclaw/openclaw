@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
@@ -24,7 +25,6 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   detectMime,
   estimateStringChars,
-  runTasksWithConcurrency,
   truncateUtf16Safe,
 } from "./openclaw-runtime-io.js";
 import {
@@ -455,11 +455,11 @@ export function chunkMarkdown(
       // Second pass: if a segment's *weighted* size still exceeds the budget
       // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
       // chunking.tokens so the chunk stays within the token budget.
-      for (let start = 0; start < line.length; ) {
+      for (let start = 0; start < line.length;) {
         const coarse = truncateUtf16Safe(line.slice(start), maxChars);
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
-          for (let j = 0; j < coarse.length; ) {
+          for (let j = 0; j < coarse.length;) {
             let end = Math.min(j + fineStep, coarse.length);
             const lastCodeUnit = coarse.charCodeAt(end - 1);
             if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
@@ -539,17 +539,6 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-export async function runWithConcurrency<T>(
-  tasks: Array<() => Promise<T>>,
-  limit: number,
-): Promise<T[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
-    tasks,
-    limit,
-    errorMode: "stop",
-  });
-  if (hasError) {
-    throw firstError;
-  }
-  return results;
+export function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+  return runWithConcurrencyImpl(tasks, limit);
 }

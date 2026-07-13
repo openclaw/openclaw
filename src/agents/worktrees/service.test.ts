@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { getRegistryWorktree } from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
@@ -52,16 +52,30 @@ async function addRemote(root: string, repo: string): Promise<string> {
 }
 
 describe("ManagedWorktreeService", () => {
+  let templateRoot: string;
+  let templateRepo: string;
   let root: string;
   let repo: string;
   let env: NodeJS.ProcessEnv;
   let now: number;
   let service: ManagedWorktreeService;
 
+  beforeAll(async () => {
+    const tempRoot = await fs.realpath(os.tmpdir());
+    templateRoot = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-worktrees-template-"));
+    templateRepo = await initializeRepository(templateRoot);
+  });
+
+  afterAll(async () => {
+    await fs.rm(templateRoot, { recursive: true, force: true });
+  });
+
   beforeEach(async () => {
     const tempRoot = await fs.realpath(os.tmpdir());
     root = await fs.mkdtemp(path.join(tempRoot, "openclaw-managed-worktrees-"));
-    repo = await initializeRepository(root);
+    repo = path.join(root, "repo");
+    await fs.cp(templateRepo, repo, { recursive: true });
+    repo = await fs.realpath(repo);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
     now = 1_700_000_000_000;
     service = new ManagedWorktreeService({ env, now: () => now });
@@ -82,6 +96,204 @@ describe("ManagedWorktreeService", () => {
     expect(created.path).toContain(path.join("worktrees", created.repoFingerprint, "remote-task"));
     expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
     expect(repeated).toEqual(created);
+  });
+
+  it("lists repository branches default-first with deterministic ordering", async () => {
+    await addRemote(root, repo);
+    await git(repo, "branch", "feature-a");
+    await git(repo, "push", "origin", "feature-a");
+    await git(repo, "branch", "-D", "feature-a");
+    await git(repo, "branch", "zeta-local");
+    await git(repo, "checkout", "-b", "current-work");
+
+    const result = await service.listRepositoryBranches(repo);
+    expect(result.defaultBranch).toBe("main");
+    expect(result.headBranch).toBe("current-work");
+    // Remote-only branches keep their remote-qualified form so the returned
+    // name always resolves as a git worktree base ref.
+    expect(result.branches.map((branch) => branch.name)).toEqual([
+      "main",
+      "current-work",
+      "origin/feature-a",
+      "zeta-local",
+    ]);
+    expect(result.branches.find((branch) => branch.name === "origin/feature-a")?.kind).toBe(
+      "remote",
+    );
+    expect(result.branches.find((branch) => branch.name === "main")?.kind).toBe("local");
+  });
+
+  it("creates a worktree from a remote-only branch ref returned by the picker", async () => {
+    await addRemote(root, repo);
+    await git(repo, "checkout", "-b", "remote-only");
+    await fs.writeFile(path.join(repo, "remote-only.txt"), "remote\n");
+    await git(repo, "add", "remote-only.txt");
+    await git(repo, "commit", "-m", "remote only commit");
+    await git(repo, "push", "origin", "remote-only");
+    const remoteCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "checkout", "main");
+    await git(repo, "branch", "-D", "remote-only");
+
+    const listed = await service.listRepositoryBranches(repo);
+    const remoteRef = listed.branches.find((branch) => branch.kind === "remote")?.name;
+    expect(remoteRef).toBe("origin/remote-only");
+    const created = await service.create({
+      repoRoot: repo,
+      name: "from-remote",
+      baseRef: remoteRef,
+    });
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteCommit);
+    expect(
+      await git(created.path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
+    ).toBe("origin/remote-only");
+  });
+
+  it("lists local branches without a remote", async () => {
+    await git(repo, "branch", "side");
+    const result = await service.listRepositoryBranches(repo);
+    expect(result.defaultBranch).toBeUndefined();
+    expect(result.headBranch).toBe("main");
+    expect(result.branches.map((branch) => branch.name)).toEqual(["main", "side"]);
+    expect(result.branches.every((branch) => branch.kind === "local")).toBe(true);
+  });
+
+  it("creates a worktree from an explicit base ref", async () => {
+    await git(repo, "checkout", "-b", "base-branch");
+    await fs.writeFile(path.join(repo, "base.txt"), "base branch file\n");
+    await git(repo, "add", "base.txt");
+    await git(repo, "commit", "-m", "base branch commit");
+    const baseCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "checkout", "main");
+
+    const created = await service.create({
+      repoRoot: repo,
+      name: "based-task",
+      baseRef: "base-branch",
+    });
+    expect(created.baseRef).toBe("base-branch");
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(baseCommit);
+  });
+
+  it("normalizes dashed refs and revision expressions before creating branches", async () => {
+    const initialCommit = await git(repo, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(repo, "history.txt"), "second\n");
+    await git(repo, "add", "history.txt");
+    await git(repo, "commit", "-m", "second commit");
+    const secondCommit = await git(repo, "rev-parse", "HEAD");
+    await fs.appendFile(path.join(repo, "history.txt"), "third\n");
+    await git(repo, "add", "history.txt");
+    await git(repo, "commit", "-m", "third commit");
+    const thirdCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "update-ref", "refs/tags/--force", thirdCommit);
+    await git(repo, "reset", "--hard", initialCommit);
+
+    const fromRef = await service.create({
+      repoRoot: repo,
+      name: "dashed-ref",
+      baseRef: "--force",
+    });
+    const fromExpression = await service.create({
+      repoRoot: repo,
+      name: "dashed-expression",
+      baseRef: "--force~1",
+    });
+
+    expect(fromRef.baseRef).toBe("--force");
+    expect(await git(fromRef.path, "rev-parse", "HEAD")).toBe(thirdCommit);
+    expect(fromExpression.baseRef).toBe("--force~1");
+    expect(await git(fromExpression.path, "rev-parse", "HEAD")).toBe(secondCommit);
+  });
+
+  it("preserves Git's bare-dash previous-checkout shorthand", async () => {
+    await git(repo, "checkout", "-b", "previous");
+    await fs.writeFile(path.join(repo, "previous.txt"), "previous\n");
+    await git(repo, "add", "previous.txt");
+    await git(repo, "commit", "-m", "previous checkout commit");
+    const previousCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "checkout", "main");
+
+    const created = await service.create({
+      repoRoot: repo,
+      name: "previous-checkout",
+      baseRef: "-",
+    });
+
+    expect(created.baseRef).toBe("-");
+    expect(await git(created.path, "rev-parse", "HEAD")).toBe(previousCommit);
+  });
+
+  it("rejects ambiguous dashed refs instead of choosing by ref precedence", async () => {
+    const initialCommit = await git(repo, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(repo, "tag.txt"), "tag\n");
+    await git(repo, "add", "tag.txt");
+    await git(repo, "commit", "-m", "tag candidate");
+    const tagCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "reset", "--hard", initialCommit);
+    await fs.writeFile(path.join(repo, "branch.txt"), "branch\n");
+    await git(repo, "add", "branch.txt");
+    await git(repo, "commit", "-m", "branch candidate");
+    const branchCommit = await git(repo, "rev-parse", "HEAD");
+    await git(repo, "update-ref", "refs/tags/--ambiguous", tagCommit);
+    await git(repo, "update-ref", "refs/heads/--ambiguous", branchCommit);
+    await git(repo, "config", "core.warnAmbiguousRefs", "false");
+
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "ambiguous-ref",
+        baseRef: "--ambiguous",
+      }),
+    ).rejects.toThrow(/git rev-parse --symbolic-full-name --verify failed/);
+
+    expect(await git(repo, "branch", "--list", "openclaw/ambiguous-ref")).toBe("");
+    expect(await service.list()).toEqual([]);
+  });
+
+  it.each(["--lock", "--orphan"])(
+    "rejects absent dashed base %s without creating worktree state",
+    async (baseRef) => {
+      const before = await git(repo, "worktree", "list", "--porcelain");
+      const name = baseRef.slice(2);
+
+      await expect(service.create({ repoRoot: repo, name, baseRef })).rejects.toThrow(
+        /git rev-parse --symbolic-full-name --verify failed/,
+      );
+
+      expect(await git(repo, "worktree", "list", "--porcelain")).toBe(before);
+      expect(await git(repo, "branch", "--list", `openclaw/${name}`)).toBe("");
+      expect(await service.list()).toEqual([]);
+      await expect(fs.stat(path.join(env.OPENCLAW_STATE_DIR!, "worktrees"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it("rejects name reuse across owners instead of adopting a foreign worktree", async () => {
+    await service.create({
+      repoRoot: repo,
+      name: "shared-name",
+      ownerKind: "session",
+      ownerId: "agent:main:dashboard:one",
+    });
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "shared-name",
+        ownerKind: "session",
+        ownerId: "agent:main:dashboard:two",
+      }),
+    ).rejects.toThrow(/already in use by session/);
+    await expect(service.create({ repoRoot: repo, name: "shared-name" })).rejects.toThrow(
+      /already in use by session/,
+    );
+    // The rightful owner still reuses its record.
+    const reused = await service.create({
+      repoRoot: repo,
+      name: "shared-name",
+      ownerKind: "session",
+      ownerId: "agent:main:dashboard:one",
+    });
+    expect(reused.ownerId).toBe("agent:main:dashboard:one");
   });
 
   it("does not remove a concurrent successful create during remote fallback", async () => {

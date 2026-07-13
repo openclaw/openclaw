@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import { request } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -51,6 +52,7 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
+import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { withProgress } from "../progress.js";
@@ -129,20 +131,46 @@ function createGatewayCliStartupTrace() {
       );
     }
   };
+  const startMeasure = <T>(name: string, run: () => Awaitable<T>) => {
+    const before = performance.now();
+    let completedAt = before;
+    let emitted = false;
+    const result = withDiagnosticPhase(name, run).finally(() => {
+      completedAt = performance.now();
+    });
+    // Attach both outcomes immediately so callers can finish terminal UI before
+    // consuming or rethrowing the measured result without an unhandled rejection.
+    const settled = result.then(
+      () => {},
+      () => {},
+    );
+    return {
+      result,
+      settled,
+      emit() {
+        if (emitted) {
+          return;
+        }
+        emitted = true;
+        emit(name, completedAt - before, completedAt - started);
+        last = completedAt;
+      },
+    };
+  };
   return {
     mark(name: string) {
       const now = performance.now();
       emit(name, now - last, now - started);
       last = now;
     },
+    startMeasure,
     async measure<T>(name: string, run: () => Awaitable<T>): Promise<T> {
-      const before = performance.now();
+      const measurement = startMeasure(name, run);
       try {
-        return await withDiagnosticPhase(name, run);
+        return await measurement.result;
       } finally {
-        const now = performance.now();
-        emit(name, now - before, now - started);
-        last = now;
+        await measurement.settled;
+        measurement.emit();
       }
     },
   };
@@ -183,7 +211,7 @@ function formatModeErrorList(modes: readonly string[]): string {
     return "";
   }
   if (quoted.length === 1) {
-    return quoted[0];
+    return expectDefined(quoted[0], "quoted entry at 0");
   }
   if (quoted.length === 2) {
     return `${quoted[0]} or ${quoted[1]}`;
@@ -200,28 +228,6 @@ function shouldBlockGatewayBindWithoutExplicitAuth(params: {
     !isLoopbackHost(params.bindHost) &&
     !params.hasSharedSecret &&
     params.resolvedAuthMode !== "trusted-proxy"
-  );
-}
-
-async function maybeLogPendingControlUiBuild(cfg: OpenClawConfig): Promise<void> {
-  if (cfg.gateway?.controlUi?.enabled === false) {
-    return;
-  }
-  if (toOptionString(cfg.gateway?.controlUi?.root)) {
-    return;
-  }
-  const { resolveControlUiRootSync } = await import("../../infra/control-ui-assets.js");
-  if (
-    resolveControlUiRootSync({
-      moduleUrl: import.meta.url,
-      argv1: process.argv[1],
-      cwd: process.cwd(),
-    })
-  ) {
-    return;
-  }
-  gatewayLog.info(
-    "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
   );
 }
 
@@ -625,14 +631,33 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
   const startupTrace = createGatewayCliStartupTrace();
 
   // The heaviest part of gateway startup is loading the server module tree
-  // (channels, plugins, HTTP stack, etc.). Show a spinner so the user sees
-  // progress instead of a silent 15-20 s pause (especially on Windows/NTFS).
-  const { startGatewayServer } = await startupTrace.measure("cli.server-import", () =>
-    withProgress(
-      { label: "Loading gateway modules…", indeterminate: true },
-      async () => import("../../gateway/server.js"),
-    ),
+  // (channels, plugins, HTTP stack, etc.). Start it before the foreground TTY
+  // banner so the animation never extends readiness. If loading wins, the
+  // banner settles cleanly; otherwise its existing spinner owns the wait.
+  const serverImportMeasurement = startupTrace.startMeasure(
+    "cli.server-import",
+    () => import("../../gateway/server.js"),
   );
+  const rawServerImport = serverImportMeasurement.result;
+  const bannerDone: Promise<ClawBannerResult> = process.stdout.isTTY
+    ? printClawBanner(defaultRuntime, { settleWhen: rawServerImport })
+    : Promise.resolve("static");
+  const loadServerModule = async () => {
+    try {
+      const bannerResult = await bannerDone;
+      return bannerResult === "settled"
+        ? await rawServerImport
+        : await withProgress(
+            { label: "Loading gateway modules…", indeterminate: true },
+            async () => rawServerImport,
+          );
+    } finally {
+      // Trace output follows banner or spinner cleanup on both success and error.
+      await serverImportMeasurement.settled;
+      serverImportMeasurement.emit();
+    }
+  };
+  const { startGatewayServer } = await loadServerModule();
 
   setConsoleTimestampPrefix(true);
 
@@ -709,9 +734,6 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
     process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
-  void maybeLogPendingControlUiBuild(cfg).catch((err: unknown) => {
-    gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
-  });
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     defaultRuntime.error(formatInvalidPortOption("--port"));
@@ -757,7 +779,8 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
         sigtermTimeoutMs: 700,
       });
       if (killed.length === 0) {
-        gatewayLog.info(`force: no listeners on port ${port}`);
+        // Nothing was freed; keep the no-op out of normal startup output.
+        gatewayLog.debug(`force: no listeners on port ${port}`);
       } else {
         for (const proc of killed) {
           gatewayLog.info(
@@ -1011,7 +1034,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
       healthHost,
       beginBoot,
       completeBoot,
-      start: async ({ startupStartedAt } = {}) => {
+      start: async ({ startupStartedAt, requestHotReloadRecovery } = {}) => {
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
@@ -1019,6 +1042,7 @@ export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunR
           auth: authOverride,
           tailscale: tailscaleOverride,
           startupStartedAt,
+          ...(requestHotReloadRecovery ? { hotReloadRecovery: requestHotReloadRecovery } : {}),
           ...(startupConfigSnapshotReadForThisStart
             ? { startupConfigSnapshotRead: startupConfigSnapshotReadForThisStart }
             : {}),
@@ -1074,4 +1098,3 @@ export const testing = {
   resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
-export { testing as __testing };

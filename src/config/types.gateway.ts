@@ -107,7 +107,8 @@ export type TalkConfig = {
     | "high"
     | "xhigh"
     | "adaptive"
-    | "max";
+    | "max"
+    | "ultra";
   /** Optional fast mode override for the agent run behind Talk realtime consults. */
   consultFastMode?: boolean;
   /** BCP 47 locale id used for Talk speech recognition on device nodes. */
@@ -130,6 +131,12 @@ export type GatewayControlUiConfig = {
   basePath?: string;
   /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
   root?: string;
+  /**
+   * Opt-in AI purpose titles for tool calls in Control UI chat (default false).
+   * When enabled, chat.toolTitles generates short titles through standard
+   * utility-model routing and caches them per agent.
+   */
+  toolTitles?: boolean;
   /**
    * Embed sandbox mode for hosted Control UI previews.
    * - strict: no script execution inside embeds
@@ -244,8 +251,6 @@ export type GatewayTailscaleConfig = {
 };
 
 export type GatewayRemoteConfig = {
-  /** Whether remote gateway surfaces are enabled. Default: true when absent. */
-  enabled?: boolean;
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
   /** Transport for macOS remote connections (ssh tunnel or direct WS). */
@@ -472,6 +477,26 @@ export type GatewayNodePairingConfig = {
    * Default: unset/disabled.
    */
   autoApproveCidrs?: string[];
+  /**
+   * SSH-verified auto-approval for first-time node-role pairing (default: enabled).
+   * The gateway connects back to the pairing host over SSH (BatchMode, strict
+   * host keys) and approves only when the remote `openclaw node identity`
+   * output matches the pending request's device key. Set false to disable SSH
+   * verification; this is independent of autoApproveCidrs, so unset that too for
+   * manual-only node pairing. The object form tunes the probe:
+   * - user: remote user (default: gateway process user)
+   * - identity: SSH identity file (default: standard SSH resolution)
+   * - timeoutMs: probe timeout (default: 7000)
+   * - cidrs: CIDRs/IPs eligible for probing (default: private/CGNAT ranges)
+   */
+  sshVerify?:
+    | boolean
+    | {
+        user?: string;
+        identity?: string;
+        timeoutMs?: number;
+        cidrs?: string[];
+      };
 };
 
 export type GatewayNodesConfig = {
@@ -484,6 +509,16 @@ export type GatewayNodesConfig = {
   };
   /** Pairing policy for node-role gateway clients. */
   pairing?: GatewayNodePairingConfig;
+  /** Controls whether paired nodes may publish agent-visible plugin tools (default: true). */
+  pluginTools?: {
+    /** Accept node-published plugin tool descriptors (default: true). */
+    enabled?: boolean;
+  };
+  /** Controls whether paired nodes may publish agent-visible skills (default: true). */
+  skills?: {
+    /** Accept node-published skill descriptors (default: true). */
+    enabled?: boolean;
+  };
   /** Additional node.invoke commands to allow on the gateway. */
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
@@ -510,8 +545,8 @@ export type GatewayConfig = {
    * - auto: Loopback (127.0.0.1) if available, else 0.0.0.0 (fallback to all interfaces)
    * - lan: 0.0.0.0 (all interfaces, no fallback, current BYOH path is IPv4-only)
    * - loopback: 127.0.0.1 (local-only)
-   * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
-   * - custom: User-specified IPv4 address, fallback to 0.0.0.0 if unavailable (requires customBindHost)
+   * - tailnet: Tailnet IPv4 plus 127.0.0.1 if available, else loopback only
+   * - custom: User-specified IPv4 address (requires customBindHost); specific IPv4s also bind 127.0.0.1
    * IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy.
    * Default: loopback (127.0.0.1).
    */

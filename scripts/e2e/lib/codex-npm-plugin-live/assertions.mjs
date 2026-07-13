@@ -19,6 +19,8 @@ import {
 const command = process.argv[2];
 const allowBetaCompatDiagnostics =
   process.env.OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS === "1";
+const sessionStoreContract =
+  process.env.OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT || "sqlite";
 const MAX_TEXT_FILE_BYTES = readPositiveIntEnv(
   "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES",
   1024 * 1024,
@@ -115,6 +117,75 @@ function readCodexBinding(sessionId, sessionKey) {
       );
     }
     return stored.binding;
+  } finally {
+    db.close();
+  }
+}
+
+function readLegacySessionEntry(sessionId) {
+  const storePath = path.join(stateDir(), "agents", "main", "sessions", "sessions.json");
+  const store = readJson(storePath);
+  const sessionMatch = Object.entries(store).find(
+    ([, candidate]) => candidate?.sessionId === sessionId,
+  );
+  if (!sessionMatch) {
+    throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
+  }
+  const [sessionKey, entry] = sessionMatch;
+  if (typeof entry.sessionFile !== "string" || !fs.existsSync(entry.sessionFile)) {
+    throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
+  }
+  const transcriptEventCount = readTextFileBounded(
+    entry.sessionFile,
+    "OpenClaw legacy session transcript",
+  )
+    .split("\n")
+    .filter((line) => line.trim()).length;
+  return { entry, sessionKey, transcriptEventCount };
+}
+
+function readSessionEntry(sessionId) {
+  if (sessionStoreContract === "legacy-json") {
+    return readLegacySessionEntry(sessionId);
+  }
+  if (sessionStoreContract !== "sqlite") {
+    throw new Error(
+      `OPENCLAW_CODEX_NPM_PLUGIN_SESSION_STORE_CONTRACT must be sqlite or legacy-json; got ${sessionStoreContract}`,
+    );
+  }
+  const dbPath = path.join(stateDir(), "agents", "main", "agent", "openclaw-agent.sqlite");
+  if (!fs.existsSync(dbPath)) {
+    throw new Error(`missing agent session database: ${dbPath}`);
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    const row = db
+      .prepare(
+        `SELECT se.session_key, se.entry_json, s.agent_harness_id,
+                (SELECT COUNT(*)
+                   FROM transcript_events AS te
+                  WHERE te.session_id = s.session_id) AS transcript_event_count
+           FROM sessions AS s
+           INNER JOIN session_entries AS se ON se.session_id = s.session_id
+          WHERE s.session_id = ?
+          ORDER BY se.updated_at DESC, se.session_key
+          LIMIT 1`,
+      )
+      .get(sessionId);
+    if (!row || typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
+      throw new Error(`missing session store entry for ${sessionId}`);
+    }
+    const entry = JSON.parse(row.entry_json);
+    return {
+      entry: {
+        ...entry,
+        agentHarnessId:
+          typeof row.agent_harness_id === "string" ? row.agent_harness_id : entry.agentHarnessId,
+        sessionId,
+      },
+      sessionKey: row.session_key,
+      transcriptEventCount: Number(row.transcript_event_count),
+    };
   } finally {
     db.close();
   }
@@ -442,24 +513,15 @@ function assertAgentTurn() {
     );
   }
 
-  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const storePath = path.join(sessionsDir, "sessions.json");
-  const store = readJson(storePath);
-  const sessionMatch = Object.entries(store).find(
-    ([, candidate]) => candidate?.sessionId === sessionId,
-  );
-  if (!sessionMatch) {
-    throw new Error(`missing session store entry for ${sessionId}: ${JSON.stringify(store)}`);
-  }
-  const [sessionKey, entry] = sessionMatch;
+  const { entry, sessionKey, transcriptEventCount } = readSessionEntry(sessionId);
   if (entry.agentHarnessId !== "codex") {
     throw new Error(`expected codex harness in session entry, got ${entry.agentHarnessId}`);
   }
   if (entry.modelOverride && entry.modelOverride !== modelRef) {
     throw new Error(`unexpected session model override: ${entry.modelOverride}`);
   }
-  if (typeof entry.sessionFile !== "string" || !fs.existsSync(entry.sessionFile)) {
-    throw new Error(`missing OpenClaw session file: ${entry.sessionFile}`);
+  if (!Number.isSafeInteger(transcriptEventCount) || transcriptEventCount < 1) {
+    throw new Error(`missing OpenClaw transcript events for ${sessionId}`);
   }
 
   const binding = readCodexBinding(sessionId, sessionKey);

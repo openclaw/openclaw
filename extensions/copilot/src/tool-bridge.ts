@@ -39,7 +39,7 @@ type AgentToolResultLike = {
  * execute before the SDK session is up, so reading `current === undefined`
  * inside `onYield` is a no-op by design.
  */
-export interface CopilotSessionHolder {
+interface CopilotSessionHolder {
   current: { abort?: () => unknown } | undefined;
 }
 
@@ -361,9 +361,12 @@ function buildOpenClawCodingToolsOptions(
       elevated: a.bashElevated,
     },
     messageProvider: a.messageProvider ?? a.messageChannel,
+    chatType: a.chatType,
     agentAccountId: a.agentAccountId,
     messageTo: a.messageTo,
     messageThreadId: a.messageThreadId,
+    nativeChannelId: a.chatId,
+    messageActionTurnCapability: a.messageActionTurnCapability,
     groupId: a.groupId,
     groupChannel: a.groupChannel,
     groupSpace: a.groupSpace,

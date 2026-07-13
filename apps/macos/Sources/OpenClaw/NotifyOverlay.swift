@@ -10,9 +10,6 @@ final class NotifyOverlayController {
     static let shared = NotifyOverlayController()
 
     private(set) var model = Model()
-    var isVisible: Bool {
-        self.model.isVisible
-    }
 
     struct Model {
         var title: String = ""
@@ -62,9 +59,7 @@ final class NotifyOverlayController {
         self.hostingView?.rootView = NotifyOverlayView(controller: self)
         let target = self.targetFrame()
         let isFirst = !self.model.isVisible
-        if isFirst {
-            self.model.isVisible = true
-        }
+        if isFirst { self.model.isVisible = true }
         OverlayPanelFactory.present(
             window: self.window,
             isFirstPresent: isFirst,
@@ -76,9 +71,7 @@ final class NotifyOverlayController {
     }
 
     private func ensureWindow() {
-        if self.window != nil {
-            return
-        }
+        if self.window != nil { return }
         let panel = OverlayPanelFactory.makePanel(
             contentRect: NSRect(x: 0, y: 0, width: self.width, height: self.minHeight),
             level: .statusBar,

@@ -48,7 +48,8 @@ async function loadSessionsRoute(
 
 export const page = definePage({
   id: "sessions",
-  path: "/sessions",
+  path: "/settings/sessions",
+  aliases: ["/sessions"],
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
     const options = routeOptions(location);
     return `${options.expandedSessionKey ?? ""}\u0000${options.showArchived ? "1" : "0"}`;

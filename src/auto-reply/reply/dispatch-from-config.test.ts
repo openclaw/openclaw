@@ -1,5 +1,6 @@
 // Tests dispatch-from-config runtime selection, hooks, and provider handoff.
 import { AsyncResource } from "node:async_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
@@ -14,7 +15,6 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-session-recovery.js";
 import type {
   AcpRuntime,
   AcpRuntimeEnsureInput,
@@ -23,11 +23,7 @@ import type {
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
-import type {
-  PluginHookBeforeDispatchResult,
-  PluginHookReplyDispatchResult,
-  PluginTargetedInboundClaimOutcome,
-} from "../../plugins/hooks.js";
+import type { PluginTargetedInboundClaimOutcome } from "../../plugins/hooks.test-fixtures.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   interruptSessionWorkAdmissions,
@@ -40,619 +36,44 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
-import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
-import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
-import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import {
-  createReplyDispatcher,
-  type ReplyDispatchBeforeDeliver,
-  type ReplyDispatcher,
-} from "./reply-dispatcher.js";
+  acpManagerRuntimeMocks,
+  acpMocks,
+  agentEventMocks,
+  createDispatcher,
+  diagnosticMocks,
+  emptyConfig,
+  globalMocks,
+  hookMocks,
+  internalHookMocks,
+  messageAuditMocks,
+  mocks,
+  noAbortResult,
+  parseGenericThreadSessionInfo,
+  replyMediaPathMocks,
+  resetPluginTtsAndThreadMocks,
+  runtimePluginMocks,
+  sessionBindingMocks,
+  sessionStoreMocks,
+  stageSandboxMediaMocks,
+  threadInfoMocks,
+  transcriptMocks,
+  ttsMocks,
+} from "./dispatch-from-config.shared.test-harness.js";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-type AbortResult = {
-  handled: boolean;
-  aborted: boolean;
-  rejectionReason?: "finalizing";
-  stoppedSubagents?: number;
-};
 type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
 >[0];
 
-const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
-  tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
-    handled: false,
-    aborted: false,
-  })),
-}));
-const globalMocks = vi.hoisted(() => ({
-  logVerbose: vi.fn(),
-}));
-const diagnosticMocks = vi.hoisted(() => ({
-  logMessageDispatchCompleted: vi.fn(),
-  logMessageDispatchStarted: vi.fn(),
-  logMessageQueued: vi.fn(),
-  logMessageProcessed: vi.fn(),
-  logSessionStateChange: vi.fn(),
-  markDiagnosticSessionProgress: vi.fn(),
-  requestStuckDiagnosticSessionRecovery: vi.fn<() => Promise<StuckSessionRecoveryOutcome>>(
-    async () => ({
-      status: "skipped" as const,
-      action: "keep_lane" as const,
-      reason: "active_reply_work" as const,
-    }),
-  ),
-}));
-const hookMocks = vi.hoisted(() => ({
-  registry: {
-    plugins: [] as Array<{
-      id: string;
-      status: "loaded" | "disabled" | "error";
-    }>,
-  },
-  runner: {
-    hasHooks: vi.fn<(hookName?: string) => boolean>(() => false),
-    runInboundClaim: vi.fn(async () => undefined),
-    runInboundClaimForPlugin: vi.fn(async () => undefined),
-    runInboundClaimForPluginOutcome: vi.fn<
-      (
-        pluginId?: string,
-        event?: unknown,
-        context?: unknown,
-      ) => Promise<PluginTargetedInboundClaimOutcome>
-    >(async () => ({ status: "no_handler" as const })),
-    runMessageReceived: vi.fn(async () => {}),
-    runBeforeDispatch: vi.fn<
-      (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
-    >(async () => undefined),
-    runReplyDispatch: vi.fn<
-      (eventValue: unknown, _ctx: unknown) => Promise<PluginHookReplyDispatchResult | undefined>
-    >(async () => undefined),
-    runReplyPayloadSending: vi.fn(async () => undefined),
-  },
-}));
-const internalHookMocks = vi.hoisted(() => ({
-  createInternalHookEvent: vi.fn(),
-  triggerInternalHook: vi.fn(async () => {}),
-}));
-const acpMocks = vi.hoisted(() => ({
-  listAcpSessionEntries: vi.fn(async () => []),
-  readAcpSessionEntry: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
-    () => null,
-  ),
-  readAcpSessionMeta: vi.fn<(params: { sessionKey: string; cfg?: OpenClawConfig }) => unknown>(
-    () => null,
-  ),
-  getAcpRuntimeBackend: vi.fn<() => unknown>(() => null),
-  upsertAcpSessionMeta: vi.fn<
-    (params: {
-      sessionKey: string;
-      cfg?: OpenClawConfig;
-      mutate: (
-        current: Record<string, unknown> | undefined,
-        entry: { acp?: Record<string, unknown> } | undefined,
-      ) => Record<string, unknown> | null | undefined;
-    }) => Promise<unknown>
-  >(async () => null),
-  requireAcpRuntimeBackend: vi.fn<() => unknown>(),
-}));
-const sessionBindingMocks = vi.hoisted(() => ({
-  listBySession: vi.fn<(targetSessionKey: string) => SessionBindingRecord[]>(() => []),
-  resolveByConversation: vi.fn<
-    (ref: {
-      channel: string;
-      accountId: string;
-      conversationId: string;
-      parentConversationId?: string;
-    }) => SessionBindingRecord | null
-  >(() => null),
-  touch: vi.fn(),
-}));
-const pluginConversationBindingMocks = vi.hoisted(() => ({
-  shownFallbackNoticeBindingIds: new Set<string>(),
-}));
-const sessionStoreMocks = vi.hoisted(() => ({
-  currentEntry: undefined as Record<string, unknown> | undefined,
-  entriesBySessionKey: new Map<string, Record<string, unknown>>(),
-  loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
-  loadSessionStore: vi.fn(() => ({})),
-  readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
-  resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
-  resolveSessionStoreEntry: vi.fn(
-    (params: {
-      store: Record<string, Record<string, unknown>>;
-      sessionKey: string;
-    }): { existing: Record<string, unknown> | undefined } => ({
-      existing:
-        params.store[params.sessionKey] ??
-        sessionStoreMocks.entriesBySessionKey.get(params.sessionKey) ??
-        sessionStoreMocks.currentEntry,
-    }),
-  ),
-  updateSessionStoreEntry: vi.fn(
-    async (params: {
-      update: (entry: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
-    }) => {
-      if (!sessionStoreMocks.currentEntry) {
-        return null;
-      }
-      const patch = await params.update(sessionStoreMocks.currentEntry);
-      if (!patch) {
-        return sessionStoreMocks.currentEntry;
-      }
-      sessionStoreMocks.currentEntry = { ...sessionStoreMocks.currentEntry, ...patch };
-      return sessionStoreMocks.currentEntry;
-    },
-  ),
-}));
-const acpManagerRuntimeMocks = vi.hoisted(() => ({
-  getAcpSessionManager: vi.fn(),
-}));
-const agentEventMocks = vi.hoisted(() => ({
-  emitAgentAuditEvent: vi.fn(),
-  emitAgentEvent: vi.fn(),
-  onAgentEvent: vi.fn<(listener: unknown) => () => void>(() => () => {}),
-}));
-const ttsMocks = vi.hoisted(() => {
-  const state = {
-    synthesizeFinalAudio: false,
-    synthesizeToolAudio: false,
-  };
-  return {
-    state,
-    maybeApplyTtsToPayload: vi.fn(async (paramsUnknown: unknown) => {
-      const params = paramsUnknown as {
-        payload: ReplyPayload;
-        kind: "tool" | "block" | "final";
-      };
-      if (
-        state.synthesizeFinalAudio &&
-        params.kind === "final" &&
-        typeof params.payload?.text === "string" &&
-        params.payload.text.trim()
-      ) {
-        return {
-          ...params.payload,
-          mediaUrl: "https://example.com/tts-synth.opus",
-          audioAsVoice: true,
-          trustedLocalMedia: true,
-        };
-      }
-      if (
-        state.synthesizeToolAudio &&
-        params.kind === "tool" &&
-        typeof params.payload?.text === "string" &&
-        params.payload.text.trim()
-      ) {
-        return {
-          ...params.payload,
-          mediaUrl: "https://example.com/tts-tool.opus",
-          audioAsVoice: true,
-          trustedLocalMedia: true,
-        };
-      }
-      return params.payload;
-    }),
-    normalizeTtsAutoMode: vi.fn((value: unknown) =>
-      typeof value === "string" ? value : undefined,
-    ),
-    resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
-  };
-});
-const transcriptMocks = vi.hoisted(() => ({
-  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
-  appendAssistantMessageToSessionTranscript: vi.fn(async (_params: unknown) => ({
-    ok: true,
-    sessionFile: "/tmp/session.jsonl",
-    messageId: "message-1",
-  })),
-}));
-const replyMediaPathMocks = vi.hoisted(() => ({
-  createReplyMediaPathNormalizer: vi.fn(
-    (_params?: unknown) => async (payload: ReplyPayload) => payload,
-  ),
-}));
-const stageSandboxMediaMocks = vi.hoisted(() => ({
-  stageSandboxMedia: vi.fn<(params: unknown) => Promise<{ staged: Map<string, string> }>>(
-    async () => ({ staged: new Map() }),
-  ),
-}));
-const runtimePluginMocks = vi.hoisted(() => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
-}));
-const conversationBindingMocks = vi.hoisted(() => {
-  type BindingMsgContext = {
-    OriginatingChannel?: string | null;
-    Surface?: string | null;
-    Provider?: string | null;
-    AccountId?: string | null;
-    MessageThreadId?: string | number | null;
-    ThreadParentId?: string | null;
-    SenderId?: string | null;
-    SessionKey?: string | null;
-    ParentSessionKey?: string | null;
-    OriginatingTo?: string | null;
-    To?: string | null;
-    From?: string | null;
-    NativeChannelId?: string | null;
-  };
-  type BindingConfig = {
-    channels?: Record<string, { defaultAccount?: string | null } | undefined>;
-  };
-
-  const normalizeText = (value: string | number | null | undefined) =>
-    typeof value === "number" ? `${value}` : (value ?? "").trim();
-  const normalizeChannel = (value: string | null | undefined) => normalizeText(value).toLowerCase();
-  const resolveChannel = (ctx: BindingMsgContext, commandChannel?: string | null) =>
-    normalizeChannel(ctx.OriginatingChannel ?? commandChannel ?? ctx.Surface ?? ctx.Provider);
-  const resolveAccountId = (ctx: BindingMsgContext, cfg: BindingConfig, channel: string) =>
-    normalizeText(ctx.AccountId) ||
-    normalizeText(cfg.channels?.[channel]?.defaultAccount) ||
-    "default";
-  const resolveTarget = (channel: string, value: string | null | undefined) => {
-    const target = normalizeText(value);
-    if (!target) {
-      return undefined;
-    }
-    const channelPrefix = `${channel}:`;
-    return target.toLowerCase().startsWith(channelPrefix)
-      ? target.slice(channelPrefix.length)
-      : target;
-  };
-  const resolveThreadId = (ctx: BindingMsgContext) =>
-    normalizeText(ctx.MessageThreadId) || undefined;
-
-  const resolveConversationBindingContextFromMessage = vi.fn(
-    (params: { cfg: BindingConfig; ctx: BindingMsgContext }) => {
-      const channel = resolveChannel(params.ctx);
-      if (!channel) {
-        return null;
-      }
-      const threadId = resolveThreadId(params.ctx);
-      const baseConversationId =
-        resolveTarget(channel, params.ctx.OriginatingTo) ?? resolveTarget(channel, params.ctx.To);
-      const conversationId = threadId ?? baseConversationId;
-      if (!conversationId) {
-        return null;
-      }
-      const parentConversationId =
-        threadId && baseConversationId && baseConversationId !== threadId
-          ? baseConversationId
-          : resolveTarget(channel, params.ctx.ThreadParentId);
-      return {
-        channel,
-        accountId: resolveAccountId(params.ctx, params.cfg, channel),
-        conversationId,
-        ...(parentConversationId ? { parentConversationId } : {}),
-        ...(threadId ? { threadId } : {}),
-      };
-    },
-  );
-
-  return {
-    resolveConversationBindingAccountIdFromMessage: (params: {
-      ctx: BindingMsgContext;
-      cfg: BindingConfig;
-      commandChannel?: string | null;
-    }) =>
-      resolveAccountId(params.ctx, params.cfg, resolveChannel(params.ctx, params.commandChannel)),
-    resolveConversationBindingChannelFromMessage: (
-      ctx: BindingMsgContext,
-      commandChannel?: string | null,
-    ) => resolveChannel(ctx, commandChannel),
-    resolveConversationBindingContextFromAcpCommand: (params: {
-      cfg: BindingConfig;
-      ctx: BindingMsgContext;
-      command?: { to?: string | null; senderId?: string | null };
-      sessionKey?: string | null;
-      parentSessionKey?: string | null;
-    }) =>
-      resolveConversationBindingContextFromMessage({
-        cfg: params.cfg,
-        ctx: {
-          ...params.ctx,
-          SenderId: params.command?.senderId ?? params.ctx.SenderId,
-          SessionKey: params.sessionKey ?? params.ctx.SessionKey,
-          ParentSessionKey: params.parentSessionKey ?? params.ctx.ParentSessionKey,
-          To: params.command?.to ?? params.ctx.To,
-        },
-      }),
-    resolveConversationBindingContextFromMessage,
-    resolveConversationBindingThreadIdFromMessage: (ctx: BindingMsgContext) => resolveThreadId(ctx),
-  };
-});
-const threadInfoMocks = vi.hoisted(() => ({
-  parseSessionThreadInfo: vi.fn<
-    (sessionKey: string | undefined) => {
-      baseSessionKey: string | undefined;
-      threadId: string | undefined;
-    }
-  >(),
-}));
-
-function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
-  const trimmed = sessionKey?.trim();
-  if (!trimmed) {
-    return { baseSessionKey: undefined, threadId: undefined };
-  }
-  const threadMarker = ":thread:";
-  const topicMarker = ":topic:";
-  const marker = trimmed.includes(threadMarker)
-    ? threadMarker
-    : trimmed.includes(topicMarker)
-      ? topicMarker
-      : undefined;
-  if (!marker) {
-    return { baseSessionKey: trimmed, threadId: undefined };
-  }
-  const index = trimmed.lastIndexOf(marker);
-  if (index < 0) {
-    return { baseSessionKey: trimmed, threadId: undefined };
-  }
-  const baseSessionKey = trimmed.slice(0, index).trim() || undefined;
-  const threadId = trimmed.slice(index + marker.length).trim() || undefined;
-  return { baseSessionKey, threadId };
-}
-
-vi.mock("./route-reply.runtime.js", () => ({
-  isRoutableChannel: (channel: string | undefined) =>
-    Boolean(
-      channel &&
-      [
-        "telegram",
-        "slack",
-        "discord",
-        "signal",
-        "imessage",
-        "whatsapp",
-        "feishu",
-        "mattermost",
-      ].includes(channel),
-    ),
-  routeReply: mocks.routeReply,
-}));
-
-vi.mock("./route-reply.js", () => ({
-  isRoutableChannel: (channel: string | undefined) =>
-    Boolean(
-      channel &&
-      [
-        "telegram",
-        "slack",
-        "discord",
-        "signal",
-        "imessage",
-        "whatsapp",
-        "feishu",
-        "mattermost",
-      ].includes(channel),
-    ),
-  routeReply: mocks.routeReply,
-}));
-
-vi.mock("./abort.runtime.js", () => ({
-  tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
-  formatAbortReplyText: (stoppedSubagents?: number) => {
-    if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
-      return "⚙️ Agent was aborted.";
-    }
-    const label = stoppedSubagents === 1 ? "sub-agent" : "sub-agents";
-    return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
-  },
-}));
-
-vi.mock("../../globals.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../globals.js")>();
-  return {
-    ...actual,
-    logVerbose: globalMocks.logVerbose,
-  };
-});
-
-vi.mock("../../logging/diagnostic.js", () => ({
-  logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
-  logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
-  logMessageQueued: diagnosticMocks.logMessageQueued,
-  logMessageProcessed: diagnosticMocks.logMessageProcessed,
-  logSessionStateChange: diagnosticMocks.logSessionStateChange,
-  markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
-  isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
-    config?.diagnostics?.enabled !== false,
-  requestStuckDiagnosticSessionRecovery: diagnosticMocks.requestStuckDiagnosticSessionRecovery,
-  resolveStuckSessionWarnMs: (config?: { diagnostics?: { stuckSessionWarnMs?: number } }) =>
-    config?.diagnostics?.stuckSessionWarnMs ?? 120_000,
-  resolveStuckSessionAbortMs: (
-    config: { diagnostics?: { stuckSessionAbortMs?: number } } | undefined,
-    stuckSessionWarnMs: number,
-  ) =>
-    Math.max(
-      stuckSessionWarnMs,
-      config?.diagnostics?.stuckSessionAbortMs ?? Math.max(300_000, stuckSessionWarnMs * 3),
-    ),
-}));
-vi.mock("../../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfo: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
-  parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
-}));
-vi.mock("./dispatch-from-config.runtime.js", () => ({
-  createInternalHookEvent: internalHookMocks.createInternalHookEvent,
-  loadSessionStore: sessionStoreMocks.loadSessionStore,
-  readSessionEntry: sessionStoreMocks.readSessionEntry,
-  resolveSessionStoreEntry: sessionStoreMocks.resolveSessionStoreEntry,
-  resolveStorePath: sessionStoreMocks.resolveStorePath,
-  triggerInternalHook: internalHookMocks.triggerInternalHook,
-  updateSessionStoreEntry: sessionStoreMocks.updateSessionStoreEntry,
-}));
-vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/sessions/session-accessor.js")>();
-  return {
-    ...actual,
-    loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
-  };
-});
-
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  initializeGlobalHookRunner: vi.fn(),
-  getGlobalHookRunner: () => hookMocks.runner,
-  getGlobalPluginRegistry: () => hookMocks.registry,
-  resetGlobalHookRunner: vi.fn(),
-}));
-vi.mock("../../acp/runtime/session-meta.js", () => ({
-  listAcpSessionEntries: acpMocks.listAcpSessionEntries,
-  readAcpSessionEntry: acpMocks.readAcpSessionEntry,
-  readAcpSessionMeta: acpMocks.readAcpSessionMeta,
-  upsertAcpSessionMeta: acpMocks.upsertAcpSessionMeta,
-}));
-vi.mock("../../acp/runtime/registry.js", () => ({
-  getAcpRuntimeBackend: acpMocks.getAcpRuntimeBackend,
-  requireAcpRuntimeBackend: acpMocks.requireAcpRuntimeBackend,
-}));
-vi.mock("../../infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: () => ({
-    bind: vi.fn(async () => {
-      throw new Error("bind not mocked");
-    }),
-    getCapabilities: vi.fn(() => ({
-      adapterAvailable: true,
-      bindSupported: true,
-      unbindSupported: true,
-      placements: ["current", "child"] as const,
-    })),
-    listBySession: (targetSessionKey: string) =>
-      sessionBindingMocks.listBySession(targetSessionKey),
-    resolveByConversation: sessionBindingMocks.resolveByConversation,
-    touch: sessionBindingMocks.touch,
-    unbind: vi.fn(async () => []),
-  }),
-}));
-vi.mock("../../bindings/records.js", () => ({
-  resolveConversationBindingRecord: (conversation: {
-    channel: string;
-    accountId: string;
-    conversationId: string;
-    parentConversationId?: string;
-  }) => sessionBindingMocks.resolveByConversation(conversation),
-  touchConversationBindingRecord: (...args: [bindingId: string, at?: number]) =>
-    sessionBindingMocks.touch(...args),
-}));
-vi.mock("../../infra/agent-events.js", () => ({
-  emitAgentAuditEvent: (params: unknown) => agentEventMocks.emitAgentAuditEvent(params),
-  emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
-  onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
-}));
-vi.mock("../../plugins/conversation-binding.js", () => ({
-  buildPluginBindingDeclinedText: () => "Plugin binding request was declined.",
-  buildPluginBindingErrorText: () => "Plugin binding request failed.",
-  buildPluginBindingUnavailableText: (binding: { pluginName?: string; pluginId: string }) =>
-    `${binding.pluginName ?? binding.pluginId} is not currently loaded.`,
-  hasShownPluginBindingFallbackNotice: (bindingId: string) =>
-    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.has(bindingId),
-  isPluginOwnedSessionBindingRecord: (
-    record: SessionBindingRecord | null | undefined,
-  ): record is SessionBindingRecord =>
-    record?.metadata != null &&
-    typeof record.metadata === "object" &&
-    (record.metadata as { pluginBindingOwner?: string }).pluginBindingOwner === "plugin",
-  markPluginBindingFallbackNoticeShown: (bindingId: string) => {
-    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.add(bindingId);
-  },
-  toPluginConversationBinding: (record: SessionBindingRecord) => {
-    const metadata = (record.metadata ?? {}) as {
-      pluginId?: string;
-      pluginName?: string;
-      pluginRoot?: string;
-      data?: Record<string, unknown>;
-    };
-    return {
-      bindingId: record.bindingId,
-      pluginId: metadata.pluginId ?? "unknown-plugin",
-      pluginName: metadata.pluginName,
-      pluginRoot: metadata.pluginRoot ?? "",
-      channel: record.conversation.channel,
-      accountId: record.conversation.accountId,
-      conversationId: record.conversation.conversationId,
-      parentConversationId: record.conversation.parentConversationId,
-      data: metadata.data,
-    };
-  },
-}));
-vi.mock("./dispatch-acp-manager.runtime.js", () => ({
-  getAcpSessionManager: () => acpManagerRuntimeMocks.getAcpSessionManager(),
-  getSessionBindingService: () => ({
-    listBySession: (targetSessionKey: string) =>
-      sessionBindingMocks.listBySession(targetSessionKey),
-    unbind: vi.fn(async () => []),
-  }),
-}));
-vi.mock("../../tts/tts.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-  normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
-  resolveTtsConfig: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg),
-}));
-vi.mock("../../tts/tts.runtime.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-}));
-vi.mock("./reply-media-paths.runtime.js", () => ({
-  createReplyMediaPathNormalizer: (params: unknown) =>
-    replyMediaPathMocks.createReplyMediaPathNormalizer(params),
-}));
-vi.mock("./stage-sandbox-media.runtime.js", () => ({
-  stageSandboxMedia: (params: unknown) => stageSandboxMediaMocks.stageSandboxMedia(params),
-}));
-vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
-  ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
-}));
-vi.mock("./conversation-binding-input.js", () => ({
-  resolveConversationBindingAccountIdFromMessage:
-    conversationBindingMocks.resolveConversationBindingAccountIdFromMessage,
-  resolveConversationBindingChannelFromMessage:
-    conversationBindingMocks.resolveConversationBindingChannelFromMessage,
-  resolveConversationBindingContextFromAcpCommand:
-    conversationBindingMocks.resolveConversationBindingContextFromAcpCommand,
-  resolveConversationBindingContextFromMessage:
-    conversationBindingMocks.resolveConversationBindingContextFromMessage,
-  resolveConversationBindingThreadIdFromMessage:
-    conversationBindingMocks.resolveConversationBindingThreadIdFromMessage,
-}));
-vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ({
-    autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
-  }),
-}));
-vi.mock("./dispatch-acp-tts.runtime.js", () => ({
-  maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
-}));
-vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
-  persistAcpDispatchTranscript: (params: unknown) =>
-    transcriptMocks.persistAcpDispatchTranscript(params),
-}));
-vi.mock("../../config/sessions/transcript.js", () => ({
-  appendAssistantMessageToSessionTranscript: (params: unknown) =>
-    transcriptMocks.appendAssistantMessageToSessionTranscript(params),
-}));
-vi.mock("./dispatch-acp-session.runtime.js", () => ({
-  readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
-    acpMocks.readAcpSessionEntry(params),
-}));
-vi.mock("../../tts/tts-config.js", () => ({
-  normalizeTtsAutoMode: (value: unknown) => ttsMocks.normalizeTtsAutoMode(value),
-  resolveConfiguredTtsMode: (cfg: OpenClawConfig) => ttsMocks.resolveTtsConfig(cfg).mode,
-  shouldCleanTtsDirectiveText: () => true,
-  shouldAttemptTtsPayload: () => true,
-}));
-
-const noAbortResult = { handled: false, aborted: false } as const;
-const emptyConfig = {} as OpenClawConfig;
 const automaticGroupReplyConfig = {
   messages: {
     groupChat: {
@@ -702,48 +123,6 @@ beforeAll(async () => {
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =
     await import("./reply-turn-admission.js"));
 });
-
-function createDispatcher(): ReplyDispatcher {
-  let beforeDeliver: ReplyDispatchBeforeDeliver | undefined;
-  const beforeDeliverTasks: Promise<unknown>[] = [];
-  const runBeforeDeliver = (kind: "tool" | "block" | "final", payload: ReplyPayload): void => {
-    if (!beforeDeliver) {
-      return;
-    }
-    beforeDeliverTasks.push(Promise.resolve(beforeDeliver(payload, { kind })));
-  };
-  return {
-    sendToolResult: vi.fn((payload) => {
-      runBeforeDeliver("tool", payload);
-      return true;
-    }),
-    sendBlockReply: vi.fn((payload) => {
-      runBeforeDeliver("block", payload);
-      return true;
-    }),
-    sendFinalReply: vi.fn((payload) => {
-      runBeforeDeliver("final", payload);
-      return true;
-    }),
-    appendBeforeDeliver: vi.fn((hook) => {
-      const previousBeforeDeliver = beforeDeliver;
-      beforeDeliver = previousBeforeDeliver
-        ? async (payload, info) => {
-            const previousPayload = await previousBeforeDeliver(payload, info);
-            return previousPayload
-              ? hook(copyReplyPayloadMetadata(payload, previousPayload), info)
-              : null;
-          }
-        : hook;
-    }),
-    waitForIdle: vi.fn(async () => {
-      await Promise.all(beforeDeliverTasks);
-    }),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    markComplete: vi.fn(),
-  };
-}
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
@@ -990,10 +369,18 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
   return [first, second] as const;
 }
 
+function messageAuditEvents(): Array<Record<string, unknown>> {
+  return messageAuditMocks.emitTrustedMessageAuditEvent.mock.calls.map(([event]) =>
+    event && typeof event === "object" ? (event as Record<string, unknown>) : {},
+  );
+}
+
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
     clearAgentHarnesses();
     clearPluginCommands();
+    resetPluginTtsAndThreadMocks();
+    // This suite keeps richer channel registry and ACP hook wiring local.
     const discordTestPlugin = {
       ...createChannelTestPluginBase({
         id: "discord",
@@ -1090,6 +477,22 @@ describe("dispatchReplyFromConfig", () => {
     acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
+    mocks.isRoutableChannel.mockReset();
+    mocks.isRoutableChannel.mockImplementation((channel) =>
+      Boolean(
+        channel &&
+        [
+          "telegram",
+          "slack",
+          "discord",
+          "signal",
+          "imessage",
+          "whatsapp",
+          "feishu",
+          "mattermost",
+        ].includes(channel),
+      ),
+    );
     mocks.routeReply.mockReset();
     mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
@@ -1143,9 +546,10 @@ describe("dispatchReplyFromConfig", () => {
     agentEventMocks.emitAgentAuditEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReset();
     agentEventMocks.onAgentEvent.mockReturnValue(() => {});
+    messageAuditMocks.enabled = true;
+    messageAuditMocks.emitTrustedMessageAuditEvent.mockReset();
     sessionBindingMocks.listBySession.mockReset();
     sessionBindingMocks.listBySession.mockReturnValue([]);
-    pluginConversationBindingMocks.shownFallbackNoticeBindingIds.clear();
     sessionBindingMocks.resolveByConversation.mockReset();
     sessionBindingMocks.resolveByConversation.mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
@@ -1153,6 +557,10 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.entriesBySessionKey.clear();
     sessionStoreMocks.loadSessionEntry.mockReset();
     sessionStoreMocks.loadSessionEntry.mockImplementation(() => sessionStoreMocks.currentEntry);
+    sessionStoreMocks.loadSessionStoreEntry.mockReset();
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
+      () => sessionStoreMocks.currentEntry,
+    );
     sessionStoreMocks.loadSessionStore.mockReset();
     sessionStoreMocks.loadSessionStore.mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset();
@@ -1168,22 +576,8 @@ describe("dispatchReplyFromConfig", () => {
           sessionStoreMocks.currentEntry,
       }),
     );
-    threadInfoMocks.parseSessionThreadInfo.mockReset();
-    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
-    ttsMocks.state.synthesizeFinalAudio = false;
-    ttsMocks.state.synthesizeToolAudio = false;
-    ttsMocks.maybeApplyTtsToPayload.mockClear();
-    ttsMocks.normalizeTtsAutoMode.mockClear();
-    ttsMocks.resolveTtsConfig.mockClear();
-    ttsMocks.resolveTtsConfig.mockReturnValue({
-      mode: "final",
-    });
     transcriptMocks.persistAcpDispatchTranscript.mockClear();
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
-    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReset();
-    replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
-      async (payload: ReplyPayload) => payload,
-    );
     stageSandboxMediaMocks.stageSandboxMedia.mockReset();
     stageSandboxMediaMocks.stageSandboxMedia.mockResolvedValue({ staged: new Map() });
     runtimePluginMocks.ensureRuntimePluginsLoaded.mockClear();
@@ -1208,7 +602,10 @@ describe("dispatchReplyFromConfig", () => {
     expect(pluginLoadOptions.config).toBe(cfg);
     expect(typeof pluginLoadOptions.workspaceDir).toBe("string");
     expect(runtimePluginMocks.ensureRuntimePluginsLoaded.mock.invocationCallOrder[0]).toBeLessThan(
-      hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
+      expectDefined(
+        hookMocks.runner.hasHooks.mock.invocationCallOrder[0],
+        "hookMocks.runner.hasHooks.mock.invocationCallOrder[0] test invariant",
+      ),
     );
   });
 
@@ -1302,6 +699,14 @@ describe("dispatchReplyFromConfig", () => {
       counts: { tool: 0, block: 0, final: 0 },
     });
     expect(replyResolver).not.toHaveBeenCalled();
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        outcome: "skipped",
+        reasonCode: "reply_operation_aborted",
+      }),
+    );
     activeOperation.complete();
   });
 
@@ -1345,6 +750,14 @@ describe("dispatchReplyFromConfig", () => {
     });
     expect(replyResolver).not.toHaveBeenCalled();
     expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        outcome: "skipped",
+        reasonCode: "reply_operation_active",
+      }),
+    );
     activeOperation.complete();
   });
 
@@ -4924,7 +4337,7 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.currentEntry = {
       verboseLevel: "off",
     };
-    sessionStoreMocks.readSessionEntry.mockReturnValue({ verboseLevel: "on" });
+    sessionStoreMocks.loadSessionStoreEntry.mockReturnValue({ verboseLevel: "on" });
     const cfg = {
       ...emptyConfig,
       agents: {
@@ -4947,7 +4360,7 @@ describe("dispatchReplyFromConfig", () => {
     ) => {
       sessionStoreMocks.loadSessionStore.mockClear();
       sessionStoreMocks.resolveSessionStoreEntry.mockClear();
-      sessionStoreMocks.readSessionEntry.mockClear();
+      sessionStoreMocks.loadSessionStoreEntry.mockClear();
       await opts?.onPlanUpdate?.({
         phase: "update",
         explanation: "Inspect code, patch it, run tests.",
@@ -4963,10 +4376,13 @@ describe("dispatchReplyFromConfig", () => {
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(sessionStoreMocks.readSessionEntry).toHaveBeenCalledWith(
-      "/tmp/mock-sessions.json",
-      "agent:main:main",
-    );
+    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: "/tmp/mock-sessions.json",
+      sessionKey: "agent:main:main",
+      readConsistency: "latest",
+      clone: false,
+    });
     expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
     expect(sessionStoreMocks.resolveSessionStoreEntry).not.toHaveBeenCalled();
     expect(firstToolResultPayload(dispatcher)).toMatchObject({
@@ -6083,6 +5499,89 @@ describe("dispatchReplyFromConfig", () => {
     expect(lifecycleEvent?.stream).toBe("lifecycle");
     expect(lifecycleEvent?.data?.phase).toBe("error");
     expect(String(lifecycleEvent?.data?.error)).toContain("ACP exploded");
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        outcome: "failed",
+        errorCode: "message_processing_failed",
+        reasonCode: "acp_dispatch_failed",
+      }),
+    );
+    expect(JSON.stringify(messageAuditEvents()[0])).not.toContain("ACP exploded");
+  });
+
+  it("audits aborted ACP turns as skipped", async () => {
+    setNoAbort();
+    const abortController = new AbortController();
+    const runtime = createAcpRuntime([]);
+    runtime.runTurn.mockImplementation(async function* () {
+      abortController.abort();
+      yield { type: "done" };
+    });
+    acpMocks.readAcpSessionEntry.mockReturnValue({
+      sessionKey: "agent:codex-acp:session-1",
+      storeSessionKey: "agent:codex-acp:session-1",
+      cfg: {},
+      storePath: "/tmp/mock-sessions.json",
+      entry: {},
+      acp: {
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "runtime:1",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: Date.now(),
+      },
+    });
+    acpMocks.requireAcpRuntimeBackend.mockReturnValue({
+      id: "acpx",
+      runtime,
+    });
+    hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (event, contextUnknown) => {
+      const context = contextUnknown as Record<string, unknown>;
+      return (
+        (await tryDispatchAcpReplyHook(
+          event as never,
+          {
+            ...context,
+            abortSignal: abortController.signal,
+          } as never,
+        )) ?? undefined
+      );
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:codex-acp:session-1",
+        BodyForAgent: "stop this turn",
+      }),
+      cfg: {
+        diagnostics: { enabled: true },
+        acp: {
+          enabled: true,
+          dispatch: { enabled: true },
+          stream: { coalesceIdleMs: 0, maxChunkChars: 128 },
+        },
+      } as OpenClawConfig,
+      dispatcher: createDispatcher(),
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        outcome: "skipped",
+        reasonCode: "acp_dispatch_aborted",
+      }),
+    );
+    expect(messageAuditEvents()[0]).not.toHaveProperty("errorCode");
+    const diagnosticEvent = diagnosticMocks.logMessageProcessed.mock.calls
+      .map(([event]) => event as { outcome?: unknown; reason?: unknown })
+      .find((event) => event.reason === "acp_aborted");
+    expect(diagnosticEvent?.outcome).toBe("completed");
   });
 
   it("posts a one-time resolved-session-id notice in thread after the first ACP turn", async () => {
@@ -7303,6 +6802,237 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("audits completed inbound message processing", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    vi.mocked(dispatcher.getQueuedCounts).mockReturnValue({ tool: 1, block: 0, final: 1 });
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "  ",
+      AccountId: "acc-1",
+      NativeChannelId: "  ",
+      OriginatingTo: "C123",
+      SenderId: "U123",
+      SessionKey: "agent:main:slack:direct:C123",
+      MessageSid: "msg-audit-1",
+      MessageSidFull: "  ",
+      ChatType: "dm",
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { runId: "run-audit-1" },
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(1);
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        occurredAt: expect.any(Number),
+        kind: "message",
+        action: "message.inbound.processed",
+        status: "succeeded",
+        actorType: "channel_sender",
+        actorId: "U123",
+        agentId: "main",
+        runId: "run-audit-1",
+        direction: "inbound",
+        channel: "slack",
+        conversationKind: "direct",
+        outcome: "completed",
+        durationMs: expect.any(Number),
+        resultCount: 2,
+        accountId: "acc-1",
+        conversationId: "C123",
+        messageId: "msg-audit-1",
+      }),
+    );
+  });
+
+  it("uses finalized reply-dispatch counts for the inbound terminal", async () => {
+    setNoAbort();
+    hookMocks.runner.runReplyDispatch.mockImplementationOnce(async (_event, contextUnknown) => {
+      const context = contextUnknown as {
+        recordProcessed: (outcome: "completed", options: { reason: string }) => void;
+      };
+      context.recordProcessed("completed", { reason: "acp_dispatch" });
+      return {
+        handled: true,
+        queuedFinal: true,
+        counts: { tool: 2, block: 3, final: 4 },
+      };
+    });
+    const dispatcher = createDispatcher();
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        MessageSid: "msg-audit-routed-counts",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+    });
+
+    expect(result.counts).toEqual({ tool: 2, block: 3, final: 4 });
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        reasonCode: "acp_dispatch_completed",
+        resultCount: 9,
+      }),
+    );
+  });
+
+  it("correlates inbound processing with the generated agent run", async () => {
+    setNoAbort();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async (_ctx, options) => {
+        options?.onAgentRunStart?.("generated-run-audit-1");
+        return { text: "hi" } satisfies ReplyPayload;
+      },
+    });
+
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({ runId: "generated-run-audit-1" }),
+    );
+  });
+
+  it("audits setup failures without replacing the dispatch error", async () => {
+    setNoAbort();
+    runtimePluginMocks.ensureRuntimePluginsLoaded.mockImplementationOnce(() => {
+      throw new Error("setup failed");
+    });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({
+          Provider: "slack",
+          Surface: "slack",
+          MessageSid: "msg-audit-setup-failure",
+        }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+      }),
+    ).rejects.toThrow("setup failed");
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        outcome: "failed",
+        errorCode: "message_processing_failed",
+        resultCount: 0,
+      }),
+    );
+    expect(JSON.stringify(messageAuditEvents()[0])).not.toContain("setup failed");
+  });
+
+  it("skips inbound audit attribution work when no listener is registered", async () => {
+    setNoAbort();
+    messageAuditMocks.enabled = false;
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not let an audit emission failure reject successful dispatch", async () => {
+    setNoAbort();
+    messageAuditMocks.emitTrustedMessageAuditEvent.mockImplementationOnce(() => {
+      throw new Error("audit unavailable");
+    });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+      }),
+    ).resolves.toMatchObject({ counts: expect.any(Object) });
+  });
+
+  it("does not include message content or session identifiers in inbound audit events", async () => {
+    setNoAbort();
+    const privateBody = "private inbound body 7ca58b";
+    const privateSessionKey = "agent:private:slack:direct:C999";
+    const privateSenderName = "Private Sender Name 7ca58b";
+    const privateSenderUsername = "private-sender-7ca58b";
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        AccountId: "acc-private",
+        NativeChannelId: "C999",
+        SessionKey: privateSessionKey,
+        MessageSid: "msg-audit-private",
+        Body: privateBody,
+        BodyForAgent: privateBody,
+        CommandBody: privateBody,
+        RawBody: privateBody,
+        SenderName: privateSenderName,
+        SenderUsername: privateSenderUsername,
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(1);
+    const event = messageAuditEvents()[0];
+    const serializedEvent = JSON.stringify(event);
+    expect(event).toEqual(
+      expect.objectContaining({
+        action: "message.inbound.processed",
+        actorType: "system",
+        actorId: "gateway",
+      }),
+    );
+    expect(event).not.toHaveProperty("body");
+    expect(event).not.toHaveProperty("sessionKey");
+    expect(event).not.toHaveProperty("error");
+    expect(serializedEvent).not.toContain(privateBody);
+    expect(serializedEvent).not.toContain(privateSessionKey);
+    expect(serializedEvent).not.toContain(privateSenderName);
+    expect(serializedEvent).not.toContain(privateSenderUsername);
+  });
+
+  it("records the routing channel id ahead of surface and provider", async () => {
+    setNoAbort();
+    // SDK plugin channels may set only OriginatingChannel, and it is the id
+    // outbound rows record; it must win over Surface/Provider variants.
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        OriginatingChannel: "clickclack",
+        AccountId: "acc-plugin",
+        MessageSid: "msg-audit-plugin-channel",
+      }),
+      cfg: emptyConfig,
+      dispatcher: createDispatcher(),
+      replyResolver: async () => ({ text: "hi" }) satisfies ReplyPayload,
+    });
+
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(1);
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        action: "message.inbound.processed",
+        channel: "clickclack",
+      }),
+    );
+  });
+
   it("emits diagnostics when enabled", async () => {
     setNoAbort();
     const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
@@ -8056,6 +7786,15 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
     expect(mutationRan).toBe(true);
     expect(replyResolver).not.toHaveBeenCalled();
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "blocked",
+        outcome: "skipped",
+        reasonCode: "reply_operation_aborted",
+      }),
+    );
+    expect(messageAuditEvents()[0]).not.toHaveProperty("errorCode");
     externalLifecycleRequest.emitDestroy();
   });
 
@@ -9083,7 +8822,7 @@ describe("dispatchReplyFromConfig", () => {
         RawBody: "hello",
         Body: "hello",
       }),
-      cfg: emptyConfig,
+      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
       dispatcher,
       replyResolver,
     });
@@ -9094,6 +8833,21 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalNotice?.text).not.toContain("boom");
     expect(replyResolver).not.toHaveBeenCalled();
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
+    expect(messageAuditEvents()[0]).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        outcome: "failed",
+        errorCode: "message_processing_failed",
+        reasonCode: "plugin_bound_error",
+      }),
+    );
+    expect(messageAuditEvents()[0]).not.toHaveProperty("error");
+    expect(JSON.stringify(messageAuditEvents()[0])).not.toContain("boom");
+    const diagnosticEvent = diagnosticMocks.logMessageProcessed.mock.calls
+      .map(([event]) => event as { outcome?: unknown; reason?: unknown })
+      .find((event) => event.reason === "plugin-bound-error");
+    expect(diagnosticEvent?.outcome).toBe("completed");
   });
 
   it("marks diagnostics skipped for duplicate inbound messages", async () => {
@@ -9120,6 +8874,21 @@ describe("dispatchReplyFromConfig", () => {
       .find((event) => event.outcome === "skipped");
     expect(skippedEvent?.channel).toBe("whatsapp");
     expect(skippedEvent?.reason).toBe("duplicate");
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(2);
+    const skippedAuditEvent = messageAuditEvents().find((event) => event.outcome === "skipped");
+    expect(skippedAuditEvent).toEqual(
+      expect.objectContaining({
+        action: "message.inbound.processed",
+        status: "blocked",
+        actorType: "system",
+        actorId: "gateway",
+        direction: "inbound",
+        channel: "whatsapp",
+        outcome: "skipped",
+        reasonCode: "duplicate",
+      }),
+    );
+    expect(skippedAuditEvent).not.toHaveProperty("reason");
   });
 
   it("keeps duplicate skip diagnostics inside the active inbound trace", async () => {
@@ -9214,6 +8983,20 @@ describe("dispatchReplyFromConfig", () => {
       .find((event) => event.outcome === "error");
     expect(errorEvent?.channel).toBe("whatsapp");
     expect(errorEvent?.error).toBe("Error: dispatch failed");
+    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledTimes(2);
+    const failedAuditEvent = messageAuditEvents().find((event) => event.outcome === "failed");
+    expect(failedAuditEvent).toEqual(
+      expect.objectContaining({
+        action: "message.inbound.processed",
+        status: "failed",
+        direction: "inbound",
+        channel: "whatsapp",
+        outcome: "failed",
+        errorCode: "message_processing_failed",
+      }),
+    );
+    expect(failedAuditEvent).not.toHaveProperty("error");
+    expect(JSON.stringify(failedAuditEvent)).not.toContain("dispatch failed");
   });
 
   it("poisons inbound dedupe when dispatch fails after a block reply", async () => {
@@ -9970,12 +9753,11 @@ describe("dispatchReplyFromConfig", () => {
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const onBlockReplyQueued = vi.fn();
-    const { setReplyPayloadMetadata: setReplyPayloadMetadataLocal } = await import("../types.js");
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
     ): Promise<ReplyPayload | undefined> => {
-      const payload = setReplyPayloadMetadataLocal({ text: "Alpha" }, { assistantMessageIndex: 7 });
+      const payload = setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 7 });
       await opts?.onBlockReply?.(payload);
       return undefined;
     };
@@ -12374,6 +12156,57 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("keeps locked supervised Codex delivery defaults across outer model overrides", async () => {
+    setNoAbort();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      supports: (ctx) =>
+        ctx.provider === "codex"
+          ? { supported: true, priority: 100 }
+          : { supported: false, reason: "codex provider only" },
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "catalog-adopted-session",
+      updatedAt: 0,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      pluginExtensions: {
+        codex: {
+          supervision: {
+            sourceThreadId: "019f-codex-thread",
+            modelLocked: true,
+          },
+        },
+      },
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4.6",
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      return { text: "private supervised reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        CommandSource: undefined,
+        SessionKey: "agent:main:main",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("uses Codex direct source delivery defaults before a session entry exists", async () => {
     setNoAbort();
     registerAgentHarness({
@@ -12657,14 +12490,20 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       parentSessionKey,
       sendPolicy: "allow",
     };
-    sessionStoreMocks.loadSessionStore.mockReturnValueOnce({
-      [parentSessionKey]: {
-        sessionId: "parent",
-        updatedAt: 0,
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4.6",
-      },
-    });
+    const parentEntry = {
+      sessionId: "parent",
+      updatedAt: 0,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4.6",
+    };
+    // Scope the parent-key override to this test; the describe's beforeEach does
+    // not reset loadSessionStoreEntry, so leaving it in place would resolve a
+    // stale "parent" sessionId for a sibling reusing this session key.
+    const defaultLoadSessionStoreEntry = () => sessionStoreMocks.currentEntry;
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(((params: unknown) =>
+      (params as { sessionKey?: string }).sessionKey === parentSessionKey
+        ? parentEntry
+        : sessionStoreMocks.currentEntry) as () => Record<string, unknown> | undefined);
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("automatic");
@@ -12686,8 +12525,17 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(sessionStoreMocks.loadSessionStore).not.toHaveBeenCalled();
+    expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
+      agentId: "main",
+      storePath: "/tmp/mock-sessions.json",
+      sessionKey: parentSessionKey,
+      readConsistency: "latest",
+      clone: false,
+    });
     expect(result.queuedFinal).toBe(true);
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible parent-model reply");
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(defaultLoadSessionStoreEntry);
   });
 
   it("honors heartbeat model overrides before Codex direct source delivery defaults", async () => {
@@ -12702,6 +12550,12 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
           : { supported: false, reason: "codex provider only" },
       runAttempt: vi.fn(async () => ({}) as never),
     });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      agentHarnessId: "codex",
+      sendPolicy: "allow",
+    };
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("automatic");

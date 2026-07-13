@@ -9,11 +9,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { setMaxPluginStateEntriesPerPluginForTests } from "../plugin-state/plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   readPersistedInstalledPluginIndex,
@@ -23,6 +24,7 @@ import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plug
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -53,46 +55,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
     } catch {
       return false;
     }
-  }
-
-  function resolveTelegramAccountId(cfg: OpenClawConfig): string {
-    const defaultAgentId = cfg.agents?.list?.find((agent) => agent.default)?.id ?? "main";
-    const boundAccountId = cfg.bindings?.find(
-      (binding) =>
-        binding.agentId === defaultAgentId &&
-        binding.match?.channel === "telegram" &&
-        typeof binding.match.accountId === "string",
-    )?.match.accountId;
-    return boundAccountId ?? cfg.channels?.telegram?.defaultAccount ?? "default";
-  }
-
-  function detectTelegramAllowFromMigration(params: {
-    cfg: OpenClawConfig;
-    env: NodeJS.ProcessEnv;
-  }) {
-    const root = params.env.OPENCLAW_STATE_DIR;
-    if (!root) {
-      return [];
-    }
-    const legacyPath = path.join(root, "credentials", "telegram-allowFrom.json");
-    if (!fileExists(legacyPath)) {
-      return [];
-    }
-    const targetPath = path.join(
-      root,
-      "credentials",
-      `telegram-${resolveTelegramAccountId(params.cfg)}-allowFrom.json`,
-    );
-    return fileExists(targetPath)
-      ? []
-      : [
-          {
-            kind: "copy" as const,
-            label: "Telegram pairing allowFrom",
-            sourcePath: legacyPath,
-            targetPath,
-          },
-        ];
   }
 
   function detectWhatsAppLegacyStateMigrations(params: { oauthDir: string }) {
@@ -132,8 +94,6 @@ vi.mock("../channels/plugins/bundled.js", async () => {
     ]),
     listBundledChannelLegacyStateMigrationDetectors: vi.fn(() => [
       ({ oauthDir }: { oauthDir: string }) => detectWhatsAppLegacyStateMigrations({ oauthDir }),
-      ({ cfg, env }: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) =>
-        detectTelegramAllowFromMigration({ cfg, env }),
       () => mockedChannelMigrationPlans.plans,
     ]),
   };
@@ -206,12 +166,18 @@ function writeLegacyTelegramAllowFromStore(oauthDir: string) {
 async function runTelegramAllowFromMigration(params: { root: string; cfg: OpenClawConfig }) {
   const oauthDir = ensureCredentialsDir(params.root);
   writeLegacyTelegramAllowFromStore(oauthDir);
+  const env = { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv;
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
-    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
+    env,
   });
-  const result = await runLegacyStateMigrations({ detected, now: () => 123 });
-  return { oauthDir, detected, result };
+  const result = await runLegacyStateMigrations({
+    detected,
+    config: params.cfg,
+    env,
+    now: () => 123,
+  });
+  return { oauthDir, env, detected, result };
 }
 
 afterEach(async () => {
@@ -648,6 +614,35 @@ function appendLegacyCrossAgentTask(taskRunsPath: string): void {
   }
 }
 
+function appendLegacyTaskWithObsoleteDeliveryStatus(taskRunsPath: string): void {
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(taskRunsPath);
+  try {
+    db.prepare(
+      `
+        INSERT INTO task_runs (
+          task_id, runtime, requester_session_key, agent_id, run_id, task,
+          status, delivery_status, notify_policy, created_at, last_event_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+    ).run(
+      "legacy-not-requested",
+      "cron",
+      "",
+      "ops",
+      "legacy-not-requested-run",
+      "Legacy cancelled task",
+      "cancelled",
+      "not-requested",
+      "silent",
+      150,
+      160,
+    );
+  } finally {
+    db.close();
+  }
+}
+
 async function detectAndRunMigrations(params: {
   root: string;
   cfg: OpenClawConfig;
@@ -990,7 +985,7 @@ describe("doctor legacy state migrations", () => {
     const stateDatabasePath = createLegacyAgentDatabaseRegistry(stateDir);
     const { DatabaseSync } = requireNodeSqlite();
     const seededDb = new DatabaseSync(stateDatabasePath);
-    seededDb.exec("PRAGMA user_version = 2;");
+    seededDb.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
     seededDb.close();
 
     const detected = await detectLegacyStateMigrations({
@@ -1001,7 +996,9 @@ describe("doctor legacy state migrations", () => {
     const result = await runLegacyStateMigrations({ detected });
     expect(result.changes).toStrictEqual([]);
     expect(result.warnings).toHaveLength(1);
-    expect(result.warnings[0]).toContain("uses newer schema version 2");
+    expect(result.warnings[0]).toContain(
+      `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+    );
 
     const db = new DatabaseSync(stateDatabasePath);
     try {
@@ -1082,6 +1079,159 @@ describe("doctor legacy state migrations", () => {
     } finally {
       db.close();
     }
+  });
+
+  it("migrates legacy ACP metadata from retired custom-root agent stores", async () => {
+    const root = await makeTempRoot();
+    const customRoot = await makeTempRoot();
+    const legacySessionKey = "acp:binding:discord:default:feedface";
+    const sessionKey = "agent:ops:acp:binding:discord:default:feedface";
+    const storePath = path.join(customRoot, "agents", "ops", "sessions", "sessions.json");
+    const cfg: OpenClawConfig = {
+      session: {
+        store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    writeJson5(storePath, {
+      [legacySessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({
+      detected,
+      config: cfg,
+      now: () => 456,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(true);
+    const store = JSON.parse(fs.readFileSync(storePath, "utf8")) as Record<string, SessionEntry>;
+    expect(store[legacySessionKey]?.acp).toBeUndefined();
+
+    const sqlite = requireNodeSqlite();
+    const db = new sqlite.DatabaseSync(path.join(root, "state", "openclaw.sqlite"));
+    try {
+      const row = db
+        .prepare(
+          "SELECT backend, agent, runtime_session_name, mode, state, last_activity_at FROM acp_sessions WHERE session_key = ?",
+        )
+        .get(sessionKey) as
+        | {
+            backend: string;
+            agent: string;
+            runtime_session_name: string;
+            mode: string;
+            state: string;
+            last_activity_at: number | bigint;
+          }
+        | undefined;
+      expect(row).toMatchObject({
+        backend: "acpx",
+        agent: "codex",
+        runtime_session_name: "codex-discord",
+        mode: "persistent",
+        state: "idle",
+      });
+      expect(Number(row?.last_activity_at)).toBe(123);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("skips symlinked managed-agent ACP metadata stores", async () => {
+    const root = await makeTempRoot();
+    const outsideRoot = await makeTempRoot();
+    const sessionKey = "agent:main:acp:binding:discord:default:feedface";
+    const managedStorePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const outsideStorePath = path.join(outsideRoot, "sessions.json");
+    writeJson5(outsideStorePath, {
+      [sessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+    });
+    fs.mkdirSync(path.dirname(managedStorePath), { recursive: true });
+    fs.symlinkSync(outsideStorePath, managedStorePath);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
+    const outsideStore = JSON.parse(fs.readFileSync(outsideStorePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(outsideStore[sessionKey]?.acp).toBeDefined();
+  });
+
+  it("skips symlinked custom agent-store ACP metadata stores", async () => {
+    const root = await makeTempRoot();
+    const customRoot = await makeTempRoot();
+    const outsideRoot = await makeTempRoot();
+    const sessionKey = "agent:main:acp:binding:discord:default:feedface";
+    const cfg: OpenClawConfig = {
+      session: {
+        store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+      },
+    };
+    const managedStorePath = path.join(customRoot, "agents", "main", "sessions", "sessions.json");
+    const outsideStorePath = path.join(outsideRoot, "sessions.json");
+    writeJson5(outsideStorePath, {
+      [sessionKey]: {
+        sessionId: "sess-acp",
+        updatedAt: 100,
+        acp: {
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "codex-discord",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 123,
+        },
+      },
+    });
+    fs.mkdirSync(path.dirname(managedStorePath), { recursive: true });
+    fs.symlinkSync(outsideStorePath, managedStorePath);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected, config: cfg });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
+    const outsideStore = JSON.parse(fs.readFileSync(outsideStorePath, "utf8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(outsideStore[sessionKey]?.acp).toBeDefined();
   });
 
   it("keeps shipped WhatsApp legacy group keys channel-qualified during migration", async () => {
@@ -1181,21 +1331,42 @@ describe("doctor legacy state migrations", () => {
     expect(fs.existsSync(path.join(oauthDir, "creds.json"))).toBe(false);
   });
 
-  it("migrates legacy Telegram pairing allowFrom store to account-scoped default file", async () => {
-    const { root, cfg } = await makeRootWithEmptyCfg();
-    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
-      "telegram-default-allowFrom.json",
-    ]);
-    expect(result.warnings).toStrictEqual([]);
+  it("uses the channel-resolved default account for unscoped pairing allowFrom", async () => {
+    const root = await makeTempRoot();
+    const cfg: OpenClawConfig = {
+      channels: {
+        whatsapp: {
+          accounts: {
+            work: {},
+            alerts: {},
+          },
+        },
+      },
+    };
+    const oauthDir = ensureCredentialsDir(root);
+    const sourcePath = path.join(oauthDir, "whatsapp-allowFrom.json");
+    fs.writeFileSync(sourcePath, '["123456"]\n', "utf8");
+    const env = { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv;
 
-    const target = path.join(oauthDir, "telegram-default-allowFrom.json");
-    expect(fs.existsSync(target)).toBe(true);
-    expect(JSON.parse(fs.readFileSync(target, "utf-8"))).toEqual({
-      version: 1,
-      allowFrom: ["123456"],
+    const detected = await detectLegacyStateMigrations({ cfg, env });
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env, now: () => 123 });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(readChannelPairingStateSnapshot("whatsapp", env).allowFrom).toEqual({
+      work: ["123456"],
     });
+    expect(fs.existsSync(sourcePath)).toBe(false);
+  });
+
+  it("migrates legacy Telegram pairing allowFrom store to SQLite default account rows", async () => {
+    const { root, cfg } = await makeRootWithEmptyCfg();
+    const { oauthDir, env, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPairing.hasLegacy).toBe(true);
+    expect(result.warnings).toStrictEqual([]);
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      default: ["123456"],
+    });
+    expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
   it("does not fan out legacy Telegram pairing allowFrom store to configured named accounts", async () => {
@@ -1211,23 +1382,13 @@ describe("doctor legacy state migrations", () => {
         },
       },
     };
-    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
-      "telegram-bot2-allowFrom.json",
-    ]);
+    const { oauthDir, env, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPairing.hasLegacy).toBe(true);
     expect(result.warnings).toStrictEqual([]);
-
-    const bot1Target = path.join(oauthDir, "telegram-bot1-allowFrom.json");
-    const bot2Target = path.join(oauthDir, "telegram-bot2-allowFrom.json");
-    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
-    expect(fs.existsSync(bot1Target)).toBe(false);
-    expect(fs.existsSync(bot2Target)).toBe(true);
-    expect(fs.existsSync(defaultTarget)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(bot2Target, "utf-8"))).toEqual({
-      version: 1,
-      allowFrom: ["123456"],
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      bot2: ["123456"],
     });
+    expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
   it("migrates legacy Telegram pairing allowFrom store to the default agent bound account", async () => {
@@ -1247,23 +1408,13 @@ describe("doctor legacy state migrations", () => {
       },
     };
 
-    const { oauthDir, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
-    expect(detected.channelPlans.hasLegacy).toBe(true);
-    expect(detected.channelPlans.plans.map((plan) => path.basename(plan.targetPath))).toEqual([
-      "telegram-alerts-allowFrom.json",
-    ]);
+    const { oauthDir, env, detected, result } = await runTelegramAllowFromMigration({ root, cfg });
+    expect(detected.channelPairing.hasLegacy).toBe(true);
     expect(result.warnings).toStrictEqual([]);
-
-    const alertsTarget = path.join(oauthDir, "telegram-alerts-allowFrom.json");
-    const backupTarget = path.join(oauthDir, "telegram-backup-allowFrom.json");
-    const defaultTarget = path.join(oauthDir, "telegram-default-allowFrom.json");
-    expect(fs.existsSync(alertsTarget)).toBe(true);
-    expect(fs.existsSync(backupTarget)).toBe(false);
-    expect(fs.existsSync(defaultTarget)).toBe(false);
-    expect(JSON.parse(fs.readFileSync(alertsTarget, "utf-8"))).toEqual({
-      version: 1,
-      allowFrom: ["123456"],
+    expect(readChannelPairingStateSnapshot("telegram", env).allowFrom).toEqual({
+      alerts: ["123456"],
     });
+    expect(fs.existsSync(path.join(oauthDir, "telegram-allowFrom.json"))).toBe(false);
   });
 
   it("no-ops when nothing detected", async () => {
@@ -3040,6 +3191,36 @@ describe("doctor legacy state migrations", () => {
     await withStateDir(root, async () => {
       expect(loadTaskRegistryStateFromSqlite().tasks.has("legacy-task")).toBe(true);
       expect(loadTaskFlowRegistryStateFromSqlite().flows.has("legacy-flow")).toBe(true);
+    });
+  });
+
+  it("normalizes obsolete task delivery status before archiving the legacy sidecar", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath } = writeLegacyTaskStateSidecars(root);
+    appendLegacyTaskWithObsoleteDeliveryStatus(taskRunsPath);
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 2 task registry sidecar rows → shared SQLite state");
+    expect(fs.existsSync(taskRunsPath)).toBe(false);
+    expect(fs.existsSync(`${taskRunsPath}.migrated`)).toBe(true);
+
+    const shared = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(
+      shared.db
+        .prepare("SELECT delivery_status FROM task_runs WHERE task_id = ?")
+        .get("legacy-not-requested"),
+    ).toEqual({ delivery_status: "not_applicable" });
+
+    await withStateDir(root, async () => {
+      const tasks = loadTaskRegistryStateFromSqlite().tasks;
+      expect(tasks.get("legacy-not-requested")?.deliveryStatus).toBe("not_applicable");
+      expect(tasks.get("legacy-task")?.deliveryStatus).toBe("not_applicable");
     });
   });
 

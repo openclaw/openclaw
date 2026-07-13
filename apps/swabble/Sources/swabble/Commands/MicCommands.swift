@@ -4,23 +4,10 @@ import Foundation
 import Swabble
 
 @MainActor
-struct MicCommand: ParsableCommand {
-    static var commandDescription: CommandDescription {
-        CommandDescription(
-            commandName: "mic",
-            abstract: "Microphone management",
-            subcommands: [MicList.self, MicSet.self])
-    }
-}
-
-@MainActor
 struct MicList: ParsableCommand {
     static var commandDescription: CommandDescription {
         CommandDescription(commandName: "list", abstract: "List input devices")
     }
-
-    init() {}
-    init(parsed: ParsedValues) {}
 
     mutating func run() async throws {
         let session = AVCaptureDevice.DiscoverySession(
@@ -50,12 +37,8 @@ struct MicSet: ParsableCommand {
     init() {}
     init(parsed: ParsedValues) {
         self.init()
-        if let value = parsed.positional.first, let intVal = Int(value) {
-            self.index = intVal
-        }
-        if let cfg = parsed.options["config"]?.last {
-            self.configPath = cfg
-        }
+        if let value = parsed.positional.first, let intVal = Int(value) { self.index = intVal }
+        if let cfg = parsed.options["config"]?.last { self.configPath = cfg }
     }
 
     mutating func run() async throws {

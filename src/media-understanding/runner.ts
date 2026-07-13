@@ -41,9 +41,13 @@ import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
-import { fileExists } from "./fs.js";
+import {
+  clearLocalAudioInspectionCacheForTests,
+  inspectLocalAudioSelection,
+} from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
@@ -335,6 +339,7 @@ const antigravityCliCache = new Map<string, Promise<string | null>>();
 export function clearMediaUnderstandingBinaryCacheForTests(): void {
   binaryCache.clear();
   antigravityCliCache.clear();
+  clearLocalAudioInspectionCacheForTests();
 }
 
 function expandHomeDir(value: string): string {
@@ -386,11 +391,7 @@ async function isExecutable(filePath: string): Promise<boolean> {
 }
 
 async function findBinary(name: string): Promise<string | null> {
-  const cached = binaryCache.get(name);
-  if (cached) {
-    return cached;
-  }
-  const resolved = (async () => {
+  return await getOrCreatePromise(binaryCache, name, async () => {
     const direct = expandHomeDir(name.trim());
     if (direct && hasPathSeparator(direct)) {
       for (const candidate of candidateBinaryNames(direct)) {
@@ -420,13 +421,7 @@ async function findBinary(name: string): Promise<string | null> {
     }
 
     return null;
-  })();
-  binaryCache.set(name, resolved);
-  return resolved;
-}
-
-async function hasBinary(name: string): Promise<boolean> {
-  return Boolean(await findBinary(name));
+  });
 }
 
 async function probeAntigravityCliCandidate(command: string): Promise<string | null> {
@@ -455,11 +450,7 @@ async function probeAntigravityCliCandidate(command: string): Promise<string | n
 }
 
 async function resolveAntigravityCliBinary(): Promise<string | null> {
-  const cached = antigravityCliCache.get("agy");
-  if (cached) {
-    return cached;
-  }
-  const resolved = (async () => {
+  return await getOrCreatePromise(antigravityCliCache, "agy", async () => {
     const configured = process.env.OPENCLAW_ANTIGRAVITY_CLI?.trim();
     const candidates = [configured, "agy", "antigravity"].filter((value): value is string =>
       Boolean(value),
@@ -471,96 +462,7 @@ async function resolveAntigravityCliBinary(): Promise<string | null> {
       }
     }
     return null;
-  })();
-  antigravityCliCache.set("agy", resolved);
-  return resolved;
-}
-
-async function resolveLocalWhisperCppEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("whisper-cli"))) {
-    return null;
-  }
-  const envModel = process.env.WHISPER_CPP_MODEL?.trim();
-  const defaultModel = "/opt/homebrew/share/whisper-cpp/for-tests-ggml-tiny.bin";
-  const modelPath = envModel && (await fileExists(envModel)) ? envModel : defaultModel;
-  if (!(await fileExists(modelPath))) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command: "whisper-cli",
-    args: ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-np", "-nt", "{{MediaPath}}"],
-  };
-}
-
-async function resolveLocalWhisperEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("whisper"))) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command: "whisper",
-    args: [
-      "--model",
-      "turbo",
-      "--output_format",
-      "txt",
-      "--output_dir",
-      "{{OutputDir}}",
-      "--verbose",
-      "False",
-      "{{MediaPath}}",
-    ],
-  };
-}
-
-async function resolveSherpaOnnxEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  if (!(await hasBinary("sherpa-onnx-offline"))) {
-    return null;
-  }
-  const modelDir = process.env.SHERPA_ONNX_MODEL_DIR?.trim();
-  if (!modelDir) {
-    return null;
-  }
-  const tokens = path.join(modelDir, "tokens.txt");
-  const encoder = path.join(modelDir, "encoder.onnx");
-  const decoder = path.join(modelDir, "decoder.onnx");
-  const joiner = path.join(modelDir, "joiner.onnx");
-  if (!(await fileExists(tokens))) {
-    return null;
-  }
-  if (!(await fileExists(encoder))) {
-    return null;
-  }
-  if (!(await fileExists(decoder))) {
-    return null;
-  }
-  if (!(await fileExists(joiner))) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command: "sherpa-onnx-offline",
-    args: [
-      `--tokens=${tokens}`,
-      `--encoder=${encoder}`,
-      `--decoder=${decoder}`,
-      `--joiner=${joiner}`,
-      "{{MediaPath}}",
-    ],
-  };
-}
-
-async function resolveLocalAudioEntry(): Promise<MediaUnderstandingModelConfig | null> {
-  const sherpa = await resolveSherpaOnnxEntry();
-  if (sherpa) {
-    return sherpa;
-  }
-  const whisperCpp = await resolveLocalWhisperCppEntry();
-  if (whisperCpp) {
-    return whisperCpp;
-  }
-  return await resolveLocalWhisperEntry();
+  });
 }
 
 async function resolveAntigravityCliEntry(
@@ -798,9 +700,9 @@ async function resolveAutoEntries(params: {
     if (keyEntry) {
       return [keyEntry];
     }
-    const localAudio = await resolveLocalAudioEntry();
-    if (localAudio) {
-      return [localAudio];
+    const localAudio = await inspectLocalAudioSelection();
+    if (localAudio.entries.length > 0) {
+      return localAudio.entries;
     }
   }
   const keys = await resolveKeyEntry(params);
@@ -988,6 +890,12 @@ async function runAttachmentEntries(params: {
         }
         if (result.model) {
           decision.model = result.model;
+        }
+        if (result.requestedBackend) {
+          decision.requestedBackend = result.requestedBackend;
+        }
+        if (result.observedBackend) {
+          decision.observedBackend = result.observedBackend;
         }
         attempts.push(decision);
         return { output: result, attempts };

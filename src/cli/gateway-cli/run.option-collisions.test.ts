@@ -65,6 +65,10 @@ const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
   snapshot: { config: {}, exists: false, sourceConfig: {}, valid: true } as Record<string, unknown>,
 }));
+const pristineStartupMigrationPlan = vi.hoisted(() => ({
+  config: vi.fn(),
+  state: vi.fn(),
+}));
 const readBestEffortConfig = vi.fn(async () => configState.cfg);
 type ConfigSnapshotReadOptionsStub = {
   isolateEnv?: boolean;
@@ -106,9 +110,6 @@ const bootLifecycle = vi.hoisted(() => ({
   record: vi.fn((_env?: NodeJS.ProcessEnv, _nowMs?: number, _reason?: string) => "boot-id"),
   complete: vi.fn(),
 }));
-const controlUiState = vi.hoisted(() => ({
-  root: "/tmp/openclaw-control-ui" as string | null,
-}));
 const netState = vi.hoisted(() => ({
   autoBindHost: "127.0.0.1",
   container: false,
@@ -141,10 +142,18 @@ vi.mock("../../config/config.js", () => ({
     readConfigFileSnapshotWithPluginMetadata(options),
 }));
 
+vi.mock("../../commands/doctor/shared/pristine-startup-state.js", () => ({
+  planPristineStartupConfigMigrations: (config: unknown, env?: NodeJS.ProcessEnv) =>
+    pristineStartupMigrationPlan.config(config, env),
+  planPristineStartupStateMigrations: (env?: NodeJS.ProcessEnv) =>
+    pristineStartupMigrationPlan.state(env),
+}));
+
 vi.mock("../../config/paths.js", () => ({
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
   normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   pinRuntimePaths: (env?: NodeJS.ProcessEnv) => pinRuntimePaths(env),
+  resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
@@ -239,10 +248,6 @@ vi.mock("../../gateway/server.js", () => ({
   startGatewayServer: (port: number, opts?: unknown) => startGatewayServer(port, opts),
 }));
 
-vi.mock("../../infra/control-ui-assets.js", () => ({
-  resolveControlUiRootSync: () => controlUiState.root,
-}));
-
 vi.mock("../../gateway/ws-logging.js", () => ({
   setGatewayWsLogStyle: (style: string) => setGatewayWsLogStyle(style),
 }));
@@ -291,6 +296,7 @@ vi.mock("../../infra/gateway-boot-lifecycle.js", () => ({
 
 vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
+    debug: () => undefined,
     info: (message: string) => {
       gatewayLogMessages.push(message);
     },
@@ -347,11 +353,20 @@ describe("gateway run option collisions", () => {
     resetRuntimeCapture();
     configState.cfg = {};
     configState.snapshot = { config: {}, exists: false, sourceConfig: {}, valid: true };
+    pristineStartupMigrationPlan.config.mockReset();
+    pristineStartupMigrationPlan.config.mockReturnValue({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
+    pristineStartupMigrationPlan.state.mockReset();
+    pristineStartupMigrationPlan.state.mockReturnValue({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
     netState.autoBindHost = "127.0.0.1";
     netState.container = false;
     readBestEffortConfig.mockClear();
     readConfigFileSnapshotWithPluginMetadata.mockClear();
-    controlUiState.root = "/tmp/openclaw-control-ui";
     gatewayLogMessages.length = 0;
     writeDiagnosticStabilityBundleForFailureSync.mockClear();
     bootLifecycle.decisions.length = 0;
@@ -429,6 +444,50 @@ describe("gateway run option collisions", () => {
 
     expect(beforeRun).toHaveBeenCalledOnce();
     expect(callOrder).toEqual(["bootstrap", "normalize", "normalize", "start"]);
+  });
+
+  it("drops the pristine core fact when guarded config becomes stateful", async () => {
+    const initialConfig = {
+      gateway: { mode: "local" },
+      plugins: { load: { paths: ["/plugins/example"] } },
+    };
+    configState.snapshot = {
+      config: initialConfig,
+      exists: true,
+      hash: "initial",
+      parsed: initialConfig,
+      path: "/tmp/openclaw.json",
+      sourceConfig: initialConfig,
+      valid: true,
+    };
+    pristineStartupMigrationPlan.state.mockReturnValue({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: true,
+    });
+    const {
+      prepareGatewayRunBootstrap,
+      selectGatewayRunEnvironment,
+      wasPreparedGatewayRunCoreStatePristine,
+    } = await import("./pre-bootstrap.js");
+
+    expect(await selectGatewayRunEnvironment({ opts: {}, runtime: defaultRuntime })).toBe(true);
+    const recoveredConfig = {
+      gateway: { mode: "local" },
+      session: { store: "/tmp/sessions.json" },
+    };
+    configState.snapshot = {
+      config: recoveredConfig,
+      exists: true,
+      hash: "recovered",
+      parsed: recoveredConfig,
+      path: "/tmp/openclaw.json",
+      sourceConfig: recoveredConfig,
+      valid: true,
+    };
+
+    expect(await prepareGatewayRunBootstrap({ opts: {}, runtime: defaultRuntime })).toBe(true);
+    expect(wasPreparedGatewayRunCoreStatePristine()).toBe(false);
+    expect(pristineStartupMigrationPlan.config).toHaveBeenCalledWith(recoveredConfig, process.env);
   });
 
   it("refreshes the managed proxy from the final accepted config before gateway startup", async () => {
@@ -1438,16 +1497,6 @@ describe("gateway run option collisions", () => {
     });
     expect(gatewayStartOptions(1).channelAutostartSuppression).toBeUndefined();
     expect(gatewayLogMessages.some((message) => message.includes("breaker recovered"))).toBe(true);
-  });
-
-  it("logs when first startup will build missing Control UI assets", async () => {
-    controlUiState.root = null;
-
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
-
-    expect(gatewayLogMessages).toContain(
-      "Control UI assets are missing; first startup may spend a few seconds building them before the gateway binds. `pnpm gateway:watch` does not rebuild Control UI assets, so rerun `pnpm ui:build` after UI changes or use `pnpm ui:dev` while developing the Control UI. For a full local dist, run `pnpm build && pnpm ui:build`.",
-    );
   });
 
   it("does not write startup failure bundles for expected gateway lock conflicts", async () => {

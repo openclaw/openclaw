@@ -1,11 +1,10 @@
 // Covers provider-specific transcript turn validation and repair.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
-import {
-  mergeConsecutiveUserTurns,
-  validateAnthropicTurns,
-  validateGeminiTurns,
-} from "./embedded-agent-helpers.js";
+import { validateAnthropicTurns, validateGeminiTurns } from "./embedded-agent-helpers.js";
+import { mergeConsecutiveUserTurns } from "./embedded-agent-helpers/turns.js";
 
 function asMessages(messages: unknown[]): AgentMessage[] {
   return messages as AgentMessage[];
@@ -284,7 +283,7 @@ describe("validateAnthropicTurns", () => {
     const result = validateAnthropicTurns(msgs) as Extract<AgentMessage, { role: "user" }>[];
 
     expect(result).toHaveLength(1);
-    const merged = result[0];
+    const merged = expectDefined(result[0], "merged user message");
     expect(merged.timestamp).toBe(2000);
     expect((merged as { attachments?: unknown[] }).attachments).toEqual([
       { type: "image", url: "new.png" },
@@ -315,7 +314,7 @@ describe("validateAnthropicTurns", () => {
     ]);
 
     const [merged] = validateAnthropicTurns(msgs) as Extract<AgentMessage, { role: "user" }>[];
-    expect(merged.content).toEqual([
+    expect(expectDefined(merged, "merged test invariant").content).toEqual([
       { type: "text", text: "first" },
       { type: "image", url: "img1" },
       { type: "image", url: "img2" },

@@ -176,22 +176,14 @@ struct TailscaleIntegrationSection: View {
     }
 
     private var statusColor: Color {
-        if !self.effectiveService.isInstalled {
-            return .yellow
-        }
-        if self.effectiveService.isRunning {
-            return .green
-        }
+        if !self.effectiveService.isInstalled { return .yellow }
+        if self.effectiveService.isRunning { return .green }
         return .orange
     }
 
     private var statusText: String {
-        if !self.effectiveService.isInstalled {
-            return "Tailscale is not installed"
-        }
-        if self.effectiveService.isRunning {
-            return "Tailscale is installed and running"
-        }
+        if !self.effectiveService.isInstalled { return "Tailscale is not installed" }
+        if self.effectiveService.isRunning { return "Tailscale is installed and running" }
         return "Tailscale is installed but not running"
     }
 
@@ -325,9 +317,7 @@ struct TailscaleIntegrationSection: View {
     private static func buildAndSaveTailscaleConfig(
         tailscaleMode: GatewayTailscaleMode,
         requireCredentialsForServe: Bool,
-        password: String,
-        connectionMode: AppState.ConnectionMode,
-        isPaused: Bool) async -> (Bool, String?)
+        password: String) async -> (Bool, String?)
     {
         let settings = GatewayTailscaleSettingsSnapshot(
             mode: tailscaleMode,
@@ -389,7 +379,7 @@ struct TailscaleIntegrationSection: View {
 
     private func restartGatewayIfNeeded() {
         guard self.connectionMode == .local, !self.isPaused else { return }
-        Task { await GatewayLaunchAgentManager.kickstart() }
+        Task { _ = await GatewayLaunchAgentManager.kickstart() }
     }
 
     private func currentSettingsSnapshot() -> GatewayTailscaleSettingsSnapshot {
@@ -507,22 +497,18 @@ struct TailscaleIntegrationSection: View {
     @MainActor
     private static func saveTailscaleSettings(
         settings: GatewayTailscaleSettingsSnapshot,
-        connectionMode: AppState.ConnectionMode,
-        isPaused: Bool) async -> (Bool, String?)
+        connectionMode _: AppState.ConnectionMode,
+        isPaused _: Bool) async -> (Bool, String?)
     {
         await self.buildAndSaveTailscaleConfig(
             tailscaleMode: settings.mode,
             requireCredentialsForServe: settings.requireCredentialsForServe,
-            password: settings.password,
-            connectionMode: connectionMode,
-            isPaused: isPaused)
+            password: settings.password)
     }
 
     private func startStatusTimer() {
         self.stopStatusTimer()
-        if ProcessInfo.processInfo.isRunningTests {
-            return
-        }
+        if ProcessInfo.processInfo.isRunningTests { return }
         self.statusTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
             Task { await self.effectiveService.checkTailscaleStatus() }
         }

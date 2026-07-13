@@ -105,6 +105,6 @@ describe("renderActivity", () => {
     const meta = Array.from(container.querySelectorAll(".activity-entry__meta span")).map(
       (element) => element.textContent?.trim(),
     );
-    expect(meta).toContain("2m 0s");
+    expect(meta).toContain("2m");
   });
 });

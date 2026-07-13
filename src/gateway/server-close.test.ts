@@ -64,6 +64,7 @@ vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => ({
+    debug: vi.fn(),
     info: mocks.logInfo,
     warn: mocks.logWarn,
   })),
@@ -183,6 +184,62 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("joins an in-flight config reload before mutable runtime teardown", async () => {
+    const events: string[] = [];
+    let releaseReload!: () => void;
+    const reloadStopped = new Promise<void>((resolve) => {
+      releaseReload = resolve;
+    });
+    const configReloader = {
+      stop: vi.fn(async () => {
+        events.push("reload:stopping");
+        await reloadStopped;
+        events.push("reload:stopped");
+      }),
+    };
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        events.push("sidecar:stopped");
+      }),
+    };
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugins:stopped");
+      }),
+    };
+    const stopChannel = vi.fn(async () => {
+      events.push("channel:stopped");
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        configReloader,
+        postReadySidecars: [postReadySidecar],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    const closePromise = close({ reason: "test" });
+    await vi.waitFor(() => {
+      expect(events).toEqual(["reload:stopping"]);
+    });
+    expect(postReadySidecar.stop).not.toHaveBeenCalled();
+    expect(pluginServices.stop).not.toHaveBeenCalled();
+    expect(stopChannel).not.toHaveBeenCalled();
+
+    releaseReload();
+    await closePromise;
+
+    expect(events).toEqual([
+      "reload:stopping",
+      "reload:stopped",
+      "sidecar:stopped",
+      "plugins:stopped",
+      "channel:stopped",
+    ]);
   });
 
   it("stops plugin services before channel runtimes", async () => {

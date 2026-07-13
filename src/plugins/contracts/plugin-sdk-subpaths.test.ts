@@ -23,7 +23,11 @@ import type {
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
-import type { GetReplyOptions as ReplyRuntimeGetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import type {
+  GetReplyOptions as ReplyRuntimeGetReplyOptions,
+  ReplyDispatchBeforeDeliverOptions as ReplyRuntimeBeforeDeliverOptions,
+  ReplyDispatcher as ReplyRuntimeDispatcher,
+} from "openclaw/plugin-sdk/reply-runtime";
 import * as zalouserSdk from "openclaw/plugin-sdk/zalouser";
 import ts from "typescript";
 import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
@@ -554,6 +558,10 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps helper subpaths aligned", () => {
+    expectSourceContract("expect-runtime", {
+      mentions: ["expectDefined"],
+      omits: ["first", "last"],
+    });
     expectSourceMentions("core", [
       "emptyPluginConfigSchema",
       "definePluginEntry",
@@ -597,6 +605,10 @@ describe("plugin-sdk subpath exports", () => {
       "markImplicitSameChatApprovalAuthorization",
       "resolveApprovalApprovers",
     ]);
+    expectSourceContract("approval-reference-runtime", {
+      mentions: ["buildApprovalResolutionRef"],
+      omits: ["resolveApprovalOverGateway", "withOperatorApprovalsGatewayClient"],
+    });
     expectSourceMentions("reply-chunking", [
       "chunkText",
       "chunkTextWithMode",
@@ -1345,6 +1357,12 @@ describe("plugin-sdk subpath exports", () => {
       "requestedSessionId" | "resumeRequestedSession"
     >;
     expectTypeOf<PrivateResumeOptionKeys>().toEqualTypeOf<never>();
+    type ReplyRuntimeAppendBeforeDeliverOptions = Parameters<
+      NonNullable<ReplyRuntimeDispatcher["appendBeforeDeliver"]>
+    >[1];
+    expectTypeOf<ReplyRuntimeAppendBeforeDeliverOptions>().toEqualTypeOf<
+      ReplyRuntimeBeforeDeliverOptions | undefined
+    >();
   });
 
   it("keeps runtime entry subpaths importable", async () => {
@@ -1383,7 +1401,11 @@ describe("plugin-sdk subpath exports", () => {
     );
     expectSourceMentions("delivery-queue-runtime", ["drainPendingDeliveries"]);
     expectSourceContains("delivery-queue-runtime", "../infra/outbound/deliver-runtime.js");
-    expectSourceMentions("error-runtime", ["formatUncaughtError", "isApprovalNotFoundError"]);
+    expectSourceMentions("error-runtime", [
+      "formatUncaughtError",
+      "isApprovalNotFoundError",
+      "PlatformMessageNotDispatchedError",
+    ]);
 
     expect(channelLifecycleSdk.createDraftStreamLoop).toBe(
       channelLifecycleDirectSdk.createDraftStreamLoop,

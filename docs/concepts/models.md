@@ -23,7 +23,21 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-A model ref (`provider/model`) chooses a provider and model. It does not usually choose the low-level agent runtime. OpenAI is the main exception: official `openai/gpt-*` agent refs run through the Codex app-server runtime by default. Subscription Copilot refs (`github-copilot/*`) can be opted into the external GitHub Copilot agent runtime plugin, but that path is always explicit (never selected by `auto`). Runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, `openai/gpt-*` does not imply API-key billing; auth can come from a Codex account or an `openai` OAuth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
+A model ref (`provider/model`) chooses a provider and model, not the low-level
+agent runtime. With runtime policy unset or `auto`, OpenAI's provider-owned
+route policy may select Codex only for an exact official HTTPS Platform
+Responses or ChatGPT Responses route with no authored request override; the
+`openai/*` prefix alone never selects Codex. Completions adapters, custom
+endpoints, and authored request behavior stay on OpenClaw. Plaintext official
+HTTP endpoints are rejected. See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
+
+Subscription Copilot refs (`github-copilot/*`) can be opted into the external
+GitHub Copilot agent runtime plugin, but that path is always explicit (never
+selected by `auto`). Runtime overrides belong on provider/model policy, not on
+the whole agent or session. Runtime selection does not determine billing:
+OpenAI API-key and ChatGPT/Codex subscription credentials remain distinct. See
+[Agent runtimes](/concepts/agent-runtimes) and
+[GitHub Copilot agent runtime](/plugins/copilot).
 
 ## Selection order
 
@@ -42,7 +56,7 @@ A model ref (`provider/model`) chooses a provider and model. It does not usually
 Related model-config surfaces:
 
 - `agents.defaults.models` is the allowlist/catalog of models OpenClaw can use, plus aliases. Use `provider/*` entries to allow every discovered model from a provider without listing each one.
-- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles and supported channel thread/topic titles. Per-agent `agents.list[].utilityModel` overrides it. When unset, these tasks use the agent's primary model. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
+- `agents.defaults.utilityModel` is an optional lower-cost model for short internal tasks such as generated dashboard session titles, supported channel thread/topic titles, and progress narration. Per-agent `agents.list[].utilityModel` overrides it. When unset, OpenClaw uses the primary provider's declared small-model default when one exists (OpenAI → `gpt-5.6-luna`, Anthropic → `claude-haiku-4-5`), otherwise the agent's primary model; set it to an empty string to disable utility routing. Utility tasks are separate model calls and may send bounded task content to the selected model provider.
 - `agents.defaults.imageModel` is used only when the primary model cannot accept images.
 - `agents.defaults.pdfModel` is used by the `pdf` tool. If unset, the tool falls back to `imageModel`, then the resolved session/default model.
 - `agents.defaults.imageGenerationModel`, `musicGenerationModel`, and `videoGenerationModel` back the shared media-generation tools. If unset, each tool infers an auth-backed provider default: current default provider first, then the remaining registered providers for that capability in provider-id order. Set `agents.defaults.mediaGenerationAutoProviderFallback: false` to disable that cross-provider inference while keeping explicit fallbacks.
@@ -66,6 +80,7 @@ Other selection rules:
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
 - The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when set (including `provider/*` wildcard entries), otherwise `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 
 Full mechanics: [Model failover](/concepts/model-failover).
 
