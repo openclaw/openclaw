@@ -16,6 +16,11 @@ const WizardRunStatusSchema = Type.Union([
 export const WizardStartParamsSchema = closedObject({
   mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
   workspace: Type.Optional(Type.String()),
+  // "setup" (default) runs full onboarding; "channels" runs the guided
+  // channel-setup flow (openclaw channels add) over the same step protocol.
+  flow: Type.Optional(Type.Union([Type.Literal("setup"), Type.Literal("channels")])),
+  // Preselected channel id for flow "channels" (e.g. "telegram").
+  channel: Type.Optional(NonEmptyString),
 });
 
 /** Client answer payload for the current wizard step. */

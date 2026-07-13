@@ -209,6 +209,11 @@ export type GatewayRequestContext = {
     runtime: import("../../runtime.js").RuntimeEnv,
     prompter: import("../../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
+  channelWizardRunner: (
+    opts: { channel?: string },
+    runtime: import("../../runtime.js").RuntimeEnv,
+    prompter: import("../../wizard/prompts.js").WizardPrompter,
+  ) => Promise<void>;
   broadcastVoiceWakeChanged: (triggers: string[]) => void;
   broadcastVoiceWakeRoutingChanged: (
     config: import("../../infra/voicewake-routing.js").VoiceWakeRoutingConfig,

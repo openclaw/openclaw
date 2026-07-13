@@ -561,6 +561,14 @@ export type GatewayServerOptions = {
     runtime: import("../runtime.js").RuntimeEnv,
     prompter: import("../wizard/prompts.js").WizardPrompter,
   ) => Promise<void>;
+  /**
+   * Test-only: override the channel-setup wizard runner (wizard.start flow "channels").
+   */
+  channelWizardRunner?: (
+    opts: { channel?: string },
+    runtime: import("../runtime.js").RuntimeEnv,
+    prompter: import("../wizard/prompts.js").WizardPrompter,
+  ) => Promise<void>;
   sidecarStartup?: GatewaySidecarStartupMode;
   channelAutostartSuppression?: ChannelAutostartSuppression;
   /**
@@ -577,10 +585,16 @@ export type GatewayServerOptions = {
 };
 
 type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
+type ChannelSetupWizardRunner = NonNullable<GatewayServerOptions["channelWizardRunner"]>;
 
 const runDefaultSetupWizard: SetupWizardRunner = async (...args) => {
   const { runSetupWizard } = await import("../wizard/setup.js");
   return runSetupWizard(...args);
+};
+
+const runDefaultChannelSetupWizard: ChannelSetupWizardRunner = async (...args) => {
+  const { runChannelsSetupWizard } = await import("../commands/channels/add-wizard.js");
+  return runChannelsSetupWizard(...args);
 };
 
 export async function startGatewayServer(
@@ -1075,6 +1089,7 @@ export async function startGatewayServer(
   const terminalLaunchPolicy = createTerminalLaunchPolicy(cfgAtStart);
 
   const wizardRunner = opts.wizardRunner ?? runDefaultSetupWizard;
+  const channelWizardRunner = opts.channelWizardRunner ?? runDefaultChannelSetupWizard;
   const { wizardSessions, findRunningWizard, purgeWizardSession } = createWizardSessionTracker();
   const crestodianSessions: GatewayRequestContext["crestodianSessions"] = new Map();
 
@@ -1923,6 +1938,7 @@ export async function startGatewayServer(
           stopChannel,
           markChannelLoggedOut,
           wizardRunner,
+          channelWizardRunner,
           broadcastVoiceWakeChanged,
           unavailableGatewayMethods,
           broadcastVoiceWakeRoutingChanged,

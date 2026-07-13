@@ -11,6 +11,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.ts";
 import { renderChannels } from "./view.ts";
+import { ChannelWizardController } from "./wizard-controller.ts";
 
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
 
@@ -59,6 +60,71 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   @state()
   private nostrProfileAccountId: string | null = null;
+
+  @state()
+  private selectedChannel: string | null = null;
+
+  @state()
+  private wizardMultiselect: unknown[] = [];
+
+  private wizardMultiselectStepId: string | null = null;
+
+  private readonly wizardController = new ChannelWizardController(
+    () => this.context?.gateway.snapshot.client ?? null,
+    () => {
+      // Pending multiselect toggles survive busy re-renders but reset per step.
+      const wizard = this.wizardController.state;
+      const stepId = wizard.phase === "step" ? wizard.step.id : null;
+      if (stepId !== this.wizardMultiselectStepId) {
+        this.wizardMultiselectStepId = stepId;
+        const initial =
+          wizard.phase === "step" && Array.isArray(wizard.step.initialValue)
+            ? [...wizard.step.initialValue]
+            : [];
+        this.wizardMultiselect = initial;
+      }
+      if (wizard.phase === "done" && this.lastWizardPhase !== "done") {
+        void this.handleWizardCompleted(wizard.channel);
+      }
+      this.lastWizardPhase = wizard.phase;
+      this.requestUpdate();
+    },
+  );
+
+  private lastWizardPhase = "idle";
+
+  private async handleWizardCompleted(channel: string | null) {
+    const context = this.context;
+    if (!context) {
+      return;
+    }
+    // The wizard rewrote openclaw.json on the gateway; resync the local draft.
+    await context.runtimeConfig.refresh({ discardPendingChanges: true });
+    await context.channels.refresh(true);
+    if (channel === "whatsapp") {
+      // Jump straight into QR pairing; the wizard modal renders the QR phase.
+      await context.channels.startWhatsApp(false);
+    }
+  }
+
+  private startSetup(channel: string | null) {
+    this.selectedChannel = null;
+    void this.wizardController.start(channel);
+  }
+
+  private closeWizard() {
+    const wasActive = this.wizardController.state.phase !== "idle";
+    void this.wizardController.cancel();
+    if (wasActive) {
+      void this.context?.channels.refresh(true);
+    }
+  }
+
+  private toggleWizardMultiselect(value: unknown) {
+    this.wizardMultiselect = this.wizardMultiselect.includes(value)
+      ? this.wizardMultiselect.filter((entry) => entry !== value)
+      : [...this.wizardMultiselect, value];
+  }
 
   private schemaLoadStarted = false;
   private gatewaySource?: ApplicationContext["gateway"];
@@ -166,6 +232,8 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.wizardController.reset();
+    this.selectedChannel = null;
     this.gatewaySource = undefined;
     this.channelsSource = undefined;
     this.gatewayClient = null;
@@ -490,6 +558,19 @@ class ChannelsPage extends OpenClawLightDomElement {
           configFormDirty: config.configFormDirty,
           nostrProfileFormState: this.nostrProfileFormState,
           nostrProfileAccountId: this.nostrProfileAccountId,
+          selectedChannel: this.selectedChannel,
+          wizard: this.wizardController.state,
+          wizardMultiselect: this.wizardMultiselect,
+          onShowDetail: (channelId) => {
+            this.selectedChannel = channelId;
+          },
+          onCloseDetail: () => {
+            this.selectedChannel = null;
+          },
+          onStartSetup: (channelId) => this.startSetup(channelId),
+          onWizardAnswer: (value) => void this.wizardController.answer(value),
+          onWizardToggleMultiselect: (value) => this.toggleWizardMultiselect(value),
+          onWizardClose: () => this.closeWizard(),
           onRefresh: (probe) => void context.channels.refresh(probe),
           onWhatsAppStart: (force) => void context.channels.startWhatsApp(force),
           onWhatsAppWait: () => void context.channels.waitWhatsApp(),

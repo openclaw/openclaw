@@ -1,0 +1,388 @@
+/* Channels hub: card grid, setup wizard, and detail overlay. Mirrors the
+   plugins-page visual language (see plugins.css) with channel-specific bits. */
+
+.channels-hub {
+  display: grid;
+  gap: 22px;
+}
+
+.channels-group__heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+
+.channels-group__heading h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 660;
+  letter-spacing: -0.015em;
+}
+
+.channels-group__heading .muted {
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(230px, 100%), 1fr));
+  gap: 12px;
+}
+
+.channels-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 10px 10px 12px;
+  background: linear-gradient(135deg, var(--card-highlight), transparent 42%), var(--card);
+  box-shadow: var(--shadow-sm);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-normal) var(--ease-out),
+    transform var(--duration-normal) var(--ease-out),
+    box-shadow var(--duration-normal) var(--ease-out);
+}
+
+.channels-card:hover,
+.channels-card:focus-visible {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.channels-cover {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  place-items: center;
+  overflow: hidden;
+  border-radius: calc(var(--radius-lg) - 4px);
+  background: var(--bg-elevated);
+}
+
+.channels-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--duration-slow) var(--ease-out);
+}
+
+@media (hover: hover) {
+  .channels-card:hover .channels-cover img {
+    transform: scale(1.03);
+  }
+}
+
+.channels-cover--fallback {
+  background: linear-gradient(135deg, var(--channels-art-a), var(--channels-art-b));
+  color: rgb(255 255 255 / 92%);
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+}
+
+.channels-card__body {
+  display: grid;
+  gap: 4px;
+  padding: 0 2px;
+}
+
+.channels-card__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-strong);
+  font-weight: 640;
+}
+
+.channels-card__sub {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.4;
+}
+
+.channels-state {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-full);
+  padding: 3px 7px;
+  background: var(--bg-muted);
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 620;
+  line-height: 1.1;
+}
+
+.channels-state--running {
+  background: var(--ok-subtle);
+  color: var(--ok);
+}
+
+.channels-state--attention {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+.channels-state--setup {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+/* ---------- detail overlay ---------- */
+
+.channels-detail {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, calc(100vw - 48px));
+  max-height: min(85dvh, 860px);
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.channels-detail__header {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.channels-detail__header .channels-cover {
+  border-radius: 0;
+  aspect-ratio: 32 / 9;
+}
+
+.channels-detail__close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  width: 32px;
+  height: 32px;
+  padding: 7px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(4px);
+}
+
+.channels-detail__body {
+  display: grid;
+  gap: 12px;
+  padding: 16px 18px 20px;
+}
+
+.channels-detail__body .card {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* The overlay renders its own heading; the embedded legacy card repeats the
+   channel name as its first rows, so hide that duplicate header. */
+.channels-detail__body .card > .card-title,
+.channels-detail__body .card > .card-sub {
+  display: none;
+}
+
+/* ---------- setup wizard ---------- */
+
+.channels-wizard {
+  display: flex;
+  flex-direction: column;
+  width: min(540px, calc(100vw - 48px));
+  max-height: min(85dvh, 760px);
+  overflow-y: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.channels-wizard__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 18px 0;
+}
+
+.channels-wizard__header .channels-tile {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
+}
+
+.channels-wizard__header .channels-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.channels-wizard__header .channels-tile--fallback {
+  border-color: transparent;
+  background: linear-gradient(135deg, var(--channels-art-a), var(--channels-art-b));
+  color: rgb(255 255 255 / 92%);
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+}
+
+.channels-wizard__heading {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.channels-wizard__heading h2 {
+  margin: 0;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 660;
+  letter-spacing: -0.015em;
+}
+
+.channels-wizard__heading .muted {
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-wizard__body {
+  display: grid;
+  gap: 12px;
+  padding: 14px 18px 18px;
+}
+
+.channels-wizard__note {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+}
+
+.channels-wizard__note--code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
+.channels-wizard__message {
+  color: var(--text-strong);
+  font-weight: 620;
+  line-height: 1.4;
+}
+
+.channels-wizard__options {
+  display: grid;
+  gap: 8px;
+}
+
+.channels-wizard__option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--card);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-out),
+    background var(--duration-fast) var(--ease-out);
+}
+
+.channels-wizard__option:hover,
+.channels-wizard__option:focus-visible {
+  border-color: var(--border-hover);
+  background: var(--bg-elevated);
+}
+
+.channels-wizard__option[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--accent-subtle);
+}
+
+.channels-wizard__option-label {
+  color: var(--text-strong);
+  font-weight: 620;
+}
+
+.channels-wizard__option-hint {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-wizard__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.channels-wizard__footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.channels-wizard__error {
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--danger-subtle);
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-wizard__qr {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  padding: 6px 0;
+}
+
+.channels-wizard__qr img {
+  width: min(260px, 70vw);
+  border-radius: var(--radius-md);
+  background: #fff;
+  padding: 10px;
+}
+
+.channels-wizard__spinner {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-health summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}

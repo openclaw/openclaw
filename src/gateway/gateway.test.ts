@@ -789,6 +789,81 @@ module.exports = {
   );
 
   it(
+    "routes wizard.start flow channels to the channel wizard runner",
+    { timeout: GATEWAY_E2E_TIMEOUT_MS },
+    async () => {
+      const { envSnapshot, tempHome } = await setupGatewayTempHome({
+        prefix: "openclaw-wizard-channels-home-",
+        minimalGateway: true,
+      });
+      const gatewayToken = nextGatewayId("wiz-chan-token");
+      const port = await getFreeGatewayPort();
+      const channelRuns: Array<string | undefined> = [];
+      const server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token: gatewayToken },
+        controlUiEnabled: false,
+        wizardRunner: async () => {
+          throw new Error("setup wizard runner must not run for flow channels");
+        },
+        channelWizardRunner: async (opts, _runtime, prompter) => {
+          channelRuns.push(opts.channel);
+          await prompter.intro("Channel setup");
+          const choice = await prompter.select({
+            message: "channel",
+            options: [{ value: opts.channel ?? "none", label: opts.channel ?? "none" }],
+          });
+          await prompter.outro(`configured ${String(choice)}`);
+        },
+      });
+
+      const client = await connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: gatewayToken,
+        clientDisplayName: "vitest-wizard-channels",
+      });
+
+      try {
+        const start = await client.request<{
+          sessionId?: string;
+          done: boolean;
+          status: "running" | "done" | "cancelled" | "error";
+          step?: { id: string; type: string };
+        }>("wizard.start", { flow: "channels", channel: "telegram" });
+        const sessionId = start.sessionId;
+        expect(typeof sessionId).toBe("string");
+
+        let next = start;
+        const seenSteps: string[] = [];
+        while (!next.done) {
+          const step = next.step;
+          if (!step) {
+            throw new Error("wizard missing step");
+          }
+          seenSteps.push(step.type);
+          next = await client.request(
+            "wizard.next",
+            {
+              sessionId,
+              answer: { stepId: step.id, value: step.type === "select" ? "telegram" : null },
+            },
+            { timeoutMs: 60_000 },
+          );
+        }
+
+        expect(next.status, `seenSteps=${seenSteps.join(",")}`).toBe("done");
+        expect(seenSteps).toContain("select");
+        expect(channelRuns).toEqual(["telegram"]);
+      } finally {
+        await disconnectGatewayClient(client);
+        await server.close({ reason: "wizard channels flow complete" });
+        await removeGatewayTempHome(tempHome);
+        envSnapshot.restore();
+      }
+    },
+  );
+
+  it(
     "ignores env-driven plugin auto-enable in minimal gateway mode",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
     async () => {

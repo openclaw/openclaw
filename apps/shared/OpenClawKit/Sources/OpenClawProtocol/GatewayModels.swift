@@ -6493,18 +6493,26 @@ public struct CrestodianSetupAuthStartResult: Codable, Sendable {
 public struct WizardStartParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let workspace: String?
+    public let flow: AnyCodable?
+    public let channel: String?
 
     public init(
         mode: AnyCodable? = nil,
-        workspace: String? = nil)
+        workspace: String? = nil,
+        flow: AnyCodable? = nil,
+        channel: String? = nil)
     {
         self.mode = mode
         self.workspace = workspace
+        self.flow = flow
+        self.channel = channel
     }
 
     private enum CodingKeys: String, CodingKey {
         case mode
         case workspace
+        case flow
+        case channel
     }
 }
 

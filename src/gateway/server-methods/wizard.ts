@@ -49,13 +49,26 @@ export const wizardHandlers: GatewayRequestHandlers = {
       return;
     }
     const sessionId = randomUUID();
-    const opts = {
-      mode: params.mode,
-      workspace: readStringValue(params.workspace),
-    };
-    const session = new WizardSession((prompter) =>
-      context.wizardRunner(opts, defaultRuntime, prompter),
-    );
+    const flow = params.flow ?? "setup";
+    const session =
+      flow === "channels"
+        ? new WizardSession((prompter) =>
+            context.channelWizardRunner(
+              { channel: readStringValue(params.channel) },
+              defaultRuntime,
+              prompter,
+            ),
+          )
+        : new WizardSession((prompter) =>
+            context.wizardRunner(
+              {
+                mode: params.mode,
+                workspace: readStringValue(params.workspace),
+              },
+              defaultRuntime,
+              prompter,
+            ),
+          );
     context.wizardSessions.set(sessionId, session);
     const result = await session.next();
     if (result.done) {

@@ -14,6 +14,7 @@ import type {
   WhatsAppStatus,
 } from "../../api/types.ts";
 import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
+import type { ChannelWizardState } from "./wizard-controller.ts";
 
 export type ChannelKey = string;
 
@@ -35,6 +36,15 @@ export type ChannelsProps = {
   configFormDirty: boolean;
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
+  selectedChannel: string | null;
+  wizard: ChannelWizardState;
+  wizardMultiselect: readonly unknown[];
+  onShowDetail: (channelId: string) => void;
+  onCloseDetail: () => void;
+  onStartSetup: (channelId: string | null) => void;
+  onWizardAnswer: (value: unknown) => void;
+  onWizardToggleMultiselect: (value: unknown) => void;
+  onWizardClose: () => void;
   onRefresh: (probe: boolean) => void;
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
