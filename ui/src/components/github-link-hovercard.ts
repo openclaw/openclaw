@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ControlUiGitHubPreview } from "../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n, t } from "../i18n/index.ts";
@@ -34,10 +35,6 @@ type CacheEntry = {
 };
 
 let nextHovercardId = 0;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function requiredString(record: Record<string, unknown>, key: string): string {
   const value = record[key];

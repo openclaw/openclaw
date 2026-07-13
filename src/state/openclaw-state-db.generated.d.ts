@@ -1149,6 +1149,30 @@ export interface WorkerInferenceTurns {
   updated_at_ms: number;
 }
 
+export interface WorkerSessionPlacements {
+  active_owner_epoch: number | null;
+  agent_id: string;
+  created_at_ms: number;
+  environment_id: string | null;
+  last_live_event_ack_cursor: number | null;
+  last_transcript_ack_cursor: number | null;
+  recovery_error: string | null;
+  remote_workspace_dir: string | null;
+  session_id: string;
+  session_key: string;
+  state: string;
+  state_changed_at_ms: number;
+  transition_generation: Generated<number>;
+  turn_claim_generation: number | null;
+  turn_claim_id: string | null;
+  turn_claim_owner: string | null;
+  turn_claim_owner_epoch: number | null;
+  turn_claim_run_id: string | null;
+  updated_at_ms: number;
+  worker_bundle_hash: string | null;
+  workspace_base_manifest_ref: string | null;
+}
+
 export interface WorkerTranscriptCommitHeads {
   environment_id: string;
   next_seq: number;
@@ -1272,6 +1296,7 @@ export interface DB {
   worker_environment_credentials: WorkerEnvironmentCredentials;
   worker_environments: WorkerEnvironments;
   worker_inference_turns: WorkerInferenceTurns;
+  worker_session_placements: WorkerSessionPlacements;
   worker_transcript_commit_heads: WorkerTranscriptCommitHeads;
   worker_transcript_commits: WorkerTranscriptCommits;
   workspace_setup_state: WorkspaceSetupState;

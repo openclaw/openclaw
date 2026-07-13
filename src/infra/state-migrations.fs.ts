@@ -27,7 +27,7 @@ export function existsDir(dir: string): boolean {
 }
 
 /** Creates a directory tree for migration targets. */
-export function ensureDir(dir: string) {
+export function ensureMigrationDir(dir: string) {
   fs.mkdirSync(dir, { recursive: true });
 }
 

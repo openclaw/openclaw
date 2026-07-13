@@ -35,6 +35,12 @@ describe("sidebar pinned routes", () => {
     expect(normalizeSidebarPinnedRoutes(["sessions", "usage"])).toEqual(["usage"]);
   });
 
+  it("moves devices into system settings and drops stale pinned entries", () => {
+    expect(SIDEBAR_NAV_ROUTES).not.toContain("nodes");
+    expect(SETTINGS_NAVIGATION_ROUTES).toContain("nodes");
+    expect(normalizeSidebarPinnedRoutes(["nodes", "usage"])).toEqual(["usage"]);
+  });
+
   it("keeps channel management and settings slices out of the customizable sidebar", () => {
     expect(SIDEBAR_NAV_ROUTES).not.toContain("channels");
     expect(SIDEBAR_NAV_ROUTES).not.toContain("config");

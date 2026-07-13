@@ -124,9 +124,16 @@ GHSA-specific advisory work outside this skill.
   gates on the newly pushed SHA, then run `prepare-run` again.
 - If an exact PR-head CI run has no active jobs because Blacksmith capacity is
   stalled, a maintainer may dispatch the explicit GitHub-hosted fallback from
-  the PR head branch:
+  the PR head branch. Check the target-owned workflow with `git show
+<full-pr-sha>:.github/workflows/ci.yml | rg -q '^  +pr_number:'`. When it
+  declares `pr_number`, run:
   `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+target_ref=<full-pr-sha> -f pr_number=<pr-number> -f include_android=true -f
+release_gate=true`.
+  The workflow authenticates that PR's head/base, validates GitHub's current
+  synthetic merge tree, and runs the LOC task from that tree. Older workflow
+  schemas cannot provide equivalent LOC evidence; update the head to contain the current `pr_number` workflow, then
+  restart exact-head proof on the new SHA instead of dispatching them.
   Use it only for an observed provider queue stall, never for failed CI or as a
   routine shortcut. The run must be named `CI release gate <full-pr-sha>` and
   pass on that exact SHA; the native hosted-gate verifier rejects generic manual

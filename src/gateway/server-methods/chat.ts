@@ -1,13 +1,10 @@
 // Chat gateway methods implement chat.send/history/abort/inject/metadata and
 // bridge UI RPCs to agent dispatch, transcripts, media, and streaming state.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
-import { isAudioFileName } from "@openclaw/media-core/mime";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -22,130 +19,75 @@ import {
   validateChatMetadataParams,
   validateChatMessageGetParams,
   validateChatToolTitlesParams,
-  validateChatSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
   listAgentIds,
   resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
-import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   getReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
-import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import { isReplyRunAbortableForSignal } from "../../auto-reply/reply/reply-run-registry.js";
-import {
-  stageSandboxMedia,
-  type StageSandboxMediaResult,
-} from "../../auto-reply/reply/stage-sandbox-media.js";
-import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
-import {
-  resolveSessionRoutingContract,
-  SESSION_ROUTING_CHANGED_ERROR_REASON,
-} from "../../config/sessions/main-session.js";
 import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  claimAgentRunContext,
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import {
   emitDiagnosticsTimelineEvent,
   measureDiagnosticsTimelineSpan,
-  measureDiagnosticsTimelineSpanSync,
 } from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
-import { parseInboundMediaUri } from "../../media/media-reference.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { deleteMediaBuffer, MEDIA_MAX_BYTES, type SavedMedia } from "../../media/store.js";
-import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import {
   retainGatewayRootWorkAdmissionContinuation,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
-import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
-import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
-import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnInput,
-  type UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
-import {
   parseInlineDirectives,
-  stripInlineDirectiveTagsForDelivery,
   stripInlineDirectiveTagsForDisplay,
   sanitizeReplyDirectiveId,
 } from "../../utils/directive-tags.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isOperatorUiClient,
-  normalizeMessageChannel,
-} from "../../utils/message-channel.js";
+import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
-  isChatStopCommandText,
-  registerChatAbortController,
-  resolveChatRunExpiresAtMs,
   resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "../chat-abort.js";
-import {
-  type ChatImageContent,
-  MediaOffloadError,
-  type OffloadedRef,
-  parseMessageWithAttachments,
-  persistInboundImagesForTranscript,
-  resolveChatAttachmentMaxBytes,
-  UnsupportedAttachmentError,
-} from "../chat-attachments.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessage,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
-import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import {
   completeQueuedChatTurn,
   registerQueuedChatTurn,
   retireQueuedChatTurnCancellation,
 } from "../chat-queued-turns.js";
-import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
 import { attachManagedOutgoingImagesToMessage } from "../managed-image-attachments.js";
-import { chatAbortMarkerTimestampMs, type ChatRunTiming } from "../server-chat-state.js";
+import type { ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import {
-  PENDING_CHAT_SEND_DEDUPE_PREFIX,
-  pendingChatSendDedupeKey,
-  type DedupeEntry,
-} from "../server-shared.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import {
   capArrayByJsonBytes,
@@ -157,26 +99,13 @@ import {
   getSessionDefaults,
   loadSessionEntry,
   listAgentsForGateway,
-  resolveGatewayModelSupportsImages,
-  resolveDeletedAgentIdFromSessionKey,
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
-import {
-  buildAbortedChatSendPayload,
-  readPreRegisteredRun,
-  resolveChatAbortRequester,
-  writePreRegisteredChatAbort,
-} from "./chat-abort-authorization.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import {
-  abortChatRunsForSessionKeyWithPartials,
-  createChatAbortOps,
-  ensureChatQueuedTurns,
-} from "./chat-abort-runtime.js";
+import { ensureChatQueuedTurns } from "./chat-abort-runtime.js";
 import {
   buildAssistantDisplayContentFromReplyPayloads,
   extractAssistantDisplayText,
@@ -185,13 +114,20 @@ import {
   hasManagedOutgoingAssistantContent,
   hasSensitiveMediaPayload,
   hasVisibleAssistantFinalMessage,
-  isMediaBearingPayload,
   replaceAssistantContentTextBlocks,
   sanitizeAssistantDisplayText,
   scheduleChatHistoryManagedImageCleanup,
   stripManagedOutgoingAssistantContentBlocks,
   type AssistantDisplayContentBlock,
 } from "./chat-assistant-content.js";
+import {
+  broadcastChatError,
+  broadcastChatFinal,
+  broadcastSideResult,
+  isBtwReplyPayload,
+  isSourceReplyTranscriptMirrorPayload,
+  sendGlobalAwareNodeChatPayload,
+} from "./chat-broadcast.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   enforceChatHistoryFinalBudget,
@@ -205,30 +141,33 @@ import {
   readChatHistoryPage,
 } from "./chat-history-pages.js";
 import {
-  explicitOriginTargetsAcpSession,
-  explicitOriginTargetsPluginBinding,
   hasGatewayAdminScope,
-  isAcpBridgeClient,
-  normalizeOptionalChatSystemReceipt,
-  resolveChatSendActiveScopeKey,
-  resolveChatSendOriginatingRoute,
   resolveRequestedChatAgentId,
   validateChatSelectedAgent,
-  type ChatSendExplicitOrigin,
 } from "./chat-origin-routing.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
+import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
+import { admitChatSend } from "./chat-send-admission.js";
+import { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import {
+  respondChatSessionRoutingChanged,
+  runChatSendPreAdmission,
+} from "./chat-send-pre-admission.js";
+import {
+  buildTranscriptReplyText,
+  createChatSendReplyDispatch,
+} from "./chat-send-reply-dispatch.js";
+import { normalizeChatSendRequest } from "./chat-send-request.js";
+import { prepareChatSendSession } from "./chat-send-session.js";
+import { applyChatSendManagedMediaFields, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
   emitOperatorChatSendServerTiming,
   roundedChatSendTimingMs,
-  resolveControlUiReconnectResumeParams,
   shouldIncludeChatSendAckServerTiming,
   type ChatSendServerTimingPhase,
 } from "./chat-server-timing.js";
-import {
-  normalizeOptionalChatText as normalizeOptionalText,
-  normalizeUnknownChatText as normalizeUnknownText,
-} from "./chat-text-normalization.js";
+import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import type { GatewayInjectedTtsSupplementMarker } from "./chat-transcript-inject.js";
 import {
   assistantTranscriptScope,
@@ -238,11 +177,8 @@ import {
   type SourceReplyContentState,
   type SourceReplyTranscriptMirrorMetadata,
 } from "./chat-transcript-persistence.js";
-import {
-  buildMediaOnlyTtsSupplementTranscriptMarker,
-  buildTtsSupplementTranscriptMarker,
-  stripVisibleTextFromTtsSupplement,
-} from "./chat-tts-markers.js";
+import { buildMediaOnlyTtsSupplementTranscriptMarker } from "./chat-tts-markers.js";
+import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 import {
   loadOptionalServerMethodModelCatalog,
@@ -487,559 +423,6 @@ export {
 } from "./chat-history-budget.js";
 
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
-function formatAttachmentFailureForLog(err: unknown): string {
-  const primary = formatUncaughtError(err);
-  const cause = err instanceof Error ? err.cause : undefined;
-  if (cause === undefined) {
-    return primary;
-  }
-  const causeText = formatUncaughtError(cause);
-  if (!causeText || causeText === primary) {
-    return primary;
-  }
-  return `${primary}\nCaused by: ${causeText}`;
-}
-
-function logAttachmentFailure(
-  logGateway: Pick<GatewayRequestContext["logGateway"], "error">,
-  label: string,
-  err: unknown,
-): void {
-  logGateway.error(label, {
-    error: formatAttachmentFailureForLog(err),
-    consoleMessage: `${label}: ${formatForLog(err)}`,
-  });
-}
-
-type SideResultPayload = {
-  kind: "btw";
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  question: string;
-  text: string;
-  isError?: boolean;
-  ts: number;
-};
-
-function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
-  const chunks = payloads
-    .map((payload) => {
-      if (payload.isReasoning === true) {
-        return "";
-      }
-      const parts = resolveSendableOutboundReplyParts(payload);
-      const lines: string[] = [];
-      const parsedText = payload.text?.includes("[[")
-        ? parseInlineDirectives(payload.text)
-        : undefined;
-      const replyToId =
-        sanitizeReplyDirectiveId(payload.replyToId) ??
-        sanitizeReplyDirectiveId(parsedText?.replyToExplicitId);
-      if (replyToId) {
-        lines.push(`[[reply_to:${replyToId}]]`);
-      } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
-        lines.push("[[reply_to_current]]");
-      }
-      const text = payload.text
-        ? stripInlineDirectiveTagsForDelivery(payload.text).text.trim()
-        : "";
-      if (text && !isSuppressedControlReplyText(text)) {
-        lines.push(text);
-      }
-      for (const mediaUrl of parts.mediaUrls) {
-        if (payload.sensitiveMedia === true) {
-          continue;
-        }
-        const trimmed = mediaUrl.trim();
-        if (trimmed) {
-          lines.push(`Attachment: ${trimmed}`);
-        }
-      }
-      if (
-        (payload.audioAsVoice || parsedText?.audioAsVoice) &&
-        parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))
-      ) {
-        lines.push("[[audio_as_voice]]");
-      }
-      return lines.join("\n").trim();
-    })
-    .filter(Boolean);
-  return chunks.join("\n\n").trim();
-}
-
-async function persistChatSendImages(params: {
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  offloadedRefs: OffloadedRef[];
-  client: GatewayRequestHandlerOptions["client"];
-  logGateway: GatewayRequestContext["logGateway"];
-}): Promise<SavedMedia[]> {
-  if (
-    (params.images.length === 0 && params.offloadedRefs.length === 0) ||
-    isAcpBridgeClient(params.client)
-  ) {
-    return [];
-  }
-  return await persistInboundImagesForTranscript({
-    images: params.images,
-    imageOrder: params.imageOrder,
-    offloadedRefs: params.offloadedRefs,
-    log: params.logGateway,
-    logContext: "chat.send",
-  });
-}
-
-function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
-  if (refs.length === 0) {
-    return message;
-  }
-  const removableRefs = new Set(refs.map((ref) => ref.mediaRef));
-  const lines = message.split(/\r?\n/);
-  while (lines.length > 0) {
-    const last = lines[lines.length - 1]?.trim() ?? "";
-    const match = /^\[media attached:\s*(media:\/\/inbound\/[^\]\s]+)\]$/.exec(last);
-    if (!match?.[1] || !removableRefs.delete(match[1])) {
-      break;
-    }
-    lines.pop();
-  }
-  return lines.join("\n").trimEnd();
-}
-
-function isPdfOffloadedRef(ref: OffloadedRef): boolean {
-  const mime = ref.mimeType.trim().toLowerCase();
-  if (mime === "application/pdf" || mime.endsWith("+pdf")) {
-    return true;
-  }
-  return path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
-}
-
-// A managed inbound PDF saved to the media store is safe to hand the agent as its
-// media path without sandbox staging: host-side media-understanding extracts its
-// text (see resolveFileExtractionLimits) by reading the media-store root, so even
-// locked-down agents receive the document. This gates both the up-front bypass for
-// oversized PDFs and the fallback to the managed path when sandbox staging fails
-// for an already-managed PDF. #90097
-function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  if (!isPdfOffloadedRef(ref)) {
-    return false;
-  }
-  try {
-    return parseInboundMediaUri(ref.mediaRef) !== null;
-  } catch {
-    return false;
-  }
-}
-
-// Oversized managed PDFs skip sandbox staging up front: copying a large PDF into
-// every sandbox is wasteful, and files above the 5MB staging cap would otherwise
-// be rejected as a 4xx (see prestageMediaPathOffloads).
-function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
-}
-
-// Stages media-path offloads into the agent sandbox synchronously so chat.send
-// can surface 5xx before respond(). Throws MediaOffloadError when staging fails
-// for a ref that cannot fall back (ENOSPC / EPERM / partial-stage of a non-PDF or
-// unmanaged ref) so the outer chat.send handler maps it to UNAVAILABLE (5xx);
-// plain Error would be misclassified as 4xx. Already-managed inbound PDFs instead
-// fall back to their managed media path on staging failure (#90097), since
-// host-side media-understanding reads them from the media-store root. Offloaded
-// refs are cleaned up from the media store before rethrow.
-// Callers MUST set ctx.MediaStaged=true when this runs so the dispatch
-// pipeline skips its own stageSandboxMedia pass.
-//
-// Returned paths are absolute media-store paths when no sandbox is active, for
-// oversized managed PDFs that bypass staging, or for already-managed PDFs that
-// fall back when staging fails (#90097); files staged into the sandbox use
-// sandbox-relative paths plus `workspaceDir`. Host-side media-understanding
-// resolves both via MediaWorkspaceDir and the media-store root.
-async function prestageMediaPathOffloads(params: {
-  offloadedRefs: OffloadedRef[];
-  includeImageRefs?: boolean;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-}): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
-  const mediaPathRefs = params.offloadedRefs.filter(
-    (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
-  );
-  if (mediaPathRefs.length === 0) {
-    return { paths: [], types: [] };
-  }
-  const refsByManagedPath = (refs: OffloadedRef[]) => ({
-    paths: refs.map((ref) => ref.path),
-    types: refs.map((ref) => ref.mimeType),
-  });
-
-  // Oversized managed PDFs bypass sandbox staging and are read host-side, so they
-  // do not need a workspace copy or the staging-cap check below.
-  const passThroughRefs: OffloadedRef[] = [];
-  const refsToStage: OffloadedRef[] = [];
-  for (const ref of mediaPathRefs) {
-    (shouldPassThroughManagedInboundPdfOffloadRef(ref) ? passThroughRefs : refsToStage).push(ref);
-  }
-  if (refsToStage.length === 0) {
-    return refsByManagedPath(mediaPathRefs);
-  }
-
-  try {
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    const sandbox = await ensureSandboxWorkspaceForSession({
-      config: params.cfg,
-      sessionKey: params.sessionKey,
-      workspaceDir,
-    });
-    if (!sandbox) {
-      return refsByManagedPath(mediaPathRefs);
-    }
-
-    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (=
-    // MEDIA_MAX_BYTES, 5MB) and silently skips oversized files. The parse cap
-    // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
-    // session receiving a non-PDF file between the two caps would otherwise
-    // pass parse, fail staging, and surface as a retryable 5xx even though
-    // retry cannot succeed. Reject here as a client-side 4xx instead. Managed
-    // PDFs in that range pass through above instead of being rejected.
-    const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
-    if (oversizedForSandbox.length > 0) {
-      const details = oversizedForSandbox
-        .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
-        .join(", ");
-      throw new UnsupportedAttachmentError(
-        "non-image-too-large-for-sandbox",
-        `attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
-      );
-    }
-
-    const stagingCtx: MsgContext = {
-      MediaPath: expectDefined(refsToStage[0], "refs to stage entry at 0").path,
-      MediaPaths: refsToStage.map((ref) => ref.path),
-      MediaType: expectDefined(refsToStage[0], "refs to stage entry at 0").mimeType,
-      MediaTypes: refsToStage.map((ref) => ref.mimeType),
-    };
-    let stageResult: StageSandboxMediaResult;
-    try {
-      stageResult = await stageSandboxMedia({
-        ctx: stagingCtx,
-        sessionCtx: stagingCtx as TemplateContext,
-        cfg: params.cfg,
-        sessionKey: params.sessionKey,
-        workspaceDir,
-      });
-    } catch (stageErr) {
-      // stageSandboxMedia threw before copying anything (e.g. workspace mkdir
-      // ENOSPC/EPERM), so nothing reached the sandbox. Already-managed inbound
-      // PDFs still reach the agent via their managed media path (host-side
-      // media-understanding reads the media-store root); fail the send only when a
-      // ref cannot fall back. #90097
-      if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
-        throw stageErr;
-      }
-      return refsByManagedPath(mediaPathRefs);
-    }
-
-    // stageSandboxMedia silently keeps unstaged entries as their original
-    // absolute path, so length parity does not prove every file landed in the
-    // sandbox. The RPC max (20MB via resolveChatAttachmentMaxBytes) admits files
-    // above the staging cap (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned
-    // `staged` map for missing sources. Already-managed inbound PDFs fall back to
-    // their absolute managed path (host-side media-understanding reads the
-    // media-store root); any other missing source is a 5xx MediaOffloadError the
-    // client can retry. #90097
-    const stagedSources = stageResult.staged;
-    const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
-    const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
-    if (unstageable.length > 0) {
-      throw new Error(
-        `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
-      );
-    }
-    const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? refsToStage.map((ref) => ref.mimeType);
-
-    // Map each ref to its post-staging path. Staged files become sandbox-relative
-    // (e.g. `media/inbound/foo.pdf`) so the agent inside the container can read
-    // them; pass-through PDFs and managed PDFs that fell back from staging keep
-    // their absolute managed path (stagedPaths preserves the absolute path for any
-    // unstaged entry). Host-side media-understanding resolves both via
-    // ctx.MediaWorkspaceDir plus the media-store root. Preserve attachment order.
-    const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
-    refsToStage.forEach((ref, index) => {
-      resolvedByRef.set(ref, {
-        path: stagedPaths[index] ?? ref.path,
-        mimeType: stagedTypes[index] ?? ref.mimeType,
-      });
-    });
-    for (const ref of passThroughRefs) {
-      resolvedByRef.set(ref, { path: ref.path, mimeType: ref.mimeType });
-    }
-    const ordered = mediaPathRefs.map(
-      (ref) => resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType },
-    );
-    return {
-      paths: ordered.map((entry) => entry.path),
-      types: ordered.map((entry) => entry.mimeType),
-      workspaceDir: sandbox.workspaceDir,
-    };
-  } catch (err) {
-    await Promise.allSettled(
-      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
-    );
-    if (err instanceof MediaOffloadError) {
-      throw err;
-    }
-    // Sandbox-oversize rejections are client-side 4xx (see check above). Wrapping
-    // them as MediaOffloadError would misclassify them as retryable 5xx.
-    if (err instanceof UnsupportedAttachmentError) {
-      throw err;
-    }
-    throw new MediaOffloadError(
-      `[Gateway Error] Failed to stage attachments into agent workspace: ${formatErrorMessage(err)}`,
-      { cause: err },
-    );
-  }
-}
-
-type ChatSendManagedMediaFields = Partial<
-  Pick<MsgContext, "MediaPath" | "MediaPaths" | "MediaType" | "MediaTypes">
->;
-
-function resolveChatSendManagedMediaFields(savedImages: SavedMedia[]): ChatSendManagedMediaFields {
-  const mediaPaths = savedImages.map((entry) => entry.path);
-  if (mediaPaths.length === 0) {
-    return {};
-  }
-  const mediaTypes = savedImages.map((entry) => entry.contentType ?? "application/octet-stream");
-  return {
-    MediaPath: mediaPaths[0],
-    MediaPaths: mediaPaths,
-    MediaType: mediaTypes[0],
-    MediaTypes: mediaTypes,
-  };
-}
-
-function applyChatSendManagedMediaFields(ctx: MsgContext, fields: ChatSendManagedMediaFields) {
-  if (!ctx.MediaStaged) {
-    Object.assign(ctx, fields);
-    return;
-  }
-
-  if (ctx.MediaPath === undefined && fields.MediaPath !== undefined) {
-    ctx.MediaPath = fields.MediaPath;
-  }
-  if (ctx.MediaPaths === undefined && fields.MediaPaths !== undefined) {
-    ctx.MediaPaths = fields.MediaPaths;
-  }
-  if (ctx.MediaType === undefined && fields.MediaType !== undefined) {
-    ctx.MediaType = fields.MediaType;
-  }
-  if (ctx.MediaTypes === undefined && fields.MediaTypes !== undefined) {
-    ctx.MediaTypes = fields.MediaTypes;
-  }
-}
-
-function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserTurnInput["media"]> {
-  return savedMedia.map((entry) => ({
-    path: entry.path,
-    contentType: entry.contentType,
-  }));
-}
-
-function normalizeExplicitChatSendOrigin(
-  params: ChatSendExplicitOrigin,
-): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
-  const originatingChannel = normalizeOptionalText(params.originatingChannel);
-  const originatingTo = normalizeOptionalText(params.originatingTo);
-  const accountId = normalizeOptionalText(params.accountId);
-  const messageThreadId = normalizeOptionalText(params.messageThreadId);
-  const hasAnyExplicitOriginField = Boolean(
-    originatingChannel || originatingTo || accountId || messageThreadId,
-  );
-  if (!hasAnyExplicitOriginField) {
-    return { ok: true };
-  }
-  const normalizedChannel = normalizeMessageChannel(originatingChannel);
-  if (!normalizedChannel) {
-    return {
-      ok: false,
-      error: "originatingChannel is required when using originating route fields",
-    };
-  }
-  if (!originatingTo) {
-    return {
-      ok: false,
-      error: "originatingTo is required when using originating route fields",
-    };
-  }
-  return {
-    ok: true,
-    value: {
-      originatingChannel: normalizedChannel,
-      originatingTo,
-      ...(accountId ? { accountId } : {}),
-      ...(messageThreadId ? { messageThreadId } : {}),
-    },
-  };
-}
-
-function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: string) {
-  const next = (context.agentRunSeq.get(runId) ?? 0) + 1;
-  context.agentRunSeq.set(runId, next);
-  return next;
-}
-
-function broadcastChatFinal(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  message?: Record<string, unknown>;
-}) {
-  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
-  const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
-  const payload = {
-    runId: params.runId,
-    sessionKey: params.sessionKey,
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq,
-    state: "final" as const,
-    message: projectChatDisplayMessage(params.message),
-  };
-  params.context.broadcast("chat", payload);
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat",
-    payload,
-  });
-  params.context.agentRunSeq.delete(params.runId);
-}
-
-function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
-  btw: { question: string };
-  text: string;
-} {
-  return (
-    typeof payload?.btw?.question === "string" &&
-    payload.btw.question.trim().length > 0 &&
-    typeof payload.text === "string" &&
-    payload.text.trim().length > 0
-  );
-}
-
-function broadcastSideResult(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
-  payload: SideResultPayload;
-}) {
-  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.payload.runId);
-  const payloadAgentId =
-    params.payload.sessionKey === "global" ? params.payload.agentId : undefined;
-  const payload = {
-    ...params.payload,
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq,
-  };
-  params.context.broadcast("chat.side_result", payload);
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.payload.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat.side_result",
-    payload,
-  });
-}
-
-function broadcastChatError(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  errorMessage?: string;
-}) {
-  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
-  const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
-  const errorText = params.errorMessage?.trim();
-  const payload = {
-    runId: params.runId,
-    sessionKey: params.sessionKey,
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq,
-    state: "error" as const,
-    errorMessage: params.errorMessage,
-    ...(errorText
-      ? {
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text:
-                  errorText.startsWith("⚠️") || errorText.startsWith("Error:")
-                    ? errorText
-                    : `Error: ${errorText}`,
-              },
-            ],
-            timestamp: Date.now(),
-          },
-        }
-      : {}),
-  };
-  params.context.broadcast("chat", payload);
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat",
-    payload,
-  });
-  params.context.agentRunSeq.delete(params.runId);
-}
-
-function sendGlobalAwareNodeChatPayload(params: {
-  context: Pick<GatewayRequestContext, "nodeSendToSession"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
-  sessionKey: string;
-  agentId?: string;
-  event: string;
-  payload: unknown;
-}) {
-  const deliveryKeys = resolveGlobalAwareNodeChatDeliveryKeys({
-    cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  for (const deliveryKey of deliveryKeys) {
-    params.context.nodeSendToSession(deliveryKey, params.event, params.payload);
-  }
-}
-
-function resolveGlobalAwareNodeChatDeliveryKeys(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId?: string;
-}): string[] {
-  if (params.sessionKey !== "global") {
-    return [params.sessionKey];
-  }
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const scopedAgentId = params.agentId ?? defaultAgentId;
-  const keys = [`agent:${scopedAgentId}:global`];
-  if (scopedAgentId === defaultAgentId) {
-    keys.push("global");
-  }
-  return keys;
-}
-
-function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined) {
-  return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
-}
-
 function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
   totalMessages: number;
@@ -1597,694 +980,180 @@ export const chatHandlers: GatewayRequestHandlers = {
   },
   "chat.abort": handleChatAbortRequest,
   "chat.send": async ({ params, respond, context, client }) => {
-    const chatSendReceivedAtMs = performance.now();
-    const clientInfo = client?.connect?.client;
-    const supportsTaskSuggestions =
-      isOperatorUiClient(clientInfo) &&
-      client?.connect?.scopes?.includes("operator.admin") === true &&
-      hasGatewayClientCap(client?.connect?.caps, GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS);
-    const controlUiReconnectResume = resolveControlUiReconnectResumeParams(params, clientInfo);
-    if (!validateChatSendParams(controlUiReconnectResume.params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
-        ),
-      );
+    const normalizedRequest = normalizeChatSendRequest({ params, client });
+    if (!normalizedRequest.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalizedRequest.error));
       return;
     }
-    const p = controlUiReconnectResume.params as {
-      sessionKey: string;
-      agentId?: string;
-      sessionId?: string;
-      message: string;
-      thinking?: string;
-      fastMode?: FastMode;
-      fastAutoOnSeconds?: number;
-      deliver?: boolean;
-      originatingChannel?: string;
-      originatingTo?: string;
-      originatingAccountId?: string;
-      originatingThreadId?: string;
-      attachments?: Array<{
-        type?: string;
-        mimeType?: string;
-        fileName?: string;
-        content?: unknown;
-      }>;
-      timeoutMs?: number;
-      systemInputProvenance?: InputProvenance;
-      systemProvenanceReceipt?: string;
-      suppressCommandInterpretation?: boolean;
-      expectedSessionRoutingContract?: string;
-      idempotencyKey: string;
-    };
-    const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
-    const explicitOriginResult = normalizeExplicitChatSendOrigin({
-      originatingChannel: p.originatingChannel,
-      originatingTo: p.originatingTo,
-      accountId: p.originatingAccountId,
-      messageThreadId: p.originatingThreadId,
+    const {
+      chatSendReceivedAtMs,
+      clientInfo,
+      supportsTaskSuggestions,
+      p,
+      systemInputProvenance,
+      rawMessage,
+      reconnectResumeRequested,
+    } = normalizedRequest.value;
+    const preparedSession = prepareChatSendSession({
+      request: normalizedRequest.value,
+      context,
+      client,
     });
-    if (!explicitOriginResult.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, explicitOriginResult.error));
+    if (!preparedSession.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, preparedSession.error));
       return;
     }
-    if (
-      (p.systemInputProvenance ||
-        p.systemProvenanceReceipt ||
-        suppressCommandInterpretation ||
-        explicitOriginResult.value) &&
-      !hasGatewayAdminScope(client)
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          p.systemInputProvenance || p.systemProvenanceReceipt || suppressCommandInterpretation
-            ? "system provenance fields require admin scope"
-            : "originating route fields require admin scope",
-        ),
-      );
-      return;
-    }
-    const sanitizedMessageResult = sanitizeChatSendMessageInput(p.message);
-    if (!sanitizedMessageResult.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, sanitizedMessageResult.error),
-      );
-      return;
-    }
-    const systemReceiptResult = normalizeOptionalChatSystemReceipt(p.systemProvenanceReceipt);
-    if (!systemReceiptResult.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, systemReceiptResult.error));
-      return;
-    }
-    const inboundMessage = sanitizedMessageResult.message;
-    const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
-    const systemProvenanceReceipt = systemReceiptResult.receipt;
-    const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
-    const turnKind =
-      !suppressCommandInterpretation && isBtwRequestText(inboundMessage) ? "btw" : "main";
-    const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
-    const rawMessage = inboundMessage.trim();
-    if (!rawMessage && normalizedAttachments.length === 0) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "message or attachment required"),
-      );
-      return;
-    }
-    const rawSessionKey = p.sessionKey;
-    const agentIdOverride = normalizeOptionalText(p.agentId);
-    const clientRunId = p.idempotencyKey;
-    const pendingChatSendKey = pendingChatSendDedupeKey(clientRunId);
-    const requestedAgentId = resolveRequestedChatAgentId({
-      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
-      requestedSessionKey: rawSessionKey,
-      agentId: agentIdOverride,
-    });
-    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const sessionLoadStartedAtMs = performance.now();
-    const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
-      "gateway.chat_send.load_session",
-      () => loadSessionEntry(rawSessionKey, sessionLoadOptions),
-      {
-        phase: "agent-turn",
-        attributes: {
-          runId: clientRunId,
-          hasAttachments: normalizedAttachments.length > 0,
-          hasExplicitOrigin: explicitOriginResult.value !== undefined,
-        },
-      },
-    );
-    const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
-    const { cfg, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
-    const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(sessionKey, entry);
-    if (missingHarnessSessionError) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, missingHarnessSessionError));
-      return;
-    }
-    const expectedSessionRoutingContract = normalizeOptionalText(p.expectedSessionRoutingContract);
-    const sessionRoutingChanged = (candidateConfig: OpenClawConfig) =>
-      expectedSessionRoutingContract !== undefined &&
-      expectedSessionRoutingContract.toLowerCase() !==
-        resolveSessionRoutingContract(candidateConfig);
-    const respondSessionRoutingChanged = () => {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "session routing changed; review and retry", {
-          details: { reason: SESSION_ROUTING_CHANGED_ERROR_REASON },
-        }),
-      );
-    };
-    const selectedAgent = validateChatSelectedAgent({
+    const {
+      rawSessionKey,
+      clientRunId,
+      sessionLoadOptions,
+      sessionLoadMs,
       cfg,
-      requestedSessionKey: rawSessionKey,
-      agentId: requestedAgentId,
-    });
-    if (!selectedAgent.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
-      return;
-    }
-    const requestedSessionId = normalizeOptionalText(p.sessionId);
-    const backingSessionId = entry?.sessionId ?? requestedSessionId;
-    const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey, entry, {
-      acpMetadataSessionKey: legacyKey ?? sessionKey,
-    });
-    if (deletedAgentId !== null) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Agent "${deletedAgentId}" no longer exists in configuration`,
-        ),
-      );
-      return;
-    }
-    const agentId = resolveSessionAgentId({
-      sessionKey,
-      config: cfg,
-      agentId: selectedAgent.agentId,
-    });
-    const activeRunScopeKey = resolveChatSendActiveScopeKey({
-      sessionKey,
-      agentId: selectedAgent.agentId,
-      mainKey: cfg.session?.mainKey,
-    });
-    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
-    const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
-      config: cfg,
-    });
-    let parsedMessage = inboundMessage;
-    let parsedImages: ChatImageContent[] = [];
-    let imageOrder: PromptImageOrderEntry[] = [];
-    let offloadedRefs: OffloadedRef[] = [];
-    let mediaPathOffloadPaths: string[] = [];
-    let mediaPathOffloadTypes: string[] = [];
-    let mediaPathOffloadWorkspaceDir: string | undefined;
-    const timeoutMs = resolveAgentTimeoutMs({
-      cfg,
-      overrideMs: p.timeoutMs,
-    });
-    const now = Date.now();
-
-    const sendPolicy = resolveSendPolicy({
-      cfg,
+      storePath,
       entry,
       sessionKey,
-      channel: entry?.channel,
-      chatType: entry?.chatType,
+      sessionRoutingChanged,
+      selectedAgent,
+      requestedSessionId,
+      backingSessionId,
+      agentId,
+      activeRunScopeKey,
+      resolvedSessionModel,
+      now,
+    } = preparedSession.value;
+    const shouldAdmit = await runChatSendPreAdmission({
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      respond,
+      context,
+      client,
     });
-    if (sendPolicy === "deny") {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
-      );
+    if (!shouldAdmit) {
       return;
     }
-
-    if (stopCommand) {
-      if (sessionRoutingChanged(cfg)) {
-        respondSessionRoutingChanged();
-        return;
-      }
-      const defaultAgentId = resolveDefaultAgentId(cfg);
-      const stopAgentId =
-        sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
-      const res = await abortChatRunsForSessionKeyWithPartials({
-        context,
-        ops: createChatAbortOps(context),
-        sessionKey: rawSessionKey,
-        sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
-        agentId: stopAgentId,
-        sessionId: entry?.sessionId,
-        persistSessionKey: sessionKey,
-        defaultAgentId,
-        abortOrigin: "stop-command",
-        stopReason: "stop",
-        requester: resolveChatAbortRequester(client),
-      });
-      if (res.unauthorized) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
-        return;
-      }
-      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
-      return;
-    }
-
-    const cached = context.dedupe.get(`chat:${clientRunId}`);
-    if (cached) {
-      respond(cached.ok, cached.payload, cached.error, {
-        cached: true,
-      });
-      return;
-    }
-
-    const abortMarker = context.chatAbortedRuns.get(clientRunId);
-    if (abortMarker !== undefined) {
-      const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
-      const payload = buildAbortedChatSendPayload({
-        runId: clientRunId,
-        endedAt: abortedAt,
-      });
-      setGatewayDedupeEntry({
-        dedupe: context.dedupe,
-        key: `chat:${clientRunId}`,
-        entry: {
-          ts: abortedAt,
-          ok: true,
-          payload,
-        },
-      });
-      respond(true, payload, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
-      return;
-    }
-
-    const pendingChatSend = readPreRegisteredRun({
-      key: pendingChatSendKey,
-      entry: context.dedupe.get(pendingChatSendKey),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
+    const admitted = await admitChatSend({
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      respond,
+      context,
+      client,
     });
-    if (pendingChatSend) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
+    if (!admitted.ok) {
       return;
     }
-
-    const activeExisting = context.chatAbortControllers.get(clientRunId);
-    if (activeExisting) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
-      return;
-    }
-    if (context.chatQueuedTurns?.has(clientRunId)) {
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
-      return;
-    }
-    // Cached/in-flight retries are already bound to their original target and
-    // must remain queryable after config changes. Gate only a new dispatch.
-    if (sessionRoutingChanged(cfg)) {
-      respondSessionRoutingChanged();
-      return;
-    }
-    const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
-    if (archivedSessionError) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
-      return;
-    }
-    const chatSendTraceAttributes = {
-      runId: clientRunId,
-      sessionKey,
-      agentId: selectedAgent.agentId ?? agentId,
-      provider: resolvedSessionModel.provider,
-      model: resolvedSessionModel.model,
-      hasAttachments: normalizedAttachments.length > 0,
-      hasExplicitOrigin: explicitOriginResult.value !== undefined,
-      hasConnectedClient: client?.connect !== undefined,
-    };
-    const originatingRoute = resolveChatSendOriginatingRoute({
-      client: clientInfo,
-      deliver: p.deliver,
-      entry,
-      explicitOrigin: explicitOriginResult.value,
-      hasConnectedClient: client?.connect !== undefined,
-      mainKey: cfg.session?.mainKey,
-      sessionKey,
-    });
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const pendingAttemptId = randomUUID();
-    const pendingExpiresAtMs = resolveChatRunExpiresAtMs({ now, timeoutMs });
-    // Keep the run abortable while lifecycle mutation owns the session. Admission
-    // must reject an expired/missing reservation instead of reviving evicted work.
-    context.dedupe.set(pendingChatSendKey, {
-      ts: now,
-      ok: true,
-      payload: {
-        runId: clientRunId,
-        attemptId: pendingAttemptId,
-        status: "accepted" as const,
-        sessionKey,
-        ...(rawSessionKey === sessionKey ? {} : { sessionKeyAliases: [rawSessionKey] }),
-        ...(sessionKey === "global" && selectedAgent.agentId
-          ? { agentId: selectedAgent.agentId }
-          : {}),
-        ownerConnId: normalizeOptionalText(client?.connId),
-        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-        expiresAtMs: pendingExpiresAtMs,
-        turnKind,
-      },
-    });
-    const clearPendingChatSendReservation = () => {
-      const pending = readPreRegisteredRun({
-        key: pendingChatSendKey,
-        entry: context.dedupe.get(pendingChatSendKey),
-        keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
-      });
-      if (
-        pending?.runId === clientRunId &&
-        normalizeUnknownText(pending.payload.attemptId) === pendingAttemptId
-      ) {
-        context.dedupe.delete(pendingChatSendKey);
-      }
-    };
-    let admittedSessionId = backingSessionId ?? clientRunId;
-    let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
-    let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
-    let reservationSuperseded = false;
-    let supersedingResult: DedupeEntry | undefined;
-    const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
-      if (context.chatAbortedRuns.has(clientRunId)) {
-        return;
-      }
-      const pendingReservation = readPreRegisteredRun({
-        key: pendingChatSendKey,
-        entry: context.dedupe.get(pendingChatSendKey),
-        keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
-      });
-      if (
-        pendingReservation &&
-        normalizeUnknownText(pendingReservation.payload.attemptId) !== pendingAttemptId
-      ) {
-        if (commitOutcome) {
-          reservationSuperseded = true;
-        }
-        return;
-      }
-      if (!pendingReservation) {
-        const terminalResult = context.dedupe.get(`chat:${clientRunId}`);
-        if (terminalResult || context.chatAbortControllers.has(clientRunId)) {
-          if (commitOutcome) {
-            reservationSuperseded = true;
-            supersedingResult = terminalResult;
-          }
-          return;
-        }
-      }
-      if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-        if (commitOutcome) {
-          writePreRegisteredChatAbort({
-            context,
-            runId: clientRunId,
-            stopReason: "restart",
-            attemptId: pendingAttemptId,
-          });
-        }
-        return;
-      }
-      if (
-        !pendingReservation ||
-        !isFutureDateTimestampMs(pendingReservation.payload.expiresAtMs, {
-          nowMs: Date.now(),
-        })
-      ) {
-        if (commitOutcome) {
-          writePreRegisteredChatAbort({
-            context,
-            runId: clientRunId,
-            stopReason: "timeout",
-            attemptId: pendingAttemptId,
-          });
-        }
-        return;
-      }
-      const latestSession = loadSessionEntry(rawSessionKey, sessionLoadOptions);
-      if (sessionRoutingChanged(latestSession.cfg)) {
-        throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
-      }
-      const latestEntry = latestSession.entry;
-      if (entry && !latestEntry) {
-        throw new Error(`Session "${sessionKey}" was deleted while starting work. Retry.`);
-      }
-      // Admission can queue behind reset. Never route a request captured
-      // against the old session into the replacement transcript.
-      if (
-        backingSessionId &&
-        latestEntry?.sessionId &&
-        latestEntry.sessionId !== backingSessionId
-      ) {
-        throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
-      }
-      const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
-      if (archivedError) {
-        throw new Error(archivedError);
-      }
-      if (!commitOutcome) {
-        return;
-      }
-      admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-      admittedRunAbort = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
-        runId: clientRunId,
-        sessionId: admittedSessionId,
-        sessionKey,
-        agentId: selectedAgent.agentId,
-        timeoutMs,
-        now,
-        ownerConnId: normalizeOptionalText(client?.connId),
-        ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
-        providerId: resolvedSessionModel.provider,
-        authProviderId: resolvedSessionAuthProvider,
-        isAbortable: (active) => isReplyRunAbortableForSignal(active.controller.signal),
-        kind: "chat-send",
-        turnKind,
-        lifecycleGeneration,
-      });
-    };
-    try {
-      gatewayWorkAdmission = await beginSessionWorkAdmission({
-        scope: storePath,
-        identities: [sessionKey, backingSessionId],
-        assertAllowed: () => assertChatWorkAdmissionAllowed(false),
-        revalidateAllowed: () => assertChatWorkAdmissionAllowed(true),
-        onInterrupt: () => {
-          if (admittedRunAbort?.entry) {
-            admittedRunAbort.entry.abortStopReason = "restart";
-          }
-          admittedRunAbort?.controller.abort(createAgentRunRestartAbortError());
-        },
-      });
-    } catch (err) {
-      clearPendingChatSendReservation();
-      if (err instanceof Error && err.message === SESSION_ROUTING_CHANGED_ERROR_REASON) {
-        respondSessionRoutingChanged();
-        return;
-      }
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
-      return;
-    }
-    clearPendingChatSendReservation();
-    const activeRunAbort = admittedRunAbort;
-    if (reservationSuperseded) {
-      gatewayWorkAdmission.release();
-      const supersedingCached = supersedingResult ?? context.dedupe.get(`chat:${clientRunId}`);
-      if (supersedingCached) {
-        respond(supersedingCached.ok, supersedingCached.payload, supersedingCached.error, {
-          cached: true,
-          runId: clientRunId,
-        });
-        return;
-      }
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
-      return;
-    }
-    if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
-      if (activeRunAbort) {
-        if (activeRunAbort.entry) {
-          activeRunAbort.entry.abortStopReason = "restart";
-        }
-        activeRunAbort.controller.abort();
-        activeRunAbort.cleanup({ force: true });
-      }
-      gatewayWorkAdmission.release();
-      if (!context.dedupe.has(`chat:${clientRunId}`)) {
-        writePreRegisteredChatAbort({
-          context,
-          runId: clientRunId,
-          stopReason: activeRunAbort?.entry?.abortStopReason ?? "restart",
-          attemptId: pendingAttemptId,
-        });
-      }
-      const aborted = context.dedupe.get(`chat:${clientRunId}`);
-      respond(aborted?.ok ?? true, aborted?.payload, aborted?.error, {
-        cached: true,
-        runId: clientRunId,
-      });
-      return;
-    }
-    if (!activeRunAbort) {
-      gatewayWorkAdmission.release();
-      const aborted = context.dedupe.get(`chat:${clientRunId}`);
-      if (aborted) {
-        respond(aborted.ok, aborted.payload, aborted.error, {
-          cached: true,
-          runId: clientRunId,
-        });
-        return;
-      }
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "chat run admission failed"));
-      return;
-    }
-    if (!activeRunAbort.registered) {
-      gatewayWorkAdmission.release();
-      respond(true, { runId: clientRunId, status: "in_flight" as const }, undefined, {
-        cached: true,
-        runId: clientRunId,
-      });
-      return;
-    }
-    let releaseGatewayRootContinuation: (() => void) | undefined;
-    const cleanupAdmittedRun: typeof activeRunAbort.cleanup = (options) => {
-      activeRunAbort.cleanup(options);
-      gatewayWorkAdmission?.release();
-      releaseGatewayRootContinuation?.();
-      releaseGatewayRootContinuation = undefined;
-    };
-    claimAgentRunContext(clientRunId, {
-      sessionKey,
-      sessionId: admittedSessionId,
+    const {
+      activeRunAbort,
+      admittedSessionId,
+      chatSendTraceAttributes,
+      cleanupAdmittedRun,
+      finishAbortedChatSend,
+      gatewayWorkAdmission,
       lifecycleGeneration,
+      restartSafeAdmission,
+      setReleaseGatewayRootContinuation,
+    } = admitted.value;
+    const preparedAttachments = await prepareChatSendAttachments({
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      admission: admitted.value,
+      respond,
+      context,
     });
-    const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
-      explicitOriginResult.value,
-    );
-    let prepareAttachmentsMs: number | undefined;
-    if (normalizedAttachments.length > 0) {
-      const prepareAttachmentsStartedAtMs = performance.now();
-      try {
-        await measureDiagnosticsTimelineSpan(
-          "gateway.chat_send.prepare_attachments",
-          async () => {
-            const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-              provider: resolvedSessionModel.provider,
-              model: resolvedSessionModel.model,
-            });
-            const explicitOriginSupportsInlineImages =
-              explicitOriginTargetsAcpSession(explicitOriginResult.value) ||
-              explicitOriginTargetsPlugin;
-            // Bound plugin sessions own the real recipient model, so keep image
-            // attachments even when the parent OpenClaw session model is text-only.
-            const supportsImages = supportsSessionModelImages || explicitOriginSupportsInlineImages;
-            const routeImageOffloadsAsMediaPaths = !supportsImages;
-            const parsed = await parseMessageWithAttachments(
-              inboundMessage,
-              normalizedAttachments,
-              {
-                maxBytes: resolveChatAttachmentMaxBytes(cfg),
-                log: context.logGateway,
-                supportsImages,
-                // chat.send routes selected offloadedRefs into ctx.MediaPaths below
-                // so the auto-reply stage pipeline can surface them to the agent.
-                acceptNonImage: true,
-              },
-            );
-            parsedMessage = stripTrailingOffloadedMediaMarkers(
-              parsed.message,
-              routeImageOffloadsAsMediaPaths
-                ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
-                : [],
-            );
-            parsedImages = parsed.images;
-            imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
-            offloadedRefs = parsed.offloadedRefs;
-            ({
-              paths: mediaPathOffloadPaths,
-              types: mediaPathOffloadTypes,
-              workspaceDir: mediaPathOffloadWorkspaceDir,
-            } = await prestageMediaPathOffloads({
-              offloadedRefs,
-              // Text-only image offloads need ctx.MediaPaths so media-understanding
-              // can describe them via agents.defaults.imageModel. Vision-capable
-              // image offloads stay as prompt refs for native image loading.
-              includeImageRefs: routeImageOffloadsAsMediaPaths,
-              cfg,
-              sessionKey,
-              agentId,
-            }));
-          },
-          {
-            phase: "agent-turn",
-            config: cfg,
-            attributes: {
-              ...chatSendTraceAttributes,
-              attachmentCount: normalizedAttachments.length,
-            },
-          },
-        );
-        prepareAttachmentsMs = roundedChatSendTimingMs(
-          performance.now() - prepareAttachmentsStartedAtMs,
-        );
-      } catch (err) {
-        cleanupAdmittedRun({ force: true });
-        clearAgentRunContext(clientRunId, lifecycleGeneration);
-        logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
-          ),
-        );
-        return;
-      }
+    if (!preparedAttachments.ok) {
+      return;
     }
     if (activeRunAbort.controller.signal.aborted) {
-      const stopReason = activeRunAbort.entry?.abortStopReason ?? "rpc";
-      const endedAt = Date.now();
-      const payload = buildAbortedChatSendPayload({
-        runId: clientRunId,
-        stopReason,
-        endedAt,
-      });
-      setGatewayDedupeEntry({
-        dedupe: context.dedupe,
-        key: `chat:${clientRunId}`,
-        entry: {
-          ts: endedAt,
-          ok: true,
-          payload,
-        },
-      });
-      cleanupAdmittedRun({ force: true });
-      clearAgentRunContext(clientRunId, lifecycleGeneration);
-      respond(true, payload, undefined, { runId: clientRunId });
+      finishAbortedChatSend();
       return;
     }
 
-    // Attachment preparation and admission can suspend. Recheck immediately
-    // before ACK/dispatch so hot config reload cannot cross the send boundary.
+    // Attachment preparation can suspend. Recheck immediately before the
+    // synchronous ACK path so aborts and hot routing reloads cannot cross it.
     if (sessionRoutingChanged(context.getRuntimeConfig())) {
       cleanupAdmittedRun({ force: true });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
-      respondSessionRoutingChanged();
+      respondChatSessionRoutingChanged(respond);
       return;
     }
+    const { imageOrder, prepareAttachmentsMs } = preparedAttachments.value;
+
+    const admissionStartedAt = Date.now();
+    const terminalizeRestartSafeAdmission = async (terminalState: {
+      retryable: boolean;
+      status: "failed" | "killed";
+    }): Promise<boolean> =>
+      await terminalizeRestartSafeChatAdmission({
+        admittedSessionId,
+        clientRunId,
+        sessionKey,
+        startedAt: admissionStartedAt,
+        storePath,
+        ...terminalState,
+      });
 
     try {
+      const userTurn = createGatewayChatUserTurnController({
+        agentId,
+        cfg,
+        clientRunId,
+        initialSessionId: admittedSessionId,
+        now,
+        ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
+        rawMessage,
+        ...(restartSafeAdmission ? { restartAdmission: restartSafeAdmission } : {}),
+        senderIsOwner: hasGatewayAdminScope(client),
+        sessionKey,
+        ...(sessionLoadOptions ? { sessionLoadOptions } : {}),
+        startedAt: admissionStartedAt,
+        traceAttributes: chatSendTraceAttributes,
+        warn: (message) => context.logGateway.warn(message),
+      });
+      const {
+        persist: persistGatewayUserTurnTranscript,
+        persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
+        recorder: userTurnRecorder,
+      } = userTurn;
+      if (restartSafeAdmission) {
+        const persistedUserTurn = await persistGatewayUserTurnTranscript();
+        const admittedEntry = persistedUserTurn?.sessionEntry;
+        // A matching idempotency row and lifecycle claim commit atomically, so
+        // retries adopt the durable turn without submitting it twice.
+        if (
+          !persistedUserTurn ||
+          admittedEntry?.status !== "running" ||
+          admittedEntry.restartRecoveryDeliveryRunId !== clientRunId
+        ) {
+          throw new Error("chat turn was not durably admitted");
+        }
+        if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
+          if (activeRunAbort.entry) {
+            activeRunAbort.entry.abortStopReason = "restart";
+          }
+          activeRunAbort.controller.abort(createAgentRunRestartAbortError());
+        }
+        if (activeRunAbort.controller.signal.aborted) {
+          if (
+            !(await terminalizeRestartSafeAdmission({
+              retryable: activeRunAbort.entry?.abortStopReason === "restart",
+              status: "killed",
+            }))
+          ) {
+            throw new Error("chat admission ownership changed before terminalization");
+          }
+          finishAbortedChatSend();
+          return;
+        }
+        if (sessionRoutingChanged(context.getRuntimeConfig())) {
+          if (!(await terminalizeRestartSafeAdmission({ retryable: true, status: "failed" }))) {
+            throw new Error("chat admission ownership changed before terminalization");
+          }
+          cleanupAdmittedRun({ force: true });
+          clearAgentRunContext(clientRunId, lifecycleGeneration);
+          respondChatSessionRoutingChanged(respond);
+          return;
+        }
+      }
+
       const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
         ? {
             receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
@@ -2359,148 +1228,32 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         });
       }
-      const persistedImagesPromise = persistChatSendImages({
-        images: parsedImages,
-        imageOrder,
-        offloadedRefs,
+      const {
+        accountId,
+        ctx,
+        isInternalTextSlashCommandTurn,
+        pluginBoundMediaFieldsPromise,
+        queuedFollowupOwnerKey,
+        replyOptionImages,
+      } = prepareChatSendUserTurn({
+        request: normalizedRequest.value,
+        session: preparedSession.value,
+        admission: admitted.value,
+        attachments: preparedAttachments.value,
         client,
         logGateway: context.logGateway,
+        userTurn,
       });
-      let persistedMediaForTranscript: SavedMedia[] | undefined;
-      const getPersistedMediaForTranscript = async () => {
-        if (!persistedMediaForTranscript) {
-          persistedMediaForTranscript = await persistedImagesPromise;
-        }
-        return persistedMediaForTranscript;
-      };
-      const preparedUserTurnMediaPromise =
-        normalizedAttachments.length > 0 ? getPersistedMediaForTranscript() : Promise.resolve([]);
-      const userTurnMediaPromise = preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia);
-      const baseUserTurnInput: UserTurnInput = {
-        text: rawMessage,
-        timestamp: now,
-        idempotencyKey: `${clientRunId}:user`,
-        ...(hasGatewayAdminScope(client) ? { senderIsOwner: true } : {}),
-        ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
-      };
-      const userTurnInputPromise: Promise<UserTurnInput> = userTurnMediaPromise.then((media) => ({
-        ...baseUserTurnInput,
-        ...(media.length > 0
-          ? {
-              media,
-              mediaOnlyText: "[User sent media without caption]",
-            }
-          : {}),
-      }));
-      const pluginBoundMediaFieldsPromise =
-        explicitOriginTargetsPlugin && parsedImages.length > 0
-          ? preparedUserTurnMediaPromise.then(resolveChatSendManagedMediaFields)
-          : Promise.resolve({});
 
-      const trimmedMessage = parsedMessage.trim();
-      const commandBody = parsedMessage;
-      const commandSource =
-        !suppressCommandInterpretation && trimmedMessage.startsWith("/") ? "text" : undefined;
-      const messageForAgent = systemProvenanceReceipt
-        ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
-        : parsedMessage;
-      const queuedFollowupOwnerDeviceId = normalizeOptionalText(client?.connect?.device?.id);
-      const queuedFollowupOwnerConnId = normalizeOptionalText(client?.connId);
-      const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
-        ? `device:${queuedFollowupOwnerDeviceId}`
-        : queuedFollowupOwnerConnId
-          ? `connection:${queuedFollowupOwnerConnId}`
-          : undefined;
-      const {
-        originatingChannel,
-        originatingTo,
-        accountId,
-        messageThreadId,
-        explicitDeliverRoute,
-      } = originatingRoute;
-      // The per-message timestamp prefix is now applied at the single LLM
-      // boundary (normalizeMessagesForLlmBoundary), derived from each message's
-      // own timestamp, so the current turn and all historical turns carry
-      // identical bytes on the wire. BodyForAgent uses the same bare text as
-      // Body; the transient gateway stamp is removed (stamping the live turn
-      // here would diverge from bare stored history and bust the prompt cache).
-      // See: https://github.com/openclaw/openclaw/issues/3658
-      const ctx: MsgContext = {
-        Body: messageForAgent,
-        BodyForAgent: messageForAgent,
-        BodyForCommands: commandBody,
-        RawBody: parsedMessage,
-        CommandBody: commandBody,
-        InputProvenance: systemInputProvenance,
-        SessionKey: sessionKey,
-        AgentId: agentId,
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
-        OriginatingChannel: originatingChannel,
-        OriginatingTo: originatingTo,
-        ExplicitDeliverRoute: explicitDeliverRoute,
-        AccountId: accountId,
-        MessageThreadId: messageThreadId,
-        ChatType: "direct",
-        ...(commandSource ? { CommandSource: commandSource } : {}),
-        CommandAuthorized: !suppressCommandInterpretation,
-        CommandTurn: commandSource
-          ? {
-              kind: "text-slash",
-              source: commandSource,
-              authorized: true,
-              body: commandBody,
-            }
-          : {
-              kind: "normal",
-              source: "message",
-              authorized: false,
-              body: commandBody,
-            },
-        MessageSid: clientRunId,
-        ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
-        ...(!isOperatorUiClient(clientInfo)
-          ? {
-              SenderId: clientInfo?.id,
-              SenderName: clientInfo?.displayName,
-              SenderUsername: clientInfo?.displayName,
-            }
-          : {}),
-        GatewayClientScopes: client?.connect?.scopes ?? [],
-        GatewayClientCaps: client?.connect?.caps ?? [],
-      };
-      const isInternalTextSlashCommandTurn =
-        ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
-      if (mediaPathOffloadPaths.length > 0) {
-        // Inject offloads via the same MsgContext fields the channel
-        // path uses so buildInboundMediaNote renders a real `[media attached:
-        // <workspace-relative-path>]` line into the agent prompt. Marker
-        // blocks the dispatch pipeline from re-running stageSandboxMedia; see
-        // prestageMediaPathOffloads.
-        ctx.MediaPath = mediaPathOffloadPaths[0];
-        ctx.MediaPaths = mediaPathOffloadPaths;
-        ctx.MediaType = mediaPathOffloadTypes[0];
-        ctx.MediaTypes = mediaPathOffloadTypes;
-        ctx.MediaWorkspaceDir = mediaPathOffloadWorkspaceDir;
-        ctx.MediaStaged = true;
-      }
-      const mediaPathOffloadsIncludeImages = mediaPathOffloadTypes.some((type) =>
-        type.startsWith("image/"),
-      );
-      const replyOptionImages = mediaPathOffloadsIncludeImages
-        ? undefined
-        : parsedImages.length > 0
-          ? parsedImages
-          : undefined;
-
-      const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
-        cfg,
-        agentId,
-        channel: INTERNAL_MESSAGE_CHANNEL,
-      });
-      const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
-      let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
+      const { deliveredReplies, dispatcher, hasAppendedWebchatAgentMedia, onModelSelected } =
+        createChatSendReplyDispatch({
+          accountId,
+          isAgentRunStarted: () => agentRunStarted,
+          logGateway: context.logGateway,
+          session: preparedSession.value,
+          userTurnRecorder,
+        });
       let queuedFollowupEnqueued = false;
       let pendingDispatchLifecycleError:
         | {
@@ -2511,174 +1264,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
         | undefined;
       let persistDispatchErrorUserTurn: (() => Promise<void>) | undefined;
-      let acceptedUserTurnSessionId = entry?.sessionId;
-      const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-        input: baseUserTurnInput,
-        resolveInput: () => userTurnInputPromise,
-        target: () => {
-          const {
-            storePath: latestStorePath,
-            store: latestStore,
-            entry: latestEntry,
-          } = loadSessionEntry(sessionKey, sessionLoadOptions);
-          if (!latestEntry?.sessionId || latestEntry.sessionId !== acceptedUserTurnSessionId) {
-            return undefined;
-          }
-          return {
-            sessionId: latestEntry.sessionId,
-            expectedSessionId: latestEntry.sessionId,
-            sessionKey,
-            sessionEntry: latestEntry,
-            sessionStore: latestStore,
-            storePath: latestStorePath,
-            agentId,
-            config: cfg,
-          };
-        },
-        errorContext: "gateway chat user turn transcript",
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-        onPersistenceError: (error) => {
-          context.logGateway.warn(
-            `gateway user transcript persistence failed: ${formatForLog(error)}`,
-          );
-        },
-      });
-      const persistGatewayUserTurnTranscript = async () => {
-        await measureDiagnosticsTimelineSpan(
-          "gateway.chat_send.persist_user_transcript",
-          async () => {
-            await userTurnRecorder.persistFallback();
-          },
-          {
-            phase: "agent-turn",
-            config: cfg,
-            attributes: chatSendTraceAttributes,
-          },
-        );
-      };
-      const persistGatewayUserTurnTranscriptBestEffort = async () => {
-        await persistGatewayUserTurnTranscript().catch(() => undefined);
-      };
-      const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-        if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
-          return;
-        }
-        if (isSourceReplyTranscriptMirrorPayload(payload)) {
-          return;
-        }
-        const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
-        const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
-          cfg,
-          sessionKey,
-          agentId,
-          accountId,
-          payloads: [stripVisibleTextFromTtsSupplement(payload)],
-        });
-        if (!transcriptPayload) {
-          return;
-        }
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-          sessionKey,
-          sessionLoadOptions,
-        );
-        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-        const mediaLocalRoots = appendLocalMediaParentRoots(
-          getAgentScopedMediaLocalRoots(cfg, agentId),
-          latestStorePath ? [latestStorePath] : undefined,
-        );
-        const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-          sessionKey,
-          agentId,
-          payloads: [transcriptPayload],
-          managedImageLocalRoots: mediaLocalRoots,
-          includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-          onManagedImagePrepareError: (message) => {
-            context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
-          },
-        });
-        const mediaMessage = await buildWebchatAssistantMediaMessage([transcriptPayload], {
-          localRoots: mediaLocalRoots,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-        });
-        const persistedAssistantContent = replaceAssistantContentTextBlocks(
-          assistantContent,
-          mediaMessage,
-        );
-        const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
-          ? persistedAssistantContent
-          : undefined;
-        if (!persistedContentForAppend?.length) {
-          return;
-        }
-        const transcriptReply =
-          mediaMessage?.transcriptText ??
-          extractAssistantDisplayTextFromContent(assistantContent) ??
-          buildTranscriptReplyText([transcriptPayload]);
-        if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
-          return;
-        }
-        const appended = await appendAssistantTranscriptMessage({
-          sessionKey,
-          message: transcriptReply,
-          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
-          sessionId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile,
-          agentId,
-          createIfMissing: true,
-          idempotencyKey: `${clientRunId}:assistant-media`,
-          ttsSupplement: ttsSupplementMarker,
-          cfg,
-        });
-        if (appended.ok) {
-          if (appended.messageId && assistantContent?.length) {
-            await attachManagedOutgoingImagesToMessage({
-              messageId: appended.messageId,
-              blocks: assistantContent,
-            });
-          }
-          appendedWebchatAgentMedia = true;
-          return;
-        }
-        context.logGateway.warn(
-          `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
-        );
-      };
-      const dispatcher = createReplyDispatcher({
-        ...replyPipeline,
-        onError: (err) => {
-          context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
-        },
-        deliver: async (payload, info) => {
-          if (getReplyPayloadMetadata(payload)?.beforeAgentRunBlocked === true) {
-            userTurnRecorder.markBlocked();
-          }
-          switch (info.kind) {
-            case "block":
-            case "final":
-              deliveredReplies.push({ payload, kind: info.kind });
-              await appendWebchatAgentMediaTranscriptIfNeeded(payload);
-              break;
-            case "tool":
-              // Tool results that carry audio (e.g. the TTS tool) must be promoted
-              // to "final" so the downstream audio extraction path can pick them up.
-              // Strip text to avoid leaking tool summary into the combined reply.
-              if (isMediaBearingPayload(payload)) {
-                deliveredReplies.push({
-                  payload: { ...payload, text: undefined },
-                  kind: "final",
-                });
-              }
-              break;
-          }
-        },
-      });
-
       const emitServerTiming = (
         phase: ChatSendServerTimingPhase,
         extra?: Record<string, string | number>,
@@ -2715,7 +1300,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       };
       // Reserve the detached dispatch before this request releases its root. Otherwise
       // its inherited ALS context becomes retired and rejects queued/session work.
-      releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
+      setReleaseGatewayRootContinuation(retainGatewayRootWorkAdmissionContinuation() ?? undefined);
       void gatewayWorkAdmission
         .run(() =>
           measureDiagnosticsTimelineSpan(
@@ -2747,15 +1332,18 @@ export const chatHandlers: GatewayRequestHandlers = {
                     ? { taskSuggestionDeliveryMode: "gateway" as const }
                     : {}),
                   requestedSessionId,
-                  ...(entry?.sessionId
+                  ...(restartSafeAdmission
                     ? {
-                        expectedExistingSessionId: entry.sessionId,
+                        expectedExistingSessionId: admittedSessionId,
+                        pinExpectedExistingSession: true,
                       }
-                    : {}),
-                  resumeRequestedSession: controlUiReconnectResume.resumeRequested,
+                    : entry?.sessionId
+                      ? { expectedExistingSessionId: entry.sessionId }
+                      : {}),
+                  resumeRequestedSession: reconnectResumeRequested,
                   onSessionPrepared: (binding) => {
                     if (binding.sessionKey === sessionKey) {
-                      acceptedUserTurnSessionId = binding.sessionId;
+                      userTurn.setAcceptedSessionId(binding.sessionId);
                     }
                   },
                   abortSignal: activeRunAbort.controller.signal,
@@ -2796,6 +1384,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   thinkingLevelOverride: p.thinking,
                   fastModeOverride: p.fastMode,
                   userTurnTranscriptRecorder: userTurnRecorder,
+                  ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                   fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                   onAgentRunStart: (runId) => {
                     agentRunStarted = true;
@@ -3201,7 +1790,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     : finalPayloadEntries;
                   // Non-agent command paths can enqueue only block replies. If no visible final
                   // supersedes them, fold those blocks into the final WebChat message.
-                  const rawFinalPayloads = appendedWebchatAgentMedia
+                  const rawFinalPayloads = hasAppendedWebchatAgentMedia()
                     ? []
                     : [
                         ...commandBlockPayloadEntriesForDelivery,
@@ -3709,6 +2298,27 @@ export const chatHandlers: GatewayRequestHandlers = {
         })
         .catch(async (err: unknown) => {
           const errorMessage = String(err);
+          let restartSafeDispatchFailureTerminalized = false;
+          if (restartSafeAdmission && !queuedFollowupEnqueued) {
+            restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
+              retryable: true,
+              status: "failed",
+            }).catch((terminalizeError: unknown) => {
+              context.logGateway.warn(
+                `failed to release restart-safe chat admission after dispatch error: ${formatForLog(
+                  terminalizeError,
+                )}`,
+              );
+              return false;
+            });
+            if (restartSafeDispatchFailureTerminalized) {
+              emitSessionsChanged(context, {
+                sessionKey,
+                ...(agentId ? { agentId } : {}),
+                reason: "chat.dispatch-error",
+              });
+            }
+          }
           if (queuedFollowupEnqueued) {
             context.logGateway.warn(
               `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
@@ -3735,8 +2345,11 @@ export const chatHandlers: GatewayRequestHandlers = {
           persistDispatchErrorUserTurn =
             userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
               ? undefined
-              : persistGatewayUserTurnTranscript;
+              : async () => {
+                  await persistGatewayUserTurnTranscript();
+                };
           if (
+            !restartSafeDispatchFailureTerminalized &&
             !activeRunAbort.controller.signal.aborted &&
             !context.chatAbortedRuns.has(clientRunId)
           ) {
@@ -3838,6 +2451,26 @@ export const chatHandlers: GatewayRequestHandlers = {
             .finally(() => releaseDispatchErrorRoot?.());
         });
     } catch (err) {
+      if (restartSafeAdmission) {
+        const terminalized = await terminalizeRestartSafeAdmission({
+          retryable: true,
+          status: "failed",
+        }).catch((terminalizeError: unknown) => {
+          context.logGateway.warn(
+            `failed to release restart-safe chat admission after setup error: ${formatForLog(
+              terminalizeError,
+            )}`,
+          );
+          return false;
+        });
+        if (terminalized) {
+          emitSessionsChanged(context, {
+            sessionKey,
+            ...(agentId ? { agentId } : {}),
+            reason: "chat.dispatch-error",
+          });
+        }
+      }
       cleanupAdmittedRun({ force: true });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       context.removeChatRun(clientRunId, clientRunId, sessionKey);

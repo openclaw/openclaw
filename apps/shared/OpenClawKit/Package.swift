@@ -50,6 +50,7 @@ let package = Package(
             name: "OpenClawChatUI",
             dependencies: [
                 "OpenClawKit",
+                "OpenClawProtocol",
                 .product(name: "Markdown", package: "swift-markdown"),
                 .product(name: "SwiftMath", package: "SwiftMath"),
             ],

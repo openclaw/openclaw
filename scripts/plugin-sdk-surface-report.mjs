@@ -108,7 +108,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-runtime": 1,
   "config-runtime": 123,
   "config-contracts": 1,
-  "config-types": 424,
+  "config-types": 425,
   "config-schema": 3,
   "reply-dedupe": 1,
   "inbound-reply-dispatch": 33,
@@ -135,7 +135,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   types: 6,
   "agent-config-primitives": 2,
   "command-auth": 81,
-  compat: 155,
+  compat: 152,
   "direct-dm": 9,
   "direct-dm-access": 5,
   discord: 48,
@@ -204,24 +204,22 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      10650,
+      10647,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      5363,
+      5359,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      // Main accounts for 3282; the shared channel helper barrels add one
-      // deprecated compat export.
       3283,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      211,
+      209,
       env,
     ),
   };

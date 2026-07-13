@@ -1,11 +1,13 @@
 // Qa Lab tests cover discord live plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   findMissingLiveTransportStandardScenarios,
-} from "../shared/live-transport-scenarios.js";
-import { testing } from "./discord-live.runtime.js";
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { discordQaLiveRuntime } from "./discord-live.runtime.js";
+
+const { testing } = discordQaLiveRuntime;
 
 describe("discord live qa runtime", () => {
   afterEach(() => {
@@ -184,6 +186,7 @@ describe("discord live qa runtime", () => {
 
     expect(next.channels?.discord?.voice).toEqual({
       enabled: true,
+      mode: "stt-tts",
       autoJoin: [
         {
           guildId: "123456789012345678",

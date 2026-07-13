@@ -82,6 +82,7 @@ export const de: TranslationMap = {
     relink: "Erneut verknüpfen",
     waitForScan: "Auf Scan warten",
     logout: "Abmelden",
+    skipToMainContent: "Zum Hauptinhalt springen",
   },
   nativeLinkMenu: {
     label: "Link-Aktionen",
@@ -125,6 +126,7 @@ export const de: TranslationMap = {
     ariaLabel: "{state} {kind} {repo} #{number}: {title}, von {author}",
   },
   channels: {
+    lastError: "Letzter Fehler",
     refreshingStaleSnapshot:
       "Kanalstatus wird im Hintergrund aktualisiert; der letzte erfolgreiche Snapshot wird angezeigt.",
     config: {
@@ -232,6 +234,16 @@ export const de: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Scannen Sie diesen QR-Code in der mobilen App, um ein neues Telefon zu verbinden.",
       generating: "Sicherer Einrichtungscode wird erstellt…",
+      accessTitle: "Mobiler Zugriff",
+      fullAccess: "Vollzugriff (empfohlen)",
+      fullAccessHint:
+        "Node sowie vollständige Gateway-Steuerung, einschließlich Einstellungen und Upgrades.",
+      limitedAccess: "Eingeschränkter Zugriff",
+      limitedAccessHint: "Node, Chat und Genehmigungen ohne administrative Steuerung.",
+      generateCode: "Einrichtungscode erstellen",
+      transportLimitedTitle: "Zur Netzwerksicherheit eingeschränkt",
+      transportLimitedHint:
+        "Diese Gateway-URL verwendet unverschlüsseltes ws://. Verwenden Sie wss:// oder Tailscale Serve und erstellen Sie anschließend einen neuen Code für den Vollzugriff.",
       failed: "Einrichtungscode konnte nicht erstellt werden.",
       qrAlt: "QR-Code für die Kopplung mit OpenClaw mobile",
       qrUnavailable: "QR-Code nicht verfügbar. Kopieren Sie stattdessen den Einrichtungscode.",
@@ -267,7 +279,8 @@ export const de: TranslationMap = {
     },
     inventory: {
       title: "Geräte",
-      subtitle: "Eine Zeile pro gekoppeltem Client: Status, Rollen, Tokens.",
+      summaryConnected: "{connected} von {total} verbunden",
+      summaryPending: "{count} warten auf Genehmigung",
       cleanupStale: "{count} veraltete bereinigen",
       pendingApproval: "Ausstehende Genehmigung",
       paired: "Gekoppelt",
@@ -375,19 +388,26 @@ export const de: TranslationMap = {
   },
   worktrees: {
     newWorktree: "Neuer Worktree",
-    owner: "Besitzer",
     ownerManual: "Manuell",
     ownerSession: "Sitzung",
     ownerWorkboard: "Workboard",
     title: "Verwaltete Worktrees",
     subtitle: "Isolierte Repository-Checkouts im Besitz von OpenClaw.",
     cleanNow: "Jetzt bereinigen",
+    cleanupTitle: "Bereinigung",
+    cleanupSubtitle:
+      "OpenClaw entfernt regelmäßig alte Worktrees, um Speicherplatz freizugeben. Legen Sie fest, wie aggressiv die Bereinigung durchgeführt wird.",
+    cleanupMaxCount: "Maximale Anzahl an Worktrees",
+    cleanupMaxCountHelp:
+      "Maximale Anzahl verwalteter Worktrees, die über alle Repositorys hinweg beibehalten werden. Ältere Worktrees werden zuerst als Snapshots gespeichert und entfernt. Auf 0 setzen, um die Anzahlbegrenzung zu deaktivieren.",
+    cleanupMaxSize: "Maximale Gesamtgröße (GB)",
+    cleanupMaxSizeHelp:
+      "Maximale Gesamtgröße in GB über alle verwalteten Worktrees hinweg. Auf 0 setzen, um die Größenbegrenzung zu deaktivieren.",
+    cleanupDecrease: "{label} verringern",
+    cleanupIncrease: "{label} erhöhen",
+    cleanupSaveFailed: "Speichern der Bereinigungsgrenzwerte fehlgeschlagen.",
     name: "Name",
     repo: "Repository",
-    branch: "Branch",
-    status: "Status",
-    lastActive: "Zuletzt aktiv",
-    actions: "Aktionen",
     empty: "Keine verwalteten Worktrees.",
     restorable: "Wiederherstellbar",
     restore: "Wiederherstellen",
@@ -400,9 +420,17 @@ export const de: TranslationMap = {
     working: "Arbeitet…",
     ready: "Bereit zum Chatten",
     whatCanAgentDo: "Was kann {name} tun?",
+    help: "Hilfe",
     getHelp: "Hilfe erhalten",
     discord: "Discord-Community",
     viewChangelog: "Änderungsprotokoll anzeigen",
+    agentSettings: "Agent-Einstellungen",
+    filterAgents: "Agent suchen…",
+    noAgentMatches: "Keine passenden Agenten",
+  },
+  agentScope: {
+    label: "Agentenbereich",
+    allAgents: "Alle Agenten",
   },
   newSession: {
     title: "Neue Sitzung",
@@ -432,6 +460,7 @@ export const de: TranslationMap = {
     start: "Sitzung starten",
     starting: "Wird gestartet…",
     createFailed: "Die Sitzung konnte nicht erstellt werden.",
+    catalogUnavailable: "Dieses Sitzungsziel ist nicht verfügbar.",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -612,6 +641,8 @@ export const de: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Im Umschalter anheften",
+    unpinFromSwitcher: "Vom Umschalter lösen",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -636,6 +667,19 @@ export const de: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identität",
+      subtitle: "Name, Emoji und Avatar, die in Chats und in der Seitenleiste angezeigt werden.",
+      name: "Anzeigename",
+      namePlaceholder: "Agentenname",
+      emoji: "Emoji",
+      chooseImage: "Bild auswählen…",
+      replaceImage: "Bild ersetzen…",
+      imageUnusable:
+        "Dieses Bild kann nicht verwendet werden. Wähle eine Bilddatei mit einer Größe von bis zu 2 MB aus.",
+      fileHint:
+        "Agenten können dies selbst festlegen, indem sie IDENTITY.md in ihrem Arbeitsbereich bearbeiten.",
     },
     overview: {
       title: "Übersicht",
@@ -783,6 +827,7 @@ export const de: TranslationMap = {
     },
     manualRpcTitle: "Manual RPC",
     manualRpcSubtitle: "Send a raw gateway method with JSON params.",
+    callFailed: "Aufruf fehlgeschlagen",
     method: "Method",
     selectMethod: "Select a method…",
     paramsJson: "Params (JSON)",
@@ -1082,6 +1127,7 @@ export const de: TranslationMap = {
     settingsView: "Einstellungsansicht",
     simple: "Einfach",
     advanced: "Erweitert",
+    content: "Einstellungsinhalte",
     themeImported: "{name} importiert.",
     themeRemoved: "Benutzerdefiniertes Theme entfernt.",
     channels: {
@@ -1372,6 +1418,7 @@ export const de: TranslationMap = {
     moreLiveTitle: "{count} weitere Live-Tools sind in den folgenden Gruppen verfügbar.",
     moreLive: "+{count} weitere Live-Tools",
     quickPresets: "Schnelle Voreinstellungen",
+    catalogTitle: "Toolkatalog",
     inherit: "Erben",
     profile: "Profil",
     source: "Quelle",
@@ -1436,6 +1483,8 @@ export const de: TranslationMap = {
     platforms: "Plattformen: {platforms}",
     installNamed: "{name} installieren",
     notFound: "Skill nicht gefunden.",
+    openDetails: "Details zu {name} öffnen",
+    enabledNamed: "{name} aktiviert",
     invalidLink: "ClawHub-Link ungültig",
     overview: "Übersicht",
     skillCard: "Skill Card",
@@ -1720,7 +1769,6 @@ export const de: TranslationMap = {
     filterAll: "Alle",
     filterIssues: "Probleme",
     filterLabel: "Installierte Plugins filtern",
-    pulseLabel: "{enabled} aktiviert, {disabled} deaktiviert, {issues} mit Problemen",
     categoryChannels: "Kanäle",
     categoryProviders: "Modellanbieter",
     categoryMemory: "Speicher",
@@ -1799,6 +1847,16 @@ export const de: TranslationMap = {
       "{name} deaktiviert. Ein Neustart des Gateway ist erforderlich, um die Änderung anzuwenden.",
   },
   aboutPage: {
+    productName: "OpenClaw",
+    tagline: "Dein persönlicher KI-Assistent, der auf deinen eigenen Geräten läuft.",
+    waveHello: "Sag Clawd Hallo",
+    linksLabel: "Community und Ressourcen",
+    linkWebsite: "Website",
+    linkDocs: "Dokumentation",
+    linkGitHub: "GitHub",
+    linkDiscord: "Discord",
+    linkChangelog: "Änderungsprotokoll",
+    license: "© 2026 OpenClaw Foundation — MIT-Lizenz.",
     artifactTitle: "Control UI",
     artifactSubtitle: "Identität, die beim Erstellen dieses Browser-Artefakts eingebettet wurde.",
     artifactDetails: "Build-Details der Control UI",
@@ -2473,6 +2531,7 @@ export const de: TranslationMap = {
       uptime: "Betriebszeit",
       tickInterval: "Tick-Intervall",
       lastChannelsRefresh: "Letzte Kanalaktualisierung",
+      lastError: "Letzter Fehler",
     },
     help: {
       title: "So stellen Sie eine Verbindung her",
@@ -2703,6 +2762,94 @@ export const de: TranslationMap = {
     noStats: "No live usage data reported by this provider.",
     localCost: "Session spend · {days}d",
     localCostDetail: "{tokens} tokens · {sessions} sessions",
+    saving: "Wird gespeichert…",
+    requestFailed: "Anfrage fehlgeschlagen.",
+    configUnavailable:
+      "Die Konfiguration ist nicht verfügbar. Aktualisieren Sie die Seite und versuchen Sie es erneut.",
+    credentials: {
+      label: "Anmeldedaten",
+      oauth: "OAuth-Profile: {count}",
+      tokenProfiles: "Tokenprofile: {count}",
+      configKey: "API-Schlüssel in der Konfiguration festgelegt",
+      envKey: "API-Schlüssel aus der Umgebung",
+      envKeyNamed: "API-Schlüssel aus der Umgebung ({name})",
+      profileKey: "API-Schlüsselprofile: {count}",
+      none: "Nicht konfiguriert",
+    },
+    apiKey: {
+      label: "API-Schlüssel",
+      placeholder: "API-Schlüssel des Anbieters eingeben",
+      replacePlaceholder:
+        "Geheimnis gespeichert. Geben Sie einen neuen Schlüssel ein, um ihn zu ersetzen.",
+      set: "API-Schlüssel festlegen",
+      replace: "Schlüssel ersetzen",
+      remove: "Schlüssel entfernen",
+      saved: "Geheimnis gespeichert.",
+      removed: "API-Schlüssel entfernt.",
+      authModeBlocked:
+        "Änderungen am API-Schlüssel sind nicht verfügbar, solange der Authentifizierungsmodus „{mode}“ lautet.",
+    },
+    probe: {
+      test: "Verbindung testen",
+      testing: "Wird getestet…",
+      unavailable: "Für den Verbindungstest ist ein neueres Gateway erforderlich.",
+      latency: "{ms} ms",
+      status: {
+        ok: "Verbunden",
+        auth: "Authentifizierung fehlgeschlagen",
+        rate_limit: "Ratenlimit erreicht",
+        billing: "Abrechnungsproblem",
+        timeout: "Zeitüberschreitung",
+        format: "Ungültige Antwort",
+        unknown: "Verbindung fehlgeschlagen",
+        no_model: "Kein Modell verfügbar",
+      },
+    },
+    logout: {
+      action: "Abmelden",
+      confirm: "Von {provider} abmelden? Gespeicherte OAuth- und Tokenprofile werden entfernt.",
+      loggingOut: "Wird abgemeldet…",
+      done: "Abgemeldet.",
+    },
+    add: {
+      title: "Anbieter hinzufügen",
+      subtitle:
+        "Wählen Sie einen bekannten Modellanbieter aus und speichern Sie dessen API-Schlüssel.",
+      action: "Anbieter hinzufügen",
+      none: "Alle bekannten Anbieter sind bereits konfiguriert.",
+      provider: "Anbieter",
+      selectProvider: "Anbieter auswählen",
+      save: "Anbieter speichern",
+      saved: "Anbieter {provider} hinzugefügt.",
+    },
+    defaults: {
+      title: "Standardmodelle",
+      subtitle: "Wählen Sie das primäre Modell, geordnete Ausweichmodelle und das Hilfsmodell aus.",
+      primary: "Standardmodell",
+      utility: "Hilfsmodell",
+      automatic: "Automatisch (Anbieterstandard)",
+      disabled: "Deaktiviert",
+      savedSelection: "Gespeicherte Auswahl",
+      fallbacks: "Fallbacks",
+      noFallbacks: "Keine Ausweichmodelle konfiguriert.",
+      unsaved: "Nicht gespeicherte Änderungen",
+      addFallback: "Ausweichmodell hinzufügen",
+      selectModel: "Modell auswählen",
+      selectFallback: "Ausweichmodell auswählen",
+      noModels: "Konfigurieren Sie einen Anbieter, bevor Sie Standardmodelle auswählen.",
+      saved: "Standardmodelle gespeichert.",
+    },
+    readOnly: {
+      disconnected:
+        "Stellen Sie eine Verbindung zum Gateway her, um die Modelleinstellungen zu ändern.",
+      adminRequired: "Nur Ansicht. Modelländerungen erfordern operator.admin-Zugriff.",
+    },
+    notes: {
+      saveKey: "API-Schlüssel für {provider} über die Control UI speichern",
+      removeKey: "API-Schlüssel für {provider} über die Control UI entfernen",
+      addProvider: "Modellanbieter {provider} über die Control UI hinzufügen",
+      defaultModel: "Standardmodellauswahl über die Control UI aktualisieren",
+    },
   },
   usage: {
     common: {
@@ -3515,11 +3662,13 @@ export const de: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Automatisierungsstatus",
       all: "Alle",
       active: "Aktiv",
       paused: "Pausiert",
     },
     list: {
+      viewLabel: "Automatisierungsansichten",
       searchPlaceholder: "Geplante Aufgaben suchen",
       newTask: "Neue Aufgabe",
       filters: "Filter",
@@ -3590,6 +3739,7 @@ export const de: TranslationMap = {
       nextWake: "Nächste Ausführung",
     },
     detail: {
+      tabsLabel: "Automatisierungsdetails",
       newTitle: "Neue geplante Aufgabe",
       newSubtitle: "Beschreibe, was OpenClaw tun soll, und wähle dann, wann es ausgeführt wird.",
       back: "Alle Automatisierungen",
@@ -3609,15 +3759,6 @@ export const de: TranslationMap = {
       clone: "Klonen",
       remove: "Entfernen",
       more: "Weitere Aktionen",
-    },
-    runNotStarted: {
-      notDue: "Diese Automatisierung ist noch nicht fällig.",
-      alreadyRunning: "Diese Automatisierung wird bereits ausgeführt.",
-      recoveryPending: "Die Wiederherstellung des Zeitplaners läuft noch.",
-      invalidSpec:
-        "Diese Automatisierung hat einen ungültigen Zeitplan oder eine ungültige Nutzlast.",
-      stopped: "Der Zeitplaner wurde angehalten.",
-      unknown: "Diese Automatisierung konnte nicht gestartet werden.",
     },
     runNotStarted: {
       notDue: "Diese Automatisierung ist noch nicht fällig.",

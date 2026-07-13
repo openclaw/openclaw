@@ -355,7 +355,7 @@ const DISCORD_QA_DEFAULT_SCENARIOS = DISCORD_QA_SCENARIOS.filter(
     scenario.id !== "discord-thread-reply-filepath-attachment",
 );
 
-export function listDiscordQaScenarioCatalog() {
+function listDiscordQaScenarioCatalog() {
   return DISCORD_QA_SCENARIOS.map((scenario) => ({ id: scenario.id }));
 }
 
@@ -449,7 +449,6 @@ function buildDiscordQaConfig(
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },
   };
-  const requireMention = !options.statusReactionsToolOnly;
   const messages = options.statusReactionsToolOnly
     ? {
         ...baseCfg.messages,
@@ -479,6 +478,7 @@ function buildDiscordQaConfig(
     ? {
         ...baseCfg.channels?.discord?.voice,
         enabled: true,
+        mode: "stt-tts" as const,
         autoJoin: [options.voiceAutoJoin],
       }
     : undefined;
@@ -504,12 +504,12 @@ function buildDiscordQaConfig(
             groupPolicy: "allowlist",
             guilds: {
               [params.guildId]: {
-                requireMention,
+                requireMention: !options.statusReactionsToolOnly,
                 users: [params.driverBotId],
                 channels: {
                   [params.channelId]: {
                     enabled: true,
-                    requireMention,
+                    requireMention: !options.statusReactionsToolOnly,
                     users: [params.driverBotId],
                   },
                 },
@@ -1510,7 +1510,7 @@ async function assertDiscordApplicationCommandsRegistered(params: {
   );
 }
 
-export async function runDiscordQaLive(params: {
+async function runDiscordQaLive(params: {
   repoRoot?: string;
   outputDir?: string;
   providerMode?: QaProviderModeInput;
@@ -1954,4 +1954,9 @@ export const testing = {
   resolveDiscordQaRuntimeEnv,
   waitForDiscordChannelRunning,
 };
-export { testing as __testing };
+
+export const discordQaLiveRuntime = {
+  listScenarioCatalog: listDiscordQaScenarioCatalog,
+  run: runDiscordQaLive,
+  testing,
+};

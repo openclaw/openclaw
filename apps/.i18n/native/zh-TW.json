@@ -3929,11 +3929,6 @@
       "translated": "正在載入 cron 作業…"
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "代理程式"
-    },
-    {
       "id": "native.android.0f33ca43db97b2a9",
       "source": "Choose and inspect the assistants available on this gateway.",
       "translated": "選擇並檢視此 gateway 上可用的助理。"
@@ -4157,11 +4152,6 @@
       "id": "native.android.609413bd24d4dfe6",
       "source": "Rate Limit",
       "translated": "速率限制"
-    },
-    {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "存取權限"
     },
     {
       "id": "native.android.ebeec52e498bc128",
@@ -4429,14 +4419,44 @@
       "translated": "線上"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "存取權限"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "位址"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "無法使用"
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "已探索"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "預設代理程式"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "代理程式"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "執行個體 ID"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "掃描 QR Code 以配對"
+    },
+    {
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "Gateway 存取受限"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4447,6 +4467,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "中斷連線"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "診斷"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "新增 Gateway"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "掃描或貼上設定代碼以新增另一個 gateway。"
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "掃描 QR Code"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "設定代碼"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "如何取得設定代碼？"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android 可以掃描或貼上現有的設定代碼，但此 gateway 尚未向 App 開放設定代碼產生功能。請在 gateway 主機上使用 openclaw qr 產生 QR/code，然後在此掃描，或在下方貼上設定代碼。"
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "尚未找到任何 Gateway。若探索功能遭封鎖，請使用手動設定。"
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "連線"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4529,9 @@
       "translated": "忘記"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "Gateway 設定"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "掃描或貼上設定代碼以新增另一個 gateway。"
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "新增 gateway"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "設定代碼"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android 可以掃描或貼上現有的設定代碼，但此 gateway 尚未向 App 開放設定代碼產生功能。請在 gateway 主機上使用 openclaw qr 產生 QR/code，然後在此掃描，或在下方貼上設定代碼。"
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "連線設定"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "設定代碼"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "手動設定 Gateway"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -4547,6 +4582,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "輸入有效的設定代碼或 gateway 位址。"
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "無法使用"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "完整"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "受限"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "使用安全的 wss:// 或 Tailscale Serve Gateway，在 Control UI 中或透過 openclaw qr 產生完整存取設定碼，然後在下方掃描或貼上並重新連線，以啟用設定與升級。"
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -4987,6 +5042,11 @@
       "id": "native.android.b3185067fb7fa30e",
       "source": "Default",
       "translated": "預設"
+    },
+    {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
     },
     {
       "id": "native.android.f154617fd2233082",
@@ -11339,6 +11399,41 @@
       "translated": "代理程式"
     },
     {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "存取"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "完整"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "受限"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "升級存取"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "此手機的 Gateway 存取受限。"
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "使用安全的 wss:// 或 Tailscale Serve Gateway，然後從 Control UI 或 openclaw qr 掃描完整存取設定碼並重新連線，以啟用設定與升級。"
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "掃描完整存取代碼"
+    },
+    {
       "id": "native.apple.5c4427c5a67068d6",
       "source": "Gateway",
       "translated": "Gateway"
@@ -17514,9 +17609,9 @@
       "translated": "啟用 Peekaboo Bridge"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "允許已簽署工具（例如 `peekaboo`）透過 PeekabooBridge 驅動 UI 自動化。"
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "允許已簽署的工具（例如 `peekaboo`）透過 PeekabooBridge 驅動 UI 自動化。需要 Computer Control；否則請執行 Peekaboo 自己的 Mac 應用程式。"
     },
     {
       "id": "native.apple.72b24ed86295d6fa",
@@ -19277,6 +19372,16 @@
       "id": "native.apple.7a62dc7bc8d3fab9",
       "source": "Mac",
       "translated": "Mac"
+    },
+    {
+      "id": "native.apple.fb09a404bfd12fa9",
+      "source": "Device",
+      "translated": "裝置"
+    },
+    {
+      "id": "native.apple.7ed2af81aa7647fb",
+      "source": "Node",
+      "translated": "節點"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

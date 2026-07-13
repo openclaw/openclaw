@@ -27,6 +27,7 @@ export {
   scheduleGatewaySigusr1Restart,
 } from "../../infra/restart.js";
 export { writeGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+export { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../../infra/gateway-suspend-coordinator.js";
 export { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.js";
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";

@@ -380,11 +380,6 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
           execApprovalsSelectedAgent: this.execApprovalsSelectedAgent,
           execApprovalsTarget: this.execApprovalsTarget,
           execApprovalsTargetNodeId: this.execApprovalsTargetNodeId,
-          onRefresh: () => {
-            void loadNodes(this);
-            void loadDevices(this);
-            void this.loadPresence();
-          },
           onDevicePairSetupOpen: () => void this.context.overlays.openDevicePairSetup(),
           onDeviceApprove: (requestId) => void approveDevicePairing(this, requestId),
           onDeviceReject: (requestId) => void rejectDevicePairing(this, requestId),

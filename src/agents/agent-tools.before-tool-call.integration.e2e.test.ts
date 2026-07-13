@@ -34,7 +34,7 @@ import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
-import { splitSdkTools } from "./embedded-agent-runner.js";
+import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import type { ExtensionContext } from "./sessions/index.js";
 import { setToolTerminalPresentation } from "./tool-terminal-presentation.js";
 

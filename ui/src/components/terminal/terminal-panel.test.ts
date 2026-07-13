@@ -80,6 +80,23 @@ describe("OpenClawTerminalPanel", () => {
     await i18n.setLocale("en");
   });
 
+  it("restores persisted open state when a mounted tag upgrades lazily", async () => {
+    localStorage.setItem(
+      "openclaw.terminal.panel.v1",
+      JSON.stringify({ open: true, dock: "bottom", height: 320, width: 520 }),
+    );
+    const tagName = `test-lazy-terminal-panel-${crypto.randomUUID()}`;
+    const element = document.createElement(tagName) as HTMLElement & { available: boolean };
+    element.available = true;
+    document.body.append(element);
+
+    class LazyUpgradeTerminalPanel extends TestTerminalPanel {}
+    customElements.define(tagName, LazyUpgradeTerminalPanel);
+    const panel = element as unknown as OpenClawTerminalPanel;
+    await panel.updateComplete;
+    await vi.waitFor(() => expect((panel as unknown as { open: boolean }).open).toBe(true));
+  });
+
   it("opens new sessions for the selected agent", async () => {
     let createOptions: CreateOptions | undefined;
     createGhosttyTerminalMock.mockImplementation(async (options: CreateOptions) => {

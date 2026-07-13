@@ -2,6 +2,7 @@
 // Schedules warmups, sentinels, update checks, memory backend, and plugin services.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
+import pMap from "p-map";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -448,7 +449,6 @@ async function cleanupStaleSessionLocks(params: {
       Math.floor(params.concurrency ?? SESSION_LOCK_CLEANUP_CONCURRENCY),
     ),
   );
-  let nextIndex = 0;
   let markRestartAbortedMainSessionsFromLocks =
     params.markRestartAbortedMainSessionsFromLocks ?? null;
   const getMarker = async () => {
@@ -456,11 +456,10 @@ async function cleanupStaleSessionLocks(params: {
       .markRestartAbortedMainSessionsFromLocks;
     return markRestartAbortedMainSessionsFromLocks;
   };
-  const worker = async () => {
-    while (!params.isStopped()) {
-      const sessionsDir = params.sessionDirs[nextIndex];
-      nextIndex += 1;
-      if (!sessionsDir) {
+  await pMap(
+    params.sessionDirs,
+    async (sessionsDir) => {
+      if (params.isStopped()) {
         return;
       }
       const result = await params.cleanStaleLockFiles({
@@ -470,16 +469,16 @@ async function cleanupStaleSessionLocks(params: {
         log: { warn: (message) => params.log.warn(message) },
       });
       if (result.cleaned.length === 0) {
-        continue;
+        return;
       }
       const markRestartAbortedMainSessionsFromLocksLocal = await getMarker();
       await markRestartAbortedMainSessionsFromLocksLocal({
         sessionsDir,
         cleanedLocks: result.cleaned,
       });
-    }
-  };
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    },
+    { concurrency, stopOnError: true },
+  );
 }
 
 function scheduleTranscriptsAutoStartSidecar(params: {
@@ -1274,28 +1273,35 @@ export async function startGatewayPostAttachRuntime(
     ? Promise.resolve({ pluginServices: null, pluginRegistry, postReadySidecars: [] })
     : waitForSidecarStartTurn().then(async () => {
         await loadStartupPluginsIfNeeded();
-        params.log.info("starting channels and sidecars...");
-        const loaderStatsBefore = getPluginModuleLoaderStats();
-        const result = await measureStartup(params.startupTrace, "sidecars.total", () =>
-          runtimeDeps.startGatewaySidecars({
-            cfg: params.gatewayPluginConfigAtStart,
-            pluginRegistry,
-            defaultWorkspaceDir: params.defaultWorkspaceDir,
-            deps: params.deps,
-            startChannels: params.startChannels,
-            log: params.log,
-            logHooks: params.logHooks,
-            logChannels: params.logChannels,
-            startupTrace: params.startupTrace,
-            onChannelsStarted: params.onChannelsStarted,
-            onPluginServices: reportPluginServices,
-            shouldStartPluginServices: () => params.isClosing?.() !== true,
-            startupOutcomes,
-          }),
-        );
         const workerEnvironmentSidecar = params.isClosing?.()
           ? null
           : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
+        params.log.info("starting channels and sidecars...");
+        const loaderStatsBefore = getPluginModuleLoaderStats();
+        const result = await (async () => {
+          try {
+            return await measureStartup(params.startupTrace, "sidecars.total", () =>
+              runtimeDeps.startGatewaySidecars({
+                cfg: params.gatewayPluginConfigAtStart,
+                pluginRegistry,
+                defaultWorkspaceDir: params.defaultWorkspaceDir,
+                deps: params.deps,
+                startChannels: params.startChannels,
+                log: params.log,
+                logHooks: params.logHooks,
+                logChannels: params.logChannels,
+                startupTrace: params.startupTrace,
+                onChannelsStarted: params.onChannelsStarted,
+                onPluginServices: reportPluginServices,
+                shouldStartPluginServices: () => params.isClosing?.() !== true,
+                startupOutcomes,
+              }),
+            );
+          } catch (error) {
+            await workerEnvironmentSidecar?.stop();
+            throw error;
+          }
+        })();
         const loaderStatsAfter = getPluginModuleLoaderStats();
         params.startupTrace?.detail("sidecars.plugin-loader", [
           ["callsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],

@@ -3929,11 +3929,6 @@
       "translated": "Ładowanie zadania cron…"
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "Agenci"
-    },
-    {
       "id": "native.android.0f33ca43db97b2a9",
       "source": "Choose and inspect the assistants available on this gateway.",
       "translated": "Wybierz i sprawdź asystentów dostępnych na tym gateway."
@@ -4157,11 +4152,6 @@
       "id": "native.android.609413bd24d4dfe6",
       "source": "Rate Limit",
       "translated": "Limit częstotliwości"
-    },
-    {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "Dostęp"
     },
     {
       "id": "native.android.ebeec52e498bc128",
@@ -4429,14 +4419,44 @@
       "translated": "Online"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "Dostęp"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "Adres"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "Niedostępne"
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "Wykryto"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "Domyślny agent"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "Agenci"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "Identyfikator instancji"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "Zeskanuj kod QR, aby sparować"
+    },
+    {
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "Ograniczony dostęp do Gateway"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4447,6 +4467,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "Rozłącz"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "Diagnozuj"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "Dodaj Gateway"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "Zeskanuj lub wklej kod konfiguracji, aby dodać kolejne Gateway."
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "Zeskanuj kod QR"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "Kod konfiguracji"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "Skąd wziąć kod konfiguracji?"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android może zeskanować lub wkleić istniejący kod konfiguracji, ale ten gateway nie udostępnia jeszcze aplikacji generowania kodu konfiguracji. Wygeneruj QR/kod na hoście gateway za pomocą openclaw qr, a następnie zeskanuj go tutaj lub wklej kod konfiguracji poniżej."
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "Nie znaleziono jeszcze żadnych Gateway. Jeśli wykrywanie jest zablokowane, użyj konfiguracji ręcznej."
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "Połącz"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4529,9 @@
       "translated": "Zapomnij"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "Konfiguracja Gateway"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "Zeskanuj lub wklej kod konfiguracji, aby dodać kolejne Gateway."
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "Dodaj Gateway"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "Kod konfiguracji"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android może zeskanować lub wkleić istniejący kod konfiguracji, ale ten gateway nie udostępnia jeszcze aplikacji generowania kodu konfiguracji. Wygeneruj QR/kod na hoście gateway za pomocą openclaw qr, a następnie zeskanuj go tutaj lub wklej kod konfiguracji poniżej."
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "Konfiguracja połączenia"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "Kod konfiguracji"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "Ręczna konfiguracja Gateway"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -4547,6 +4582,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "Wprowadź prawidłowy kod konfiguracji lub adres Gateway."
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "Niedostępne"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "Pełny"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "Ograniczony"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "Użyj bezpiecznego Gateway wss:// lub Tailscale Serve, wygeneruj kod konfiguracyjny z pełnym dostępem w Control UI lub za pomocą openclaw qr, następnie zeskanuj go lub wklej poniżej i połącz się ponownie, aby włączyć ustawienia i aktualizacje."
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -4987,6 +5042,11 @@
       "id": "native.android.b3185067fb7fa30e",
       "source": "Default",
       "translated": "Domyślne"
+    },
+    {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
     },
     {
       "id": "native.android.f154617fd2233082",
@@ -11339,6 +11399,41 @@
       "translated": "Agenci"
     },
     {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "Dostęp"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "Pełny"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "Ograniczony"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "Rozszerz dostęp"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "Ten telefon ma ograniczony dostęp do Gateway."
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "Użyj bezpiecznego Gateway wss:// lub Tailscale Serve, następnie zeskanuj kod konfiguracyjny z pełnym dostępem z Control UI lub openclaw qr i połącz się ponownie, aby włączyć ustawienia i aktualizacje."
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "Zeskanuj kod pełnego dostępu"
+    },
+    {
       "id": "native.apple.5c4427c5a67068d6",
       "source": "Gateway",
       "translated": "Gateway"
@@ -17514,9 +17609,9 @@
       "translated": "Włącz Peekaboo Bridge"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "Zezwalaj podpisanym narzędziom (np. `peekaboo`) na sterowanie automatyzacją interfejsu użytkownika za pomocą PeekabooBridge."
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "Zezwalaj podpisanym narzędziom (np. `peekaboo`) na sterowanie automatyzacją interfejsu za pomocą PeekabooBridge. Wymaga Computer Control; w przeciwnym razie uruchom własną aplikację Mac Peekaboo."
     },
     {
       "id": "native.apple.72b24ed86295d6fa",
@@ -19277,6 +19372,16 @@
       "id": "native.apple.7a62dc7bc8d3fab9",
       "source": "Mac",
       "translated": "Mac"
+    },
+    {
+      "id": "native.apple.fb09a404bfd12fa9",
+      "source": "Device",
+      "translated": "Urządzenie"
+    },
+    {
+      "id": "native.apple.7ed2af81aa7647fb",
+      "source": "Node",
+      "translated": "Węzeł"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

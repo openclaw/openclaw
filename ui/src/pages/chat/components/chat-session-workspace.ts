@@ -14,6 +14,10 @@ import {
   type UiSettings,
 } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_TOGGLE_EVENT,
+} from "../../../components/panel-toggle-contract.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
@@ -701,7 +705,7 @@ export function createSessionWorkspaceProps(
     onToggleTerminal: state.terminalAvailable
       ? () => {
           window.dispatchEvent(
-            new CustomEvent("openclaw:terminal-toggle", {
+            new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, {
               detail: { dock: "right", open: true },
             }),
           );
@@ -709,7 +713,7 @@ export function createSessionWorkspaceProps(
       : undefined,
     onToggleBrowser: state.browserPanelAvailable
       ? () => {
-          window.dispatchEvent(new CustomEvent("openclaw:browser-toggle", {}));
+          window.dispatchEvent(new CustomEvent(BROWSER_PANEL_TOGGLE_EVENT, {}));
         }
       : undefined,
     onOpenDiff:

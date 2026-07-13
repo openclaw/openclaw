@@ -3929,11 +3929,6 @@
       "translated": "cron 작업을 로드하는 중…"
     },
     {
-      "id": "native.android.6da97c8c6e1a3d3a",
-      "source": "Agents",
-      "translated": "에이전트"
-    },
-    {
       "id": "native.android.0f33ca43db97b2a9",
       "source": "Choose and inspect the assistants available on this gateway.",
       "translated": "이 Gateway에서 사용할 수 있는 어시스턴트를 선택하고 검사합니다."
@@ -4157,11 +4152,6 @@
       "id": "native.android.609413bd24d4dfe6",
       "source": "Rate Limit",
       "translated": "사용량 제한"
-    },
-    {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "접근 권한"
     },
     {
       "id": "native.android.ebeec52e498bc128",
@@ -4429,14 +4419,44 @@
       "translated": "온라인"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "접근 권한"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "주소"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "사용할 수 없음"
+      "id": "native.android.7f63838c1aaa496a",
+      "source": "Discovered",
+      "translated": "발견됨"
+    },
+    {
+      "id": "native.android.b1c378e882375bba",
+      "source": "Default Agent",
+      "translated": "기본 에이전트"
+    },
+    {
+      "id": "native.android.6da97c8c6e1a3d3a",
+      "source": "Agents",
+      "translated": "에이전트"
+    },
+    {
+      "id": "native.android.f2c8ad44786cc3b8",
+      "source": "Instance ID",
+      "translated": "인스턴스 ID"
+    },
+    {
+      "id": "native.android.27b4b0e04eca357c",
+      "source": "Scan QR to Pair",
+      "translated": "페어링하려면 QR 스캔"
+    },
+    {
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "제한된 Gateway 접근"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4447,6 +4467,51 @@
       "id": "native.android.e11f54696b376155",
       "source": "Disconnect",
       "translated": "연결 해제"
+    },
+    {
+      "id": "native.android.4dd409fe93b28258",
+      "source": "Diagnose",
+      "translated": "진단"
+    },
+    {
+      "id": "native.android.3901b9fb63225af4",
+      "source": "Add Gateway",
+      "translated": "Gateway 추가"
+    },
+    {
+      "id": "native.android.c040d4ee72a810e0",
+      "source": "Scan or paste a setup code to add another gateway.",
+      "translated": "다른 Gateway를 추가하려면 설정 코드를 스캔하거나 붙여넣으세요."
+    },
+    {
+      "id": "native.android.d869cbfce570d83c",
+      "source": "Scan QR",
+      "translated": "QR 스캔"
+    },
+    {
+      "id": "native.android.1fcfa6e7f5daac35",
+      "source": "Setup code",
+      "translated": "설정 코드"
+    },
+    {
+      "id": "native.android.c73418c6ff187c8e",
+      "source": "Where do I get a setup code?",
+      "translated": "설정 코드는 어디에서 받을 수 있나요?"
+    },
+    {
+      "id": "native.android.de12fd162a566974",
+      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+      "translated": "Android는 기존 설정 코드를 스캔하거나 붙여넣을 수 있지만, 이 gateway는 아직 앱에 설정 코드 생성을 제공하지 않습니다. gateway 호스트에서 openclaw qr로 QR/코드를 생성한 다음 여기에서 스캔하거나 아래에 설정 코드를 붙여넣으세요."
+    },
+    {
+      "id": "native.android.ac1032dabe06ab02",
+      "source": "No gateways found yet. Use manual setup if discovery is blocked.",
+      "translated": "아직 Gateway를 찾지 못했습니다. 검색이 차단된 경우 수동 설정을 사용하세요."
+    },
+    {
+      "id": "native.android.bb6a50133b74967d",
+      "source": "Connect",
+      "translated": "연결"
     },
     {
       "id": "native.android.87eee1e2bafbf13b",
@@ -4464,39 +4529,9 @@
       "translated": "잊어버리기"
     },
     {
-      "id": "native.android.56e98811c4e9b027",
-      "source": "Gateway setup",
-      "translated": "Gateway 설정"
-    },
-    {
-      "id": "native.android.c040d4ee72a810e0",
-      "source": "Scan or paste a setup code to add another gateway.",
-      "translated": "다른 Gateway를 추가하려면 설정 코드를 스캔하거나 붙여넣으세요."
-    },
-    {
-      "id": "native.android.a7c243ff3f1d6447",
-      "source": "Add gateway",
-      "translated": "Gateway 추가"
-    },
-    {
-      "id": "native.android.77a03c8c22155ec5",
-      "source": "Setup Code",
-      "translated": "설정 코드"
-    },
-    {
-      "id": "native.android.de12fd162a566974",
-      "source": "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
-      "translated": "Android는 기존 설정 코드를 스캔하거나 붙여넣을 수 있지만, 이 gateway는 아직 앱에 설정 코드 생성을 제공하지 않습니다. gateway 호스트에서 openclaw qr로 QR/코드를 생성한 다음 여기에서 스캔하거나 아래에 설정 코드를 붙여넣으세요."
-    },
-    {
-      "id": "native.android.0e8f4c02f7aa20e9",
-      "source": "Connection Setup",
-      "translated": "연결 설정"
-    },
-    {
-      "id": "native.android.1fcfa6e7f5daac35",
-      "source": "Setup code",
-      "translated": "설정 코드"
+      "id": "native.android.ec5f17e1a1fa0515",
+      "source": "Manual Gateway",
+      "translated": "수동 Gateway"
     },
     {
       "id": "native.android.29fe804ebbaed339",
@@ -4547,6 +4582,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "유효한 설정 코드 또는 Gateway 주소를 입력하세요."
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "사용할 수 없음"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "전체"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "제한됨"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "보안 wss:// 또는 Tailscale Serve Gateway를 사용하고, Control UI 또는 openclaw qr로 전체 접근 설정 코드를 생성한 다음, 아래에서 스캔하거나 붙여넣고 다시 연결하여 설정 및 업그레이드를 활성화하세요."
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -4987,6 +5042,11 @@
       "id": "native.android.b3185067fb7fa30e",
       "source": "Default",
       "translated": "기본값"
+    },
+    {
+      "id": "native.android.66baf6f63dafa213",
+      "source": "${endpoint.host}:${endpoint.port}",
+      "translated": "${endpoint.host}:${endpoint.port}"
     },
     {
       "id": "native.android.f154617fd2233082",
@@ -11339,6 +11399,41 @@
       "translated": "에이전트"
     },
     {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "접근"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "전체"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "제한됨"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "접근 업그레이드"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "이 휴대폰은 Gateway 접근이 제한되어 있습니다."
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "보안 wss:// 또는 Tailscale Serve Gateway를 사용한 다음, Control UI 또는 openclaw qr에서 전체 접근 설정 코드를 스캔하고 다시 연결하여 설정 및 업그레이드를 활성화하세요."
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "전체 접근 코드 스캔"
+    },
+    {
       "id": "native.apple.5c4427c5a67068d6",
       "source": "Gateway",
       "translated": "Gateway"
@@ -17514,9 +17609,9 @@
       "translated": "Peekaboo Bridge 활성화"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "서명된 도구(예: `peekaboo`)가 PeekabooBridge를 통해 UI 자동화를 실행하도록 허용합니다."
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "서명된 도구(예: `peekaboo`)가 PeekabooBridge를 통해 UI 자동화를 구동하도록 허용합니다. Computer Control이 필요하며, 그렇지 않으면 Peekaboo 자체 Mac 앱을 실행하세요."
     },
     {
       "id": "native.apple.72b24ed86295d6fa",
@@ -19277,6 +19372,16 @@
       "id": "native.apple.7a62dc7bc8d3fab9",
       "source": "Mac",
       "translated": "Mac"
+    },
+    {
+      "id": "native.apple.fb09a404bfd12fa9",
+      "source": "Device",
+      "translated": "기기"
+    },
+    {
+      "id": "native.apple.7ed2af81aa7647fb",
+      "source": "Node",
+      "translated": "노드"
     },
     {
       "id": "native.apple.6223e5f12aa9464b",

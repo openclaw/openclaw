@@ -20,6 +20,7 @@ import {
   GATEWAY_SUSPEND_TTL_MS,
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
+  resetGatewaySuspendCoordinatorForLifecycleRestart,
   resetGatewaySuspendCoordinatorForTest,
   resumeGatewaySuspend,
 } from "./gateway-suspend-coordinator.js";
@@ -59,6 +60,30 @@ afterEach(() => {
 });
 
 describe("gateway suspend coordinator", () => {
+  it("lifecycle reset resumes a held scheduler before admission is cleared", () => {
+    const resumeScheduling = vi.fn(() => {
+      expect(isGatewayWorkAdmissionClosed()).toBe(true);
+    });
+    expect(
+      prepareGatewaySuspend({
+        requestId: "request-lifecycle-reset",
+        pauseScheduling: vi.fn(),
+        resumeScheduling,
+        inspect: inspectors(),
+      }),
+    ).toMatchObject({ status: "ready" });
+
+    markGatewayRestartDraining();
+    expect(resumeScheduling).not.toHaveBeenCalled();
+    expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+    resetGatewaySuspendCoordinatorForLifecycleRestart();
+
+    expect(resumeScheduling).toHaveBeenCalledOnce();
+    resetGatewayWorkAdmission();
+    expect(isGatewayWorkAdmissionClosed()).toBe(false);
+  });
+
   it("test reset resumes a held scheduler before admission is cleared", () => {
     const resumeScheduling = vi.fn(() => {
       expect(isGatewayWorkAdmissionClosed()).toBe(true);

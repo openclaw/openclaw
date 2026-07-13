@@ -19,6 +19,7 @@ const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
 const resetGatewayRestartStateForInProcessRestart = vi.fn();
+const resetGatewaySuspendCoordinatorForLifecycleRestart = vi.fn();
 const rollbackGatewayRestartSignalAdmission = vi.fn();
 const requestGatewayRestartWithSignalAdmission = vi.fn(() => ({ status: "emitted" as const }));
 const writeGatewayRestartHandoffSync = vi.fn((_opts: unknown) => ({
@@ -149,6 +150,11 @@ vi.mock("../../infra/restart.js", () => ({
   },
   scheduleGatewaySigusr1Restart: (opts?: { delayMs?: number; reason?: string }) =>
     scheduleGatewaySigusr1Restart(opts),
+}));
+
+vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
+  resetGatewaySuspendCoordinatorForLifecycleRestart: () =>
+    resetGatewaySuspendCoordinatorForLifecycleRestart(),
 }));
 
 vi.mock("../../infra/process-respawn.js", () => ({
@@ -966,6 +972,10 @@ describe("runGatewayLoop", () => {
       expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(1);
       expect(resetCronActiveJobs).toHaveBeenCalledTimes(1);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
+      expect(resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(1);
+      expect(
+        resetGatewaySuspendCoordinatorForLifecycleRestart.mock.invocationCallOrder[0],
+      ).toBeLessThan(resetAllLanes.mock.invocationCallOrder[0] ?? 0);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(1);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(1);
       expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(1);
@@ -1005,6 +1015,7 @@ describe("runGatewayLoop", () => {
       expect(retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(2);
       expect(resetCronActiveJobs).toHaveBeenCalledTimes(2);
       expect(clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(2);
+      expect(resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(2);
       expect(resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
       expect(rotateAgentEventLifecycleGeneration).toHaveBeenCalledTimes(2);
       expect(reloadTaskRuntimeStateFromStore).toHaveBeenCalledTimes(2);

@@ -14,6 +14,11 @@ import type {
   TelegramStatus,
   WhatsAppStatus,
 } from "../../api/types.ts";
+import {
+  renderSettingsPage,
+  renderSettingsSection,
+  renderSettingsStatus,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelConfigSection } from "./view.config.ts";
@@ -22,9 +27,13 @@ import { renderGoogleChatCard } from "./view.googlechat.ts";
 import { renderIMessageCard } from "./view.imessage.ts";
 import { renderNostrCard } from "./view.nostr.ts";
 import {
+  boolStatusKind,
   channelEnabled,
   formatNullableBoolean,
-  renderChannelAccountCount,
+  renderChannelAccountRow,
+  renderChannelErrorRow,
+  renderChannelFacts,
+  resolveChannelAccountCount,
   resolveChannelDisplayState,
 } from "./view.shared.ts";
 import { renderSignalCard } from "./view.signal.ts";
@@ -59,56 +68,70 @@ export function renderChannels(props: ChannelsProps) {
   const showingStaleSnapshot = Boolean(props.loading && props.snapshot && props.lastSuccessAt);
   const partialWarnings = props.snapshot?.warnings?.filter((warning) => warning.trim()) ?? [];
 
-  return html`
-    <section class="grid grid-cols-2">
-      ${orderedChannels.map((channel) =>
-        renderChannel(channel.key, props, {
-          whatsapp,
-          telegram,
-          discord,
-          googlechat,
-          slack,
-          signal,
-          imessage,
-          nostr,
-          channelAccounts: props.snapshot?.channelAccounts ?? null,
-        }),
-      )}
-    </section>
-
-    <section class="card" style="margin-top: 18px;">
-      <div class="row" style="justify-content: space-between;">
-        <div>
-          <div class="card-title">${t("channels.health.title")}</div>
-          <div class="card-sub">${t("channels.health.subtitle")}</div>
-        </div>
-        <div class="muted">
-          ${props.lastSuccessAt ? formatRelativeTimestamp(props.lastSuccessAt) : t("common.na")}
-        </div>
-      </div>
-      ${showingStaleSnapshot
-        ? html`
-            <div class="callout info" style="margin-top: 12px;">
-              ${t("channels.refreshingStaleSnapshot")}
+  const healthRows = html`
+    ${showingStaleSnapshot
+      ? html`
+          <div class="settings-row">
+            <div class="settings-row__text">
+              <span class="settings-row__desc">${t("channels.refreshingStaleSnapshot")}</span>
             </div>
-          `
-        : nothing}
-      ${props.snapshot?.partial
-        ? html`
-            <div class="callout warn" style="margin-top: 12px;">
-              Some channel checks did not finish before the UI budget.
-              ${partialWarnings.length > 0 ? partialWarnings.slice(0, 3).join("; ") : ""}
+          </div>
+        `
+      : nothing}
+    ${props.snapshot?.partial
+      ? html`
+          <div class="settings-row">
+            <div class="settings-row__text">
+              <span class="settings-row__title"
+                >${renderSettingsStatus({
+                  kind: "warn",
+                  label: "Some channel checks did not finish before the UI budget.",
+                })}</span
+              >
+              ${partialWarnings.length > 0
+                ? html`<span class="settings-row__desc"
+                    >${partialWarnings.slice(0, 3).join("; ")}</span
+                  >`
+                : nothing}
             </div>
-          `
-        : nothing}
-      ${props.lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${props.lastError}</div>`
-        : nothing}
-      <pre class="code-block" style="margin-top: 12px;">
+          </div>
+        `
+      : nothing}
+    ${props.lastError ? renderChannelErrorRow(props.lastError) : nothing}
+    <div class="settings-row settings-row--stacked">
+      <pre class="code-block">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
       </pre>
-    </section>
+    </div>
   `;
+
+  return renderSettingsPage(html`
+    ${orderedChannels.map((channel) =>
+      renderChannel(channel.key, props, {
+        whatsapp,
+        telegram,
+        discord,
+        googlechat,
+        slack,
+        signal,
+        imessage,
+        nostr,
+        channelAccounts: props.snapshot?.channelAccounts ?? null,
+      }),
+    )}
+    ${renderSettingsSection(
+      {
+        title: t("channels.health.title"),
+        description: t("channels.health.subtitle"),
+        actions: html`<span class="settings-row__value"
+          >${props.lastSuccessAt
+            ? formatRelativeTimestamp(props.lastSuccessAt)
+            : t("common.na")}</span
+        >`,
+      },
+      healthRows,
+    )}
+  `);
 }
 
 function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKey[] {
@@ -122,50 +145,50 @@ function resolveChannelOrder(snapshot: ChannelsStatusSnapshot | null): ChannelKe
 }
 
 function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChannelData) {
-  const accountCountLabel = renderChannelAccountCount(key, data.channelAccounts);
+  const accountCount = resolveChannelAccountCount(key, data.channelAccounts);
   switch (key) {
     case "whatsapp":
       return renderWhatsAppCard({
         props,
         whatsapp: data.whatsapp,
-        accountCountLabel,
+        accountCount,
       });
     case "telegram":
       return renderTelegramCard({
         props,
         telegram: data.telegram,
         telegramAccounts: data.channelAccounts?.telegram ?? [],
-        accountCountLabel,
+        accountCount,
       });
     case "discord":
       return renderDiscordCard({
         props,
         discord: data.discord,
-        accountCountLabel,
+        accountCount,
       });
     case "googlechat":
       return renderGoogleChatCard({
         props,
         googleChat: data.googlechat,
-        accountCountLabel,
+        accountCount,
       });
     case "slack":
       return renderSlackCard({
         props,
         slack: data.slack,
-        accountCountLabel,
+        accountCount,
       });
     case "signal":
       return renderSignalCard({
         props,
         signal: data.signal,
-        accountCountLabel,
+        accountCount,
       });
     case "imessage":
       return renderIMessageCard({
         props,
         imessage: data.imessage,
-        accountCountLabel,
+        accountCount,
       });
     case "nostr": {
       const nostrAccounts = data.channelAccounts?.nostr ?? [];
@@ -188,7 +211,7 @@ function renderChannel(key: ChannelKey, props: ChannelsProps, data: ChannelsChan
         props,
         nostr: data.nostr,
         nostrAccounts,
-        accountCountLabel,
+        accountCount,
         profileFormState: showForm,
         profileFormCallbacks,
         onEditProfile: () => props.onNostrProfileEdit(accountId, profile),
@@ -209,41 +232,38 @@ function renderGenericChannelCard(
   const lastError =
     typeof displayState.status?.lastError === "string" ? displayState.status.lastError : undefined;
   const accounts = channelAccounts[key] ?? [];
-  const accountCountLabel = renderChannelAccountCount(key, channelAccounts);
+  const accountCount = resolveChannelAccountCount(key, channelAccounts);
 
-  return html`
-    <div class="card">
-      <div class="card-title">${label}</div>
-      <div class="card-sub">${t("channels.generic.subtitle")}</div>
-      ${accountCountLabel}
+  return renderSettingsSection(
+    {
+      title: label,
+      description: t("channels.generic.subtitle"),
+      ...(accountCount !== undefined ? { count: accountCount } : {}),
+    },
+    html`
       ${accounts.length > 0
-        ? html`
-            <div class="account-card-list">
-              ${accounts.map((account) => renderGenericAccount(account))}
-            </div>
-          `
-        : html`
-            <div class="status-list" style="margin-top: 16px;">
-              <div>
-                <span class="label">${t("common.configured")}</span>
-                <span>${formatNullableBoolean(displayState.configured)}</span>
-              </div>
-              <div>
-                <span class="label">${t("common.running")}</span>
-                <span>${formatNullableBoolean(displayState.running)}</span>
-              </div>
-              <div>
-                <span class="label">${t("common.connected")}</span>
-                <span>${formatNullableBoolean(displayState.connected)}</span>
-              </div>
-            </div>
-          `}
-      ${lastError
-        ? html`<div class="callout danger" style="margin-top: 12px;">${lastError}</div>`
-        : nothing}
+        ? accounts.map((account) => renderGenericAccount(account))
+        : renderChannelFacts([
+            {
+              label: t("common.configured"),
+              value: formatNullableBoolean(displayState.configured),
+              kind: boolStatusKind(displayState.configured),
+            },
+            {
+              label: t("common.running"),
+              value: formatNullableBoolean(displayState.running),
+              kind: boolStatusKind(displayState.running),
+            },
+            {
+              label: t("common.connected"),
+              value: formatNullableBoolean(displayState.connected),
+              kind: boolStatusKind(displayState.connected),
+            },
+          ])}
+      ${lastError ? renderChannelErrorRow(lastError) : nothing}
       ${renderChannelConfigSection({ channelId: key, props })}
-    </div>
-  `;
+    `,
+  );
 }
 
 function resolveChannelMetaMap(
@@ -297,38 +317,21 @@ function deriveConnectedStatus(account: ChannelAccountSnapshot): string {
 function renderGenericAccount(account: ChannelAccountSnapshot) {
   const runningStatus = deriveRunningStatus(account);
   const connectedStatus = deriveConnectedStatus(account);
+  const effectivelyRunning = account.running || hasRecentActivity(account);
 
-  return html`
-    <div class="account-card">
-      <div class="account-card-header">
-        <div class="account-card-title">${account.name || account.accountId}</div>
-        <div class="account-card-id">${account.accountId}</div>
-      </div>
-      <div class="status-list account-card-status">
-        <div>
-          <span class="label">${t("common.running")}</span>
-          <span>${runningStatus}</span>
-        </div>
-        <div>
-          <span class="label">${t("common.configured")}</span>
-          <span>${account.configured ? t("common.yes") : t("common.no")}</span>
-        </div>
-        <div>
-          <span class="label">${t("common.connected")}</span>
-          <span>${connectedStatus}</span>
-        </div>
-        <div>
-          <span class="label">${t("common.lastInbound")}</span>
-          <span
-            >${account.lastInboundAt
-              ? formatRelativeTimestamp(account.lastInboundAt)
-              : t("common.na")}</span
-          >
-        </div>
-        ${account.lastError
-          ? html` <div class="account-card-error">${account.lastError}</div> `
-          : nothing}
-      </div>
-    </div>
-  `;
+  return renderChannelAccountRow({
+    title: account.name || account.accountId,
+    accountId: account.accountId,
+    facts: [
+      `${t("common.running")}: ${runningStatus}`,
+      `${t("common.configured")}: ${account.configured ? t("common.yes") : t("common.no")}`,
+      `${t("common.connected")}: ${connectedStatus}`,
+    ],
+    status: {
+      kind: boolStatusKind(effectivelyRunning),
+      label: effectivelyRunning ? t("common.running") : t("common.no"),
+    },
+    lastInboundAt: account.lastInboundAt,
+    lastError: account.lastError,
+  });
 }
