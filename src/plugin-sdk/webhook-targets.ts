@@ -1,6 +1,6 @@
 // Webhook target helpers resolve and validate plugin webhook destinations.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { registerPluginHttpRoute as registerPluginHttpRouteInternal } from "../plugins/http-registry.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { normalizeWebhookPath } from "./webhook-path.js";
 import {
@@ -24,15 +24,35 @@ export type RegisterWebhookTargetOptions<T extends { path: string }> = {
   onLastPathTargetRemoved?: (params: { path: string }) => void;
 };
 
-type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[0];
-
-export { registerPluginHttpRoute };
-
 /** Plugin HTTP route options supplied when webhook paths are registered lazily. */
 export type RegisterWebhookPluginRouteOptions = Omit<
-  RegisterPluginHttpRouteParams,
+  RegisterPluginHttpRouteOptions,
   "path" | "fallbackPath"
 >;
+
+/** Plugin HTTP route options exposed through webhook SDK helpers. */
+export type RegisterPluginHttpRouteOptions = {
+  path?: string | null;
+  fallbackPath?: string | null;
+  handler: (req: IncomingMessage, res: ServerResponse) => Promise<boolean | void> | boolean | void;
+  auth: "gateway" | "plugin";
+  match?: "exact" | "prefix";
+  gatewayRuntimeScopeSurface?: "write-default" | "trusted-operator";
+  replaceExisting?: boolean;
+  pluginId?: string;
+  source?: string;
+  accountId?: string;
+  log?: (message: string) => void;
+  registry?: unknown;
+};
+
+/** Register a plugin HTTP route without exposing the internal registry type graph in SDK declarations. */
+export function registerPluginHttpRoute(params: RegisterPluginHttpRouteOptions): () => void {
+  return registerPluginHttpRouteInternal({
+    ...params,
+    registry: params.registry as Parameters<typeof registerPluginHttpRouteInternal>[0]["registry"],
+  });
+}
 
 /** Register a webhook target and lazily install the matching plugin HTTP route on first use. */
 export function registerWebhookTargetWithPluginRoute<T extends { path: string }>(params: {
@@ -47,8 +67,11 @@ export function registerWebhookTargetWithPluginRoute<T extends { path: string }>
 }): RegisteredWebhookTarget<T> {
   return registerWebhookTarget(params.targetsByPath, params.target, {
     onFirstPathTarget: ({ path }) =>
-      registerPluginHttpRoute({
+      registerPluginHttpRouteInternal({
         ...params.route,
+        registry: params.route.registry as Parameters<
+          typeof registerPluginHttpRouteInternal
+        >[0]["registry"],
         path,
         // Webhook targets own this path while registered; default replacement lets
         // plugin reload/setup refresh the handler without accumulating stale routes.

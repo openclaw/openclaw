@@ -1,10 +1,6 @@
+import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 // Shared server-method types define the client, context, response, and handler
 // contracts used by every gateway RPC method module.
-import type {
-  ConnectParams,
-  ErrorShape,
-  RequestFrame,
-} from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { HealthSummary } from "../../commands/health.types.js";
@@ -37,6 +33,52 @@ import type { TerminalSessionManager } from "../terminal/session-manager.js";
  * Shared gateway request types used by every server-method module.
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
+
+type GatewayConnectDeviceInfo = {
+  id: string;
+  publicKey: string;
+  signature: string;
+  signedAt: number;
+  nonce: string;
+};
+
+export type ConnectParams = {
+  minProtocol: number;
+  maxProtocol: number;
+  client: GatewayClientInfo;
+  caps?: string[];
+  commands?: string[];
+  permissions?: Record<string, boolean>;
+  pathEnv?: string;
+  role?: string;
+  scopes?: string[];
+  device?: GatewayConnectDeviceInfo;
+  auth?: {
+    token?: string;
+    bootstrapToken?: string;
+    deviceToken?: string;
+    password?: string;
+    approvalRuntimeToken?: string;
+    agentRuntimeIdentityToken?: string;
+  };
+  locale?: string;
+  userAgent?: string;
+};
+
+export type ErrorShape = {
+  code: string;
+  message: string;
+  details?: unknown;
+  retryable?: boolean;
+  retryAfterMs?: number;
+};
+
+export type RequestFrame = {
+  type: "req";
+  id: string;
+  method: string;
+  params?: unknown;
+};
 
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
