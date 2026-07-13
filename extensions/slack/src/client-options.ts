@@ -17,9 +17,9 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
 
-export const SLACK_LOOKUP_TIMEOUT_MS = 30_000;
+const SLACK_LOOKUP_TIMEOUT_MS = 30_000;
 
-export const SLACK_LOOKUP_RETRY_OPTIONS: RetryOptions = {
+const SLACK_LOOKUP_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
 

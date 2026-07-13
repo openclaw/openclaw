@@ -19,12 +19,9 @@ let slackListenerUploadCompletionClientCache = new WeakMap<
 type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl">;
 
 export {
-  resolveSlackLookupClientOptions,
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
   SLACK_DEFAULT_RETRY_OPTIONS,
-  SLACK_LOOKUP_RETRY_OPTIONS,
-  SLACK_LOOKUP_TIMEOUT_MS,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
