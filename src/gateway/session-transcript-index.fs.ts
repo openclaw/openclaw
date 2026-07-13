@@ -2,7 +2,6 @@
 // Streams JSONL transcript files into byte-offset indexes for history paging.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
-import { readNonBlankStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
@@ -11,6 +10,7 @@ import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
+  readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
 
 const TRANSCRIPT_INDEX_READ_CHUNK_BYTES = 64 * 1024;
