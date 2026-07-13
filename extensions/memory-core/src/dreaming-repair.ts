@@ -700,7 +700,6 @@ export async function repairDreamingArtifacts(params: {
   let archivedSessionCorpus = false;
   let archivedSessionIngestion = false;
   let removedHeartbeatDerivedLines = 0;
-  let clearedSessionCheckpointKeys = 0;
 
   const ensureArchiveDir = () => {
     archiveDir ??= path.join(
@@ -765,20 +764,6 @@ export async function repairDreamingArtifacts(params: {
       await fs.writeFile(filePath, `${serialized.join("\n")}\n`, "utf-8");
     }
 
-    try {
-      clearedSessionCheckpointKeys += await clearScopedSessionIngestionState({
-        workspaceDir,
-        stateKeys,
-        scopeKeys,
-      });
-    } catch (err) {
-      warnings.push(
-        `Failed clearing scoped dreaming session-ingestion SQLite state: ${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
-    }
-
     const legacy = await clearScopedLegacySessionIngestionJson({
       workspaceDir,
       stateKeys,
@@ -792,23 +777,10 @@ export async function repairDreamingArtifacts(params: {
       );
       return { removed: 0, archivedPath: undefined };
     });
-    clearedSessionCheckpointKeys += legacy.removed;
     if (legacy.archivedPath) {
       archivedSessionIngestion = true;
       archivedPaths.push(legacy.archivedPath);
     }
-
-    return {
-      changed: true,
-      ...(archiveDir ? { archiveDir } : {}),
-      archivedDreamsDiary,
-      archivedSessionCorpus,
-      archivedSessionIngestion,
-      archivedPaths,
-      removedHeartbeatDerivedLines,
-      clearedSessionCheckpointKeys,
-      warnings,
-    };
   }
 
   const shouldArchiveDerivedArtifacts = await hasSelfIngestedSessionCorpusLines(workspaceDir).catch(
@@ -835,13 +807,14 @@ export async function repairDreamingArtifacts(params: {
     }
 
     return {
-      changed: archivedDreamsDiary,
+      changed: archivedDreamsDiary || removedHeartbeatDerivedLines > 0,
       ...(archiveDir ? { archiveDir } : {}),
       archivedDreamsDiary,
       archivedSessionCorpus,
       archivedSessionIngestion,
       archivedPaths,
       warnings,
+      ...(removedHeartbeatDerivedLines > 0 ? { removedHeartbeatDerivedLines } : {}),
     };
   }
 
@@ -884,7 +857,11 @@ export async function repairDreamingArtifacts(params: {
     }
   }
 
-  const changed = archivedDreamsDiary || archivedSessionCorpus || archivedSessionIngestion;
+  const changed =
+    archivedDreamsDiary ||
+    archivedSessionCorpus ||
+    archivedSessionIngestion ||
+    removedHeartbeatDerivedLines > 0;
   return {
     changed,
     ...(archiveDir ? { archiveDir } : {}),
@@ -893,7 +870,6 @@ export async function repairDreamingArtifacts(params: {
     archivedSessionIngestion,
     archivedPaths,
     ...(removedHeartbeatDerivedLines > 0 ? { removedHeartbeatDerivedLines } : {}),
-    ...(clearedSessionCheckpointKeys > 0 ? { clearedSessionCheckpointKeys } : {}),
     warnings,
   };
 }
