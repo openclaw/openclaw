@@ -1727,6 +1727,333 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send preserves restart-safe abort when dispatch rejects", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const dispatchRelease = createDeferred();
+    const runId = "idem-restart-safe-abort-then-reject";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const broadcast = vi.fn();
+      const context = {
+        ...createDirectChatContext(),
+        broadcast,
+      } as GatewayRequestContext;
+      const sendResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+      const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      let capturedAbortSignal: AbortSignal | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        capturedAbortSignal = (args as { replyOptions?: GetReplyOptions }).replyOptions
+          ?.abortSignal;
+        await dispatchRelease.promise;
+        throw new Error("restart-safe dispatch rejected after abort");
+      });
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "persist my abort",
+        respond: ((ok, payload) => sendResponses.push({ ok, payload })) as RespondFn,
+      });
+      await vi.waitFor(() => {
+        expect(sendResponses).toEqual([
+          {
+            ok: true,
+            payload: expect.objectContaining({ runId, status: "started" }),
+          },
+        ]);
+        expect(capturedAbortSignal).toBeDefined();
+        expect(context.chatAbortControllers.has(runId)).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await expectDefined(
+        chatHandlers["chat.abort"],
+        'chatHandlers["chat.abort"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "abort",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId },
+        },
+        params: { sessionKey: "main", runId },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error) => {
+          abortResponses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: true, runIds: [runId] },
+          error: undefined,
+        },
+      ]);
+      expect(capturedAbortSignal?.aborted).toBe(true);
+
+      dispatchRelease.resolve();
+      await vi.waitFor(() => {
+        expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+          expect.objectContaining({
+            runId,
+            status: "timeout",
+            summary: "aborted",
+            stopReason: "rpc",
+          }),
+        );
+        expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+          abortedLastRun: true,
+          restartRecoveryTerminalRunIds: [runId],
+          status: "killed",
+        });
+      }, FAST_WAIT_OPTS);
+      const stored = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(stored?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+      expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
+      expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+      expect(broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+      );
+    } finally {
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send closes restart-safe abortability before persisting dispatch failure", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const dispatchReject = createDeferred();
+    const dispatchEntered = createDeferred();
+    const lockEntered = createDeferred();
+    const releaseLock = createDeferred();
+    const runId = "idem-restart-safe-error-then-abort";
+    let lockPromise: Promise<void> | undefined;
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const broadcast = vi.fn();
+      const context = {
+        ...createDirectChatContext(),
+        broadcast,
+      } as GatewayRequestContext;
+      const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      dispatchInboundMessageMock.mockImplementationOnce(async () => {
+        dispatchEntered.resolve();
+        await dispatchReject.promise;
+        throw new Error("restart-safe dispatch failed before abort");
+      });
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "persist my failure",
+        respond: vi.fn() as RespondFn,
+      });
+      await dispatchEntered.promise;
+
+      const scope = {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      lockPromise = withTranscriptWriteLock(scope, async () => {
+        lockEntered.resolve();
+        await releaseLock.promise;
+      });
+      await lockEntered.promise;
+
+      dispatchReject.resolve();
+      await vi.waitFor(
+        () => expect(context.chatAbortControllers.has(runId)).toBe(false),
+        FAST_WAIT_OPTS,
+      );
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await expectDefined(
+        chatHandlers["chat.abort"],
+        'chatHandlers["chat.abort"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "late-abort",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId },
+        },
+        params: { sessionKey: "main", runId },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error) => {
+          abortResponses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: false, runIds: [] },
+          error: undefined,
+        },
+      ]);
+
+      releaseLock.resolve();
+      await lockPromise;
+      await vi.waitFor(() => {
+        expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+          expect.objectContaining({
+            runId,
+            status: "error",
+            summary: "Error: restart-safe dispatch failed before abort",
+          }),
+        );
+        expect(loadSessionEntry(scope)).toMatchObject({
+          abortedLastRun: false,
+          status: "failed",
+        });
+      }, FAST_WAIT_OPTS);
+      expect(context.chatAbortedRuns.has(runId)).toBe(false);
+      expect(broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "aborted" }),
+      );
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+      );
+    } finally {
+      dispatchReject.resolve();
+      releaseLock.resolve();
+      await lockPromise?.catch(() => undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send signal-only dispatch rejection remains an error", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchRelease = createDeferred();
+    const runId = "idem-signal-only-dispatch-reject";
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const broadcast = vi.fn();
+      const context = {
+        ...createDirectChatContext(),
+        broadcast,
+      } as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementationOnce(async () => {
+        await dispatchRelease.promise;
+        throw new Error("signal-only dispatch rejection");
+      });
+
+      const params = {
+        sessionKey: "main",
+        message: "interrupt without an abort marker",
+        idempotencyKey: runId,
+      };
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
+        req: { type: "req", id: "send", method: "chat.send", params },
+        params,
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+        context,
+      });
+      await vi.waitFor(() => {
+        expect(responses).toEqual([
+          {
+            ok: true,
+            payload: { runId, status: "started" },
+          },
+        ]);
+        expect(context.chatAbortControllers.has(runId)).toBe(true);
+      }, FAST_WAIT_OPTS);
+
+      context.chatAbortControllers.get(runId)?.controller.abort(new Error("lifecycle interrupted"));
+      expect(context.chatAbortedRuns.has(runId)).toBe(false);
+      dispatchRelease.resolve();
+
+      await vi.waitFor(() => {
+        expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+          expect.objectContaining({
+            runId,
+            status: "error",
+            summary: "Error: signal-only dispatch rejection",
+          }),
+        );
+      }, FAST_WAIT_OPTS);
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+      );
+      expect(broadcast).not.toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "aborted" }),
+      );
+    } finally {
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.abort cancels chat.send while lifecycle admission waits", async () => {
     const sessionDir = autoCleanupTempDirs.make("openclaw-gw-");
     const releaseMutation = createDeferred();
