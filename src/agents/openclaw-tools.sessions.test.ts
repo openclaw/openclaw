@@ -41,6 +41,10 @@ vi.mock("../config/config.js", () => ({
 }));
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
+import {
+  markAcpTurnActive,
+  resetAcpActiveTurnsForTests,
+} from "../acp/control-plane/active-turns.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
@@ -249,6 +253,7 @@ describe("sessions tools", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
+    resetAcpActiveTurnsForTests();
     loadSessionEntryByKeyMock.mockReset();
     loadSessionEntryByKeyMock.mockReturnValue(undefined);
     readAcpSessionMetaMock.mockReset();
@@ -2163,9 +2168,16 @@ describe("sessions tools", () => {
             mode: "oneshot",
             state: "running",
             lastActivityAt: 1000,
+            identity: {
+              state: "resolved",
+              source: "status",
+              agentSessionId: "claude-inner-session",
+              lastUpdatedAt: 1000,
+            },
           }
         : undefined;
     });
+    markAcpTurnActive(targetKey);
 
     const tool = createOpenClawTools({
       agentSessionKey: requesterKey,
@@ -2192,7 +2204,7 @@ describe("sessions tools", () => {
     ).toBe(false);
   });
 
-  it("sessions_send resumes idle ACP run-mode oneshot sessions with recorded identity", async () => {
+  it("sessions_send resumes a one-shot whose persisted running state is stale", async () => {
     const requesterKey = "agent:main:cron:job-1";
     const targetKey = "agent:claude:acp:child-1";
     loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
@@ -2213,7 +2225,7 @@ describe("sessions tools", () => {
             agent: "claude",
             runtimeSessionName: "claude",
             mode: "oneshot",
-            state: "idle",
+            state: "running",
             lastActivityAt: 1000,
             identity: {
               state: "resolved",
