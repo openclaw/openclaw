@@ -72,7 +72,7 @@
         "openclaw": "openclaw.mjs"
       },
       "engines": {
-        "node": ">=22.19.0 <23 || >=23.11.0"
+        "node": ">=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0"
       },
       "optionalDependencies": {
         "sqlite-vec": "0.1.9"
