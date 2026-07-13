@@ -1853,6 +1853,8 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/agents/auth-profiles/runtime-snapshots.ts: getRuntimeAuthProfileStoreCredentialMutationRevision",
   "src/agents/auth-profiles/runtime-snapshots.ts: getRuntimeAuthProfileStoreStateMutationRevision",
   "src/agents/auth-profiles/runtime-snapshots.ts: testing",
+  "src/agents/auth-profiles/store.ts: AuthProfileStorePersistenceSnapshot",
+  "src/agents/auth-profiles/store.ts: CommittedAuthProfileStoreSave",
   "src/agents/auth-profiles/store.ts: testing",
   "src/agents/auth-profiles/usage.ts: testing",
   "src/agents/bash-process-registry.ts: resetProcessRegistryForTests",

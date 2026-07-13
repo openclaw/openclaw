@@ -1314,7 +1314,7 @@ export function saveAuthProfileStore(
   publishRuntimeSnapshotsAfterCommit(publishRuntimeSnapshots);
 }
 
-type AuthProfileStorePersistenceSnapshot = {
+export type AuthProfileStorePersistenceSnapshot = {
   credentialsRaw: unknown;
   stateRaw: unknown;
   runtimeCaptured: boolean;
@@ -1334,7 +1334,7 @@ type AuthProfileStorePersistenceSnapshot = {
   }>;
 };
 
-type CommittedAuthProfileStoreSave = {
+export type CommittedAuthProfileStoreSave = {
   owned: AuthProfileStorePersistenceSnapshot;
   publishRuntimeSnapshots: () => boolean;
 };
