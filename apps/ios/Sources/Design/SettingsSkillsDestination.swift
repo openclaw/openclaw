@@ -590,7 +590,10 @@ struct SettingsSkillsDestination: View {
                     title: String(localized: "Install result unknown"),
                     message: String(
                         localized:
-                        "Reconnect, refresh Skills, then retry. The Gateway safely joins a matching install still running."),
+                        """
+                        Reconnect, refresh Skills, then retry. \
+                        The Gateway safely joins a matching install still running.
+                        """),
                     warning: result.warning,
                     isError: true)
                 return
