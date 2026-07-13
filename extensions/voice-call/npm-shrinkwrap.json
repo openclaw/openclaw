@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/voice-call",
-  "version": "2026.7.2",
+  "version": "2026.7.2-beta.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/voice-call",
-      "version": "2026.7.2",
+      "version": "2026.7.2-beta.1",
       "dependencies": {
         "defu": "6.1.5",
         "typebox": "1.3.3",
@@ -14,7 +14,7 @@
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.7.2"
+        "openclaw": ">=2026.7.2-beta.1"
       },
       "peerDependenciesMeta": {
         "openclaw": {
