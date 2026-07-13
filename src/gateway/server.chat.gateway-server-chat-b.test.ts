@@ -2585,18 +2585,34 @@ describe("gateway server chat", () => {
         );
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
         expect(
-          (dispatchInboundMessageMock.mock.calls[0]?.[0] as { replyOptions?: GetReplyOptions })
-            .replyOptions?.suppressNextUserMessagePersistence,
+          (
+            dispatchInboundMessageMock.mock.calls[0]?.[0] as
+              | { replyOptions?: GetReplyOptions }
+              | undefined
+          )?.replyOptions?.suppressNextUserMessagePersistence,
         ).toBe(true);
       } else {
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       }
       expect(
-        loadTranscriptEventsSync(scope).filter(
-          (event) =>
-            event.type === "message" &&
-            (event.message as { idempotencyKey?: unknown }).idempotencyKey === `${runId}:user`,
-        ),
+        loadTranscriptEventsSync(scope).filter((event) => {
+          if (
+            typeof event !== "object" ||
+            event === null ||
+            !("type" in event) ||
+            event.type !== "message" ||
+            !("message" in event)
+          ) {
+            return false;
+          }
+          const message = event.message;
+          return (
+            typeof message === "object" &&
+            message !== null &&
+            "idempotencyKey" in message &&
+            message.idempotencyKey === `${runId}:user`
+          );
+        }),
       ).toHaveLength(1);
     } finally {
       releaseLock.resolve(undefined);
@@ -2872,8 +2888,11 @@ describe("gateway server chat", () => {
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(
-        (dispatchInboundMessageMock.mock.calls[1]?.[0] as { replyOptions?: GetReplyOptions })
-          .replyOptions?.suppressNextUserMessagePersistence,
+        (
+          dispatchInboundMessageMock.mock.calls[1]?.[0] as
+            | { replyOptions?: GetReplyOptions }
+            | undefined
+        )?.replyOptions?.suppressNextUserMessagePersistence,
       ).toBe(true);
     } finally {
       dispatchInboundMessageMock.mockReset();
@@ -3001,8 +3020,11 @@ describe("gateway server chat", () => {
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(
-        (dispatchInboundMessageMock.mock.calls[0]?.[0] as { replyOptions?: GetReplyOptions })
-          .replyOptions?.suppressNextUserMessagePersistence,
+        (
+          dispatchInboundMessageMock.mock.calls[0]?.[0] as
+            | { replyOptions?: GetReplyOptions }
+            | undefined
+        )?.replyOptions?.suppressNextUserMessagePersistence,
       ).toBe(true);
     } finally {
       dispatchInboundMessageMock.mockReset();

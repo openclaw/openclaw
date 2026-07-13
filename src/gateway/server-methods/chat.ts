@@ -595,10 +595,19 @@ function fingerprintRestartSafeChatRequest(params: {
   return `hmac-sha256:v1:${identity.deviceId}:${digest}`;
 }
 
+type RetryableUnadoptedChatClaim = SessionEntry & {
+  abortedLastRun?: false;
+  restartRecoveryDeliveryContext?: undefined;
+  restartRecoveryDeliveryRequestFingerprint: string;
+  restartRecoveryDeliveryRunId: string;
+  restartRecoveryDeliverySourceRunId: string;
+  status: "failed" | "killed";
+};
+
 function isRetryableUnadoptedChatClaim(
   entry: SessionEntry | undefined,
   clientRunId: string,
-): entry is SessionEntry {
+): entry is RetryableUnadoptedChatClaim {
   return Boolean(
     entry &&
     entry.abortedLastRun !== true &&
@@ -2543,7 +2552,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     const admissionStartedAt = Date.now();
-    const terminalizeRestartSafeAdmission = async (params: {
+    const terminalizeRestartSafeAdmission = async (terminalState: {
       retryable: boolean;
       status: "failed" | "killed";
     }): Promise<boolean> => {
@@ -2560,9 +2569,9 @@ export const chatHandlers: GatewayRequestHandlers = {
           }
           terminalized = true;
           return {
-            abortedLastRun: params.retryable ? false : params.status === "killed",
+            abortedLastRun: terminalState.retryable ? false : terminalState.status === "killed",
             endedAt,
-            ...(params.retryable
+            ...(terminalState.retryable
               ? {}
               : buildRestartRecoveryClaimCleanupPatch({
                   entry: current,
@@ -2570,7 +2579,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   terminalSourceRunId: current.restartRecoveryDeliverySourceRunId,
                 })),
             runtimeMs: Math.max(0, endedAt - admissionStartedAt),
-            status: params.status,
+            status: terminalState.status,
             updatedAt: endedAt,
           };
         },
