@@ -821,7 +821,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     kind: ReplyDispatchKind;
     forcedThreadTs?: string;
   }): string | undefined => {
-    const plannedThreadTs = params.forcedThreadTs ? undefined : replyPlan.nextThreadTs();
+    const plannedThreadTs = params.forcedThreadTs ? undefined : replyPlan.peekThreadTs();
     return (
       params.forcedThreadTs ??
       plannedThreadTs ??
@@ -882,7 +882,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return false;
     }
     try {
-      await deliverReplies({
+      const result = await deliverReplies({
         cfg: ctx.cfg,
         replies: [{ text: fallbackText } as ReplyPayload],
         target: prepared.replyTarget,
@@ -899,6 +899,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         deferMessageSentHooks: true,
         ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
       });
+      if (!result) {
+        emitFailedPendingStreamedDeliveries("suppressed Slack fallback delivery");
+        logVerbose(
+          `slack-stream: suppressed fallback delivery after ${fallbackError.slackCode}; not marking stream delivery state`,
+        );
+        return false;
+      }
       markSlackStreamFallbackDelivered(session);
       if (!session.stopped) {
         try {
@@ -957,7 +964,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       logVerbose("slack: suppressed duplicate normal delivery within the same turn");
       return deliveryReplyThreadTs;
     }
-    await deliverReplies({
+    const result = await deliverReplies({
       cfg: ctx.cfg,
       replies: [params.payload],
       target: prepared.replyTarget,
@@ -973,6 +980,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ...messageSentDeliveryHookContext,
       ...(prepared.eventScope ? { eventScope: prepared.eventScope } : {}),
     });
+    if (!result) {
+      logVerbose("slack: suppressed normal delivery without marking reply state");
+      return undefined;
+    }
     observedReplyDelivery = true;
     if (params.kind === "final") {
       observedFinalReplyDelivery = true;

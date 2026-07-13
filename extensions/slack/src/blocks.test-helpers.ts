@@ -15,6 +15,9 @@ type SlackSendTestClient = WebClient & {
   chat: {
     postMessage: ReturnType<typeof vi.fn>;
   };
+  reactions: {
+    add: ReturnType<typeof vi.fn>;
+  };
 };
 
 const slackBlockTestState = vi.hoisted(() => ({
@@ -50,6 +53,9 @@ export function createSlackSendTestClient(): SlackSendTestClient {
     },
     chat: {
       postMessage: vi.fn(async () => ({ ts: "171234.567" })),
+    },
+    reactions: {
+      add: vi.fn(async () => ({ ok: true })),
     },
   } as unknown as SlackSendTestClient;
 }

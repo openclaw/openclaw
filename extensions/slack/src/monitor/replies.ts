@@ -32,6 +32,10 @@ import {
   type SlackFormattingDisabledMessage,
 } from "../native-data-fallback.js";
 import {
+  buildSlackProgressChromeSendOpts,
+  markSlackProgressSuppressedResult,
+} from "../progress-chrome.js";
+import {
   hasSlackReplyStructuredContent,
   resolveSlackReplyBlockResolution,
   resolveSlackReplyBlocks,
@@ -42,7 +46,12 @@ import {
   SlackResponseAlreadyReportedError,
   type SlackResponseUrlBudget as ResponseUrlBudget,
 } from "./response-url-budget.js";
-import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
+import {
+  isSuppressedSlackSendResult,
+  sendMessageSlack,
+  type SlackSendIdentity,
+  type SlackSendResult,
+} from "./send.runtime.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
@@ -107,6 +116,8 @@ export async function deliverReplies(params: {
     nativeDataFallbackBaseText?: string;
     textIsSlackMrkdwn?: boolean;
     textIsSlackPlainText?: boolean;
+    progressChrome?: true;
+    progressChromeReaction?: string;
   }): Promise<SlackSendResult> => {
     return await sendMessageSlack(params.target, input.text, {
       cfg: params.cfg,
@@ -123,6 +134,10 @@ export async function deliverReplies(params: {
         : {}),
       ...(input.textIsSlackMrkdwn ? { textIsSlackMrkdwn: true } : {}),
       ...(input.textIsSlackPlainText ? { textIsSlackPlainText: true } : {}),
+      ...(input.progressChrome ? { progressChrome: true } : {}),
+      ...(input.progressChromeReaction
+        ? { progressChromeReaction: input.progressChromeReaction }
+        : {}),
       ...(params.eventScope
         ? {
             client: params.eventScope.client,
@@ -193,10 +208,12 @@ export async function deliverReplies(params: {
     };
 
     const spokenText = resolveSlackMediaHookSpokenText(payload);
+    const progressChromeOpts = buildSlackProgressChromeSendOpts(payload);
     const hookParts: string[] = [];
     let outsideText = authoredTextPlacement === "outside-blocks" ? (textRaw ?? "") : "";
     let lastResult: SlackSendResult | undefined;
     let delivered = false;
+    const suppressState = { suppressedOnly: false };
     try {
       if (reply.hasMedia) {
         const mediaCaption = outsideText;
@@ -210,7 +227,10 @@ export async function deliverReplies(params: {
           payload,
           text: mediaCaption,
           sendText: async (text) => {
-            lastResult = await sendReply({ text, threadTs });
+            lastResult = markSlackProgressSuppressedResult(
+              await sendReply({ text, threadTs, ...progressChromeOpts }),
+              suppressState,
+            );
           },
           sendMedia: async ({ mediaUrl, caption }) => {
             lastResult = await sendReply({ text: caption ?? "", mediaUrl, threadTs });
@@ -228,7 +248,18 @@ export async function deliverReplies(params: {
           }
           hookParts.push(text);
           for (const chunk of chunkSlackTextAtHardLimit(text)) {
-            lastResult = await sendReply({ text: chunk, threadTs, textIsSlackPlainText: true });
+            lastResult = markSlackProgressSuppressedResult(
+              await sendReply({
+                text: chunk,
+                threadTs,
+                textIsSlackPlainText: true,
+                ...progressChromeOpts,
+              }),
+              suppressState,
+            );
+            if (isSuppressedSlackSendResult(lastResult)) {
+              continue;
+            }
             delivered = true;
           }
           continue;
@@ -256,8 +287,13 @@ export async function deliverReplies(params: {
 
       if (outsideText && !reply.hasMedia) {
         hookParts.push(outsideText);
-        lastResult = await sendReply({ text: outsideText, threadTs });
-        delivered = true;
+        lastResult = markSlackProgressSuppressedResult(
+          await sendReply({ text: outsideText, threadTs, ...progressChromeOpts }),
+          suppressState,
+        );
+        if (!isSuppressedSlackSendResult(lastResult)) {
+          delivered = true;
+        }
       }
     } catch (error) {
       const hookContent = hookParts.join("\n\n") || textRaw || spokenText || "";
@@ -271,6 +307,8 @@ export async function deliverReplies(params: {
       emitSent(hookContent, reply.hasMedia ? undefined : lastResult);
       latestResult = lastResult;
       params.runtime.log?.(`delivered reply to ${params.target}`);
+    } else if (suppressState.suppressedOnly) {
+      // Keep latestResult undefined so callers do not mark chat delivery state.
     }
   }
   return latestResult;

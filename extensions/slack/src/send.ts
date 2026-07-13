@@ -48,6 +48,10 @@ import {
   isSlackInvalidBlocksError,
 } from "./native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
+import {
+  isSuppressedSlackSendResult,
+  maybeSuppressSlackProgressChrome,
+} from "./progress-chrome.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { canonicalizeSlackApiTargetId, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
@@ -138,6 +142,9 @@ type SlackSendOpts = {
   onPlatformSendDispatch?: () => Promise<void>;
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
+  /** Internal tool/progress chrome markers (never post as chat when set/detected). */
+  progressChrome?: true;
+  progressChromeReaction?: string;
 };
 
 type SlackWebApiErrorData = {
@@ -271,7 +278,9 @@ export type SlackSendResult = {
   channelId: string;
   receipt: MessageReceipt;
   threadTs?: string;
+  suppressed?: true;
 };
+export { isSuppressedSlackSendResult };
 
 type SlackConversationMessage = {
   ts?: unknown;
@@ -977,6 +986,7 @@ export async function sendMessageSlack(
       messageId: "suppressed",
       channelId: "",
       receipt: createSlackSendReceipt({ platformMessageIds: [], kind: "unknown" }),
+      suppressed: true,
     };
   }
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
@@ -1015,7 +1025,7 @@ export async function sendMessageSlack(
     }),
   );
   const threadTs = result.threadTs ?? normalizeSlackThreadTsCandidate(queuedOpts.threadTs);
-  if (threadTs && result.channelId && account.accountId) {
+  if (threadTs && result.channelId && account.accountId && !isSuppressedSlackSendResult(result)) {
     if (enterpriseDelivery) {
       recordSlackThreadParticipation(account.accountId, result.channelId, threadTs, {
         teamId: enterpriseDelivery.teamId,
@@ -1091,6 +1101,34 @@ async function sendMessageSlackQueuedInner(params: {
     await opts.onDeliveryResult?.(result);
     return result;
   };
+
+  if (
+    !blocks &&
+    !opts.mediaUrl &&
+    (
+      await maybeSuppressSlackProgressChrome({
+        client,
+        channelId,
+        text: trimmedMessage,
+        logVerbose,
+        threadTs: opts.threadTs,
+        progressChrome: opts.progressChrome,
+        progressChromeReaction: opts.progressChromeReaction,
+      })
+    ).suppress
+  ) {
+    return {
+      messageId: "suppressed",
+      channelId,
+      receipt: createSlackSendReceipt({
+        platformMessageIds: [],
+        channelId,
+        kind: "text",
+        ...(opts.threadTs ? { threadTs: opts.threadTs } : {}),
+      }),
+      suppressed: true,
+    };
+  }
   let didDispatch = false;
   const dispatchOnce = async () => {
     if (didDispatch) {
