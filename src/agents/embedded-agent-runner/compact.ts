@@ -1524,7 +1524,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
       trackSessionManagerAccess(params.sessionFile);
       const pluginMetadataSnapshot = getCurrentPluginMetadataSnapshot({
         config: params.config,
-        env: process.env,
         workspaceDir: effectiveWorkspace,
       });
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
@@ -1534,13 +1533,11 @@ async function compactEmbeddedAgentSessionDirectOnce(
         pluginMetadataSnapshot,
         contextTokenBudget,
       });
-      // Sets compaction/pruning runtime state and returns extension factories
-      // that must be passed to the resource loader for the safeguard to be active.
+      // Sets compaction/pruning runtime state and extension factories for the resource loader.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
-        workspaceDir: effectiveWorkspace,
-        pluginMetadataSnapshot,
+        ...{ workspaceDir: effectiveWorkspace, pluginMetadataSnapshot },
         provider,
         modelId,
         model: effectiveModel,

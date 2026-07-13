@@ -1,5 +1,7 @@
-// Defines plugin middleware contracts for agent tool results.
 import type { AgentToolResult } from "../agents/runtime/index.js";
+// Defines plugin middleware contracts for agent tool results.
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 
 export type OpenClawAgentToolResult<TResult = unknown> = AgentToolResult<TResult>;
 
@@ -28,6 +30,12 @@ export type AgentToolResultMiddlewareContext = {
   sessionId?: string;
   sessionKey?: string;
   runId?: string;
+};
+
+export type AgentToolResultMiddlewareLoaderContext = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  manifestRegistry?: PluginManifestRegistry;
 };
 
 export type AgentToolResultMiddlewareResult = {

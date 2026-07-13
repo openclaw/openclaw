@@ -55,13 +55,16 @@ function buildAgentToolResultMiddlewareFactory(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
   workspaceDir?: string;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry" | "pluginIds">;
   runId?: string;
 }): ExtensionFactory {
   const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, undefined, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
-    manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
+    manifestRegistry:
+      params.pluginMetadataSnapshot?.pluginIds === undefined
+        ? params.pluginMetadataSnapshot?.manifestRegistry
+        : undefined,
   });
   return (agent) => {
     agent.on("tool_result", async (rawEvent: unknown, ctx: { cwd?: string }) => {
@@ -183,7 +186,7 @@ export function buildEmbeddedExtensionFactories(params: {
   cfg: OpenClawConfig | undefined;
   sessionManager: SessionManager;
   workspaceDir?: string;
-  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry" | "pluginIds">;
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
