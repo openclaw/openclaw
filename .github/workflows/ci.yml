@@ -8,8 +8,13 @@ on:
         required: false
         default: ""
         type: string
+      pr_number:
+        description: Pull request number required by the exact-SHA release gate
+        required: false
+        default: ""
+        type: string
       loc_base_ref:
-        description: Exact LOC comparison-base SHA for manual runs; required by release-gate runs
+        description: Optional exact LOC comparison-base SHA for standalone manual runs
         required: false
         default: ""
         type: string
@@ -86,12 +91,14 @@ jobs:
   preflight:
     permissions:
       contents: read
+      pull-requests: read
     needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
+      loc_base_sha: ${{ steps.release_gate_loc_base.outputs.sha || inputs.loc_base_ref || '' }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -135,7 +142,7 @@ jobs:
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
-          LOC_BASE_REF: ${{ inputs.loc_base_ref }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
@@ -145,18 +152,24 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "$LOC_BASE_REF" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "release_gate requires loc_base_ref to be a full commit SHA" >&2
-            exit 1
-          fi
-
-          if [[ "$LOC_BASE_REF" == "$TARGET_REF" ]]; then
-            echo "release_gate requires loc_base_ref to differ from target_ref" >&2
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "release_gate requires pr_number to identify an open pull request" >&2
             exit 1
           fi
 
           if [[ "$GITHUB_SHA" != "$TARGET_REF" ]]; then
             echo "release_gate must run from the branch at target_ref" >&2
+            exit 1
+          fi
+
+      - name: Validate manual LOC base input
+        if: github.event_name == 'workflow_dispatch' && inputs.loc_base_ref != ''
+        env:
+          LOC_BASE_REF: ${{ inputs.loc_base_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$LOC_BASE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "loc_base_ref must be a full commit SHA" >&2
             exit 1
           fi
 
@@ -243,28 +256,42 @@ jobs:
         id: checkout_ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate release-gate LOC merge base
+      - name: Validate release-gate PR base
+        id: release_gate_loc_base
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
-          BASE_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
-          LOC_BASE_REF: ${{ inputs.loc_base_ref }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
-          comparison_ref="$(jq -rn --arg value "${BASE_BRANCH}...${TARGET_REF}" '$value | @uri')"
+          pr_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          pr_state="$(jq -r '.state // ""' <<<"$pr_json")"
+          pr_head_sha="$(jq -r '.head.sha // ""' <<<"$pr_json")"
+          pr_base_sha="$(jq -r '.base.sha // ""' <<<"$pr_json")"
+          pr_base_repo="$(jq -r '.base.repo.full_name // ""' <<<"$pr_json")"
+          if [[ "$pr_state" != "open" || "$pr_base_repo" != "$GITHUB_REPOSITORY" ]]; then
+            echo "release_gate pr_number must identify an open pull request in ${GITHUB_REPOSITORY}" >&2
+            exit 1
+          fi
+          if [[ "$pr_head_sha" != "$TARGET_REF" ]]; then
+            echo "release_gate target_ref must match pull request ${PR_NUMBER} head ${pr_head_sha}" >&2
+            exit 1
+          fi
+          if [[ ! "$pr_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve pull request ${PR_NUMBER} base SHA." >&2
+            exit 1
+          fi
+          comparison_ref="$(jq -rn --arg value "${pr_base_sha}...${TARGET_REF}" '$value | @uri')"
           merge_base="$(
             gh api --method GET "repos/${GITHUB_REPOSITORY}/compare/${comparison_ref}" \
               --jq '.merge_base_commit.sha // ""'
           )"
           if [[ ! "$merge_base" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve the release-gate merge base against ${BASE_BRANCH}." >&2
+            echo "Could not resolve pull request ${PR_NUMBER} merge base." >&2
             exit 1
           fi
-          if [[ "$merge_base" != "$LOC_BASE_REF" ]]; then
-            echo "release_gate loc_base_ref must equal the ${BASE_BRANCH} merge base ${merge_base}" >&2
-            exit 1
-          fi
+          echo "sha=${merge_base}" >> "$GITHUB_OUTPUT"
 
       - name: Validate historical release target
         id: historical_target
@@ -1606,7 +1633,7 @@ jobs:
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
-          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || inputs.loc_base_ref || '' }}
+          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || needs.preflight.outputs.loc_base_sha || '' }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
         shell: bash
         run: |

@@ -633,7 +633,13 @@ describe("ci workflow guards", () => {
       type: "string",
     });
     expect(workflow.on.workflow_dispatch.inputs.loc_base_ref).toEqual({
-      description: "Exact LOC comparison-base SHA for manual runs; required by release-gate runs",
+      description: "Optional exact LOC comparison-base SHA for standalone manual runs",
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.pr_number).toEqual({
+      description: "Pull request number required by the exact-SHA release gate",
       required: false,
       default: "",
       type: "string",
@@ -648,34 +654,53 @@ describe("ci workflow guards", () => {
     expect(validationStep.if).toBe(
       "github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
-    expect(validationStep.env.LOC_BASE_REF).toBe("${{ inputs.loc_base_ref }}");
+    expect(validationStep.env.PR_NUMBER).toBe("${{ inputs.pr_number }}");
     expect(validationStep.run).toContain(
       "release_gate requires target_ref to be a full commit SHA",
     );
     expect(validationStep.run).toContain(
-      "release_gate requires loc_base_ref to be a full commit SHA",
-    );
-    expect(validationStep.run).toContain(
-      "release_gate requires loc_base_ref to differ from target_ref",
+      "release_gate requires pr_number to identify an open pull request",
     );
     expect(validationStep.run).toContain("release_gate must run from the branch at target_ref");
-    const mergeBaseStep = preflightSteps.find(
-      (step: WorkflowStep) => step.name === "Validate release-gate LOC merge base",
+    const manualLocBaseStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Validate manual LOC base input",
     );
+    expect(manualLocBaseStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.loc_base_ref != ''",
+    );
+    expect(manualLocBaseStep.run).toContain("loc_base_ref must be a full commit SHA");
+    const mergeBaseStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Validate release-gate PR base",
+    );
+    expect(mergeBaseStep.id).toBe("release_gate_loc_base");
     expect(mergeBaseStep.if).toBe(
       "github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
-    expect(mergeBaseStep.env.BASE_BRANCH).toBe("${{ github.event.repository.default_branch }}");
-    expect(mergeBaseStep.env.LOC_BASE_REF).toBe("${{ inputs.loc_base_ref }}");
+    expect(mergeBaseStep.env.PR_NUMBER).toBe("${{ inputs.pr_number }}");
     expect(mergeBaseStep.env.TARGET_REF).toBe("${{ inputs.target_ref }}");
+    expect(mergeBaseStep.run).toContain(
+      'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"',
+    );
+    expect(mergeBaseStep.run).toContain(".head.sha");
+    expect(mergeBaseStep.run).toContain(".base.sha");
+    expect(mergeBaseStep.run).toContain('[[ "$pr_head_sha" != "$TARGET_REF" ]]');
     expect(mergeBaseStep.run).toContain(
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/compare/${comparison_ref}"',
     );
     expect(mergeBaseStep.run).toContain(".merge_base_commit.sha");
-    expect(mergeBaseStep.run).toContain(
-      "release_gate loc_base_ref must equal the ${BASE_BRANCH} merge base",
+    expect(mergeBaseStep.run).toContain('echo "sha=${merge_base}" >> "$GITHUB_OUTPUT"');
+    expect(workflow.jobs.preflight.permissions["pull-requests"]).toBe("read");
+    expect(workflow.jobs.preflight.outputs.loc_base_sha).toContain(
+      "steps.release_gate_loc_base.outputs.sha",
     );
-    expect(readFileSync("docs/ci.md", "utf8")).toContain("git fetch origin main");
+    expect(workflow.jobs.preflight.outputs.loc_base_sha).toContain("inputs.loc_base_ref");
+    const ciDocs = readFileSync("docs/ci.md", "utf8");
+    expect(ciDocs).toContain("`pr_number`");
+    expect(ciDocs).toContain("target-owned workflow revision");
+    expect(ciDocs).toContain("transitional revisions that declare `loc_base_ref`");
+    expect(ciDocs).toContain("valid for default-branch PRs only");
+    expect(ciDocs).toContain("must first update its head to the current `pr_number` workflow");
+    expect(ciDocs).toContain("legacy exact-SHA command");
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     );
@@ -1939,7 +1964,7 @@ describe("ci workflow guards", () => {
 
     expect(checkShardRun.env.LOC_BASE_SHA).toContain("github.event.before");
     expect(checkShardRun.env.LOC_BASE_SHA).toContain("github.event.pull_request.base.sha");
-    expect(checkShardRun.env.LOC_BASE_SHA).toContain("inputs.loc_base_ref");
+    expect(checkShardRun.env.LOC_BASE_SHA).toContain("needs.preflight.outputs.loc_base_sha");
     expect(checkShardRun.env.LOC_BASE_SHA).not.toContain("github.event.repository.default_branch");
     expect(checkShardRun.run).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
     expect(checkShardRun.run).toContain(

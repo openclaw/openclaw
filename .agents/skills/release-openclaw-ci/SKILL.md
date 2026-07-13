@@ -176,13 +176,32 @@ Stop watchers before ending the turn or switching strategy.
      failed child; never rebuild an immutable version that already published
 7. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
-   From the PR head branch, dispatch the explicit exact-SHA fallback:
-   refresh the base with `git fetch origin main`, resolve
-   `<full-pr-merge-base-sha>` with `git merge-base <full-pr-sha> origin/main`,
-   then run
+   First check the target-owned workflow with `git show
+<full-pr-sha>:.github/workflows/ci.yml | rg -q '^  +pr_number:'`. When it
+   declares `pr_number`, dispatch the explicit exact-SHA fallback:
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
+target_ref=<full-pr-sha> -f pr_number=<pr-number> -f include_android=true -f
+release_gate=true`.
+   The workflow authenticates that PR's head and derives its actual base.
+   If that workflow lacks `pr_number` but declares `loc_base_ref`, use it only
+   for a PR whose `.base.ref` from `gh api
+repos/openclaw/openclaw/pulls/<pr-number>` equals the repository
+   `.default_branch` from `gh api repos/openclaw/openclaw`. Resolve the PR base
+   SHA with the pull request's `.base.sha`, resolve `<full-pr-merge-base-sha>`
+   with `gh api
+repos/openclaw/openclaw/compare/<pr-base-sha>...<full-pr-sha> --jq
+.merge_base_commit.sha`, then use its transitional schema: `gh workflow run
+ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
 target_ref=<full-pr-sha> -f loc_base_ref=<full-pr-merge-base-sha> -f
 include_android=true -f release_gate=true`.
+   For a non-default-base PR on that transitional schema, do not dispatch it;
+   update the head to contain the current `pr_number` workflow, then restart
+   exact-head proof on the new SHA.
+   For an oldest PR head whose target-owned workflow declares neither input,
+   use its legacy schema: `gh workflow run ci.yml --repo openclaw/openclaw --ref
+<pr-head-branch> -f target_ref=<full-pr-sha> -f include_android=true -f
+release_gate=true`. Do not pass a new input that the selected workflow revision
+   does not declare.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.
