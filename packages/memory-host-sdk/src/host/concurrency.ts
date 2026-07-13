@@ -26,7 +26,7 @@ export async function runWithConcurrency<T>(
     );
   } catch (error) {
     // p-map stops dequeuing on error, but active memory writes must drain before callers recover.
-    await Promise.allSettled([...inFlight]);
+    await Promise.allSettled(inFlight);
     throw error;
   }
 }
