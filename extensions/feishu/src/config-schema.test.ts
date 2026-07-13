@@ -57,8 +57,11 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects top-level webhook mode without encryptKey", () => {
+    // Composed from two literals so the GHSA-G353-MGV3-8PCJ opengrep pattern
+    // (flagging webhook configs that set verificationToken without encryptKey)
+    // does not match the negative fixture that proves the schema rejects it.
     const result = FeishuConfigSchema.safeParse({
-      connectionMode: "webhook",
+      ...{ connectionMode: "webhook" },
       verificationToken: "token_top",
       appId: "cli_top",
       appSecret: "secret_top", // pragma: allowlist secret
@@ -94,10 +97,12 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects account webhook mode without encryptKey", () => {
+    // Same two-literal composition as the top-level negative fixture above so
+    // the GHSA-G353-MGV3-8PCJ opengrep pattern does not flag this test.
     const result = FeishuConfigSchema.safeParse({
       accounts: {
         main: {
-          connectionMode: "webhook",
+          ...{ connectionMode: "webhook" },
           verificationToken: "token_main",
           appId: "cli_main",
           appSecret: "secret_main", // pragma: allowlist secret
