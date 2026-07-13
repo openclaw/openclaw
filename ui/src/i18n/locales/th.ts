@@ -387,7 +387,6 @@ export const th: TranslationMap = {
     confirmForceDelete: "สร้างสแนปช็อตไม่สำเร็จ: {error}\n\nลบโดยไม่มีสแนปช็อตหรือไม่?",
   },
   agentChip: {
-    openConversation: "เปิดการสนทนาของคุณกับ {name}",
     menuLabel: "เมนูเอเจนต์",
     agents: "เอเจนต์",
     working: "กำลังทำงาน…",

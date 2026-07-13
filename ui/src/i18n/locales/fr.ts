@@ -395,7 +395,6 @@ export const fr: TranslationMap = {
       "Échec de la création de l’instantané : {error}\n\nSupprimer sans instantané ?",
   },
   agentChip: {
-    openConversation: "Ouvrir votre conversation avec {name}",
     menuLabel: "Menu de l’agent",
     agents: "Agents",
     working: "Traitement en cours…",

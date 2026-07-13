@@ -1974,7 +1974,8 @@ openclaw-session-menu[popover] {
 }
 
 .sidebar-agent-chip__main:hover,
-.sidebar-agent-chip__main:focus-visible {
+.sidebar-agent-chip__main:focus-visible,
+.sidebar-agent-chip__main--open {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
 }
 
@@ -2093,24 +2094,11 @@ openclaw-session-menu[popover] {
   stroke-linejoin: round;
 }
 
-.sidebar-agent-chip__menu-toggle {
-  position: relative;
-}
-
-.sidebar-agent-chip__menu-toggle svg {
-  transition: transform var(--duration-fast) ease;
-}
-
 .sidebar-agent-chip__menu-unread {
-  position: absolute;
-  top: 3px;
-  right: 3px;
+  flex: none;
+  margin-left: auto;
   width: 6px;
   height: 6px;
-}
-
-.sidebar-agent-chip__menu-toggle--open svg {
-  transform: rotate(180deg);
 }
 
 /* The docs row is the menu's only real hyperlink; keep it looking like a row. */

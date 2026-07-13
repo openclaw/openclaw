@@ -389,7 +389,6 @@ export const ar: TranslationMap = {
     confirmForceDelete: "فشل أخذ اللقطة: {error}\n\nهل تريد الحذف دون لقطة؟",
   },
   agentChip: {
-    openConversation: "افتح محادثتك مع {name}",
     menuLabel: "قائمة الوكيل",
     agents: "الوكلاء",
     working: "جارٍ العمل…",

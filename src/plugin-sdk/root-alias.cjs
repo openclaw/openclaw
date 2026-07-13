@@ -110,6 +110,12 @@ const workspacePackageAliasEntries = {
       },
     },
   },
+  "@openclaw/retry": {
+    dir: "retry",
+    subpaths: {
+      "": { srcFile: "src/index.ts", distFile: "dist/index.mjs" },
+    },
+  },
 };
 const workspacePackageAliases = Object.entries(workspacePackageAliasEntries).flatMap(
   ([name, pkg]) =>

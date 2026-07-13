@@ -519,6 +519,7 @@ describe("plugin-sdk root alias", () => {
         "src",
         "number-coercion.ts",
       ),
+      retry: path.join(packageRoot, "packages", "retry", "src", "index.ts"),
     };
     const lazyModule = loadRootAliasWithStubs({
       existingPaths: Object.values(sourcePaths),
@@ -534,6 +535,7 @@ describe("plugin-sdk root alias", () => {
     expect(aliasMap["@openclaw/normalization-core/number-coercion"]).toBe(
       sourcePaths.numberCoercion,
     );
+    expect(aliasMap["@openclaw/retry"]).toBe(sourcePaths.retry);
   });
 
   it("keeps bootstrap plugin-sdk aliases deterministic and ignores unsafe subpaths", () => {
@@ -593,6 +595,7 @@ describe("plugin-sdk root alias", () => {
       "@openclaw/normalization-core/string-coerce",
       "@openclaw/normalization-core/string-normalization",
       "@openclaw/normalization-core/utf16-slice",
+      "@openclaw/retry",
       "openclaw/plugin-sdk",
       "@openclaw/plugin-sdk",
     ]);
