@@ -39,7 +39,7 @@ function pruneWorkerPackageManifest(contents: Buffer): Buffer {
     // Released package manifests are already portable; keep bytes (and hashes) stable.
     return contents;
   }
-  const pruned = { ...parsed, dependencies: portable };
+  const pruned: Record<string, unknown> = { ...parsed, dependencies: portable };
   for (const key of prunedFields) {
     delete pruned[key];
   }
