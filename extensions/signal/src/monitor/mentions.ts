@@ -33,16 +33,24 @@ function clampBounds(start: number, length: number, textLength: number) {
   return { start: safeStart, end: safeEnd };
 }
 
-function hasMentionPlaceholder(message: string, mention: SignalMention) {
-  const { start, end } = clampBounds(mention.start!, mention.length!, message.length);
-  return start < end && message.slice(start, end).includes(OBJECT_REPLACEMENT);
-}
-
 function isValidStructuredMention(
   message: string,
   mention: SignalMention | null | undefined,
 ): mention is SignalMention {
-  return isValidMention(mention) && hasMentionPlaceholder(message, mention);
+  if (!mention || !(mention.uuid || mention.number)) {
+    return false;
+  }
+  const { start, length } = mention;
+  if (typeof start !== "number" || typeof length !== "number") {
+    return false;
+  }
+  return (
+    Number.isInteger(start) &&
+    Number.isInteger(length) &&
+    start >= 0 &&
+    length > 0 &&
+    start + length <= message.length
+  );
 }
 
 function normalizeAccountPhone(account?: string | null) {

@@ -1,4 +1,5 @@
 // Signal tests cover event handler.mention gating plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { buildDispatchInboundCaptureMock } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -42,10 +43,12 @@ const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
   { renderSignalMentions, resolveSignalNativeMentionFacts },
+  { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
   import("./mentions.js"),
+  import("../reply-authors.js"),
 ]);
 
 type GroupEventOpts = {
@@ -122,12 +125,13 @@ async function expectSkippedGroupHistory(opts: GroupEventOpts, expectedBody: str
   expect(capturedCtx).toBeUndefined();
   const entries = getGroupHistoryEntries(groupHistories);
   expect(entries).toHaveLength(1);
-  expect(entries[0].body).toBe(expectedBody);
+  expect(expectDefined(entries[0], "Signal group history entry").body).toBe(expectedBody);
 }
 
 describe("signal mention gating", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     capturedCtx = undefined;
+    await clearSignalReplyAuthorsForTest();
   });
 
   it("drops group messages without mention when requireMention is configured", async () => {
@@ -182,8 +186,37 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(entries[0].sender).toBe("Alice");
-    expect(entries[0].body).toBe("hello from alice");
+    const entry = expectDefined(entries[0], "Signal group history entry");
+    expect(entry.sender).toBe("Alice");
+    expect(entry.body).toBe("hello from alice");
+  });
+
+  it("records edited target reply authors for skipped group messages", async () => {
+    const { handler } = createMentionGatedHistoryHandler();
+
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: 1700000000999,
+        editMessage: {
+          targetSentTimestamp: 1700000000000,
+          dataMessage: {
+            timestamp: 1700000000999,
+            message: "edited without mention",
+            attachments: [],
+            groupInfo: { groupId: "g1", groupName: "Test Group" },
+          },
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+    await expect(
+      resolveSignalReplyContextWithPersistence({
+        accountId: "default",
+        to: "group:g1",
+        replyToId: "1700000000000",
+      }),
+    ).resolves.toEqual({ author: "+15550001111", body: "edited without mention" });
   });
 
   it("records attachment placeholder in pending history for skipped attachment-only group messages", async () => {
@@ -214,7 +247,7 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(entries[0].body).toBe("<media:audio>");
+    expect(expectDefined(entries[0], "Signal audio history entry").body).toBe("<media:audio>");
   });
 
   it("summarizes multiple skipped attachments with stable file count wording", async () => {
@@ -241,7 +274,9 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(entries[0].body).toBe("[2 files attached]");
+    expect(expectDefined(entries[0], "Signal attachment history entry").body).toBe(
+      "[2 files attached]",
+    );
   });
 
   it("records quote text in pending history for skipped quote-only group messages", async () => {
@@ -305,16 +340,14 @@ describe("signal mention gating", () => {
       mentionPattern: null,
       accountUuid: "bot-uuid",
     });
-    const placeholder = "\uFFFC";
-
     await handler(
       makeGroupEvent({
-        message: `${placeholder} ping`,
-        mentions: [{ uuid: "bot-uuid", start: 0, length: placeholder.length }],
+        message: "Hi X!",
+        mentions: [{ uuid: "bot-uuid", start: 3, length: 1 }],
       }),
     );
 
-    expect(getCapturedCtx()?.Body ?? "").toContain("@bot-uuid ping");
+    expect(getCapturedCtx()?.Body).toBe("Hi X!");
     expect(getCapturedCtx().WasMentioned).toBe(true);
   });
 
@@ -357,7 +390,34 @@ describe("signal mention gating", () => {
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(entries[0].body).toBe("@other-user can you check?");
+    expect(expectDefined(entries[0], "Signal native mention history entry").body).toBe(
+      "@other-user can you check?",
+    );
+  });
+
+  it("does not let an authorized command bypass a native mention of another participant", async () => {
+    const groupHistories = new Map();
+    const handler = createMentionHandler({
+      requireMention: true,
+      mentionPattern: null,
+      accountUuid: "bot-uuid",
+      groupHistories,
+    });
+    const placeholder = "\uFFFC";
+
+    await handler(
+      makeGroupEvent({
+        message: `/help ${placeholder}`,
+        mentions: [{ uuid: "other-user", start: 6, length: placeholder.length }],
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+    const entries = getGroupHistoryEntries(groupHistories);
+    expect(entries).toHaveLength(1);
+    expect(expectDefined(entries[0], "Signal command mention history entry").body).toBe(
+      "/help @other-user",
+    );
   });
 
   it("does not accept malformed matching native mention metadata as a bot mention", async () => {
@@ -372,14 +432,16 @@ describe("signal mention gating", () => {
     await handler(
       makeGroupEvent({
         message: "plain ping",
-        mentions: [{ uuid: "bot-uuid", start: 0, length: 5 }],
+        mentions: [{ uuid: "bot-uuid", start: 99, length: 1 }],
       }),
     );
 
     expect(capturedCtx).toBeUndefined();
     const entries = getGroupHistoryEntries(groupHistories);
     expect(entries).toHaveLength(1);
-    expect(entries[0].body).toBe("plain ping");
+    expect(expectDefined(entries[0], "Signal malformed mention history entry").body).toBe(
+      "plain ping",
+    );
   });
 
   it("preserves no-detector behavior when no text pattern or bot identity is configured", async () => {
@@ -460,11 +522,25 @@ describe("resolveSignalNativeMentionFacts", () => {
     });
   });
 
-  it("ignores matching metadata when the referenced body span is not a Signal mention", () => {
+  it("accepts valid mention metadata over ordinary message text", () => {
+    expect(
+      resolveSignalNativeMentionFacts({
+        message: "Hi X!",
+        mentions: [{ uuid: "bot-uuid", start: 3, length: 1 }],
+        accountUuid: "bot-uuid",
+      }),
+    ).toEqual({
+      canDetectBotMention: true,
+      hasAnyMention: true,
+      mentionsBot: true,
+    });
+  });
+
+  it("ignores matching metadata whose span is outside the message", () => {
     expect(
       resolveSignalNativeMentionFacts({
         message: "plain ping",
-        mentions: [{ uuid: "bot-uuid", start: 0, length: 5 }],
+        mentions: [{ uuid: "bot-uuid", start: 99, length: 1 }],
         accountUuid: "bot-uuid",
       }),
     ).toEqual({

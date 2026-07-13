@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Signal native mention gating:** detect structured Signal @mentions against the configured bot phone or UUID without requiring text regex matches, preserve configured text fallbacks, and keep mentions of other participants silent. (#96738) Thanks @pdurlej.
 - **Unicode-safe bounded text:** preserve complete UTF-16 surrogate pairs when shortening previews, prompts, diagnostics, labels, session keys, link metadata, and identity values across Control UI, CLI, Gateway, plugins, QA, memory, and Android surfaces. (#102625, #102626, #102627, #102656, #102816, #102823, #102833, #102877, #102949, #102963, #102969, #102988, #103010, #103034) Thanks @zhangguiping-xydt, @wings1029, @wangyan2026, @Pandah97, @MoerAI, @SunnyShu0925, @zhangqueping, @zw-xysk, @cxbAsDev, @lzyyzznl, @coder-master-0915, @LeonidasLux, @mushuiyu886, @ly85206559, and @Simon-XYDT.
 - **CLI model tables:** sanitize, truncate, and pad model-list cells by rendered terminal width so emoji, CJK, and other wide graphemes keep columns aligned. (#102819) Thanks @Kevin23-design and @vincentkoc.
 - **Skills prompt compaction:** preserve every included skill identity before using the remaining prompt budget for shortened, UTF-16-safe descriptions, retaining trigger guidance without exceeding the hard limit. (#88426) Thanks @abel-zer0.
