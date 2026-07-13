@@ -3,7 +3,7 @@ import type { ReefChannelConfig, ReefFriendConfig } from "./config-schema.js";
 import type { ReefTransportClient } from "./transport.js";
 import type { RelayFriend } from "./types.js";
 
-export type PairingChallenge = (params: {
+type PairingChallenge = (params: {
   peer: string;
   fingerprint: string;
   code: string;

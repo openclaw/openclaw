@@ -23,7 +23,12 @@ import { reefMessageAdapter, reefOutboundAdapter } from "./outbound.js";
 import { getActiveReef, getReefRuntime, setActiveReef } from "./runtime.js";
 import { reefSetupAdapter, reefSetupWizard } from "./setup.js";
 import { loadKeys, openStores, resolveStateDir, ReviewApprovalStore } from "./state.js";
-import { abortableSleep, ReefInboxConnection, ReefTransportClient } from "./transport.js";
+import {
+  ReefInboxConnection,
+  ReefTransportClient,
+  type WebSocketLike,
+  abortableSleep,
+} from "./transport.js";
 import type { ReefAccount, ReefIngressMessage } from "./types.js";
 
 function resolveAccount(cfg: unknown): ReefAccount {
@@ -269,8 +274,7 @@ export const reefPlugin: ChannelPlugin<ReefAccount> = {
       };
       await reconcile();
       ctx.setStatus({ accountId: "default", running: true, connected: false });
-      const socketFactory = (url: string) =>
-        new WebSocket(url) as unknown as import("./transport.js").WebSocketLike;
+      const socketFactory = (url: string) => new WebSocket(url) as unknown as WebSocketLike;
       const inbox = new ReefInboxConnection(
         transport,
         (entries) => flow.processEntries(entries),

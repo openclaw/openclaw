@@ -265,9 +265,11 @@ const config = {
       ],
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {
-      entry: bundledPluginEntries,
       // Reef vendors its wire protocol under protocol/, which owns the noble
-      // crypto dependencies.
+      // crypto dependencies. The protocol barrel is the vendored library's
+      // public surface, so its exports are intentional even where the channel
+      // consumes only a subset.
+      entry: [...bundledPluginEntries, "protocol/index.ts!", "protocol/node.ts!"],
       project: ["index.ts!", "src/**/*.{js,mjs,ts}!", "protocol/**/*.ts!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
