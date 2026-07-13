@@ -723,6 +723,10 @@ jobs:
 
       - name: Check CLI startup memory
         shell: bash
+        env:
+          # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
+          # the same built CLI. Keep the tighter Blacksmith regression ceiling.
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
         run: |
           set +e
           pnpm test:startup:memory
@@ -968,6 +972,7 @@ jobs:
           export OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS=180000
           export NODE_OPTIONS=--max-old-space-size=16384
           node scripts/package-openclaw-for-docker.mjs \
+            --allow-unreleased-changelog \
             --output-dir "$package_dir" \
             --output-name openclaw-current.tgz
           export OPENCLAW_CURRENT_PACKAGE_TGZ="$PWD/$package_dir/openclaw-current.tgz"
@@ -997,7 +1002,6 @@ jobs:
             --repo-root . \
             --qa-profile smoke-ci \
             --concurrency 8 \
-            --allow-unreleased-changelog \
             --output-dir "$output_dir" \
             "${scenario_args[@]}" || qa_exit_code=$?
           echo "QA smoke profile evidence: \`${output_dir}\`" >> "$GITHUB_STEP_SUMMARY"
@@ -1122,7 +1126,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.19.0"
+          node-version: "22.22.3"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1169,7 +1173,7 @@ jobs:
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
-        run: 'test "$(go env GOVERSION)" = "go1.25.12"'
+        run: test "$(go env GOVERSION)" = "go1.25.12"
 
       - name: Configure Node test resources
         run: echo "OPENCLAW_VITEST_MAX_WORKERS=2" >> "$GITHUB_ENV"
@@ -1983,9 +1987,7 @@ jobs:
           install-bun: "false"
 
       - name: Install iOS Swift tooling
-        run: |
-          brew update
-          brew install xcodegen swiftlint swiftformat
+        run: brew install xcodegen swiftlint swiftformat
 
       - name: Build iOS app
         run: pnpm ios:build
