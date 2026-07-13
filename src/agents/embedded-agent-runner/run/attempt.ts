@@ -39,7 +39,6 @@ import {
 import { resolveBlockMessage } from "../../../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { copyPluginToolMeta } from "../../../plugins/tools.js";
-import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import {
   createTrajectoryRuntimeRecorder,
