@@ -121,10 +121,9 @@ describe("channel-streaming", () => {
   });
 
   it("resolves flat delivery keys when no nested streaming config exists", () => {
-    // Flat delivery keys stay canonical for channels without a nested
-    // streaming schema (Mattermost, WhatsApp, Google Chat, IRC, Signal) and
-    // for external SDK plugins; mode-family aliases (streamMode, scalar
-    // streaming, nativeStreaming) are doctor-only and stay unread.
+    // Flat delivery keys are an external SDK plugin fallback only. Bundled
+    // channel schemas are nested-only, and doctor migrates their old flat
+    // config; streamMode and nativeStreaming remain doctor-only.
     const entry = {
       chunkMode: "newline",
       blockStreaming: true,

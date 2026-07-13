@@ -14,7 +14,10 @@ import type {
   TextChunkMode,
 } from "../config/types.base.js";
 import { asBoolean } from "../utils/boolean.js";
-import { warnFlatStreamingKeyFallback } from "./streaming-flat-key-deprecation.js";
+import {
+  warnFlatStreamingKeyFallback,
+  warnScalarStreamingFallback,
+} from "./streaming-flat-key-deprecation.js";
 
 export type {
   ChannelDeliveryStreamingConfig,
@@ -44,10 +47,11 @@ export type StreamingCompatEntry = {
 // Nested streaming config wins. Every bundled channel now uses a nested-only
 // streaming schema with doctor migrating the flat spellings, so in-tree the
 // flat delivery keys (chunkMode, blockStreaming, blockStreamingCoalesce,
-// draftChunk) are legacy config. The fallback reads below serve external SDK
-// plugin configs only and emit a once-per-key deprecation warning; remove
-// them (and the flat StreamingCompatEntry fields) when the next release train
-// closes the SDK deprecation window.
+// draftChunk) are legacy config. Those reads and the scalar `streaming` read in
+// resolveChannelPreviewStreamMode serve external SDK plugin configs only and
+// emit once-per-key deprecation warnings. Remove them (and the flat
+// StreamingCompatEntry fields) when the next release train closes the SDK
+// deprecation window.
 // Mode-family aliases (streamMode) are doctor-only and stay unread here.
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -922,14 +926,18 @@ export function resolveChannelPreviewStreamMode(
   // Scalar `streaming` (mode string or boolean) is rejected by every bundled
   // channel schema and doctor-migrated to streaming.mode; the read here stays
   // only for external SDK plugin configs that predate the nested shape.
-  const parsedStreaming = parsePreviewStreamingMode(
-    getChannelStreamingConfigObject(entry)?.mode ?? entry?.streaming,
-  );
+  const streaming = entry?.streaming;
+  const config = getChannelStreamingConfigObject(entry);
+  const parsedStreaming = parsePreviewStreamingMode(config?.mode ?? streaming);
   if (parsedStreaming) {
+    if (typeof streaming === "string") {
+      warnScalarStreamingFallback();
+    }
     return parsedStreaming;
   }
-  if (typeof entry?.streaming === "boolean") {
-    return entry.streaming ? "partial" : "off";
+  if (typeof streaming === "boolean") {
+    warnScalarStreamingFallback();
+    return streaming ? "partial" : "off";
   }
   return defaultMode;
 }

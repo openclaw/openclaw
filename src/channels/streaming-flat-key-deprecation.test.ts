@@ -1,7 +1,8 @@
-// Covers the once-per-process deprecation warning for flat streaming key fallbacks.
+// Covers once-per-process deprecation warnings for streaming config fallbacks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetFlatStreamingKeyDeprecationWarningsForTest } from "./streaming-flat-key-deprecation.js";
+import { resetStreamingDeprecationWarningsForTest } from "./streaming-flat-key-deprecation.js";
 import {
+  resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
@@ -16,14 +17,14 @@ vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: vi.fn(() => loggerMocks),
 }));
 
-describe("flat streaming key deprecation warning", () => {
+describe("streaming config fallback deprecation warnings", () => {
   beforeEach(() => {
-    resetFlatStreamingKeyDeprecationWarningsForTest();
+    resetStreamingDeprecationWarningsForTest();
     loggerMocks.warn.mockClear();
   });
 
   afterEach(() => {
-    resetFlatStreamingKeyDeprecationWarningsForTest();
+    resetStreamingDeprecationWarningsForTest();
   });
 
   it("warns once per key when the flat fallback is actually used", () => {
@@ -54,6 +55,47 @@ describe("flat streaming key deprecation warning", () => {
       false,
     );
     expect(resolveChannelStreamingBlockCoalesce({})).toBeUndefined();
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns once when the scalar boolean fallback is used", () => {
+    expect(resolveChannelPreviewStreamMode({ streaming: true }, "off")).toBe("partial");
+    expect(resolveChannelPreviewStreamMode({ streaming: false }, "partial")).toBe("off");
+    expect(resolveChannelPreviewStreamMode({ streaming: true }, "off")).toBe("partial");
+
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.warn.mock.calls[0]?.[0]).toContain("streaming.mode");
+    expect(loggerMocks.warn.mock.calls[0]?.[0]).toContain('true with "partial"');
+    expect(loggerMocks.warn.mock.calls[0]?.[0]).toContain('false with "off"');
+    expect(loggerMocks.warn.mock.calls[0]?.[0]).toContain("after the next release train");
+  });
+
+  it("warns once when the scalar mode-string fallback is used", () => {
+    expect(resolveChannelPreviewStreamMode({ streaming: "progress" }, "off")).toBe("progress");
+    expect(resolveChannelPreviewStreamMode({ streaming: "block" }, "partial")).toBe("block");
+
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.warn.mock.calls[0]?.[0]).toContain("streaming.mode");
+  });
+
+  it("tracks scalar and flat fallback warnings independently", () => {
+    expect(resolveChannelPreviewStreamMode({ streaming: "partial" }, "off")).toBe("partial");
+    expect(resolveChannelStreamingChunkMode({ chunkMode: "newline" })).toBe("newline");
+    expect(resolveChannelPreviewStreamMode({ streaming: "partial" }, "off")).toBe("partial");
+    expect(resolveChannelStreamingChunkMode({ chunkMode: "newline" })).toBe("newline");
+
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(2);
+    expect(loggerMocks.warn.mock.calls[0]?.[0]).toContain("streaming.mode");
+    expect(loggerMocks.warn.mock.calls[1]?.[0]).toContain('"chunkMode"');
+  });
+
+  it("stays silent for nested streaming config and absent streaming", () => {
+    expect(resolveChannelPreviewStreamMode({ streaming: { mode: "progress" } }, "off")).toBe(
+      "progress",
+    );
+    expect(resolveChannelPreviewStreamMode({}, "partial")).toBe("partial");
+    expect(resolveChannelPreviewStreamMode(undefined, "off")).toBe("off");
+
     expect(loggerMocks.warn).not.toHaveBeenCalled();
   });
 });
