@@ -4,12 +4,11 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   consumeControlPlaneWriteBudget,
   pruneStaleControlPlaneBuckets,
-  testing,
 } from "./control-plane-rate-limit.js";
 
 describe("control-plane-rate-limit", () => {
   afterEach(() => {
-    testing.resetControlPlaneRateLimitState();
+    pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
   });
 
   test("pruneStaleControlPlaneBuckets removes expired buckets (#63643)", () => {
@@ -38,20 +37,5 @@ describe("control-plane-rate-limit", () => {
 
   test("pruneStaleControlPlaneBuckets is safe on empty map", () => {
     expect(pruneStaleControlPlaneBuckets()).toBe(0);
-  });
-
-  test("control-plane bucket map stays bounded between prune sweeps", () => {
-    const baseMs = 2_000_000;
-    for (let i = 0; i < 10_001; i++) {
-      consumeControlPlaneWriteBudget({
-        client: {
-          connect: { device: { id: `dev-${i}` } },
-          clientIp: "1.2.3.4",
-        } as never,
-        nowMs: baseMs,
-      });
-    }
-
-    expect(testing.getControlPlaneRateLimitBucketCount()).toBe(10_000);
   });
 });

@@ -26,7 +26,7 @@ export type CronExitResult = {
   noOutputTimedOut: boolean;
 };
 
-export type CronExitWatchers = {
+type CronExitWatchers = {
   reconcile: (jobs: CronJob[]) => void;
   cancel: (jobId: string) => void;
   cancelAll: () => void;
@@ -47,7 +47,7 @@ function isWatchableExitJob(job: CronJob): job is OnExitCronJob {
  * Resolve the shell used to run watched commands. Native Windows gateways use
  * cmd.exe; POSIX gateways keep bash -lc.
  */
-export function resolveExitWatchShell(platform: NodeJS.Platform = process.platform): {
+function resolveExitWatchShell(platform: NodeJS.Platform = process.platform): {
   command: string;
   argsFor: (command: string) => string[];
 } {

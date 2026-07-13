@@ -2,13 +2,13 @@
 // Allows first-time node pairing from configured CIDRs while rejecting upgrades/browser paths.
 import { isTrustedProxyAddress } from "./net.js";
 
-export type NodePairingAutoApproveReason =
+type NodePairingAutoApproveReason =
   | "not-paired"
   | "role-upgrade"
   | "scope-upgrade"
   | "metadata-upgrade";
 
-export type NodePairingAutoApproveClientIpSource =
+type NodePairingAutoApproveClientIpSource =
   | "direct"
   | "trusted-proxy"
   | "loopback-trusted-proxy"

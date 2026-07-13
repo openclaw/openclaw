@@ -25,7 +25,7 @@ type WorkerInstallationArtifactBase = {
   protocolFeatures: readonly string[];
 };
 
-export type WorkerBundleArtifact = WorkerInstallationArtifactBase & {
+type WorkerBundleArtifact = WorkerInstallationArtifactBase & {
   install: "bundle";
   tarballSha256: string;
   tarballPath: string;
@@ -43,19 +43,19 @@ export type WorkerBundleProducer = {
   prepare: () => Promise<WorkerBundleArtifact>;
 };
 
-export type WorkerBundleProducerOptions = {
+type WorkerBundleProducerOptions = {
   packageRoot?: string;
   cacheDir?: string;
   openclawVersion?: string;
   protocolFeatures?: readonly string[];
 };
 
-export type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
-export type WorkerNpmReleaseVerifier = (params: {
+type WorkerNpmPackageInstallCheck = (packageRoot: string) => Promise<boolean>;
+type WorkerNpmReleaseVerifier = (params: {
   bundleHash: string;
   version: string;
 }) => Promise<string>;
-export type WorkerNpmProofCommandRunner = typeof runCommandWithTimeout;
+type WorkerNpmProofCommandRunner = typeof runCommandWithTimeout;
 
 type WorkerBundleManifestEntry = {
   path: string;
@@ -177,7 +177,7 @@ async function hashWorkerBundleTarball(tarballPath: string): Promise<string> {
   return hash.digest("hex");
 }
 
-export async function verifyPublishedNpmRelease(params: {
+async function verifyPublishedNpmRelease(params: {
   bundleHash: string;
   version: string;
   runCommand?: WorkerNpmProofCommandRunner;
@@ -577,6 +577,7 @@ export async function resolveWorkerNpmInstallationArtifact(params: {
   packageRoot?: string;
   isPackageInstall?: WorkerNpmPackageInstallCheck;
   verifyRelease?: WorkerNpmReleaseVerifier;
+  runCommand?: WorkerNpmProofCommandRunner;
 }): Promise<WorkerNpmArtifact> {
   const version = params.bundle.openclawVersion.trim();
   if (!isExactSemverVersion(version)) {
@@ -593,7 +594,14 @@ export async function resolveWorkerNpmInstallationArtifact(params: {
       "Worker npm install requires the gateway to run from a packaged release install",
     );
   }
-  const packageIntegrity = await (params.verifyRelease ?? verifyPublishedNpmRelease)({
+  const verifyRelease =
+    params.verifyRelease ??
+    ((proof: Parameters<WorkerNpmReleaseVerifier>[0]) =>
+      verifyPublishedNpmRelease({
+        ...proof,
+        ...(params.runCommand ? { runCommand: params.runCommand } : {}),
+      }));
+  const packageIntegrity = await verifyRelease({
     bundleHash: params.bundle.bundleHash,
     version,
   });

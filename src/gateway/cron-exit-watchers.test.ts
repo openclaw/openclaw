@@ -1,11 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
-import {
-  createCronExitWatchers,
-  type CronExitResult,
-  resolveExitWatchShell,
-} from "./cron-exit-watchers.js";
+import { createCronExitWatchers, type CronExitResult } from "./cron-exit-watchers.js";
 
 type Deferred = {
   resolve: (exit: { exitCode: number | null; reason: string }) => void;
@@ -436,19 +432,5 @@ describe("createCronExitWatchers", () => {
     w.reconcile([onExitJob("job-a")]);
     await flush();
     expect(supervisor.spawn).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("resolveExitWatchShell", () => {
-  it("uses cmd.exe on Windows so native gateways without bash can run on-exit", () => {
-    const shell = resolveExitWatchShell("win32");
-    expect(shell.command).toMatch(/cmd\.exe$/i);
-    expect(shell.argsFor("echo hi")).toEqual(["/d", "/s", "/c", "echo hi"]);
-  });
-
-  it("uses bash -lc on POSIX (unchanged from prior behavior)", () => {
-    expect(resolveExitWatchShell("linux").command).toBe("bash");
-    expect(resolveExitWatchShell("linux").argsFor("echo hi")).toEqual(["-lc", "echo hi"]);
-    expect(resolveExitWatchShell("darwin").command).toBe("bash");
   });
 });

@@ -7,11 +7,13 @@ import { withTempDir } from "../../test-helpers/temp-dir.js";
 import {
   createWorkerBundleProducer,
   resolveWorkerNpmInstallationArtifact,
-  verifyPublishedNpmRelease,
-  type WorkerBundleArtifact,
-  type WorkerNpmProofCommandRunner,
+  type WorkerInstallationArtifact,
 } from "./bundle.js";
 
+type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
+type WorkerNpmProofCommandRunner = NonNullable<
+  Parameters<typeof resolveWorkerNpmInstallationArtifact>[0]["runCommand"]
+>;
 const fixturePackageJson = `${JSON.stringify({
   name: "openclaw",
   version: "1.2.3",
@@ -243,7 +245,11 @@ describe("worker npm installation artifact", () => {
       const packageRoot = path.join(root, "package");
       const cacheDir = path.join(root, "cache");
       await writeFixture(packageRoot, [["dist/entry.js", "export {};\n"]]);
-      const bundle = await createWorkerBundleProducer({ packageRoot, cacheDir }).prepare();
+      const bundle = await createWorkerBundleProducer({
+        packageRoot,
+        cacheDir,
+        openclawVersion: "1.2.3",
+      }).prepare();
       const calls: Array<{ argv: string[]; cwd: string | undefined }> = [];
       let integrity = "";
       const runCommand: WorkerNpmProofCommandRunner = async (argv, options) => {
@@ -284,7 +290,6 @@ describe("worker npm installation artifact", () => {
         };
       };
 
-      // The registry lookup runs first, so provide the integrity of the deterministic fixture tarball.
       const proofTarball = path.join(root, "proof.tgz");
       await tar.create(
         { cwd: root, file: proofTarball, gzip: true, noMtime: true, portable: true },
@@ -295,24 +300,22 @@ describe("worker npm installation artifact", () => {
         .digest("base64")}`;
 
       await expect(
-        verifyPublishedNpmRelease({
-          bundleHash: bundle.bundleHash,
-          version: "1.2.3",
+        resolveWorkerNpmInstallationArtifact({
+          bundle: { ...bundle, bundleHash: bundle.bundleHash },
+          packageRoot,
+          isPackageInstall: async () => true,
           runCommand,
         }),
-      ).resolves.toBe(integrity);
-
+      ).resolves.toMatchObject({ packageIntegrity: integrity });
       expect(calls).toHaveLength(2);
       expect(calls[0]?.argv).toContain("--registry=https://registry.npmjs.org/");
-      expect(calls[1]?.argv).toContain("--pack-destination");
       expect(calls[1]?.argv).toContain("--ignore-scripts");
-      expect(calls[1]?.argv).toContain("openclaw@1.2.3");
-      expect(calls[1]?.argv).toContain("--registry=https://registry.npmjs.org/");
-      expect(calls[0]?.cwd).toBe(calls[1]?.cwd);
+
       await expect(
-        verifyPublishedNpmRelease({
-          bundleHash: "b".repeat(64),
-          version: "1.2.3",
+        resolveWorkerNpmInstallationArtifact({
+          bundle: { ...bundle, bundleHash: "b".repeat(64) },
+          packageRoot,
+          isPackageInstall: async () => true,
           runCommand,
         }),
       ).rejects.toThrow("does not match the prepared worker bundle");
@@ -349,9 +352,9 @@ describe("worker npm installation artifact", () => {
     };
 
     await expect(
-      verifyPublishedNpmRelease({
-        bundleHash: "a".repeat(64),
-        version: "1.2.3",
+      resolveWorkerNpmInstallationArtifact({
+        bundle: bundleArtifact(),
+        isPackageInstall: async () => true,
         runCommand,
       }),
     ).rejects.toThrow("does not match the published package");

@@ -14,7 +14,6 @@ import type {
 import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
-  clearTalkRealtimeRelaySessionsForTest,
   createTalkRealtimeRelaySession,
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
@@ -25,7 +24,6 @@ import {
 
 describe("talk realtime gateway relay", () => {
   afterEach(() => {
-    clearTalkRealtimeRelaySessionsForTest();
     vi.useRealTimers();
     embeddedRunTesting.resetActiveEmbeddedRuns();
   });

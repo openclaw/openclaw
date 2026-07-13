@@ -18,21 +18,12 @@ import {
   buildGatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
-  resolveConfigReloadMetadata,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
 
-export {
-  buildGatewayReloadPlan,
-  diffConfigPaths,
-  listPluginInstallTimestampMetadataPaths,
-  listPluginInstallWholeRecordPaths,
-  resolveConfigReloadMetadata,
-  resolveGatewayReloadSettings,
-};
-export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
+export type { GatewayReloadPlan } from "./config-reload-plan.js";
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
 
@@ -78,10 +69,7 @@ function firstSkillsChangedPath(changedPaths: string[]): string | undefined {
   return changedPaths.find(matchesSkillsInvalidationPrefix);
 }
 
-export function diffGatewayReloadPaths(
-  prevConfig: OpenClawConfig,
-  nextConfig: OpenClawConfig,
-): string[] {
+function diffGatewayReloadPaths(prevConfig: OpenClawConfig, nextConfig: OpenClawConfig): string[] {
   const changedPaths = diffConfigPaths(prevConfig, nextConfig);
   if (!changedPaths.includes("mcp")) {
     return changedPaths;

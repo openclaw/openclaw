@@ -28,7 +28,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { isAccountEnabled } from "../shared/account-enabled.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
-export type { ChannelRuntimeSnapshot };
 
 const RESTART_POLICY: BackoffPolicy = {
   initialMs: 5_000,

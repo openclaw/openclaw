@@ -66,12 +66,6 @@ export function replaceGatewayModelPricingCache(
   cachedAt = nextCachedAt;
 }
 
-export function clearGatewayModelPricingCacheState(): void {
-  cachedPricing = new Map();
-  cachedAt = 0;
-  clearGatewayModelPricingFailures();
-}
-
 export function recordGatewayModelPricingSourceFailure(
   source: GatewayModelPricingHealthSource,
   detail: string,
@@ -179,24 +173,4 @@ function stablePricingValue(value: unknown): string {
 export function getGatewayModelPricingCacheFingerprint(): string {
   const entries = Array.from(cachedPricing.entries()).toSorted(([a], [b]) => a.localeCompare(b));
   return stablePricingValue(entries);
-}
-
-export function resetGatewayModelPricingCacheForTest(): void {
-  clearGatewayModelPricingCacheState();
-}
-
-export function setGatewayModelPricingForTest(
-  entries: Array<{ provider: string; model: string; pricing: CachedModelPricing }>,
-): void {
-  replaceGatewayModelPricingCache(
-    new Map(
-      entries.flatMap((entry) => {
-        const normalized = normalizeModelRef(entry.provider, entry.model, {
-          allowPluginNormalization: false,
-        });
-        const key = modelPricingCacheKey(normalized.provider, normalized.model);
-        return key ? ([[key, entry.pricing]] as const) : [];
-      }),
-    ),
-  );
 }

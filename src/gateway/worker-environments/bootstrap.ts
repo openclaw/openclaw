@@ -474,21 +474,21 @@ cat "$receipt"
 printf '\n'
 `;
 
-export type ResolvedWorkerSshIdentity = WorkerSshIdentity;
+type ResolvedWorkerSshIdentity = WorkerSshIdentity;
 
-export type WorkerBootstrapCommandRunner = (
+type WorkerBootstrapCommandRunner = (
   argv: string[],
   options: CommandOptions,
 ) => Promise<SpawnResult>;
 
-export type WorkerBootstrapRequest = {
+type WorkerBootstrapRequest = {
   ssh: WorkerSshEndpoint;
   artifact: WorkerInstallationArtifact;
   /** Provider endpoint host key copied by the gateway bootstrap adapter. */
   pinnedHostKey?: string;
 };
 
-export type WorkerBootstrapDependencies = {
+type WorkerBootstrapDependencies = {
   resolveIdentity: (keyRef: WorkerSshEndpoint["keyRef"]) => Promise<ResolvedWorkerSshIdentity>;
   runCommand?: WorkerBootstrapCommandRunner;
   timeoutMs?: number;

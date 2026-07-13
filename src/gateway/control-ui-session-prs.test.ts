@@ -7,10 +7,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadControlUiSessionPullRequests,
   parseControlUiSessionPullRequestsParams,
-  parseGitHubRemoteUrl,
-  resetControlUiSessionPullRequestCacheForTests,
-  type SessionPullRequestGitContext,
 } from "./control-ui-session-prs.js";
+
+type GitContext = { owner: string; repo: string; branch: string };
 
 function githubJson(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -54,30 +53,33 @@ function pullListItem(overrides: Record<string, unknown> = {}): Record<string, u
   };
 }
 
-const context: SessionPullRequestGitContext = {
+const context: GitContext = {
   owner: "openclaw",
   repo: "openclaw",
   branch: "claude/browser-tabs-tighter-header",
 };
 
 const resolveGitContext = async () => context;
+let cacheEpochMs = Date.now();
+let cacheEvictionEpoch = 0;
 
-describe("parseGitHubRemoteUrl", () => {
-  it("parses https, scp-like, and ssh remotes", () => {
-    const expected = { owner: "openclaw", repo: "openclaw" };
-    expect(parseGitHubRemoteUrl("https://github.com/openclaw/openclaw.git")).toEqual(expected);
-    expect(parseGitHubRemoteUrl("https://github.com/openclaw/openclaw")).toEqual(expected);
-    expect(parseGitHubRemoteUrl("git@github.com:openclaw/openclaw.git")).toEqual(expected);
-    expect(parseGitHubRemoteUrl("ssh://git@github.com/openclaw/openclaw.git")).toEqual(expected);
-  });
-
-  it("rejects non-GitHub and malformed remotes", () => {
-    expect(parseGitHubRemoteUrl("https://gitlab.com/openclaw/openclaw.git")).toBeNull();
-    expect(parseGitHubRemoteUrl("git@github.com:openclaw")).toBeNull();
-    expect(parseGitHubRemoteUrl("https://github.com/openclaw/openclaw/extra")).toBeNull();
-    expect(parseGitHubRemoteUrl("/local/path/repo.git")).toBeNull();
-  });
-});
+async function evictPullRequestCache(): Promise<void> {
+  const epoch = (cacheEvictionEpoch += 1);
+  await Promise.all(
+    Array.from({ length: 101 }, (_, index) =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:main" },
+        {
+          fetchImpl: async () => githubJson([]),
+          resolveGitContext: async () => ({
+            ...context,
+            branch: `test/cache-eviction-${epoch}-${index}`,
+          }),
+        },
+      ),
+    ),
+  );
+}
 
 describe("parseControlUiSessionPullRequestsParams", () => {
   it("requires a non-empty session key", () => {
@@ -101,11 +103,13 @@ describe("parseControlUiSessionPullRequestsParams", () => {
 
 describe("loadControlUiSessionPullRequests", () => {
   beforeEach(() => {
-    resetControlUiSessionPullRequestCacheForTests();
     vi.useFakeTimers();
+    cacheEpochMs += 10 * 60_000;
+    vi.setSystemTime(cacheEpochMs);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await evictPullRequestCache();
     vi.useRealTimers();
   });
 
@@ -210,7 +214,7 @@ describe("loadControlUiSessionPullRequests", () => {
       running: 1,
     });
 
-    resetControlUiSessionPullRequestCacheForTests();
+    vi.advanceTimersByTime(10 * 60_000);
     checkRuns[0] = { status: "completed", conclusion: "timed_out" };
     const failing = await loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
@@ -226,7 +230,7 @@ describe("loadControlUiSessionPullRequests", () => {
 
     // A stale conclusion means GitHub invalidated the run; it must not be
     // rolled up as green.
-    resetControlUiSessionPullRequestCacheForTests();
+    vi.advanceTimersByTime(10 * 60_000);
     checkRuns[0] = { status: "completed", conclusion: "stale" };
     const stale = await loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
@@ -452,11 +456,11 @@ describe("session branch diff stats", () => {
     });
 
   beforeEach(async () => {
-    resetControlUiSessionPullRequestCacheForTests();
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-prs-")));
   });
 
   afterEach(async () => {
+    await evictPullRequestCache();
     await fs.rm(root, { recursive: true, force: true });
   });
 

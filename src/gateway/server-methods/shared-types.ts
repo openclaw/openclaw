@@ -26,6 +26,7 @@ import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { StartChannelOptions } from "../server-channels.js";
 import type {
   BufferedAgentEvent,
   ChatAbortMarker,
@@ -182,7 +183,7 @@ export type GatewayRequestContext = {
   startChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,
     accountId?: string,
-    opts?: import("../server-channels.js").StartChannelOptions,
+    opts?: StartChannelOptions,
   ) => Promise<void>;
   stopChannel: (
     channel: import("../../channels/plugins/types.public.js").ChannelId,

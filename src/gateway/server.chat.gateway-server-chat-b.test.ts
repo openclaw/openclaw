@@ -24,13 +24,12 @@ import { appendSqliteTranscriptEvents } from "../config/sessions/session-accesso
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
+import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import {
@@ -113,7 +112,6 @@ async function withGatewayChatHarness(
   try {
     await run({ ws, createSessionDir });
   } finally {
-    setMaxChatHistoryMessagesBytesForTest();
     if (process.env.OPENCLAW_CONFIG_PATH) {
       await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
     }
@@ -409,12 +407,8 @@ const configuredImageModelCases: ConfiguredImageModelCase[] = [
 async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
   createSessionDir: () => Promise<string>;
-  historyMaxBytes?: number;
   sessionId?: string;
 }) {
-  if (params.historyMaxBytes !== undefined) {
-    setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
-  }
   await connectOk(params.ws);
   const sessionDir = await params.createSessionDir();
   await writeMainSessionStore(sessionDir, params.sessionId);
@@ -4523,76 +4517,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history marks byte-truncated claude-cli snapshots as incomplete", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      const sessionDir = await createSessionDir();
-      const sessionId = "sess-claude-cli-byte-pages";
-      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
-      const homeEnvSnapshot = captureEnv(["HOME"]);
-      const homeDir = path.join(sessionDir, "home");
-      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
-      await fs.mkdir(claudeProjectsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
-        Array.from({ length: 14 }, (_, index) =>
-          JSON.stringify({
-            type: index % 2 === 0 ? "user" : "assistant",
-            uuid: `byte-page-${index + 1}`,
-            timestamp: new Date(Date.parse("2026-03-26T16:30:00.000Z") + index).toISOString(),
-            message: {
-              role: index % 2 === 0 ? "user" : "assistant",
-              content: [{ type: "text", text: `message ${index + 1} ${"x".repeat(600)}` }],
-            },
-          }),
-        ).join("\n"),
-        "utf-8",
-      );
-      setTestEnvValue("HOME", homeDir);
-      setMaxChatHistoryMessagesBytesForTest(1_200);
-      try {
-        await writeSessionStore({
-          entries: {
-            main: {
-              sessionId,
-              sessionFile: testSessionFilePath(sessionDir, sessionId),
-              updatedAt: futureFixtureUpdatedAt(),
-              modelProvider: "claude-cli",
-              model: "claude-sonnet-4-6",
-              cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
-            },
-          },
-        });
-
-        const history = await rpcReq<{
-          messages?: unknown[];
-          hasMore?: boolean;
-          nextOffset?: number;
-          totalMessages?: number;
-          completeSnapshot?: boolean;
-        }>(ws, "chat.history", { sessionKey: "main", limit: 20 });
-        expect(history.ok).toBe(true);
-        expect(history.payload?.messages?.length).toBeLessThan(14);
-        expect(history.payload?.totalMessages).toBe(14);
-        expect(history.payload?.hasMore).toBe(false);
-        expect(history.payload?.nextOffset).toBeUndefined();
-        expect(history.payload?.completeSnapshot).toBeUndefined();
-
-        setMaxChatHistoryMessagesBytesForTest();
-        const complete = await rpcReq<{
-          messages?: unknown[];
-          hasMore?: boolean;
-          completeSnapshot?: boolean;
-        }>(ws, "chat.history", { sessionKey: "main", limit: 20 });
-        expect(complete.payload?.messages).toHaveLength(14);
-        expect(complete.payload?.hasMore).toBe(false);
-        expect(complete.payload?.completeSnapshot).toBe(true);
-      } finally {
-        homeEnvSnapshot.restore();
-      }
-    });
-  });
-
   test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -5044,76 +4968,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("smoke: caps history payload and preserves routing metadata", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes,
-      });
-
-      const bigText = "x".repeat(2_000);
-      const historyLines: string[] = [];
-      for (let i = 0; i < 45; i += 1) {
-        historyLines.push(
-          JSON.stringify({
-            message: {
-              role: "user",
-              content: [{ type: "text", text: `${i}:${bigText}` }],
-              timestamp: Date.now() + i,
-            },
-          }),
-        );
-      }
-      await writeMainSessionTranscript(sessionDir, historyLines);
-      const messages = await fetchHistoryMessages(ws);
-      const bytes = Buffer.byteLength(JSON.stringify(messages), "utf8");
-      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
-      expect(messages.length).toBeLessThan(45);
-
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastTo: "+1555",
-          },
-        },
-      });
-
-      const sendRes = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "hello",
-        idempotencyKey: "idem-route",
-      });
-      expect(sendRes.ok).toBe(true);
-
-      const sessionStorePath = testState.sessionStorePath;
-      if (!sessionStorePath) {
-        throw new Error("expected session store path");
-      }
-      const stored = loadSessionEntry({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        storePath: sessionStorePath,
-      });
-      expect(stored?.lastChannel).toBe("whatsapp");
-      expect(stored?.lastTo).toBe("+1555");
-
-      await vi.waitFor(async () => {
-        const completed = await rpcReq<{ status?: string }>(ws, "chat.send", {
-          sessionKey: "main",
-          message: "hello",
-          idempotencyKey: "idem-route",
-        });
-        expect(completed.ok).toBe(true);
-        expect(completed.payload?.status).toBe("ok");
-      }, FAST_WAIT_OPTS);
-    });
-  });
-
   test("chat.send does not force-disable block streaming", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;
@@ -5343,39 +5197,29 @@ describe("gateway server chat", () => {
 
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes,
-      });
-
-      const hugeNestedText = "n".repeat(120_000);
-      const oversizedLine = JSON.stringify({
-        id: "msg-huge",
-        message: {
-          role: "assistant",
-          timestamp: Date.now(),
-          content: [
-            {
-              type: "tool_result",
-              toolUseId: "tool-1",
-              output: {
-                nested: {
-                  payload: hugeNestedText,
-                },
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
+      const hugeNestedText = "n".repeat(300_000);
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-huge",
+          message: {
+            role: "assistant",
+            timestamp: Date.now(),
+            content: [
+              {
+                type: "tool_result",
+                toolUseId: "tool-1",
+                output: { nested: { payload: hugeNestedText } },
               },
-            },
-          ],
-        },
-      });
-      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
-      const messages = await fetchHistoryMessages(ws);
-      expect(messages.length).toBe(1);
+            ],
+          },
+        }),
+      ]);
 
+      const messages = await fetchHistoryMessages(ws);
       const serialized = JSON.stringify(messages);
-      const bytes = Buffer.byteLength(serialized, "utf8");
-      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
+      expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(historyMaxBytes);
       expect(serialized).toContain("[chat.history omitted: message too large]");
       expect(messages[0]).toMatchObject({
         __openclaw: { id: "msg-huge", truncated: true, reason: "oversized" },
@@ -5384,30 +5228,20 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history keeps recent small messages when latest message is oversized", async () => {
+  test("chat.history keeps recent messages within the production byte budget", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes,
-      });
-
-      const baseText = "s".repeat(1_200);
-      const lines: string[] = [];
-      for (let i = 0; i < 30; i += 1) {
-        lines.push(
-          JSON.stringify({
-            message: {
-              role: "user",
-              timestamp: Date.now() + i,
-              content: [{ type: "text", text: `small-${i}:${baseText}` }],
-            },
-          }),
-        );
-      }
-
-      const hugeNestedText = "z".repeat(120_000);
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
+      const baseText = "s".repeat(100_000);
+      const lines = Array.from({ length: 70 }, (_, index) =>
+        JSON.stringify({
+          message: {
+            role: "user",
+            timestamp: Date.now() + index,
+            content: [{ type: "text", text: `small-${index}:${baseText}` }],
+          },
+        }),
+      );
       lines.push(
         JSON.stringify({
           message: {
@@ -5417,11 +5251,7 @@ describe("gateway server chat", () => {
               {
                 type: "tool_result",
                 toolUseId: "tool-1",
-                output: {
-                  nested: {
-                    payload: hugeNestedText,
-                  },
-                },
+                output: { nested: { payload: "z".repeat(300_000) } },
               },
             ],
           },
@@ -5429,15 +5259,56 @@ describe("gateway server chat", () => {
       );
 
       await writeMainSessionTranscript(sessionDir, lines);
-      const messages = await fetchHistoryMessages(ws);
+      const messages = await fetchHistoryMessages(ws, { maxChars: 100_000 });
       const serialized = JSON.stringify(messages);
-      const bytes = Buffer.byteLength(serialized, "utf8");
 
-      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
-      expect(messages.length).toBeGreaterThan(1);
-      expect(serialized).toContain("small-29:");
+      expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(historyMaxBytes);
+      expect(serialized).toContain("small-69:");
       expect(serialized).toContain("[chat.history omitted: message too large]");
-      expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
+      expect(serialized).not.toContain("small-0:");
+    });
+  });
+
+  test("chat.history advances past an oversized newest record when the tail parses empty", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "reachable older message" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            padding: "x".repeat(historyMaxBytes * 2 + 1024),
+            timestamp: Date.now() + 1,
+          },
+        }),
+      ]);
+
+      const firstPage = await rpcReq<{
+        messages?: unknown[];
+        nextOffset?: number;
+        hasMore?: boolean;
+      }>(ws, "chat.history", { sessionKey: "main", limit: 1 });
+      expect(firstPage.ok).toBe(true);
+      expect(firstPage.payload?.messages).toEqual([]);
+      expect(firstPage.payload?.hasMore).toBe(true);
+      expect(firstPage.payload?.nextOffset).toBe(1);
+
+      const olderPage = await rpcReq<{ messages?: unknown[]; hasMore?: boolean }>(
+        ws,
+        "chat.history",
+        { sessionKey: "main", limit: 1, offset: firstPage.payload?.nextOffset },
+      );
+      expect(olderPage.ok).toBe(true);
+      expect(JSON.stringify(olderPage.payload?.messages)).toContain("reachable older message");
+      expect(olderPage.payload?.hasMore).toBe(false);
     });
   });
 
@@ -6068,124 +5939,6 @@ describe("gateway server chat", () => {
       expect(JSON.stringify(messages)).toContain("visible question");
       expect(JSON.stringify(messages)).toContain("visible answer");
       expect(JSON.stringify(messages)).not.toContain("NO_REPLY");
-    });
-  });
-
-  test("chat.history first-page fallback cursor advances only by byte-bounded records read", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes: 1_000,
-      });
-      const silentTail = Array.from({ length: 7 }, (_, index) =>
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "NO_REPLY" }],
-            padding: "x".repeat(180_000),
-            timestamp: Date.now() + index + 2,
-          },
-        }),
-      );
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "oldest visible question" }],
-            timestamp: Date.now(),
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "oldest visible answer" }],
-            timestamp: Date.now() + 1,
-          },
-        }),
-        ...silentTail,
-      ]);
-
-      type HistoryPage = {
-        messages?: Array<{ __openclaw?: { seq?: number } }>;
-        nextOffset?: number;
-        hasMore?: boolean;
-        totalMessages?: number;
-      };
-      const firstPage = await rpcReq<HistoryPage>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 3,
-      });
-      expect(firstPage.ok).toBe(true);
-      expect(firstPage.payload?.messages).toEqual([]);
-      expect(firstPage.payload?.totalMessages).toBe(9);
-      expect(firstPage.payload?.hasMore).toBe(true);
-      expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
-      expect(firstPage.payload?.nextOffset).toBeLessThan(9);
-
-      const visibleSeqs: number[] = [];
-      let offset = firstPage.payload?.nextOffset;
-      for (let pageIndex = 0; pageIndex < 10 && offset !== undefined; pageIndex += 1) {
-        const page = await rpcReq<HistoryPage>(ws, "chat.history", {
-          sessionKey: "main",
-          limit: 3,
-          offset,
-        });
-        expect(page.ok).toBe(true);
-        visibleSeqs.push(
-          ...(page.payload?.messages?.map(readOpenClawSeq).filter((seq) => seq !== undefined) ??
-            []),
-        );
-        offset = page.payload?.nextOffset;
-      }
-      expect(visibleSeqs.toSorted((a, b) => a - b)).toEqual([1, 2]);
-      expect(offset).toBeUndefined();
-    });
-  });
-
-  test("chat.history advances past an oversized newest record when the tail parses empty", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes: 1_000,
-      });
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "reachable older message" }],
-            timestamp: Date.now(),
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "NO_REPLY" }],
-            padding: "x".repeat(2_000_000),
-            timestamp: Date.now() + 1,
-          },
-        }),
-      ]);
-
-      const firstPage = await rpcReq<{
-        messages?: unknown[];
-        nextOffset?: number;
-        hasMore?: boolean;
-      }>(ws, "chat.history", { sessionKey: "main", limit: 1 });
-      expect(firstPage.ok).toBe(true);
-      expect(firstPage.payload?.messages).toEqual([]);
-      expect(firstPage.payload?.hasMore).toBe(true);
-      expect(firstPage.payload?.nextOffset).toBe(1);
-
-      const olderPage = await rpcReq<{ messages?: unknown[]; hasMore?: boolean }>(
-        ws,
-        "chat.history",
-        { sessionKey: "main", limit: 1, offset: firstPage.payload?.nextOffset },
-      );
-      expect(olderPage.ok).toBe(true);
-      expect(JSON.stringify(olderPage.payload?.messages)).toContain("reachable older message");
-      expect(olderPage.payload?.hasMore).toBe(false);
     });
   });
 

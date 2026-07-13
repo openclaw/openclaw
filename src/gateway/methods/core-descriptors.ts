@@ -18,7 +18,7 @@ type CoreGatewayMethodSpec = {
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
-export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
+const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "health", scope: "operator.read" },
   { name: "diagnostics.stability", scope: "operator.read" },
   { name: "doctor.memory.status", scope: "operator.read" },

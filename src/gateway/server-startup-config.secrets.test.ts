@@ -20,12 +20,16 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
 } from "../secrets/runtime-state.js";
 import type { PreparedSecretsRuntimeSnapshot, SecretResolverWarning } from "../secrets/runtime.js";
-import { KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS } from "./known-weak-gateway-secrets.js";
 import {
   createRuntimeSecretsActivator,
   prepareGatewayStartupConfig,
 } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
+
+const KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS = [
+  "change-me-to-a-long-random-token",
+  "change-me-now",
+] as const;
 
 type PrepareRuntimeSecretsSnapshotForTest =
   typeof import("../secrets/runtime.js").prepareSecretsRuntimeSnapshot;

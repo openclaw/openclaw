@@ -87,10 +87,7 @@ export async function spawnTerminalPty(params: {
 // node-pty's kill only signals the shell; commands it launched (a long-running
 // `npm install`, `sleep`, etc.) would survive close/disconnect/shutdown. Signal
 // the whole process tree instead, mirroring the process supervisor's PTY adapter.
-export function killPtyTree(
-  pty: { pid: number; kill: (signal?: string) => void },
-  signal?: string,
-): void {
+function killPtyTree(pty: { pid: number; kill: (signal?: string) => void }, signal?: string): void {
   const sig = (signal ?? "SIGKILL") as NodeJS.Signals;
   try {
     if ((sig === "SIGKILL" || sig === "SIGTERM") && typeof pty.pid === "number" && pty.pid > 0) {

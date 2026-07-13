@@ -36,7 +36,7 @@ export type ControlUiSessionPullRequestsParams = {
 };
 
 /** GitHub repo + branch resolved from a session's git checkout. */
-export type SessionPullRequestGitContext = {
+type SessionPullRequestGitContext = {
   owner: string;
   repo: string;
   branch: string;
@@ -66,10 +66,6 @@ type CacheEntry = {
 
 const branchCache = new Map<string, CacheEntry>();
 
-export function resetControlUiSessionPullRequestCacheForTests(): void {
-  branchCache.clear();
-}
-
 export function parseControlUiSessionPullRequestsParams(
   value: unknown,
 ): ControlUiSessionPullRequestsParams | null {
@@ -97,7 +93,7 @@ async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
 }
 
 /** Parses a GitHub `origin` remote (https, ssh, or scp-like) to owner/repo. */
-export function parseGitHubRemoteUrl(raw: string): { owner: string; repo: string } | null {
+function parseGitHubRemoteUrl(raw: string): { owner: string; repo: string } | null {
   const trimmed = raw.trim();
   let path: string | undefined;
   const scpMatch = /^git@github\.com:(.+)$/i.exec(trimmed);
@@ -132,7 +128,7 @@ export function parseGitHubRemoteUrl(raw: string): { owner: string; repo: string
  * the same checkout, and skipping it protects the anonymous GitHub quota for
  * plain sessions).
  */
-export async function resolveSessionPullRequestGitContext(
+async function resolveSessionPullRequestGitContext(
   params: ControlUiSessionPullRequestsParams,
 ): Promise<SessionPullRequestGitContext | null> {
   const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.sessionKey, {
@@ -590,7 +586,7 @@ async function refreshBranchPullRequests(
   }
 }
 
-export type LoadSessionPullRequestDeps = {
+type LoadSessionPullRequestDeps = {
   fetchImpl?: typeof fetch;
   resolveGitContext?: (
     params: ControlUiSessionPullRequestsParams,
