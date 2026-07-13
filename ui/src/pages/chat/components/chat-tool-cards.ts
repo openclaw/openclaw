@@ -10,11 +10,11 @@ import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
-  formatDistinctCollapsedToolSummaryText,
+  formatDistinctCollapsedToolSummaryText as distinctSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
-  resolveCollapsedToolArgumentPreview,
+  resolveCollapsedToolArgumentPreview as toolArgumentPreview,
   resolveToolCardOutcome,
   type ToolPreview,
 } from "../../../lib/chat/tool-cards.ts";
@@ -468,7 +468,6 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     `;
   }
 
-  // Generic tools keep the resolver-driven label + detail.
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
   const summary = resolveCollapsedToolSummaryParts({
     card,
@@ -477,12 +476,8 @@ function renderToolRowContent(card: ToolCard, view: ToolCallView, outcome: ToolC
     isError: outcome === "failed",
   });
   const displayLabel = formatCollapsedToolSummaryText(summary.label) ?? summary.label;
-  const argumentPreview =
-    outcome === "failed" ? undefined : resolveCollapsedToolArgumentPreview(card.args);
-  const displayName = formatDistinctCollapsedToolSummaryText(
-    argumentPreview ?? summary.name,
-    displayLabel,
-  );
+  const argumentPreview = outcome === "failed" ? undefined : toolArgumentPreview(card.args);
+  const displayName = distinctSummaryText(argumentPreview ?? summary.name, displayLabel);
   const aiTitle = getToolCallTitle(card.name, card.args);
   if (aiTitle) {
     return html`
@@ -737,7 +732,6 @@ export function isRunningToolCard(card: ToolCard, runActive: boolean | undefined
   return resolveToolCardOutcome(card, runActive) === "running";
 }
 
-/** Plain-text row label, e.g. for the group header while a tool is running. */
 export function resolveToolRowText(card: ToolCard, runActive?: boolean): string {
   const view = resolveToolCallView({ name: card.name, args: card.args, details: card.details });
   if (view.kind === "command" && view.command) {
@@ -748,8 +742,7 @@ export function resolveToolRowText(card: ToolCard, runActive?: boolean): string 
     return `${verb} ${view.target}`;
   }
   const display = resolveToolDisplay({ name: card.name, args: card.args, detailMode: "explain" });
-  const preview = resolveCollapsedToolArgumentPreview(card.args);
-  return preview ? `${display.label} ${preview}` : display.label;
+  return [display.label, toolArgumentPreview(card.args)].filter(Boolean).join(" ");
 }
 
 export function renderToolCard(
