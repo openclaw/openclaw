@@ -392,12 +392,13 @@ export function createChannelProgressDraftCompositor(params: {
         await params.deleteCurrent?.();
         return true;
       }
-      if (itemId && itemId !== preambleItemId) {
+      const isNewPreambleItem = Boolean(itemId && itemId !== preambleItemId);
+      if (isNewPreambleItem) {
         preambleItemId = itemId;
       } else if (!itemId) {
         preambleItemId = undefined;
       }
-      if (normalized === preambleText) {
+      if (normalized === preambleText && !isNewPreambleItem) {
         return false;
       }
       preambleText = normalized;

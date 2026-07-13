@@ -476,6 +476,30 @@ describe("createChannelProgressDraftCompositor", () => {
     );
   });
 
+  it("refreshes a new preamble item when its text matches the stale item", async () => {
+    let nowMs = 0;
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      now: () => nowMs,
+      update,
+    });
+
+    await progress.start();
+    await progress.pushPreambleHeadline("Reading the workspace.", { itemId: "first" });
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    await progress.pushNarrationProgress("Comparing the configuration now.");
+    await progress.pushPreambleHeadline("Reading the workspace.", { itemId: "second" });
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\nReading the workspace.",
+      expect.anything(),
+    );
+  });
+
   it("refreshes to retained narration when a visible preamble expires", async () => {
     vi.useFakeTimers();
     try {
