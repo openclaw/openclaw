@@ -6,7 +6,7 @@ import {
   sortUniqueStrings,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { pathCaseInsensitive } from "./path-case-sensitivity.js";
+import { canonicalizePathIdentity } from "./path-case-sensitivity.js";
 
 // Keep defaults to OS-managed immutable bins only.
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
@@ -31,9 +31,9 @@ export type WritableTrustedSafeBinDir = {
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
 
 function normalizeTrustComparisonPath(value: string): string {
-  const resolved = path.resolve(value);
-  // Shared child-lookup probe: fold only when the target volume is case-insensitive.
-  return pathCaseInsensitive(resolved) ? resolved.toLowerCase() : resolved;
+  // Component-aware identity (fail-closed on unknown probes): do not fold
+  // case-sensitive ancestor components when a descendant mount is CI.
+  return canonicalizePathIdentity(value);
 }
 
 function normalizeTrustedDir(value: string, forComparison = true): string | null {

@@ -3,7 +3,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { pathCaseInsensitive } from "../infra/path-case-sensitivity.js";
+import {
+  canonicalizePathIdentity,
+  pathCaseInsensitive,
+  type PathChildCaseProbe,
+} from "../infra/path-case-sensitivity.js";
 import { findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -115,6 +119,35 @@ describe("resolveEffectiveAgentDir via findDuplicateAgentDirs", () => {
       } else {
         expect(dupes).toHaveLength(0);
       }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps case-distinct agentDirs distinct across a case-sensitive ancestor", () => {
+    // Component-aware identity: mixed CS ancestor must not collapse Foo/foo
+    // even when a leaf would fold under whole-path semantics.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agentdir-mixed-"));
+    try {
+      const rootResolved = path.resolve(root);
+      const probe: PathChildCaseProbe = (dir) => {
+        const rel = path.relative(rootResolved, path.resolve(dir));
+        if (rel.startsWith("..") || path.isAbsolute(rel)) {
+          return null;
+        }
+        const parts = rel.split(path.sep).filter((part) => part.length > 0);
+        return parts.includes("CI");
+      };
+      const upper = path.join(root, "Foo", "CI", "agent");
+      const lower = path.join(root, "foo", "CI", "agent");
+      // Mixed mounts: validate via canonicalizePathIdentity injection (same helper
+      // production canonicalizeAgentDir uses).
+      expect(canonicalizePathIdentity(upper, { probeChildCaseInsensitive: probe })).not.toBe(
+        canonicalizePathIdentity(lower, { probeChildCaseInsensitive: probe }),
+      );
+      expect(canonicalizePathIdentity(upper, { probeChildCaseInsensitive: probe })).toBe(
+        canonicalizePathIdentity(upper, { probeChildCaseInsensitive: probe }),
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

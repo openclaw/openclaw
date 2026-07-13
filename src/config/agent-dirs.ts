@@ -1,9 +1,8 @@
 // Resolves agent-specific config and workspace directories.
 import os from "node:os";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { pathCaseInsensitive } from "../infra/path-case-sensitivity.js";
+import { canonicalizePathIdentity } from "../infra/path-case-sensitivity.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
@@ -27,18 +26,12 @@ export class DuplicateAgentDirError extends Error {
 
 /**
  * Collision key for agentDir identity.
- * Case-insensitive volumes (common macOS APFS / Windows NTFS) fold case so
- * AgentA and agenta cannot share auth state under different spellings.
- * Case-sensitive volumes keep distinct case paths as distinct agent dirs.
- * Uses shared child-lookup probes so absent paths and mount boundaries match
- * real filesystem identity (not parent-name case swaps).
+ * Component-aware: fold only segments whose parent resolves children
+ * case-insensitively. Case-sensitive ancestors keep Foo/foo distinct even when
+ * a descendant is case-insensitive (mixed mount / per-dir semantics).
  */
 function canonicalizeAgentDir(agentDir: string): string {
-  const resolved = path.resolve(agentDir);
-  if (pathCaseInsensitive(resolved)) {
-    return normalizeLowercaseStringOrEmpty(resolved);
-  }
-  return resolved;
+  return canonicalizePathIdentity(agentDir);
 }
 
 function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {

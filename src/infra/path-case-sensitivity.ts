@@ -1,8 +1,14 @@
-// Path case-sensitivity probes for identity keys (agentDir, trusted bins, …).
-// Measures *child* lookup semantics on the target filesystem so mount boundaries
-// are not misclassified by case-swapping a parent path name.
+// Path case-sensitivity probes and component-aware identity keys
+// (agentDir collisions, trusted safe-bin dirs, …).
+//
+// Whole-path folding is unsafe across mixed mount / per-directory case
+// semantics: one boolean must not lowercase every component. Identity walks
+// components and folds only where the parent resolves children case-insensitively.
 import fs from "node:fs";
 import path from "node:path";
+
+/** Probe whether `dir` resolves children case-insensitively. null = unknown. */
+export type PathChildCaseProbe = (dir: string) => boolean | null;
 
 function swapAsciiCase(value: string): string {
   return value.replace(/[A-Za-z]/g, (char) => {
@@ -25,7 +31,7 @@ function hasAsciiLetters(value: string): boolean {
  * otherwise create a temporary marker and remove it.
  * Returns null when the directory cannot be probed.
  */
-function probeDirectoryChildCaseInsensitive(dir: string): boolean | null {
+export function probeDirectoryChildCaseInsensitive(dir: string): boolean | null {
   try {
     const entries = fs.readdirSync(dir);
     for (const entry of entries) {
@@ -84,34 +90,98 @@ function probeDirectoryChildCaseInsensitive(dir: string): boolean | null {
 }
 
 /**
- * True when `value` lives on a volume where child path lookups fold case.
+ * True when `value` lives under a directory whose *child* lookups fold case.
  * Walks to the closest existing directory so configured paths need not exist yet.
- * Probes child lookup semantics on that directory (mount-boundary safe).
+ * Prefer {@link canonicalizePathIdentity} for multi-component identity keys.
  */
 export function pathCaseInsensitive(value: string): boolean {
-  let candidate = path.resolve(value);
+  return childLookupFoldsCase(path.resolve(value), probeDirectoryChildCaseInsensitive);
+}
+
+/**
+ * Whether children of `parent` fold case.
+ * Tries the logical parent first (injected probes / existing dirs), then walks
+ * to the closest existing ancestor for production probes on absent paths.
+ * Unknown / unreadable → false (fail-closed: do not invent equality).
+ */
+function childLookupFoldsCase(parent: string, probe: PathChildCaseProbe): boolean {
+  let candidate = parent;
   for (;;) {
+    const probed = probe(candidate);
+    if (probed === true) {
+      return true;
+    }
+    if (probed === false) {
+      return false;
+    }
+    // null: probe could not answer (missing / unreadable). Prefer an existing
+    // ancestor so production child markers still work for absent leaf paths.
     try {
       const stats = fs.statSync(candidate);
       if (stats.isDirectory()) {
-        const probed = probeDirectoryChildCaseInsensitive(candidate);
-        if (probed !== null) {
-          return probed;
-        }
-        // Directory exists but is unreadable/unwritable: do not walk past a
-        // mount boundary by case-swapping the parent name. Fall back to OS default.
-        return process.platform === "win32";
+        // Existing dir answered null → fail-closed (do not fold).
+        return false;
       }
-      // Existing non-directory: children of the containing dir share its volume.
     } catch {
-      // Path may not exist yet; walk to the closest existing parent directory.
+      // Missing path: walk up.
     }
 
-    const parent = path.dirname(candidate);
-    if (parent === candidate) {
+    const up = path.dirname(candidate);
+    if (up === candidate) {
       // Unknown root: Windows volumes are case-insensitive by default; POSIX is not.
+      // Fail-closed on POSIX (preserve case) matches safe-bin trust needs.
       return process.platform === "win32";
     }
-    candidate = parent;
+    candidate = up;
   }
+}
+
+export type CanonicalizePathIdentityOptions = {
+  /**
+   * Optional probe for unit tests / mixed-boundary simulation.
+   * Receives the logical parent path built so far (may not exist yet).
+   * Production default probes the closest existing directory.
+   */
+  probeChildCaseInsensitive?: PathChildCaseProbe;
+};
+
+/**
+ * Component-aware path identity key.
+ *
+ * Walks absolute path components left-to-right. Folds a component to lowercase
+ * only when that component's parent resolves children case-insensitively.
+ * Case-sensitive ancestors keep distinct spellings (`Foo` vs `foo`) even when a
+ * descendant mount is case-insensitive — fixing whole-path folding false aliases.
+ *
+ * Fail-closed: unknown parent probes do not fold (safe for trusted-bin compare).
+ */
+export function canonicalizePathIdentity(
+  value: string,
+  options?: CanonicalizePathIdentityOptions,
+): string {
+  const resolved = path.resolve(value);
+  const probe = options?.probeChildCaseInsensitive ?? probeDirectoryChildCaseInsensitive;
+  const parsed = path.parse(resolved);
+  // Root (/, C:\, \\server\share\) has no parent component to fold.
+  let built = parsed.root;
+  const relative = resolved.slice(parsed.root.length);
+  if (!relative) {
+    return built;
+  }
+  const parts = relative.split(path.sep).filter((part) => part.length > 0);
+  const foldsCache = new Map<string, boolean>();
+
+  for (const part of parts) {
+    let folds = foldsCache.get(built);
+    if (folds === undefined) {
+      // Injected probes answer for the logical parent (tests); production
+      // probes walk to the closest existing directory inside childLookupFoldsCase.
+      folds = childLookupFoldsCase(built, probe);
+      foldsCache.set(built, folds);
+    }
+    const segment = folds ? part.toLowerCase() : part;
+    built =
+      built.endsWith(path.sep) || built === "" ? `${built}${segment}` : path.join(built, segment);
+  }
+  return built;
 }
