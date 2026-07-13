@@ -5,11 +5,24 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { BUNDLE_MCP_TEMP_PREFIX, sweepOrphanedBundleMcpTempDirs } from "./bundle-mcp-sweep.js";
 
 const OLD_MTIME = new Date(Date.now() - 24 * 60 * 60 * 1000);
+// Kept in sync with the module-private marker name in bundle-mcp-sweep.ts.
+const BUNDLE_MCP_OWNER_MARKER = ".owner.json";
 
-async function createTempConfigDir(root: string, suffix: string, options?: { old?: boolean }) {
+async function createTempConfigDir(
+  root: string,
+  suffix: string,
+  options?: { old?: boolean; owner?: { pid: number; bootId?: string } },
+) {
   const dir = path.join(root, `${BUNDLE_MCP_TEMP_PREFIX}${suffix}`);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, "mcp.json"), `{"mcpServers":{}}\n`, "utf-8");
+  if (options?.owner) {
+    await fs.writeFile(
+      path.join(dir, BUNDLE_MCP_OWNER_MARKER),
+      `${JSON.stringify(options.owner)}\n`,
+      "utf-8",
+    );
+  }
   if (options?.old !== false) {
     await fs.utimes(dir, OLD_MTIME, OLD_MTIME);
   }
@@ -81,6 +94,57 @@ describe("sweepOrphanedBundleMcpTempDirs", () => {
     expect(result.removed).toEqual([]);
     expect(result.kept).toEqual([orphan]);
     await expect(fs.stat(orphan)).resolves.toBeDefined();
+  });
+
+  it("keeps an aged, unreferenced dir whose owning gateway is still alive (queued run before child spawn)", async () => {
+    const queued = await createTempConfigDir(root, "queued", { owner: { pid: 4242 } });
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      listCommandLines: () => ["node /usr/bin/unrelated"],
+      isPidAlive: (pid) => pid === 4242, // the owning gateway is alive
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([queued]);
+    await expect(fs.stat(queued)).resolves.toBeDefined();
+  });
+
+  it("removes an aged, unreferenced dir whose owning gateway is dead", async () => {
+    const orphan = await createTempConfigDir(root, "dead-owner", { owner: { pid: 4242 } });
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      listCommandLines: () => ["node /usr/bin/unrelated"],
+      isPidAlive: () => false, // owning gateway is gone
+    });
+    expect(result.removed).toEqual([orphan]);
+    await expect(fs.stat(orphan)).rejects.toThrow();
+  });
+
+  it("removes an aged, unreferenced dir whose owner boot id predates a reboot (pid may be reused)", async () => {
+    const orphan = await createTempConfigDir(root, "rebooted", {
+      owner: { pid: 4242, bootId: "boot-before" },
+    });
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      listCommandLines: () => ["node /usr/bin/unrelated"],
+      currentBootId: "boot-after",
+      isPidAlive: () => true, // pid reused after reboot must not protect the dir
+    });
+    expect(result.removed).toEqual([orphan]);
+    await expect(fs.stat(orphan)).rejects.toThrow();
+  });
+
+  it("keeps a live-owned dir when the boot id still matches", async () => {
+    const queued = await createTempConfigDir(root, "same-boot", {
+      owner: { pid: 4242, bootId: "boot-a" },
+    });
+    const result = await sweepOrphanedBundleMcpTempDirs({
+      tmpRoot: root,
+      listCommandLines: () => ["node /usr/bin/unrelated"],
+      currentBootId: "boot-a",
+      isPidAlive: (pid) => pid === 4242,
+    });
+    expect(result.removed).toEqual([]);
+    expect(result.kept).toEqual([queued]);
   });
 
   it("removes legacy empty dirs (mcp.json already gone) with no live reference", async () => {

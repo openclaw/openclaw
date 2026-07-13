@@ -20,6 +20,14 @@
  * what spawns the CLI children) remain visible, so their configs stay
  * protected; a scan that yields nothing at all is treated as unknown and the
  * sweep fails closed.
+ *
+ * Argv liveness alone is not enough: the config is rendered at prepare time,
+ * before the run enters the serialization queue, so a run waiting in the queue
+ * owns a config that no process argv references yet. To avoid a concurrent
+ * gateway's sweep reclaiming such a dir, each dir carries an owner marker (the
+ * creating gateway's pid + boot id); an aged, argv-unreferenced dir is only
+ * removed once its owning gateway is gone. Unmarked (legacy) dirs keep the
+ * prior age + liveness behaviour.
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -34,6 +42,99 @@ export const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
 
 const DEFAULT_SPAWN_GRACE_MS = 5 * 60 * 1000;
 const PROCESS_SCAN_TIMEOUT_MS = 10_000;
+
+/**
+ * Marker written beside the rendered `mcp.json` recording the gateway that owns
+ * the dir. It lets a concurrent gateway's startup sweep distinguish a dir owned
+ * by a still-live gateway (e.g. a run waiting in the serialization queue whose
+ * CLI child has not spawned yet, so no argv references it) from a true orphan.
+ */
+const BUNDLE_MCP_OWNER_MARKER = ".owner.json";
+
+type BundleMcpOwner = { pid: number; bootId?: string };
+
+/** Linux boot id (changes on reboot); undefined off-Linux — best-effort only. */
+async function readCurrentBootId(): Promise<string | undefined> {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  try {
+    return (await fs.readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function defaultIsPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH: no such process (dead). EPERM: exists but not signalable (alive).
+    return (err as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
+/**
+ * Persist the owning gateway's identity beside the rendered config. Best-effort:
+ * a failed write leaves the dir unmarked, which the sweep treats as legacy
+ * (age + liveness only), so a marker failure can never over-protect a leak.
+ */
+export async function writeBundleMcpOwnerMarker(dir: string): Promise<void> {
+  const owner: BundleMcpOwner = { pid: process.pid, bootId: await readCurrentBootId() };
+  try {
+    await fs.writeFile(
+      path.join(dir, BUNDLE_MCP_OWNER_MARKER),
+      `${JSON.stringify(owner)}\n`,
+      "utf8",
+    );
+  } catch {
+    // Non-fatal: unmarked dirs fall back to the legacy age + liveness rule.
+  }
+}
+
+async function readBundleMcpOwner(dir: string): Promise<BundleMcpOwner | undefined> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(dir, BUNDLE_MCP_OWNER_MARKER), "utf8");
+  } catch {
+    return undefined; // No marker: legacy dir (pre-ownership or a foreign leak).
+  }
+  try {
+    const parsed = JSON.parse(raw) as { pid?: unknown; bootId?: unknown };
+    if (typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0) {
+      return {
+        pid: parsed.pid,
+        bootId: typeof parsed.bootId === "string" ? parsed.bootId : undefined,
+      };
+    }
+  } catch {
+    // Corrupt marker — treat as unmarked (legacy handling).
+  }
+  return undefined;
+}
+
+/**
+ * Whether the gateway that created `dir` is still alive. An owned dir may be a
+ * run still waiting in the serialization queue whose CLI child has not spawned
+ * yet — no argv references it, but deleting it would make that run spawn with a
+ * missing `--mcp-config`. Unmarked (legacy) dirs return false so their handling
+ * is unchanged. A changed boot id means the host rebooted and the owner is gone.
+ */
+async function isBundleMcpOwnerAlive(
+  dir: string,
+  currentBootId: string | undefined,
+  isPidAlive: (pid: number) => boolean,
+): Promise<boolean> {
+  const owner = await readBundleMcpOwner(dir);
+  if (!owner) {
+    return false;
+  }
+  if (owner.bootId !== undefined && currentBootId !== undefined && owner.bootId !== currentBootId) {
+    return false;
+  }
+  return isPidAlive(owner.pid);
+}
 
 async function listPosixCommandLinesViaPs(): Promise<string[]> {
   try {
@@ -126,10 +227,15 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   spawnGraceMs?: number;
   /** Override the process scan (tests). */
   listCommandLines?: () => string[] | Promise<string[]>;
+  /** Override the owner liveness probe (tests). Defaults to `process.kill(pid, 0)`. */
+  isPidAlive?: (pid: number) => boolean;
+  /** Override the current boot id (tests). Defaults to the host boot id on Linux. */
+  currentBootId?: string;
   log?: { warn: (msg: string) => void };
 }): Promise<{ removed: string[]; kept: string[] }> {
   const tmpRoot = params?.tmpRoot ?? os.tmpdir();
   const spawnGraceMs = params?.spawnGraceMs ?? DEFAULT_SPAWN_GRACE_MS;
+  const isPidAlive = params?.isPidAlive ?? defaultIsPidAlive;
   const removed: string[] = [];
   const kept: string[] = [];
 
@@ -153,6 +259,7 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
     return { removed, kept: entries.map((entry) => path.join(tmpRoot, entry)) };
   }
 
+  const currentBootId = params?.currentBootId ?? (await readCurrentBootId());
   const now = Date.now();
   for (const entry of entries) {
     const dir = path.join(tmpRoot, entry);
@@ -171,6 +278,16 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
     if (commandLines.some((line) => lineReferencesDir(line, dir))) {
       // A live CLI child (of this gateway, a concurrent gateway, or a
       // persistent live session) still references the config — keep (#73244).
+      kept.push(dir);
+      continue;
+    }
+    if (await isBundleMcpOwnerAlive(dir, currentBootId, isPidAlive)) {
+      // The owning gateway is still alive, so this may be a run waiting in the
+      // serialization queue whose CLI child has not spawned yet — no argv
+      // references it, but deleting it would make that run spawn with a missing
+      // `--mcp-config`. The config is created at prepare time, before the run
+      // enters `enqueueCliRun`, so a serialized run can outlive the grace window
+      // without a child. Only reclaim once the owning gateway is gone.
       kept.push(dir);
       continue;
     }

@@ -28,7 +28,7 @@ import {
 } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
-import { BUNDLE_MCP_TEMP_PREFIX } from "./bundle-mcp-sweep.js";
+import { BUNDLE_MCP_TEMP_PREFIX, writeBundleMcpOwnerMarker } from "./bundle-mcp-sweep.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -183,6 +183,10 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     params.env,
   ) as BundleMcpConfig;
   await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
+  // Record the owning gateway so a concurrent gateway's startup sweep does not
+  // reclaim this dir while the run still waits in the serialization queue (its
+  // CLI child, which would put the path in argv, has not spawned yet).
+  await writeBundleMcpOwnerMarker(tempDir);
   return {
     backend: {
       ...params.backend,
