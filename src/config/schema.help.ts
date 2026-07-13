@@ -1,6 +1,7 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
+import { SUBAGENT_FIELD_HELP } from "./schema.subagents.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 export const FIELD_HELP: Record<string, string> = {
   meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
@@ -311,14 +312,7 @@ export const FIELD_HELP: Record<string, string> = {
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
   "agents.defaults.skills":
     "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
-  "agents.defaults.subagents.delegationMode":
-    'Prompt-only sub-agent delegation strength. "suggest" keeps the default guidance; "prefer" strongly instructs the main agent to delegate anything more involved than a direct reply via sessions_spawn.',
-  "agents.defaults.subagents.announceTarget":
-    'Default native sub-agent completion routing. "channel" preserves direct completion announces; "parent" wakes the requester session with no direct channel announce.',
-  "agents.list[].subagents.delegationMode":
-    "Per-agent override for sub-agent delegation strength. Use this for coordinator agents that should stay responsive and push non-trivial work into spawned sub-agents.",
-  "agents.list[].subagents.announceTarget":
-    'Per-agent native sub-agent completion routing. "parent" is useful for coordinator agents that should synthesize child results before replying.',
+  ...SUBAGENT_FIELD_HELP,
   "agents.list[].contextInjection":
     "Per-agent override for when workspace bootstrap files are injected into this agent's system prompt. Omit to inherit agents.defaults.contextInjection.",
   "agents.list[].bootstrapMaxChars":

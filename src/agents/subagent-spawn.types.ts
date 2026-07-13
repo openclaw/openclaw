@@ -11,7 +11,3 @@ export type SpawnSubagentSandboxMode = (typeof SUBAGENT_SPAWN_SANDBOX_MODES)[num
 /** Prompt context relationship between the parent session and spawned subagent. */
 export const SUBAGENT_SPAWN_CONTEXT_MODES = ["isolated", "fork"] as const;
 export type SpawnSubagentContextMode = (typeof SUBAGENT_SPAWN_CONTEXT_MODES)[number];
-
-/** Completion routing target for native subagent runs. */
-export const SUBAGENT_ANNOUNCE_TARGETS = ["channel", "parent"] as const;
-export type SubagentAnnounceTarget = (typeof SUBAGENT_ANNOUNCE_TARGETS)[number];

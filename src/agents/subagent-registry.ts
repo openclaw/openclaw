@@ -86,8 +86,8 @@ import {
 import {
   createSubagentRunManager,
   markSubagentRunPausedAfterYield,
-  type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
+import type { RegisterSubagentRunParams } from "./subagent-registry-run-params.js";
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,

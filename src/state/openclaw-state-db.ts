@@ -1318,7 +1318,6 @@ function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
     );
   }
 }
-
 // The caller owns the state.schema.ensure transaction so every probe, DDL
 // change, and backfill observes one authoritative schema across processes.
 function ensureAdditiveStateColumns(db: DatabaseSync): void {

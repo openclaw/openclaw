@@ -1,6 +1,7 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
+import { SUBAGENT_FIELD_LABELS } from "./schema.subagents.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   meta: "Metadata",
@@ -467,10 +468,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "skills.load.watchDebounceMs": "Skills Watch Debounce (ms)",
   "skills.workshop.allowSymlinkTargetWrites": "Allow Skill Workshop Symlink Writes",
   "agents.defaults.skills": "Skills",
-  "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
-  "agents.list[].subagents.delegationMode": "Sub-agent Delegation Mode",
-  "agents.defaults.subagents.announceTarget": "Sub-agent Announce Target",
-  "agents.list[].subagents.announceTarget": "Sub-agent Announce Target",
+  ...SUBAGENT_FIELD_LABELS,
   "agents.defaults.workspace": "Workspace",
   "agents.defaults.repoRoot": "Repo Root",
   "agents.defaults.promptOverlays": "Prompt Overlays",

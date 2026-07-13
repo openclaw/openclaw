@@ -5,14 +5,12 @@
  */
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
   resolveSubagentSpawnModelSelection,
 } from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
-import type { SubagentAnnounceTarget } from "./subagent-spawn.types.js";
 
 /** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
@@ -50,33 +48,6 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
   return typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
     ? Math.max(0, Math.floor(params.runTimeoutSeconds))
     : cfgSubagentTimeout;
-}
-
-function readConfiguredAnnounceTarget(value: unknown): SubagentAnnounceTarget | undefined {
-  return value === "channel" || value === "parent" ? value : undefined;
-}
-
-/** Resolves subagent completion routing from per-call override, per-agent config, or defaults. */
-export function resolveConfiguredSubagentAnnounceTarget(params: {
-  cfg: OpenClawConfig;
-  requesterAgentId?: string;
-  announceTarget?: SubagentAnnounceTarget;
-}): SubagentAnnounceTarget {
-  if (params.announceTarget) {
-    return params.announceTarget;
-  }
-  // Match the canonical agent lookup used elsewhere (routing, requireAgentId):
-  // requesterAgentId arrives already normalized, so a raw agent.id === id compare
-  // silently drops per-agent overrides whenever the configured id casing/format
-  // differs. resolveAgentConfig normalizes both sides.
-  const requesterAgentConfig = params.requesterAgentId
-    ? resolveAgentConfig(params.cfg, params.requesterAgentId)
-    : undefined;
-  return (
-    readConfiguredAnnounceTarget(requesterAgentConfig?.subagents?.announceTarget) ??
-    readConfiguredAnnounceTarget(params.cfg?.agents?.defaults?.subagents?.announceTarget) ??
-    "channel"
-  );
 }
 
 /** Resolves the subagent model plus thinking patch to apply to the spawned session. */

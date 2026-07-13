@@ -6,8 +6,9 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
+import type { SubagentAnnounceTarget } from "./subagent-announce-target.js";
 import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
-import type { SpawnSubagentMode, SubagentAnnounceTarget } from "./subagent-spawn.types.js";
+import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 export type PendingFinalDeliveryPayload = {
   requesterSessionKey: string;

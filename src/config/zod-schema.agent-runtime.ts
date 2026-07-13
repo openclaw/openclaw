@@ -9,7 +9,6 @@ import { z } from "zod";
 import { splitSandboxBindSpec } from "../agents/sandbox/bind-spec.js";
 import { isSandboxHostPathAbsolute } from "../agents/sandbox/host-paths.js";
 import { getBlockedNetworkModeReason } from "../agents/sandbox/network-mode.js";
-import { SUBAGENT_ANNOUNCE_TARGETS } from "../agents/subagent-spawn.types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { LEGACY_WEB_SEARCH_PROVIDER_CONFIG_KEYS } from "./web-search-legacy-provider-keys.js";
@@ -24,6 +23,7 @@ import {
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+import { createAgentEntrySubagentsSchema } from "./zod-schema.subagents.js";
 
 function validateSandboxBindEntries(
   binds: readonly string[] | undefined,
@@ -1070,17 +1070,7 @@ export const AgentEntrySchema = z
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
-    subagents: z
-      .object({
-        delegationMode: z.enum(["suggest", "prefer"]).optional(),
-        allowAgents: z.array(z.string()).optional(),
-        model: AgentModelSchema.optional(),
-        thinking: z.string().optional(),
-        announceTarget: z.enum(SUBAGENT_ANNOUNCE_TARGETS).optional(),
-        requireAgentId: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    subagents: createAgentEntrySubagentsSchema(AgentModelSchema),
     runRetries: AgentRunRetriesConfigSchema.optional(),
     embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
     sandbox: AgentSandboxSchema,

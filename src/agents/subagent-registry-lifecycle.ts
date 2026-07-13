@@ -696,28 +696,25 @@ export function createSubagentRegistryLifecycleController(params: {
   const loadPendingFinalDeliveryPayload = (
     entry: SubagentRunRecord,
   ): PendingFinalDeliveryPayload => {
+    const payload = entry.delivery?.payload;
     return {
-      requesterSessionKey:
-        entry.delivery?.payload?.requesterSessionKey ?? entry.requesterSessionKey,
-      requesterOrigin: entry.delivery?.payload?.requesterOrigin ?? entry.requesterOrigin,
-      requesterDisplayKey:
-        entry.delivery?.payload?.requesterDisplayKey ?? entry.requesterDisplayKey,
-      childSessionKey: entry.delivery?.payload?.childSessionKey ?? entry.childSessionKey,
-      childRunId: entry.delivery?.payload?.childRunId ?? entry.runId,
-      task: entry.delivery?.payload?.task ?? entry.task,
-      label: entry.delivery?.payload?.label ?? entry.label,
-      startedAt: entry.delivery?.payload?.startedAt ?? entry.startedAt,
-      endedAt: entry.delivery?.payload?.endedAt ?? entry.endedAt,
-      outcome: entry.delivery?.payload?.outcome ?? entry.outcome,
-      expectsCompletionMessage:
-        entry.delivery?.payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
-      announceTarget: entry.delivery?.payload?.announceTarget ?? entry.announceTarget,
-      spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
-      frozenResultText: entry.delivery?.payload?.frozenResultText ?? entry.completion?.resultText,
+      requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
+      requesterOrigin: payload?.requesterOrigin ?? entry.requesterOrigin,
+      requesterDisplayKey: payload?.requesterDisplayKey ?? entry.requesterDisplayKey,
+      childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
+      childRunId: payload?.childRunId ?? entry.runId,
+      task: payload?.task ?? entry.task,
+      label: payload?.label ?? entry.label,
+      startedAt: payload?.startedAt ?? entry.startedAt,
+      endedAt: payload?.endedAt ?? entry.endedAt,
+      outcome: payload?.outcome ?? entry.outcome,
+      expectsCompletionMessage: payload?.expectsCompletionMessage ?? entry.expectsCompletionMessage,
+      announceTarget: payload?.announceTarget ?? entry.announceTarget,
+      spawnMode: payload?.spawnMode ?? entry.spawnMode,
+      frozenResultText: payload?.frozenResultText ?? entry.completion?.resultText,
       fallbackFrozenResultText:
-        entry.delivery?.payload?.fallbackFrozenResultText ?? entry.completion?.fallbackResultText,
-      wakeOnDescendantSettle:
-        entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
+        payload?.fallbackFrozenResultText ?? entry.completion?.fallbackResultText,
+      wakeOnDescendantSettle: payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
     };
   };
 

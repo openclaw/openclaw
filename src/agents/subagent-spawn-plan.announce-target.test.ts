@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveConfiguredSubagentAnnounceTarget } from "./subagent-spawn-plan.js";
+import { resolveConfiguredSubagentAnnounceTarget } from "./subagent-announce-target.js";
 
 function cfgWith(agents: unknown): OpenClawConfig {
   return { agents } as OpenClawConfig;

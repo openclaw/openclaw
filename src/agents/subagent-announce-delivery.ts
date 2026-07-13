@@ -55,6 +55,10 @@ import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
+import type {
+  DeliverSubagentAnnouncementParams,
+  SendSubagentAnnounceDirectlyParams,
+} from "./subagent-announce-delivery-params.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
@@ -81,7 +85,7 @@ import {
 import type { DeliveryContext } from "./subagent-announce-origin.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { resolveRequesterStoreKey } from "./subagent-requester-store-key.js";
-import type { SpawnSubagentMode, SubagentAnnounceTarget } from "./subagent-spawn.types.js";
+import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 type SubagentAnnounceDeliveryDeps = {
@@ -1383,24 +1387,9 @@ function stripNonDeliverableChannelForCompletionOrigin(
   return normalizeDeliveryContext(rest);
 }
 
-async function sendSubagentAnnounceDirectly(params: {
-  requesterSessionKey: string;
-  targetRequesterSessionKey: string;
-  triggerMessage: string;
-  internalEvents?: AgentInternalEvent[];
-  expectsCompletionMessage: boolean;
-  bestEffortDeliver?: boolean;
-  directIdempotencyKey: string;
-  completionDirectOrigin?: DeliveryContext;
-  directOrigin?: DeliveryContext;
-  requesterSessionOrigin?: DeliveryContext;
-  sourceSessionKey?: string;
-  sourceChannel?: string;
-  sourceTool?: string;
-  requesterIsSubagent: boolean;
-  announceTarget?: SubagentAnnounceTarget;
-  signal?: AbortSignal;
-}): Promise<SubagentAnnounceDeliveryResult> {
+async function sendSubagentAnnounceDirectly(
+  params: SendSubagentAnnounceDirectlyParams,
+): Promise<SubagentAnnounceDeliveryResult> {
   if (params.signal?.aborted) {
     return {
       delivered: false,
@@ -1905,28 +1894,9 @@ async function sendSubagentAnnounceDirectly(params: {
   }
 }
 
-export async function deliverSubagentAnnouncement(params: {
-  requesterSessionKey: string;
-  announceId?: string;
-  triggerMessage: string;
-  steerMessage: string;
-  internalEvents?: AgentInternalEvent[];
-  summaryLine?: string;
-  requesterSessionOrigin?: DeliveryContext;
-  requesterOrigin?: DeliveryContext;
-  completionDirectOrigin?: DeliveryContext;
-  directOrigin?: DeliveryContext;
-  sourceSessionKey?: string;
-  sourceChannel?: string;
-  sourceTool?: string;
-  targetRequesterSessionKey: string;
-  requesterIsSubagent: boolean;
-  announceTarget?: SubagentAnnounceTarget;
-  expectsCompletionMessage: boolean;
-  bestEffortDeliver?: boolean;
-  directIdempotencyKey: string;
-  signal?: AbortSignal;
-}): Promise<SubagentAnnounceDeliveryResult> {
+export async function deliverSubagentAnnouncement(
+  params: DeliverSubagentAnnouncementParams,
+): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
     expectsCompletionMessage: params.expectsCompletionMessage,
     signal: params.signal,
