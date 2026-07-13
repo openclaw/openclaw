@@ -104,6 +104,8 @@ function resolveSmsWebhookReplayGuard(account: ResolvedSmsAccount): SmsWebhookRe
 
 export function resetSmsWebhookReplayGuardsForTest(): void {
   replayGuardsByAccount.clear();
+  invalidRequestRateLimiter.clear();
+  callbackDispatchRateLimiter.clear();
 }
 
 type SmsWebhookLog = {
@@ -150,11 +152,6 @@ function rejectInvalidRequestRateLimit(params: {
   params.log?.warn?.(`SMS webhook invalid-request rate limit exceeded for ${params.key}`);
   respondTwiml(params.res, 429, "Rate limit exceeded");
   return true;
-}
-
-export function resetSmsWebhookRateLimiterForTest(): void {
-  invalidRequestRateLimiter.clear();
-  callbackDispatchRateLimiter.clear();
 }
 
 // Each account route owns its guard so one saturated account cannot block sibling accounts.
