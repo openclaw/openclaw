@@ -1412,6 +1412,31 @@ describe("handleLineWebhookEvents", () => {
     expect(onEventAccepted).toHaveBeenCalledWith(event);
   });
 
+  it("retries ordinary pre-acceptance failures instead of committing their replay claim", async () => {
+    buildLineMessageContextMock.mockRejectedValueOnce(new Error("temporary context failure"));
+    const processMessage: LineWebhookContext["processMessage"] = vi.fn(async (message) => {
+      await message.onEventAccepted?.();
+    });
+    const onEventAccepted = vi.fn();
+    const event = createReplayMessageEvent({
+      messageId: "ordinary-pre-acceptance-failure",
+      groupId: "ordinary-pre-acceptance-group",
+      userId: "ordinary-pre-acceptance-user",
+      webhookEventId: "ordinary-pre-acceptance-event",
+      isRedelivery: true,
+    });
+    const context = createOpenGroupReplayContext(processMessage, createLineWebhookReplayCache());
+    context.onEventAccepted = onEventAccepted;
+
+    await expect(handleLineWebhookEvents([event], context)).rejects.toThrow(
+      "temporary context failure",
+    );
+    await handleLineWebhookEvents([event], context);
+
+    expect(processMessage).toHaveBeenCalledOnce();
+    expect(onEventAccepted).toHaveBeenCalledWith(event);
+  });
+
   it("keeps configured media-size-limit events processable as attachment unavailable", async () => {
     downloadLineMediaMock.mockRejectedValueOnce(new Error("Media exceeds configured limit"));
     const processMessage = vi.fn();
@@ -1484,7 +1509,7 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps replay cache committed after a non-retryable event failure", async () => {
+  it("reopens replay after an ordinary event failure before durable acceptance", async () => {
     const processMessage = vi
       .fn()
       .mockRejectedValueOnce(new Error("transient failure"))
@@ -1501,8 +1526,8 @@ describe("handleLineWebhookEvents", () => {
     await expect(handleLineWebhookEvents([event], context)).rejects.toThrow("transient failure");
     await handleLineWebhookEvents([event], context);
 
-    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
-    expect(processMessage).toHaveBeenCalledTimes(1);
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(2);
+    expect(processMessage).toHaveBeenCalledTimes(2);
     expect(context.runtime.error).toHaveBeenCalledWith(
       "line: event handler failed: Error: transient failure",
     );

@@ -687,12 +687,10 @@ function startLineWebhookEvent(
       }
       await acceptEvent();
     } catch (err) {
-      if (replayCandidate) {
-        if (!eventAccepted && err instanceof LineRetryableWebhookError) {
-          replayCandidate.cache.release(replayCandidate.key, { error: err });
-        } else if (!eventAccepted) {
-          await replayCandidate.cache.commit(replayCandidate.key);
-        }
+      if (replayCandidate && !eventAccepted) {
+        // Every error here propagates to the webhook response before durable
+        // adoption. Leave the replay claim available so LINE can redeliver it.
+        replayCandidate.cache.release(replayCandidate.key, { error: err });
       }
       context.runtime.error?.(danger(`line: event handler failed: ${String(err)}`));
       throw err;
