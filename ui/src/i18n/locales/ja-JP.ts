@@ -1874,6 +1874,10 @@ export const ja_JP: TranslationMap = {
       useCurrentChatAria: "修正リクエストに現在のチャットを使用",
       useCurrentChatTooltip:
         "修正リクエストを提案のワークショップセッションではなく現在のチャットセッションに送信します。",
+      selfLearning: "自己学習",
+      selfLearningAria: "自己学習によるスキル提案を切り替える",
+      selfLearningTooltip:
+        "修正内容や完了した重要な作業を取り込み、レビューして、保留中のスキル提案を作成します。追加のバックグラウンドトークンを消費し、下書きは保留中の提案としてこのボードに追加されます。",
       view: "ワークショップビュー",
       board: "ボード",
       today: "今日",
@@ -1953,6 +1957,14 @@ export const ja_JP: TranslationMap = {
       noProposalsTitle: "まだ提案はありません",
       noProposalsBody: "{agent}はまだスキル提案をドラフトしていません。",
       noProposalsFooter: "新しい提案はレビューのためにここに表示されます。",
+    },
+    selfLearning: {
+      pitchTitle: "自己学習を有効にする",
+      pitchBody:
+        "OpenClaw は修正内容や完了した重要な実行をレビューし、このボード向けのスキル提案の下書きを作成します。追加のバックグラウンドトークンを消費し、下書きは保留中の提案として追加されます。",
+      enable: "自己学習を有効にする",
+      enabling: "有効化中…",
+      updateError: "自己学習の設定を更新できませんでした。",
     },
     today: {
       emptyTitle: "今日は待機中のものはありません",

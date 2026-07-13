@@ -1888,6 +1888,10 @@ export const it: TranslationMap = {
       useCurrentChatAria: "Usa la chat corrente per le richieste di revisione",
       useCurrentChatTooltip:
         "Invia le richieste di revisione alla sessione di chat corrente invece che alla sessione di workshop della proposta.",
+      selfLearning: "Autoapprendimento",
+      selfLearningAria: "Attiva o disattiva le proposte di Skills basate sull'autoapprendimento",
+      selfLearningTooltip:
+        "Acquisisce le correzioni ed esamina il lavoro sostanziale completato per creare proposte di skill in sospeso. Utilizza token aggiuntivi in background; le bozze vengono pubblicate su questa bacheca come proposte in sospeso.",
       view: "Vista workshop",
       board: "Bacheca",
       today: "Oggi",
@@ -1967,6 +1971,14 @@ export const it: TranslationMap = {
       noProposalsTitle: "Ancora nessuna proposta",
       noProposalsBody: "{agent} non ha ancora redatto alcuna proposta di skill.",
       noProposalsFooter: "Le nuove proposte appariranno qui per la revisione.",
+    },
+    selfLearning: {
+      pitchTitle: "Attiva l'autoapprendimento",
+      pitchBody:
+        "OpenClaw esamina le correzioni e le esecuzioni sostanziali completate, quindi crea bozze di proposte di skill per questa bacheca. Utilizza token aggiuntivi in background e le bozze arrivano come proposte in sospeso.",
+      enable: "Abilita l'autoapprendimento",
+      enabling: "Abilitazione…",
+      updateError: "Impossibile aggiornare l'impostazione di autoapprendimento.",
     },
     today: {
       emptyTitle: "Niente in attesa oggi",

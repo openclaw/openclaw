@@ -1860,6 +1860,10 @@ export const ko: TranslationMap = {
       useCurrentChat: "현재 채팅 사용",
       useCurrentChatAria: "수정 요청에 현재 채팅 사용",
       useCurrentChatTooltip: "수정 요청을 제안의 워크숍 세션 대신 현재 채팅 세션으로 보냅니다.",
+      selfLearning: "자기 학습",
+      selfLearningAria: "자기 학습 스킬 제안 전환",
+      selfLearningTooltip:
+        "수정 사항과 완료된 주요 작업을 포착하고 검토하여 보류 중인 Skill 제안으로 만듭니다. 추가 백그라운드 토큰을 사용하며, 초안은 이 보드에 보류 중인 제안으로 등록됩니다.",
       view: "워크숍 보기",
       board: "보드",
       today: "오늘",
@@ -1938,6 +1942,14 @@ export const ko: TranslationMap = {
       noProposalsTitle: "아직 제안이 없습니다",
       noProposalsBody: "{agent}이(가) 아직 스킬 제안을 작성하지 않았습니다.",
       noProposalsFooter: "새 제안은 검토를 위해 여기에 표시됩니다.",
+    },
+    selfLearning: {
+      pitchTitle: "자기 학습 켜기",
+      pitchBody:
+        "OpenClaw는 수정 사항과 완료된 주요 실행을 검토한 후 이 보드에 게시할 Skill 제안 초안을 작성합니다. 추가 백그라운드 토큰을 사용하며, 초안은 보류 중인 제안으로 등록됩니다.",
+      enable: "자기 학습 활성화",
+      enabling: "활성화 중…",
+      updateError: "자기 학습 설정을 업데이트할 수 없습니다.",
     },
     today: {
       emptyTitle: "오늘 대기 중인 항목이 없습니다",

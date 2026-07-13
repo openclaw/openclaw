@@ -1863,6 +1863,10 @@ export const vi: TranslationMap = {
       useCurrentChatAria: "Dùng cuộc trò chuyện hiện tại cho yêu cầu chỉnh sửa",
       useCurrentChatTooltip:
         "Gửi yêu cầu chỉnh sửa đến phiên trò chuyện hiện tại thay vì phiên workshop của đề xuất.",
+      selfLearning: "Tự học",
+      selfLearningAria: "Bật hoặc tắt đề xuất Skills tự học",
+      selfLearningTooltip:
+        "Ghi nhận các chỉnh sửa và xem xét những công việc quan trọng đã hoàn thành để tạo thành các đề xuất kỹ năng đang chờ xử lý. Tính năng này sử dụng thêm token nền; các bản nháp sẽ xuất hiện trên bảng này dưới dạng đề xuất đang chờ xử lý.",
       view: "Chế độ xem Workshop",
       board: "Bảng",
       today: "Hôm nay",
@@ -1944,6 +1948,14 @@ export const vi: TranslationMap = {
       noProposalsTitle: "Chưa có đề xuất nào",
       noProposalsBody: "{agent} chưa soạn thảo đề xuất skill nào.",
       noProposalsFooter: "Các đề xuất mới sẽ xuất hiện ở đây để xem xét.",
+    },
+    selfLearning: {
+      pitchTitle: "Bật tính năng tự học",
+      pitchBody:
+        "OpenClaw xem xét các chỉnh sửa và những lượt chạy quan trọng đã hoàn thành, sau đó soạn thảo các đề xuất kỹ năng cho bảng này. Tính năng này sử dụng thêm token nền và các bản nháp sẽ xuất hiện dưới dạng đề xuất đang chờ xử lý.",
+      enable: "Bật tính năng tự học",
+      enabling: "Đang bật…",
+      updateError: "Không thể cập nhật cài đặt tự học.",
     },
     today: {
       emptyTitle: "Hôm nay không có gì đang chờ",

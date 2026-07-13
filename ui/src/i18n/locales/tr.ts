@@ -1884,6 +1884,10 @@ export const tr: TranslationMap = {
       useCurrentChatAria: "Revizyon istekleri için mevcut sohbeti kullan",
       useCurrentChatTooltip:
         "Revizyon isteklerini önerinin çalışma alanı oturumu yerine mevcut sohbet oturumuna gönder.",
+      selfLearning: "Kendi kendine öğrenme",
+      selfLearningAria: "Kendi kendine öğrenen beceri önerilerini aç veya kapat",
+      selfLearningTooltip:
+        "Düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceleyerek bekleyen beceri önerilerine dönüştürür. Arka planda ek token harcar; taslaklar bu panoya bekleyen öneriler olarak eklenir.",
       view: "Atölye görünümü",
       board: "Pano",
       today: "Bugün",
@@ -1963,6 +1967,14 @@ export const tr: TranslationMap = {
       noProposalsTitle: "Henüz öneri yok",
       noProposalsBody: "{agent} henüz herhangi bir skill önerisi hazırlamadı.",
       noProposalsFooter: "Yeni öneriler inceleme için burada görünecek.",
+    },
+    selfLearning: {
+      pitchTitle: "Kendi kendine öğrenmeyi aç",
+      pitchBody:
+        "OpenClaw, düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceler, ardından bu pano için beceri önerileri taslakları oluşturur. Arka planda ek token harcar ve taslaklar bekleyen öneriler olarak eklenir.",
+      enable: "Kendi kendine öğrenmeyi etkinleştir",
+      enabling: "Etkinleştiriliyor…",
+      updateError: "Kendi kendine öğrenme ayarı güncellenemedi.",
     },
     today: {
       emptyTitle: "Bugün bekleyen bir şey yok",

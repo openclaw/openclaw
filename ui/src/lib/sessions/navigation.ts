@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../string-coerce.ts";
+import { parseCatalogSessionKey } from "./catalog-key.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -276,8 +277,12 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     areUiSessionKeysEquivalent(row.key, currentSessionKey) ||
     (resultScopeMatches && uiSessionRowMatchesSelectedChat(input, row.key, currentSessionKey));
   const selectedSession = input.result?.sessions.find(matchesCurrentSession);
+  // Catalog sessions select their own sidebar rows; synthesizing a session row
+  // here would surface the raw catalog key as a phantom chat entry.
   const activeSession =
-    currentSessionKey && currentSessionKey.toLowerCase() !== "unknown"
+    currentSessionKey &&
+    currentSessionKey.toLowerCase() !== "unknown" &&
+    !parseCatalogSessionKey(currentSessionKey)
       ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
       : undefined;
   const sortedSessions = getVisibleSessionRows(input.result, {
