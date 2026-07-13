@@ -9,7 +9,10 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { extractTranscriptIndexEntry } from "./session-transcript-index.js";
+import {
+  extractTranscriptIndexEntry,
+  markSessionTranscriptIndexDirtyInTransaction,
+} from "./session-transcript-index.js";
 import {
   resolveVisibleTranscriptAppendParentId,
   selectVisibleTranscriptEventEntries,
@@ -31,6 +34,8 @@ function kysely(db: DatabaseSync) {
 }
 
 function readRevision(db: DatabaseSync, sessionId: string): number | null | undefined {
+  // Transcript mutations advance this value strictly, even within one wall-clock
+  // millisecond, so it is the generation fence for out-of-transaction planning.
   return executeSqliteQueryTakeFirstSync(
     db,
     kysely(db)
@@ -220,15 +225,20 @@ function insertFtsRows(
   }
 }
 
-function selectOrphanFtsRowIds(db: DatabaseSync): Array<number | bigint> {
+type OrphanFtsRow = { rowId: number | bigint; sessionId: string };
+
+function selectOrphanFtsRows(db: DatabaseSync, afterRowId: number | bigint): OrphanFtsRow[] {
   return (
     db
       .prepare(
         /* sqlite-allow-raw: unindexed FTS scan deliberately stays outside BEGIN */
-        "SELECT f.rowid FROM session_transcript_fts AS f WHERE NOT EXISTS (SELECT 1 FROM transcript_events AS e WHERE e.session_id = f.session_id) LIMIT ?",
+        "SELECT f.rowid, f.session_id FROM session_transcript_fts AS f WHERE f.rowid > ? AND NOT EXISTS (SELECT 1 FROM transcript_events AS e WHERE e.session_id = f.session_id) ORDER BY f.rowid LIMIT ?",
       )
-      .all(RECONCILE_BATCH_SIZE) as Array<{ rowid: number | bigint }>
-  ).map((row) => row.rowid);
+      .all(afterRowId, RECONCILE_BATCH_SIZE) as Array<{
+      rowid: number | bigint;
+      session_id: string;
+    }>
+  ).map((row) => ({ rowId: row.rowid, sessionId: row.session_id }));
 }
 
 function selectOrphanWatermarks(db: DatabaseSync): string[] {
@@ -259,11 +269,12 @@ async function reconcileOrphans(params: {
   onProgress?: () => void;
 }): Promise<void> {
   const database = openOpenClawAgentDatabase(params);
+  let orphanFtsCursor: number | bigint = 0;
   while (true) {
     params.onPlanning?.();
-    const rowIds = selectOrphanFtsRowIds(database.db);
+    const rows = selectOrphanFtsRows(database.db, orphanFtsCursor);
     const sessionIds = selectOrphanWatermarks(database.db);
-    if (rowIds.length === 0 && sessionIds.length === 0) {
+    if (rows.length === 0 && sessionIds.length === 0) {
       return;
     }
     params.onRebuildActive?.();
@@ -273,8 +284,13 @@ async function reconcileOrphans(params: {
           /* sqlite-allow-raw: revalidates transcript absence inside the short write */
           "DELETE FROM session_transcript_fts WHERE rowid = ? AND NOT EXISTS (SELECT 1 FROM transcript_events AS e WHERE e.session_id = session_transcript_fts.session_id)",
         );
-        for (const rowId of rowIds) {
-          removeFts.run(rowId);
+        for (const row of rows) {
+          const removed = removeFts.run(row.rowId);
+          if (removed.changes === 0) {
+            // The session was recreated after planning. Hide any retained old
+            // FTS rows until the normal dirty-session rebuild replaces them.
+            markSessionTranscriptIndexDirtyInTransaction(agentDatabase.db, row.sessionId);
+          }
         }
         for (const sessionId of sessionIds) {
           executeSqliteQuerySync(
@@ -298,6 +314,7 @@ async function reconcileOrphans(params: {
       params,
       { operationLabel: "sessions.search.reconcile.orphan-batch" },
     );
+    orphanFtsCursor = rows.at(-1)?.rowId ?? orphanFtsCursor;
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });

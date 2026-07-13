@@ -340,6 +340,10 @@ describe("searchSessionTranscripts", () => {
     const reconcile = waitForSessionTranscriptReconcileForTest().then(() => "reconcile" as const);
     expect(await Promise.race([append, reconcile])).toBe("append");
     await reconcile;
+    await sessionTranscriptSearchTesting.runReconcileWorker({
+      agentId: "main",
+      stateDir: paths.stateDir,
+    });
   });
 
   it("resolves source and dist worker URLs and times out a silent worker", async () => {
@@ -460,7 +464,7 @@ describe("searchSessionTranscripts", () => {
 
     executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_index_state"));
     expect(search("after").indexing).toBe(true);
-    await deleteSqliteTranscript({ agentId: "main", env: env(), sessionId: "session-1" });
+    await replaceSqliteTranscriptEvents(transcriptScope("session-1", "agent:main:main"), []);
     await waitForSessionTranscriptReconcileForTest();
     expect(search("after").hits).toHaveLength(0);
   });

@@ -93,6 +93,7 @@ function runReconcileWorker(params: {
       timeout = setTimeout(() => {
         finish(() => reject(new Error("session transcript reconcile worker timed out")), true);
       }, timeoutMs);
+      timeout.unref?.();
     };
     const finish = (done: () => void, terminate: boolean) => {
       if (settled) {

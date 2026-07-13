@@ -82,7 +82,7 @@ function readMessageText(message: unknown): string | undefined {
  * assistant message text is indexed; tool results, reasoning blocks, and
  * images stay out of the index by construction.
  */
-function extractTranscriptIndexEntry(
+export function extractTranscriptIndexEntry(
   event: unknown,
   fallbackTimestamp: number,
 ): TranscriptIndexEntry | undefined {
@@ -216,6 +216,9 @@ export function indexAppendedTranscriptEventInTransaction(
     return;
   }
   if (watermark.needsRebuild) {
+    // A rebuild may own a generation token in needs_rebuild. Reset it to the
+    // canonical dirty marker so this append invalidates that worker's claim.
+    markSessionTranscriptIndexDirtyInTransaction(db, params.sessionId);
     return;
   }
   if (params.seq !== watermark.indexedSeq + 1) {
@@ -273,7 +276,10 @@ function applyForwardIndex(
 }
 
 /** Marks one session for lazy rebuild without touching its FTS rows. */
-function markSessionTranscriptIndexDirtyInTransaction(db: DatabaseSync, sessionId: string): void {
+export function markSessionTranscriptIndexDirtyInTransaction(
+  db: DatabaseSync,
+  sessionId: string,
+): void {
   const watermark = readWatermark(db, sessionId);
   // Claim generations also live in needs_rebuild. Advancing updated_at
   // monotonically ensures a mutation can never recreate an older claim token.
