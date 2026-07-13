@@ -74,7 +74,7 @@ must include this copyable template:
 ```
 
 Under `Approved exceptions`, record one decision per PR using exactly one of
-these forms. An optional Markdown list marker is allowed:
+these forms. Only an optional `-` or `*` Markdown list marker is accepted:
 
 ```md
 #PR: pending (https://github.com/...decision...)
