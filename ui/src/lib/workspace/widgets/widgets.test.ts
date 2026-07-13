@@ -2,8 +2,9 @@
 // payload fixture into the rendered view model. The render fns are exercised
 // separately (empty/populated) to lock the empty/loading/error affordances.
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
 import { renderActivity } from "./activity.ts";
 import { renderChart } from "./chart.ts";
@@ -11,6 +12,7 @@ import { renderCron } from "./cron.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
 import { renderInstances } from "./instances.ts";
 import { renderMarkdown } from "./markdown.ts";
+import { renderPreview } from "./preview.ts";
 import { renderSessions } from "./sessions.ts";
 import { renderStatCard } from "./stat-card.ts";
 import { renderTable } from "./table.ts";
@@ -308,5 +310,89 @@ describe("iframe-embed render × sandbox mode", () => {
     );
     expect(container.querySelector('[data-test-id="workspace-embed-blocked"]')).not.toBeNull();
     expect(container.querySelector('[data-test-id="workspace-embed-frame"]')).toBeNull();
+  });
+});
+
+describe("preview widget", () => {
+  it("renders its URL with the workspace embed sandbox ceiling", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), null, {
+        basePath: "",
+        embed: { embedSandboxMode: "trusted", allowExternalEmbedUrls: false },
+      }),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="workspace-preview-frame"]',
+    );
+    expect(frame?.getAttribute("src")).toBe("/preview");
+    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("reloads the mounted frame without reading its content window", () => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview" } }), null, STRICT_EMBED),
+    );
+    const frame = container.querySelector<HTMLIFrameElement>(
+      '[data-test-id="workspace-preview-frame"]',
+    );
+    const setAttribute = vi.spyOn(expectDefined(frame), "setAttribute");
+    container
+      .querySelector<HTMLButtonElement>('[data-test-id="workspace-preview-reload"]')
+      ?.click();
+    expect(setAttribute).toHaveBeenCalledWith("src", "/preview");
+  });
+
+  it("exposes labeled controls and updates the selected viewport state", () => {
+    const container = renderToContainer(
+      renderPreview(
+        widget({ props: { url: "/preview", defaultViewport: "tablet" } }),
+        null,
+        STRICT_EMBED,
+      ),
+    );
+    expect(container.querySelector('[role="toolbar"]')?.getAttribute("aria-label")).toBeTruthy();
+    expect(container.querySelector('[role="group"]')?.getAttribute("aria-label")).toBeTruthy();
+    const tablet = container.querySelector<HTMLButtonElement>(
+      '[data-test-id="workspace-preview-viewport-tablet"]',
+    );
+    const mobile = container.querySelector<HTMLButtonElement>(
+      '[data-test-id="workspace-preview-viewport-mobile"]',
+    );
+    expect(tablet?.getAttribute("aria-pressed")).toBe("true");
+    expect(mobile?.getAttribute("aria-pressed")).toBe("false");
+    mobile?.click();
+    expect(tablet?.getAttribute("aria-pressed")).toBe("false");
+    expect(mobile?.getAttribute("aria-pressed")).toBe("true");
+    expect(container.querySelector(".workspace-preview__frame-wrap")?.className).toContain(
+      "workspace-preview__frame-wrap--mobile",
+    );
+  });
+
+  it.each(["bogus", 42])("defaults malformed viewport prop %j to desktop", (defaultViewport) => {
+    const container = renderToContainer(
+      renderPreview(widget({ props: { url: "/preview", defaultViewport } }), null, STRICT_EMBED),
+    );
+
+    expect(container.querySelector(".workspace-preview__frame-wrap")?.className).toContain(
+      "workspace-preview__frame-wrap--desktop",
+    );
+  });
+
+  it("fails closed for missing, malformed, external, and unsafe URLs", () => {
+    const cases: WorkspaceWidget[] = [
+      widget({ props: [] as never }),
+      widget({ props: { url: 42 } }),
+      widget({ props: { url: "https://evil.example" } }),
+      widget({ props: { url: "javascript:alert(1)" } }),
+    ];
+    for (const candidate of cases) {
+      const container = renderToContainer(
+        renderPreview(candidate, "javascript:alert(1)", STRICT_EMBED),
+      );
+      expect(container.querySelector('[data-test-id="workspace-preview-frame"]')).toBeNull();
+      expect(container.querySelector(".workspace-widget__placeholder")).not.toBeNull();
+    }
   });
 });

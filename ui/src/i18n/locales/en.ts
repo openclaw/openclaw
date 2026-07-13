@@ -2465,6 +2465,19 @@ export const en: TranslationMap = {
         blockedExternal: "External embeds are disabled by your gateway policy.",
         blockedScheme: "This embed URL uses an unsupported scheme.",
       },
+      preview: {
+        missing: "This preview has no URL yet.",
+        blockedExternal: "External previews are disabled by your gateway policy.",
+        blockedScheme: "This preview URL uses an unsupported scheme.",
+        toolbar: "Preview controls",
+        reload: "Reload preview",
+        viewport: {
+          label: "Preview viewport",
+          desktop: "Desktop",
+          tablet: "Tablet",
+          mobile: "Mobile",
+        },
+      },
     },
   },
   workboard: {

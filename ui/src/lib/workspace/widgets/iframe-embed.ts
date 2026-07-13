@@ -22,7 +22,13 @@ import { widgetProps } from "./types.ts";
  */
 const EMBED_SANDBOX_CEILING = "scripts" as const;
 
-type EmbedUrlDecision =
+export function resolveWorkspaceEmbedSandbox(
+  mode: BuiltinWidgetContext["embed"]["embedSandboxMode"],
+): string {
+  return resolveEmbedSandbox(mode, EMBED_SANDBOX_CEILING);
+}
+
+export type EmbedUrlDecision =
   | { status: "missing" }
   | { status: "blocked"; reason: "external" | "scheme"; url: string }
   | { status: "ok"; url: string; external: boolean };
@@ -88,7 +94,7 @@ export function renderIframeEmbed(
     data-test-id="workspace-embed-frame"
     src=${decision.url}
     title=${widget.title}
-    sandbox=${resolveEmbedSandbox(ctx.embed.embedSandboxMode, EMBED_SANDBOX_CEILING)}
+    sandbox=${resolveWorkspaceEmbedSandbox(ctx.embed.embedSandboxMode)}
     referrerpolicy="no-referrer"
     loading="lazy"
   ></iframe>`;
