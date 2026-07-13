@@ -2,12 +2,14 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DiscordApiError, fetchDiscord } from "./api.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
+const DISCORD_PROBE_GET_ME_LABEL = "discord.probe.getMe";
+const DISCORD_PROBE_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 export type DiscordProbe = BaseProbeResult & {
   status?: number | null;
@@ -121,6 +123,24 @@ function getResolvedFetch(fetcher: typeof fetch): typeof fetch {
   return fetchImpl;
 }
 
+async function readDiscordProbeGetMeJson(
+  response: Response,
+  timeoutMs: number,
+): Promise<{ id?: string; username?: string }> {
+  const bytes = await readResponseWithLimit(response, DISCORD_PROBE_JSON_MAX_BYTES, {
+    chunkTimeoutMs: timeoutMs,
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`${DISCORD_PROBE_GET_ME_LABEL}: JSON response stalled after ${chunkTimeoutMs}ms`),
+    onOverflow: ({ maxBytes }) =>
+      new Error(`${DISCORD_PROBE_GET_ME_LABEL}: JSON response exceeds ${maxBytes} bytes`),
+  });
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as { id?: string; username?: string };
+  } catch (cause) {
+    throw new Error(`${DISCORD_PROBE_GET_ME_LABEL}: malformed JSON response`, { cause });
+  }
+}
+
 export async function probeDiscord(
   token: string,
   timeoutMs: number,
@@ -156,10 +176,7 @@ export async function probeDiscord(
       result.error = `getMe failed (${res.status})`;
       return { ...result, elapsedMs: Date.now() - started };
     }
-    const json = await readProviderJsonResponse<{ id?: string; username?: string }>(
-      res,
-      "discord.probe.getMe",
-    );
+    const json = await readDiscordProbeGetMeJson(res, timeoutMs);
     result.ok = true;
     result.bot = {
       id: json.id ?? null,

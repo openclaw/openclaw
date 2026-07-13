@@ -31,6 +31,23 @@ function oversizedDiscordProbeJsonResponse(onCancel: () => void): Response {
   return response;
 }
 
+function stalledDiscordProbeJsonResponse(onCancel: () => void): Response {
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      cancel() {
+        onCancel();
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
+  Object.defineProperty(response, "json", {
+    value: async () => {
+      throw new Error("unbounded json reader was used");
+    },
+  });
+  return response;
+}
+
 describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -139,6 +156,31 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       error: expect.stringContaining("discord.probe.getMe: JSON response exceeds 16777216 bytes"),
     });
     expect(cancelCount).toBe(1);
+  });
+
+  it("times out and cancels stalled getMe probe JSON response bodies", async () => {
+    vi.useFakeTimers();
+    try {
+      let cancelCount = 0;
+      const fetcher = withFetchPreconnect(async () =>
+        stalledDiscordProbeJsonResponse(() => {
+          cancelCount += 1;
+        }),
+      );
+
+      const probe = probeDiscord("MTIz.abc.def", 50, { fetcher });
+      const assertion = expect(probe).resolves.toMatchObject({
+        ok: false,
+        error: "discord.probe.getMe: JSON response stalled after 50ms",
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
+      await assertion;
+      expect(cancelCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("derives application id from parseable tokens before probing REST", async () => {
