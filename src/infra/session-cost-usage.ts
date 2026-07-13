@@ -1458,8 +1458,6 @@ export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
   dayBucket?: UsageDailyBucket;
-  /** @deprecated Use startMs/endMs. */
-  days?: number;
   config?: OpenClawConfig;
   agentId?: string;
 }): Promise<CostUsageSummary> {
@@ -1471,8 +1469,7 @@ export async function loadCostUsageSummary(params?: {
     sinceTime = params.startMs;
     untilTime = params.endMs;
   } else {
-    // Fallback to days-based calculation for backwards compatibility
-    const days = Math.max(1, Math.floor(params?.days ?? 30));
+    const days = 30;
     const since = new Date(now);
     since.setDate(since.getDate() - (days - 1));
     sinceTime = since.getTime();
