@@ -76,7 +76,7 @@ export type GatewayProtocolRequestTiming = {
   endedAtMs: number;
   errorCode?: string;
 };
-export type GatewayProtocolClientOptions<TPlan> = {
+type GatewayProtocolClientOptions<TPlan> = {
   createSocket: (handlers: GatewayProtocolSocketHandlers) => GatewayProtocolSocket;
   createRequestId: () => string;
   createRequestError?: (error: Partial<ErrorShape>) => GatewayProtocolRequestError;
