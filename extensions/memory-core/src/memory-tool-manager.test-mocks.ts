@@ -1,7 +1,6 @@
 // Memory Core plugin module implements memory tool manager mock behavior.
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
-
 import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineAction,
