@@ -70,8 +70,10 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
   } as unknown as TestGateway;
 }
 
-function createContext(gateway: TestGateway): ApplicationContext {
+function createContext(gateway: TestGateway, scopeId: string | null = "main"): ApplicationContext {
   const subscribe = () => () => undefined;
+  let selectionState = { selectedId: scopeId, scopeId };
+  const selectionListeners = new Set<(state: typeof selectionState) => void>();
   return {
     basePath: "",
     gateway,
@@ -94,6 +96,27 @@ function createContext(gateway: TestGateway): ApplicationContext {
     runtimeConfig: {
       state: { configSnapshot: null },
       subscribe,
+    },
+    agentSelection: {
+      get state() {
+        return selectionState;
+      },
+      set(agentId: string | null) {
+        selectionState = { selectedId: agentId, scopeId: agentId };
+        for (const listener of selectionListeners) {
+          listener(selectionState);
+        }
+      },
+      setScope(agentId: string | null) {
+        selectionState = { ...selectionState, scopeId: agentId };
+        for (const listener of selectionListeners) {
+          listener(selectionState);
+        }
+      },
+      subscribe(listener: (state: typeof selectionState) => void) {
+        selectionListeners.add(listener);
+        return () => selectionListeners.delete(listener);
+      },
     },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
@@ -131,6 +154,23 @@ afterEach(() => {
 });
 
 describe("CronPage editor state sync", () => {
+  it("scopes list, stats, and run history requests to the selected agent", async () => {
+    const request = createRequest();
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    createPage(createContext(gateway, "writer"));
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(
+        "cron.list",
+        expect.objectContaining({ agentId: "writer" }),
+      );
+      expect(request).toHaveBeenCalledWith(
+        "cron.runs",
+        expect.objectContaining({ agentId: "writer" }),
+      );
+    });
+  });
+
   it("create & run now issues cron.run for the job returned by cron.add", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "cron.add") {
