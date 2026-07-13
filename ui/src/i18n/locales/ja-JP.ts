@@ -397,7 +397,6 @@ export const ja_JP: TranslationMap = {
       "スナップショットに失敗しました: {error}\n\nスナップショットなしで削除しますか？",
   },
   agentChip: {
-    openConversation: "{name}との会話を開く",
     menuLabel: "エージェントメニュー",
     agents: "エージェント",
     working: "作業中…",

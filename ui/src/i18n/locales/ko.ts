@@ -390,7 +390,6 @@ export const ko: TranslationMap = {
     confirmForceDelete: "스냅샷 실패: {error}\n\n스냅샷 없이 삭제할까요?",
   },
   agentChip: {
-    openConversation: "{name}님과의 대화 열기",
     menuLabel: "에이전트 메뉴",
     agents: "에이전트",
     working: "작업 중…",

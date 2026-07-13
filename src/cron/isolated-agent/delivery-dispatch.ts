@@ -36,6 +36,7 @@ import type {
   SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { retryAsync } from "../../infra/retry.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
@@ -970,28 +971,32 @@ async function retryTransientDirectCronDelivery<T>(params: {
   run: () => Promise<T>;
 }): Promise<T> {
   const retryDelaysMs = resolveDirectCronRetryDelaysMs();
-  for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
-    if (params.signal?.aborted) {
-      throw new Error("cron delivery aborted");
-    }
-    try {
-      return await params.run();
-    } catch (err) {
-      if (!isTransientDirectCronDeliveryError(err) || params.signal?.aborted) {
-        throw err;
-      }
-      const nextAttempt = retryIndex + 2;
-      const maxAttempts = retryDelaysMs.length + 1;
-      await logCronDeliveryWarn(
-        `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${nextAttempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
-      );
-      await sleepWithAbort(delayMs, params.signal);
-    }
-  }
   if (params.signal?.aborted) {
     throw new Error("cron delivery aborted");
   }
-  return await params.run();
+  const runWithAbortCheck = async () => {
+    if (params.signal?.aborted) {
+      throw new Error("cron delivery aborted");
+    }
+    return await params.run();
+  };
+  return await retryAsync(runWithAbortCheck, {
+    attempts: retryDelaysMs.length + 1,
+    minDelayMs: 0,
+    maxDelayMs: Math.max(...retryDelaysMs),
+    delayMs: ({ attempt }) => retryDelaysMs[attempt - 1] ?? 0,
+    shouldRetry: (err) =>
+      params.signal?.aborted !== true && isTransientDirectCronDeliveryError(err),
+    onRetry: async ({ attempt, maxAttempts, delayMs, err }) => {
+      await logCronDeliveryWarn(
+        `[cron:${params.jobId}] transient direct announce delivery failure, retrying ${attempt + 1}/${maxAttempts} in ${Math.round(delayMs / 1000)}s: ${summarizeDirectCronDeliveryError(err)}`,
+      );
+      if (delayMs === 0) {
+        await sleepWithAbort(0, params.signal);
+      }
+    },
+    sleep: async (delayMs) => await sleepWithAbort(delayMs, params.signal),
+  });
 }
 
 /** Dispatches cron run output through verified message-tool or direct delivery paths. */

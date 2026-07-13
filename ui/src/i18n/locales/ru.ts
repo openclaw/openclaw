@@ -393,7 +393,6 @@ export const ru: TranslationMap = {
     confirmForceDelete: "Не удалось создать снимок: {error}\n\nУдалить без снимка?",
   },
   agentChip: {
-    openConversation: "Открыть беседу с {name}",
     menuLabel: "Меню агента",
     agents: "Агенты",
     working: "Выполняется…",

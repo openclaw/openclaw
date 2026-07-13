@@ -392,7 +392,6 @@ export const fa: TranslationMap = {
     confirmForceDelete: "snapshot ناموفق بود: {error}\n\nبدون snapshot حذف شود؟",
   },
   agentChip: {
-    openConversation: "گفت‌وگوی خود با {name} را باز کنید",
     menuLabel: "منوی عامل",
     agents: "عامل‌ها",
     working: "در حال کار…",
