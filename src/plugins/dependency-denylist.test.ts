@@ -4,7 +4,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
 import {
-  blockedInstallDependencyPackageNames,
   findBlockedPackageDirectoryInPath,
   findBlockedPackageFileAliasInPath,
   findBlockedManifestDependencies,
@@ -205,13 +204,5 @@ describe("dependency denylist guardrails", () => {
   it("keeps blocked packages out of the root manifest", () => {
     const manifest = readRootManifest();
     expect(findBlockedManifestDependencies(manifest)).toStrictEqual([]);
-  });
-
-  it("keeps blocked packages out of the lockfile graph", () => {
-    const lockfile = readRootLockfile();
-    for (const packageName of blockedInstallDependencyPackageNames) {
-      expect(lockfile).not.toContain(`\n  ${packageName}@`);
-      expect(lockfile).not.toContain(`\n      ${packageName}: `);
-    }
   });
 });

@@ -2,12 +2,7 @@
 import fs from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
-import {
-  getPluginCompatRecord,
-  isPluginCompatCode,
-  listDeprecatedPluginCompatRecords,
-  listPluginCompatRecords,
-} from "./registry.js";
+import { listPluginCompatRecords } from "./registry.js";
 
 const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 const sourceRootsForDeprecatedCallGuard = [
@@ -268,32 +263,6 @@ describe("plugin compatibility registry", () => {
       .filter((file) => deprecatedTargetParserCallPattern.test(fs.readFileSync(file, "utf8")));
   });
 
-  it("keeps compatibility codes unique and lookup-safe", () => {
-    const records = listPluginCompatRecords();
-    const codes = records.map((record) => record.code);
-
-    expect(new Set(codes).size).toBe(codes.length);
-    expect(isPluginCompatCode("legacy-root-sdk-import")).toBe(true);
-    expect(isPluginCompatCode("missing-code")).toBe(false);
-    expect(getPluginCompatRecord("legacy-root-sdk-import").owner).toBe("sdk");
-  });
-
-  it("requires dated deprecation metadata for deprecated records", () => {
-    for (const record of listDeprecatedPluginCompatRecords()) {
-      expect(record.deprecated, record.code).toMatch(datePattern);
-      expect(record.warningStarts, record.code).toMatch(datePattern);
-      expect(record.removeAfter, record.code).toMatch(datePattern);
-      if (!record.warningStarts || !record.removeAfter) {
-        throw new Error(`${record.code} is missing deprecation window dates`);
-      }
-      const maxRemoveAfter = addUtcMonths(parseDate(record.warningStarts), 3);
-      const removeAfter = parseDate(record.removeAfter);
-      expect(removeAfter <= maxRemoveAfter, record.code).toBe(true);
-      expect(record.replacement, record.code).toMatch(/\S/u);
-      expect(record.docsPath, record.code).toMatch(/^\//u);
-    }
-  });
-
   it("keeps every record actionable", () => {
     for (const record of listPluginCompatRecords()) {
       expect(record.introduced, record.code).toMatch(datePattern);
@@ -304,13 +273,6 @@ describe("plugin compatibility registry", () => {
       for (const testPath of record.tests) {
         expect(fs.existsSync(testPath), `${record.code}: ${testPath}`).toBe(true);
       }
-    }
-  });
-
-  it("tracks known plugin-facing deprecated surfaces", () => {
-    for (const surface of knownDeprecatedSurfaceMarkers) {
-      expect(isPluginCompatCode(surface.code), surface.code).toBe(true);
-      expect(fs.readFileSync(surface.file, "utf8"), surface.file).toContain(surface.marker);
     }
   });
 

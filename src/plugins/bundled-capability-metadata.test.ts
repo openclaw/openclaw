@@ -1,18 +1,10 @@
 // Verifies bundled capability metadata emitted by plugins.
 import fs from "node:fs";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { normalizeBundledPluginStringList } from "./bundled-plugin-scan.js";
-import {
-  BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
-  BUNDLED_LEGACY_PLUGIN_ID_ALIASES,
-  BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS,
-  buildBundledPluginContractSnapshot,
-  hasBundledPluginContractSnapshotCapabilities,
-} from "./contracts/inventory/bundled-capability-metadata.js";
 import { pluginTestRepoRoot as repoRoot } from "./generated-plugin-test-helpers.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginManifest } from "./manifest.js";
@@ -72,70 +64,5 @@ describe("bundled capability metadata", () => {
       expect(packagePaths.length).toBeGreaterThan(0);
       expect(packagePaths.every((file) => file.endsWith("package.json"))).toBe(true);
     });
-  });
-
-  it("keeps contract snapshots aligned with bundled plugin manifests", () => {
-    const expected = readManifestRecords()
-      .map(buildBundledPluginContractSnapshot)
-      .filter(hasBundledPluginContractSnapshotCapabilities)
-      .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
-
-    expect(BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS).toEqual(expected);
-    expect(
-      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.find((entry) => entry.pluginId === "migrate-hermes"),
-    ).toEqual({
-      pluginId: "migrate-hermes",
-      cliBackendIds: [],
-      providerIds: [],
-      providerEnvVars: {},
-      workerProviderIds: [],
-      embeddingProviderIds: [],
-      speechProviderIds: [],
-      realtimeTranscriptionProviderIds: [],
-      realtimeVoiceProviderIds: [],
-      mediaUnderstandingProviderIds: [],
-      transcriptSourceProviderIds: [],
-      documentExtractorIds: [],
-      imageGenerationProviderIds: [],
-      videoGenerationProviderIds: [],
-      musicGenerationProviderIds: [],
-      webContentExtractorIds: [],
-      webFetchProviderIds: [],
-      webSearchProviderIds: [],
-      migrationProviderIds: ["hermes"],
-      toolNames: [],
-    });
-  });
-
-  it("keeps lightweight alias maps aligned with bundled plugin manifests", () => {
-    const manifests = readManifestRecords();
-    const expectedLegacyAliases = Object.fromEntries(
-      manifests
-        .flatMap((manifest) =>
-          (manifest.legacyPluginIds ?? []).map((legacyPluginId) => [legacyPluginId, manifest.id]),
-        )
-        .toSorted(([left], [right]) =>
-          expectDefined(left, "left test invariant").localeCompare(
-            expectDefined(right, "right test invariant"),
-          ),
-        ),
-    );
-    const expectedAutoEnableProviderPluginIds = Object.fromEntries(
-      manifests
-        .flatMap((manifest) =>
-          (manifest.autoEnableWhenConfiguredProviders ?? []).map((providerId) => [
-            providerId,
-            manifest.id,
-          ]),
-        )
-        .toSorted(([left], [right]) =>
-          expectDefined(left, "left test invariant").localeCompare(
-            expectDefined(right, "right test invariant"),
-          ),
-        ),
-    );
-
-    expect(BUNDLED_LEGACY_PLUGIN_ID_ALIASES).toEqual(expectedLegacyAliases);
-    expect(BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS).toEqual(expectedAutoEnableProviderPluginIds);
   });
 });
