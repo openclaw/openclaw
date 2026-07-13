@@ -1886,6 +1886,10 @@ export const de: TranslationMap = {
       useCurrentChatAria: "Aktuellen Chat für Überarbeitungsanfragen verwenden",
       useCurrentChatTooltip:
         "Überarbeitungsanfragen an die aktuelle Chat-Sitzung statt an die Workshop-Sitzung des Vorschlags senden.",
+      selfLearning: "Selbstlernen",
+      selfLearningAria: "Vorschläge für selbstlernende Skills ein- oder ausschalten",
+      selfLearningTooltip:
+        "Erfasst Korrekturen und prüft umfangreiche abgeschlossene Arbeiten, um daraus ausstehende Skill-Vorschläge zu erstellen. Verbraucht zusätzliche Hintergrund-Tokens; Entwürfe erscheinen auf diesem Board als ausstehende Vorschläge.",
       view: "Workshop-Ansicht",
       board: "Board",
       today: "Heute",
@@ -1966,6 +1970,14 @@ export const de: TranslationMap = {
       noProposalsTitle: "Noch keine Vorschläge",
       noProposalsBody: "{agent} hat noch keine Skill-Vorschläge entworfen.",
       noProposalsFooter: "Neue Vorschläge werden hier zur Überprüfung angezeigt.",
+    },
+    selfLearning: {
+      pitchTitle: "Selbstlernen aktivieren",
+      pitchBody:
+        "OpenClaw prüft Korrekturen und umfangreiche abgeschlossene Durchläufe und erstellt anschließend Skill-Vorschläge für dieses Board. Dabei werden zusätzliche Hintergrund-Tokens verbraucht und die Entwürfe erscheinen als ausstehende Vorschläge.",
+      enable: "Selbstlernen aktivieren",
+      enabling: "Wird aktiviert…",
+      updateError: "Die Einstellung für das Selbstlernen konnte nicht aktualisiert werden.",
     },
     today: {
       emptyTitle: "Heute steht nichts an",

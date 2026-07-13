@@ -1898,6 +1898,10 @@ export const fr: TranslationMap = {
       useCurrentChatAria: "Utiliser la discussion actuelle pour les demandes de révision",
       useCurrentChatTooltip:
         "Envoyer les demandes de révision à la session de discussion actuelle plutôt qu'à la session d'atelier de la proposition.",
+      selfLearning: "Auto-apprentissage",
+      selfLearningAria: "Activer ou désactiver les propositions de Skills par auto-apprentissage",
+      selfLearningTooltip:
+        "Capture les corrections et analyse les travaux substantiels terminés pour en faire des propositions de Skills en attente. Utilise des jetons supplémentaires en arrière-plan ; les brouillons apparaissent sur ce tableau comme propositions en attente.",
       view: "Vue de l'atelier",
       board: "Tableau",
       today: "Aujourd’hui",
@@ -1981,6 +1985,14 @@ export const fr: TranslationMap = {
       noProposalsTitle: "Aucune proposition pour le moment",
       noProposalsBody: "{agent} n'a rédigé aucune proposition de skill.",
       noProposalsFooter: "Les nouvelles propositions apparaîtront ici pour révision.",
+    },
+    selfLearning: {
+      pitchTitle: "Activer l’auto-apprentissage",
+      pitchBody:
+        "OpenClaw analyse les corrections et les exécutions substantielles terminées, puis rédige des propositions de Skills pour ce tableau. Il utilise des jetons supplémentaires en arrière-plan, et les brouillons apparaissent comme propositions en attente.",
+      enable: "Activer l’auto-apprentissage",
+      enabling: "Activation…",
+      updateError: "Impossible de mettre à jour le paramètre d’auto-apprentissage.",
     },
     today: {
       emptyTitle: "Rien en attente aujourd'hui",
