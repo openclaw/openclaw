@@ -45,7 +45,7 @@ function nextColumnId(layout: ChatSplitLayout): string {
   return `c${max + 1}`;
 }
 
-export function nextPaneId(layout: ChatSplitLayout): string {
+function nextPaneId(layout: ChatSplitLayout): string {
   const max = panesOf(layout).reduce(
     (current, pane) => Math.max(current, numericSuffix(pane.id, "p")),
     0,

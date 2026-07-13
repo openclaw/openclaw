@@ -351,6 +351,7 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     startup: true,
     controlPlaneWrite: true,
   },
+  { name: "models.probe", scope: "operator.admin" },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

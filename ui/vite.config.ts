@@ -7,14 +7,8 @@ import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 import type { Plugin, UserConfig } from "vite";
 import { controlUiManualChunk } from "./config/control-ui-chunking.ts";
-import {
-  deriveControlUiBuildId,
-  normalizeControlUiBuildId,
-  normalizeControlUiBranch,
-  normalizeControlUiBuildTimestamp,
-  normalizeControlUiCommit,
-  type ControlUiBuildInfo,
-} from "./src/build-info.ts";
+import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
+import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -153,7 +147,7 @@ type ControlUiBuildInfoSources = {
 function normalizeBuildTimestamp(value: string | undefined, now: () => Date): string | null {
   const explicit = value?.trim();
   if (explicit) {
-    const timestamp = normalizeControlUiBuildTimestamp(explicit);
+    const timestamp = normalizeControlUiBuildInfo({ builtAt: explicit }).builtAt;
     if (!timestamp) {
       throw new Error(
         "OPENCLAW_BUILD_TIMESTAMP must be a valid UTC ISO-8601 timestamp ending in Z",
@@ -175,18 +169,20 @@ export function resolveControlUiBuildInfo(
     { name: "GIT_SHA", value: env.GIT_SHA?.trim() },
   ].find((source) => source.value);
   const explicitCommit = explicitCommitSource?.value;
-  const envCommit = explicitCommit ? normalizeControlUiCommit(explicitCommit) : null;
+  const envCommit = explicitCommit
+    ? normalizeControlUiBuildInfo({ commit: explicitCommit }).commit
+    : null;
   if (explicitCommitSource && !envCommit) {
     throw new Error(`${explicitCommitSource.name} must be a full 40-character hexadecimal SHA`);
   }
   const gitCommit = explicitCommit ? null : (sources.readGitCommit ?? readGitCommit)();
-  const normalizedGitCommit = normalizeControlUiCommit(gitCommit);
+  const normalizedGitCommit = normalizeControlUiBuildInfo({ commit: gitCommit }).commit;
   if (gitCommit?.trim() && !normalizedGitCommit) {
     throw new Error("git rev-parse HEAD must return a full 40-character hexadecimal SHA");
   }
   // GITHUB_SHA names the workflow invocation and can differ from a checked-out tag.
   const githubCommit = explicitCommit || gitCommit?.trim() ? null : env.GITHUB_SHA?.trim();
-  const normalizedGithubCommit = normalizeControlUiCommit(githubCommit);
+  const normalizedGithubCommit = normalizeControlUiBuildInfo({ commit: githubCommit }).commit;
   if (githubCommit && !normalizedGithubCommit) {
     throw new Error("GITHUB_SHA must be a full 40-character hexadecimal SHA");
   }
@@ -200,9 +196,9 @@ export function resolveControlUiBuildInfo(
   // Tags must not be presented as branches in GitHub-built artifacts.
   const githubBranch = env.GITHUB_REF_TYPE === "branch" ? env.GITHUB_REF_NAME : null;
   const branch =
-    normalizeControlUiBranch(env.GIT_BRANCH) ??
-    normalizeControlUiBranch(githubBranch) ??
-    normalizeControlUiBranch((sources.readGitBranch ?? readGitBranch)());
+    normalizeControlUiBuildInfo({ branch: env.GIT_BRANCH }).branch ??
+    normalizeControlUiBuildInfo({ branch: githubBranch }).branch ??
+    normalizeControlUiBuildInfo({ branch: (sources.readGitBranch ?? readGitBranch)() }).branch;
   const dirty = (sources.readGitDirty ?? readGitDirty)();
   const metadata = { version, commit, builtAt };
   const explicitBuildId = env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim();
@@ -210,9 +206,9 @@ export function resolveControlUiBuildInfo(
     ...metadata,
     branch,
     dirty,
-    buildId: explicitBuildId
-      ? normalizeControlUiBuildId(explicitBuildId)
-      : deriveControlUiBuildId(metadata),
+    buildId: normalizeControlUiBuildInfo(
+      explicitBuildId ? { ...metadata, buildId: explicitBuildId } : metadata,
+    ).buildId,
   };
 }
 
