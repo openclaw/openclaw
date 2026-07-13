@@ -171,7 +171,7 @@ describe("createProgressNarrator", () => {
     vi.useFakeTimers();
     try {
       let visible = false;
-      const { narrator, generate } = createNarratorHarness({
+      const { narrator, generate, inputs } = createNarratorHarness({
         isProgressDraftVisible: () => visible,
         setTimeoutFn: setTimeout,
         clearTimeoutFn: clearTimeout,
@@ -189,6 +189,7 @@ describe("createProgressNarrator", () => {
       await flushNarrations();
 
       expect(generate).toHaveBeenCalledTimes(1);
+      expect(inputs[0]?.userMessage).toBe("");
     } finally {
       vi.useRealTimers();
     }

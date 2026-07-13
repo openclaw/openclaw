@@ -101,6 +101,7 @@ export function createProgressNarrator(params: {
   let retryImmediate = false;
   let turnGeneration = 0;
   let turnActive = true;
+  let userMessage = params.userMessage ?? "";
 
   const clearRetryTimer = () => {
     if (retryTimer !== undefined) {
@@ -113,6 +114,9 @@ export function createProgressNarrator(params: {
   const resetTurnState = () => {
     turnGeneration += 1;
     turnActive = true;
+    // Queued turns reuse the narrator lifecycle but not the primary request.
+    // Empty context is safer than describing follow-up work with stale intent.
+    userMessage = "";
     notes.splice(0);
     disabled = false;
     inFlight = false;
@@ -264,7 +268,7 @@ export function createProgressNarrator(params: {
     notesAtLastRun = notes.length;
     lastRunAt = now();
     const input: ProgressNarrationInput = {
-      userMessage: params.userMessage ?? "",
+      userMessage,
       activityNotes: [...notes],
       previousText: lastText,
     };
