@@ -293,7 +293,7 @@ describe("durable gateway methods", () => {
 
       const calls: unknown[][] = [];
       const call = (method: string, params: Record<string, unknown>) => {
-        durableHandlers[method]?.({
+        void durableHandlers[method]?.({
           params,
           respond: (...args: unknown[]) => calls.push([method, ...args]),
         } as never);
@@ -394,7 +394,7 @@ describe("durable gateway methods", () => {
     process.env.OPENCLAW_STATE_DIR = dir;
     try {
       const calls: unknown[][] = [];
-      durableHandlers["durable.wake.acknowledge"]?.({
+      void durableHandlers["durable.wake.acknowledge"]?.({
         params: {
           wakeId: "wake_invalid",
           actorKind: "operator",
