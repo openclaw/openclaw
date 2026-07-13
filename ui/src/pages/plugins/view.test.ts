@@ -528,11 +528,7 @@ describe("renderPlugins", () => {
     expect(normalizedText(row.querySelector(".settings-row__title"))).toBe("Calendar Plus");
     expect(row.querySelector(".plugins-install")).toBeNull();
     actionButton(row, "Disable")?.click();
-    expect(onSetEnabled).toHaveBeenCalledWith(
-      "calendar-runtime",
-      false,
-      clawHubKey(packageName),
-    );
+    expect(onSetEnabled).toHaveBeenCalledWith("calendar-runtime", false, clawHubKey(packageName));
   });
 
   it("does not present an empty catalog alongside an initial list failure", () => {

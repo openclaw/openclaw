@@ -354,10 +354,10 @@ describe("session transcript reader facade", () => {
 
     expect(messages).toMatchObject([{ content: "branch prompt" }, { content: "active branch" }]);
     expect(
-      messages.map((message) => (message as { __openclaw?: { id?: string } }).__openclaw?.id),
+      messages.map((message) => (message as { __openclaw?: { id?: string } })["__openclaw"]?.id),
     ).toEqual(["root", "active"]);
     expect(
-      messages.map((message) => (message as { __openclaw?: { seq?: number } }).__openclaw?.seq),
+      messages.map((message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq),
     ).toEqual([2, 4]);
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(2);
   });

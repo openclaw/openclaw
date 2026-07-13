@@ -493,7 +493,7 @@ async function readGoogleAuthResponseBytes(response: Response): Promise<Uint8Arr
 }
 
 export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
-  googleAuthRuntimePromise ??= import("google-auth-library").catch((error) => {
+  googleAuthRuntimePromise ??= import("google-auth-library").catch((error: unknown) => {
     googleAuthRuntimePromise = null;
     throw error;
   });

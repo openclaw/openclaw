@@ -314,6 +314,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Account config keys
   - H2: Multiple bots
   - H2: Reply modes
+  - H2: Durable media delivery
   - H2: Agent activity rows
   - H2: Targets
   - H2: Permissions
@@ -2640,6 +2641,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /concepts/model-providers
 - Headings:
   - H2: Quick rules
+  - H2: Configure providers in the Control UI
   - H2: Plugin-owned provider behavior
   - H2: API key rotation
   - H2: Official provider plugins
@@ -3193,6 +3195,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Bundle MCP overlays
   - H2: Reseed history cap
   - H2: Limitations
+  - H2: Troubleshooting
+  - H2: Related
+
+## gateway/cloud-workers.md
+
+- Route: /gateway/cloud-workers
+- Headings:
+  - H2: What runs where
+  - H2: Requirements
+  - H2: Configuration
+  - H3: The setup command
+  - H3: Install channels
+  - H2: Dispatching a session
+  - H2: Security model
   - H2: Troubleshooting
   - H2: Related
 
