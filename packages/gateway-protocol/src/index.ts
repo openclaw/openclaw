@@ -6,10 +6,8 @@ export {
   type ClawHubTrustErrorCode,
   type ClawHubTrustErrorDetails,
 } from "./clawhub-trust-error-details.js";
-export {
-  validateApprovalGetResult,
-  validateApprovalResolveResult,
-} from "./approval-result-validators.js";
+export { validateApprovalGetResult } from "./approval-result-validators.js";
+export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import { lazyCompile } from "./protocol-validator.js";

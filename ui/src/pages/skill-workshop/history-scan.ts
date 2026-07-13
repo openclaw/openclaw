@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import type { ApplicationGateway } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import type { SkillWorkshopHistoryScanResult, SkillWorkshopHistoryScanState } from "./proposals.ts";
+import type { SkillWorkshopHistoryScanResult, SkillWorkshopHistoryScanState } from "./state.ts";
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

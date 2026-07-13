@@ -5,8 +5,8 @@ import type {
   SkillWorkshopProposal,
   SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
-import type { SkillWorkshopHistoryScanState } from "./proposals.ts";
 import type { SkillWorkshopSelfLearning } from "./self-learning.ts";
+import type { SkillWorkshopHistoryScanState } from "./state.ts";
 
 export type SkillWorkshopProps = {
   loading: boolean;
