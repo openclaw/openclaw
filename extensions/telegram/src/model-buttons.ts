@@ -6,6 +6,7 @@
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
+ * - mdl_idx_{prov}_{idx}_{token} - select over-limit model by index + identity token
  * - mdl_back              - back to providers list
  */
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -19,6 +20,7 @@ export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
   | { type: "select"; provider?: string; model: string }
+  | { type: "selectIndex"; provider: string; index: number; token: string }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -50,6 +52,7 @@ const CALLBACK_PREFIX = {
   list: "mdl_list_",
   selectStandard: "mdl_sel_",
   selectCompact: "mdl_sel/",
+  selectIndex: "mdl_idx_",
 } as const;
 
 /**
@@ -73,6 +76,16 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     const page = parseStrictPositiveInteger(pageStr);
     if (provider && page !== undefined) {
       return { type: "list", provider, page };
+    }
+  }
+
+  // mdl_idx_{provider}_{index}_{token} (index fallback for models too long to name-encode)
+  const indexSelMatch = trimmed.match(/^mdl_idx_([a-z0-9_.-]+)_(\d+)_([a-z0-9]+)$/i);
+  if (indexSelMatch) {
+    const [, provider, indexStr, token] = indexSelMatch;
+    const index = Number(indexStr);
+    if (provider && Number.isInteger(index) && token) {
+      return { type: "selectIndex", provider, index, token: token.toLowerCase() };
     }
   }
 
@@ -110,13 +123,58 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
 export function buildModelSelectionCallbackData(params: {
   provider: string;
   model: string;
+  /** Index of the model in the provider's sorted list; used as a length-safe
+   *  fallback when the model name does not fit a name-based callback. */
+  index?: number;
 }): string | null {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
   if (fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
   }
   const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
+  if (fitsTelegramCallbackData(compactCallbackData)) {
+    return compactCallbackData;
+  }
+  // Long model names (e.g. namespaced Ollama ids) can exceed Telegram's 64-byte
+  // callback_data limit even compacted. Fall back to a provider+index reference
+  // resolved server-side against the same sorted list, so the model stays
+  // selectable instead of being silently dropped from the picker.
+  if (params.index !== undefined) {
+    const token = buildModelSelectionIndexToken({
+      provider: params.provider,
+      model: params.model,
+    });
+    const indexCallbackData = `${CALLBACK_PREFIX.selectIndex}${params.provider}_${params.index}_${token}`;
+    if (fitsTelegramCallbackData(indexCallbackData)) {
+      return indexCallbackData;
+    }
+  }
+  return null;
+}
+
+export function buildModelSelectionIndexToken(params: { provider: string; model: string }): string {
+  const input = `${params.provider}\0${params.model}`;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+export function resolveIndexedModelSelection(params: {
+  callback: Extract<ParsedModelCallback, { type: "selectIndex" }>;
+  models: readonly string[];
+}): string | null {
+  const model = params.models[params.callback.index];
+  if (!model) {
+    return null;
+  }
+  const token = buildModelSelectionIndexToken({
+    provider: params.callback.provider,
+    model,
+  });
+  return token === params.callback.token ? model : null;
 }
 
 export function resolveModelSelection(params: {
@@ -213,9 +271,13 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  for (const model of pageModels) {
-    const callbackData = buildModelSelectionCallbackData({ provider, model });
-    // Skip models that still exceed Telegram's callback_data limit.
+  for (const [pageIndex, model] of pageModels.entries()) {
+    const callbackData = buildModelSelectionCallbackData({
+      provider,
+      model,
+      index: startIndex + pageIndex,
+    });
+    // Skip only if even the index fallback cannot fit (pathological provider id).
     if (!callbackData) {
       continue;
     }

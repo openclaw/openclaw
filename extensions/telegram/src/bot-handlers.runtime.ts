@@ -195,6 +195,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveIndexedModelSelection,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -3439,8 +3440,8 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_back)
-      const modelCallback = parseModelCallbackData(data);
+      // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_idx_*, mdl_back)
+      let modelCallback = parseModelCallbackData(data);
       if (modelCallback) {
         if (
           !(await isTelegramModelCallbackAuthorized({
@@ -3505,6 +3506,32 @@ export const registerTelegramHandlers = ({
             }
           }
         };
+
+        // Resolve an index-based selection (used when a model name is too long for
+        // a name-based callback_data) against the same sorted list the keyboard was
+        // built from. The identity token prevents an old in-range index from
+        // selecting a different model after a provider list refresh.
+        if (modelCallback.type === "selectIndex") {
+          const orderedModels = [...(byProvider.get(modelCallback.provider) ?? [])].toSorted(
+            (left, right) => left.localeCompare(right),
+          );
+          const indexedModel = resolveIndexedModelSelection({
+            callback: modelCallback,
+            models: orderedModels,
+          });
+          if (!indexedModel) {
+            try {
+              await editMessageWithButtons(
+                "That model list changed. Send /model again to refresh.",
+                [],
+              );
+            } catch (err) {
+              throw new TelegramRetryableCallbackError(err);
+            }
+            return;
+          }
+          modelCallback = { type: "select", provider: modelCallback.provider, model: indexedModel };
+        }
 
         if (modelCallback.type === "providers" || modelCallback.type === "back") {
           if (providers.length === 0) {

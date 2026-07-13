@@ -8,6 +8,7 @@ import {
   calculateTotalPages,
   getModelsPageSize,
   parseModelCallbackData,
+  resolveIndexedModelSelection,
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
@@ -33,6 +34,11 @@ describe("parseModelCallbackData", () => {
         "mdl_sel/anthropic/claude-3-7-sonnet",
         { type: "select", model: "anthropic/claude-3-7-sonnet" },
       ],
+      [
+        "mdl_idx_ollama_5_ab12cd",
+        { type: "selectIndex", provider: "ollama", index: 5, token: "ab12cd" },
+      ],
+      ["mdl_idx_open-ai_0_z9", { type: "selectIndex", provider: "open-ai", index: 0, token: "z9" }],
       ["  mdl_prov  ", { type: "providers" }],
     ] as const;
     for (const [input, expected] of cases) {
@@ -113,6 +119,27 @@ describe("resolveModelSelection", () => {
   });
 });
 
+describe("resolveIndexedModelSelection", () => {
+  it("rejects stale in-range index callbacks when the model identity changed (#98230)", () => {
+    const originalModel = `xentriom/${"a".repeat(70)}:latest`;
+    const callbackData = buildModelSelectionCallbackData({
+      provider: "ollama",
+      model: originalModel,
+      index: 1,
+    });
+    const callback = parseModelCallbackData(callbackData ?? "");
+    expect(callback?.type).toBe("selectIndex");
+    if (callback?.type === "selectIndex") {
+      expect(
+        resolveIndexedModelSelection({
+          callback,
+          models: ["alpha", `other/${"b".repeat(70)}:latest`, "zeta"],
+        }),
+      ).toBeNull();
+    }
+  });
+});
+
 describe("buildModelSelectionCallbackData", () => {
   it("uses standard callback when under limit and compact callback when needed", () => {
     expect(buildModelSelectionCallbackData({ provider: "openai", model: "gpt-4.1" })).toBe(
@@ -124,9 +151,14 @@ describe("buildModelSelectionCallbackData", () => {
     );
   });
 
-  it("returns null when even compact callback exceeds Telegram limit", () => {
+  it("falls back to an index callback for over-limit names (#98221)", () => {
     const tooLongModel = "x".repeat(80);
+    // Without an index hint the over-limit model still cannot be name-encoded.
     expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+    // With the sorted-list index it stays selectable via a length-safe reference.
+    expect(
+      buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel, index: 7 }),
+    ).toMatch(/^mdl_idx_openai_7_[a-z0-9]+$/);
   });
 });
 
@@ -194,6 +226,66 @@ describe("buildModelsKeyboard", () => {
     expect(result).toHaveLength(1);
     expect(result[0]?.[0]?.text).toBe("<< Back");
     expect(result[0]?.[0]?.callback_data).toBe("mdl_back");
+  });
+
+  it("round-trips an over-limit model through index encode/parse/resolve (#98221)", () => {
+    const longModel = `xentriom/${"a".repeat(70)}:latest`;
+    const models = ["alpha", longModel, "zeta"].toSorted((left, right) =>
+      left.localeCompare(right),
+    );
+    const keyboard = buildModelsKeyboard({
+      provider: "ollama",
+      models,
+      currentPage: 1,
+      totalPages: 1,
+    });
+    // Short names keep the readable name-based callback; the long one falls back.
+    expect(keyboard.flat().find((b) => b.callback_data === "mdl_sel_ollama/alpha")).toBeDefined();
+    const longButton = keyboard.flat().find((b) => b.callback_data.startsWith("mdl_idx_"));
+    expect(longButton?.callback_data).toBeDefined();
+    // The keyboard's index callback parses back and resolves against the same sorted
+    // list to recover the exact model — the contract the handler relies on.
+    const parsed = parseModelCallbackData(longButton?.callback_data ?? "");
+    expect(parsed).toMatchObject({
+      type: "selectIndex",
+      provider: "ollama",
+      index: models.indexOf(longModel),
+    });
+    if (parsed?.type === "selectIndex") {
+      expect(models[parsed.index]).toBe(longModel);
+    }
+  });
+
+  it("binds index callbacks to the model identity so shifted lists refresh (#98230)", () => {
+    const originalModel = `xentriom/${"a".repeat(70)}:latest`;
+    const keyboard = buildModelsKeyboard({
+      provider: "ollama",
+      models: ["alpha", originalModel, "zeta"].toSorted((left, right) => left.localeCompare(right)),
+      currentPage: 1,
+      totalPages: 1,
+    });
+    const indexCallback = keyboard
+      .flat()
+      .find((button) => button.callback_data.startsWith("mdl_idx_"));
+    const parsed = parseModelCallbackData(indexCallback?.callback_data ?? "");
+    expect(parsed).toMatchObject({
+      type: "selectIndex",
+      provider: "ollama",
+      index: 1,
+    });
+    if (parsed?.type === "selectIndex") {
+      const shiftedModels = ["alpha", `other/${"b".repeat(70)}:latest`, "zeta"].toSorted(
+        (left, right) => left.localeCompare(right),
+      );
+      const shiftedModel = shiftedModels[parsed.index];
+      const shiftedCallback = buildModelSelectionCallbackData({
+        provider: parsed.provider,
+        model: shiftedModel ?? "",
+        index: parsed.index,
+      });
+      const shiftedParsed = parseModelCallbackData(shiftedCallback ?? "");
+      expect(shiftedParsed).not.toEqual(parsed);
+    }
   });
 
   it("renders model rows and optional current-model indicator", () => {
@@ -522,12 +614,10 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
-    const models = [
-      "short-model",
-      "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
-      "another-short",
-    ];
+  it("renders over-limit models via an index callback instead of dropping them (#98221)", () => {
+    const longModel =
+      "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit";
+    const models = ["short-model", longModel, "another-short"];
     const result = buildModelsKeyboard({
       provider: "openrouter",
       models,
@@ -535,10 +625,19 @@ describe("large model lists (OpenRouter-scale)", () => {
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
+    // No model is dropped: all three render and every callback still fits 64 bytes.
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
-    expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons.length).toBe(3);
+    for (const row of result) {
+      for (const button of row) {
+        expect(Buffer.byteLength(button.callback_data, "utf8")).toBeLessThanOrEqual(64);
+      }
+    }
+    // The over-limit model uses the index fallback at its position in the list.
+    const longIndex = models.indexOf(longModel);
+    const longButton = result
+      .flat()
+      .find((b) => b.callback_data.startsWith(`mdl_idx_openrouter_${longIndex}_`));
+    expect(longButton).toBeDefined();
   });
 });
