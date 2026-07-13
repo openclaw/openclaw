@@ -55,7 +55,7 @@ describe("listAzureSpeechVoices timeout", () => {
       await expect(
         Promise.race([
           listAzureSpeechVoices({
-            apiKey: "speech-key",
+            apiKey: "not-a-real",
             baseUrl: "https://custom.example.com",
             timeoutMs: 250,
           }),
