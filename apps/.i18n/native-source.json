@@ -23979,7 +23979,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 558,
+      "line": 559,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Invalid Gateway response",
       "surface": "apple",
@@ -23987,7 +23987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 583,
+      "line": 584,
       "path": "apps/ios/WatchApp/Sources/WatchDirectNode.swift",
       "source": "Paired, but could not finish secure setup",
       "surface": "apple",
