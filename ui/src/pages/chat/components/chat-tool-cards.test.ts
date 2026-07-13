@@ -12,7 +12,9 @@ import {
 import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
 
 const lazyElementMocks = vi.hoisted(() => ({
-  ensureCustomElementDefined: vi.fn(() => Promise.resolve()),
+  ensureCustomElementDefined: vi.fn<
+    (tagName: string, loadModule: () => Promise<unknown>) => Promise<void>
+  >(() => Promise.resolve()),
 }));
 
 vi.mock("../../../app/lazy-custom-element.ts", () => lazyElementMocks);
@@ -73,10 +75,10 @@ describe("tool-cards", () => {
     expect((view as { viewId?: string }).viewId).toBe("cv_app");
     expect((view as { height?: number }).height).toBe(600);
     expect(lazyElementMocks.ensureCustomElementDefined).toHaveBeenCalledOnce();
-    const [tagName, loadModule] = lazyElementMocks.ensureCustomElementDefined.mock.calls[0] ?? [];
+    const [tagName, loadModule] = lazyElementMocks.ensureCustomElementDefined.mock.calls[0]!;
     expect(tagName).toBe("mcp-app-view");
     expect(loadModule).toBeTypeOf("function");
-    await loadModule?.();
+    await loadModule();
     expect(customElements.get("mcp-app-view")).toBeDefined();
     expect((view as { sessionKey?: string }).sessionKey).toBe("agent:main:main");
     expect((view as { viewId?: string }).viewId).toBe("cv_app");
