@@ -1,8 +1,8 @@
 // Stores active plugin channel registry state for the current runtime.
 import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
+import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 
-/** Global symbol that stores process-current plugin registry state. */
-const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+export { PLUGIN_REGISTRY_STATE };
 
 type GlobalChannelRegistryState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
