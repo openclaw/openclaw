@@ -16,7 +16,6 @@ import {
   ChatStateController,
   handlePageGatewayEvent,
   refreshChatMetadata,
-  requestChatPageUpdate,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
   resolveChatAvatarUrl,
@@ -59,11 +58,26 @@ describe("ChatStateController render lifecycle", () => {
       frames.delete(id);
     });
     const requestUpdate = vi.fn();
-    const state = { chatStreamRenderFrame: null, requestUpdate };
+    const state = {
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamStartedAt: 1,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      requestUpdate,
+      sessionKey: "main",
+    } as unknown as ChatPageHost;
 
-    requestChatPageUpdate(state, "animation-frame");
-    requestChatPageUpdate(state, "animation-frame");
-    requestChatPageUpdate(state, "animation-frame");
+    for (const deltaText of ["A", "B", "C"]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
+      });
+    }
 
     expect(frames.size).toBe(1);
     expect(requestUpdate).not.toHaveBeenCalled();
@@ -73,9 +87,17 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).toHaveBeenCalledOnce();
     expect(state.chatStreamRenderFrame).toBeNull();
 
-    requestChatPageUpdate(state, "animation-frame");
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText: "D" },
+    });
     const staleFrame = frames.get(2);
-    requestChatPageUpdate(state);
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.operation",
+      payload: {},
+    });
     staleFrame?.(0);
 
     expect(cancelFrame).toHaveBeenCalledWith(2);

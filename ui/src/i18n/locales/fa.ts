@@ -408,6 +408,7 @@ export const fa: TranslationMap = {
     working: "در حال کار…",
     ready: "آماده گفت‌وگو",
     whatCanAgentDo: "{name} چه کاری می‌تواند انجام دهد؟",
+    help: "راهنما",
     getHelp: "دریافت راهنمایی",
     discord: "انجمن Discord",
     viewChangelog: "مشاهده فهرست تغییرات",

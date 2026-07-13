@@ -403,6 +403,7 @@ export const zh_CN: TranslationMap = {
     working: "正在工作…",
     ready: "可以开始聊天",
     whatCanAgentDo: "{name} 能做什么？",
+    help: "帮助",
     getHelp: "获取帮助",
     discord: "Discord 社区",
     viewChangelog: "查看更新日志",

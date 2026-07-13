@@ -1429,6 +1429,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/dashboard
 - Headings:
   - H1: openclaw dashboard
+  - H2: Machine-readable output
   - H2: Related
 
 ## cli/devices.md
@@ -5132,7 +5133,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/linux
 - Headings:
-  - H2: Quick path (VPS)
+  - H2: Desktop companion
+  - H2: CLI and SSH alternative
   - H2: Install
   - H2: Gateway service (systemd)
   - H2: Memory pressure and OOM kills

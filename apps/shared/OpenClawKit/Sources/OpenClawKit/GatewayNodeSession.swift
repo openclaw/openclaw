@@ -688,6 +688,22 @@ public actor GatewayNodeSession {
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
     {
+        let params = try decodeParamsJSON(paramsJSON)
+        return try await self.request(
+            method: method,
+            params: params,
+            timeoutMs: Double(timeoutSeconds * 1000),
+            ifCurrentRoute: expectedRoute,
+            distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
+    }
+
+    public func request(
+        method: String,
+        params: [String: AnyCodable]?,
+        timeoutMs: Double = 15000,
+        ifCurrentRoute expectedRoute: GatewayNodeSessionRoute? = nil,
+        distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
+    {
         if let expectedRoute, !self.isCurrentRoute(expectedRoute) {
             if distinguishPreDispatchRouteChange {
                 throw GatewayNodeSessionRequestError.routeChangedBeforeDispatch
@@ -700,11 +716,10 @@ public actor GatewayNodeSession {
             ])
         }
 
-        let params = try decodeParamsJSON(paramsJSON)
         return try await channel.request(
             method: method,
             params: params,
-            timeoutMs: Double(timeoutSeconds * 1000))
+            timeoutMs: timeoutMs)
     }
 
     public func subscribeServerEvents(bufferingNewest: Int = 200) -> AsyncStream<EventFrame> {
