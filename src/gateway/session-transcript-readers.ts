@@ -78,7 +78,7 @@ type ReadSessionMessageByIdResult = {
   found: boolean;
 };
 
-export type ResolvedTranscriptReadTarget = {
+type ResolvedTranscriptReadTarget = {
   agentId?: string;
   sessionFile: string;
   sessionId: string;

@@ -5,14 +5,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { computeTwilioSignature, parseTwilioFormBody } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
-import {
-  createSmsWebhookHandler,
-  resetSmsWebhookRateLimiterForTest,
-  createSmsWebhookReplayGuard,
-  resetSmsWebhookReplayGuardsForTest,
-} from "./webhook.js";
+import { createSmsWebhookHandler, createSmsWebhookReplayGuard } from "./webhook.js";
 
 const dispatchSmsInboundEvent = vi.hoisted(() => vi.fn(async () => undefined));
+let accountScope = 0;
 
 vi.mock("./inbound.js", () => ({
   dispatchSmsInboundEvent,
@@ -20,7 +16,7 @@ vi.mock("./inbound.js", () => ({
 
 function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
   return {
-    accountId: "default",
+    accountId: `default-${accountScope}`,
     enabled: true,
     accountSid: "AC123",
     authToken: "secret",
@@ -115,9 +111,8 @@ function createMessageSid(index: number): string {
 
 describe("createSmsWebhookHandler", () => {
   beforeEach(() => {
+    accountScope += 1;
     dispatchSmsInboundEvent.mockClear();
-    resetSmsWebhookRateLimiterForTest();
-    resetSmsWebhookReplayGuardsForTest();
   });
 
   it("validates a fragmentless signature and preserves dedupe across handler reloads", async () => {
