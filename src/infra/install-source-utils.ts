@@ -83,7 +83,7 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
 }
 
 /** Reads npm registry metadata for a package spec without running package scripts. */
-export type NpmMetadataFailureCategory = "metadata-env";
+type NpmMetadataFailureCategory = "metadata-env";
 
 export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
   | {
