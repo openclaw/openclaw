@@ -33,7 +33,7 @@ describe("readTelegramResponseBodyWithTimeout", () => {
   it("fails and cancels getReader-less response bodies on the deadline", async () => {
     vi.useFakeTimers();
     try {
-      const cancel = vi.fn(async () => undefined);
+      const cancel = vi.fn(async (_reason?: unknown) => undefined);
       const response = {
         body: { cancel },
         arrayBuffer: async () => await new Promise<ArrayBuffer>(() => {}),
