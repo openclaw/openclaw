@@ -13,9 +13,10 @@ import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
+  hasCompletedSourceReplyDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
-  hasVisibleAgentPayload,
   hasVisibleOutboundDeliveryEvidence,
+  resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   hasDeliberateSilentTerminalReply,
@@ -181,12 +182,10 @@ function isStrandedReplyRetryFollowup(queued: FollowupRun): boolean {
 
 function hasSuccessfulFollowupSourceReplyDelivery(params: {
   didDeliverSourceReplyViaMessageTool?: boolean;
+  messagingToolSentTargets?: EmbeddedAgentRunResult["messagingToolSentTargets"];
   messagingToolSourceReplyPayloads?: EmbeddedAgentRunResult["messagingToolSourceReplyPayloads"];
 }): boolean {
-  return (
-    params.didDeliverSourceReplyViaMessageTool === true ||
-    hasVisibleAgentPayload({ payloads: params.messagingToolSourceReplyPayloads })
-  );
+  return hasCompletedSourceReplyDeliveryEvidence(params);
 }
 
 function normalizeAssistantFinalDeliveryText(text: string): string {
@@ -1672,6 +1671,7 @@ export function createFollowupRunner(params: {
         if (
           hasSuccessfulFollowupSourceReplyDelivery({
             didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+            messagingToolSentTargets: runResult.messagingToolSentTargets,
             messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
           })
         ) {
@@ -1729,6 +1729,7 @@ export function createFollowupRunner(params: {
             sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
             successfulSourceReplyDelivery: hasSuccessfulFollowupSourceReplyDelivery({
               didDeliverSourceReplyViaMessageTool: runResult.didDeliverSourceReplyViaMessageTool,
+              messagingToolSentTargets: runResult.messagingToolSentTargets,
               messagingToolSourceReplyPayloads: runResult.messagingToolSourceReplyPayloads,
             }),
             finalText: assistantFinalText,
@@ -1802,6 +1803,13 @@ export function createFollowupRunner(params: {
         hasVisibleOutboundDeliveryEvidence(runResult) ||
         hasCommittedSourceReplyDeliveryEvidence(runResult) ||
         runResult.didSendDeterministicApprovalPrompt === true;
+      const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
+      const hasExplicitSourceReplyCompletion =
+        resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) !== undefined;
+      const hasCompletedTerminalDelivery =
+        completedSourceReplyDelivery ||
+        (!hasExplicitSourceReplyCompletion && hasVisibleOutboundDeliveryEvidence(runResult)) ||
+        runResult.didSendDeterministicApprovalPrompt === true;
       const hasDeliveryDestination = Boolean(
         (isRoutableChannel(queued.originatingChannel) && queued.originatingTo) ||
         opts?.onBlockReply,
@@ -1817,9 +1825,7 @@ export function createFollowupRunner(params: {
         Surface: queued.originatingChannel,
       };
       const fallbackPayload = terminalRunFailed
-        ? isInteractive &&
-          run.sourceReplyDeliveryMode !== "message_tool_only" &&
-          !hasCommittedDelivery
+        ? isInteractive && !hasCompletedTerminalDelivery
           ? buildTerminalAgentRunFailureReplyPayload({
               isHeartbeat: opts?.isHeartbeat,
               sessionCtx: failureConversationContext,
