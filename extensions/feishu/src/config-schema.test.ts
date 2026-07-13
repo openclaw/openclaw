@@ -207,18 +207,36 @@ describe("FeishuConfigSchema optimization flags", () => {
     expect(result.resolveSenderNames).toBe(true);
   });
 
-  it("accepts top-level and account-level block streaming", () => {
+  it("accepts top-level and account-level nested streaming config", () => {
     const result = FeishuConfigSchema.parse({
-      blockStreaming: true,
+      streaming: {
+        mode: "partial",
+        chunkMode: "newline",
+        block: { enabled: true, coalesce: { idleMs: 100 } },
+      },
       accounts: {
         main: {
-          blockStreaming: false,
+          streaming: { mode: "off", block: { enabled: false } },
         },
       },
     });
 
-    expect(result.blockStreaming).toBe(true);
-    expect(result.accounts?.main?.blockStreaming).toBe(false);
+    expect(result.streaming?.block?.enabled).toBe(true);
+    expect(result.streaming?.chunkMode).toBe("newline");
+    expect(result.accounts?.main?.streaming).toEqual({
+      mode: "off",
+      block: { enabled: false },
+    });
+  });
+
+  it.each([
+    ["boolean streaming", { streaming: true }],
+    ["flat blockStreaming", { blockStreaming: true }],
+    ["flat blockStreamingCoalesce", { blockStreamingCoalesce: { idleMs: 100 } }],
+    ["flat chunkMode", { chunkMode: "newline" }],
+  ])("rejects legacy %s spelling", (_name, overrides) => {
+    expect(FeishuConfigSchema.safeParse(overrides).success).toBe(false);
+    expect(FeishuConfigSchema.safeParse({ accounts: { main: overrides } }).success).toBe(false);
   });
 
   it("accepts account-level optimization flags", () => {
