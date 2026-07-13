@@ -6,16 +6,13 @@ import { insertCronRunLogEntry } from "../cron/run-log/sqlite-store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { cronRunLogEntryToTaskDetail, cronRunStatusToTaskStatus } from "../cron/task-run-detail.js";
 import { readCronTaskRunHistoryPage } from "../cron/task-run-history.js";
-import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID,
-  migrateLegacyCronRunLogsToTaskRuns,
-} from "./state-migrations.cron-run-logs.js";
+import { resetTaskRegistryForTests } from "../tasks/task-registry.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { CRON_RUN_LOG_TASK_IMPORT_MIGRATION_ID } from "./state-migrations.cron-run-logs.js";
 
 describe("cron run-log task import", () => {
   it("imports legacy cron history into task runs once at state database open", async () => {
