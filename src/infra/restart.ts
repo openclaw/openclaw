@@ -139,10 +139,23 @@ function clearActiveDeferralPolls(): void {
   activeDeferralPolls.clear();
 }
 
-export function resetGatewayRestartStateForInProcessRestart(): void {
+function clearGatewayRestartTransientState(): void {
+  restartTransientGeneration += 1;
+  sigusr1AuthorizedCount = 0;
+  sigusr1AuthorizedUntil = 0;
+  restartCycleToken = 0;
+  emittedRestartToken = 0;
+  consumedRestartToken = 0;
+  emittedRestartReason = undefined;
+  emittedRestartIntent = undefined;
+  lastRestartEmittedAt = 0;
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();
   clearPendingRestartSignalAdmission();
+}
+
+export function resetGatewayRestartStateForInProcessRestart(): void {
+  clearGatewayRestartTransientState();
   // Cancel any in-progress deferred channel reload so it doesn't race with
   // the restart to start the same channel (e.g. telegram double-spawn).
   void import("../gateway/server-reload-handlers.js")
@@ -1297,18 +1310,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 }
 
 function resetSigusr1TransientStateForTest(): void {
-  restartTransientGeneration += 1;
-  sigusr1AuthorizedCount = 0;
-  sigusr1AuthorizedUntil = 0;
-  restartCycleToken = 0;
-  emittedRestartToken = 0;
-  consumedRestartToken = 0;
-  emittedRestartReason = undefined;
-  emittedRestartIntent = undefined;
-  lastRestartEmittedAt = 0;
-  clearActiveDeferralPolls();
-  clearPendingScheduledRestart();
-  clearPendingRestartSignalAdmission();
+  clearGatewayRestartTransientState();
 }
 
 export const testing = {

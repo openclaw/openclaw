@@ -661,7 +661,3 @@ export class ApprovalPage extends OpenClawLightDomElement {
     this.activeDocumentTitle = title;
   }
 }
-
-if (!customElements.get("openclaw-approval-page")) {
-  customElements.define("openclaw-approval-page", ApprovalPage);
-}

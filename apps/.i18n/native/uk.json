@@ -17609,9 +17609,9 @@
       "translated": "Увімкнути Peekaboo Bridge"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "Дозволити підписаним інструментам (наприклад, `peekaboo`) виконувати автоматизацію UI через PeekabooBridge."
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "Дозволити підписаним інструментам (напр. `peekaboo`) керувати автоматизацією UI через PeekabooBridge. Потрібен Computer Control; інакше запустіть власний Mac-застосунок Peekaboo."
     },
     {
       "id": "native.apple.72b24ed86295d6fa",

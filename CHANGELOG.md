@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Gateway in-process restarts:** clear stale SIGUSR1 restart state and resume prepared host suspensions before rebuilding runtime admission, preventing restart cooldowns or paused scheduling from leaking into the next lifecycle.
 - **macOS remote node readiness:** take the main-session key from the node hello snapshot instead of opening an operator connection during node admission, preventing remote tunnel recovery from leaving Computer Use and node exec stuck in lifecycle transition.
 - **Claude CLI context budgets:** honor Anthropic model and per-agent `contextTokens` limits by passing the effective limit to Claude Code's native auto-compactor and persisting the same prepared budget in OpenClaw session state. Fixes #80933. (#93198) Thanks @mushuiyu886.
 - **Native app connection and relay reliability:** keep Android disconnects stopped across Activity recreation, fail remote camera commands without opening permission prompts, refresh mobile node registration after capability changes, surface iOS onboarding connection failures, cancel stale Talk owners on session switches, reject invalid Watch acknowledgments, preserve Watch events received during startup, and prevent older agent overview requests from replacing newer gateway state.
@@ -50,6 +51,7 @@ Docs: https://docs.openclaw.ai
 - **Gateway command SecretRefs:** preserve authoritative active-snapshot values when another command secret remains unresolved, falling back locally only for missing paths instead of emitting a per-turn `secrets.resolve` failure. (#96661) Thanks @SunnyShu0925.
 - **Cron delivery status:** keep successful isolated agent turns at `status=ok` when downstream delivery fails, while preserving the send failure separately in delivery state and run logs. (#95419) Thanks @Alix-007.
 - **Channel ingress recovery:** tombstone and scrub malformed durable ingress payloads without letting corrupt rows hide or starve later valid messages. (#98402) Thanks @Pick-cat.
+- **Discord thread archive defaults:** inherit each parent channel's configured auto-archive duration for binding-created threads instead of forcing 60 minutes, while preserving explicit overrides. (#103413) Thanks @wings1029.
 - **Installed plugin loading:** make native-module fallback use jiti's transform path instead of retrying the same synchronous ESM load, preventing Node 24 startup races when official plugins import SDK contract modules.
 - **QA profile channel execution:** partition mixed Crabline channel scenarios into one aggregate host suite so taxonomy-backed profile commands and evidence workflows no longer abort before execution.
 - **Plugin SDK API baseline:** cover every public entrypoint, preserve complete declaration shapes without source-line churn, and run baseline and export-surface guards from changed-file validation.

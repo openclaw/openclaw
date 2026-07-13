@@ -30,6 +30,17 @@ public enum ErrorCode: String, Codable, Sendable {
     case unavailable = "UNAVAILABLE"
 }
 
+public enum AuthProbeStatus: String, Codable, Sendable {
+    case ok = "ok"
+    case auth = "auth"
+    case rateLimit = "rate_limit"
+    case billing = "billing"
+    case timeout = "timeout"
+    case format = "format"
+    case unknown = "unknown"
+    case noModel = "no_model"
+}
+
 public enum EnvironmentStatus: String, Codable, Sendable {
     case available = "available"
     case unavailable = "unavailable"
@@ -8537,6 +8548,7 @@ public struct ModelChoice: Codable, Sendable {
     public let available: Bool?
     public let contextwindow: Int?
     public let reasoning: Bool?
+    public let apikeysupported: Bool?
     public let input: [AnyCodable]?
 
     public init(
@@ -8547,6 +8559,7 @@ public struct ModelChoice: Codable, Sendable {
         available: Bool? = nil,
         contextwindow: Int? = nil,
         reasoning: Bool? = nil,
+        apikeysupported: Bool? = nil,
         input: [AnyCodable]? = nil)
     {
         self.id = id
@@ -8556,6 +8569,7 @@ public struct ModelChoice: Codable, Sendable {
         self.available = available
         self.contextwindow = contextwindow
         self.reasoning = reasoning
+        self.apikeysupported = apikeysupported
         self.input = input
     }
 
@@ -8567,20 +8581,25 @@ public struct ModelChoice: Codable, Sendable {
         case available
         case contextwindow = "contextWindow"
         case reasoning
+        case apikeysupported = "apiKeySupported"
         case input
     }
 }
 
 public struct ModelsListParams: Codable, Sendable {
+    public let includeprovidercapabilities: Bool?
     public let view: AnyCodable?
 
     public init(
+        includeprovidercapabilities: Bool? = nil,
         view: AnyCodable? = nil)
     {
+        self.includeprovidercapabilities = includeprovidercapabilities
         self.view = view
     }
 
     private enum CodingKeys: String, CodingKey {
+        case includeprovidercapabilities = "includeProviderCapabilities"
         case view
     }
 }
@@ -8596,6 +8615,88 @@ public struct ModelsListResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case models
+    }
+}
+
+public struct ModelsProbeParams: Codable, Sendable {
+    public let provider: String
+    public let profileid: String?
+    public let timeoutms: Int?
+
+    public init(
+        provider: String,
+        profileid: String? = nil,
+        timeoutms: Int? = nil)
+    {
+        self.provider = provider
+        self.profileid = profileid
+        self.timeoutms = timeoutms
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case profileid = "profileId"
+        case timeoutms = "timeoutMs"
+    }
+}
+
+public struct ModelsProbeTargetResult: Codable, Sendable {
+    public let profileid: String?
+    public let label: String
+    public let status: AuthProbeStatus
+    public let latencyms: Int?
+    public let error: String?
+
+    public init(
+        profileid: String? = nil,
+        label: String,
+        status: AuthProbeStatus,
+        latencyms: Int? = nil,
+        error: String? = nil)
+    {
+        self.profileid = profileid
+        self.label = label
+        self.status = status
+        self.latencyms = latencyms
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+        case label
+        case status
+        case latencyms = "latencyMs"
+        case error
+    }
+}
+
+public struct ModelsProbeResult: Codable, Sendable {
+    public let provider: String
+    public let status: AuthProbeStatus
+    public let latencyms: Int?
+    public let error: String?
+    public let results: [ModelsProbeTargetResult]
+
+    public init(
+        provider: String,
+        status: AuthProbeStatus,
+        latencyms: Int? = nil,
+        error: String? = nil,
+        results: [ModelsProbeTargetResult])
+    {
+        self.provider = provider
+        self.status = status
+        self.latencyms = latencyms
+        self.error = error
+        self.results = results
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case provider
+        case status
+        case latencyms = "latencyMs"
+        case error
+        case results
     }
 }
 

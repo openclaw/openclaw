@@ -15,6 +15,7 @@ import {
   WakeParamsSchema,
 } from "./agent.js";
 import {
+  AuthProbeStatusSchema,
   AgentSummarySchema,
   AgentsCreateParamsSchema,
   AgentsCreateResultSchema,
@@ -34,6 +35,9 @@ import {
   ModelChoiceSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
+  ModelsProbeTargetResultSchema,
   SkillsBinsParamsSchema,
   SkillsBinsResultSchema,
   SkillsDetailParamsSchema,
@@ -505,6 +509,7 @@ import {
 
 /** Public schema registry keyed by stable protocol schema name. */
 export const ProtocolSchemas = {
+  AuthProbeStatus: AuthProbeStatusSchema,
   // Handshake, transport frames, state snapshots, and shared error envelopes.
   ConnectParams: ConnectParamsSchema,
   WorkerAdmissionHandshake: WorkerAdmissionHandshakeSchema,
@@ -804,6 +809,9 @@ export const ProtocolSchemas = {
   ModelChoice: ModelChoiceSchema,
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,
+  ModelsProbeParams: ModelsProbeParamsSchema,
+  ModelsProbeTargetResult: ModelsProbeTargetResultSchema,
+  ModelsProbeResult: ModelsProbeResultSchema,
   CommandEntry: CommandEntrySchema,
   CommandsListParams: CommandsListParamsSchema,
   CommandsListResult: CommandsListResultSchema,
