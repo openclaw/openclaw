@@ -4446,6 +4446,43 @@ describe("qa mock openai server", () => {
     expect(outputText(await response.json())).toContain("model switch handoff confirmed");
   });
 
+  it("returns the Codex remote-compaction-v2 response shape", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "Retained context." }],
+          },
+          { type: "compaction_trigger" },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.text();
+    expect(body).toContain('"type":"response.output_item.done"');
+    expect(body).toContain('"type":"compaction"');
+    expect(body).toContain('"encrypted_content":"QA_MOCK_REMOTE_COMPACTION_SUMMARY"');
+    expect(body).toContain('"type":"response.completed"');
+    const debugResponse = await fetch(`${server.baseUrl}/debug/requests`);
+    expect(debugResponse.status).toBe(200);
+    expect(await debugResponse.json()).toEqual([]);
+  });
+
   it("returns NO_REPLY for unmentioned group chatter", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -4495,6 +4532,24 @@ describe("qa mock openai server", () => {
     expect(ids).toContain("claude-opus-4-8");
     expect(ids).toContain("gpt-5.5");
     expect(ids).toContain("gpt-4o-transcribe");
+  });
+
+  it("advertises selected target-era models on /v1/models", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+      modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/models`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: Array<{ id: string }> };
+    expect(body.data.map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["gpt-5.5", "gpt-5.5-alt", "gpt-image-1"]),
+    );
   });
 
   it("serves deterministic OpenAI-compatible audio transcription responses", async () => {

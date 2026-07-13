@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 - **Microsoft Teams Graph response bounds:** cap successful file-upload and chat JSON reads so oversized Microsoft Graph responses cannot be buffered without limit. (#97784) Thanks @Alix-007.
 - **Packaged speech runtime:** stop treating package-backed `speech-core` as a bundled plugin sidecar, restoring TTS startup in npm installs while release checks keep true activation-bypassing facades package-complete. (#89899, #89425) Thanks @zhangguiping-xydt, @ant1b0t, and @vincentkoc.
 - **Container image upgrades:** run versioned state migrations and plugin convergence before Gateway readiness when reusing mounted state, failing closed with `doctor --fix` recovery guidance instead of serving half-upgraded state. (#101881) Fixes #98565 Thanks @sallyom, @jacobtomlinson, and @shakkernerd.
+- **Plugin update reliability:** preserve plugins successfully switched through ClawHub during core updates instead of processing them a second time and disabling them after a redundant transient failure. (#105405) Thanks @vincentkoc.
 - **Codex app-server protocol:** require app-server 0.143 or newer, remove pre-0.142 wire-shape compatibility, migrate retired `on-failure` approval settings to `on-request` in Codex configuration and saved bindings, teach Codex to retrieve deferred native `spawn_agent` through `tool_search` so native subagent task mirroring works on search-capable models, and update the managed runtime to 0.144.1 for code-mode host installation and missing-host fallback reliability. Thanks @vincentkoc.
 - **Android hardware keyboard chat:** send with unmodified Enter on physical keyboards while preserving Shift+Enter and other modified Enter combinations for multiline input. (#101239) Thanks @3ninyt3nin-creator and @vincentkoc.
 - **CJK Markdown emphasis:** render adjacent Chinese, Japanese, and Korean emphasis punctuation through the shared Markdown pipeline instead of leaking literal markers across channels. (#101230, #101120) Thanks @nicknmorty and @j08577600-jpg.
@@ -193,11 +194,13 @@ Docs: https://docs.openclaw.ai
 - **Configuration and plugin health:** restrict config traversal to owned properties, preserve config-health recovery state, surface unloadable channel plugins, preserve defaulted provider base URLs during patches, validate bundled plugin updates by manifest contract, resolve public artifacts from installed plugin roots, and retain legacy ClawHub families where required. (#99846, #99728, #96397, #98396, #98010, #98819, #98249) Thanks @vincentkoc, @zenglingbiao, @joshavant, @jalehman, @ccbridle, @849261680, @momothemage, @weltmaister, @LiLan0125, @herove, @amknight, @KelTech-Services, and @Patrick-Erichsen.
 - **Runtime process safety:** prevent unhandled child-stream errors in SSH tunnels, supervisors, and MCP stdio transports; keep auto-replies from waiting on transcript mirroring; and avoid splitting Unicode characters in approval previews and LINE outbound fields. (#99800, #99802, #99803, #99549, #99566, #98994) Thanks @cxbAsDev, @vincentkoc, @Shagrat2, @mikasa0818, and @LEXES7.
 - **Node runtime compatibility:** installers, the CLI launcher, doctor, and the macOS app now reject incompatible Node 23 runtimes and guide users toward supported Node 22 or 24 releases. (#99832) Thanks @vincentkoc and @fuller-stack-dev.
+- **SQLite WAL safety:** require Node releases with a patched SQLite runtime, verify the loaded library before opening state databases, and make installers upgrade and validate unsafe runtimes across supported platforms. (#106065) Thanks @vincentkoc.
+- **Installer temporary-file cleanup:** remove Node staging directories and pnpm workspace rewrite files when downloads or rewrites fail. (#103725) Thanks @SebTardif.
 - **QQBot media delivery:** scope sandbox-generated media sends to the active session's workspace so `/workspace/...` and relative generated-file paths resolve safely across QQBot media tags, structured payloads, and streaming delivery. (#92872) Thanks @zhangguiping-xydt and @sliverp.
 
 ### Complete contribution record
 
-This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..2d2b639212f3ac24d4cf4fbf100339ecd6664509 history: 1527 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete 66e676d29b92d040716376a75aca32bad655cfac..e0ce12504d428779bb5023d4f1442f4b92261f49 history: 1536 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020, #92657, #93466, #93650, #93767, #93810, #97118).
 
@@ -341,7 +344,7 @@ Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020,
 - **PR #98134** fix: clear timeout timer in Tailscale binary probe Promise.race. Thanks @zhangLei99586.
 - **PR #97989** fix(sms): stop internal tool-trace banners from reaching SMS replies. Thanks @ZengWen-DT.
 - **PR #97972** fix(browser): CDP auth fails with percent-encoded credentials. Thanks @VectorPeak.
-- **PR #98063** fix(reply): suppress tool-error progress delivery when messages.suppressToolErrors is set. Thanks @moeedahmed and @amittell.
+- **PR #98063** fix(reply): suppress tool-error progress delivery when messages.suppressToolErrors is set. Thanks @moeedahmed.
 - **PR #94964** fix(reload): cancel deferred channel reload on in-process restart. Related #79487. Thanks @lzyyzznl and @tseller.
 - **PR #98598** fix: restore main lint after timer repairs. Related #98462, #98464. Thanks @zhangLei99586.
 - **PR #98587** fix(slack): guard relay WebSocket frame JSON.parse against malformed input. Thanks @lsr911 and @vincentkoc.
@@ -1730,6 +1733,15 @@ Shipped baseline exclusions: v2026.6.11 (10 PRs: #87298, #89949, #90811, #92020,
 - **PR #103775** fix: Codex runtime rejected for Codex provider. Related #103762.
 - **PR #105133** test(ui): bound chat hover browser wait.
 - **PR #105055** fix(release): support explicit provenance overrides. Thanks @vincentkoc.
+- **PR #105405** fix(update): preserve ClawHub plugins after cutover. Thanks @vincentkoc.
+- **PR #105401** fix(qa): align mock catalog with selected models.
+- **PR #105444** fix(qa): preserve Codex mock routing.
+- **PR #105518** fix(openai): preserve image routing before catalog load. Thanks @vincentkoc.
+- **PR #105488** fix(qa): keep mock memory embeddings offline.
+- **PR #105493** test(qa): model Codex compaction in parity mock.
+- **PR #105500** fix(qa): repair agentic runtime parity mocks.
+- **PR #106065** fix(sqlite): reject runtimes vulnerable to WAL corruption. Thanks @vincentkoc.
+- **PR #103725** fix(install-cli): track mktemp paths and clean up on EXIT. Thanks @SebTardif.
 
 ## 2026.6.11
 

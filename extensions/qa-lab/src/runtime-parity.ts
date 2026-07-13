@@ -114,6 +114,7 @@ type QaGatewayLike = {
 type QaSuiteScenarioLike = {
   details?: string;
   status: "pass" | "fail";
+  steps?: Array<{ details?: string; status?: "pass" | "fail" | "skip" }>;
 };
 
 type RuntimeParityCaptureParams = {
@@ -761,21 +762,66 @@ function hasMissingToolResult(toolCalls: readonly RuntimeParityToolCall[]) {
   return toolCalls.some((toolCall) => toolCall.errorClass === TOOL_RESULT_MISSING_ERROR_CLASS);
 }
 
+function hasProvenTerminalImageResult(scenarioResult: QaSuiteScenarioLike) {
+  return (
+    scenarioResult.status === "pass" &&
+    (scenarioResult.steps ?? []).some(
+      (step) =>
+        step.status === "pass" &&
+        /(?:^|\n)image_generate=true\r?\nMEDIA:\S+/u.test(step.details ?? ""),
+    )
+  );
+}
+
+const PROVEN_TERMINAL_IMAGE_RESULT_HASH = stableHash({ kind: "media", status: "success" });
+
 function resolveRuntimeParityToolCalls(params: {
   mockToolCalls: RuntimeParityToolCall[] | null;
   transcriptToolCalls: RuntimeParityToolCall[];
+  terminalImageResultProven?: boolean;
 }): RuntimeParityToolCall[] {
+  const mockImageCalls = (params.mockToolCalls ?? []).filter(
+    (toolCall) => toolCall.tool === "image_generate",
+  );
+  const transcriptImageCalls = params.transcriptToolCalls.filter(
+    (toolCall) => toolCall.tool === "image_generate",
+  );
+  const imageCaptureIsUnambiguous =
+    mockImageCalls.length <= 1 &&
+    transcriptImageCalls.length <= 1 &&
+    (mockImageCalls.length === 0 ||
+      transcriptImageCalls.length === 0 ||
+      compareToolCallShape(mockImageCalls, transcriptImageCalls) === undefined);
+  let selected: RuntimeParityToolCall[];
   if (!params.mockToolCalls) {
-    return params.transcriptToolCalls;
-  }
-  if (
+    selected = params.transcriptToolCalls;
+  } else if (
     hasMissingToolResult(params.mockToolCalls) &&
     !hasMissingToolResult(params.transcriptToolCalls) &&
     compareToolCallShape(params.mockToolCalls, params.transcriptToolCalls) === undefined
   ) {
-    return params.transcriptToolCalls;
+    selected = params.transcriptToolCalls;
+  } else {
+    selected = params.mockToolCalls;
   }
-  return params.mockToolCalls;
+  const imageCalls = selected.filter((toolCall) => toolCall.tool === "image_generate");
+  if (params.terminalImageResultProven && imageCaptureIsUnambiguous && imageCalls.length === 1) {
+    selected = selected.map((toolCall) => {
+      if (
+        toolCall.tool !== "image_generate" ||
+        (toolCall.errorClass !== undefined &&
+          toolCall.errorClass !== TOOL_RESULT_MISSING_ERROR_CLASS)
+      ) {
+        return toolCall;
+      }
+      return {
+        ...toolCall,
+        resultHash: PROVEN_TERMINAL_IMAGE_RESULT_HASH,
+        errorClass: undefined,
+      };
+    });
+  }
+  return selected;
 }
 
 function filterMockRequestsForParentPrompt(
@@ -1069,10 +1115,15 @@ export async function captureRuntimeParityCell(
       ? classifyScenarioError(params.scenarioResult.details)
       : undefined;
   const sentinelErrorClass = summarizeSentinelErrorClass(sentinelFindings);
+  const terminalImageResultProven = hasProvenTerminalImageResult(params.scenarioResult);
   return {
     runtime: params.runtime,
     transcriptBytes,
-    toolCalls: resolveRuntimeParityToolCalls({ mockToolCalls, transcriptToolCalls }),
+    toolCalls: resolveRuntimeParityToolCalls({
+      mockToolCalls,
+      transcriptToolCalls,
+      terminalImageResultProven,
+    }),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
     wallClockMs: params.wallClockMs,
@@ -1112,6 +1163,7 @@ export async function runRuntimeParityScenario(params: {
 export const testing = {
   classifyRuntimeParityCells,
   filterMockRequestsForParentPrompt,
+  hasProvenTerminalImageResult,
   resolveRuntimeParityToolCalls,
   resolveToolCallOrderFromMockRequests,
 };

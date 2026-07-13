@@ -72,6 +72,8 @@ if (
     ensureOpenClawExecMarkerOnProcess();
     installProcessWarningFilter();
     normalizeEnv();
+    const { assertSupportedRuntime } = await import("./infra/runtime-guard.js");
+    assertSupportedRuntime();
 
     enableOpenClawCompileCache({
       installRoot,

@@ -92,7 +92,9 @@ describe("runQaManualLane", () => {
       replySettleMs: 0,
     });
 
-    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
+    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai", {
+      modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
+    });
     const [gatewayOptions] = startQaGatewayChild.mock.calls[0] ?? [];
     expect(gatewayOptions?.repoRoot).toBe("/tmp/openclaw-repo");
     expect(gatewayOptions?.providerMode).toBe("mock-openai");
@@ -118,7 +120,9 @@ describe("runQaManualLane", () => {
       replySettleMs: 0,
     });
 
-    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
+    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier", {
+      modelRefs: ["openai/gpt-5.5", "openai/gpt-5.5"],
+    });
     expect(startQaLabServer).toHaveBeenCalledWith({
       repoRoot: "/tmp/openclaw-repo",
       embeddedGateway: "disabled",

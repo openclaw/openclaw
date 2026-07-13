@@ -7,6 +7,7 @@ import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
 import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import { writeJson } from "../shared/http-json.js";
+import { listMockOpenAiServerModelIds } from "../shared/mock-model-config.js";
 
 type ResponsesInputItem = Record<string, unknown>;
 
@@ -288,6 +289,34 @@ function writeSse(res: ServerResponse, events: StreamEvent[]) {
     "content-length": Buffer.byteLength(body),
   });
   res.end(body);
+}
+
+function isRemoteCompactionV2Request(input: ResponsesInputItem[]) {
+  // Codex sends compaction through /responses with a trigger item. Keep it
+  // outside scenario dispatch so maintenance calls never become tool evidence.
+  return input.some((item) => item.type === "compaction_trigger");
+}
+
+function buildRemoteCompactionV2Events(): [
+  Extract<StreamEvent, { type: "response.output_item.done" }>,
+  Extract<StreamEvent, { type: "response.completed" }>,
+] {
+  const item = {
+    type: "compaction",
+    encrypted_content: "QA_MOCK_REMOTE_COMPACTION_SUMMARY",
+  };
+  return [
+    { type: "response.output_item.done", item },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_mock_compaction_1",
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
 }
 
 async function writeSseWithPreviewPause(
@@ -3627,6 +3656,7 @@ export async function startQaMockOpenAiServer(params?: {
   host?: string;
   port?: number;
   finalOnlyMarkerPauseMs?: number;
+  modelRefs?: readonly string[];
 }) {
   const host = params?.host ?? "127.0.0.1";
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
@@ -3649,15 +3679,10 @@ export async function startQaMockOpenAiServer(params?: {
       }
       if (req.method === "GET" && url.pathname === "/v1/models") {
         writeJson(res, 200, {
-          data: [
-            { id: "gpt-5.5", object: "model" },
-            { id: "gpt-5.5-alt", object: "model" },
-            { id: "gpt-image-1", object: "model" },
-            { id: "gpt-4o-transcribe", object: "model" },
-            { id: "text-embedding-3-small", object: "model" },
-            { id: "claude-opus-4-8", object: "model" },
-            { id: "claude-sonnet-4-6", object: "model" },
-          ],
+          data: listMockOpenAiServerModelIds(params?.modelRefs).map((id) => ({
+            id,
+            object: "model",
+          })),
         });
         return;
       }
@@ -3739,6 +3764,15 @@ export async function startQaMockOpenAiServer(params?: {
           return;
         }
         const input = Array.isArray(body.input) ? (body.input as ResponsesInputItem[]) : [];
+        if (isRemoteCompactionV2Request(input)) {
+          const events = buildRemoteCompactionV2Events();
+          if (body.stream === false) {
+            writeJson(res, 200, events[1].response);
+          } else {
+            writeSse(res, events);
+          }
+          return;
+        }
         const prompt = extractLastUserText(input);
         const allInputText = extractAllRequestTexts(input, body);
         const inflightRequestId = nextInflightRequestId++;

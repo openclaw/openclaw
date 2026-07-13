@@ -7,14 +7,15 @@ read_when:
 title: "Linux app"
 ---
 
-The Gateway is fully supported on Linux. Node is the recommended runtime; Bun
-is not recommended (known WhatsApp/Telegram issues).
+The Gateway is fully supported on Linux and requires Node. Bun can still be used
+as a dependency installer or package-script runner, but it cannot run OpenClaw
+because it does not provide `node:sqlite`.
 
 There is no native Linux companion app yet. Contributions are welcome.
 
 ## Quick path (VPS)
 
-1. Install Node 24 (recommended) or Node 22.19+ (LTS, still supported).
+1. Install Node 24.15+ (recommended), Node 22.22.3+ (LTS), or Node 25.9+.
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -28,7 +29,7 @@ Full server guide: [Linux Server](/vps). Step-by-step VPS example:
 
 - [Getting Started](/start/getting-started)
 - [Install & updates](/install/updating)
-- Optional: [Bun (experimental)](/install/bun), [Nix](/install/nix), [Docker](/install/docker)
+- Optional: [Bun package workflow](/install/bun), [Nix](/install/nix), [Docker](/install/docker)
 
 ## Gateway service (systemd)
 

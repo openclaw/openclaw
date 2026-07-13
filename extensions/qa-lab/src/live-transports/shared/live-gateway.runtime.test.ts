@@ -93,7 +93,9 @@ describe("startQaLiveLaneGateway", () => {
       controlUiEnabled: false,
     });
 
-    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai");
+    expect(startQaProviderServer).toHaveBeenCalledWith("mock-openai", {
+      modelRefs: ["mock-openai/gpt-5.5", "mock-openai/gpt-5.5-alt"],
+    });
     const gatewayOptions = firstGatewayOptions();
     expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
     expect(gatewayOptions?.providerBaseUrl).toBe("http://127.0.0.1:44080/v1");
@@ -183,7 +185,9 @@ describe("startQaLiveLaneGateway", () => {
       controlUiEnabled: false,
     });
 
-    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier");
+    expect(startQaProviderServer).toHaveBeenCalledWith("live-frontier", {
+      modelRefs: ["openai/gpt-5.5", "openai/gpt-5.5"],
+    });
     const gatewayOptions = firstGatewayOptions();
     expect(gatewayOptions?.transportBaseUrl).toBe("http://127.0.0.1:43123");
     expect(gatewayOptions?.providerBaseUrl).toBeUndefined();
