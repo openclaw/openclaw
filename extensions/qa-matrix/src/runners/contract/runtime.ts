@@ -1348,4 +1348,3 @@ export const testing = {
   waitForMatrixChannelReady,
   withMatrixQaRunDeadline,
 };
-export { testing as __testing };
