@@ -52,27 +52,16 @@ function isTerminalConnection(connection: WorkerConnection): boolean {
 }
 
 export class WorkerTranscriptCommitError extends Error {
-  constructor(readonly response: TranscriptResponseError) {
-    super(response.message);
+  constructor(
+    readonly response: TranscriptResponseError,
+    message = response.message,
+  ) {
+    super(message);
     this.name = "WorkerTranscriptCommitError";
   }
 
   get reason(): TranscriptResponseError["details"]["reason"] {
     return this.response.details.reason;
-  }
-}
-
-export class WorkerTranscriptResyncError extends WorkerTranscriptCommitError {
-  constructor(
-    response: WorkerTranscriptCommitErrorShape & {
-      details: { reason: "stale-base-leaf" };
-    },
-    readonly baseLeafId: string | null,
-    readonly seq: number,
-    readonly nextSeq: number,
-  ) {
-    super(response);
-    this.name = "WorkerTranscriptResyncError";
   }
 }
 
@@ -82,16 +71,11 @@ export type WorkerTranscriptCommitClientOptions = {
   initialSeq?: number;
 };
 
-export type WorkerTranscriptResumeState = {
-  baseLeafId: string | null;
-  nextSeq: number;
-};
-
 export class WorkerTranscriptCommitClient {
   private baseLeafIdValue: string | null;
   private nextSeqValue: number;
   private queue: Promise<void> = Promise.resolve();
-  private pendingResync: WorkerTranscriptResyncError | undefined;
+  private terminalFailure: WorkerTranscriptCommitError | undefined;
 
   constructor(
     private readonly connection: WorkerConnection,
@@ -107,15 +91,6 @@ export class WorkerTranscriptCommitClient {
 
   get nextSeq(): number {
     return this.nextSeqValue;
-  }
-
-  resumeFromBase(state: WorkerTranscriptResumeState): void {
-    if (!Number.isSafeInteger(state.nextSeq) || state.nextSeq < this.nextSeqValue) {
-      throw new Error("worker transcript resume sequence moved backwards");
-    }
-    this.baseLeafIdValue = state.baseLeafId;
-    this.nextSeqValue = state.nextSeq;
-    this.pendingResync = undefined;
   }
 
   commit(messages: readonly WorkerTranscriptMessage[]): Promise<WorkerTranscriptCommitResult> {
@@ -183,8 +158,8 @@ export class WorkerTranscriptCommitClient {
   private async commitBatch(
     messages: readonly WorkerTranscriptMessage[],
   ): Promise<WorkerTranscriptCommitResult> {
-    if (this.pendingResync) {
-      throw this.pendingResync;
+    if (this.terminalFailure) {
+      throw this.terminalFailure;
     }
     const request = {
       runEpoch: this.options.runEpoch,
@@ -202,18 +177,14 @@ export class WorkerTranscriptCommitClient {
           return response.payload;
         }
         if (response.error.details.reason === "stale-base-leaf") {
-          // Transcript failures are terminal ledger entries and consume seq.
-          // Block until the launcher supplies a fresh authoritative base.
+          // A stale base consumes this ledger seq. Retrying against a new leaf
+          // would append output built from stale context; milestone 3 must relaunch.
           this.nextSeqValue = request.seq + 1;
-          this.pendingResync = new WorkerTranscriptResyncError(
-            response.error as WorkerTranscriptCommitErrorShape & {
-              details: { reason: "stale-base-leaf" };
-            },
-            request.baseLeafId,
-            request.seq,
-            this.nextSeqValue,
+          this.terminalFailure = new WorkerTranscriptCommitError(
+            response.error,
+            "Worker transcript base changed; uncommitted messages were not committed; relaunch required.",
           );
-          throw this.pendingResync;
+          throw this.terminalFailure;
         }
         fenceForOwnershipError(this.connection, response.error);
         throw new WorkerTranscriptCommitError(response.error);

@@ -43,6 +43,7 @@ import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
+  WorkerTranscriptCommitError,
 } from "./worker-rpc-clients.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
@@ -76,6 +77,7 @@ type FakeGatewayOptions = {
   silenceFirstTranscript?: boolean;
   silenceFirstLiveEvent?: boolean;
   silenceFirstInference?: boolean;
+  transcriptFailureAtRequest?: number;
   heartbeatFailure?: "credential-expired";
   heartbeatIntervalMs?: number;
 };
@@ -123,6 +125,7 @@ class FakeWorkerGateway {
   connectionCount = 0;
   readonly methods: string[] = [];
   readonly transcriptRequests: WorkerTranscriptCommitParams[] = [];
+  readonly acceptedTranscriptRequests: WorkerTranscriptCommitParams[] = [];
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
 
@@ -298,6 +301,20 @@ class FakeWorkerGateway {
       this.droppedTranscript = true;
       return;
     }
+    if (this.transcriptRequests.length === this.options.transcriptFailureAtRequest) {
+      this.send(socket, {
+        type: "res",
+        id: frame.id,
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "worker transcript commit rejected",
+          details: { reason: "stale-base-leaf" },
+        },
+      });
+      return;
+    }
+    this.acceptedTranscriptRequests.push(structuredClone(frame.params));
     this.send(socket, {
       type: "res",
       id: frame.id,
@@ -728,6 +745,33 @@ describe("worker runtime", () => {
       transcriptLeafId: `leaf-${lastTranscript?.seq}`,
       transcriptNextSeq: (lastTranscript?.seq ?? 0) + 1,
     });
+  });
+
+  it("fail-stops a stale mid-run transcript without duplicating or rebasing the paid tail", async () => {
+    const { gateway, launch } = await setup({ transcriptFailureAtRequest: 2 });
+
+    const failure: unknown = await runWorkerDescriptor(launch).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(WorkerTranscriptCommitError);
+    expect(failure).toMatchObject({
+      message:
+        "Worker transcript base changed; uncommitted messages were not committed; relaunch required.",
+      reason: "stale-base-leaf",
+    });
+    expect(gateway.inferenceRequests).toHaveLength(1);
+    expect(gateway.transcriptRequests.map((request) => request.seq)).toEqual([3, 4]);
+    expect(
+      gateway.transcriptRequests.map((request) => request.messages.map((message) => message.role)),
+    ).toEqual([["user"], ["assistant"]]);
+    expect(gateway.acceptedTranscriptRequests.map((request) => request.seq)).toEqual([3]);
+    expect(
+      gateway.liveEventRequests.some(
+        (request) => request.event.kind === "lifecycle" && request.event.payload.phase === "error",
+      ),
+    ).toBe(true);
   });
 
   it("fails closed when worker admission is rejected", async () => {

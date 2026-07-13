@@ -57,11 +57,14 @@ in-flight inference turn with the same identity. The terminal inference message
 is authoritative if streamed deltas were missed. A superseding owner epoch
 fences the process and causes a clean exit.
 
-A stale transcript base cannot be discovered through the current closed RPC
-surface. The launcher must supply a fresh prepared assignment. Likewise, a
-gateway process restart terminates a pending inference turn with a provider
-error; only a tunnel or worker WebSocket reconnect can reattach to an active
-same-process inference stream.
+A `stale-base-leaf` transcript rejection fail-stops the current run. Worker
+mode does not retry the rejected sequence against a different leaf, so no
+duplicate commit is produced; any still-uncommitted in-memory tail from that
+run is lost. Relaunch belongs to the milestone-3 placement owner, which must
+create a fresh assignment from the gateway's authoritative transcript and
+commit ledger. Likewise, a gateway process restart terminates a pending
+inference turn with a provider error; only a tunnel or worker WebSocket
+reconnect can reattach to an active same-process inference stream.
 
 See [Gateway protocol](/gateway/protocol#worker-role-and-closed-protocol) for the
 closed worker RPC surface and [Cloud workers plan](/plan/cloud-workers) for the

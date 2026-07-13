@@ -20,7 +20,7 @@ import {
   WorkerInferenceProxyClient,
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
-  WorkerTranscriptResyncError,
+  WorkerTranscriptCommitError,
 } from "./worker-rpc-clients.js";
 
 const HELLO: WorkerHelloOk = {
@@ -205,7 +205,7 @@ describe("worker transcript commit client", () => {
     expect(client.nextSeq).toBe(9);
   });
 
-  it("consumes stale ledger seq and blocks commits until an explicit base resume", async () => {
+  it("fail-stops on a stale base without retrying the rejected batch", async () => {
     const harness = connectionHarness();
     harness.requestTranscriptCommit.mockResolvedValueOnce({
       type: "res",
@@ -228,8 +228,12 @@ describe("worker transcript commit client", () => {
       (cause: unknown) => cause,
     );
 
-    expect(error).toBeInstanceOf(WorkerTranscriptResyncError);
-    expect(error).toMatchObject({ baseLeafId: "leaf-4", seq: 11, nextSeq: 12 });
+    expect(error).toBeInstanceOf(WorkerTranscriptCommitError);
+    expect(error).toMatchObject({
+      message:
+        "Worker transcript base changed; uncommitted messages were not committed; relaunch required.",
+      reason: "stale-base-leaf",
+    });
     expect(client.baseLeafId).toBe("leaf-4");
     expect(client.nextSeq).toBe(12);
 
@@ -240,25 +244,8 @@ describe("worker transcript commit client", () => {
     expect(blocked).toBe(error);
     expect(harness.requestTranscriptCommit).toHaveBeenCalledOnce();
 
-    harness.requestTranscriptCommit.mockResolvedValueOnce({
-      type: "res",
-      id: "commit-response-after-resume",
-      ok: true,
-      payload: { entryIds: ["entry-5"], newLeafId: "leaf-6" },
-    });
-    client.resumeFromBase({ baseLeafId: "leaf-5", nextSeq: 12 });
-
-    await expect(client.commit([userMessage("resumed")])).resolves.toEqual({
-      entryIds: ["entry-5"],
-      newLeafId: "leaf-6",
-    });
-    expect(harness.requestTranscriptCommit.mock.calls[1]?.[0]).toMatchObject({
-      baseLeafId: "leaf-5",
-      seq: 12,
-      messages: [userMessage("resumed")],
-    });
-    expect(client.baseLeafId).toBe("leaf-6");
-    expect(client.nextSeq).toBe(13);
+    expect(client.nextSeq).toBe(12);
+    expect(harness.requestTranscriptCommit).toHaveBeenCalledOnce();
   });
 
   it("splits semantic batches at the gateway frame byte ceiling", async () => {
