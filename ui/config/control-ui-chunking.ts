@@ -11,27 +11,7 @@ function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   );
 }
 
-type ControlUiChunkGraph = {
-  getModuleInfo: (id: string) => { importers: readonly string[]; isEntry: boolean } | null;
-};
-
-function isStaticEntryDependency(
-  id: string,
-  graph: ControlUiChunkGraph,
-  visited = new Set<string>(),
-): boolean {
-  if (visited.has(id)) {
-    return false;
-  }
-  visited.add(id);
-  const info = graph.getModuleInfo(id);
-  return Boolean(
-    info?.isEntry ||
-    info?.importers.some((importer) => isStaticEntryDependency(importer, graph, visited)),
-  );
-}
-
-export function controlUiManualChunk(id: string, graph?: ControlUiChunkGraph): string | undefined {
+export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   // These entry-and-route helpers must stay together; separate shared chunks
@@ -81,9 +61,23 @@ export function controlUiManualChunk(id: string, graph?: ControlUiChunkGraph): s
     return "gateway-runtime";
   }
 
-  if (graph && isStaticEntryDependency(id, graph)) {
-    return normalized.includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation";
-  }
-
   return undefined;
 }
+
+export const controlUiCodeSplitting = {
+  includeDependenciesRecursively: false,
+  groups: [
+    {
+      name: (id: string) => controlUiStableChunkName(id) ?? null,
+      test: (id: string) => controlUiStableChunkName(id) !== undefined,
+      priority: 20,
+    },
+    {
+      name: (id: string) =>
+        normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+      tags: ["$initial"] as ["$initial"],
+      priority: 10,
+      maxSize: 400 * 1024,
+    },
+  ],
+};
