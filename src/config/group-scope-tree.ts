@@ -1,4 +1,5 @@
 // Resolves canonical group policy scopes prepared by channel plugins.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelId } from "../channels/plugins/channel-id.types.js";
 import { resolveChannelGroups, resolveToolsBySender } from "./group-policy.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -34,6 +35,24 @@ export function buildChannelGroupsScopeTree(
   // The wildcard config is the fallback node, not a matchable exact scope.
   const { "*": defaults, ...scopes } = groups;
   return { defaults, scopes };
+}
+
+export function resolveScopeKeyCaseInsensitive(
+  tree: ScopeTree,
+  key: string | null | undefined,
+): string | undefined {
+  if (!key) {
+    return undefined;
+  }
+  // Exact scope identity wins; keys are matched untrimmed for parity with the
+  // legacy resolver. Wildcard never matches: builders move it to `defaults`.
+  if (Object.hasOwn(tree.scopes, key)) {
+    return key;
+  }
+  const target = normalizeLowercaseStringOrEmpty(key);
+  return Object.keys(tree.scopes).find(
+    (scopeKey) => normalizeLowercaseStringOrEmpty(scopeKey) === target,
+  );
 }
 
 function resolveFromScopes<Value>(params: {

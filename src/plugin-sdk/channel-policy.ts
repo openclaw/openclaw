@@ -51,6 +51,7 @@ export {
 export {
   buildChannelGroupsScopeTree,
   resolveScopeIntroHint,
+  resolveScopeKeyCaseInsensitive,
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
   type ScopeNode,
