@@ -208,7 +208,7 @@ export function emitGatewaySessionStartPluginHook(params: {
 
 const SHUTDOWN_DRAIN_DEFAULT_TOTAL_TIMEOUT_MS = 2_000;
 
-export type DrainActiveSessionsForShutdownResult = {
+type DrainActiveSessionsForShutdownResult = {
   emittedSessionIds: string[];
   timedOut: boolean;
 };

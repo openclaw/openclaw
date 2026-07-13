@@ -29,11 +29,11 @@ export function isInternalNonDeliveryChannel(
 // in place and the agent can wait inline for the result instead of falling
 // back to a fire-and-forget followup that loses the agent's session.
 //
-// Keep this list aligned with bundled extensions that publish
-// `approval-handler.runtime` and a `resolveApproveCommandBehavior` capability;
-// adding an extension without the runtime, or listing one without the runtime,
-// re-introduces the "approval loop" the inline path was added to avoid.
-export const NATIVE_APPROVAL_CHANNELS = [
+// Keep this list aligned with bundled channels whose
+// `approvalCapability.nativeRuntime` handles exec approvals; webchat is
+// core-owned. Listing a channel without that runtime re-introduces the
+// "approval loop" the inline path was added to avoid.
+const NATIVE_APPROVAL_CHANNELS = [
   "webchat",
   "discord",
   "googlechat",

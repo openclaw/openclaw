@@ -26,6 +26,7 @@ import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceBrowserAudioContract,
+  type RealtimeVoiceAudioClearReason,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceTool,
   type RealtimeVoiceToolResultOptions,
@@ -47,6 +48,10 @@ import {
 } from "../talk/talk-session-controller.js";
 import { abortChatRunById } from "./chat-abort.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import {
+  buildTalkRealtimeRelayIssuePayload as relayIssuePayload,
+  createTalkRealtimeRelayIssue as realtimeRelayIssue,
+} from "./talk-realtime-relay-issues.js";
 import {
   closeExpiredTalkRelaySessions,
   requireActiveTalkRelaySession,
@@ -73,7 +78,7 @@ type TalkRealtimeRelayEventPayload =
       responseId?: string;
     }
   | { relaySessionId: string; type: "audioDone"; itemId?: string; responseId?: string }
-  | { relaySessionId: string; type: "clear" }
+  | { relaySessionId: string; type: "clear"; reason?: RealtimeVoiceAudioClearReason }
   | { relaySessionId: string; type: "mark"; markName: string }
   | {
       relaySessionId: string;
@@ -151,15 +156,6 @@ type RelaySession = {
   transcript: RealtimeVoiceTranscriptEntry[];
 };
 
-type TalkRealtimeRelayIssue = {
-  code: "realtime_unavailable";
-  message: string;
-  provider: string;
-  model?: string;
-  transport: "gateway-relay";
-  phase: string;
-};
-
 type CreateTalkRealtimeRelaySessionParams = {
   context: GatewayRequestContext;
   connId: string;
@@ -185,38 +181,6 @@ type TalkRealtimeRelaySessionResult = {
 };
 
 const relaySessions = new Map<string, RelaySession>();
-
-function realtimeRelayIssue(params: {
-  message: string;
-  provider: string;
-  model?: string;
-  phase: string;
-}): TalkRealtimeRelayIssue {
-  return {
-    code: "realtime_unavailable",
-    message: params.message,
-    provider: params.provider,
-    ...(params.model ? { model: params.model } : {}),
-    transport: "gateway-relay",
-    phase: params.phase,
-  };
-}
-
-function relayIssuePayload(
-  relaySessionId: string,
-  issue: TalkRealtimeRelayIssue,
-): Extract<TalkRealtimeRelayEventPayload, { type: "error" }> {
-  return {
-    relaySessionId,
-    type: "error",
-    message: issue.message,
-    code: issue.code,
-    provider: issue.provider,
-    ...(issue.model ? { model: issue.model } : {}),
-    transport: issue.transport,
-    phase: issue.phase,
-  };
-}
 
 function isWorkingToolResult(result: unknown): boolean {
   return (
@@ -288,6 +252,7 @@ function relayEventDeliveryOptions(event: TalkRealtimeRelayEventPayload): { drop
     case "ready":
     case "error":
     case "close":
+    case "mark":
       return { dropIfSlow: false };
     default:
       return { dropIfSlow: true };
@@ -657,7 +622,7 @@ export function createTalkRealtimeRelaySession(
     autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
     interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
     tools: params.tools,
-    markStrategy: "ack-immediately",
+    markStrategy: "transport",
     audioSink: {
       isOpen: () => Boolean(relayRef.current && relaySessions.has(relayRef.current.id)),
       sendAudio: (audio) => {
@@ -677,14 +642,14 @@ export function createTalkRealtimeRelaySession(
           },
         );
       },
-      clearAudio: () => {
+      clearAudio: (reason) => {
         const turnId = relayRef.current ? ensureRelayTurn(relayRef.current) : undefined;
         emit(
-          { relaySessionId, type: "clear" },
+          { relaySessionId, type: "clear", ...(reason ? { reason } : {}) },
           {
             type: "output.audio.done",
             turnId,
-            payload: { reason: "clear" },
+            payload: { reason: reason ?? "clear" },
             final: true,
           },
         );
@@ -1156,6 +1121,16 @@ export function sendTalkRealtimeRelayAudio(params: {
   }
 }
 
+/** Confirms that an owning relay client finished playing through a provider mark. */
+export function acknowledgeTalkRealtimeRelayMark(params: {
+  relaySessionId: string;
+  connId: string;
+  markName: string;
+}): void {
+  const session = getRelaySession(params.relaySessionId, params.connId);
+  session.bridge.acknowledgeMark(params.markName);
+}
+
 /** Delivers a tool result from the browser/client side back to the provider. */
 export function submitTalkRealtimeRelayToolResult(params: {
   relaySessionId: string;
@@ -1475,15 +1450,4 @@ export function stopTalkRealtimeRelaySession(params: {
 }): void {
   const session = getRelaySession(params.relaySessionId, params.connId);
   closeRelaySession(session, "completed");
-}
-
-/** Clears process-local realtime relays between tests. */
-export function clearTalkRealtimeRelaySessionsForTest(): void {
-  for (const session of relaySessions.values()) {
-    session.forcedConsults.clear();
-    clearTimeout(session.cleanupTimer);
-    forgetUnifiedTalkSession(session.id);
-    session.bridge.close();
-  }
-  relaySessions.clear();
 }

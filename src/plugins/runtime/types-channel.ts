@@ -5,6 +5,8 @@
  * inside the owning plugin package instead of hanging off core runtime slots
  * keyed by plugin id.
  */
+import type { LoadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.types.js";
+
 type DispatchReplyWithBufferedBlockDispatcher =
   import("../../auto-reply/reply/provider-dispatcher.types.js").DispatchReplyWithBufferedBlockDispatcher;
 type CreateReplyDispatcherWithTyping =
@@ -177,7 +179,7 @@ export type PluginRuntimeChannel = {
     shouldHandleTextCommands: ShouldHandleTextCommands;
   };
   outbound: {
-    loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
+    loadAdapter: LoadChannelOutboundAdapter;
   };
   inbound: {
     buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;

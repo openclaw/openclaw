@@ -119,7 +119,7 @@ function processError(stderr: string): Error {
 }
 
 /** Production runner that treats the remote post-forward marker as connection readiness. */
-export function createWorkerSshRunner(): WorkerSshRunner {
+function createWorkerSshRunner(): WorkerSshRunner {
   return {
     run: runCommandWithTimeout,
     start(argv, options) {

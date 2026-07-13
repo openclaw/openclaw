@@ -2,7 +2,6 @@
 // plugin registry refresh, skill snapshot invalidation, and watcher behavior.
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { prepareConfigRuntimeEnv } from "../config/config-env-vars.js";
 import type {
@@ -27,16 +26,12 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
+import { buildGatewayReloadPlan, resolveConfigReloadMetadata } from "./config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import {
-  buildGatewayReloadPlan,
-  diffConfigPaths,
-  diffGatewayReloadPaths,
   type GatewayConfigReloadTransactionOwnership,
   type GatewayReloadPlan,
-  listPluginInstallTimestampMetadataPaths,
-  listPluginInstallWholeRecordPaths,
-  resolveConfigReloadMetadata,
-  resolveGatewayReloadSettings,
   startGatewayConfigReloader,
 } from "./config-reload.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
@@ -137,27 +132,13 @@ describe("diffConfigPaths", () => {
   });
 
   it.each([
-    {
-      label: "added",
-      prev: {},
-      next: { mcp: { apps: { enabled: true } } },
-    },
-    {
-      label: "removed",
-      prev: { mcp: { apps: { enabled: true } } },
-      next: {},
-    },
-  ])(
-    "preserves the Apps restart boundary when the whole MCP config is $label",
-    ({ prev, next }) => {
-      const changedPaths = diffGatewayReloadPaths(prev, next);
-      const plan = buildGatewayReloadPlan(changedPaths);
-
-      expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
-      expect(plan.restartGateway).toBe(true);
-      expect(plan.restartReasons).toContain("mcp.apps");
-    },
-  );
+    { prev: {}, next: { mcp: { apps: { enabled: true } } } },
+    { prev: { mcp: { apps: { enabled: true } } }, next: {} },
+  ])("preserves the Apps restart boundary for whole MCP changes", ({ prev, next }) => {
+    const changedPaths = diffGatewayReloadPaths(prev, next);
+    expect(changedPaths).toEqual(["mcp", "mcp.apps"]);
+    expect(buildGatewayReloadPlan(changedPaths).restartReasons).toContain("mcp.apps");
+  });
 });
 
 describe("buildGatewayReloadPlan", () => {
@@ -225,44 +206,170 @@ describe("buildGatewayReloadPlan", () => {
     setActivePluginRegistry(emptyRegistry);
   });
 
-  it("marks gateway changes as restart required", () => {
-    const plan = buildGatewayReloadPlan(["gateway.port"]);
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toContain("gateway.port");
+  it.each([
+    {
+      path: "mcp.apps.enabled",
+      restart: true,
+      reason: "mcp.apps.enabled",
+    },
+    {
+      path: "gateway.auth.token",
+      restart: true,
+      reason: "gateway.auth.token",
+    },
+    {
+      path: "models.pricing.enabled",
+      restart: true,
+      reason: "models.pricing.enabled",
+    },
+    {
+      path: "auth.cooldowns.billingBackoffHours",
+      restart: false,
+      hot: "auth.cooldowns.billingBackoffHours",
+    },
+    {
+      path: "agents.defaults.model",
+      restart: false,
+      hot: "agents.defaults.model",
+      restartHeartbeat: true,
+    },
+    {
+      path: "unknownField",
+      restart: true,
+      reason: "unknownField",
+    },
+  ])("classifies reload path: $path", (testCase) => {
+    const plan = buildGatewayReloadPlan([testCase.path]);
+    expect(plan.restartGateway).toBe(testCase.restart);
+    if (testCase.reason) {
+      expect(plan.restartReasons).toContain(testCase.reason);
+    }
+    if (testCase.hot) {
+      expect(plan.hotReasons).toContain(testCase.hot);
+      expect(resolveConfigReloadMetadata(testCase.path).kind).toBe("hot");
+    }
+    if (testCase.restartHeartbeat) {
+      expect(plan.restartHeartbeat).toBe(true);
+    }
   });
 
-  it("restarts the gateway when MCP Apps listener config changes", () => {
-    const plan = buildGatewayReloadPlan([
-      "mcp.apps.enabled",
-      "mcp.apps.sandboxPort",
-      "mcp.apps.sandboxOrigin",
-    ]);
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toEqual([
-      "mcp.apps.enabled",
-      "mcp.apps.sandboxPort",
-      "mcp.apps.sandboxOrigin",
-    ]);
-    expect(plan.disposeMcpRuntimes).toBe(false);
-  });
+  it.each([
+    "gateway.port",
+    "gateway.terminal.enabled",
+    "browser.enabled",
+    "plugins.installs.telegram.installPath",
+    "plugins.load.paths.0",
+    "gateway.auth.mode",
+  ])("keeps restart-owned path restart-backed: %s", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
 
-  it("restarts the gateway for operator terminal config changes", () => {
-    // The terminal drives the Control UI CSP + bootstrap (both document-load
-    // time) and live PTYs, none of which hot-update a connected client, so a
-    // change restarts the gateway (clients reconnect with a fresh page/CSP).
-    const plan = buildGatewayReloadPlan(["gateway.terminal.enabled", "gateway.terminal.shell"]);
     expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toContain("gateway.terminal.enabled");
-  });
-
-  it("restarts the gateway for browser plugin config changes", () => {
-    const plan = buildGatewayReloadPlan(["browser.enabled"]);
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toContain("browser.enabled");
+    expect(plan.restartReasons).toEqual([path]);
     expect(plan.hotReasons).toStrictEqual([]);
   });
 
-  it("hot-reloads browser profile config under the broad browser restart rule", () => {
+  it.each([
+    {
+      path: "hooks.gmail.account",
+      expected: { restartGmailWatcher: true, reloadHooks: true },
+    },
+    {
+      path: "gateway.channelHealthCheckMinutes",
+      expected: { restartHealthMonitor: true },
+    },
+    {
+      path: "mcp.servers.context7.command",
+      expected: { disposeMcpRuntimes: true },
+    },
+    {
+      path: "models.providers.openai.models",
+      expected: { restartHeartbeat: true },
+    },
+    {
+      path: "agents.defaults.models",
+      expected: { restartHeartbeat: true },
+    },
+    {
+      path: "agents.list",
+      expected: { restartHeartbeat: true },
+    },
+    {
+      path: "plugins.entries.lossless-claw.config.mode",
+      expected: { reloadPlugins: true, disposeMcpRuntimes: true },
+    },
+    {
+      path: "diagnostics.memoryPressureSnapshot",
+      expected: {},
+    },
+  ])("keeps hot-reload actions for $path", ({ path, expected }) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan).toMatchObject({
+      restartGateway: false,
+      restartReasons: [],
+      hotReasons: [path],
+      noopPaths: [],
+      ...expected,
+    });
+  });
+
+  it.each([
+    "gateway.remote.url",
+    "secrets.providers.default.path",
+    "tui.footer.showRemoteHost",
+    "diagnostics.stuckSessionWarnMs",
+    "diagnostics.stuckSessionAbortMs",
+  ])("keeps runtime-irrelevant path as a no-op: %s", (path) => {
+    const plan = buildGatewayReloadPlan([path]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.hotReasons).toStrictEqual([]);
+    expect(plan.noopPaths).toEqual([path]);
+  });
+
+  it("treats plugin install timestamp-only changes as no-ops", () => {
+    const paths = [
+      "plugins.installs.lossless-claw.resolvedAt",
+      "plugins.installs.lossless-claw.installedAt",
+    ];
+    const plan = buildGatewayReloadPlan(paths);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toEqual(paths);
+    for (const path of paths) {
+      expect(resolveConfigReloadMetadata(path).kind).toBe("none");
+    }
+  });
+
+  it("restarts for forced whole-record plugin install changes", () => {
+    const path = "plugins.installs.lossless.resolvedAt";
+    const plan = buildGatewayReloadPlan([path, path], {
+      noopPaths: [path],
+      forceChangedPaths: [path],
+    });
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
+    expect(plan.restartReasons).toEqual([path, path]);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("restarts the matching channel for channel config changes", () => {
+    const plan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
+  it("restarts every channel whose config prefix matches", () => {
+    const plan = buildGatewayReloadPlan(["web.enabled", "channels.telegram.botToken"]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp", "telegram"]));
+  });
+
+  it("prefers a specific hot rule under a broad restart prefix", () => {
     const path = "browser.profiles.sandbox.cdpUrl";
     const plan = buildGatewayReloadPlan([path]);
 
@@ -270,7 +377,6 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toStrictEqual([]);
     expect(plan.hotReasons).toEqual([path]);
     expect(plan.noopPaths).toStrictEqual([]);
-    expect(resolveConfigReloadMetadata(path).kind).toBe("hot");
   });
 
   it("keeps Gateway reload policy when an agent activates a scoped registry", () => {
@@ -284,400 +390,65 @@ describe("buildGatewayReloadPlan", () => {
     });
   });
 
-  it("restarts the Gmail watcher for hooks.gmail changes", () => {
-    const plan = buildGatewayReloadPlan(["hooks.gmail.account"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartGmailWatcher).toBe(true);
-    expect(plan.reloadHooks).toBe(true);
-  });
-
-  it("restarts providers when provider config prefixes change", () => {
-    const changedPaths = ["web.enabled", "channels.telegram.botToken"];
-    const plan = buildGatewayReloadPlan(changedPaths);
-    expect(plan.restartGateway).toBe(false);
-    const expected = new Set(
-      listChannelPlugins()
-        .filter((plugin) =>
-          (plugin.reload?.configPrefixes ?? []).some((prefix) =>
-            changedPaths.some((path) => path === prefix || path.startsWith(`${prefix}.`)),
-          ),
-        )
-        .map((plugin) => plugin.id),
-    );
-    expect(expected.size).toBeGreaterThan(0);
-    expect(plan.restartChannels).toEqual(expected);
-  });
-
-  it("restarts the channel when a per-account config field changes (more specific configPrefix wins over the broad noop prefix)", () => {
+  it("prefers channel restart prefixes over a broad no-op prefix", () => {
     const changedPaths = [
       "channels.whatsapp.accounts.default.enabled",
-      "channels.whatsapp.accounts.default.authDir",
+      "channels.whatsapp.selfChatMode",
     ];
     const plan = buildGatewayReloadPlan(changedPaths);
+
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
     expect(plan.hotReasons).toEqual(changedPaths);
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
-  it("restarts the WhatsApp channel when selfChatMode changes (configPrefix wins over broad noop prefix)", () => {
-    const plan = buildGatewayReloadPlan(["channels.whatsapp.selfChatMode"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
-    expect(plan.hotReasons).toContain("channels.whatsapp.selfChatMode");
-    expect(plan.noopPaths).toStrictEqual([]);
-  });
+  it("keeps unrelated channel paths as no-ops", () => {
+    const path = "channels.whatsapp.replyToMode";
+    const plan = buildGatewayReloadPlan([path]);
 
-  it("keeps other channels.whatsapp.* changes as hot no-ops", () => {
-    const plan = buildGatewayReloadPlan(["channels.whatsapp.replyToMode"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set());
-    expect(plan.noopPaths).toContain("channels.whatsapp.replyToMode");
+    expect(plan.noopPaths).toEqual([path]);
   });
 
-  it("refreshes channel reload rules when only the tracked channel registry changes", () => {
-    const activeOnlyRegistry = createTestRegistry([]);
+  it("refreshes channel rules when the tracked channel registry changes", () => {
     const channelOnlyRegistry = createTestRegistry([
       { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
     ]);
 
-    setActivePluginRegistry(activeOnlyRegistry);
-    const beforePinPlan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
-    expect(beforePinPlan.restartGateway).toBe(true);
-    expect(beforePinPlan.restartChannels).toEqual(new Set());
+    setActivePluginRegistry(emptyRegistry);
+    expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
+      restartGateway: true,
+      restartChannels: new Set(),
+    });
 
     pinActivePluginChannelRegistry(channelOnlyRegistry);
-    const afterPinPlan = buildGatewayReloadPlan(["channels.telegram.botToken"]);
-    expect(afterPinPlan.restartGateway).toBe(false);
-    expect(afterPinPlan.restartChannels).toEqual(new Set(["telegram"]));
+    expect(buildGatewayReloadPlan(["channels.telegram.botToken"])).toMatchObject({
+      restartGateway: false,
+      restartChannels: new Set(["telegram"]),
+    });
   });
 
-  it("restarts loaded channel plugins when plugin entry state changes", () => {
+  it("reloads loaded channel plugins when plugin entry state changes", () => {
     const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"]);
-
     expect(plan.restartGateway).toBe(false);
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.disposeMcpRuntimes).toBe(true);
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
-  it("keeps installed channel plugin source changes restart-backed", () => {
-    const plan = buildGatewayReloadPlan(["plugins.installs.telegram.installPath"]);
-
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.reloadPlugins).toBe(false);
-    expect(plan.disposeMcpRuntimes).toBe(false);
-    expect(plan.restartChannels).toEqual(new Set());
-    expect(plan.restartReasons).toEqual(["plugins.installs.telegram.installPath"]);
-  });
-
-  it("restarts heartbeat when model-related config changes", () => {
-    const plan = buildGatewayReloadPlan([
-      "models.providers.openai.models",
-      "agents.defaults.model",
-    ]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartHeartbeat).toBe(true);
-    expect(plan.hotReasons).toEqual(["models.providers.openai.models", "agents.defaults.model"]);
-  });
-
-  it("requires restart when model pricing bootstrap changes", () => {
-    const plan = buildGatewayReloadPlan(["models.pricing.enabled"]);
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toContain("models.pricing.enabled");
-    expect(plan.restartHeartbeat).toBe(false);
-    expect(plan.hotReasons).toStrictEqual([]);
-  });
-
-  it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
-    const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartHeartbeat).toBe(true);
-    expect(plan.hotReasons).toContain("agents.defaults.models");
-    expect(plan.noopPaths).toStrictEqual([]);
-  });
-
-  it("restarts heartbeat when agents.list entries change", () => {
-    const plan = buildGatewayReloadPlan(["agents.list"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartHeartbeat).toBe(true);
-    expect(plan.hotReasons).toContain("agents.list");
-    expect(plan.noopPaths).toStrictEqual([]);
-  });
-
-  it("treats plugin install timestamp-only changes as no-op", () => {
-    const plan = buildGatewayReloadPlan([
-      "plugins.installs.lossless-claw.resolvedAt",
-      "plugins.installs.lossless-claw.installedAt",
-    ]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.noopPaths).toEqual([
-      "plugins.installs.lossless-claw.resolvedAt",
-      "plugins.installs.lossless-claw.installedAt",
-    ]);
-    expect(resolveConfigReloadMetadata("plugins.installs.lossless-claw.resolvedAt").kind).toBe(
-      "none",
-    );
-    expect(resolveConfigReloadMetadata("plugins.installs.lossless-claw.installedAt").kind).toBe(
-      "none",
-    );
-  });
-
-  it("restarts for whole-record plugin install changes", () => {
-    const plan = buildGatewayReloadPlan(
-      ["plugins.installs.lossless.resolvedAt", "plugins.installs.lossless.resolvedAt"],
-      {
-        noopPaths: ["plugins.installs.lossless.resolvedAt"],
-        forceChangedPaths: ["plugins.installs.lossless.resolvedAt"],
-      },
-    );
-
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.reloadPlugins).toBe(false);
-    expect(plan.disposeMcpRuntimes).toBe(false);
-    expect(plan.restartReasons).toEqual([
-      "plugins.installs.lossless.resolvedAt",
-      "plugins.installs.lossless.resolvedAt",
-    ]);
-    expect(plan.noopPaths).toStrictEqual([]);
-  });
-
-  it("requires restart when plugin load paths change", () => {
-    const plan = buildGatewayReloadPlan(["plugins.load.paths.0"]);
-
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.reloadPlugins).toBe(false);
-    expect(plan.disposeMcpRuntimes).toBe(false);
-    expect(plan.restartReasons).toEqual(["plugins.load.paths.0"]);
-  });
-
-  it("hot-reloads plugin entry config changes", () => {
-    const plan = buildGatewayReloadPlan(["plugins.entries.lossless-claw.config.mode"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.reloadPlugins).toBe(true);
-    expect(plan.disposeMcpRuntimes).toBe(true);
-    expect(plan.hotReasons).toContain("plugins.entries.lossless-claw.config.mode");
-  });
-
-  it("keeps restart-owned plugin entry config changes restart-backed", () => {
-    const plan = buildGatewayReloadPlan(["plugins.entries.canvas.enabled"]);
-
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toEqual(["plugins.entries.canvas.enabled"]);
-    expect(plan.hotReasons).toStrictEqual([]);
-  });
-
-  it("lists plugin install metadata and whole-record paths structurally", () => {
-    const prev = {
-      plugins: {
-        installs: {
-          lossless: { source: "npm", resolvedAt: "2026-04-22T00:00:00.000Z" },
-        },
-      },
-    };
-    const next = {
-      plugins: {
-        installs: {
-          lossless: { source: "npm", resolvedAt: "2026-04-22T00:01:00.000Z" },
-          "lossless.resolvedAt": { source: "npm" },
-        },
-      },
-    };
-
-    expect(listPluginInstallTimestampMetadataPaths(prev, next)).toEqual([
-      "plugins.installs.lossless.resolvedAt",
-    ]);
-    expect(listPluginInstallWholeRecordPaths(prev, next)).toEqual([
-      "plugins.installs.lossless.resolvedAt",
-    ]);
-  });
-
-  it("hot-reloads health monitor when channelHealthCheckMinutes changes", () => {
-    const plan = buildGatewayReloadPlan(["gateway.channelHealthCheckMinutes"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartHealthMonitor).toBe(true);
-    expect(plan.hotReasons).toContain("gateway.channelHealthCheckMinutes");
-  });
-
-  it("hot-reloads MCP config changes by disposing cached runtimes", () => {
-    const plan = buildGatewayReloadPlan(["mcp.servers.context7.command"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.disposeMcpRuntimes).toBe(true);
-    expect(plan.hotReasons).toContain("mcp.servers.context7.command");
-  });
-
-  it("treats gateway.remote as no-op", () => {
-    const plan = buildGatewayReloadPlan(["gateway.remote.url"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.noopPaths).toContain("gateway.remote.url");
-  });
-
-  it("treats secrets config changes as no-op for gateway restart planning", () => {
-    const plan = buildGatewayReloadPlan(["secrets.providers.default.path"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.noopPaths).toContain("secrets.providers.default.path");
-  });
-
-  it("treats TUI display preferences as no-op for gateway restart planning", () => {
-    const path = "tui.footer.showRemoteHost";
+  it("keeps restart-owned plugin paths ahead of the generic plugin hot rule", () => {
+    const path = "plugins.entries.canvas.enabled";
     const plan = buildGatewayReloadPlan([path]);
 
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartReasons).toStrictEqual([]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual([path]);
     expect(plan.hotReasons).toStrictEqual([]);
-    expect(plan.noopPaths).toContain(path);
-    expect(resolveConfigReloadMetadata(path).kind).toBe("none");
   });
 
-  it("treats diagnostics stuck-session thresholds as no-op for gateway restart planning", () => {
-    const plan = buildGatewayReloadPlan([
-      "diagnostics.stuckSessionWarnMs",
-      "diagnostics.stuckSessionAbortMs",
-    ]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.noopPaths).toContain("diagnostics.stuckSessionWarnMs");
-    expect(plan.noopPaths).toContain("diagnostics.stuckSessionAbortMs");
-  });
-
-  it("hot-reloads diagnostics memory pressure snapshot toggles", () => {
-    const plan = buildGatewayReloadPlan(["diagnostics.memoryPressureSnapshot"]);
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.hotReasons).toContain("diagnostics.memoryPressureSnapshot");
-    expect(plan.noopPaths).toStrictEqual([]);
-  });
-
-  it("hot-reloads auth cooldown changes without a gateway restart", () => {
-    const changedPaths = [
-      "auth.cooldowns.billingBackoffHours",
-      "auth.cooldowns.billingBackoffHoursByProvider.anthropic",
-    ];
-    const plan = buildGatewayReloadPlan(changedPaths);
-
-    expect(plan.restartGateway).toBe(false);
-    expect(plan.restartReasons).toStrictEqual([]);
-    expect(plan.hotReasons).toStrictEqual(changedPaths);
-    expect(plan.noopPaths).toStrictEqual([]);
-    expect(resolveConfigReloadMetadata("auth.cooldowns.billingBackoffHours").kind).toBe("hot");
-  });
-
-  it("restarts for gateway.auth.token changes", () => {
-    const plan = buildGatewayReloadPlan(["gateway.auth.token"]);
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toContain("gateway.auth.token");
-  });
-
-  it("restarts for gateway.auth.mode changes", () => {
-    const plan = buildGatewayReloadPlan(["gateway.auth.mode"]);
-    expect(plan.restartGateway).toBe(true);
-    expect(plan.restartReasons).toContain("gateway.auth.mode");
-  });
-
-  it("defaults unknown paths to restart", () => {
-    const plan = buildGatewayReloadPlan(["unknownField"]);
-    expect(plan.restartGateway).toBe(true);
-  });
-
-  it.each([
-    {
-      path: "browser.enabled",
-      expectRestartGateway: true,
-      expectRestartReason: "browser.enabled",
-    },
-    {
-      path: "browser.defaultProfile",
-      expectRestartGateway: true,
-      expectRestartReason: "browser.defaultProfile",
-    },
-    {
-      path: "browser.profiles.sandbox.cdpUrl",
-      expectRestartGateway: false,
-      expectHotPath: "browser.profiles.sandbox.cdpUrl",
-    },
-    {
-      path: "gateway.channelHealthCheckMinutes",
-      expectRestartGateway: false,
-      expectHotPath: "gateway.channelHealthCheckMinutes",
-      expectRestartHealthMonitor: true,
-    },
-    {
-      path: "hooks.gmail.account",
-      expectRestartGateway: false,
-      expectHotPath: "hooks.gmail.account",
-      expectRestartGmailWatcher: true,
-      expectReloadHooks: true,
-    },
-    {
-      path: "agents.list",
-      expectRestartGateway: false,
-      expectHotPath: "agents.list",
-      expectRestartHeartbeat: true,
-    },
-    {
-      path: "mcp.servers.context7",
-      expectRestartGateway: false,
-      expectHotPath: "mcp.servers.context7",
-      expectDisposeMcpRuntimes: true,
-    },
-    {
-      path: "gateway.remote.url",
-      expectRestartGateway: false,
-      expectNoopPath: "gateway.remote.url",
-    },
-    {
-      path: "tui.footer.showRemoteHost",
-      expectRestartGateway: false,
-      expectNoopPath: "tui.footer.showRemoteHost",
-    },
-    {
-      path: "auth.cooldowns.billingBackoffHours",
-      expectRestartGateway: false,
-      expectHotPath: "auth.cooldowns.billingBackoffHours",
-    },
-    {
-      path: "gateway.auth.token",
-      expectRestartGateway: true,
-      expectRestartReason: "gateway.auth.token",
-    },
-    {
-      path: "unknownField",
-      expectRestartGateway: true,
-      expectRestartReason: "unknownField",
-    },
-  ])("classifies reload path: $path", (testCase) => {
-    const plan = buildGatewayReloadPlan([testCase.path]);
-    expect(plan.restartGateway).toBe(testCase.expectRestartGateway);
-    if (testCase.expectHotPath) {
-      expect(plan.hotReasons).toContain(testCase.expectHotPath);
-    }
-    if (testCase.expectNoopPath) {
-      expect(plan.noopPaths).toContain(testCase.expectNoopPath);
-    }
-    if (testCase.expectRestartReason) {
-      expect(plan.restartReasons).toContain(testCase.expectRestartReason);
-    }
-    if (testCase.expectRestartHealthMonitor) {
-      expect(plan.restartHealthMonitor).toBe(true);
-    }
-    if (testCase.expectRestartGmailWatcher) {
-      expect(plan.restartGmailWatcher).toBe(true);
-    }
-    if (testCase.expectReloadHooks) {
-      expect(plan.reloadHooks).toBe(true);
-    }
-    if (testCase.expectRestartHeartbeat) {
-      expect(plan.restartHeartbeat).toBe(true);
-    }
-    if (testCase.expectDisposeMcpRuntimes) {
-      expect(plan.disposeMcpRuntimes).toBe(true);
-    }
-  });
-});
-
-describe("resolveGatewayReloadSettings", () => {
-  it("uses defaults when unset", () => {
-    const settings = resolveGatewayReloadSettings({});
-    expect(settings.mode).toBe("hybrid");
-    expect(settings.debounceMs).toBe(300);
+  it("uses default reload settings when config is unset", () => {
+    expect(resolveGatewayReloadSettings({})).toMatchObject({ mode: "hybrid", debounceMs: 300 });
   });
 });
 
