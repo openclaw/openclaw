@@ -476,15 +476,15 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       });
       await page.getByText("Default shortcut received.").waitFor({ timeout: 10_000 });
 
-      await page.getByRole("button", { name: "Chat settings" }).click();
-      const shortcutSelect = page.getByLabel("Send shortcut");
+      // The send shortcut moved to the Settings appearance page; picking it
+      // there must apply to the chat composer after navigating back.
+      await page.goto(`${server.baseUrl}settings/appearance`);
+      const shortcutSelect = page.locator("[data-settings-send-shortcut]");
       await shortcutSelect.selectOption("modifier-enter");
       expect(await shortcutSelect.inputValue()).toBe("modifier-enter");
 
-      await page.reload();
+      await page.goto(`${server.baseUrl}chat`);
       await composer.waitFor({ state: "visible", timeout: 10_000 });
-      await page.getByRole("button", { name: "Chat settings" }).click();
-      expect(await page.getByLabel("Send shortcut").inputValue()).toBe("modifier-enter");
       expect(await composer.getAttribute("aria-keyshortcuts")).toBe("Control+Enter Meta+Enter");
 
       await composer.fill("plain enter stays in the draft");

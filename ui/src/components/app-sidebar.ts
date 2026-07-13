@@ -157,6 +157,7 @@ type SidebarSessionGroupDropTarget = {
 };
 
 const SIDEBAR_SESSION_GROUPING_STORAGE_KEY = "openclaw:sidebar:sessions:grouping";
+const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cron";
 const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_SESSION_PAGE_SIZE = 10;
 const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
@@ -188,6 +189,10 @@ function loadStoredSidebarSessionsGrouping(): SidebarSessionsGrouping {
   return normalizeSidebarSessionsGrouping(
     getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_GROUPING_STORAGE_KEY),
   );
+}
+
+function loadStoredSidebarSessionsShowCron(): boolean {
+  return getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY) === "true";
 }
 
 function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
@@ -308,6 +313,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @state() private collapsedSessionSections = loadStoredCollapsedSessionSections();
   @state() private sessionSortMode: SidebarSessionSortMode = "created";
   @state() private sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
+  @state() private sessionsShowCron = loadStoredSidebarSessionsShowCron();
   @state() private sessionSortMenuPosition: { x: number; y: number } | null = null;
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   @state() private agentMenuPosition: { x: number; bottom: number } | null = null;
@@ -933,6 +939,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       assistantAgentId:
         context?.agentSelection.state.selectedId ?? context?.gateway.snapshot.assistantAgentId,
       hello: context?.gateway.snapshot.hello,
+      showCron: this.sessionsShowCron,
       compareSessions: this.compareSidebarSessionRows,
     });
     const highlightCurrentSession = this.activeRouteId === "chat";
@@ -1781,6 +1788,15 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
+  private setSessionsShowCron(show: boolean) {
+    this.sessionsShowCron = show;
+    try {
+      getSafeLocalStorage()?.setItem(SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY, String(show));
+    } catch {
+      // ignore storage failures
+    }
+  }
+
   private async forkSession(session: SidebarRecentSession) {
     const context = this.context;
     if (!context) {
@@ -2317,6 +2333,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               </button>
             `,
           )}
+          <div class="session-menu__separator" role="separator"></div>
+          <button
+            type="button"
+            class="sidebar-session-sort-menu__item"
+            role="menuitemcheckbox"
+            tabindex="-1"
+            aria-checked=${String(this.sessionsShowCron)}
+            @click=${() => {
+              this.setSessionsShowCron(!this.sessionsShowCron);
+              this.closeSessionSortMenu({ restoreFocus: true });
+            }}
+          >
+            <span class="session-menu__check" aria-hidden="true">
+              ${this.sessionsShowCron ? icons.check : nothing}
+            </span>
+            <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
+          </button>
         </div>
       </openclaw-menu-surface>
     `;
@@ -2645,6 +2678,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         hello: this.context?.gateway.snapshot.hello,
       }),
       filterByAgent: true,
+      showCron: this.sessionsShowCron,
     })
       .toSorted(this.compareSidebarSessionRows)
       .filter((row) => !adopted.has(row.key))
