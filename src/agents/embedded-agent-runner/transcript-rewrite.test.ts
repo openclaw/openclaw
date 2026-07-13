@@ -39,6 +39,21 @@ function asAppendMessage(message: unknown): AppendMessage {
   return message as AppendMessage;
 }
 
+function requireString(value: string | undefined, label: string): string {
+  if (!value) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function restoreOptionalEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
+  }
+}
+
 function getBranchMessages(sessionManager: SessionManager): AgentMessage[] {
   return sessionManager
     .getBranch()
@@ -445,15 +460,16 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
     // Regression: the deferred-maintenance timeout can trip while we await the
     // write lock. shouldAbort must re-check after acquisition so a late run does
     // not persist over the transcript the resumed foreground turn now owns.
+    // A scope with an explicit sessionFile and no store identity routes to the
+    // file-backed path, mirroring how deferred maintenance builds its scope.
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
-    const storePath = path.join(dir, "sessions.json");
+    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+    // Isolate the default store lookup (loadSessionEntry runs before the explicit
+    // file is selected) so it never touches the real state dir.
+    process.env.OPENCLAW_STATE_DIR = dir;
     const sessionManager = SessionManager.create(dir, dir);
-    const entryIds = appendSessionMessages(sessionManager, [
-      asAppendMessage({
-        role: "user",
-        content: "run tool",
-        timestamp: 1,
-      }),
+    appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "run tool", timestamp: 1 }),
       asAppendMessage({
         role: "toolResult",
         toolCallId: "call_1",
@@ -470,19 +486,8 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
     ]);
     const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
     const sessionId = path.basename(sessionFile, ".jsonl");
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        "agent:main:test": {
-          sessionFile,
-          sessionId,
-          updatedAt: 10,
-        },
-      }),
-      "utf8",
-    );
+    const [, toolResultEntryId] = sessionManager.getBranch().map((entry) => entry.id);
     const originalSessionBytes = await fs.readFile(sessionFile, "utf8");
-    const toolResultEntryId = entryIds[1];
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);
 
@@ -500,12 +505,12 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
           agentId: "main",
           sessionId,
           sessionKey: "agent:main:test",
-          storePath,
+          sessionFile,
         },
         request: {
           replacements: [
             {
-              entryId: toolResultEntryId,
+              entryId: requireString(toolResultEntryId, "tool result entry id"),
               message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
             },
           ],
@@ -519,6 +524,156 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       expect(await fs.readFile(sessionFile, "utf8")).toBe(originalSessionBytes);
       expect(listener).not.toHaveBeenCalled();
       expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      restoreOptionalEnv("OPENCLAW_STATE_DIR", priorStateDir);
+    }
+  });
+
+  it("fences the file persist when the timeout trips between the read and the write", async () => {
+    // Part A parity: the file path re-checks the fence after reading the snapshot
+    // and before persisting, so a timeout that fires mid-flight leaves the on-disk
+    // transcript untouched instead of clobbering the resumed foreground turn.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
+    const priorStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = dir;
+    const sessionManager = SessionManager.create(dir, dir);
+    appendSessionMessages(sessionManager, [
+      asAppendMessage({ role: "user", content: "run tool", timestamp: 1 }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: createTextContent("before rewrite"),
+        isError: false,
+        timestamp: 2,
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("summarized"),
+        timestamp: 3,
+      }),
+    ]);
+    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
+    const sessionId = path.basename(sessionFile, ".jsonl");
+    const [, toolResultEntryId] = sessionManager.getBranch().map((entry) => entry.id);
+    const originalSessionBytes = await fs.readFile(sessionFile, "utf8");
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    // False on the first check (after the lock is acquired) so the read runs,
+    // then true on the second check (before persist), modeling a timeout that
+    // fires once the snapshot has been read.
+    let abortChecks = 0;
+    const shouldAbort = () => {
+      abortChecks += 1;
+      return abortChecks > 1;
+    };
+
+    try {
+      const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+        scope: {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:test",
+          sessionFile,
+        },
+        request: {
+          replacements: [
+            {
+              entryId: requireString(toolResultEntryId, "tool result entry id"),
+              message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
+            },
+          ],
+        },
+        shouldAbort,
+      });
+
+      expect(result.changed).toBe(false);
+      expect(result.reason).toBe("rewrite fenced before persist");
+      expect(abortChecks).toBe(2);
+      // The persist never ran even though the read did: transcript unchanged.
+      expect(await fs.readFile(sessionFile, "utf8")).toBe(originalSessionBytes);
+      expect(listener).not.toHaveBeenCalled();
+      expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+      restoreOptionalEnv("OPENCLAW_STATE_DIR", priorStateDir);
+    }
+  });
+
+  it("fences the SQLite persist when the timeout trips between the locked read and the write", async () => {
+    // Part A regression: the SQLite path must hold the transcript write lock
+    // across the load and replace and re-check the fence before persisting. A
+    // deferred run that times out mid-flight must leave the transcript unchanged
+    // so a message the resumed foreground turn appended can never be lost.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "runtime-sqlite-fence";
+    const sessionFile = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    const scope = { agentId: "main", sessionId, sessionKey: "agent:main:test", storePath };
+    await replaceSessionEntry({ sessionKey: "agent:main:test", storePath }, {
+      sessionFile,
+      sessionId,
+      updatedAt: 10,
+    } as SessionEntry);
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "run tool", timestamp: 1 },
+    });
+    const toolResult = await appendTranscriptMessage(scope, {
+      message: {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: createTextContent("before rewrite"),
+        isError: false,
+        timestamp: 2,
+      },
+    });
+    await appendTranscriptMessage(scope, {
+      message: { role: "assistant", content: createTextContent("summarized"), timestamp: 3 },
+    });
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+    let abortChecks = 0;
+    const shouldAbort = () => {
+      abortChecks += 1;
+      return abortChecks > 1;
+    };
+
+    try {
+      const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+        scope,
+        request: {
+          replacements: [
+            {
+              entryId: toolResult.messageId,
+              message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
+            },
+          ],
+        },
+        shouldAbort,
+      });
+
+      expect(result.changed).toBe(false);
+      expect(result.reason).toBe("rewrite fenced before persist");
+      expect(abortChecks).toBe(2);
+      // SQLite uses its own transcript write lock, never the file lock mock.
+      expect(acquireSessionWriteLockMock).not.toHaveBeenCalled();
+      expect(listener).not.toHaveBeenCalled();
+      // The persist never ran: the tool result still holds its original text.
+      const branchMessages = (await loadTranscriptEvents(scope))
+        .filter(
+          (entry): entry is { message: AgentMessage; type: "message" } =>
+            typeof entry === "object" &&
+            entry !== null &&
+            "message" in entry &&
+            "type" in entry &&
+            entry.type === "message",
+        )
+        .map((entry) => entry.message);
+      expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
+        { type: "text", text: "before rewrite" },
+      ]);
     } finally {
       cleanup();
     }

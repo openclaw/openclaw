@@ -1575,6 +1575,94 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
+  it("holds the same-session read barrier until an in-flight persist admitted before the timeout settles", async () => {
+    await withStateDirEnv("openclaw-turn-maintenance-persist-checkpoint-", async () => {
+      vi.useFakeTimers();
+      try {
+        resetCommandQueueStateForTest();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const sessionKey = "agent:main:session-persist-checkpoint";
+        const events: string[] = [];
+        let releasePersist: (() => void) | undefined;
+        // The persist is admitted before the timeout, then parked mid-write.
+        rewriteTranscriptEntriesInRuntimeTranscriptMock.mockImplementationOnce(async () => {
+          events.push("persist-start");
+          await new Promise<void>((resolve) => {
+            releasePersist = resolve;
+          });
+          events.push("persist-end");
+          return { changed: true, bytesFreed: 123, rewrittenEntries: 2 };
+        });
+        const maintain = vi.fn(async (params?: unknown) => {
+          await (
+            params as { runtimeContext?: ContextEngineRuntimeContext }
+          ).runtimeContext?.rewriteTranscriptEntries?.({
+            replacements: [
+              {
+                entryId: "entry-1",
+                message: castAgentMessage({
+                  role: "assistant",
+                  content: [{ type: "text", text: "done" }],
+                  timestamp: 2,
+                }),
+              },
+            ],
+          });
+          return { changed: false, bytesFreed: 0, rewrittenEntries: 0 };
+        });
+
+        const deferredPromises: Promise<void>[] = [];
+        await runContextEngineMaintenance({
+          contextEngine: createBackgroundMaintenanceEngine(maintain),
+          sessionId: "session-persist-checkpoint",
+          sessionKey,
+          sessionFile: "/tmp/session-persist-checkpoint.jsonl",
+          reason: "turn",
+          config: { agents: { defaults: { compaction: { turnMaintenanceTaskTimeoutMs: 5_000 } } } },
+          onDeferredMaintenance: (promise) => {
+            deferredPromises.push(promise);
+          },
+        });
+
+        await waitForAssertion(() => expect(events).toContain("persist-start"));
+        expect(deferredPromises).toHaveLength(1);
+        let barrierSettled = false;
+        const tracked = deferredPromises[0].then(() => {
+          barrierSettled = true;
+        });
+
+        // Drive past the timeout: the lane is released and the fence trips, but a
+        // persist admitted before the timeout is still awaiting I/O.
+        await vi.advanceTimersByTimeAsync(6_000);
+        await flushAsyncWork();
+        // The read barrier must NOT resolve while that persist is unsettled, or a
+        // same-session read could observe a half-applied rewrite.
+        expect(barrierSettled).toBe(false);
+
+        // Once the in-flight persist settles, the bounded checkpoint releases the
+        // read barrier and the next same-session read can proceed.
+        expect(releasePersist).toBeTypeOf("function");
+        releasePersist?.();
+        await tracked;
+        expect(barrierSettled).toBe(true);
+        expect(events).toContain("persist-end");
+        await waitForDeferredTurnMaintenanceForSession(sessionKey);
+
+        // The descriptor stays cancelled: the late worker is fenced past its bound.
+        const tasks = listTasksForOwnerKey(sessionKey).filter(
+          (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+        );
+        expect(tasks).toHaveLength(1);
+        const task = requireRecord(getTaskById(tasks[0].taskId), "timed-out task");
+        expect(task.status).toBe("cancelled");
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it("starts deferred maintenance while the foreground session lane stays busy", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();

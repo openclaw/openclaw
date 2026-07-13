@@ -58,6 +58,47 @@ const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
  */
 type DeferredTurnMaintenanceFence = { tripped: boolean };
 
+/**
+ * Bounded read checkpoint that complements the write-side fence. The lane (and
+ * therefore the read barrier the next same-session turn awaits) is released at
+ * the timeout point for liveness, while a transcript persist admitted just
+ * before the timeout may still be awaiting I/O in the background worker. This
+ * tracker lets the timeout path wait for that single in-flight persist to
+ * settle so the next same-session read never observes a half-applied rewrite.
+ * It is bounded to one persist: once the fence trips the rewrite helper no-ops
+ * every fresh request, so no new persist can start after a timeout.
+ */
+type DeferredTurnMaintenancePersistenceCheckpoint = {
+  /** Record the promise for a persist attempt as it begins. */
+  track: (persist: Promise<unknown>) => void;
+  /** Resolve once the currently in-flight persist settles, or immediately when none is. */
+  waitForInFlight: () => Promise<void>;
+};
+
+function createDeferredTurnMaintenancePersistenceCheckpoint(): DeferredTurnMaintenancePersistenceCheckpoint {
+  let inFlight: Promise<unknown> | undefined;
+  return {
+    track: (persist) => {
+      inFlight = persist;
+      // Clear once settled so a later waitForInFlight never blocks on a persist
+      // that already finished (and never rethrows its failure into the barrier).
+      const clear = () => {
+        if (inFlight === persist) {
+          inFlight = undefined;
+        }
+      };
+      persist.then(clear, clear);
+    },
+    waitForInFlight: async () => {
+      const current = inFlight;
+      if (!current) {
+        return;
+      }
+      await current.catch(() => {});
+    },
+  };
+}
+
 function fencedTranscriptRewriteResult(): TranscriptRewriteResult {
   return {
     changed: false,
@@ -351,6 +392,7 @@ function buildContextEngineMaintenanceRuntimeContext(params: {
   purpose?: string;
   contextEnginePluginId?: string;
   maintenanceFence?: DeferredTurnMaintenanceFence;
+  persistenceCheckpoint?: DeferredTurnMaintenancePersistenceCheckpoint;
 }): ContextEngineRuntimeContext {
   return {
     ...params.runtimeContext,
@@ -407,7 +449,13 @@ function buildContextEngineMaintenanceRuntimeContext(params: {
           shouldAbort: () => params.maintenanceFence?.tripped === true,
         });
       };
-      return await rewriteRuntimeTranscriptEntries();
+      // Register the persist so the timeout path can wait for a write admitted
+      // before the timeout to settle before releasing the next same-session
+      // read. Tracking the whole call keeps it bounded: a fenced no-op resolves
+      // immediately, and only one persist is ever in flight per run.
+      const persist = rewriteRuntimeTranscriptEntries();
+      params.persistenceCheckpoint?.track(persist);
+      return await persist;
     },
   };
 }
@@ -427,6 +475,7 @@ async function executeContextEngineMaintenance(params: {
   executionMode: "foreground" | "background";
   config?: OpenClawConfig;
   maintenanceFence?: DeferredTurnMaintenanceFence;
+  persistenceCheckpoint?: DeferredTurnMaintenancePersistenceCheckpoint;
 }): Promise<ContextEngineMaintenanceResult | undefined> {
   if (typeof params.contextEngine.maintain !== "function") {
     return undefined;
@@ -452,6 +501,7 @@ async function executeContextEngineMaintenance(params: {
       purpose: `context-engine.${params.reason}.maintenance`,
       contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
       maintenanceFence: params.maintenanceFence,
+      persistenceCheckpoint: params.persistenceCheckpoint,
     }),
   });
   if (result.changed) {
@@ -478,6 +528,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   config?: OpenClawConfig;
   disposeContextEngineAfterMaintenance?: boolean;
   maintenanceFence: DeferredTurnMaintenanceFence;
+  persistenceCheckpoint: DeferredTurnMaintenancePersistenceCheckpoint;
 }): Promise<void> {
   let surfacedUserNotice = false;
   let longRunningTimer: ReturnType<typeof setTimeout> | null = null;
@@ -540,6 +591,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
       config: params.config,
       executionMode: "background",
       maintenanceFence: params.maintenanceFence,
+      persistenceCheckpoint: params.persistenceCheckpoint,
     });
     if (longRunningTimer) {
       clearTimeout(longRunningTimer);
@@ -690,6 +742,11 @@ function scheduleDeferredTurnMaintenance(
   // below). The worker and its transcript-rewrite helper read it to suppress
   // late side effects once the lane has been released to a queued user turn.
   const maintenanceFence: DeferredTurnMaintenanceFence = { tripped: false };
+  // Bounded read checkpoint (issue #96703): the lane releases at the timeout
+  // point for liveness, but a persist admitted just before the timeout may still
+  // be writing. The timeout path awaits this before resolving the read barrier so
+  // the next same-session read sees a settled (or fenced no-op) transcript.
+  const persistenceCheckpoint = createDeferredTurnMaintenancePersistenceCheckpoint();
   // Opt-in bound: with no positive config the lane arms no timeout and the fence
   // never trips, so background maintenance runs unbounded exactly as before the
   // bound existed. A positive value arms both (issue #96703).
@@ -721,6 +778,7 @@ function scheduleDeferredTurnMaintenance(
           runId: task.runId!,
           disposeContextEngineAfterMaintenance: params.disposeContextEngineAfterMaintenance,
           maintenanceFence,
+          persistenceCheckpoint,
         }),
       // When armed, on timeout the lane is released and the enqueue promise
       // rejects with CommandLaneTaskTimeoutError. The onTaskTimeout hook flips
@@ -757,7 +815,7 @@ function scheduleDeferredTurnMaintenance(
     }
   };
   const trackedPromise = runPromise
-    .catch((err: unknown) => {
+    .catch(async (err: unknown) => {
       params.onScheduleFailure?.(err);
       // A wedged worker that blew past taskTimeoutMs surfaces here as a lane
       // timeout. The worker may still be unwinding in the background, but the
@@ -775,6 +833,12 @@ function scheduleDeferredTurnMaintenance(
           taskId: task.taskId,
           timeoutMs: taskTimeoutMs,
         });
+        // Bounded belt-and-suspenders: a persist admitted before the timeout may
+        // still be writing. Hold the read barrier for that single write to settle
+        // (the fence already stops any new persist), so the next same-session read
+        // never observes a half-applied rewrite. The load-bearing safety is the
+        // write-side fence in transcript-rewrite.ts; this only tightens the read.
+        await persistenceCheckpoint.waitForInFlight();
         return;
       }
       markDeferredTurnMaintenanceTaskScheduleFailure({
