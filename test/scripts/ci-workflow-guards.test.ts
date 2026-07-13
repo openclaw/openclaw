@@ -1972,7 +1972,7 @@ describe("ci workflow guards", () => {
     expect(checkShardRun).not.toContain("check:protocol-coverage");
   });
 
-  it("runs the changed-file TypeScript LOC ratchet against the exact CI base", () => {
+  it("runs the changed-file TypeScript LOC ratchet against the exact tested tree", () => {
     const workflow = readCiWorkflow();
     const checksFastSteps = workflow.jobs["checks-fast-core"].steps;
     const mergeCheckout = checksFastSteps.find(
@@ -1986,6 +1986,8 @@ describe("ci workflow guards", () => {
     expect(checksFastRun.env.LOC_BASE_SHA).toContain("github.event.pull_request.base.sha");
     expect(checksFastRun.env.LOC_BASE_SHA).toContain("needs.preflight.outputs.loc_base_sha");
     expect(checksFastRun.env.LOC_BASE_SHA).not.toContain("github.event.repository.default_branch");
+    expect(checksFastRun.env.LOC_EXPECTED_PR_HEAD).toContain("github.event.pull_request.head.sha");
+    expect(checksFastRun.env.LOC_EXPECTED_PR_HEAD).toContain("inputs.target_ref");
     expect(mergeCheckout.if).toContain("matrix.task == 'loc-ratchet'");
     expect(mergeCheckout.if).toContain("needs.preflight.outputs.loc_head_sha != ''");
     expect(mergeCheckout.env.LOC_HEAD_SHA).toBe("${{ needs.preflight.outputs.loc_head_sha }}");
@@ -1999,12 +2001,18 @@ describe("ci workflow guards", () => {
       checksFastSteps.findIndex((step: WorkflowStep) => step.name === "Setup Node environment"),
     );
     expect(checksFastRun.run).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(checksFastRun.run).toContain("git rev-parse --verify HEAD^1");
+    expect(checksFastRun.run).toContain("git rev-parse --verify HEAD^2");
     expect(checksFastRun.run).toContain(
-      'git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/ci-base"',
+      'git fetch --no-tags --depth=2 origin "+${loc_merge_sha}:refs/remotes/origin/ci-loc-merge"',
     );
+    expect(checksFastRun.run).toContain('merge_head="$(git rev-parse HEAD^2)"');
+    expect(checksFastRun.run).toContain('[[ "$merge_head" != "$LOC_EXPECTED_PR_HEAD" ]]');
+    expect(checksFastRun.run).toContain('loc_base_ref="$(git rev-parse HEAD^1)"');
     expect(checksFastRun.run).toContain(
-      "pnpm check:loc --base refs/remotes/origin/ci-base --head HEAD",
+      'git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:${loc_base_ref}"',
     );
+    expect(checksFastRun.run).toContain('pnpm check:loc --base "$loc_base_ref" --head HEAD');
 
     const fastOnly = runCiManifestFixture({
       bundledPlanner: true,

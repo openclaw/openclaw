@@ -1236,6 +1236,7 @@ jobs:
         env:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || needs.preflight.outputs.loc_base_sha || '' }}
+          LOC_EXPECTED_PR_HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.preflight.outputs.loc_head_sha != '' && inputs.target_ref || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
           TASK: ${{ matrix.task }}
         shell: bash
@@ -1263,9 +1264,25 @@ jobs:
               # Frozen compatibility targets were governed by their original CI. Comparing
               # them with moving main would turn unrelated branch drift into release failures.
               if [[ "$HISTORICAL_TARGET" != "true" ]] && [ -n "$LOC_BASE_SHA" ] && [[ ! "$LOC_BASE_SHA" =~ ^0+$ ]]; then
-                git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/ci-base"
+                loc_base_ref="refs/remotes/origin/ci-base"
+                if [ -n "$LOC_EXPECTED_PR_HEAD" ]; then
+                  # Pull-request merge refs can advance past the event base as main moves.
+                  # Compare with the base parent of the exact merge tree under test.
+                  if ! git rev-parse --verify HEAD^1 >/dev/null 2>&1 || ! git rev-parse --verify HEAD^2 >/dev/null 2>&1; then
+                    loc_merge_sha="$(git rev-parse HEAD)"
+                    git fetch --no-tags --depth=2 origin "+${loc_merge_sha}:refs/remotes/origin/ci-loc-merge"
+                  fi
+                  merge_head="$(git rev-parse HEAD^2)"
+                  if [[ "$merge_head" != "$LOC_EXPECTED_PR_HEAD" ]]; then
+                    echo "LOC merge tree head ${merge_head} does not match expected pull-request head ${LOC_EXPECTED_PR_HEAD}." >&2
+                    exit 1
+                  fi
+                  loc_base_ref="$(git rev-parse HEAD^1)"
+                else
+                  git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:${loc_base_ref}"
+                fi
                 if has_package_script "check:loc"; then
-                  pnpm check:loc --base refs/remotes/origin/ci-base --head HEAD
+                  pnpm check:loc --base "$loc_base_ref" --head HEAD
                 else
                   echo "Current CI targets must provide the check:loc package script." >&2
                   exit 1
