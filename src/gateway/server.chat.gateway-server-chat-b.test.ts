@@ -2254,6 +2254,172 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send retains unresolved agent terminal persistence after dispatch rejection", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchEntered = createDeferred();
+    const allowDispatchReject = createDeferred();
+    const allowTerminalPersistence = createDeferred();
+    const runId = "idem-agent-terminal-persistence-pending";
+    let terminalPersistence: Promise<void> | undefined;
+    try {
+      const storePath = path.join(sessionDir, "sessions.json");
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "running",
+            startedAt: 900,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const broadcast = vi.fn();
+      const broadcastToConnIds = vi.fn();
+      const context = {
+        ...createDirectChatContext(),
+        broadcast,
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-session"]),
+      } as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementationOnce(async () => {
+        dispatchEntered.resolve();
+        await allowDispatchReject.promise;
+        throw new Error("dispatch failed while agent terminal persistence is pending");
+      });
+
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "retain pending agent terminal persistence",
+        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+      });
+      await vi.waitFor(() => {
+        expect(responses).toEqual([
+          {
+            ok: true,
+            payload: expect.objectContaining({ runId, status: "started" }),
+          },
+        ]);
+        expect(context.chatAbortControllers.has(runId)).toBe(true);
+      }, FAST_WAIT_OPTS);
+      await dispatchEntered.promise;
+
+      const activeRun = context.chatAbortControllers.get(runId);
+      expect(activeRun).toBeDefined();
+      const agentEndedAt = Date.now();
+      const { persistGatewaySessionLifecycleEvent } = await import("./session-lifecycle-state.js");
+      terminalPersistence = (async () => {
+        await allowTerminalPersistence.promise;
+        await persistGatewaySessionLifecycleEvent({
+          sessionKey: "agent:main:main",
+          event: {
+            runId,
+            sessionId: "sess-main",
+            ts: agentEndedAt,
+            data: {
+              phase: "end",
+              startedAt: 900,
+              endedAt: agentEndedAt,
+              aborted: true,
+              stopReason: "restart",
+            },
+          },
+        });
+      })();
+      if (activeRun) {
+        activeRun.projectSessionActive = false;
+        activeRun.projectSessionTerminalObservedAt = agentEndedAt;
+        activeRun.projectSessionTerminalPending = false;
+        activeRun.projectSessionTerminalPersistence = terminalPersistence;
+      }
+
+      allowDispatchReject.resolve();
+      await vi.waitFor(() => {
+        expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+          expect.objectContaining({
+            runId,
+            status: "error",
+            summary: "Error: dispatch failed while agent terminal persistence is pending",
+          }),
+        );
+      }, FAST_WAIT_OPTS);
+
+      const trackedRun = context.chatAbortControllers.get(runId);
+      expect(trackedRun).toBe(activeRun);
+      expect(trackedRun?.registrationCleanupRequested).toBe(true);
+      const { isChatAbortControllerEntryAbortable } = await import("./chat-abort.js");
+      expect(trackedRun && isChatAbortControllerEntryAbortable(trackedRun)).toBe(false);
+      const { createGatewayServerActiveWorkInspectors } = await import("./server-active-work.js");
+      const activeWork = createGatewayServerActiveWorkInspectors(context);
+      expect(activeWork.getChatRuns?.()).toBe(0);
+      expect(activeWork.getTerminalPersistence?.()).toBe(1);
+
+      const abortResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await expectDefined(
+        chatHandlers["chat.abort"],
+        'chatHandlers["chat.abort"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "late-abort",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId },
+        },
+        params: { sessionKey: "main", runId },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload) => abortResponses.push({ ok, payload })) as RespondFn,
+        context,
+      });
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: { ok: true, aborted: false, runIds: [] },
+        },
+      ]);
+
+      allowTerminalPersistence.resolve();
+      await terminalPersistence;
+      await vi.waitFor(() => {
+        expect(context.chatAbortControllers.has(runId)).toBe(false);
+      }, FAST_WAIT_OPTS);
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: true,
+        sessionId: "sess-main",
+        status: "killed",
+      });
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+      );
+      expect(broadcastToConnIds).not.toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ reason: "chat.dispatch-error" }),
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      allowDispatchReject.resolve();
+      allowTerminalPersistence.resolve();
+      await terminalPersistence?.catch(() => undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.send signal-only dispatch rejection remains an error", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred();

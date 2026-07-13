@@ -143,9 +143,15 @@ export function createChatSendDispatchErrorLifecycle(params: {
 
     // Dispatch rejection owns every remaining path. Retire abortability
     // synchronously before durable terminalization can suspend, so a late
-    // chat.abort cannot publish or cache a contradictory terminal state.
+    // chat.abort cannot publish or cache a contradictory terminal state. An
+    // agent-terminal persistence owner must remain tracked until it settles.
     context.chatAbortedRuns.delete(clientRunId);
-    activeRunAbort.cleanup({ force: true });
+    if (agentTerminalPersistenceOwnedAtDispatchReject && activeRunAbort.entry) {
+      activeRunAbort.entry.isAbortable = () => false;
+      activeRunAbort.cleanup();
+    } else {
+      activeRunAbort.cleanup({ force: true });
+    }
 
     let restartSafeDispatchFailureTerminalized = false;
     if (restartSafeAdmission) {
