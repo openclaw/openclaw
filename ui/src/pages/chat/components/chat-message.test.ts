@@ -19,9 +19,6 @@ const markdownRenderMock = vi.hoisted(() =>
     (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
   ),
 );
-const streamingTextRenderMock = vi.hoisted(() =>
-  vi.fn((value: string) => `<div class="markdown-plain-text-fallback">${value}</div>`),
-);
 const streamingMarkdownRenderMock = vi.hoisted(() =>
   vi.fn(
     (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
@@ -43,7 +40,6 @@ vi.mock("../../../components/markdown.ts", async (importOriginal) => {
     ...actual,
     toSanitizedMarkdownHtml: markdownRenderMock,
     toStreamingMarkdownHtml: streamingMarkdownRenderMock,
-    toStreamingPlainTextHtml: streamingTextRenderMock,
   };
 });
 
@@ -1005,7 +1001,6 @@ describe("grouped chat rendering", () => {
     const container = document.createElement("div");
     markdownRenderMock.mockClear();
     streamingMarkdownRenderMock.mockClear();
-    streamingTextRenderMock.mockClear();
 
     render(
       renderStreamGroup([
@@ -1021,7 +1016,6 @@ describe("grouped chat rendering", () => {
     );
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
-    expect(streamingTextRenderMock).not.toHaveBeenCalled();
     expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
       codeBlockChrome: "copy",
       fileLinks: true,
