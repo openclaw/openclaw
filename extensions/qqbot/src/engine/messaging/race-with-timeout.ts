@@ -1,4 +1,4 @@
-export interface TimeoutRaceState {
+interface TimeoutRaceState {
   readonly timedOut: boolean;
 }
 
