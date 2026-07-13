@@ -10,7 +10,6 @@ import {
 } from "../telegram-media.runtime.js";
 
 export {
-  readRemoteMediaBuffer,
   formatErrorMessage,
   logVerbose,
   MediaFetchError,
