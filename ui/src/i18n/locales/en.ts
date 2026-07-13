@@ -3388,6 +3388,8 @@ export const en: TranslationMap = {
       empty: "No background tasks for this agent yet.",
       running: "Running ({count})",
       finished: "Finished ({count})",
+      statusRunningOne: "1 running task",
+      statusRunningMany: "{count} running tasks",
       stopTask: "Stop {title}",
       viewTranscript: "View transcript",
       toolUseOne: "1 tool use",

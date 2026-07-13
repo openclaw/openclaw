@@ -3,12 +3,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { TaskSummary } from "../../../lib/tasks/data.ts";
 import {
+  activeBackgroundTasksStatus,
   backgroundTasksActiveCount,
   createBackgroundTasksProps,
   handleBackgroundTasksEvent,
   renderBackgroundTasksRail,
+  renderBackgroundTasksStatusRow,
   toggleBackgroundTasks,
   type BackgroundTasksHost,
+  type BackgroundTasksProps,
 } from "./chat-background-tasks.ts";
 
 function flushAsync() {
@@ -330,5 +333,103 @@ describe("background tasks rail rendering", () => {
     expect(
       container.querySelector<HTMLButtonElement>(".chat-tasks-rail__section-toggle"),
     ).not.toBeNull();
+  });
+});
+
+describe("running-tasks status row", () => {
+  function makeProps(overrides: Partial<BackgroundTasksProps>): BackgroundTasksProps {
+    return {
+      agentId: "main",
+      collapsed: true,
+      narrowLayout: false,
+      connected: true,
+      canCancel: false,
+      loading: false,
+      error: null,
+      tasks: null,
+      cancellingTaskIds: new Set(),
+      finishedCollapsed: false,
+      onToggleCollapsed: () => {},
+      onToggleFinished: () => {},
+      onRefresh: () => {},
+      onCancel: () => {},
+      onOpenSession: () => {},
+      ...overrides,
+    };
+  }
+
+  it("summarizes active tasks with the oldest usable start time", () => {
+    expect(activeBackgroundTasksStatus(undefined)).toBeNull();
+    expect(activeBackgroundTasksStatus(makeProps({ tasks: null }))).toBeNull();
+    expect(
+      activeBackgroundTasksStatus(makeProps({ tasks: [makeTask({ id: "t", status: "completed" })] })),
+    ).toBeNull();
+
+    const status = activeBackgroundTasksStatus(
+      makeProps({
+        tasks: [
+          makeTask({ id: "t1", startedAt: 9_000 }),
+          makeTask({ id: "t2", status: "queued", startedAt: undefined, createdAt: 4_000 }),
+          makeTask({ id: "t3", status: "completed", startedAt: 100 }),
+        ],
+      }),
+    );
+    expect(status).toEqual({ count: 2, startedMs: 4_000 });
+  });
+
+  it("renders count, ticking elapsed time, and opens the collapsed rail", () => {
+    const onToggleCollapsed = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksStatusRow(
+        makeProps({
+          tasks: [makeTask({ id: "t1", startedAt: 9_000 })],
+          onToggleCollapsed,
+        }),
+      )}`,
+      container,
+    );
+
+    const row = container.querySelector(".chat-tasks-status");
+    expect(row).not.toBeNull();
+    expect(row?.querySelector("openclaw-elapsed-time")).not.toBeNull();
+    const link = row?.querySelector<HTMLButtonElement>(".chat-tasks-status__link");
+    expect(link?.textContent?.trim()).toBe("1 running task");
+    link?.click();
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+  });
+
+  it("pluralizes the label and leaves an open rail alone", () => {
+    const onToggleCollapsed = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksStatusRow(
+        makeProps({
+          collapsed: false,
+          tasks: [makeTask({ id: "t1" }), makeTask({ id: "t2", status: "queued" })],
+          onToggleCollapsed,
+        }),
+      )}`,
+      container,
+    );
+
+    const link = container.querySelector<HTMLButtonElement>(".chat-tasks-status__link");
+    expect(link?.textContent?.trim()).toBe("2 running tasks");
+    link?.click();
+    expect(onToggleCollapsed).not.toHaveBeenCalled();
+  });
+
+  it("renders nothing without active tasks", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksStatusRow(
+        makeProps({ tasks: [makeTask({ id: "t1", status: "completed" })] }),
+      )}`,
+      container,
+    );
+    expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
 });
