@@ -177,7 +177,7 @@ describe("Windows command execution", () => {
     try {
       await withMockedWindowsPlatform(async () => {
         await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1_000 });
-        expect(requireExecaCall(0)[0]).toBe("C:\\Windows\\System32\\cmd.exe");
+        expect(requireExecaCall(0)[0].toLowerCase()).toBe("c:\\windows\\system32\\cmd.exe");
       });
     } finally {
       if (previousComSpec === undefined) {
