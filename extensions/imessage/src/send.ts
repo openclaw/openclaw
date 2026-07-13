@@ -18,6 +18,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { sleep as delay } from "openclaw/plugin-sdk/runtime-env";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import {
   appendIMessageApprovalReactionHintForOutboundMessage,
@@ -202,7 +203,7 @@ function sanitizeReplyToId(rawReplyToId?: string): string | undefined {
     return undefined;
   }
   if (sanitized.length > MAX_REPLY_TO_ID_LENGTH) {
-    return sanitized.slice(0, MAX_REPLY_TO_ID_LENGTH);
+    return truncateUtf16Safe(sanitized, MAX_REPLY_TO_ID_LENGTH);
   }
   return sanitized;
 }
