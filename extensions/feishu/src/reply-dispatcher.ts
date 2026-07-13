@@ -27,6 +27,7 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "./reply-dispatcher-runtime-api.js";
+import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
@@ -62,7 +63,6 @@ const MS_EPOCH_MIN = 1_000_000_000_000;
 const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
 const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
-const streamingStartBackoffUntilByAccount = new Map<string, number>();
 
 function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean {
   const backoffUntil = streamingStartBackoffUntilByAccount.get(accountId);
@@ -86,10 +86,6 @@ function formatMediaFallbackText(text: string | undefined, mediaUrl: string): st
   const trimmedText = text?.trim() ?? "";
   const attachmentText = `📎 ${mediaUrl}`;
   return trimmedText ? `${trimmedText}\n\n${attachmentText}` : attachmentText;
-}
-
-export function clearFeishuStreamingStartBackoffForTests() {
-  streamingStartBackoffUntilByAccount.clear();
 }
 
 function normalizeEpochMs(timestamp: number | undefined): number | undefined {

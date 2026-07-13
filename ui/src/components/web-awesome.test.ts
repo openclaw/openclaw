@@ -66,6 +66,19 @@ describe("Web Awesome adapters", () => {
     expect(restoreFocus).toBe(true);
   });
 
+  it("restores the durable trigger before native Tab navigation", async () => {
+    const durableTrigger = document.createElement("button");
+    document.body.append(durableTrigger);
+    const { dropdown } = await createDropdown();
+    dropdown.addEventListener("keydown", (event) =>
+      trackDropdownKeyboardDismissal(event, () => durableTrigger.focus()),
+    );
+
+    dropdown.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+
+    expect(document.activeElement).toBe(durableTrigger);
+  });
+
   it("restores radio semantics after a dropdown item updates", async () => {
     const item = document.createElement("wa-dropdown-item") as DropdownElement;
     item.setAttribute("type", "normal");

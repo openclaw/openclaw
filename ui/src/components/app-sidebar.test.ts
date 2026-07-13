@@ -17,11 +17,7 @@ import {
   type ApplicationGatewaySnapshot,
 } from "../app/context.ts";
 import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
-import type {
-  SessionCapability,
-  SessionDeleteOutcome,
-  SessionState,
-} from "../lib/sessions/index.ts";
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-sidebar.ts";
 import {
@@ -31,6 +27,8 @@ import {
 } from "./lobster-pet.ts";
 
 type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
+type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
+type SessionState = SessionCapability["state"];
 
 // Keep the attention widget inert: it fires its own health RPCs (cron.list,
 // models.authStatus) on connect, which would interleave with the nth-call
@@ -174,7 +172,7 @@ function createSessionsHarness(agentId: string, keys: string[]) {
     Promise.resolve(successfulSessionPatch(key)),
   );
   const deleteSession = vi.fn(
-    (): Promise<SessionDeleteOutcome> => Promise.resolve({ deleted: false }),
+    (): Promise<SessionDeleteResult> => Promise.resolve({ deleted: false }),
   );
   const deleteMany = vi.fn(() =>
     Promise.resolve({
@@ -347,7 +345,7 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     const rows = [
       ...sidebar.querySelectorAll<HTMLElement>(
-        '.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]',
+        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
       ),
     ];
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
@@ -625,7 +623,9 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
     expect(
-      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
+      sidebar.querySelectorAll(
+        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
+      ),
     ).toHaveLength(10);
   });
 
@@ -651,7 +651,7 @@ describe("AppSidebar agent chip", () => {
     const labels = () =>
       [
         ...sidebar.querySelectorAll(
-          '.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"] .sidebar-customize-menu__text',
+          ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch .sidebar-customize-menu__text",
         ),
       ].map((el) => el.textContent?.trim());
     expect(labels()).toEqual(["agent-7", "agent-12", "agent-1"]);
@@ -666,7 +666,9 @@ describe("AppSidebar agent chip", () => {
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     expect(onDropdownKeydown).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(
-      sidebar.querySelector('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
+      sidebar.querySelector(
+        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
+      ),
     );
     onDropdownKeydown.mockClear();
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
@@ -696,7 +698,9 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
     expect(
-      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
+      sidebar.querySelectorAll(
+        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
+      ),
     ).toHaveLength(10);
   });
 
@@ -715,7 +719,9 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     expect(
-      sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
+      sidebar.querySelectorAll(
+        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
+      ),
     ).toHaveLength(10);
   });
 
@@ -736,7 +742,9 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     const rows = [
-      ...sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[role="menuitemradio"]'),
+      ...sidebar.querySelectorAll(
+        ".sidebar-agent-menu wa-dropdown-item.sidebar-agent-menu__agent-switch",
+      ),
     ];
     expect(rows).toHaveLength(10);
     expect(rows.some((row) => row.textContent?.includes("agent-12"))).toBe(true);
@@ -2439,6 +2447,98 @@ describe("AppSidebar transient menus", () => {
     firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(replacement);
+  });
+
+  it("ignores a stale agent-menu hide after opening its replacement", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main");
+    if (!trigger) {
+      throw new Error("expected agent menu trigger");
+    }
+
+    trigger.click();
+    await sidebar.updateComplete;
+    const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    const settingsItem = firstMenu?.querySelector<HTMLElement>(
+      'wa-dropdown-item[value="command:settings"]',
+    );
+    expect(firstMenu).not.toBeNull();
+    expect(settingsItem).not.toBeNull();
+    firstMenu?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: settingsItem },
+      }),
+    );
+    await sidebar.updateComplete;
+
+    trigger.click();
+    await sidebar.updateComplete;
+    const replacement = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    expect(replacement).not.toBe(firstMenu);
+
+    firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(replacement);
+  });
+
+  it("ignores a stale More-menu hide after opening its replacement", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const trigger = sidebar.querySelector<HTMLButtonElement>("button.nav-item--action");
+    if (!trigger) {
+      throw new Error("expected More menu trigger");
+    }
+
+    trigger.click();
+    await sidebar.updateComplete;
+    const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-more-menu");
+    expect(firstMenu).not.toBeNull();
+    trigger.click();
+    await sidebar.updateComplete;
+    trigger.click();
+    await sidebar.updateComplete;
+    const replacement = sidebar.querySelector<HTMLElement>(".sidebar-more-menu");
+    expect(replacement).not.toBe(firstMenu);
+
+    firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-more-menu")).toBe(replacement);
+  });
+
+  it("ignores a stale Customize-menu hide after opening its replacement", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
+    const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
+    if (!nav) {
+      throw new Error("expected sidebar navigation");
+    }
+
+    nav.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 20, clientY: 20 }),
+    );
+    await sidebar.updateComplete;
+    const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-customize-menu");
+    expect(firstMenu).not.toBeNull();
+    firstMenu?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        bubbles: true,
+        detail: { item: { value: "reset" } },
+      }),
+    );
+    await sidebar.updateComplete;
+
+    nav.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 24, clientY: 24 }),
+    );
+    await sidebar.updateComplete;
+    const replacement = sidebar.querySelector<HTMLElement>(".sidebar-customize-menu");
+    expect(replacement).not.toBe(firstMenu);
+
+    firstMenu?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-customize-menu")).toBe(replacement);
   });
 });
 

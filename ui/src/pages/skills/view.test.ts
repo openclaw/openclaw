@@ -233,7 +233,9 @@ describe("renderSkills", () => {
       ).every((toggle) => toggle.hasAttribute("disabled")),
     ).toBe(true);
     expect(
-      container.querySelector('wa-switch.settings-toggle[aria-label="Repo Skill enabled"]'),
+      Array.from(container.querySelectorAll("wa-switch.settings-toggle")).find(
+        (toggle) => normalizeText(toggle) === "Repo Skill enabled",
+      ),
     ).toBeInstanceOf(HTMLElement);
     expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
       true,

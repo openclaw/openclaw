@@ -9,7 +9,7 @@ import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
 
-export type SessionMenuData = {
+type SessionMenuData = {
   key: string;
   label: string;
   pinned: boolean;

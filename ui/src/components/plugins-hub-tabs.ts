@@ -17,7 +17,7 @@ const PENDING_FOCUS_WINDOW_MS = 2000;
 let pendingFocus: { tab: PluginsHubTab; at: number } | null = null;
 let pointerActivation = false;
 
-export type PluginsHubTabsProps = {
+type PluginsHubTabsProps = {
   active: PluginsHubTab;
   /** Installed-plugin count badge; omit on pages without catalog data. */
   installedCount?: number | null;

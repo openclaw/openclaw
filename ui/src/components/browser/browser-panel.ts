@@ -47,6 +47,7 @@ import {
   type BrowserPanelTab,
 } from "./browser-client.ts";
 import { browserPanelStyles } from "./browser-panel.styles.ts";
+import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
 // Inline icon set (self-contained; the Control UI blocks external asset loads).
 const CLOSE_GLYPH = svg`<svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l8 8M12 4l-8 8" /></svg>`;
@@ -108,26 +109,6 @@ function tabLabel(tab: BrowserPanelTab): string {
   }
 }
 
-export function normalizeUrlDraft(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  // A colon followed by digits is a port (`localhost:3000`), not a scheme.
-  // Any other explicit scheme must be http(s); everything else gets https://.
-  const hasExplicitScheme = /^[a-z][a-z0-9+.-]*:(?![0-9])/i.test(trimmed);
-  if (hasExplicitScheme && !/^https?:\/\//i.test(trimmed)) {
-    return null;
-  }
-  const candidate = hasExplicitScheme ? trimmed : `https://${trimmed}`;
-  try {
-    const parsed = new URL(candidate);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : null;
-  } catch {
-    return null;
-  }
-}
-
 function loadImage(dataUrl: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -138,7 +119,7 @@ function loadImage(dataUrl: string): Promise<HTMLImageElement> {
 }
 
 /** `<openclaw-browser-panel>` — the dockable gateway browser surface. */
-export class OpenClawBrowserPanel extends OpenClawLitElement {
+class OpenClawBrowserPanel extends OpenClawLitElement {
   /** Gateway client used for browser.request RPCs; null until connected. */
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
   /** Whether the connected gateway advertises browser.request to this operator. */
@@ -314,7 +295,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dock = detail.dock;
     }
-    const url = typeof detail?.url === "string" ? normalizeUrlDraft(detail.url) : null;
+    const url = typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
     if (url || detail?.open === true) {
       if (!this.available) {
         return;
@@ -619,7 +600,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
    * screenshot refresh would leave the remote document untouched. */
   private reloadPage(): void {
     const url = this.view?.metrics?.url || this.view?.url || this.urlDraft;
-    const normalized = normalizeUrlDraft(url);
+    const normalized = normalizeBrowserUrlDraft(url);
     if (!this.activeTargetId) {
       return;
     }
@@ -639,7 +620,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
   }
 
   private commitUrlDraft(): void {
-    const url = normalizeUrlDraft(this.urlDraft);
+    const url = normalizeBrowserUrlDraft(this.urlDraft);
     if (!url) {
       return;
     }

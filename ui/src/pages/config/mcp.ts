@@ -21,7 +21,7 @@ type McpServerRow = {
   tls: string | null;
 };
 
-export type McpViewProps = {
+type McpViewProps = {
   configObject: Record<string, unknown>;
   configDirty: boolean;
   configSaving: boolean;

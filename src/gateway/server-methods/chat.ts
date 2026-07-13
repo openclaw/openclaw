@@ -1,12 +1,7 @@
 // Chat gateway methods implement chat.send/history/abort/inject/metadata and
 // bridge UI RPCs to agent dispatch, transcripts, media, and streaming state.
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { fileURLToPath } from "node:url";
-import { isAudioFileName } from "@openclaw/media-core/mime";
-import { expectDefined } from "@openclaw/normalization-core";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import {
   GATEWAY_CLIENT_CAPS,
   hasGatewayClientCap,
@@ -24,26 +19,13 @@ import {
 import {
   listAgentIds,
   resolveDefaultAgentId,
-  resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
-import {
-  getReplyPayloadMetadata,
-  isReplyPayloadStatusNotice,
-  type ReplyPayload,
-} from "../../auto-reply/reply-payload.js";
-import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import {
-  stageSandboxMedia,
-  type StageSandboxMediaResult,
-} from "../../auto-reply/reply/stage-sandbox-media.js";
-import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -55,45 +37,22 @@ import {
   emitDiagnosticsTimelineEvent,
   measureDiagnosticsTimelineSpan,
 } from "../../infra/diagnostics-timeline.js";
-import { formatErrorMessage, formatUncaughtError } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
-import {
-  appendLocalMediaParentRoots,
-  getAgentScopedMediaLocalRoots,
-} from "../../media/local-roots.js";
-import { parseInboundMediaUri } from "../../media/media-reference.js";
-import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { deleteMediaBuffer, MEDIA_MAX_BYTES, type SavedMedia } from "../../media/store.js";
-import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import {
   retainGatewayRootWorkAdmissionContinuation,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
-import {
-  parseInlineDirectives,
-  stripInlineDirectiveTagsForDelivery,
-  stripInlineDirectiveTagsForDisplay,
-  sanitizeReplyDirectiveId,
-} from "../../utils/directive-tags.js";
-import { INTERNAL_MESSAGE_CHANNEL, isOperatorUiClient } from "../../utils/message-channel.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
+import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   boundInFlightRunSnapshotForChatHistory,
   resolveInFlightRunSnapshot,
   updateChatRunProvider,
 } from "../chat-abort.js";
-import {
-  type ChatImageContent,
-  MediaOffloadError,
-  type OffloadedRef,
-  parseMessageWithAttachments,
-  persistInboundImagesForTranscript,
-  resolveChatAttachmentMaxBytes,
-  UnsupportedAttachmentError,
-} from "../chat-attachments.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
@@ -105,15 +64,12 @@ import {
   registerQueuedChatTurn,
   retireQueuedChatTurnCancellation,
 } from "../chat-queued-turns.js";
-import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   isDashboardSessionTitleCandidate,
   maybeGenerateDashboardSessionTitle,
 } from "../dashboard-session-title.js";
-import { attachManagedOutgoingImagesToMessage } from "../managed-image-attachments.js";
 import type { ChatRunTiming } from "../server-chat-state.js";
 import { getMaxChatHistoryMessagesBytes, MAX_PAYLOAD_BYTES } from "../server-constants.js";
-import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import {
   capArrayByJsonBytes,
   readSessionMessageByIdAsync,
@@ -124,7 +80,6 @@ import {
   getSessionDefaults,
   loadSessionEntry,
   listAgentsForGateway,
-  resolveGatewayModelSupportsImages,
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "../session-utils.js";
@@ -132,27 +87,10 @@ import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { ensureChatQueuedTurns } from "./chat-abort-runtime.js";
-import {
-  buildAssistantDisplayContentFromReplyPayloads,
-  extractAssistantDisplayText,
-  extractAssistantDisplayTextFromContent,
-  hasAssistantDisplayMediaContent,
-  hasManagedOutgoingAssistantContent,
-  hasSensitiveMediaPayload,
-  hasVisibleAssistantFinalMessage,
-  isMediaBearingPayload,
-  replaceAssistantContentTextBlocks,
-  sanitizeAssistantDisplayText,
-  scheduleChatHistoryManagedImageCleanup,
-  stripManagedOutgoingAssistantContentBlocks,
-  type AssistantDisplayContentBlock,
-} from "./chat-assistant-content.js";
+import { scheduleChatHistoryManagedImageCleanup } from "./chat-assistant-content.js";
 import {
   broadcastChatError,
   broadcastChatFinal,
-  broadcastSideResult,
-  isBtwReplyPayload,
-  isSourceReplyTranscriptMirrorPayload,
   sendGlobalAwareNodeChatPayload,
 } from "./chat-broadcast.js";
 import {
@@ -168,22 +106,24 @@ import {
   readChatHistoryPage,
 } from "./chat-history-pages.js";
 import {
-  explicitOriginTargetsAcpSession,
-  explicitOriginTargetsPluginBinding,
   hasGatewayAdminScope,
-  isAcpBridgeClient,
   resolveRequestedChatAgentId,
   validateChatSelectedAgent,
 } from "./chat-origin-routing.js";
-import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
 import { terminalizeRestartSafeChatAdmission } from "./chat-restart-recovery.js";
 import { admitChatSend } from "./chat-send-admission.js";
+import { prepareChatSendAttachments } from "./chat-send-attachments.js";
+import { createChatSendDispatchErrorLifecycle } from "./chat-send-dispatch-errors.js";
+import { finalizeChatSendNonAgentReplies } from "./chat-send-nonagent-finalization.js";
 import {
   respondChatSessionRoutingChanged,
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
+import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
+import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
+import { applyChatSendManagedMediaFields, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
   emitOperatorChatSendServerTiming,
@@ -192,31 +132,14 @@ import {
   type ChatSendServerTimingPhase,
 } from "./chat-server-timing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
-import type { GatewayInjectedTtsSupplementMarker } from "./chat-transcript-inject.js";
-import {
-  assistantTranscriptScope,
-  appendAssistantTranscriptMessage,
-  publishAssistantTranscriptRewrite,
-  rewriteSourceReplyTranscriptMirrors,
-  type SourceReplyContentState,
-  type SourceReplyTranscriptMirrorMetadata,
-} from "./chat-transcript-persistence.js";
-import {
-  buildMediaOnlyTtsSupplementTranscriptMarker,
-  buildTtsSupplementTranscriptMarker,
-  stripVisibleTextFromTtsSupplement,
-} from "./chat-tts-markers.js";
+import { appendAssistantTranscriptMessage } from "./chat-transcript-persistence.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
-import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 import {
   loadOptionalServerMethodModelCatalog,
   loadOptionalServerMethodModelCatalogSnapshot,
   startOptionalServerMethodModelCatalogSnapshotLoad,
 } from "./optional-model-catalog.js";
-import {
-  hasTrackedActiveSessionRun,
-  resolveVisibleActiveSessionRunState,
-} from "./session-active-runs.js";
+import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayRequestContext,
@@ -420,21 +343,6 @@ function resolveWebchatPromptCacheKey(params: {
   return `openclaw-webchat-${digest}`;
 }
 
-async function buildWebchatAssistantMediaMessage(
-  payloads: ReplyPayload[],
-  options?: {
-    localRoots?: readonly string[];
-    onLocalAudioAccessDenied?: (message: string) => void;
-  },
-): Promise<{ content: Array<Record<string, unknown>>; transcriptText: string } | null> {
-  return buildWebchatAssistantMessageFromReplyPayloads(payloads, {
-    localRoots: options?.localRoots,
-    onLocalAudioAccessDenied: (err) => {
-      options?.onLocalAudioAccessDenied?.(formatForLog(err));
-    },
-  });
-}
-
 export {
   augmentChatHistoryWithCanvasBlocks,
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -451,355 +359,6 @@ export {
 } from "./chat-history-budget.js";
 
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
-function formatAttachmentFailureForLog(err: unknown): string {
-  const primary = formatUncaughtError(err);
-  const cause = err instanceof Error ? err.cause : undefined;
-  if (cause === undefined) {
-    return primary;
-  }
-  const causeText = formatUncaughtError(cause);
-  if (!causeText || causeText === primary) {
-    return primary;
-  }
-  return `${primary}\nCaused by: ${causeText}`;
-}
-
-function logAttachmentFailure(
-  logGateway: Pick<GatewayRequestContext["logGateway"], "error">,
-  label: string,
-  err: unknown,
-): void {
-  logGateway.error(label, {
-    error: formatAttachmentFailureForLog(err),
-    consoleMessage: `${label}: ${formatForLog(err)}`,
-  });
-}
-
-function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
-  const chunks = payloads
-    .map((payload) => {
-      if (payload.isReasoning === true) {
-        return "";
-      }
-      const parts = resolveSendableOutboundReplyParts(payload);
-      const lines: string[] = [];
-      const parsedText = payload.text?.includes("[[")
-        ? parseInlineDirectives(payload.text)
-        : undefined;
-      const replyToId =
-        sanitizeReplyDirectiveId(payload.replyToId) ??
-        sanitizeReplyDirectiveId(parsedText?.replyToExplicitId);
-      if (replyToId) {
-        lines.push(`[[reply_to:${replyToId}]]`);
-      } else if (payload.replyToCurrent || parsedText?.replyToCurrent) {
-        lines.push("[[reply_to_current]]");
-      }
-      const text = payload.text
-        ? stripInlineDirectiveTagsForDelivery(payload.text).text.trim()
-        : "";
-      if (text && !isSuppressedControlReplyText(text)) {
-        lines.push(text);
-      }
-      for (const mediaUrl of parts.mediaUrls) {
-        if (payload.sensitiveMedia === true) {
-          continue;
-        }
-        const trimmed = mediaUrl.trim();
-        if (trimmed) {
-          lines.push(`Attachment: ${trimmed}`);
-        }
-      }
-      if (
-        (payload.audioAsVoice || parsedText?.audioAsVoice) &&
-        parts.mediaUrls.some((mediaUrl) => isAudioFileName(mediaUrl))
-      ) {
-        lines.push("[[audio_as_voice]]");
-      }
-      return lines.join("\n").trim();
-    })
-    .filter(Boolean);
-  return chunks.join("\n\n").trim();
-}
-
-async function persistChatSendImages(params: {
-  images: ChatImageContent[];
-  imageOrder: PromptImageOrderEntry[];
-  offloadedRefs: OffloadedRef[];
-  client: GatewayRequestHandlerOptions["client"];
-  logGateway: GatewayRequestContext["logGateway"];
-}): Promise<SavedMedia[]> {
-  if (
-    (params.images.length === 0 && params.offloadedRefs.length === 0) ||
-    isAcpBridgeClient(params.client)
-  ) {
-    return [];
-  }
-  return await persistInboundImagesForTranscript({
-    images: params.images,
-    imageOrder: params.imageOrder,
-    offloadedRefs: params.offloadedRefs,
-    log: params.logGateway,
-    logContext: "chat.send",
-  });
-}
-
-function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
-  if (refs.length === 0) {
-    return message;
-  }
-  const removableRefs = new Set(refs.map((ref) => ref.mediaRef));
-  const lines = message.split(/\r?\n/);
-  while (lines.length > 0) {
-    const last = lines[lines.length - 1]?.trim() ?? "";
-    const match = /^\[media attached:\s*(media:\/\/inbound\/[^\]\s]+)\]$/.exec(last);
-    if (!match?.[1] || !removableRefs.delete(match[1])) {
-      break;
-    }
-    lines.pop();
-  }
-  return lines.join("\n").trimEnd();
-}
-
-function isPdfOffloadedRef(ref: OffloadedRef): boolean {
-  const mime = ref.mimeType.trim().toLowerCase();
-  if (mime === "application/pdf" || mime.endsWith("+pdf")) {
-    return true;
-  }
-  return path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
-}
-
-// A managed inbound PDF saved to the media store is safe to hand the agent as its
-// media path without sandbox staging: host-side media-understanding extracts its
-// text (see resolveFileExtractionLimits) by reading the media-store root, so even
-// locked-down agents receive the document. This gates both the up-front bypass for
-// oversized PDFs and the fallback to the managed path when sandbox staging fails
-// for an already-managed PDF. #90097
-function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  if (!isPdfOffloadedRef(ref)) {
-    return false;
-  }
-  try {
-    return parseInboundMediaUri(ref.mediaRef) !== null;
-  } catch {
-    return false;
-  }
-}
-
-// Oversized managed PDFs skip sandbox staging up front: copying a large PDF into
-// every sandbox is wasteful, and files above the 5MB staging cap would otherwise
-// be rejected as a 4xx (see prestageMediaPathOffloads).
-function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  return ref.sizeBytes > MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
-}
-
-// Stages media-path offloads into the agent sandbox synchronously so chat.send
-// can surface 5xx before respond(). Throws MediaOffloadError when staging fails
-// for a ref that cannot fall back (ENOSPC / EPERM / partial-stage of a non-PDF or
-// unmanaged ref) so the outer chat.send handler maps it to UNAVAILABLE (5xx);
-// plain Error would be misclassified as 4xx. Already-managed inbound PDFs instead
-// fall back to their managed media path on staging failure (#90097), since
-// host-side media-understanding reads them from the media-store root. Offloaded
-// refs are cleaned up from the media store before rethrow.
-// Callers MUST set ctx.MediaStaged=true when this runs so the dispatch
-// pipeline skips its own stageSandboxMedia pass.
-//
-// Returned paths are absolute media-store paths when no sandbox is active, for
-// oversized managed PDFs that bypass staging, or for already-managed PDFs that
-// fall back when staging fails (#90097); files staged into the sandbox use
-// sandbox-relative paths plus `workspaceDir`. Host-side media-understanding
-// resolves both via MediaWorkspaceDir and the media-store root.
-async function prestageMediaPathOffloads(params: {
-  offloadedRefs: OffloadedRef[];
-  includeImageRefs?: boolean;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-}): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
-  const mediaPathRefs = params.offloadedRefs.filter(
-    (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
-  );
-  if (mediaPathRefs.length === 0) {
-    return { paths: [], types: [] };
-  }
-  const refsByManagedPath = (refs: OffloadedRef[]) => ({
-    paths: refs.map((ref) => ref.path),
-    types: refs.map((ref) => ref.mimeType),
-  });
-
-  // Oversized managed PDFs bypass sandbox staging and are read host-side, so they
-  // do not need a workspace copy or the staging-cap check below.
-  const passThroughRefs: OffloadedRef[] = [];
-  const refsToStage: OffloadedRef[] = [];
-  for (const ref of mediaPathRefs) {
-    (shouldPassThroughManagedInboundPdfOffloadRef(ref) ? passThroughRefs : refsToStage).push(ref);
-  }
-  if (refsToStage.length === 0) {
-    return refsByManagedPath(mediaPathRefs);
-  }
-
-  try {
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    const sandbox = await ensureSandboxWorkspaceForSession({
-      config: params.cfg,
-      sessionKey: params.sessionKey,
-      workspaceDir,
-    });
-    if (!sandbox) {
-      return refsByManagedPath(mediaPathRefs);
-    }
-
-    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (=
-    // MEDIA_MAX_BYTES, 5MB) and silently skips oversized files. The parse cap
-    // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
-    // session receiving a non-PDF file between the two caps would otherwise
-    // pass parse, fail staging, and surface as a retryable 5xx even though
-    // retry cannot succeed. Reject here as a client-side 4xx instead. Managed
-    // PDFs in that range pass through above instead of being rejected.
-    const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
-    if (oversizedForSandbox.length > 0) {
-      const details = oversizedForSandbox
-        .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
-        .join(", ");
-      throw new UnsupportedAttachmentError(
-        "non-image-too-large-for-sandbox",
-        `attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
-      );
-    }
-
-    const stagingCtx: MsgContext = {
-      MediaPath: expectDefined(refsToStage[0], "refs to stage entry at 0").path,
-      MediaPaths: refsToStage.map((ref) => ref.path),
-      MediaType: expectDefined(refsToStage[0], "refs to stage entry at 0").mimeType,
-      MediaTypes: refsToStage.map((ref) => ref.mimeType),
-    };
-    let stageResult: StageSandboxMediaResult;
-    try {
-      stageResult = await stageSandboxMedia({
-        ctx: stagingCtx,
-        sessionCtx: stagingCtx as TemplateContext,
-        cfg: params.cfg,
-        sessionKey: params.sessionKey,
-        workspaceDir,
-      });
-    } catch (stageErr) {
-      // stageSandboxMedia threw before copying anything (e.g. workspace mkdir
-      // ENOSPC/EPERM), so nothing reached the sandbox. Already-managed inbound
-      // PDFs still reach the agent via their managed media path (host-side
-      // media-understanding reads the media-store root); fail the send only when a
-      // ref cannot fall back. #90097
-      if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
-        throw stageErr;
-      }
-      return refsByManagedPath(mediaPathRefs);
-    }
-
-    // stageSandboxMedia silently keeps unstaged entries as their original
-    // absolute path, so length parity does not prove every file landed in the
-    // sandbox. The RPC max (20MB via resolveChatAttachmentMaxBytes) admits files
-    // above the staging cap (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned
-    // `staged` map for missing sources. Already-managed inbound PDFs fall back to
-    // their absolute managed path (host-side media-understanding reads the
-    // media-store root); any other missing source is a 5xx MediaOffloadError the
-    // client can retry. #90097
-    const stagedSources = stageResult.staged;
-    const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
-    const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
-    if (unstageable.length > 0) {
-      throw new Error(
-        `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
-      );
-    }
-    const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? refsToStage.map((ref) => ref.mimeType);
-
-    // Map each ref to its post-staging path. Staged files become sandbox-relative
-    // (e.g. `media/inbound/foo.pdf`) so the agent inside the container can read
-    // them; pass-through PDFs and managed PDFs that fell back from staging keep
-    // their absolute managed path (stagedPaths preserves the absolute path for any
-    // unstaged entry). Host-side media-understanding resolves both via
-    // ctx.MediaWorkspaceDir plus the media-store root. Preserve attachment order.
-    const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
-    refsToStage.forEach((ref, index) => {
-      resolvedByRef.set(ref, {
-        path: stagedPaths[index] ?? ref.path,
-        mimeType: stagedTypes[index] ?? ref.mimeType,
-      });
-    });
-    for (const ref of passThroughRefs) {
-      resolvedByRef.set(ref, { path: ref.path, mimeType: ref.mimeType });
-    }
-    const ordered = mediaPathRefs.map(
-      (ref) => resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType },
-    );
-    return {
-      paths: ordered.map((entry) => entry.path),
-      types: ordered.map((entry) => entry.mimeType),
-      workspaceDir: sandbox.workspaceDir,
-    };
-  } catch (err) {
-    await Promise.allSettled(
-      params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
-    );
-    if (err instanceof MediaOffloadError) {
-      throw err;
-    }
-    // Sandbox-oversize rejections are client-side 4xx (see check above). Wrapping
-    // them as MediaOffloadError would misclassify them as retryable 5xx.
-    if (err instanceof UnsupportedAttachmentError) {
-      throw err;
-    }
-    throw new MediaOffloadError(
-      `[Gateway Error] Failed to stage attachments into agent workspace: ${formatErrorMessage(err)}`,
-      { cause: err },
-    );
-  }
-}
-
-type ChatSendManagedMediaFields = Partial<
-  Pick<MsgContext, "MediaPath" | "MediaPaths" | "MediaType" | "MediaTypes">
->;
-
-function resolveChatSendManagedMediaFields(savedImages: SavedMedia[]): ChatSendManagedMediaFields {
-  const mediaPaths = savedImages.map((entry) => entry.path);
-  if (mediaPaths.length === 0) {
-    return {};
-  }
-  const mediaTypes = savedImages.map((entry) => entry.contentType ?? "application/octet-stream");
-  return {
-    MediaPath: mediaPaths[0],
-    MediaPaths: mediaPaths,
-    MediaType: mediaTypes[0],
-    MediaTypes: mediaTypes,
-  };
-}
-
-function applyChatSendManagedMediaFields(ctx: MsgContext, fields: ChatSendManagedMediaFields) {
-  if (!ctx.MediaStaged) {
-    Object.assign(ctx, fields);
-    return;
-  }
-
-  if (ctx.MediaPath === undefined && fields.MediaPath !== undefined) {
-    ctx.MediaPath = fields.MediaPath;
-  }
-  if (ctx.MediaPaths === undefined && fields.MediaPaths !== undefined) {
-    ctx.MediaPaths = fields.MediaPaths;
-  }
-  if (ctx.MediaType === undefined && fields.MediaType !== undefined) {
-    ctx.MediaType = fields.MediaType;
-  }
-  if (ctx.MediaTypes === undefined && fields.MediaTypes !== undefined) {
-    ctx.MediaTypes = fields.MediaTypes;
-  }
-}
-
-function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserTurnInput["media"]> {
-  return savedMedia.map((entry) => ({
-    path: entry.path,
-    contentType: entry.contentType,
-  }));
-}
-
 function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
   totalMessages: number;
@@ -1367,12 +926,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       clientInfo,
       supportsTaskSuggestions,
       p,
-      explicitOrigin,
-      inboundMessage,
       systemInputProvenance,
-      systemProvenanceReceipt,
-      suppressCommandInterpretation,
-      normalizedAttachments,
       rawMessage,
       reconnectResumeRequested,
     } = normalizedRequest.value;
@@ -1386,7 +940,6 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const {
-      rawSessionKey,
       clientRunId,
       sessionLoadOptions,
       sessionLoadMs,
@@ -1431,112 +984,33 @@ export const chatHandlers: GatewayRequestHandlers = {
       finishAbortedChatSend,
       gatewayWorkAdmission,
       lifecycleGeneration,
-      originatingRoute,
       restartSafeAdmission,
       setReleaseGatewayRootContinuation,
     } = admitted.value;
-    let parsedMessage = inboundMessage;
-    let parsedImages: ChatImageContent[] = [];
-    let imageOrder: PromptImageOrderEntry[] = [];
-    let offloadedRefs: OffloadedRef[] = [];
-    let mediaPathOffloadPaths: string[] = [];
-    let mediaPathOffloadTypes: string[] = [];
-    let mediaPathOffloadWorkspaceDir: string | undefined;
-    const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(explicitOrigin);
-    let prepareAttachmentsMs: number | undefined;
-    if (normalizedAttachments.length > 0) {
-      const prepareAttachmentsStartedAtMs = performance.now();
-      try {
-        await measureDiagnosticsTimelineSpan(
-          "gateway.chat_send.prepare_attachments",
-          async () => {
-            const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
-              loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-              provider: resolvedSessionModel.provider,
-              model: resolvedSessionModel.model,
-            });
-            const explicitOriginSupportsInlineImages =
-              explicitOriginTargetsAcpSession(explicitOrigin) || explicitOriginTargetsPlugin;
-            // Bound plugin sessions own the real recipient model, so keep image
-            // attachments even when the parent OpenClaw session model is text-only.
-            const supportsImages = supportsSessionModelImages || explicitOriginSupportsInlineImages;
-            const routeImageOffloadsAsMediaPaths = !supportsImages;
-            const parsed = await parseMessageWithAttachments(
-              inboundMessage,
-              normalizedAttachments,
-              {
-                maxBytes: resolveChatAttachmentMaxBytes(cfg),
-                log: context.logGateway,
-                supportsImages,
-                // chat.send routes selected offloadedRefs into ctx.MediaPaths below
-                // so the auto-reply stage pipeline can surface them to the agent.
-                acceptNonImage: true,
-              },
-            );
-            parsedMessage = stripTrailingOffloadedMediaMarkers(
-              parsed.message,
-              routeImageOffloadsAsMediaPaths
-                ? parsed.offloadedRefs.filter((ref) => ref.mimeType.startsWith("image/"))
-                : [],
-            );
-            parsedImages = parsed.images;
-            imageOrder = routeImageOffloadsAsMediaPaths ? [] : parsed.imageOrder;
-            offloadedRefs = parsed.offloadedRefs;
-            ({
-              paths: mediaPathOffloadPaths,
-              types: mediaPathOffloadTypes,
-              workspaceDir: mediaPathOffloadWorkspaceDir,
-            } = await prestageMediaPathOffloads({
-              offloadedRefs,
-              // Text-only image offloads need ctx.MediaPaths so media-understanding
-              // can describe them via agents.defaults.imageModel. Vision-capable
-              // image offloads stay as prompt refs for native image loading.
-              includeImageRefs: routeImageOffloadsAsMediaPaths,
-              cfg,
-              sessionKey,
-              agentId,
-            }));
-          },
-          {
-            phase: "agent-turn",
-            config: cfg,
-            attributes: {
-              ...chatSendTraceAttributes,
-              attachmentCount: normalizedAttachments.length,
-            },
-          },
-        );
-        prepareAttachmentsMs = roundedChatSendTimingMs(
-          performance.now() - prepareAttachmentsStartedAtMs,
-        );
-      } catch (err) {
-        cleanupAdmittedRun({ force: true });
-        clearAgentRunContext(clientRunId, lifecycleGeneration);
-        logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
-          ),
-        );
-        return;
-      }
+    const preparedAttachments = await prepareChatSendAttachments({
+      request: normalizedRequest.value,
+      session: preparedSession.value,
+      admission: admitted.value,
+      respond,
+      context,
+    });
+    if (!preparedAttachments.ok) {
+      return;
     }
     if (activeRunAbort.controller.signal.aborted) {
       finishAbortedChatSend();
       return;
     }
 
-    // Attachment preparation and admission can suspend. Recheck immediately
-    // before ACK/dispatch so hot config reload cannot cross the send boundary.
+    // Attachment preparation can suspend. Recheck immediately before the
+    // synchronous ACK path so aborts and hot routing reloads cannot cross it.
     if (sessionRoutingChanged(context.getRuntimeConfig())) {
       cleanupAdmittedRun({ force: true });
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       respondChatSessionRoutingChanged(respond);
       return;
     }
+    const { imageOrder, prepareAttachmentsMs } = preparedAttachments.value;
 
     const admissionStartedAt = Date.now();
     const terminalizeRestartSafeAdmission = async (terminalState: {
@@ -1570,7 +1044,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         warn: (message) => context.logGateway.warn(message),
       });
       const {
-        baseInput: baseUserTurnInput,
         persist: persistGatewayUserTurnTranscript,
         persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
         recorder: userTurnRecorder,
@@ -1690,273 +1163,42 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         });
       }
-      const persistedImagesPromise = persistChatSendImages({
-        images: parsedImages,
-        imageOrder,
-        offloadedRefs,
+      const {
+        accountId,
+        ctx,
+        isInternalTextSlashCommandTurn,
+        pluginBoundMediaFieldsPromise,
+        queuedFollowupOwnerKey,
+        replyOptionImages,
+      } = prepareChatSendUserTurn({
+        request: normalizedRequest.value,
+        session: preparedSession.value,
+        admission: admitted.value,
+        attachments: preparedAttachments.value,
         client,
         logGateway: context.logGateway,
+        userTurn,
       });
-      let persistedMediaForTranscript: SavedMedia[] | undefined;
-      const getPersistedMediaForTranscript = async () => {
-        if (!persistedMediaForTranscript) {
-          persistedMediaForTranscript = await persistedImagesPromise;
-        }
-        return persistedMediaForTranscript;
-      };
-      const preparedUserTurnMediaPromise =
-        normalizedAttachments.length > 0 ? getPersistedMediaForTranscript() : Promise.resolve([]);
-      const userTurnMediaPromise = preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia);
-      userTurn.setInputPromise(
-        userTurnMediaPromise.then((media) => ({
-          ...baseUserTurnInput,
-          ...(media.length > 0
-            ? {
-                media,
-                mediaOnlyText: "[User sent media without caption]",
-              }
-            : {}),
-        })),
-      );
-      const pluginBoundMediaFieldsPromise =
-        explicitOriginTargetsPlugin && parsedImages.length > 0
-          ? preparedUserTurnMediaPromise.then(resolveChatSendManagedMediaFields)
-          : Promise.resolve({});
 
-      const trimmedMessage = parsedMessage.trim();
-      const commandBody = parsedMessage;
-      const commandSource =
-        !suppressCommandInterpretation && trimmedMessage.startsWith("/") ? "text" : undefined;
-      const messageForAgent = systemProvenanceReceipt
-        ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
-        : parsedMessage;
-      const queuedFollowupOwnerDeviceId = normalizeOptionalText(client?.connect?.device?.id);
-      const queuedFollowupOwnerConnId = normalizeOptionalText(client?.connId);
-      const queuedFollowupOwnerKey = queuedFollowupOwnerDeviceId
-        ? `device:${queuedFollowupOwnerDeviceId}`
-        : queuedFollowupOwnerConnId
-          ? `connection:${queuedFollowupOwnerConnId}`
-          : undefined;
-      const {
-        originatingChannel,
-        originatingTo,
-        accountId,
-        messageThreadId,
-        explicitDeliverRoute,
-      } = originatingRoute;
-      // The per-message timestamp prefix is now applied at the single LLM
-      // boundary (normalizeMessagesForLlmBoundary), derived from each message's
-      // own timestamp, so the current turn and all historical turns carry
-      // identical bytes on the wire. BodyForAgent uses the same bare text as
-      // Body; the transient gateway stamp is removed (stamping the live turn
-      // here would diverge from bare stored history and bust the prompt cache).
-      // See: https://github.com/openclaw/openclaw/issues/3658
-      const ctx: MsgContext = {
-        Body: messageForAgent,
-        BodyForAgent: messageForAgent,
-        BodyForCommands: commandBody,
-        RawBody: parsedMessage,
-        CommandBody: commandBody,
-        InputProvenance: systemInputProvenance,
-        SessionKey: sessionKey,
-        AgentId: agentId,
-        Provider: INTERNAL_MESSAGE_CHANNEL,
-        Surface: INTERNAL_MESSAGE_CHANNEL,
-        OriginatingChannel: originatingChannel,
-        OriginatingTo: originatingTo,
-        ExplicitDeliverRoute: explicitDeliverRoute,
-        AccountId: accountId,
-        MessageThreadId: messageThreadId,
-        ChatType: "direct",
-        ...(commandSource ? { CommandSource: commandSource } : {}),
-        CommandAuthorized: !suppressCommandInterpretation,
-        CommandTurn: commandSource
-          ? {
-              kind: "text-slash",
-              source: commandSource,
-              authorized: true,
-              body: commandBody,
-            }
-          : {
-              kind: "normal",
-              source: "message",
-              authorized: false,
-              body: commandBody,
-            },
-        MessageSid: clientRunId,
-        ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
-        ...(!isOperatorUiClient(clientInfo)
-          ? {
-              SenderId: clientInfo?.id,
-              SenderName: clientInfo?.displayName,
-              SenderUsername: clientInfo?.displayName,
-            }
-          : {}),
-        GatewayClientScopes: client?.connect?.scopes ?? [],
-        GatewayClientCaps: client?.connect?.caps ?? [],
-      };
-      const isInternalTextSlashCommandTurn =
-        ctx.Provider === INTERNAL_MESSAGE_CHANNEL && ctx.CommandSource === "text";
-      if (mediaPathOffloadPaths.length > 0) {
-        // Inject offloads via the same MsgContext fields the channel
-        // path uses so buildInboundMediaNote renders a real `[media attached:
-        // <workspace-relative-path>]` line into the agent prompt. Marker
-        // blocks the dispatch pipeline from re-running stageSandboxMedia; see
-        // prestageMediaPathOffloads.
-        ctx.MediaPath = mediaPathOffloadPaths[0];
-        ctx.MediaPaths = mediaPathOffloadPaths;
-        ctx.MediaType = mediaPathOffloadTypes[0];
-        ctx.MediaTypes = mediaPathOffloadTypes;
-        ctx.MediaWorkspaceDir = mediaPathOffloadWorkspaceDir;
-        ctx.MediaStaged = true;
-      }
-      const mediaPathOffloadsIncludeImages = mediaPathOffloadTypes.some((type) =>
-        type.startsWith("image/"),
-      );
-      const replyOptionImages = mediaPathOffloadsIncludeImages
-        ? undefined
-        : parsedImages.length > 0
-          ? parsedImages
-          : undefined;
-
-      const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
-        cfg,
-        agentId,
-        channel: INTERNAL_MESSAGE_CHANNEL,
-      });
-      const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
-      let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
-      let queuedFollowupEnqueued = false;
-      let pendingDispatchLifecycleError:
-        | {
-            endedAt: number;
-            error: string;
-            sessionId: string;
-            startedAt: number;
-          }
-        | undefined;
-      let persistDispatchErrorUserTurn: (() => Promise<void>) | undefined;
-      const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-        if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
-          return;
-        }
-        if (isSourceReplyTranscriptMirrorPayload(payload)) {
-          return;
-        }
-        const ttsSupplementMarker = buildTtsSupplementTranscriptMarker(payload);
-        const [transcriptPayload] = await normalizeWebchatReplyMediaPathsForDisplay({
-          cfg,
-          sessionKey,
-          agentId,
+      const { deliveredReplies, dispatcher, hasAppendedWebchatAgentMedia, onModelSelected } =
+        createChatSendReplyDispatch({
           accountId,
-          payloads: [stripVisibleTextFromTtsSupplement(payload)],
+          isAgentRunStarted: () => agentRunStarted,
+          logGateway: context.logGateway,
+          session: preparedSession.value,
+          userTurnRecorder,
         });
-        if (!transcriptPayload) {
-          return;
-        }
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-          sessionKey,
-          sessionLoadOptions,
-        );
-        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-        const mediaLocalRoots = appendLocalMediaParentRoots(
-          getAgentScopedMediaLocalRoots(cfg, agentId),
-          latestStorePath ? [latestStorePath] : undefined,
-        );
-        const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-          sessionKey,
-          agentId,
-          payloads: [transcriptPayload],
-          managedImageLocalRoots: mediaLocalRoots,
-          includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-          onManagedImagePrepareError: (message) => {
-            context.logGateway.warn(`webchat image embedding skipped attachment: ${message}`);
-          },
-        });
-        const mediaMessage = await buildWebchatAssistantMediaMessage([transcriptPayload], {
-          localRoots: mediaLocalRoots,
-          onLocalAudioAccessDenied: (message) => {
-            context.logGateway.warn(`webchat audio embedding denied local path: ${message}`);
-          },
-        });
-        const persistedAssistantContent = replaceAssistantContentTextBlocks(
-          assistantContent,
-          mediaMessage,
-        );
-        const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
-          ? persistedAssistantContent
-          : undefined;
-        if (!persistedContentForAppend?.length) {
-          return;
-        }
-        const transcriptReply =
-          mediaMessage?.transcriptText ??
-          extractAssistantDisplayTextFromContent(assistantContent) ??
-          buildTranscriptReplyText([transcriptPayload]);
-        if (!transcriptReply && !persistedAssistantContent?.length && !assistantContent?.length) {
-          return;
-        }
-        const appended = await appendAssistantTranscriptMessage({
-          sessionKey,
-          message: transcriptReply,
-          ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
-          sessionId,
-          storePath: latestStorePath,
-          sessionFile: latestEntry?.sessionFile,
-          agentId,
-          createIfMissing: true,
-          idempotencyKey: `${clientRunId}:assistant-media`,
-          ttsSupplement: ttsSupplementMarker,
-          cfg,
-        });
-        if (appended.ok) {
-          if (appended.messageId && assistantContent?.length) {
-            await attachManagedOutgoingImagesToMessage({
-              messageId: appended.messageId,
-              blocks: assistantContent,
-            });
-          }
-          appendedWebchatAgentMedia = true;
-          return;
-        }
-        context.logGateway.warn(
-          `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
-        );
-      };
-      const dispatcher = createReplyDispatcher({
-        ...replyPipeline,
-        onError: (err) => {
-          context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
-        },
-        deliver: async (payload, info) => {
-          if (getReplyPayloadMetadata(payload)?.beforeAgentRunBlocked === true) {
-            userTurnRecorder.markBlocked();
-          }
-          switch (info.kind) {
-            case "block":
-            case "final":
-              deliveredReplies.push({ payload, kind: info.kind });
-              await appendWebchatAgentMediaTranscriptIfNeeded(payload);
-              break;
-            case "tool":
-              // Tool results that carry audio (e.g. the TTS tool) must be promoted
-              // to "final" so the downstream audio extraction path can pick them up.
-              // Strip text to avoid leaking tool summary into the combined reply.
-              if (isMediaBearingPayload(payload)) {
-                deliveredReplies.push({
-                  payload: { ...payload, text: undefined },
-                  kind: "final",
-                });
-              }
-              break;
-          }
-        },
+      let queuedFollowupEnqueued = false;
+      const dispatchErrorLifecycle = createChatSendDispatchErrorLifecycle({
+        admission: admitted.value,
+        context,
+        isQueuedFollowupEnqueued: () => queuedFollowupEnqueued,
+        persistUserTurnTranscript: persistGatewayUserTurnTranscript,
+        session: preparedSession.value,
+        terminalizeRestartSafeAdmission,
+        userTurnRecorder,
       });
-
       const emitServerTiming = (
         phase: ChatSendServerTimingPhase,
         extra?: Record<string, string | number>,
@@ -2192,742 +1434,25 @@ export const chatHandlers: GatewayRequestHandlers = {
               // runtime-owned assistant turn, so it appends a gateway-injected assistant entry before
               // broadcasting the final UI event.
               if (!agentRunStarted && !queuedFollowupEnqueued) {
-                const btwReplies = deliveredReplies
-                  .map((entryScoped) => entryScoped.payload)
-                  .filter(isBtwReplyPayload);
-                const btwText = btwReplies
-                  .map((payload) => payload.text.trim())
-                  .filter(Boolean)
-                  .join("\n\n")
-                  .trim();
-                if (btwReplies.length > 0 && btwText) {
-                  broadcastSideResult({
-                    context,
-                    payload: {
-                      kind: "btw",
-                      runId: clientRunId,
-                      sessionKey,
-                      ...(sessionKey === "global" && agentId ? { agentId } : {}),
-                      question: expectDefined(
-                        btwReplies[0],
-                        "btw replies entry at 0",
-                      ).btw.question.trim(),
-                      text: btwText,
-                      isError: btwReplies.some((payload) => payload.isError),
-                      ts: Date.now(),
-                    },
-                  });
-                  broadcastChatFinal({
-                    context,
-                    runId: clientRunId,
-                    sessionKey,
-                    agentId,
-                  });
-                } else {
-                  const finalPayloadEntries = deliveredReplies.filter(
-                    (entryItem) => entryItem.kind === "final",
-                  );
-                  const parseReplyInlineDirectives = (payload: ReplyPayload) =>
-                    typeof payload.text === "string" && payload.text.includes("[[")
-                      ? parseInlineDirectives(payload.text)
-                      : undefined;
-                  const shouldFoldCommandBlocks = isInternalTextSlashCommandTurn;
-                  const commandBlockPayloadEntries = shouldFoldCommandBlocks
-                    ? deliveredReplies.filter((entryItem) => entryItem.kind === "block")
-                    : [];
-                  const replyMediaUrls = (payload: ReplyPayload) =>
-                    resolveSendableOutboundReplyParts(payload).mediaUrls;
-                  const normalizeCommandMediaDedupeKey = (value: string): string => {
-                    const trimmed = value.trim();
-                    if (!trimmed) {
-                      return "";
-                    }
-                    if (!trimmed.toLowerCase().startsWith("file://")) {
-                      return path.isAbsolute(trimmed) ? path.normalize(trimmed) : trimmed;
-                    }
-                    try {
-                      const parsed = new URL(trimmed);
-                      if (parsed.protocol === "file:") {
-                        return path.normalize(fileURLToPath(parsed));
-                      }
-                    } catch {
-                      // Keep malformed file URL-like values comparable with the fallback below.
-                    }
-                    return trimmed.replace(/^file:\/\//iu, "");
-                  };
-                  const replyMediaDedupeKeys = (payload: ReplyPayload) =>
-                    replyMediaUrls(payload).map((mediaUrl) =>
-                      normalizeCommandMediaDedupeKey(mediaUrl),
-                    );
-                  const canonicalizeReplyMedia = (payload: ReplyPayload): ReplyPayload => {
-                    const mediaUrls = replyMediaUrls(payload);
-                    return {
-                      ...payload,
-                      mediaUrl: undefined,
-                      mediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
-                    };
-                  };
-                  const mergeDefinedReplySemantics = (
-                    target: ReplyPayload,
-                    source: ReplyPayload,
-                  ): ReplyPayload => {
-                    const sourceInlineDirectives = parseReplyInlineDirectives(source);
-                    const sourceReplyToId =
-                      sanitizeReplyDirectiveId(source.replyToId) ??
-                      sanitizeReplyDirectiveId(sourceInlineDirectives?.replyToExplicitId);
-                    return {
-                      ...target,
-                      ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
-                        ? { trustedLocalMedia: true }
-                        : {}),
-                      ...(source.sensitiveMedia === true || target.sensitiveMedia === true
-                        ? { sensitiveMedia: true }
-                        : {}),
-                      ...(source.presentation !== undefined
-                        ? { presentation: source.presentation }
-                        : {}),
-                      ...(source.delivery !== undefined ? { delivery: source.delivery } : {}),
-                      ...(source.interactive !== undefined
-                        ? { interactive: source.interactive }
-                        : {}),
-                      ...(sourceReplyToId !== undefined ? { replyToId: sourceReplyToId } : {}),
-                      ...(source.replyToTag === true || target.replyToTag === true
-                        ? { replyToTag: true }
-                        : {}),
-                      ...(source.replyToCurrent === true ||
-                      sourceInlineDirectives?.replyToCurrent === true ||
-                      target.replyToCurrent === true
-                        ? { replyToCurrent: true }
-                        : {}),
-                      ...(source.audioAsVoice === true ||
-                      sourceInlineDirectives?.audioAsVoice === true ||
-                      target.audioAsVoice === true
-                        ? { audioAsVoice: true }
-                        : {}),
-                      ...(source.spokenText !== undefined ? { spokenText: source.spokenText } : {}),
-                      ...(source.ttsSupplement !== undefined
-                        ? { ttsSupplement: source.ttsSupplement }
-                        : {}),
-                      ...(source.isError === true || target.isError === true
-                        ? { isError: true }
-                        : {}),
-                      ...(source.channelData !== undefined
-                        ? { channelData: source.channelData }
-                        : {}),
-                    };
-                  };
-                  const mergeMediaReplySemantics = (
-                    target: ReplyPayload,
-                    source: ReplyPayload,
-                  ): ReplyPayload => {
-                    const sourceInlineDirectives = parseReplyInlineDirectives(source);
-                    return {
-                      ...target,
-                      ...(source.trustedLocalMedia === true || target.trustedLocalMedia === true
-                        ? { trustedLocalMedia: true }
-                        : {}),
-                      ...(source.sensitiveMedia === true || target.sensitiveMedia === true
-                        ? { sensitiveMedia: true }
-                        : {}),
-                      ...(source.audioAsVoice === true ||
-                      sourceInlineDirectives?.audioAsVoice === true ||
-                      target.audioAsVoice === true
-                        ? { audioAsVoice: true }
-                        : {}),
-                    };
-                  };
-                  const hasMergeableReplySemantics = (payload: ReplyPayload): boolean => {
-                    const inlineDirectives = parseReplyInlineDirectives(payload);
-                    return Boolean(
-                      payload.trustedLocalMedia !== undefined ||
-                      payload.sensitiveMedia !== undefined ||
-                      payload.presentation ||
-                      payload.delivery ||
-                      payload.interactive ||
-                      payload.replyToId ||
-                      payload.replyToTag !== undefined ||
-                      payload.replyToCurrent !== undefined ||
-                      payload.audioAsVoice !== undefined ||
-                      inlineDirectives?.hasReplyTag ||
-                      inlineDirectives?.hasAudioTag ||
-                      payload.spokenText ||
-                      payload.ttsSupplement ||
-                      payload.isError !== undefined ||
-                      payload.channelData,
-                    );
-                  };
-                  const hasUnmergedReplySemantics = (payload: ReplyPayload): boolean =>
-                    Boolean(
-                      payload.isReasoning ||
-                      payload.isReasoningSnapshot ||
-                      payload.isCompactionNotice ||
-                      payload.isFallbackNotice ||
-                      payload.isStatusNotice ||
-                      payload.btw,
-                    );
-                  const hasReplySemantics = (payload: ReplyPayload): boolean =>
-                    hasMergeableReplySemantics(payload) || hasUnmergedReplySemantics(payload);
-                  const mediaSetsMatch = (
-                    leftMediaUrls: readonly string[],
-                    rightMediaUrls: readonly string[],
-                  ): boolean => {
-                    if (leftMediaUrls.length !== rightMediaUrls.length) {
-                      return false;
-                    }
-                    return leftMediaUrls.every(
-                      (mediaUrl, index) => mediaUrl === rightMediaUrls[index],
-                    );
-                  };
-                  const replyDisplayText = (payload: ReplyPayload): string =>
-                    sanitizeAssistantDisplayText(payload.text) ?? "";
-                  const commandBlockPayloadEntriesForDelivery = commandBlockPayloadEntries.map(
-                    (entryItem) => ({
-                      kind: entryItem.kind,
-                      payload: canonicalizeReplyMedia(entryItem.payload),
-                    }),
-                  );
-                  const sensitiveMediaDedupeKeys = new Set(
-                    finalPayloadEntries.flatMap((entryItem) =>
-                      entryItem.payload.sensitiveMedia === true
-                        ? replyMediaDedupeKeys(entryItem.payload).filter(Boolean)
-                        : [],
-                    ),
-                  );
-                  if (sensitiveMediaDedupeKeys.size > 0) {
-                    for (const entryItem of commandBlockPayloadEntriesForDelivery) {
-                      if (
-                        replyMediaDedupeKeys(entryItem.payload).some((key) =>
-                          sensitiveMediaDedupeKeys.has(key),
-                        )
-                      ) {
-                        entryItem.payload = { ...entryItem.payload, sensitiveMedia: true };
-                      }
-                    }
-                  }
-                  const finalPayloadEntriesForDelivery = shouldFoldCommandBlocks
-                    ? finalPayloadEntries.flatMap((entryItem) => {
-                        const finalMediaUrls = replyMediaUrls(entryItem.payload);
-                        const finalMediaKeys = replyMediaDedupeKeys(entryItem.payload);
-                        const finalDisplayText = replyDisplayText(entryItem.payload);
-                        const matchingMediaBlockEntry =
-                          finalMediaUrls.length > 0
-                            ? commandBlockPayloadEntriesForDelivery.find((candidate) =>
-                                mediaSetsMatch(
-                                  replyMediaDedupeKeys(candidate.payload),
-                                  finalMediaKeys,
-                                ),
-                              )
-                            : undefined;
-                        const matchingTextBlockEntry = finalDisplayText
-                          ? commandBlockPayloadEntriesForDelivery.find(
-                              (candidate) =>
-                                replyDisplayText(candidate.payload) === finalDisplayText,
-                            )
-                          : undefined;
-                        const matchingMediaAndTextBlockEntry =
-                          finalMediaUrls.length > 0 && finalDisplayText
-                            ? commandBlockPayloadEntriesForDelivery.find(
-                                (candidate) =>
-                                  replyDisplayText(candidate.payload) === finalDisplayText &&
-                                  mediaSetsMatch(
-                                    replyMediaDedupeKeys(candidate.payload),
-                                    finalMediaKeys,
-                                  ),
-                              )
-                            : undefined;
-                        const duplicateBlockEntry =
-                          finalMediaUrls.length > 0
-                            ? finalDisplayText
-                              ? matchingMediaAndTextBlockEntry
-                              : matchingMediaBlockEntry
-                            : finalMediaUrls.length === 0
-                              ? matchingTextBlockEntry
-                              : undefined;
-                        if (duplicateBlockEntry) {
-                          duplicateBlockEntry.payload = mergeDefinedReplySemantics(
-                            duplicateBlockEntry.payload,
-                            entryItem.payload,
-                          );
-                        } else if (matchingMediaBlockEntry) {
-                          matchingMediaBlockEntry.payload = mergeMediaReplySemantics(
-                            matchingMediaBlockEntry.payload,
-                            entryItem.payload,
-                          );
-                        }
-                        const remainingFinalMediaUrls = matchingMediaBlockEntry
-                          ? []
-                          : finalMediaUrls;
-                        if (
-                          remainingFinalMediaUrls.length === 0 &&
-                          ((duplicateBlockEntry && !hasUnmergedReplySemantics(entryItem.payload)) ||
-                            (!duplicateBlockEntry &&
-                              !finalDisplayText &&
-                              !hasReplySemantics(entryItem.payload)))
-                        ) {
-                          return [];
-                        }
-                        return [
-                          {
-                            ...entryItem,
-                            payload: {
-                              ...entryItem.payload,
-                              mediaUrl: undefined,
-                              mediaUrls:
-                                remainingFinalMediaUrls.length > 0
-                                  ? remainingFinalMediaUrls
-                                  : undefined,
-                            },
-                          },
-                        ];
-                      })
-                    : finalPayloadEntries;
-                  // Non-agent command paths can enqueue only block replies. If no visible final
-                  // supersedes them, fold those blocks into the final WebChat message.
-                  const rawFinalPayloads = appendedWebchatAgentMedia
-                    ? []
-                    : [
-                        ...commandBlockPayloadEntriesForDelivery,
-                        ...finalPayloadEntriesForDelivery,
-                      ].map((entryCandidate) => entryCandidate.payload);
-                  const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
-                    cfg,
-                    sessionKey,
-                    agentId,
-                    accountId,
-                    payloads: rawFinalPayloads,
-                  });
-                  const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-                    sessionKey,
-                    sessionLoadOptions,
-                  );
-                  const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-                  const mediaLocalRoots = appendLocalMediaParentRoots(
-                    getAgentScopedMediaLocalRoots(cfg, agentId),
-                    latestStorePath ? [latestStorePath] : undefined,
-                  );
-                  const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
-                    sessionKey,
-                    agentId,
-                    payloads: finalPayloads,
-                    managedImageLocalRoots: mediaLocalRoots,
-                    includeSensitiveMedia: false,
-                    includeSensitiveDisplay: true,
-                    onLocalAudioAccessDenied: (message) => {
-                      context.logGateway.warn(
-                        `webchat audio embedding denied local path: ${message}`,
-                      );
-                    },
-                    onManagedImagePrepareError: (message) => {
-                      context.logGateway.warn(
-                        `webchat image embedding skipped attachment: ${message}`,
-                      );
-                    },
-                    onSensitiveDisplayPrepareError: (message) => {
-                      context.logGateway.warn(
-                        `webchat sensitive display skipped attachment: ${message}`,
-                      );
-                    },
-                  });
-                  const mediaMessage = await buildWebchatAssistantMediaMessage(finalPayloads, {
-                    localRoots: mediaLocalRoots,
-                    onLocalAudioAccessDenied: (message) => {
-                      context.logGateway.warn(
-                        `webchat audio embedding denied local path: ${message}`,
-                      );
-                    },
-                  });
-                  const hasSensitiveMedia = hasSensitiveMediaPayload(finalPayloads);
-                  const ttsSupplementMarker = finalPayloads
-                    .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
-                    .find((marker): marker is GatewayInjectedTtsSupplementMarker =>
-                      Boolean(marker),
-                    );
-                  const persistedAssistantContent = replaceAssistantContentTextBlocks(
-                    hasSensitiveMedia
-                      ? await buildAssistantDisplayContentFromReplyPayloads({
-                          sessionKey,
-                          agentId,
-                          payloads: finalPayloads,
-                          managedImageLocalRoots: mediaLocalRoots,
-                          includeSensitiveMedia: false,
-                          onLocalAudioAccessDenied: (message) => {
-                            context.logGateway.warn(
-                              `webchat audio embedding denied local path: ${message}`,
-                            );
-                          },
-                          onManagedImagePrepareError: (message) => {
-                            context.logGateway.warn(
-                              `webchat image embedding skipped attachment: ${message}`,
-                            );
-                          },
-                        })
-                      : assistantContent,
-                    mediaMessage,
-                  );
-                  const persistedContentForAppend = hasAssistantDisplayMediaContent(
-                    persistedAssistantContent,
-                  )
-                    ? persistedAssistantContent
-                    : undefined;
-                  const broadcastAssistantContent = hasAssistantDisplayMediaContent(
-                    assistantContent,
-                  )
-                    ? assistantContent
-                    : hasAssistantDisplayMediaContent(mediaMessage?.content)
-                      ? mediaMessage?.content
-                      : assistantContent;
-                  const displayReply =
-                    extractAssistantDisplayTextFromContent(assistantContent) ??
-                    buildTranscriptReplyText(finalPayloads);
-                  const transcriptDisplayReply = displayReply
-                    ? stripInlineDirectiveTagsForDisplay(displayReply).text.trim()
-                    : "";
-                  const transcriptReply =
-                    mediaMessage?.transcriptText ||
-                    buildTranscriptReplyText(finalPayloads) ||
-                    transcriptDisplayReply;
-                  let message: Record<string, unknown> | undefined;
-                  const shouldAppendAssistantTranscript = Boolean(
-                    transcriptReply || persistedContentForAppend?.length,
-                  );
-                  if (shouldAppendAssistantTranscript) {
-                    await persistGatewayUserTurnTranscriptBestEffort();
-                  } else {
-                    await persistGatewayUserTurnTranscriptBestEffort();
-                  }
-                  if (shouldAppendAssistantTranscript) {
-                    const appended = await appendAssistantTranscriptMessage({
-                      sessionKey,
-                      message: transcriptReply,
-                      ...(persistedContentForAppend?.length
-                        ? { content: persistedContentForAppend }
-                        : {}),
-                      sessionId,
-                      storePath: latestStorePath,
-                      sessionFile: latestEntry?.sessionFile,
-                      agentId,
-                      createIfMissing: true,
-                      idempotencyKey: clientRunId,
-                      ttsSupplement: ttsSupplementMarker,
-                      cfg,
-                    });
-                    if (appended.ok) {
-                      if (appended.messageId && assistantContent?.length) {
-                        await attachManagedOutgoingImagesToMessage({
-                          messageId: appended.messageId,
-                          blocks: assistantContent,
-                        });
-                      }
-                      message = broadcastAssistantContent?.length
-                        ? { ...appended.message, content: broadcastAssistantContent }
-                        : appended.message;
-                    } else {
-                      context.logGateway.warn(
-                        `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
-                      );
-                      const fallbackAssistantContent =
-                        stripManagedOutgoingAssistantContentBlocks(persistedAssistantContent) ??
-                        stripManagedOutgoingAssistantContentBlocks(assistantContent);
-                      const fallbackText =
-                        extractAssistantDisplayText(fallbackAssistantContent) ?? displayReply;
-                      const nowValue = Date.now();
-                      message = {
-                        role: "assistant",
-                        ...(fallbackAssistantContent?.length
-                          ? { content: fallbackAssistantContent }
-                          : fallbackText
-                            ? { content: [{ type: "text", text: fallbackText }] }
-                            : {}),
-                        ...(fallbackText ? { text: fallbackText } : {}),
-                        timestamp: nowValue,
-                        ...(ttsSupplementMarker
-                          ? { openclawTtsSupplement: ttsSupplementMarker }
-                          : {}),
-                        // Keep this compatible with runner stopReason enums even though this message isn't
-                        // persisted to the transcript due to the append failure.
-                        stopReason: "stop",
-                        usage: { input: 0, output: 0, totalTokens: 0 },
-                      };
-                    }
-                  } else if (broadcastAssistantContent?.length) {
-                    message = {
-                      role: "assistant",
-                      content: broadcastAssistantContent,
-                      text: extractAssistantDisplayText(broadcastAssistantContent) ?? "",
-                      timestamp: Date.now(),
-                      stopReason: "stop",
-                      usage: { input: 0, output: 0, totalTokens: 0 },
-                    };
-                  }
-                  if (hasVisibleAssistantFinalMessage(message)) {
-                    emitFirstAssistantServerTiming();
-                  }
-                  broadcastChatFinal({
-                    context,
-                    runId: clientRunId,
-                    sessionKey,
-                    agentId,
-                    message,
-                  });
-                }
+                await finalizeChatSendNonAgentReplies({
+                  accountId,
+                  context,
+                  deliveredReplies,
+                  emitFirstAssistantServerTiming,
+                  foldCommandBlocks: isInternalTextSlashCommandTurn,
+                  persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
+                  session: preparedSession.value,
+                  suppressReplies: hasAppendedWebchatAgentMedia(),
+                });
               } else {
-                const hasReturnedAgentErrorPayloads = returnedAgentErrorPayloads.length > 0;
-                const agentRunReplyPayloads = deliveredReplies
-                  .filter((entryEntry) => entryEntry.kind === "final")
-                  .map((entryResult) => entryResult.payload)
-                  .filter(
-                    (payload) =>
-                      isSourceReplyTranscriptMirrorPayload(payload) ||
-                      (!hasReturnedAgentErrorPayloads && isReplyPayloadStatusNotice(payload)),
-                  );
-                if (agentRunReplyPayloads.length > 0) {
-                  const hasSourceReplyTranscriptMirror = agentRunReplyPayloads.some(
-                    isSourceReplyTranscriptMirrorPayload,
-                  );
-                  const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
-                    cfg,
-                    sessionKey,
-                    agentId,
-                    accountId,
-                    payloads: agentRunReplyPayloads,
-                  });
-                  const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
-                    sessionKey,
-                    sessionLoadOptions,
-                  );
-                  const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-                  const mediaLocalRoots = appendLocalMediaParentRoots(
-                    getAgentScopedMediaLocalRoots(cfg, agentId),
-                    latestStorePath ? [latestStorePath] : undefined,
-                  );
-                  const buildReplyAssistantContent = async (
-                    payloads: typeof finalPayloads,
-                  ): Promise<AssistantDisplayContentBlock[] | undefined> =>
-                    await buildAssistantDisplayContentFromReplyPayloads({
-                      sessionKey,
-                      agentId,
-                      payloads,
-                      managedImageLocalRoots: mediaLocalRoots,
-                      includeSensitiveMedia: false,
-                      onLocalAudioAccessDenied: (message) => {
-                        context.logGateway.warn(
-                          `webchat audio embedding denied local path: ${message}`,
-                        );
-                      },
-                      onManagedImagePrepareError: (message) => {
-                        context.logGateway.warn(
-                          `webchat image embedding skipped attachment: ${message}`,
-                        );
-                      },
-                    });
-                  const buildReplyMediaMessage = async (payloads: typeof finalPayloads) =>
-                    await buildWebchatAssistantMediaMessage(payloads, {
-                      localRoots: mediaLocalRoots,
-                      onLocalAudioAccessDenied: (message) => {
-                        context.logGateway.warn(
-                          `webchat audio embedding denied local path: ${message}`,
-                        );
-                      },
-                    });
-                  const combinedAssistantContent =
-                    agentRunReplyPayloads.length === 1
-                      ? await buildReplyAssistantContent(finalPayloads)
-                      : undefined;
-                  const combinedMediaMessage =
-                    agentRunReplyPayloads.length === 1
-                      ? await buildReplyMediaMessage(finalPayloads)
-                      : undefined;
-                  const sourceReplyContentStates: SourceReplyContentState[] = [];
-                  const sourceReplyBroadcastContent: AssistantDisplayContentBlock[] = [];
-                  for (const [replyIndex] of agentRunReplyPayloads.entries()) {
-                    const finalPayload = finalPayloads[replyIndex];
-                    if (!finalPayload) {
-                      continue;
-                    }
-                    const replyAssistantContent =
-                      agentRunReplyPayloads.length === 1
-                        ? combinedAssistantContent
-                        : await buildReplyAssistantContent([finalPayload]);
-                    const replyMediaMessage =
-                      agentRunReplyPayloads.length === 1
-                        ? combinedMediaMessage
-                        : await buildReplyMediaMessage([finalPayload]);
-                    const replyBroadcastContent = hasAssistantDisplayMediaContent(
-                      replyAssistantContent,
-                    )
-                      ? replyAssistantContent
-                      : hasAssistantDisplayMediaContent(replyMediaMessage?.content)
-                        ? replyMediaMessage?.content
-                        : replyAssistantContent;
-                    const persistedContent = replaceAssistantContentTextBlocks(
-                      replyAssistantContent,
-                      replyMediaMessage ?? null,
-                    );
-                    const state: SourceReplyContentState = {
-                      broadcastContent: replyBroadcastContent ? [...replyBroadcastContent] : [],
-                      persistedContent: persistedContent ? [...persistedContent] : [],
-                      hasManagedOutgoingContent:
-                        hasManagedOutgoingAssistantContent(persistedContent),
-                      backedManagedOutgoingContent: false,
-                    };
-                    sourceReplyContentStates[replyIndex] = state;
-                    if (state.broadcastContent.length > 0) {
-                      sourceReplyBroadcastContent.push(...state.broadcastContent);
-                    }
-                  }
-
-                  const displayReply =
-                    extractAssistantDisplayTextFromContent(sourceReplyBroadcastContent) ??
-                    buildTranscriptReplyText(finalPayloads);
-                  if (sourceReplyBroadcastContent.length || displayReply) {
-                    const sourceReplyPersistenceRequests: Array<{
-                      idempotencyKey: string;
-                      metadata: SourceReplyTranscriptMirrorMetadata;
-                      state: SourceReplyContentState;
-                    }> = [];
-                    for (const [
-                      replyIndex,
-                      sourceReplyPayload,
-                    ] of agentRunReplyPayloads.entries()) {
-                      const state = sourceReplyContentStates[replyIndex];
-                      if (!state || !hasAssistantDisplayMediaContent(state.persistedContent)) {
-                        continue;
-                      }
-                      const mirrorMetadata =
-                        getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror;
-                      const mirrorIdempotencyKey = mirrorMetadata?.idempotencyKey;
-                      if (
-                        typeof mirrorIdempotencyKey !== "string" ||
-                        mirrorIdempotencyKey.trim().length === 0
-                      ) {
-                        continue;
-                      }
-                      if (!state.hasManagedOutgoingContent) {
-                        state.backedManagedOutgoingContent = true;
-                      }
-                      sourceReplyPersistenceRequests.push({
-                        idempotencyKey: mirrorIdempotencyKey,
-                        metadata: mirrorMetadata,
-                        state,
-                      });
-                    }
-                    const sourceReplyMirrorCandidates: Array<{
-                      idempotencyKey: string;
-                      metadata: SourceReplyTranscriptMirrorMetadata;
-                    }> = [];
-                    for (const [
-                      replyIndex,
-                      sourceReplyPayload,
-                    ] of agentRunReplyPayloads.entries()) {
-                      if (!sourceReplyContentStates[replyIndex]) {
-                        continue;
-                      }
-                      const mirrorMetadata =
-                        getReplyPayloadMetadata(sourceReplyPayload)?.sourceReplyTranscriptMirror;
-                      const mirrorIdempotencyKey = mirrorMetadata?.idempotencyKey;
-                      if (
-                        typeof mirrorIdempotencyKey !== "string" ||
-                        mirrorIdempotencyKey.trim().length === 0 ||
-                        !mirrorMetadata
-                      ) {
-                        continue;
-                      }
-                      sourceReplyMirrorCandidates.push({
-                        idempotencyKey: mirrorIdempotencyKey,
-                        metadata: mirrorMetadata,
-                      });
-                    }
-
-                    const attachSourceReplyManagedImages = async (paramsLocal: {
-                      messageId?: string;
-                      request: (typeof sourceReplyPersistenceRequests)[number];
-                    }) => {
-                      if (!paramsLocal.request.state.hasManagedOutgoingContent) {
-                        paramsLocal.request.state.backedManagedOutgoingContent = true;
-                        return;
-                      }
-                      if (!paramsLocal.messageId) {
-                        return;
-                      }
-                      await attachManagedOutgoingImagesToMessage({
-                        messageId: paramsLocal.messageId,
-                        blocks: paramsLocal.request.state.persistedContent,
-                      });
-                      paramsLocal.request.state.backedManagedOutgoingContent = true;
-                    };
-
-                    const sourceReplyScope = assistantTranscriptScope({
-                      sessionId,
-                      sessionKey,
-                      storePath: latestStorePath,
-                      agentId,
-                    });
-                    if (sourceReplyScope && sourceReplyPersistenceRequests.length > 0) {
-                      const rewritten = await rewriteSourceReplyTranscriptMirrors({
-                        candidates: sourceReplyMirrorCandidates,
-                        requests: sourceReplyPersistenceRequests,
-                        scope: sourceReplyScope,
-                      });
-                      if (rewritten.length > 0) {
-                        await publishAssistantTranscriptRewrite({
-                          scope: sourceReplyScope,
-                          rewritten,
-                        });
-                        for (const target of rewritten) {
-                          await attachSourceReplyManagedImages({
-                            messageId: target.messageId,
-                            request: target.request,
-                          });
-                        }
-                      }
-                    }
-                    const sourceReplyContent = sourceReplyContentStates
-                      .flatMap((state) => {
-                        if (
-                          state.hasManagedOutgoingContent &&
-                          !state.backedManagedOutgoingContent
-                        ) {
-                          const stripped = stripManagedOutgoingAssistantContentBlocks(
-                            state.broadcastContent,
-                          );
-                          return stripped?.length
-                            ? stripped
-                            : [{ type: "text", text: "Media reply could not be displayed." }];
-                        }
-                        return state.broadcastContent;
-                      })
-                      .filter((block): block is AssistantDisplayContentBlock => Boolean(block));
-                    const sourceReplyTextFromContent =
-                      extractAssistantDisplayTextFromContent(sourceReplyContent);
-                    const sourceReplyText =
-                      sourceReplyTextFromContent ??
-                      (sourceReplyContent.length === 0 ? displayReply : undefined);
-                    const nowLocal = Date.now();
-                    const message = {
-                      role: "assistant",
-                      ...(sourceReplyContent?.length
-                        ? { content: sourceReplyContent }
-                        : sourceReplyText
-                          ? { content: [{ type: "text", text: sourceReplyText }] }
-                          : {}),
-                      ...(sourceReplyText ? { text: sourceReplyText } : {}),
-                      timestamp: nowLocal,
-                      stopReason: "stop",
-                      usage: { input: 0, output: 0, totalTokens: 0 },
-                    };
-                    if (hasVisibleAssistantFinalMessage(message)) {
-                      emitFirstAssistantServerTiming();
-                    }
-                    broadcastChatFinal({
-                      context,
-                      runId: clientRunId,
-                      sessionKey,
-                      agentId,
-                      message,
-                    });
-                    broadcastedSourceReplyFinal = hasSourceReplyTranscriptMirror;
-                  }
-                }
+                broadcastedSourceReplyFinal = await finalizeChatSendSourceReplies({
+                  accountId,
+                  context,
+                  deliveredReplies,
+                  emitFirstAssistantServerTiming,
+                  hasReturnedAgentErrorPayloads: returnedAgentErrorPayloads.length > 0,
+                  session: preparedSession.value,
+                });
               }
               const shouldBroadcastAgentError =
                 returnedAgentErrorPayloads.length > 0 && !broadcastedSourceReplyFinal;
@@ -2989,160 +1514,8 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
           }
         })
-        .catch(async (err: unknown) => {
-          const errorMessage = String(err);
-          let restartSafeDispatchFailureTerminalized = false;
-          if (restartSafeAdmission && !queuedFollowupEnqueued) {
-            restartSafeDispatchFailureTerminalized = await terminalizeRestartSafeAdmission({
-              retryable: true,
-              status: "failed",
-            }).catch((terminalizeError: unknown) => {
-              context.logGateway.warn(
-                `failed to release restart-safe chat admission after dispatch error: ${formatForLog(
-                  terminalizeError,
-                )}`,
-              );
-              return false;
-            });
-            if (restartSafeDispatchFailureTerminalized) {
-              emitSessionsChanged(context, {
-                sessionKey,
-                ...(agentId ? { agentId } : {}),
-                reason: "chat.dispatch-error",
-              });
-            }
-          }
-          if (queuedFollowupEnqueued) {
-            context.logGateway.warn(
-              `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
-            );
-            if (!context.chatAbortedRuns.has(clientRunId)) {
-              setGatewayDedupeEntry({
-                dedupe: context.dedupe,
-                key: `chat:${clientRunId}`,
-                entry: {
-                  ts: Date.now(),
-                  ok: true,
-                  payload: { runId: clientRunId, status: "ok" as const },
-                },
-              });
-              broadcastChatFinal({
-                context,
-                runId: clientRunId,
-                sessionKey,
-                agentId,
-              });
-            }
-            return;
-          }
-          persistDispatchErrorUserTurn =
-            userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()
-              ? undefined
-              : async () => {
-                  await persistGatewayUserTurnTranscript();
-                };
-          if (
-            !restartSafeDispatchFailureTerminalized &&
-            !activeRunAbort.controller.signal.aborted &&
-            !context.chatAbortedRuns.has(clientRunId)
-          ) {
-            pendingDispatchLifecycleError = {
-              endedAt: Date.now(),
-              error: errorMessage,
-              sessionId: activeRunAbort.entry?.sessionId ?? backingSessionId ?? clientRunId,
-              startedAt: activeRunAbort.entry?.startedAtMs ?? now,
-            };
-          }
-          const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
-          setGatewayDedupeEntry({
-            dedupe: context.dedupe,
-            key: `chat:${clientRunId}`,
-            entry: {
-              ts: Date.now(),
-              ok: false,
-              payload: {
-                runId: clientRunId,
-                status: "error" as const,
-                summary: errorMessage,
-              },
-              error,
-            },
-          });
-          broadcastChatError({
-            context,
-            runId: clientRunId,
-            sessionKey,
-            agentId,
-            errorMessage,
-          });
-        })
-        .finally(() => {
-          const dispatchError = pendingDispatchLifecycleError;
-          // Reserve error projection before cleanup retires the dispatch root. Restart
-          // drain may already reject fresh roots, but this accepted request must finish.
-          const releaseDispatchErrorRoot = dispatchError
-            ? retainGatewayRootWorkAdmissionContinuation()
-            : null;
-          cleanupAdmittedRun();
-          clearAgentRunContext(clientRunId, lifecycleGeneration);
-          context.removeChatRun(clientRunId, clientRunId, sessionKey);
-          if (!dispatchError) {
-            return;
-          }
-          const persistDispatchLifecycleError = async () => {
-            const hasActiveRun = hasTrackedActiveSessionRun({
-              context,
-              requestedKey: rawSessionKey,
-              canonicalKey: sessionKey,
-              ...(sessionKey === "global" && agentId ? { agentId } : {}),
-              defaultAgentId: resolveDefaultAgentId(cfg),
-            });
-            if (hasActiveRun) {
-              return;
-            }
-            try {
-              await persistGatewaySessionLifecycleEvent({
-                sessionKey,
-                ...(sessionKey === "global" && agentId ? { agentId } : {}),
-                event: {
-                  runId: clientRunId,
-                  sessionId: dispatchError.sessionId,
-                  lifecycleGeneration,
-                  ts: dispatchError.endedAt,
-                  data: {
-                    phase: "error",
-                    startedAt: dispatchError.startedAt,
-                    endedAt: dispatchError.endedAt,
-                    error: dispatchError.error,
-                  },
-                },
-              });
-              emitSessionsChanged(context, {
-                sessionKey,
-                ...(agentId ? { agentId } : {}),
-                reason: "chat.dispatch-error",
-              });
-            } catch (persistErr: unknown) {
-              context.logGateway.warn(
-                `webchat session lifecycle persist failed after error: ${formatForLog(persistErr)}`,
-              );
-            }
-          };
-          void (async () => {
-            await persistDispatchLifecycleError();
-            await persistDispatchErrorUserTurn?.().catch((transcriptErr: unknown) => {
-              context.logGateway.warn(
-                `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
-              );
-            });
-          })()
-            .catch((continuationErr: unknown) => {
-              context.logGateway.warn(
-                `webchat session lifecycle continuation failed: ${formatForLog(continuationErr)}`,
-              );
-            })
-            .finally(() => releaseDispatchErrorRoot?.());
-        });
+        .catch(dispatchErrorLifecycle.handleError)
+        .finally(dispatchErrorLifecycle.finalize);
     } catch (err) {
       if (restartSafeAdmission) {
         const terminalized = await terminalizeRestartSafeAdmission({

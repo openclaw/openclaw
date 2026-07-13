@@ -3,7 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { InventoryRemovalRequest } from "../../lib/nodes/index.ts";
-import { renderNodes, type NodesProps } from "./view.ts";
+import { renderNodes } from "./view.ts";
+import type { NodesProps } from "./view.types.ts";
 
 function baseProps(overrides: Partial<NodesProps> = {}): NodesProps {
   return {

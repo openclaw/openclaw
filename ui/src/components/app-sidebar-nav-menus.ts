@@ -130,6 +130,7 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   pluginTabs: readonly GatewayControlUiPluginTab[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onEditPinnedItems: () => void;
+  onTabAway: () => void;
   onClose: (restoreFocus: boolean) => void;
 };
 
@@ -229,7 +230,8 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
             params.onNavigateRoute(value as SidebarNavRoute);
           }
         }}
-        @keydown=${trackDropdownKeyboardDismissal}
+        @keydown=${(event: KeyboardEvent) =>
+          trackDropdownKeyboardDismissal(event, params.onTabAway)}
         @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
       >
         <button
@@ -258,6 +260,7 @@ type SidebarCustomizeMenuParams = {
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onToggleRoute: (routeId: SidebarNavRoute) => void;
   onReset: () => void;
+  onTabAway: () => void;
   onClose: (restoreFocus: boolean) => void;
 };
 
@@ -283,7 +286,8 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
             params.onToggleRoute(value as SidebarNavRoute);
           }
         }}
-        @keydown=${trackDropdownKeyboardDismissal}
+        @keydown=${(event: KeyboardEvent) =>
+          trackDropdownKeyboardDismissal(event, params.onTabAway)}
         @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
       >
         <button

@@ -763,6 +763,10 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
         .toBe(true);
       await page.keyboard.press("Tab");
       await expect.poll(() => menu.count()).toBe(0);
+      const sessionSortButton = sidebar.locator("button.sidebar-session-sort").first();
+      await expect
+        .poll(() => sessionSortButton.evaluate((element) => element === document.activeElement))
+        .toBe(true);
     } finally {
       await context.close();
     }

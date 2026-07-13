@@ -7,7 +7,16 @@ const keyboardDismissedDropdowns = new WeakSet<EventTarget>();
 
 /** Transient menus use hidden triggers. Keep Escape intent on the host so Lit
  * re-renders cannot lose it before Web Awesome finishes hiding the popup. */
-export function trackDropdownKeyboardDismissal(event: KeyboardEvent) {
+export function trackDropdownKeyboardDismissal(
+  event: KeyboardEvent,
+  focusDurableTrigger?: () => void,
+) {
+  // Web Awesome hides on Tab without restoring its trigger. Transient menus
+  // use a hidden trigger, so move focus first and let native Tab continue.
+  if (event.key === "Tab") {
+    focusDurableTrigger?.();
+    return;
+  }
   if (event.key === "Escape" && event.currentTarget) {
     keyboardDismissedDropdowns.add(event.currentTarget);
   }

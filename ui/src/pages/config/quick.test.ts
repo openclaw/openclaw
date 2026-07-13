@@ -2,7 +2,9 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderQuickSettings, type QuickSettingsProps } from "./quick.ts";
+import { renderQuickSettings } from "./quick.ts";
+
+type QuickSettingsProps = Parameters<typeof renderQuickSettings>[0];
 
 type QuickControl = HTMLElement & { checked?: boolean; disabled: boolean };
 

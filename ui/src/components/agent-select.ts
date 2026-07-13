@@ -164,7 +164,3 @@ export class AgentSelect extends OpenClawLightDomElement {
     `;
   }
 }
-
-if (!customElements.get("openclaw-agent-select")) {
-  customElements.define("openclaw-agent-select", AgentSelect);
-}

@@ -11,8 +11,8 @@
     "src/commands/doctor/shared/codex-route-warnings.ts": 3,
     "src/config/sessions/session-accessor.sqlite.ts": 2,
     "src/config/sessions/session-accessor.ts": 12,
-    "src/config/sessions/store-load.ts": 5,
-    "src/config/sessions/store.ts": 15,
+    "src/config/sessions/store-load.ts": 3,
+    "src/config/sessions/store.ts": 10,
     "src/config/sessions/test-helpers.ts": 2,
     "src/config/sessions/transcript.ts": 2
   },
@@ -31,7 +31,7 @@
   "sessionLifecycleCleanup": {
     "src/config/sessions/session-accessor.sqlite.ts": 2,
     "src/config/sessions/store-maintenance-operations.ts": 2,
-    "src/config/sessions/store.ts": 5
+    "src/config/sessions/store.ts": 2
   },
   "transcriptWriter": {
     "src/agents/embedded-agent-runner/compaction-hooks.ts": 2,
@@ -39,7 +39,6 @@
     "src/agents/embedded-agent-runner/tool-result-truncation.ts": 3,
     "src/agents/embedded-agent-runner/transcript-rewrite.ts": 3,
     "src/config/sessions/session-accessor.sqlite.ts": 3,
-    "src/config/sessions/session-accessor.ts": 2,
-    "src/config/sessions/store.ts": 2
+    "src/config/sessions/session-accessor.ts": 2
   }
 }

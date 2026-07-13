@@ -347,7 +347,7 @@ function renderSegmented<T extends string>(params: {
   return html`
     <wa-radio-group
       class="settings-segmented"
-      size="small"
+      size="s"
       orientation="horizontal"
       label=${ifDefined(params.ariaLabel)}
       .value=${params.value}

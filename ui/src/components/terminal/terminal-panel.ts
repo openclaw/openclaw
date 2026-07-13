@@ -1145,12 +1145,6 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   `;
 }
 
-// Guarded define (not @customElement) so re-imports under a shared registry —
-// e.g. vitest with isolate=false — don't throw "already registered".
-if (!customElements.get("openclaw-terminal-panel")) {
-  customElements.define("openclaw-terminal-panel", OpenClawTerminalPanel);
-}
-
 declare global {
   interface HTMLElementTagNameMap {
     "openclaw-terminal-panel": OpenClawTerminalPanel;

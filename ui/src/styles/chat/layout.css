@@ -1726,6 +1726,7 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
 }
 
 .chat-view-menu {
+  display: inline-flex;
   z-index: 60;
 }
 

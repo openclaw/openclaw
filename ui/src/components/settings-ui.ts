@@ -131,7 +131,7 @@ export function renderSettingsToggle(props: {
   return html`
     <wa-switch
       class="settings-toggle"
-      size="small"
+      size="s"
       .checked=${props.checked}
       ?disabled=${props.disabled ?? false}
       @change=${(event: Event) => {
@@ -172,7 +172,7 @@ export function renderSettingsToggleRow(props: {
       <div class="settings-row__control">
         <wa-switch
           class="settings-toggle"
-          size="small"
+          size="s"
           .checked=${props.checked}
           ?disabled=${props.disabled ?? false}
           @change=${(event: Event) => {
@@ -197,7 +197,7 @@ export function renderSettingsSegmented<T extends string>(props: {
   return html`
     <wa-radio-group
       class="settings-segmented"
-      size="small"
+      size="s"
       orientation="horizontal"
       .value=${props.value}
       ?disabled=${props.disabled ?? false}

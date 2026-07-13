@@ -2017,11 +2017,19 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   }
 
   private renderCustomizeMenu() {
+    const position = this.customizeMenuPosition;
+    const trigger = this.customizeMenuTrigger;
     return renderSidebarCustomizeMenu({
-      position: this.customizeMenuPosition,
+      position,
       pinnedRoutes: this.sidebarPinnedRoutes,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
-      onClose: (restoreFocus) => this.closeCustomizeMenu({ restoreFocus }),
+      onTabAway: () => trigger?.focus(),
+      onClose: (restoreFocus) => {
+        if (this.customizeMenuPosition !== position) {
+          return;
+        }
+        this.closeCustomizeMenu({ restoreFocus });
+      },
       onToggleRoute: (routeId) => {
         const pinned = this.sidebarPinnedRoutes;
         const next = pinned.includes(routeId)
@@ -2037,9 +2045,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   }
 
   private renderAgentMenu() {
+    const position = this.agentMenuPosition;
+    const trigger = this.agentMenuTrigger;
     const { activeId, agent, agents } = this.activeChipAgent();
     return renderSidebarAgentMenu({
-      position: this.agentMenuPosition,
+      position,
       activeId,
       activeName: agent ? normalizeAgentLabel(agent) : activeId,
       agents,
@@ -2057,7 +2067,15 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       onSwitchAgent: (agentId) => this.switchChipAgent(agentId),
       onAskCapabilities: (agentId) => this.askAgentCapabilities(agentId),
       onOpenNewSession: (agentId) => this.onOpenNewSession?.(agentId),
-      onClose: (restoreFocus) => this.closeAgentMenu({ restoreFocus }),
+      onTabAway: () => trigger?.focus(),
+      onClose: (restoreFocus) => {
+        // An old Web Awesome menu can finish hiding after its replacement opens.
+        // Only the render that owns the current position may close it.
+        if (this.agentMenuPosition !== position) {
+          return;
+        }
+        this.closeAgentMenu({ restoreFocus });
+      },
       onNavigate: (routeId, options) => this.onNavigate?.(routeId, options),
       onPairMobile: () => this.onPairMobile?.(),
     });
@@ -2170,6 +2188,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private renderSessionGroupMenu() {
     const menu = this.sessionGroupMenu;
+    const trigger = this.sessionGroupMenuTrigger;
     if (!menu) {
       return nothing;
     }
@@ -2199,7 +2218,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                   break;
               }
             }}
-            @keydown=${trackDropdownKeyboardDismissal}
+            @keydown=${(event: KeyboardEvent) =>
+              trackDropdownKeyboardDismissal(event, () => trigger?.focus())}
             @wa-after-hide=${(event: Event) => {
               if (this.sessionGroupMenu && this.sessionGroupMenu !== menu) {
                 return;
@@ -2247,6 +2267,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private renderSessionSortMenu() {
     const position = this.sessionSortMenuPosition;
+    const trigger = this.sessionSortMenuTrigger;
     if (!position) {
       return nothing;
     }
@@ -2278,7 +2299,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               }
               this.closeSessionSortMenu({ restoreFocus: true });
             }}
-            @keydown=${trackDropdownKeyboardDismissal}
+            @keydown=${(event: KeyboardEvent) =>
+              trackDropdownKeyboardDismissal(event, () => trigger?.focus())}
             @wa-after-hide=${(event: Event) => {
               if (this.sessionSortMenuPosition !== position) {
                 return;
@@ -2885,15 +2907,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   }
 
   private renderMoreMenu() {
+    const position = this.moreMenuPosition;
+    const trigger = this.moreMenuTrigger;
     return renderSidebarMoreMenu({
-      position: this.moreMenuPosition,
+      position,
       basePath: this.basePath,
       activeRouteId: this.activeRouteId,
       activePluginTabId: this.activePluginTabId,
       pinnedRoutes: this.sidebarPinnedRoutes,
       pluginTabs: sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs),
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
-      onClose: (restoreFocus) => this.closeMoreMenu({ restoreFocus }),
+      onTabAway: () => trigger?.focus(),
+      onClose: (restoreFocus) => {
+        if (this.moreMenuPosition !== position) {
+          return;
+        }
+        this.closeMoreMenu({ restoreFocus });
+      },
       onNavigateRoute: (routeId) => {
         this.closeMoreMenu({ restoreFocus: true });
         this.onNavigate?.(routeId);

@@ -2,7 +2,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../api/types.ts";
-import { DEFAULT_CRON_FORM } from "../../lib/cron/index.ts";
+import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { renderCron } from "./view.ts";
 
 type CronProps = Parameters<typeof renderCron>[0];

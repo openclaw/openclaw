@@ -85,19 +85,19 @@ type SessionDiffSidebarContent = {
   unavailableReason?: DetailUnavailableReason | null;
 };
 
-export type FileSaveOutcome =
+type FileSaveOutcome =
   | { ok: true; hash: string; updatedAtMs?: number }
   | { ok: false; code: "conflict"; currentHash?: string }
   | { ok: false; code: "error"; message: string };
 
-export type FileSidebarEdit = {
+type FileSidebarEdit = {
   hash: string;
   save: (params: { content: string; expectedHash: string }) => Promise<FileSaveOutcome>;
   /** `editable: false` means the latest content no longer qualifies for edit mode. */
   fetchLatest: () => Promise<{ content: string; hash: string; editable: boolean } | null>;
 };
 
-export type FileSidebarContent = {
+type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;
@@ -175,9 +175,7 @@ function toPlainTextCodeFence(value: string, language = ""): string {
   return `${fenceHeader}\n${value}\n\`\`\``;
 }
 
-export function buildRawSidebarContent(
-  content: SidebarContent | null | undefined,
-): SidebarContent | null {
+function buildRawSidebarContent(content: SidebarContent | null | undefined): SidebarContent | null {
   if (!content) {
     return null;
   }
@@ -220,7 +218,7 @@ export function hasUniformLineEndings(content: string): boolean {
   return [crlf, bareCr, bareLf].filter((count) => count > 0).length <= 1;
 }
 
-export function computeFileSearchMatches(content: string, query: string): number[] {
+function computeFileSearchMatches(content: string, query: string): number[] {
   const normalizedQuery = query.toLocaleLowerCase();
   if (!normalizedQuery) {
     return [];
@@ -532,7 +530,7 @@ type MarkdownSidebarProps = {
   allowExternalEmbedUrls?: boolean;
 };
 
-export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
+function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
   const markdownHtml =
     content?.kind === "markdown" && content.content.trim()

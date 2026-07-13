@@ -44,7 +44,7 @@ export function normalizeBasePath(basePath: string): string {
   return normalizeRouteBasePath(basePath);
 }
 
-export function normalizePath(path: string): string {
+function normalizePath(path: string): string {
   return normalizeRoutePath(path);
 }
 

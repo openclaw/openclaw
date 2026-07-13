@@ -286,6 +286,10 @@ import {
   TerminalTextParamsSchema,
   TerminalTextResultSchema,
   ModelsListParamsSchema,
+  AuthProbeStatusSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
+  ModelsProbeTargetResultSchema,
   NodeDescribeParamsSchema,
   NodeEventParamsSchema,
   NodeEventResultSchema,
@@ -836,6 +840,7 @@ export const validateTerminalCloseParams = lazyCompile(TerminalCloseParamsSchema
 export const validateTerminalAttachParams = lazyCompile(TerminalAttachParamsSchema);
 export const validateTerminalTextParams = lazyCompile(TerminalTextParamsSchema);
 export const validateTerminalEvent = lazyCompile(TerminalEventSchema);
+export const validateModelsProbeParams = lazyCompile(ModelsProbeParamsSchema);
 export const validateChatHistoryParams = lazyCompile(ChatHistoryParamsSchema);
 export const validateChatMetadataParams = lazyCompile(ChatMetadataParamsSchema);
 export const validateChatMessageGetParams = lazyCompile(ChatMessageGetParamsSchema);
@@ -1163,6 +1168,10 @@ export {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
   ModelsListParamsSchema,
+  AuthProbeStatusSchema,
+  ModelsProbeParamsSchema,
+  ModelsProbeResultSchema,
+  ModelsProbeTargetResultSchema,
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
   ToolsEffectiveParamsSchema,
@@ -1468,6 +1477,10 @@ export type {
   PluginsSetEnabledResult,
   PluginsUninstallParams,
   PluginsUninstallResult,
+  AuthProbeStatus,
+  ModelsProbeParams,
+  ModelsProbeResult,
+  ModelsProbeTargetResult,
   SkillsStatusParams,
   ToolsCatalogParams,
   ToolsCatalogResult,

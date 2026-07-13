@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, createReadStream } from "node:fs";
+import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,45 +7,18 @@ import * as tar from "tar";
 import { resolveStateDir } from "../../config/paths.js";
 import { isExactSemverVersion } from "../../infra/npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
-import { collectPackageDistInventory } from "../../infra/package-dist-inventory.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { VERSION } from "../../version.js";
+import {
+  collectWorkerBundleManifest,
+  comparePaths,
+  type WorkerBundleManifestEntry,
+} from "./bundle-staging.js";
 
 export const WORKER_BUNDLE_MANIFEST_VERSION = "openclaw-worker-bundle-v1";
 const OPENCLAW_NPM_REGISTRY = "https://registry.npmjs.org/";
 const NPM_RELEASE_PROOF_TIMEOUT_MS = 60_000;
 const NPM_SHA512_INTEGRITY_PATTERN = /^sha512-[A-Za-z0-9+/]{86}==$/u;
-// Host node_modules can contain platform-native code and is not portable to a leased box.
-// The bundle ships dist plus a pruned package.json; bootstrap installs production
-// dependencies on the box with scripts disabled, mirroring the npm channel.
-const WORKER_BUNDLE_RUNTIME_FILES = ["openclaw.mjs", "package.json"] as const;
-
-// Workspace packages are compiled into dist and their `workspace:` specs cannot
-// resolve on the box; dev-only and lifecycle fields never ship.
-function pruneWorkerPackageManifest(contents: Buffer): Buffer {
-  const parsed = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
-  const dependencies =
-    parsed.dependencies && typeof parsed.dependencies === "object"
-      ? (parsed.dependencies as Record<string, string>)
-      : {};
-  const portable = Object.fromEntries(
-    Object.entries(dependencies).filter(([, spec]) => !spec.startsWith("workspace:")),
-  );
-  const prunedFields = ["devDependencies", "scripts", "pnpm"].filter((key) => key in parsed);
-  if (
-    prunedFields.length === 0 &&
-    Object.keys(portable).length === Object.keys(dependencies).length
-  ) {
-    // Released package manifests are already portable; keep bytes (and hashes) stable.
-    return contents;
-  }
-  const pruned: Record<string, unknown> = { ...parsed, dependencies: portable };
-  for (const key of prunedFields) {
-    delete pruned[key];
-  }
-  return Buffer.from(`${JSON.stringify(pruned, null, 2)}\n`, "utf8");
-}
-
 type WorkerInstallationArtifactBase = {
   bundleHash: string;
   openclawVersion: string;
@@ -83,17 +56,6 @@ type WorkerNpmReleaseVerifier = (params: {
   version: string;
 }) => Promise<string>;
 type WorkerNpmProofCommandRunner = typeof runCommandWithTimeout;
-
-type WorkerBundleManifestEntry = {
-  path: string;
-  mode: number;
-  size: number;
-  sha256: string;
-};
-
-function comparePaths(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
 
 function normalizeProtocolFeatures(features: readonly string[]): string[] {
   const normalized = features.map((feature) => feature.trim());
@@ -300,84 +262,6 @@ async function verifyPublishedNpmRelease(params: {
   } finally {
     await fs.rm(temporaryRoot, { recursive: true, force: true });
   }
-}
-
-function normalizePortableMode(mode: number, relativePath: string): number {
-  return relativePath === "openclaw.mjs" || (mode & 0o111) !== 0 ? 0o700 : 0o600;
-}
-
-async function stageManifestEntry(
-  sourceRoot: string,
-  sourceRootRealPath: string,
-  stagingRoot: string,
-  relativePath: string,
-): Promise<WorkerBundleManifestEntry> {
-  const sourcePath = path.join(sourceRoot, relativePath);
-  const expectedRealPath = path.resolve(sourceRootRealPath, ...relativePath.split("/"));
-  const sourceRealPath = await fs.realpath(sourcePath);
-  if (sourceRealPath !== expectedRealPath) {
-    throw new Error(`Unsafe worker bundle path: ${relativePath}`);
-  }
-  const stats = await fs.lstat(sourcePath);
-  if (stats.isSymbolicLink() || !stats.isFile()) {
-    throw new Error(`Unsafe worker bundle path: ${relativePath}`);
-  }
-  const handle = await fs.open(sourcePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
-  let contents: Buffer;
-  let mode: number;
-  try {
-    const openedStats = await handle.stat();
-    const currentStats = await fs.lstat(sourcePath);
-    const currentRealPath = await fs.realpath(sourcePath);
-    if (
-      !openedStats.isFile() ||
-      currentStats.isSymbolicLink() ||
-      !currentStats.isFile() ||
-      currentRealPath !== expectedRealPath ||
-      currentStats.dev !== openedStats.dev ||
-      currentStats.ino !== openedStats.ino
-    ) {
-      throw new Error(`Worker bundle path changed while packaging: ${relativePath}`);
-    }
-    contents = await handle.readFile();
-    if (relativePath === "package.json") {
-      contents = pruneWorkerPackageManifest(contents);
-    }
-    mode = normalizePortableMode(openedStats.mode, relativePath);
-  } finally {
-    await handle.close();
-  }
-  const stagedPath = path.join(stagingRoot, relativePath);
-  await fs.mkdir(path.dirname(stagedPath), { recursive: true });
-  await fs.writeFile(stagedPath, contents, { mode });
-  await fs.chmod(stagedPath, mode);
-  return {
-    path: relativePath,
-    mode,
-    size: contents.byteLength,
-    sha256: createHash("sha256").update(contents).digest("hex"),
-  };
-}
-
-async function collectWorkerBundleManifest(
-  sourceRoot: string,
-  stagingRoot: string,
-): Promise<WorkerBundleManifestEntry[]> {
-  const sourceRootRealPath = await fs.realpath(sourceRoot);
-  const distFiles = await collectPackageDistInventory(sourceRoot);
-  if (distFiles.length === 0) {
-    throw new Error(
-      `OpenClaw worker bundle has no packaged dist files; build the running package at ${sourceRoot}`,
-    );
-  }
-  const paths = [...WORKER_BUNDLE_RUNTIME_FILES, ...distFiles].toSorted(comparePaths);
-  const entries: WorkerBundleManifestEntry[] = [];
-  for (const relativePath of paths) {
-    entries.push(
-      await stageManifestEntry(sourceRoot, sourceRootRealPath, stagingRoot, relativePath),
-    );
-  }
-  return entries;
 }
 
 function hashWorkerBundleManifest(entries: readonly WorkerBundleManifestEntry[]): string {

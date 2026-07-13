@@ -60,6 +60,7 @@ type SidebarAgentMenuParams = {
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
   onOpenNewSession: (agentId: string) => void;
+  onTabAway: () => void;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
@@ -129,6 +130,7 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
     <wa-dropdown-item
       class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
+      type="checkbox"
       role="menuitemradio"
       aria-checked=${String(active)}
       ${ref((element) => syncDropdownItemRadio(element, active))}
@@ -255,7 +257,8 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               ?.focus();
           }
         }}
-        @keydown=${trackDropdownKeyboardDismissal}
+        @keydown=${(event: KeyboardEvent) =>
+          trackDropdownKeyboardDismissal(event, params.onTabAway)}
         @wa-after-hide=${(event: Event) => params.onClose(consumeDropdownKeyboardDismissal(event))}
       >
         <button
