@@ -8,7 +8,6 @@ import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -21,6 +20,7 @@ import "../../styles/new-session.css";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
 import * as catalog from "./catalog-target.ts";
+import { renderNewSessionComposer } from "./composer.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import {
   type BrowserTarget,
@@ -64,9 +64,11 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private openedFor: string | null = null;
   private agentsHydrated = false;
-  // Agent lists clear during transport retries. Retain only an explicit draft
-  // choice; provisional defaults still follow refreshed Gateway state.
+  // Discovery clears during transport retries. Provenance distinguishes user
+  // choices from provisional defaults that must follow refreshed Gateway state.
   private agentSelectedByUser = false;
+  private folderSelectedByUser = false;
+  private submitRequestToken = 0;
   private nodesRequestToken = 0;
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
@@ -126,9 +128,11 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     // A replacement client may target another Gateway. Keep the user's task,
     // but retire every selection and discovery result owned by the old host.
+    this.invalidateSubmission();
     this.agentId = "";
     this.agentSelectedByUser = false;
     this.folder = "";
+    this.folderSelectedByUser = false;
     this.worktree = false;
     this.worktreeName = "";
     this.baseRef = "";
@@ -293,7 +297,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     // anything the user already typed while the list was loading.
     if (!this.agentsHydrated && agentsReady) {
       this.agentsHydrated = true;
-      this.adoptAgentDefaults({ preserveSelectedAgent: true, preserveTypedFolder: true });
+      this.adoptAgentDefaults({ preserveSelectedAgent: true, preserveSelectedFolder: true });
     }
   }
 
@@ -349,7 +353,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private adoptAgentDefaults(
-    options: { preserveSelectedAgent?: boolean; preserveTypedFolder?: boolean } = {},
+    options: { preserveSelectedAgent?: boolean; preserveSelectedFolder?: boolean } = {},
   ) {
     const agents = this.agents();
     const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
@@ -359,16 +363,21 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.agentId = catalog.resolveAgentId(this.data, agents, fallback);
       this.agentSelectedByUser = false;
     }
-    if (!options.preserveTypedFolder || !this.folder.trim()) {
+    const keepSelectedFolder = options.preserveSelectedFolder && this.folderSelectedByUser;
+    // A node cwd belongs to node discovery, not agent workspace refresh.
+    if (!this.execNode && !keepSelectedFolder) {
       this.folder = this.workspacePath();
+      this.folderSelectedByUser = false;
     }
     void this.loadNodes();
     this.maybeLoadBranches();
   }
 
   private resetDraft() {
+    this.invalidateSubmission();
     this.agentSelectedByUser = false;
     this.folder = "";
+    this.folderSelectedByUser = false;
     this.worktree = false;
     this.worktreeName = "";
     this.baseRef = "";
@@ -376,13 +385,17 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.branchesLoading = false;
     this.execNode = "";
     this.message = "";
-    this.submitting = false;
     this.error = null;
     this.closeBrowser();
     this.adoptAgentDefaults();
     void this.updateComplete.then(() => {
       this.querySelector<HTMLTextAreaElement>(".new-session-page__message")?.focus();
     });
+  }
+
+  private invalidateSubmission() {
+    this.submitRequestToken += 1;
+    this.submitting = false;
   }
 
   private async loadNodes() {
@@ -405,6 +418,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         // Gateway, so fall back to the selected agent's workspace as one unit.
         this.execNode = "";
         this.folder = this.workspacePath();
+        this.folderSelectedByUser = false;
         this.worktree = false;
         this.worktreeName = "";
         this.closeBrowser();
@@ -510,6 +524,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       return;
     }
     const message = this.message.trim();
+    const requestId = ++this.submitRequestToken;
     this.submitting = true;
     this.error = null;
     // Collapse menus and retire browser requests before awaiting the Gateway;
@@ -532,6 +547,9 @@ class NewSessionPage extends OpenClawLightDomElement {
           catalogId: this.data?.catalogId,
         }),
       );
+      if (requestId !== this.submitRequestToken) {
+        return;
+      }
       if (!result) {
         this.error = context.sessions.state.error ?? t("newSession.createFailed");
         return;
@@ -569,7 +587,9 @@ class NewSessionPage extends OpenClawLightDomElement {
       context.gateway.setSessionKey(result.key);
       context.navigate("chat", { search: searchForSession(result.key) });
     } finally {
-      this.submitting = false;
+      if (requestId === this.submitRequestToken) {
+        this.submitting = false;
+      }
     }
   }
 
@@ -585,6 +605,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.agentId = normalizeAgentId(agentId);
     this.agentSelectedByUser = true;
     this.folder = this.execNode ? "" : this.workspacePath();
+    this.folderSelectedByUser = false;
     this.worktree = false;
     this.worktreeName = "";
     this.closeBrowser();
@@ -597,6 +618,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     this.execNode = execNode;
     this.folder = folder.trim();
+    this.folderSelectedByUser = true;
     if (this.execNode) {
       this.worktree = false;
     } else if (this.usesCustomFolder()) {
@@ -616,6 +638,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.execNode = execNode;
     // Folder paths belong to one host; never carry a Gateway or node path to another host.
     this.folder = execNode ? "" : this.workspacePath();
+    this.folderSelectedByUser = false;
     this.worktree = false;
     this.closeBrowser();
     this.maybeLoadBranches();
@@ -1175,7 +1198,18 @@ class NewSessionPage extends OpenClawLightDomElement {
           ? html`<div class="new-session-page__error">${t("newSession.worktreeNameInvalid")}</div>`
           : nothing}
         ${this.error ? html`<div class="new-session-page__error">${this.error}</div>` : nothing}
-        ${this.renderComposer()}
+        ${renderNewSessionComposer({
+          canSubmit: this.canSubmit(),
+          message: this.message,
+          submitting: this.submitting,
+          onInput: (message) => {
+            if (!this.submitting) {
+              this.message = message;
+            }
+          },
+          onKeydown: (event) => this.handleMessageKeydown(event),
+          onSubmit: () => void this.submit(),
+        })}
       </div>
     `;
   }
@@ -1248,45 +1282,6 @@ class NewSessionPage extends OpenClawLightDomElement {
       event.preventDefault();
       void this.submit();
     }
-  }
-
-  /** Draft message box styled as the chat composer shell so both pickers match. */
-  private renderComposer() {
-    const startLabel = this.submitting ? t("newSession.starting") : t("newSession.start");
-    return html`
-      <div class="agent-chat__input new-session-page__composer">
-        <div class="agent-chat__composer-input-row">
-          <div class="agent-chat__composer-combobox">
-            <textarea
-              class="new-session-page__message"
-              rows="3"
-              ?disabled=${this.submitting}
-              placeholder=${t("newSession.messagePlaceholder")}
-              .value=${this.message}
-              @input=${(event: Event) => {
-                if (!this.submitting) {
-                  this.message = (event.target as HTMLTextAreaElement).value;
-                }
-              }}
-              @keydown=${(event: KeyboardEvent) => this.handleMessageKeydown(event)}
-            ></textarea>
-          </div>
-          <div class="agent-chat__composer-actions">
-            <openclaw-tooltip content=${t("newSession.start")}>
-              <button
-                type="button"
-                class="chat-send-btn"
-                ?disabled=${!this.canSubmit()}
-                aria-label=${startLabel}
-                @click=${() => void this.submit()}
-              >
-                ${this.submitting ? icons.loader : icons.arrowUp}
-              </button>
-            </openclaw-tooltip>
-          </div>
-        </div>
-      </div>
-    `;
   }
 }
 

@@ -21,6 +21,7 @@ const WORKSPACE = "/home/peter/openclaw";
 const PICKED = "/home/peter/openclaw/packages";
 const SOURCE_REPO = "/tmp/source-repo";
 const TARGET_REPO = "/tmp/target-repo";
+const REFRESHED_RESEARCH_WORKSPACE = "/home/peter/research-next";
 const NODE_HOME = "/Users/peter";
 const NODE_PICKED = "/Users/peter/Projects";
 const NODE_UNC = "\\\\server\\share\\repo";
@@ -114,6 +115,18 @@ async function deferTargetRepositorySelection(
     .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
     .toBe(requestsBeforeSwitch + 1);
   return baseInput;
+}
+
+async function replaceGatewayClient(page: Page) {
+  await page.evaluate(() => {
+    const app = document.querySelector("openclaw-app") as HTMLElement & {
+      runtime?: { context: { gateway: { connect: () => void } } };
+    };
+    if (!app.runtime) {
+      throw new Error("OpenClaw application runtime is unavailable");
+    }
+    app.runtime.context.gateway.connect();
+  });
 }
 
 let browser: Browser;
@@ -581,6 +594,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}new`);
       await page.getByRole("heading", { name: "Main" }).waitFor();
+      await gateway.waitForRequest("worktrees.branches");
       await page.locator('.new-session-page__select > summary[title="Agent"]').click();
       await page.getByRole("menuitemradio", { name: "Research" }).click();
       await page.getByRole("heading", { name: "Research" }).waitFor();
@@ -588,9 +602,31 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const message = page.locator(".new-session-page__message");
       await message.fill("keep my selected agent");
       const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
+      const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
 
       await gateway.setOnline(false);
       await page.locator("openclaw-connection-banner").waitFor({ timeout: 10_000 });
+      await gateway.setMethodResponse("agents.list", {
+        agents: [
+          {
+            id: "main",
+            identity: { name: "Main" },
+            name: "Main",
+            workspace: WORKSPACE,
+            workspaceGit: true,
+          },
+          {
+            id: "research",
+            identity: { name: "Research" },
+            name: "Research",
+            workspace: REFRESHED_RESEARCH_WORKSPACE,
+            workspaceGit: true,
+          },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      });
       await gateway.setOnline(true);
 
       await expect
@@ -600,6 +636,19 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(() => page.getByRole("heading").first().textContent())
         .toContain("Research");
+      await expect
+        .poll(() =>
+          page
+            .locator(".new-session-page__select--folder .new-session-page__trigger-label")
+            .textContent(),
+        )
+        .toBe("research-next");
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .toBe(branchRequestsBefore + 1);
+      expect((await gateway.getRequests("worktrees.branches")).at(-1)?.params).toEqual({
+        repoRoot: REFRESHED_RESEARCH_WORKSPACE,
+      });
 
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
@@ -607,6 +656,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         agentId: "research",
         message: "keep my selected agent",
       });
+      expect(create.params).not.toHaveProperty("cwd");
     } finally {
       await context.close();
     }
@@ -709,15 +759,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const nodesBefore = (await gateway.getRequests("node.list")).length;
       const branchesBefore = (await gateway.getRequests("worktrees.branches")).length;
 
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context: { gateway: { connect: () => void } } };
-        };
-        if (!app.runtime) {
-          throw new Error("OpenClaw application runtime is unavailable");
-        }
-        app.runtime.context.gateway.connect();
-      });
+      await replaceGatewayClient(page);
 
       await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
       await expect
@@ -748,6 +790,82 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       });
       await expect.poll(() => folderSelect.getAttribute("open")).toBeNull();
       await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("releases a pending creation when the app replaces its Gateway client", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:fresh-replacement-create";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Original agent" },
+              name: "Original agent",
+              workspace: SOURCE_REPO,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.create": { key: sessionKey },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await page.getByRole("heading", { name: "Original agent" }).waitFor();
+      const message = page.locator(".new-session-page__message");
+      const start = page.locator("button.chat-send-btn");
+      await message.fill("retry this draft on the replacement");
+      await gateway.deferNext("sessions.create");
+      await start.click();
+      await gateway.waitForRequest("sessions.create");
+      await expect.poll(() => start.isDisabled()).toBe(true);
+
+      await gateway.setMethodResponse("agents.list", {
+        agents: [
+          {
+            id: "main",
+            identity: { name: "Replacement agent" },
+            name: "Replacement agent",
+            workspace: TARGET_REPO,
+            workspaceGit: true,
+          },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      });
+      const socketsBefore = await gateway.getSocketCount();
+      await replaceGatewayClient(page);
+
+      await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
+      await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
+      await expect.poll(() => message.inputValue()).toBe("retry this draft on the replacement");
+      await expect.poll(() => start.isEnabled()).toBe(true);
+      expect(new URL(page.url()).searchParams.get("session")).toBeNull();
+
+      await start.click();
+      await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
+      await page.waitForURL((url) => url.searchParams.get("session") === sessionKey, {
+        timeout: 30_000,
+      });
     } finally {
       await context.close();
     }
