@@ -23,7 +23,8 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { enqueueRun, remove, run, start } from "./ops.js";
+import { recomputeNextRunsForMaintenance } from "./jobs.js";
+import { enqueueRun, remove, run, start, stop, update } from "./ops.js";
 import type { CronEvent } from "./state.js";
 import { createCronServiceState } from "./state.js";
 import { onTimer } from "./timer.test-support.js";
@@ -806,6 +807,348 @@ describe("cron service ops regressions", () => {
 
     clearCommandLane(CommandLane.Cron);
   });
+  it("rechecks a queued manual run after the job is disabled", async () => {
+    vi.useRealTimers();
+    clearCommandLane(CommandLane.Cron);
+    setCommandLaneConcurrency(CommandLane.Cron, 1);
+
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:04.000Z");
+    const job = createDueIsolatedJob({
+      id: "queued-disabled-before-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const blockerStarted = createDeferred<void>();
+    const releaseBlocker = createDeferred<void>();
+    const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
+      blockerStarted.resolve();
+      return await releaseBlocker.promise;
+    });
+    await blockerStarted.promise;
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    expectQueuedRunAck(await enqueueRun(state, job.id, "due"));
+    await update(state, job.id, { enabled: false });
+    releaseBlocker.resolve();
+    await blocker;
+    await waitForActiveTasks(5_000);
+
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    clearCommandLane(CommandLane.Cron);
+  });
+
+  it("shares maxConcurrentRuns between direct manual and scheduled jobs", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:05.000Z");
+    const scheduledJob = createDueIsolatedJob({
+      id: "scheduled-shared-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    const manualJob = createDueIsolatedJob({
+      id: "manual-shared-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [scheduledJob, manualJob] });
+
+    const manualStarted = createDeferred<void>();
+    const scheduledStarted = createDeferred<void>();
+    const releaseManual = createDeferred<{ status: "ok"; summary: string }>();
+    const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
+      if (runningJob.id === manualJob.id) {
+        manualStarted.resolve();
+        return await releaseManual.promise;
+      }
+      scheduledStarted.resolve();
+      return { status: "ok" as const, summary: "scheduled" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const manualRun = run(state, manualJob.id, "force");
+    await manualStarted.promise;
+    const timerRun = onTimer(state);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    releaseManual.resolve({ status: "ok", summary: "manual" });
+    await scheduledStarted.promise;
+    await Promise.all([manualRun, timerRun]);
+  });
+
+  it("skips a direct manual reservation disabled while it waits for admission", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.000Z");
+    const activeJob = createDueIsolatedJob({
+      id: "active-manual-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    const waitingJob = createDueIsolatedJob({
+      id: "disabled-manual-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
+
+    const activeStarted = createDeferred<void>();
+    const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
+    const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
+      if (runningJob.id === activeJob.id) {
+        activeStarted.resolve();
+        return await releaseActive.promise;
+      }
+      return { status: "ok" as const, summary: "should not run" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const activeRun = run(state, activeJob.id, "force");
+    await activeStarted.promise;
+    const waitingRun = run(state, waitingJob.id, "force");
+    await vi.waitFor(() => {
+      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
+        dueAt,
+      );
+    });
+    await update(state, waitingJob.id, { enabled: false });
+
+    releaseActive.resolve({ status: "ok", summary: "active" });
+    await activeRun;
+    await expect(waitingRun).resolves.toEqual({ ok: true, ran: false, reason: "not-due" });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps force runs available for jobs disabled before reservation", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.500Z");
+    const job = createDueIsolatedJob({
+      id: "force-disabled-before-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    job.enabled = false;
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps queued manual reservations out of stuck-marker cleanup", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:06.750Z");
+    const activeJob = createDueIsolatedJob({
+      id: "active-before-manual-duration",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    const waitingJob = createDueIsolatedJob({
+      id: "queued-manual-duration",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
+
+    let now = dueAt;
+    const activeStarted = createDeferred<void>();
+    const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
+    const waitingStarted = createDeferred<void>();
+    const releaseWaiting = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: noopLogger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
+        if (runningJob.id === activeJob.id) {
+          activeStarted.resolve();
+          return await releaseActive.promise;
+        }
+        waitingStarted.resolve();
+        return await releaseWaiting.promise;
+      }),
+    });
+
+    const activeRun = run(state, activeJob.id, "force");
+    await activeStarted.promise;
+    const waitingRun = run(state, waitingJob.id, "force");
+    await vi.waitFor(() => {
+      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
+        dueAt,
+      );
+    });
+    now += 2 * 60 * 60 * 1000 + 1;
+    recomputeNextRunsForMaintenance(state);
+    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
+      dueAt,
+    );
+    releaseActive.resolve({ status: "ok", summary: "active" });
+    await waitingStarted.promise;
+    expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(now);
+    expect(
+      (await loadCronStore(store.storePath))?.jobs.find((job) => job.id === waitingJob.id)?.state
+        .runningAtMs,
+    ).toBe(now);
+    now += 100;
+    releaseWaiting.resolve({ status: "ok", summary: "queued" });
+
+    await Promise.all([activeRun, waitingRun]);
+    const completedWaitingJob = state.store?.jobs.find((job) => job.id === waitingJob.id);
+    expect(completedWaitingJob?.state.lastRunAtMs).toBe(dueAt + 2 * 60 * 60 * 1000 + 1);
+    expect(completedWaitingJob?.state.lastDurationMs).toBe(100);
+  });
+
+  it("releases a direct manual reservation when stop wins its admission wait", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:07.000Z");
+    const activeJob = createDueIsolatedJob({
+      id: "active-before-manual-stop",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    const waitingJob = createDueIsolatedJob({
+      id: "stopped-manual-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, waitingJob] });
+
+    const activeStarted = createDeferred<void>();
+    const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
+        if (runningJob.id === activeJob.id) {
+          activeStarted.resolve();
+          return await releaseActive.promise;
+        }
+        return { status: "ok" as const, summary: "should not run" };
+      }),
+    });
+
+    const activeRun = run(state, activeJob.id, "force");
+    await activeStarted.promise;
+    const waitingRun = run(state, waitingJob.id, "force");
+    await vi.waitFor(() => {
+      expect(state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs).toBe(
+        dueAt,
+      );
+    });
+    stop(state);
+    await expect(waitingRun).resolves.toEqual({ ok: true, ran: false, reason: "stopped" });
+    expect(
+      state.store?.jobs.find((job) => job.id === waitingJob.id)?.state.runningAtMs,
+    ).toBeUndefined();
+    releaseActive.resolve({ status: "ok", summary: "active" });
+    await activeRun;
+  });
+
+  it("skips a scheduled reservation rescheduled while it waits for admission", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:08.000Z");
+    const activeJob = createDueIsolatedJob({
+      id: "active-before-scheduled-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt + 3_600_000,
+    });
+    const scheduledJob = createDueIsolatedJob({
+      id: "rescheduled-scheduled-admission",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [activeJob, scheduledJob] });
+
+    const activeStarted = createDeferred<void>();
+    const releaseActive = createDeferred<{ status: "ok"; summary: string }>();
+    const runIsolatedAgentJob = vi.fn(async ({ job: runningJob }: { job: { id: string } }) => {
+      if (runningJob.id === activeJob.id) {
+        activeStarted.resolve();
+        return await releaseActive.promise;
+      }
+      return { status: "ok" as const, summary: "should not run" };
+    });
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      cronConfig: { maxConcurrentRuns: 1 },
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+    });
+
+    const activeRun = run(state, activeJob.id, "force");
+    await activeStarted.promise;
+    const timerRun = onTimer(state);
+    await vi.waitFor(() => {
+      expect(state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.runningAtMs).toBe(
+        dueAt,
+      );
+    });
+    await update(state, scheduledJob.id, {
+      schedule: { kind: "at", at: new Date(dueAt + 3_600_000).toISOString() },
+    });
+
+    releaseActive.resolve({ status: "ok", summary: "active" });
+    await Promise.all([activeRun, timerRun]);
+    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    expect(
+      state.store?.jobs.find((job) => job.id === scheduledJob.id)?.state.runningAtMs,
+    ).toBeUndefined();
+  });
+
   it.each([
     {
       id: "onexit-delete-ok",

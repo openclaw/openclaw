@@ -1,6 +1,7 @@
 /** Finalizes cron task rows and active markers after timer outcome persistence. */
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
+import { releaseQueuedCronRun } from "./run-admission.js";
 import type { CronServiceState } from "./state.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
 
@@ -74,6 +75,7 @@ export function releaseUnstartedStartupCatchupReservations(
       delete job.state.runningAtMs;
       changed = true;
     }
+    releaseQueuedCronRun(state, candidate.jobId, candidate.reservedAtMs);
   }
   return changed;
 }

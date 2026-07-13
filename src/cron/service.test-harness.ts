@@ -242,6 +242,8 @@ export function createMockCronStateForJobs(params: {
     pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
+    runAdmission: { active: 0, waiters: [] },
+    queuedRunReservationAtByJobId: new Map<string, number>(),
     timer: null,
     storeLoadedAtMs: nowMs,
     op: Promise.resolve(),
