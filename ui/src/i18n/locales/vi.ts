@@ -3571,14 +3571,6 @@ export const vi: TranslationMap = {
       more: "Thêm hành động",
     },
     runNotStarted: {
-      notDue: "Tác vụ tự động này chưa đến hạn.",
-      alreadyRunning: "Tác vụ tự động này đang chạy.",
-      recoveryPending: "Quá trình khôi phục bộ lập lịch vẫn đang diễn ra.",
-      invalidSpec: "Tác vụ tự động này có lịch biểu hoặc tải trọng không hợp lệ.",
-      stopped: "Bộ lập lịch đã dừng.",
-      unknown: "Không thể khởi chạy tác vụ tự động này.",
-    },
-    runNotStarted: {
       notDue: "Chưa đến thời điểm chạy tác vụ tự động này.",
       alreadyRunning: "Tác vụ tự động này đang chạy.",
       recoveryPending: "Quá trình khôi phục trình lập lịch vẫn đang diễn ra.",
