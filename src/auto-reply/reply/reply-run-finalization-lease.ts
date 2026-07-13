@@ -23,7 +23,7 @@ type FinalizationLease = {
   recordActivity(): void;
 };
 
-export type ReplyRunSettleTimer = {
+type ReplyRunSettleTimer = {
   clear(): void;
   renew(timeoutMs: number): void;
   scheduleOnce(timeoutMs: number): void;

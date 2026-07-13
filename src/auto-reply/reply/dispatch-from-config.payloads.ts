@@ -77,7 +77,7 @@ export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string 
     .join(" ");
 }
 
-export async function maybeApplyTtsToReplyPayload(
+async function maybeApplyTtsToReplyPayload(
   params: Parameters<
     Awaited<ReturnType<typeof ttsRuntimeLoader.load>>["maybeApplyTtsToPayload"]
   >[0],
