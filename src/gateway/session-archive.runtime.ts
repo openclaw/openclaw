@@ -1,6 +1,6 @@
 // Runtime archive barrel used by lazy session archive paths.
 export {
-  archiveFileOnDisk,
+  archiveSessionTranscriptPaths,
   archiveSessionTranscriptsDetailed,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,

@@ -1294,7 +1294,7 @@ async function deleteSessionEntryLifecycleInternal(
     );
     const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     if (params.archiveTranscript) {
-      const { archiveFileOnDisk, resolveSessionTranscriptCandidates } =
+      const { archiveSessionTranscriptPaths, resolveSessionTranscriptCandidates } =
         await loadSessionArchiveRuntime();
       const resolveCandidatePaths = (entry: SessionEntry): string[] =>
         entry.sessionId
@@ -1311,19 +1311,14 @@ async function deleteSessionEntryLifecycleInternal(
       const removedTranscriptPaths = new Set(removedEntries.flatMap(resolveCandidatePaths));
       // Aliases can share either an ID or a file independently. The resolved
       // path set is the only safe deletion boundary across both relationships.
-      for (const transcriptPath of removedTranscriptPaths) {
-        if (referencedTranscriptPaths.has(transcriptPath) || !fs.existsSync(transcriptPath)) {
-          continue;
-        }
-        try {
-          archivedTranscripts.push({
-            sourcePath: transcriptPath,
-            archivedPath: archiveFileOnDisk(transcriptPath, "deleted"),
-          });
-        } catch {
-          // Match multi-candidate archival: one failed file must not block row deletion.
-        }
-      }
+      archivedTranscripts.push(
+        ...archiveSessionTranscriptPaths({
+          paths: Array.from(removedTranscriptPaths).filter(
+            (transcriptPath) => !referencedTranscriptPaths.has(transcriptPath),
+          ),
+          reason: "deleted",
+        }),
+      );
     }
     const result: DeleteSessionEntryLifecycleResult = {
       archivedTranscripts,
