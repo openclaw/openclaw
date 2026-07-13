@@ -2591,7 +2591,7 @@ describe("archiveSessionTranscripts", () => {
       fs.mkdirSync(mainSessionsDir, { recursive: true });
       fs.mkdirSync(opsSessionsDir, { recursive: true });
 
-      const storePath = path.join(mainSessionsDir, "sessions.json");
+      const crossStorePath = path.join(mainSessionsDir, "sessions.json");
       const sessionId = "sess-cross-archive-1";
       const crossTranscriptPath = path.join(opsSessionsDir, `${sessionId}.jsonl`);
       fs.writeFileSync(crossTranscriptPath, '{"type":"session"}\n', "utf-8");
@@ -2599,7 +2599,7 @@ describe("archiveSessionTranscripts", () => {
       withEnv({ OPENCLAW_HOME: crossTmpDir }, () => {
         const archived = archiveSessionTranscripts({
           sessionId,
-          storePath,
+          storePath: crossStorePath,
           sessionFile: crossTranscriptPath,
           agentId: "main",
           reason: "reset",
@@ -2665,15 +2665,21 @@ describe("archiveSessionTranscripts", () => {
     try {
       fs.mkdirSync(path.join(poisonTmpDir, "agents", "main", "sessions"), { recursive: true });
 
-      const storePath = path.join(poisonTmpDir, "agents", "main", "sessions", "sessions.json");
+      const poisonStorePath = path.join(
+        poisonTmpDir,
+        "agents",
+        "main",
+        "sessions",
+        "sessions.json",
+      );
       const sessionId = "sess-poison-store-1";
-      const validPath = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+      const validPath = path.join(path.dirname(poisonStorePath), `${sessionId}.jsonl`);
       fs.writeFileSync(validPath, '{"type":"session"}\n', "utf-8");
 
       withEnv({ OPENCLAW_HOME: poisonTmpDir }, () => {
         const archived = archiveSessionTranscripts({
           sessionId,
-          storePath,
+          storePath: poisonStorePath,
           sessionFile: "/etc/passwd",
           agentId: "main",
           reason: "deleted",

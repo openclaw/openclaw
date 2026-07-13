@@ -416,39 +416,27 @@ export function archiveSessionTranscriptsDetailed(opts: {
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
-
-  // Build containment roots that match the resolver's validated boundaries.
-  // The resolver accepts candidates from the store directory, sibling agent
-  // sessions directories, and the legacy global sessions directory. Using the
-  // same multi-root set here preserves explicit custom and cross-agent
-  // candidates while still enforcing path containment for security.
+  // Multi-root containment matching resolver boundary.
   const home = resolveRequiredHomeDir(process.env, os.homedir);
   const containmentRoots: string[] = [];
   if (opts.storePath) {
     const sessionsDir = canonicalizePathForComparison(path.dirname(opts.storePath));
     containmentRoots.push(sessionsDir);
-    // When the store path follows the .../agents/<id>/sessions/ convention,
-    // add the parent agents directory as a containment root so sibling-agent
-    // cross-agent candidates are also accepted.
+    // Parent agents dir for sibling-agent cross-agent candidates
     if (path.basename(sessionsDir) === "sessions") {
       containmentRoots.push(canonicalizePathForComparison(path.resolve(sessionsDir, "..", "..")));
     }
   } else if (opts.agentId) {
-    // Without a store path the resolver uses the agent sessions dir directly.
     const agentSessionDir = canonicalizePathForComparison(
       path.dirname(resolveSessionTranscriptPath(opts.sessionId, opts.agentId)),
     );
-    containmentRoots.push(agentSessionDir);
-    // Add the parent agents dir so sibling-agent candidates stay contained.
-    containmentRoots.push(canonicalizePathForComparison(path.resolve(agentSessionDir, "..", "..")));
+    containmentRoots.push(
+      agentSessionDir,
+      canonicalizePathForComparison(path.resolve(agentSessionDir, "..", "..")),
+    );
   }
-  // Legacy global sessions directory is always a valid containment root.
+  // Legacy global sessions dir; reject custom paths when no trusted root.
   containmentRoots.push(canonicalizePathForComparison(path.join(home, ".openclaw", "sessions")));
-  // When storePath and agentId are both absent, there is no independently trusted
-  // session root to validate against. Without trusted roots, a custom sessionFile
-  // candidate that falls outside the legacy sessions directory is rejected.
-  // This prevents an arbitrary external .jsonl path from authorizing itself.
-
   for (const candidate of resolveSessionTranscriptCandidates(
     opts.sessionId,
     opts.storePath,
