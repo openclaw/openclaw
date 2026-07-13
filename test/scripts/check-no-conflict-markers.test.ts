@@ -212,7 +212,7 @@ describe("check-no-conflict-markers", () => {
     }
 
     expect(error).toBeDefined();
-    const stderr = (error as NodeJS.ErrnoException).stderr as string;
+    const stderr = (error as { stderr?: string }).stderr ?? "";
     expect(stderr).toContain("Found unresolved merge conflict markers:");
     expect(stderr).toContain(`- ${conflictFile}:1,3,5`);
   });
