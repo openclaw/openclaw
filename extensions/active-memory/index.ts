@@ -12,28 +12,22 @@ import {
   setMinimumTimeoutMsForTests,
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
-import {
-  buildMetadata,
-  buildPromptPrefix,
-  buildQuery,
-  buildSearchQuery,
-  extractRecentTurns,
-} from "./prompt.js";
+import { buildMetadata, buildPromptPrefix } from "./prompt.js";
+import { buildQuery, buildSearchQuery, extractRecentTurns } from "./query.js";
 import {
   buildCacheKey,
   buildCircuitBreakerKey,
   getCachedResult,
   getCircuitBreakerEntry,
   isCircuitBreakerOpen,
-  maybeResolveActiveRecall,
   resetActiveRecallStateForTests,
   setCachedResult,
   shouldCacheResult,
   toSingleLineLogValue,
-} from "./recall.js";
+} from "./recall-state.js";
+import { maybeResolveActiveRecall } from "./recall.js";
 import {
   ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
-  buildPluginStatusLine,
   formatActiveMemoryCommandHelp,
   isActiveMemoryGloballyEnabled,
   isAllowedChatId,
@@ -42,21 +36,26 @@ import {
   isEnabledForAgent,
   isSessionActiveMemoryDisabled,
   lacksAdminToMutateActiveMemoryGlobal,
-  persistPluginStatusLines,
-  resolveCanonicalSessionKeyFromSessionId,
   resolveCommandSessionKey,
-  resolveStatusUpdateAgentId,
   setSessionActiveMemoryDisabled,
   shouldSkipActiveMemoryForHarnessSession,
   updateActiveMemoryGlobalEnabledInConfig,
+} from "./session-policy.js";
+import {
+  buildPluginStatusLine,
+  persistPluginStatusLines,
+  resolveCanonicalSessionKeyFromSessionId,
+  resolveStatusUpdateAgentId,
 } from "./session.js";
 import {
-  createActiveMemoryHookDeadline,
-  hasUsableMemoryResultInSessionRecord,
-  readActiveMemorySearchDebug,
   readPartialAssistantText,
   resetActiveMemoryTranscriptForTests,
   setTimeoutPartialDataGraceMsForTests,
+} from "./transcript-result.js";
+import { readActiveMemorySearchDebug } from "./transcript-watch.js";
+import {
+  createActiveMemoryHookDeadline,
+  hasUsableMemoryResultInSessionRecord,
 } from "./transcript.js";
 import {
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
