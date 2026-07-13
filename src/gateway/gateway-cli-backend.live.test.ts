@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  __testing as cliBackendsTesting,
+  testing as cliBackendsTesting,
   resolveCliBackendConfig,
   resolveCliBackendLiveTest,
 } from "../agents/cli-backends.js";
@@ -136,7 +136,7 @@ function openAiProviderConfigForCodexCli(
   modelKey: string,
 ): NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>["openai"] {
   const parsed = parseModelRef(modelKey, DEFAULT_PROVIDER);
-  const modelId = parsed?.model?.trim() || "gpt-5.5";
+  const modelId = parsed?.model?.trim() || "gpt-5.6-luna";
   return {
     api: "openai-responses",
     baseUrl: "https://api.openai.com/v1",

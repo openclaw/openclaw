@@ -1,6 +1,7 @@
 // Signal plugin module implements monitor behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -57,6 +58,7 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import { materializeSignalPresentationFallback } from "./presentation-fallback.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -406,15 +408,16 @@ export async function deliverReplies(params: {
       messageId: string;
       meta: { signalVisibleText: string };
     }> = [];
+    const presentationPayload = materializeSignalPresentationFallback(payload);
     const deliveredPayload =
       addSignalApprovalReactionHintToStructuredPayload({
         cfg: params.cfg,
         accountId,
         to: target,
-        payload,
+        payload: presentationPayload,
         targetAuthor: account,
         targetAuthorUuid: accountUuid,
-      }) ?? payload;
+      }) ?? presentationPayload;
     const reply = resolveSendableOutboundReplyParts(deliveredPayload);
     const nextNativeReply = createSignalNativeReplyResolver({
       payload: deliveredPayload,
@@ -496,16 +499,26 @@ function resolveSignalNativeReplyOptions(params: {
     return {};
   }
   const payloadReplyToId = normalizeOptionalString(params.payload.replyToId);
-  const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
-  if (!payloadReplyToId || !contextReplyToId || payloadReplyToId !== contextReplyToId) {
+  const isExplicitCurrentReply =
+    params.payload.replyToTag === true || params.payload.replyToCurrent === true;
+  if (
+    !payloadReplyToId &&
+    !isExplicitCurrentReply &&
+    params.replyContext?.allowImplicitCurrentMessage === false
+  ) {
     return {};
   }
+  const contextReplyToId = normalizeOptionalString(params.replyContext?.replyToId);
+  if (!contextReplyToId || (payloadReplyToId && payloadReplyToId !== contextReplyToId)) {
+    return {};
+  }
+  const replyToId = payloadReplyToId ?? contextReplyToId;
   const replyToAuthor = normalizeOptionalString(params.replyContext?.author);
   if (!replyToAuthor) {
-    return { replyToId: payloadReplyToId };
+    return { replyToId };
   }
   return {
-    replyToId: payloadReplyToId,
+    replyToId,
     replyToAuthor,
     replyToBody: params.replyContext?.body ?? "",
   };
@@ -690,7 +703,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       account,
       accountUuid: accountInfo.config.accountUuid,
       accountId: accountInfo.accountId,
-      blockStreaming: accountInfo.config.blockStreaming,
+      blockStreaming: resolveChannelStreamingBlockEnabled(accountInfo.config),
       historyLimit,
       groupHistories,
       textLimit,

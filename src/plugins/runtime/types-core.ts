@@ -73,6 +73,53 @@ type RuntimeSessionStoreEntrySummary = {
   sessionKey: string;
   entry: RuntimeSessionEntry;
 };
+type RuntimeCreateSessionEntryResult = {
+  key: string;
+  agentId: string;
+  sessionId: string;
+  entry: RuntimeSessionEntry;
+};
+type RuntimeCreateSessionEntryFinalPatch = {
+  pluginExtensions: RuntimeSessionEntry["pluginExtensions"];
+};
+type RuntimeCreateSessionEntryBaseParams = {
+  cfg: import("../../config/types.openclaw.js").OpenClawConfig;
+  key: string;
+  agentId?: string;
+  label?: string;
+  spawnedCwd?: string;
+  initialEntry:
+    | {
+        agentHarnessId: string;
+        modelSelectionLocked?: true;
+        pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
+      }
+    | {
+        cliBackendId: string;
+        model: string;
+        cliSessionBinding: import("../../config/sessions/types.js").CliSessionBinding;
+        modelSelectionLocked: true;
+        pluginExtensions?: RuntimeSessionEntry["pluginExtensions"];
+        /** Registry-injected owner; plugin callers cannot select another owner. */
+        pluginOwnerId?: string;
+      };
+};
+type RuntimeCreateSessionEntryParams = RuntimeCreateSessionEntryBaseParams &
+  (
+    | {
+        /** Retry an interrupted initializer only when persisted trusted state matches exactly. */
+        recoverMatchingInitialEntry: true;
+        afterCreate: (
+          created: RuntimeCreateSessionEntryResult,
+        ) => Promise<RuntimeCreateSessionEntryFinalPatch>;
+      }
+    | {
+        recoverMatchingInitialEntry?: never;
+        afterCreate?: (
+          created: RuntimeCreateSessionEntryResult,
+        ) => Promise<RuntimeCreateSessionEntryFinalPatch | void>;
+      }
+  );
 type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
   fallbackEntry?: RuntimeSessionEntry;
   maintenanceConfig?: import("../../config/sessions/store.js").ResolvedSessionMaintenanceConfigInput;
@@ -248,6 +295,9 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      createSessionEntry: (
+        params: RuntimeCreateSessionEntryParams,
+      ) => Promise<RuntimeCreateSessionEntryResult>;
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
@@ -260,37 +310,9 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
-      /**
-       * @deprecated Use getSessionEntry/listSessionEntries for reads and
-       * patchSessionEntry/upsertSessionEntry for writes. This whole-store
-       * helper is kept only during the transition before SQLite migration.
-       * Callers must migrate away from reading sessions.json directly.
-       */
-      loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
-      /**
-       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-       * whole-store helper is kept only during the transition before SQLite
-       * migration. Callers must migrate away from writing sessions.json
-       * directly.
-       */
-      saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
-      /**
-       * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
-       * whole-store helper is kept only during the transition before SQLite
-       * migration. Callers must migrate away from updating sessions.json
-       * directly.
-       */
-      updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
-      /**
-       * @deprecated Use getSessionEntry to read session metadata by
-       * agent/session identity. This file-path helper is kept only during the
-       * transition before SQLite migration. Callers must migrate away from
-       * resolving transcript file paths directly.
-       */
-      resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };
   system: {
@@ -409,6 +431,14 @@ export type PluginRuntimeCore = {
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
+    acquireLocalService: (
+      target: {
+        providerId: string;
+        baseUrl: string;
+        headers?: HeadersInit;
+      },
+      signal?: AbortSignal | null,
+    ) => Promise<{ release: () => void } | undefined>;
   };
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */

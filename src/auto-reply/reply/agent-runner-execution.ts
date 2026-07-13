@@ -1,5 +1,6 @@
 /** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -564,7 +565,7 @@ function collapseRepeatedFailureDetail(message: string): string {
     .map((part) => part.trim())
     .filter(Boolean);
   if (parts.length >= 2 && parts.every((part) => part === parts[0])) {
-    return parts[0];
+    return expectDefined(parts[0], "parts entry at 0");
   }
   return message.trim();
 }
@@ -694,7 +695,7 @@ function buildMissingApiKeyFailureText(input: { message: string; error?: unknown
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (provider === "openai") {
     return '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.';
@@ -1518,7 +1519,9 @@ async function runAgentTurnWithFallbackInternal(
     }
     return effectiveRun;
   };
-  let liveModelSwitchRuntimeEntry: Pick<SessionEntry, "agentRuntimeOverride"> | undefined;
+  let liveModelSwitchRuntimeEntry:
+    | Pick<SessionEntry, "agentHarnessId" | "agentRuntimeOverride" | "modelSelectionLocked">
+    | undefined;
   const applyLiveModelSwitchToRun = (
     run: FollowupRun["run"],
     err: LiveSessionModelSwitchError,
@@ -1978,38 +1981,52 @@ async function runAgentTurnWithFallbackInternal(
               model,
               thinkLevel: candidateThinkLevel,
             });
-            const { sessionRuntimeOverride, cliExecutionProvider } = agentTurnTiming.measureSync(
-              "fallback_resolve_runtime",
-              () => {
+            const { sessionRuntimeOverride, cliExecutionProvider, useCliExecution } =
+              agentTurnTiming.measureSync("fallback_resolve_runtime", () => {
+                const activeSessionEntry =
+                  liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry();
                 const resolvedSessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
                   provider,
-                  entry: liveModelSwitchRuntimeEntry ?? params.getActiveSessionEntry(),
+                  entry: activeSessionEntry,
                   cfg: runtimeConfig,
                 });
+                // A locked harness owns the transcript. A configured CLI backend with the
+                // same id must not steal dispatch from that persisted harness.
+                const locksPersistedHarness =
+                  activeSessionEntry?.modelSelectionLocked === true &&
+                  normalizeLowercaseStringOrEmpty(activeSessionEntry.agentHarnessId) ===
+                    resolvedSessionRuntimeOverride;
                 const resolvedSelectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
                   config: runtimeConfig,
                 });
-                const resolvedCliExecutionProvider =
-                  (resolvedSessionRuntimeOverride &&
+                const pinnedCliRuntime =
+                  !locksPersistedHarness &&
+                  resolvedSessionRuntimeOverride &&
                   isCliProvider(resolvedSessionRuntimeOverride, runtimeConfig)
                     ? resolvedSessionRuntimeOverride
-                    : undefined) ??
-                  resolveCliRuntimeExecutionProvider({
-                    provider,
-                    cfg: runtimeConfig,
-                    agentId: params.followupRun.run.agentId,
-                    modelId: model,
-                    authProfileId: resolvedSelectedAuthProfile.authProfileId,
-                  }) ??
-                  provider;
+                    : undefined;
+                const resolvedCliExecutionProvider =
+                  pinnedCliRuntime ??
+                  (resolvedSessionRuntimeOverride
+                    ? provider
+                    : (resolveCliRuntimeExecutionProvider({
+                        provider,
+                        cfg: runtimeConfig,
+                        agentId: params.followupRun.run.agentId,
+                        modelId: model,
+                        authProfileId: resolvedSelectedAuthProfile.authProfileId,
+                      }) ?? provider));
                 return {
                   sessionRuntimeOverride: resolvedSessionRuntimeOverride,
                   cliExecutionProvider: resolvedCliExecutionProvider,
+                  useCliExecution:
+                    pinnedCliRuntime !== undefined ||
+                    (!resolvedSessionRuntimeOverride &&
+                      isCliProvider(resolvedCliExecutionProvider, runtimeConfig)),
                 };
-              },
-            );
+              });
 
-            if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+            if (useCliExecution) {
               const cliSessionBinding = getCliSessionBinding(
                 params.getActiveSessionEntry(),
                 cliExecutionProvider,
@@ -3046,7 +3063,13 @@ async function runAgentTurnWithFallbackInternal(
         : isFailoverError(err)
           ? err.reason === "billing"
           : isBillingErrorMessage(message);
-      const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
+      // Prefer structured FailoverError reasons over message-text heuristics so
+      // typed context-overflow/transient failures are not misclassified when the
+      // error string lacks overflow/HTTP status tokens.
+      const isContextOverflow =
+        !isBilling &&
+        ((isFailoverError(err) && err.reason === "context_overflow") ||
+          isLikelyContextOverflowError(message));
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
       // the targeted re-auth/failover copy is surfaced instead of the generic
@@ -3061,7 +3084,11 @@ async function runAgentTurnWithFallbackInternal(
         !shouldSurfaceToControlUi
           ? classifyProviderRequestError(err)
           : undefined;
-      const isTransientHttp = isTransientHttpError(message);
+      // Typed overloaded failures stay out of the transient retry: they surface
+      // dedicated overloaded copy immediately instead of being retried silently.
+      const isTransientHttp =
+        isTransientHttpError(message) ||
+        (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
 
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its

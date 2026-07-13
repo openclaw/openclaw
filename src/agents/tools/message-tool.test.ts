@@ -722,18 +722,12 @@ describe("message tool secret scoping", () => {
     });
     const defaultTool = createMessageTool();
 
-    expect(scopedTool.description).toContain(
-      'use action="send" with message for visible replies to the current source conversation',
-    );
-    expect(scopedTool.description).toContain("target defaults to the current source conversation");
-    expect(scopedTool.description).toContain("Normal final answers stay private");
-    expect(explicitTargetTool.description).toContain("Include target when sending");
-    expect(explicitTargetTool.description).not.toContain(
-      "target defaults to the current source conversation",
-    );
-    expect(defaultTool.description).not.toContain(
-      "visible replies to the current source conversation",
-    );
+    expect(scopedTool.description).toContain('visible reply: action="send" + message');
+    expect(scopedTool.description).toContain("target defaults current source");
+    expect(scopedTool.description).toContain("Final answer private");
+    expect(explicitTargetTool.description).toContain("send needs target");
+    expect(explicitTargetTool.description).not.toContain("target defaults current source");
+    expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
   });
 
   it("forwards source reply delivery mode through createOpenClawTools", () => {
@@ -742,9 +736,7 @@ describe("message tool secret scoping", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     }).find((candidate) => candidate.name === "message");
 
-    expect(tool?.description).toContain(
-      'use action="send" with message for visible replies to the current source conversation',
-    );
+    expect(tool?.description).toContain('visible reply: action="send" + message');
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {
@@ -1488,7 +1480,7 @@ describe("message tool delivery mode schema", () => {
       | undefined;
 
     expect(bestEffort?.type).toBe("boolean");
-    expect(bestEffort?.description).toContain("required durable delivery");
+    expect(bestEffort?.description).toContain("requiring durable delivery");
   });
 });
 
@@ -1938,13 +1930,28 @@ describe("message tool schema scoping", () => {
       expect(properties).toHaveProperty("presentation");
       expect(presentationSchemaJson).toContain('"action"');
       expect(presentationSchemaJson).toContain('"command"');
+      expect(presentationSchemaJson).toContain('"const":"url"');
+      expect(presentationSchemaJson).toContain('"const":"web-app"');
+      expect(presentationSchemaJson).not.toContain('"const":"approval"');
       expect(presentationSchemaJson).toContain('"chartType"');
       expect(presentationSchemaJson).toContain('"pie"');
+      expect(presentationSchemaJson).toContain('"table"');
+      expect(presentationSchemaJson).toContain('"caption"');
+      expect(presentationSchemaJson).toContain('"headers"');
+      expect(presentationSchemaJson).toContain('"rows"');
+      expect(presentationSchemaJson).toContain('"rowHeaderColumnIndex"');
       expect(presentationSchemaJson).not.toContain('"maxItems"');
       expect(presentationSchemaJson).not.toContain('"maxLength"');
       expect(presentationSchemaJson).not.toContain('"exclusiveMinimum"');
       expect(presentationBlockItemSchema).toMatchObject({ type: "object" });
       expect(presentationBlockItemSchema).not.toHaveProperty("anyOf");
+      expect(
+        (
+          presentationBlockItemSchema as {
+            properties?: { rows?: { items?: { items?: unknown } } };
+          }
+        ).properties?.rows?.items?.items,
+      ).toEqual({ type: ["string", "number"] });
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -2307,8 +2314,7 @@ describe("message tool schema scoping", () => {
 
     expect(getActionEnum(properties)).toContain("read");
     expectStringSchema(properties.messageId, {
-      description:
-        "Target message id for read/react/edit/delete/pin/unpin. Reaction-like defaults current inbound id when available.",
+      description: "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
     });
   });
 });
@@ -2384,7 +2390,7 @@ describe("message tool description", () => {
     const userId = properties.userId as { description?: string } | undefined;
 
     expect(userId?.description).toMatch(/member-info/i);
-    expect(userId?.description).toMatch(/not.*`target`|does not accept.*target/i);
+    expect(userId?.description).toMatch(/not.*target|does not accept.*target/i);
   });
 
   it("hides iMessage group actions for DM targets", () => {
@@ -2548,7 +2554,7 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    expect(tool.description).toContain('Use action="read" with threadId');
+    expect(tool.description).toContain('action="read" + threadId');
   });
 
   it("omits the thread read hint when the current channel does not support read", () => {
@@ -2569,7 +2575,7 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    expect(tool.description).not.toContain('Use action="read" with threadId');
+    expect(tool.description).not.toContain('action="read" + threadId');
   });
 
   it("includes the thread read hint in the generic fallback when configured actions include read", () => {
@@ -2590,7 +2596,7 @@ describe("message tool description", () => {
     });
 
     expect(tool.description).toContain("Supports actions:");
-    expect(tool.description).toContain('Use action="read" with threadId');
+    expect(tool.description).toContain('action="read" + threadId');
   });
 
   it("includes broadcast in the generic fallback description", () => {
@@ -2800,6 +2806,45 @@ describe("message tool reasoning tag sanitization", () => {
         {
           type: "select",
           options: [{ label: "Main", value: "main" }],
+        },
+      ],
+    });
+  });
+
+  it("sanitizes mixed-case table captions, headers, and string cells", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          blocks: [
+            {
+              type: "Table",
+              caption: "  <think>caption rationale</think>Pipeline report  ",
+              headers: [" <think>header rationale</think>Account ", " ARR "],
+              rows: [
+                [" <think>cell rationale</think>Acme ", 125000],
+                [" Globex ", 82000],
+              ],
+              rowHeaderColumnIndex: 0,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "Table",
+          caption: "Pipeline report",
+          headers: ["Account", "ARR"],
+          rows: [
+            ["Acme", 125000],
+            ["Globex", 82000],
+          ],
+          rowHeaderColumnIndex: 0,
         },
       ],
     });
@@ -3034,6 +3079,16 @@ describe("message tool boot-echo guard", () => {
               buttons: [
                 { label: "Status", url: echoedText },
                 { label: "App", webApp: { url: echoedText }, web_app: { url: echoedText } },
+                {
+                  label: "Typed status",
+                  action: { type: "url", url: echoedText },
+                  value: "must-not-become-active",
+                },
+                {
+                  label: "Typed app",
+                  action: { type: "web-app", url: echoedText },
+                  url: "https://legacy.example.test",
+                },
               ],
             },
           ],
@@ -3047,7 +3102,12 @@ describe("message tool boot-echo guard", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [{ label: "Status" }, { label: "App" }],
+          buttons: [
+            { label: "Status" },
+            { label: "App" },
+            { label: "Typed status" },
+            { label: "Typed app" },
+          ],
         },
       ],
     });

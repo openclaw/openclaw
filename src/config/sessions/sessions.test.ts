@@ -2,13 +2,14 @@
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import * as jsonFiles from "../../infra/json-files.js";
 import { createSuiteTempRootTracker, withTempDirSync } from "../../test-helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
-import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
+import { resolveSessionLifecycleTimestamps, resolveSessionWorkStartError } from "./lifecycle.js";
 import {
   resolveExplicitSessionFilePath,
   resolveSessionFilePath,
@@ -17,7 +18,9 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+import { loadSessionEntry } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
+import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
 import {
   clearSessionStoreCacheForTest,
@@ -351,6 +354,22 @@ describe("session lifecycle timestamps", () => {
   });
 });
 
+describe("session work admission", () => {
+  it("fails closed while trusted session initialization is pending", () => {
+    expect(
+      resolveSessionWorkStartError("agent:main:pending", {
+        sessionId: "pending-session",
+        initializationPending: true,
+      }),
+    ).toContain("still initializing");
+    expect(
+      resolveSessionWorkStartError("agent:main:pending", {
+        sessionId: "pending-session",
+      }),
+    ).toBeUndefined();
+  });
+});
+
 describe("session store writer queue", () => {
   const writerFixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-writer-test-" });
 
@@ -624,7 +643,7 @@ describe("session store writer queue", () => {
     await updateSessionStore(
       storePath,
       async (store) => {
-        store[key].displayName = "saved once";
+        expectDefined(store[key], "store[key] test invariant").displayName = "saved once";
       },
       { skipMaintenance: true },
     );
@@ -687,7 +706,7 @@ describe("session store writer queue", () => {
       await updateSessionStore(
         storePath,
         async (store) => {
-          store[key].displayName = "saved once";
+          expectDefined(store[key], "store[key] test invariant").displayName = "saved once";
         },
         { skipMaintenance: true },
       );
@@ -788,12 +807,15 @@ describe("session store writer queue", () => {
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
       const loaded = loadSessionStore(storePath, { skipCache: true, clone: false });
-      loaded[key].sessionId = "mutated-owned-store";
+      expectDefined(loaded[key], "loaded[key] test invariant").sessionId = "mutated-owned-store";
 
       expect(parseSpy).toHaveBeenCalledTimes(1);
-      expect(loadSessionStore(storePath, { skipCache: true, clone: false })[key].sessionId).toBe(
-        "s-owned-skip-cache",
-      );
+      expect(
+        expectDefined(
+          loadSessionStore(storePath, { skipCache: true, clone: false })[key],
+          "loadSessionStore(storePath, { skipCache: true, clone: false })[key] test invariant",
+        ).sessionId,
+      ).toBe("s-owned-skip-cache");
     } finally {
       parseSpy.mockRestore();
     }
@@ -1004,7 +1026,7 @@ describe("session store writer queue", () => {
     });
 
     await updateSessionStore(storePath, async (store) => {
-      const entry = store[key];
+      const entry = expectDefined(store[key], "store[key] test invariant");
       entry.updatedAt = Date.now();
     });
 
@@ -1075,15 +1097,14 @@ describe("session store writer queue", () => {
     });
 
     expect(result?.acp).toBeUndefined();
-    const store = loadSessionStore(storePath);
-    expect(store[key]?.acp).toBeUndefined();
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.acp).toBeUndefined();
   });
 });
 
 describe("resolveAndPersistSessionFile", () => {
   const fixture = useTempSessionsFixture("session-file-test-");
 
-  it("persists fallback topic transcript paths for sessions without sessionFile", async () => {
+  it("persists SQLite transcript markers for sessions without sessionFile", async () => {
     const sessionId = "topic-session-id";
     const sessionKey = "agent:main:telegram:group:123:topic:456";
     const store = {
@@ -1094,11 +1115,11 @@ describe("resolveAndPersistSessionFile", () => {
     };
     fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
     const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
-    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
+    const expectedSessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
       sessionId,
-      fixture.sessionsDir(),
-      456,
-    );
+      storePath: fixture.storePath(),
+    });
 
     const result = await resolveAndPersistSessionFile({
       sessionId,
@@ -1106,13 +1127,14 @@ describe("resolveAndPersistSessionFile", () => {
       sessionStore,
       storePath: fixture.storePath(),
       sessionEntry: sessionStore[sessionKey],
-      fallbackSessionFile,
+      agentId: "main",
     });
 
-    expect(result.sessionFile).toBe(fallbackSessionFile);
+    expect(result.sessionFile).toBe(expectedSessionFile);
 
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
-    expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
+    expect(loadSessionEntry({ storePath: fixture.storePath(), sessionKey })?.sessionFile).toBe(
+      expectedSessionFile,
+    );
   });
 
   it("creates and persists entry when session is not yet present", async () => {
@@ -1120,23 +1142,28 @@ describe("resolveAndPersistSessionFile", () => {
     const sessionKey = "agent:main:telegram:group:123";
     fs.writeFileSync(fixture.storePath(), JSON.stringify({}), "utf-8");
     const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
-    const fallbackSessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const expectedSessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath: fixture.storePath(),
+    });
 
     const result = await resolveAndPersistSessionFile({
       sessionId,
       sessionKey,
       sessionStore,
       storePath: fixture.storePath(),
-      fallbackSessionFile,
+      agentId: "main",
     });
 
-    expect(result.sessionFile).toBe(fallbackSessionFile);
+    expect(result.sessionFile).toBe(expectedSessionFile);
     expect(result.sessionEntry.sessionId).toBe(sessionId);
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
-    expect(saved[sessionKey]?.sessionFile).toBe(fallbackSessionFile);
+    expect(loadSessionEntry({ storePath: fixture.storePath(), sessionKey })?.sessionFile).toBe(
+      expectedSessionFile,
+    );
   });
 
-  it("rotates to a new transcript path when sessionId changes on the same session key", async () => {
+  it("rotates to a new SQLite transcript marker when sessionId changes on the same session key", async () => {
     const previousSessionId = "old-session-id";
     const nextSessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
@@ -1144,10 +1171,11 @@ describe("resolveAndPersistSessionFile", () => {
       previousSessionId,
       fixture.sessionsDir(),
     );
-    const expectedNextSessionFile = resolveSessionTranscriptPathInDir(
-      nextSessionId,
-      fixture.sessionsDir(),
-    );
+    const expectedNextSessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: nextSessionId,
+      storePath: fixture.storePath(),
+    });
     const store = {
       [sessionKey]: {
         sessionId: previousSessionId,
@@ -1164,14 +1192,15 @@ describe("resolveAndPersistSessionFile", () => {
       sessionStore,
       storePath: fixture.storePath(),
       sessionEntry: sessionStore[sessionKey],
-      sessionsDir: fixture.sessionsDir(),
+      agentId: "main",
     });
 
     expect(result.sessionFile).toBe(expectedNextSessionFile);
     expect(result.sessionFile).not.toBe(previousSessionFile);
     expect(result.sessionEntry.sessionFile).toBe(expectedNextSessionFile);
 
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
-    expect(saved[sessionKey]?.sessionFile).toBe(expectedNextSessionFile);
+    expect(loadSessionEntry({ storePath: fixture.storePath(), sessionKey })?.sessionFile).toBe(
+      expectedNextSessionFile,
+    );
   });
 });

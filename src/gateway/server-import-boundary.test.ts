@@ -57,23 +57,61 @@ describe("gateway startup import boundaries", () => {
     expect(validation).not.toContain("commands/doctor");
   });
 
-  it("marks gateway close before awaiting gateway_stop hooks", () => {
+  it("loads the worker bootstrap runtime only when an operation needs it", () => {
+    const serverImpl = readSource("src/gateway/server.impl.ts");
+    const runtimeLoad = "await loadWorkerEnvironmentRuntimeModule()";
+    const prepareStart = serverImpl.indexOf("const prepareWorkerInstallation = async");
+    const serviceStart = serverImpl.indexOf("const workerEnvironmentService =", prepareStart);
+    const identityStart = serverImpl.indexOf("resolveSshIdentity: async", serviceStart);
+    const bootstrapStart = serverImpl.indexOf("bootstrapWorker: async", serviceStart);
+    const loggerStart = serverImpl.indexOf("logger: log.child", bootstrapStart);
+
+    expect(prepareStart).toBeGreaterThan(-1);
+    expect(serviceStart).toBeGreaterThan(prepareStart);
+    expect(identityStart).toBeGreaterThan(serviceStart);
+    expect(bootstrapStart).toBeGreaterThan(serviceStart);
+    expect(loggerStart).toBeGreaterThan(bootstrapStart);
+    expect(serverImpl.slice(0, prepareStart)).not.toContain(runtimeLoad);
+    expect(serverImpl.slice(prepareStart, serviceStart)).toContain(runtimeLoad);
+    expect(serverImpl.slice(identityStart, bootstrapStart)).toContain(runtimeLoad);
+    expect(serverImpl.slice(bootstrapStart, loggerStart)).toContain(runtimeLoad);
+    expect(serverImpl.slice(bootstrapStart, loggerStart)).toContain(
+      "pinnedHostKey: sshEndpoint.hostKey",
+    );
+    expect(serverImpl.match(/await loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
+  });
+
+  it("fences config reload before gateway teardown and gateway_stop hooks", () => {
     const serverImpl = readSource("src/gateway/server.impl.ts");
     const closeStart = /close:\s*async\s*\([^)]*\)\s*=>/u.exec(serverImpl)?.index ?? -1;
     const hookStart = serverImpl.indexOf("runGlobalGatewayStopSafely", closeStart);
-    const markStart = serverImpl.indexOf("markClosePreludeStarted();", closeStart);
+    const reloadStopStart = serverImpl.indexOf("await beginClosePrelude();", closeStart);
+    const terminalStopStart = serverImpl.indexOf("terminalSessions.disposeAll();", closeStart);
     const markHelperStart = serverImpl.indexOf("const markClosePreludeStarted = () => {");
     const markHelperEnd = serverImpl.indexOf("};", markHelperStart);
+    const beginHelperStart = serverImpl.indexOf("const beginClosePrelude = async () => {");
+    const beginHelperEnd = serverImpl.indexOf("};", beginHelperStart);
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({");
     const postReadyEnd = serverImpl.indexOf("});", postReadyStart);
     const postReadyBlock = serverImpl.slice(postReadyStart, postReadyEnd);
 
     expect(closeStart).toBeGreaterThan(-1);
-    expect(markStart).toBeGreaterThan(closeStart);
-    expect(markStart).toBeLessThan(hookStart);
+    expect(reloadStopStart).toBeGreaterThan(closeStart);
+    expect(reloadStopStart).toBeLessThan(terminalStopStart);
+    expect(reloadStopStart).toBeLessThan(hookStart);
     expect(markHelperStart).toBeGreaterThan(-1);
     expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
       "clearPostReadyMaintenanceTimer();",
+    );
+    expect(serverImpl.slice(markHelperStart, markHelperEnd)).toContain(
+      "cronReconciliation.invalidate();",
+    );
+    expect(beginHelperStart).toBeGreaterThan(-1);
+    expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
+      "markClosePreludeStarted();",
+    );
+    expect(serverImpl.slice(beginHelperStart, beginHelperEnd)).toContain(
+      "await stopConfigReloaderForClose()",
     );
     expect(postReadyStart).toBeGreaterThan(-1);
     expect(postReadyBlock).toContain("isClosing: () => closePreludeStarted");

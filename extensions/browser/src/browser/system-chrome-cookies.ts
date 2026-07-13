@@ -38,7 +38,7 @@ export type CookieImportCounts = {
 };
 
 type KeychainEntry = { service: string; account: string };
-export type KeychainSecretReader = (entry: KeychainEntry) => Promise<Buffer>;
+export type KeychainSecretReader = (entry: KeychainEntry, signal?: AbortSignal) => Promise<Buffer>;
 
 const KEYCHAIN_ENTRIES: Record<SystemBrowser, KeychainEntry> = {
   chrome: { service: "Chrome Safe Storage", account: "Chrome" },
@@ -67,14 +67,23 @@ function isAsciiWhitespace(value: number): boolean {
 }
 
 /** Read the browser Safe Storage secret. The OS consent prompt is intentional. */
-export async function readKeychainSecret(entry: KeychainEntry): Promise<Buffer> {
+async function readKeychainSecret(entry: KeychainEntry, signal?: AbortSignal): Promise<Buffer> {
+  signal?.throwIfAborted();
   return await new Promise((resolve, reject) => {
     execFile(
       "security",
       ["find-generic-password", "-w", "-s", entry.service, "-a", entry.account],
-      { encoding: "buffer" },
+      { encoding: "buffer", signal },
       (error, stdout) => {
         if (error) {
+          if (signal?.aborted) {
+            reject(
+              signal.reason instanceof Error
+                ? signal.reason
+                : new Error("Browser cookie import aborted.", { cause: signal.reason ?? error }),
+            );
+            return;
+          }
           reject(
             new Error(
               `could not read ${entry.service} from macOS Keychain; approve the prompt and retry`,
@@ -85,10 +94,10 @@ export async function readKeychainSecret(entry: KeychainEntry): Promise<Buffer> 
         const raw = Buffer.from(stdout);
         let start = 0;
         let end = raw.length;
-        while (start < end && isAsciiWhitespace(raw[start])) {
+        while (start < end && isAsciiWhitespace(raw.readUInt8(start))) {
           start += 1;
         }
-        while (end > start && isAsciiWhitespace(raw[end - 1])) {
+        while (end > start && isAsciiWhitespace(raw.readUInt8(end - 1))) {
           end -= 1;
         }
         const secret = Buffer.from(raw.subarray(start, end));
@@ -192,6 +201,7 @@ export async function decryptChromeCookieRows(params: {
   rows: readonly ChromeCookieRow[];
   domains?: readonly string[];
   readSecret?: KeychainSecretReader;
+  signal?: AbortSignal;
 }): Promise<{ cookies: PlaywrightCookie[]; counts: CookieImportCounts; domains: string[] }> {
   const counts: CookieImportCounts = {
     total: params.rows.length,
@@ -216,13 +226,14 @@ export async function decryptChromeCookieRows(params: {
   }
 
   const readSecret = params.readSecret ?? readKeychainSecret;
-  const secret = await readSecret(KEYCHAIN_ENTRIES[params.browser]);
+  const secret = await readSecret(KEYCHAIN_ENTRIES[params.browser], params.signal);
   let key: Buffer | undefined;
   const cookies: PlaywrightCookie[] = [];
   try {
     const decryptionKey = crypto.pbkdf2Sync(secret, "saltysalt", 1003, 16, "sha1");
     key = decryptionKey;
     for (const row of selected) {
+      params.signal?.throwIfAborted();
       const encrypted = Buffer.from(row.encrypted_value);
       if (encrypted.length > 0 && !encrypted.subarray(0, 3).equals(V10_PREFIX)) {
         counts.skipped += 1;
@@ -254,6 +265,7 @@ export async function readChromeCookiesDatabase(params: {
   databasePath: string;
   domains?: readonly string[];
   readSecret?: KeychainSecretReader;
+  signal?: AbortSignal;
 }) {
   const database = new DatabaseSync(params.databasePath, { readOnly: true });
   try {
@@ -265,6 +277,7 @@ export async function readChromeCookiesDatabase(params: {
       rows,
       domains: params.domains,
       readSecret: params.readSecret,
+      signal: params.signal,
     });
   } finally {
     database.close();

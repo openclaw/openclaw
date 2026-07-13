@@ -13,7 +13,6 @@ import {
   resetConfigPendingChanges,
   saveConfig,
   stageDefaultAgentConfigEntry,
-  updateMcpServerEnabled,
   updateConfigFormValue,
   updateConfigRawValue,
   type ConfigState,
@@ -309,6 +308,51 @@ describe("loadConfig", () => {
 });
 
 describe("createRuntimeConfigCapability", () => {
+  it("publishes the pending save state before the request settles", async () => {
+    const pendingSave = deferred<void>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "config.set") {
+        await pendingSave.promise;
+        return {};
+      }
+      if (method === "config.get") {
+        return {
+          hash: "saved-hash",
+          config: { source: "saved" },
+          valid: true,
+          issues: [],
+          raw: '{"source":"saved"}',
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    applyConfigSnapshot(runtimeConfig.state, {
+      hash: "base-hash",
+      config: { source: "base" },
+      valid: true,
+      issues: [],
+      raw: '{"source":"base"}',
+    });
+    updateConfigFormValue(runtimeConfig.state, ["source"], "draft");
+    const savingStates: boolean[] = [];
+    const unsubscribe = runtimeConfig.subscribe((state) => savingStates.push(state.configSaving));
+
+    const operation = runtimeConfig.save();
+
+    expect(runtimeConfig.state.configSaving).toBe(true);
+    expect(savingStates).toEqual([true]);
+
+    pendingSave.resolve();
+    await expect(operation).resolves.toBe(true);
+    expect(runtimeConfig.state.configSaving).toBe(false);
+    expect(savingStates.at(-1)).toBe(false);
+    unsubscribe();
+    runtimeConfig.dispose();
+  });
+
   it("rejects stale config and schema work after reconnecting the same client", async () => {
     const firstConfig = deferred<ConfigSnapshot>();
     const secondConfig = deferred<ConfigSnapshot>();
@@ -616,40 +660,6 @@ describe("updateConfigFormValue", () => {
       },
     });
     expect(state.configFormDirty).toBe(false);
-  });
-});
-
-describe("updateMcpServerEnabled", () => {
-  it("removes disabled-only MCP overrides when enabling", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      hash: "hash-mcp",
-      config: { mcp: { servers: { local: { enabled: false } } } },
-      valid: true,
-      issues: [],
-      raw: "{}",
-    });
-
-    updateMcpServerEnabled(state, "local", true);
-
-    expect(state.configForm).toEqual({ mcp: { servers: {} } });
-    expect(state.configFormDirty).toBe(true);
-  });
-
-  it("keeps real MCP server configuration when enabling", () => {
-    const state = createState();
-    applyConfigSnapshot(state, {
-      hash: "hash-mcp",
-      config: { mcp: { servers: { local: { command: "node", enabled: false } } } },
-      valid: true,
-      issues: [],
-      raw: "{}",
-    });
-
-    updateMcpServerEnabled(state, "local", true);
-
-    expect(state.configForm).toEqual({ mcp: { servers: { local: { command: "node" } } } });
-    expect(state.configFormDirty).toBe(true);
   });
 });
 

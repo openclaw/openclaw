@@ -1,4 +1,5 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import type { Static } from "typebox";
 import { Type } from "typebox";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
@@ -238,6 +239,9 @@ export const AgentParamsSchema = Type.Object(
       Type.Union([Type.Literal("automatic"), Type.Literal("message_tool_only")]),
     ),
     disableMessageTool: Type.Optional(Type.Boolean()),
+    // Host-owned recovery turns can force every Code Mode exec onto the
+    // restart-safe path even if the model omits or clears the tool argument.
+    forceRestartSafeTools: Type.Optional(Type.Boolean()),
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
@@ -294,3 +298,13 @@ export const WakeParamsSchema = Type.Object(
   },
   { additionalProperties: true }, // external wake senders may attach opaque metadata
 );
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type AgentEvent = Static<typeof AgentEventSchema>;
+export type AgentIdentityParams = Static<typeof AgentIdentityParamsSchema>;
+export type AgentIdentityResult = Static<typeof AgentIdentityResultSchema>;
+export type MessageActionParams = Static<typeof MessageActionParamsSchema>;
+export type PollParams = Static<typeof PollParamsSchema>;
+export type AgentWaitParams = Static<typeof AgentWaitParamsSchema>;
+export type WakeParams = Static<typeof WakeParamsSchema>;

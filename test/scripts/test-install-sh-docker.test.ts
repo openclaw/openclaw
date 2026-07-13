@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
@@ -55,7 +56,7 @@ function extractNonrootNodePreflight(): string {
   if (!match) {
     throw new Error("non-root smoke Node preflight was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "non-root smoke Node preflight capture");
 }
 
 function runNonrootNodePreflight(version: string, options: { sqlite?: boolean } = {}) {
@@ -128,7 +129,7 @@ function extractInstallE2eAgentJsonParser(): string {
   if (!match) {
     throw new Error("install E2E agent JSON parser was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "install E2E agent JSON parser capture");
 }
 
 function normalizeInstallE2eAgentOutput(output: string) {
@@ -158,7 +159,7 @@ function extractInstallSmokeUpdateJsonParser(): string {
   if (!match) {
     throw new Error("install smoke update JSON parser was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "install smoke update JSON parser capture");
 }
 
 function validateInstallSmokeUpdateJson(doctorStep?: Record<string, unknown>) {
@@ -240,7 +241,7 @@ function extractReadPackTarballFilename(): string {
   if (!match) {
     throw new Error("read_pack_tarball_filename helper was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "pack tarball filename helper capture");
 }
 
 function runReadPackTarballFilename(filename: string) {
@@ -275,7 +276,7 @@ function extractEnsureLocalUpdateDistImportClosure(): string {
   if (!match) {
     throw new Error("ensure_local_update_dist_import_closure helper was not found");
   }
-  return match[1];
+  return expectDefined(match[1], "local update import closure helper capture");
 }
 
 type RestorePathEscape = "packages" | "ai";
@@ -290,7 +291,7 @@ function runRestoreLocalDistFixture(
     ["dist/root.txt", "old-root"],
     ["packages/ai/dist/ai.txt", "old-ai"],
     ["packages/ai/package.json", "{}"],
-  ]) {
+  ] as const) {
     const target = join(fixtureRoot, relativePath);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, contents);
@@ -298,7 +299,7 @@ function runRestoreLocalDistFixture(
   for (const [relativePath, contents] of [
     ["app/dist/root.txt", "new-root"],
     ["app/node_modules/@openclaw/ai/dist/ai.txt", "new-ai"],
-  ]) {
+  ] as const) {
     const target = join(imageRoot, relativePath);
     mkdirSync(path.dirname(target), { recursive: true });
     writeFileSync(target, contents);
@@ -872,6 +873,12 @@ printf 'status=%s\\n' "$status"
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
     expect(script).toContain('node "$HARNESS_ROOT/scripts/package-openclaw-for-docker.mjs"');
+    expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(script).toContain('--source-dir "$ROOT_DIR"');
     expect(script).toContain('--pack-json "$pack_json_file"');
     expect(script).toContain("--skip-build");
@@ -1171,6 +1178,12 @@ describe("bun global install smoke", () => {
     const packageHelper = readFileSync(DOCKER_E2E_PACKAGE_HELPER_PATH, "utf8");
 
     expect(script).toContain("node scripts/package-openclaw-for-docker.mjs");
+    expect(script).toContain("--allow-unreleased-changelog");
+    expect(script).toContain("OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG");
+    expect(script).toContain(
+      'if [[ "${OPENCLAW_BUN_GLOBAL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]',
+    );
+    expect(script).toContain("package_args+=(--allow-unreleased-changelog)");
     expect(script).toContain("--skip-build");
     expect(script).toContain("--output-name openclaw-current.tgz");
     expect(script).not.toContain("npm pack --ignore-scripts --json --pack-destination");
@@ -1576,6 +1589,7 @@ chmod +x "$BUN_INSTALL/bin/openclaw"
       "./.github/actions/setup-node-env",
     );
     expect(step("Run installer docker tests").env).toMatchObject({
+      OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG: "${{ inputs.allow_unreleased_changelog }}",
       OPENCLAW_INSTALL_SMOKE_SOURCE_DIR: "${{ github.workspace }}/candidate",
     });
     expect(step("Run installer docker tests").run).toBe("bash scripts/test-install-sh-docker.sh");

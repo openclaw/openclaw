@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Telegram tests cover bot message dispatch plugin behavior.
 import type { Bot } from "grammy";
 import {
@@ -29,6 +30,14 @@ import type { TelegramRuntime } from "./runtime.types.js";
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
 >[0];
+
+function requireInvocationOrder(
+  mock: { mock: { invocationCallOrder: number[] } },
+  index: number,
+  context: string,
+): number {
+  return expectDefined(mock.mock.invocationCallOrder[index], context);
+}
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
@@ -78,12 +87,11 @@ const appendAssistantMirrorMessageByIdentity = vi.hoisted(() =>
     (
       params?: unknown,
     ) => Promise<
-      | { ok: true; sessionFile: string; messageId: string }
+      | { ok: true; messageId: string }
       | { ok: false; reason: string; code?: "blocked" | "session-rebound" }
     >
   >(async () => ({
     ok: true,
-    sessionFile: "/tmp/sessions/s1.jsonl",
     messageId: "m1",
   })),
 );
@@ -205,7 +213,6 @@ const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
   getSessionEntry: getSessionEntry as TelegramBotDeps["getSessionEntry"],
-  loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -325,7 +332,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
     appendAssistantMirrorMessageByIdentity.mockResolvedValue({
       ok: true,
-      sessionFile: "/tmp/sessions/s1.jsonl",
       messageId: "m1",
     });
     loadSessionStore.mockReturnValue({});
@@ -427,8 +433,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
   ) {
     const calls = stream.finalizeToPreview.mock.calls;
     expect(calls.length).toBeGreaterThan(0);
-    const preview = calls[calls.length - 1][0] as { text?: string };
-    expect(preview.text).toBe(barText);
+    const preview = calls.at(-1)?.[0] as { text?: string } | undefined;
+    expect(preview?.text).toBe(barText);
   }
 
   function createContext(overrides?: Partial<TelegramMessageContext>): TelegramMessageContext {
@@ -726,6 +732,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(renderText?.("# Heading")).toEqual({
       text: "Heading",
       parseMode: "HTML",
+      markdownSource: {
+        text: "# Heading",
+        tableMode: "preserve",
+      },
     });
   });
 
@@ -1461,6 +1471,101 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("canonicalizes mixed presentation finals before durable stream-off delivery", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: { messageIds: ["1002"], visibleReplySent: true },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Quarterly results",
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              { type: "text", text: "Executive summary" },
+              { type: "context", text: "Unaudited" },
+              {
+                type: "chart",
+                chartType: "pie",
+                title: "Revenue mix",
+                segments: [
+                  { label: "Product", value: 60 },
+                  { label: "Services", value: 40 },
+                ],
+              },
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage"],
+                rows: [["Acme", "Won"]],
+              },
+              { type: "buttons", buttons: [{ label: "Refresh", value: "refresh" }] },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {});
+    const payload = expectRecordFields(outbound.payload, {
+      text: [
+        "Quarterly results",
+        "FY25 outlook",
+        "Executive summary",
+        "Unaudited",
+        "Revenue mix (pie chart)\n- Product: 60\n- Services: 40",
+        "Pipeline (table)\n- Account: Acme; Stage: Won",
+      ].join("\n\n"),
+    });
+    expect(payload.presentation).toBeUndefined();
+    expect(payload.text).not.toContain("Refresh");
+    expectRecordFields(payload.channelData, {
+      telegram: { buttons: [[{ text: "Refresh", callback_data: "refresh" }]] },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps control-only finals deliverable through durable stream-off delivery", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: { messageIds: ["1003"], visibleReplySent: true },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+      telegramDeps: telegramDepsForTest,
+    });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {});
+    const payload = expectRecordFields(outbound.payload, { text: "Choose an option." });
+    expect(payload.presentation).toBeUndefined();
+    expectRecordFields(payload.channelData, {
+      telegram: { buttons: [[{ text: "Retry", callback_data: "retry" }]] },
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("queues media-only final Telegram replies through outbound delivery when available", async () => {
     deliverInboundReplyWithMessageSendContext.mockResolvedValue({
       status: "handled_visible",
@@ -1792,7 +1897,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       });
 
       const fallback = expectDeliverRepliesParams({ replyToMode: expectedFallbackMode });
-      const [fallbackPayload] = fallback.replies as Array<Record<string, unknown>>;
+      const fallbackPayload = expectDefined(
+        (fallback.replies as Array<Record<string, unknown>>)[0],
+        "unsent suffix fallback payload",
+      );
       expect(fallbackPayload.text).toBe("unsent suffix");
       if (keepsReply) {
         expect(fallbackPayload.replyToId).toBe("1001");
@@ -1833,7 +1941,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
       expect(answerDraftStream.clear).toHaveBeenCalled();
       const fallback = expectDeliverRepliesParams({ replyToMode: expectedFallbackMode });
-      const [fallbackPayload] = fallback.replies as Array<Record<string, unknown>>;
+      const fallbackPayload = expectDefined(
+        (fallback.replies as Array<Record<string, unknown>>)[0],
+        "accepted draft fallback payload",
+      );
       expect(fallbackPayload.text).toBe("final replacement");
       if (keepsReply) {
         expect(fallbackPayload.replyToId).toBe("1001");
@@ -1871,7 +1982,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       });
 
       const media = expectDeliverRepliesParams({ replyToMode: expectedMediaMode });
-      const [mediaPayload] = media.replies as Array<Record<string, unknown>>;
+      const mediaPayload = expectDefined(
+        (media.replies as Array<Record<string, unknown>>)[0],
+        "accepted draft media payload",
+      );
       expect(mediaPayload.mediaUrl).toBe("https://example.com/a.png");
       if (keepsReply) {
         expect(mediaPayload.replyToId).toBe("1001");
@@ -2714,6 +2828,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
   });
 
+  it("materializes table-only finals into the active answer preview", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage", "ARR"],
+                rows: [
+                  ["Acme", "Won", 125000],
+                  ["Globex", "Review", 82000],
+                ],
+              },
+            ],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith(
+      "FY25 outlook\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
+  });
+
   it("appends chart data to final text before active preview finalization", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -2742,10 +2890,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.update).toHaveBeenCalledWith(
-      "Quarterly results\n\nFY25 outlook\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
-    );
-    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
-      expect.stringContaining("Do not duplicate this block"),
+      "Quarterly results\n\nFY25 outlook\n\nDo not duplicate this block\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
     );
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(deliverInboundReplyWithMessageSendContext).not.toHaveBeenCalled();
@@ -3023,8 +3168,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       [trailingFinalStatusText],
     ]);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.forceNewMessage.mock.invocationCallOrder[0]).toBeLessThan(
-      answerDraftStream.update.mock.invocationCallOrder[1],
+    expect(
+      requireInvocationOrder(answerDraftStream.forceNewMessage, 0, "first answer draft rotation"),
+    ).toBeLessThan(
+      requireInvocationOrder(answerDraftStream.update, 1, "second answer draft update"),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -3246,8 +3393,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const secondBlockUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.forceNewMessage,
+      0,
+      "first answer draft rotation",
+    );
+    const secondBlockUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      1,
+      "second answer draft update",
+    );
     expect(rotationOrder).toBeLessThan(secondBlockUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -3290,10 +3445,22 @@ describe("dispatchTelegramMessage draft streaming", () => {
     };
     expect(fallbackDelivery.replies?.[0]?.text).toBe("Site A shows X.");
     expect(fallbackDelivery.transcriptMirror).toBeUndefined();
-    const clearOrder = answerDraftStream.clear.mock.invocationCallOrder[0];
-    const fallbackDeliveryOrder = deliverReplies.mock.invocationCallOrder[0];
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const secondBlockUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[2];
+    const clearOrder = requireInvocationOrder(
+      answerDraftStream.clear,
+      0,
+      "first answer draft clear",
+    );
+    const fallbackDeliveryOrder = requireInvocationOrder(deliverReplies, 0, "first reply delivery");
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.forceNewMessage,
+      0,
+      "first answer draft rotation",
+    );
+    const secondBlockUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      2,
+      "third answer draft update",
+    );
     expect(clearOrder).toBeLessThan(fallbackDeliveryOrder);
     expect(fallbackDeliveryOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(secondBlockUpdateOrder);
@@ -3328,9 +3495,21 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ["Final answer"],
     ]);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    const firstBlockFlushOrder = answerDraftStream.flush.mock.invocationCallOrder[0];
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const secondBlockUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    const firstBlockFlushOrder = requireInvocationOrder(
+      answerDraftStream.flush,
+      0,
+      "first answer draft flush",
+    );
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.forceNewMessage,
+      0,
+      "first answer draft rotation",
+    );
+    const secondBlockUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      1,
+      "second answer draft update",
+    );
     expect(firstBlockFlushOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(secondBlockUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
@@ -3355,9 +3534,21 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "PFX Original block text");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    const blockUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[2];
+    const blockUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      1,
+      "second answer draft update",
+    );
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.forceNewMessage,
+      0,
+      "first answer draft rotation",
+    );
+    const finalUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      2,
+      "third answer draft update",
+    );
     expect(blockUpdateOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
@@ -3390,9 +3581,21 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A partial");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B final");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    const firstPartialUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[0];
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const visibleBlockUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    const firstPartialUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      0,
+      "first answer draft update",
+    );
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.forceNewMessage,
+      0,
+      "first answer draft rotation",
+    );
+    const visibleBlockUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      1,
+      "second answer draft update",
+    );
     expect(firstPartialUpdateOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(visibleBlockUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
@@ -3417,8 +3620,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const secondPartialUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.forceNewMessage,
+      0,
+      "first answer draft rotation",
+    );
+    const secondPartialUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      1,
+      "second answer draft update",
+    );
     expect(rotationOrder).toBeLessThan(secondPartialUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -3454,8 +3665,16 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const visibleBlockUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.forceNewMessage,
+      0,
+      "first answer draft rotation",
+    );
+    const visibleBlockUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      1,
+      "second answer draft update",
+    );
     expect(rotationOrder).toBeLessThan(visibleBlockUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -3488,9 +3707,21 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A partial");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B partial");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
-    const firstPartialUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[0];
-    const rotationOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const nextPartialUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    const firstPartialUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      0,
+      "first answer draft update",
+    );
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.forceNewMessage,
+      0,
+      "first answer draft rotation",
+    );
+    const nextPartialUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      1,
+      "second answer draft update",
+    );
     expect(firstPartialUpdateOrder).toBeLessThan(rotationOrder);
     expect(rotationOrder).toBeLessThan(nextPartialUpdateOrder);
     expect(deliverReplies).toHaveBeenCalledTimes(1);
@@ -3610,11 +3841,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // so that clear finds no live message id and never deletes the window.
     if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
       expect(
-        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
-      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+        requireInvocationOrder(
+          answerDraftStream.rotateToNewMessageDeferringDelete,
+          0,
+          "first deferred answer draft rotation",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
+      );
     }
-    const progressResetOrder = answerDraftStream.forceNewMessage.mock.invocationCallOrder[0];
-    const progressUpdateOrder = answerDraftStream.updatePreview.mock.invocationCallOrder[0];
+    const progressResetOrder = requireInvocationOrder(
+      answerDraftStream.forceNewMessage,
+      0,
+      "first answer draft rotation",
+    );
+    const progressUpdateOrder = requireInvocationOrder(
+      answerDraftStream.updatePreview,
+      0,
+      "first answer preview update",
+    );
     expect(progressResetOrder).toBeLessThan(progressUpdateOrder);
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -3646,8 +3891,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // so that clear finds no live message id and never deletes the window.
     if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
       expect(
-        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
-      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+        requireInvocationOrder(
+          answerDraftStream.rotateToNewMessageDeferringDelete,
+          0,
+          "first deferred answer draft rotation",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
+      );
     }
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -3696,12 +3947,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // so that clear finds no live message id and never deletes the window.
     if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
       expect(
-        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
-      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+        requireInvocationOrder(
+          answerDraftStream.rotateToNewMessageDeferringDelete,
+          0,
+          "first deferred answer draft rotation",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
+      );
     }
-    const rotationOrder =
-      answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0];
-    const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[0];
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.rotateToNewMessageDeferringDelete,
+      0,
+      "first deferred answer draft rotation",
+    );
+    const finalUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      0,
+      "first answer draft update",
+    );
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
   });
 
@@ -3729,12 +3993,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // so that clear finds no live message id and never deletes the window.
     if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
       expect(
-        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
-      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+        requireInvocationOrder(
+          answerDraftStream.rotateToNewMessageDeferringDelete,
+          0,
+          "first deferred answer draft rotation",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
+      );
     }
-    const rotationOrder =
-      answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0];
-    const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[0];
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.rotateToNewMessageDeferringDelete,
+      0,
+      "first deferred answer draft rotation",
+    );
+    const finalUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      0,
+      "first answer draft update",
+    );
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
   });
 
@@ -3757,12 +4034,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // so that clear finds no live message id and never deletes the window.
     if (answerDraftStream.clear.mock.invocationCallOrder.length > 0) {
       expect(
-        answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
-      ).toBeLessThan(answerDraftStream.clear.mock.invocationCallOrder[0]);
+        requireInvocationOrder(
+          answerDraftStream.rotateToNewMessageDeferringDelete,
+          0,
+          "first deferred answer draft rotation",
+        ),
+      ).toBeLessThan(
+        requireInvocationOrder(answerDraftStream.clear, 0, "first answer draft clear"),
+      );
     }
-    const rotationOrder =
-      answerDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0];
-    const finalUpdateOrder = answerDraftStream.update.mock.invocationCallOrder[1];
+    const rotationOrder = requireInvocationOrder(
+      answerDraftStream.rotateToNewMessageDeferringDelete,
+      0,
+      "first deferred answer draft rotation",
+    );
+    const finalUpdateOrder = requireInvocationOrder(
+      answerDraftStream.update,
+      1,
+      "second answer draft update",
+    );
     expect(rotationOrder).toBeLessThan(finalUpdateOrder);
   });
 
@@ -3805,8 +4095,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // The final answer is SENT before the window collapses into the bar: sending
     // first keeps the final at the bottom of the anchored viewport, so shrinking
     // the tall window above it never drops the final off screen.
-    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
-      answerDraftStream.finalizeToPreview.mock.invocationCallOrder[0],
+    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
+      requireInvocationOrder(
+        answerDraftStream.finalizeToPreview,
+        0,
+        "first answer draft finalization",
+      ),
     );
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
@@ -3856,8 +4150,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expectDeliveredReply(0, { text: "Terminal block after tool" });
     expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
-    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
-      answerDraftStream.finalizeToPreview.mock.invocationCallOrder[0],
+    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
+      requireInvocationOrder(
+        answerDraftStream.finalizeToPreview,
+        0,
+        "first answer draft finalization",
+      ),
     );
   });
 
@@ -3892,8 +4190,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     // the collapse edit.
     expectDeliveredReply(0, { text: "All done" });
     expectWindowCollapsedTo(answerDraftStream, "🛠️ 1 tool call · ⏱️ 1s");
-    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
-      answerDraftStream.finalizeToPreview.mock.invocationCallOrder[0],
+    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
+      requireInvocationOrder(
+        answerDraftStream.finalizeToPreview,
+        0,
+        "first answer draft finalization",
+      ),
     );
     // The bar counters are snapshotted before the final send, so the count is
     // stable (one tool call — the final's own delivery does not perturb it).
@@ -4275,8 +4577,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.finalizeToPreview).toHaveBeenCalledTimes(1);
     expectWindowCollapsedTo(answerDraftStream, "💬 2 notes · 🛠️ 2 tool calls · ⏱️ 1s");
     expectDeliveredReply(0, { text: "Final answer" });
-    expect(deliverReplies.mock.invocationCallOrder[0]).toBeLessThan(
-      answerDraftStream.finalizeToPreview.mock.invocationCallOrder[0],
+    expect(requireInvocationOrder(deliverReplies, 0, "first reply delivery")).toBeLessThan(
+      requireInvocationOrder(
+        answerDraftStream.finalizeToPreview,
+        0,
+        "first answer draft finalization",
+      ),
     );
   });
 
@@ -4499,8 +4805,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, trailingFinalStatusText);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
-    expect(answerDraftStream.forceNewMessage.mock.invocationCallOrder[1]).toBeLessThan(
-      answerDraftStream.update.mock.invocationCallOrder[0],
+    expect(
+      requireInvocationOrder(answerDraftStream.forceNewMessage, 1, "second answer draft rotation"),
+    ).toBeLessThan(
+      requireInvocationOrder(answerDraftStream.update, 0, "first answer draft update"),
     );
     // Window collapses in place into the summary bar; the final answer posts
     // fresh below it.
@@ -5588,10 +5896,18 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(reasoningDraftStream.forceNewMessage).not.toHaveBeenCalled();
     expect(reasoningDraftStream.clear).toHaveBeenCalledTimes(1);
     expect(
-      reasoningDraftStream.rotateToNewMessageDeferringDelete.mock.invocationCallOrder[0],
-    ).toBeLessThan(reasoningDraftStream.update.mock.invocationCallOrder[1]);
-    expect(reasoningDraftStream.update.mock.invocationCallOrder[1]).toBeLessThan(
-      reasoningDraftStream.clear.mock.invocationCallOrder[0],
+      requireInvocationOrder(
+        reasoningDraftStream.rotateToNewMessageDeferringDelete,
+        0,
+        "first deferred reasoning draft rotation",
+      ),
+    ).toBeLessThan(
+      requireInvocationOrder(reasoningDraftStream.update, 1, "second reasoning draft update"),
+    );
+    expect(
+      requireInvocationOrder(reasoningDraftStream.update, 1, "second reasoning draft update"),
+    ).toBeLessThan(
+      requireInvocationOrder(reasoningDraftStream.clear, 0, "first reasoning draft clear"),
     );
     expect(replacementMessageId).toBe(3002);
   });
@@ -7461,11 +7777,31 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(statusReactionController.setCompacting).toHaveBeenCalledTimes(1);
     expect(statusReactionController.cancelPending).toHaveBeenCalledTimes(1);
     expect(statusReactionController.setThinking).toHaveBeenCalledTimes(2);
-    expect(statusReactionController.setCompacting.mock.invocationCallOrder[0]).toBeLessThan(
-      statusReactionController.cancelPending.mock.invocationCallOrder[0],
+    expect(
+      requireInvocationOrder(
+        statusReactionController.setCompacting,
+        0,
+        "first compacting status reaction",
+      ),
+    ).toBeLessThan(
+      requireInvocationOrder(
+        statusReactionController.cancelPending,
+        0,
+        "first pending status reaction cancellation",
+      ),
     );
-    expect(statusReactionController.cancelPending.mock.invocationCallOrder[0]).toBeLessThan(
-      statusReactionController.setThinking.mock.invocationCallOrder[1],
+    expect(
+      requireInvocationOrder(
+        statusReactionController.cancelPending,
+        0,
+        "first pending status reaction cancellation",
+      ),
+    ).toBeLessThan(
+      requireInvocationOrder(
+        statusReactionController.setThinking,
+        1,
+        "second thinking status reaction",
+      ),
     );
   });
 

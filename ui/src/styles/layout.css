@@ -105,6 +105,18 @@ html.openclaw-native-macos .shell-nav-expand {
   top: 52px;
 }
 
+/* Newer Mac apps host a native sidebar toggle in the titlebar next to
+   back/forward and add openclaw-native-nav; the in-page toggles (desktop
+   collapse/expand plus the drawer hamburger below 1100px) would duplicate
+   it, so they disappear entirely (⌘B and the accessible titlebar button
+   cover keyboard/screen-reader use). Older apps only add
+   openclaw-native-macos and keep the web controls visible. */
+html.openclaw-native-nav .shell-nav-expand,
+html.openclaw-native-nav .sidebar-brand__collapse,
+html.openclaw-native-nav .topbar .topbar-nav-toggle {
+  display: none;
+}
+
 .shell--onboarding {
   grid-template-columns: 0 minmax(0, 1fr);
   grid-template-rows: 0 1fr;
@@ -178,7 +190,10 @@ html.openclaw-native-macos .shell-nav-expand {
 
 .settings-sidebar__header {
   flex-shrink: 0;
-  padding: 14px 12px 6px;
+  /* 8px top pad centers the 32px back button on the shared 24px chrome
+     centerline, mirroring .sidebar-shell; macOS overrides with titlebar
+     clearance. */
+  padding: 8px 12px 6px;
 }
 
 .settings-sidebar__back {
@@ -456,6 +471,41 @@ html.openclaw-native-macos .shell-nav-expand {
   text-overflow: ellipsis;
 }
 
+.settings-sidebar__subitem {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  margin-inline-start: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: default;
+  text-decoration: none;
+}
+
+.settings-sidebar__subitem:hover {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+  text-decoration: none;
+}
+
+.settings-sidebar__subitem--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 72%, transparent);
+}
+
+.settings-sidebar__subitem:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.settings-sidebar__subitem-label {
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .settings-sidebar__footer {
   flex-shrink: 0;
   display: flex;
@@ -679,6 +729,9 @@ html.openclaw-native-macos .shell-nav-expand {
 }
 
 .sidebar {
+  /* Sticky headers inside the sidebar reuse --sidebar-bg so scrolled rows
+     never shine through with a mismatched tone. */
+  --sidebar-bg: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -686,11 +739,11 @@ html.openclaw-native-macos .shell-nav-expand {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background: color-mix(in srgb, var(--bg) 96%, var(--bg-elevated) 4%);
+  background: var(--sidebar-bg);
 }
 
 :root[data-theme-mode="light"] .sidebar {
-  background: color-mix(in srgb, var(--panel) 98%, white 2%);
+  --sidebar-bg: color-mix(in srgb, var(--panel) 98%, white 2%);
 }
 
 .sidebar-shell {
@@ -698,7 +751,10 @@ html.openclaw-native-macos .shell-nav-expand {
   flex-direction: column;
   min-height: 0;
   flex: 1;
-  padding: 14px 10px 12px;
+  /* 9px top pad centers the brand row's 30px icons on the app's shared
+     24px chrome centerline (pane-header actions, floating toggles). The
+     macOS app overrides this with its 50px titlebar clearance. */
+  padding: 9px 10px 12px;
   border: none;
   border-radius: 0;
   background: transparent;
@@ -714,19 +770,50 @@ html.openclaw-native-macos .shell-nav-expand {
   flex-shrink: 0;
 }
 
+/* The brand block is the "home" affordance: clicking it returns to chat. */
 .sidebar-brand__identity {
   display: flex;
   align-items: center;
   gap: 7px;
   min-width: 0;
   flex: 1 1 auto;
+  color: inherit;
+  text-decoration: none;
+  border-radius: var(--radius-md);
+}
+
+.sidebar-brand__identity:hover .sidebar-brand__logo {
+  transform: scale(1.05);
+}
+
+.sidebar-brand__identity:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Positioning box for the brand mark; the lobster pet's logo stand-in
+   (lobster-pet.css) overlays the img here during a logo visit. */
+.sidebar-brand__logo-slot {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
 }
 
 .sidebar-brand__logo {
+  display: block;
   width: 24px;
   height: 24px;
   border-radius: var(--radius-md);
-  flex: 0 0 auto;
+  transition:
+    opacity 0.3s ease,
+    transform 0.3s ease;
+}
+
+/* The crab took over: the static mark steps aside until the visit ends. */
+.sidebar-brand__logo--vacated {
+  opacity: 0;
+  transform: scale(0.55);
 }
 
 .sidebar-brand__title {
@@ -798,11 +885,212 @@ html.openclaw-native-macos .shell-nav-expand {
   flex: 1;
   display: flex;
   flex-direction: column;
+  /* Children manage their own scrolling; clip so an overgrown section can
+     never paint over the sidebar footer. */
+  overflow: hidden;
 }
 
 .sidebar-shell__footer {
   padding: 12px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+/* Ambient health chips (failed cron, expiring model auth) above the footer bar. */
+.sidebar-attention {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 8px 10px;
+}
+
+.sidebar-attention__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-attention__item--warning {
+  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.25));
+  background: rgba(234, 179, 8, 0.06);
+}
+
+.sidebar-attention__item--error {
+  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.25));
+  background: rgba(239, 68, 68, 0.06);
+}
+
+.sidebar-attention__item:hover {
+  border-color: var(--border-strong);
+}
+
+.sidebar-attention__icon {
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--warn, #b7791f);
+}
+
+.sidebar-attention__item--error .sidebar-attention__icon {
+  color: var(--danger);
+}
+
+.sidebar-attention__icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-attention__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-update-card {
+  position: relative;
+  margin: 0 8px 10px;
+}
+
+.sidebar-update-card--floating .sidebar-update-card {
+  width: min(360px, calc(100% - 32px));
+  margin: 12px 16px 0;
+}
+
+@media (min-width: 1101px) {
+  /* Keep the card beside the collapsed-nav control so their hit targets stay distinct. */
+  .sidebar-update-card--floating .sidebar-update-card {
+    width: min(360px, calc(100% - 48px));
+    margin-left: 32px;
+  }
+
+  /* Native dashboard actions must also clear AppKit's drag strip. */
+  html.openclaw-native-macos .sidebar-update-card--floating .sidebar-update-card {
+    margin-top: calc(var(--openclaw-native-titlebar-height, 50px) + 2px);
+  }
+}
+
+.sidebar-update-card__action {
+  width: 100%;
+  min-height: 62px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 34px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent-subtle) 48%, var(--bg-elevated));
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.sidebar-update-card__action:hover:not(:disabled),
+.sidebar-update-card__action:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 72%, var(--bg-elevated));
+}
+
+.sidebar-update-card__action:focus-visible,
+.sidebar-update-card__dismiss:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-update-card__action:disabled {
+  cursor: wait;
+  opacity: 0.66;
+}
+
+.sidebar-update-card__icon,
+.sidebar-update-card__arrow,
+.sidebar-update-card__dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sidebar-update-card__icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.sidebar-update-card__copy {
+  min-width: 0;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-update-card__title {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.sidebar-update-card__subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.sidebar-update-card__arrow {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.sidebar-update-card__dismiss {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.sidebar-update-card__dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.sidebar-update-card__icon svg,
+.sidebar-update-card__arrow svg,
+.sidebar-update-card__dismiss svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-nav {
@@ -827,59 +1115,6 @@ html.openclaw-native-macos .shell-nav-expand {
   margin-top: 10px;
 }
 
-.sidebar-new-session {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 8px;
-  width: 100%;
-  min-height: 34px;
-  box-sizing: border-box;
-  padding: 0 9px;
-  border: none;
-  border-radius: var(--radius-md);
-  background: transparent;
-  color: var(--accent);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 1.2;
-  transition:
-    background var(--duration-fast) ease,
-    color var(--duration-fast) ease;
-}
-
-.sidebar-new-session:hover:not(:disabled) {
-  background: var(--accent-subtle);
-  color: var(--accent-hover);
-}
-
-.sidebar-new-session:disabled {
-  cursor: not-allowed;
-  opacity: 0.52;
-}
-
-.sidebar-new-session__icon,
-.sidebar-new-session__icon svg {
-  width: 15px;
-  height: 15px;
-}
-
-.sidebar-new-session__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: currentColor;
-}
-
-.sidebar-new-session__icon svg {
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 /* min-height: 0 down this chain lets the recent list shrink and scroll instead
    of pushing the sidebar footer out of view. */
 .sidebar-recent-sessions {
@@ -889,10 +1124,53 @@ html.openclaw-native-macos .shell-nav-expand {
   margin: 0 -8px;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-color: color-mix(in srgb, currentColor 8%, transparent) transparent;
   scrollbar-width: thin;
   /* Sessions are app chrome, not hyperlinks: the whole region uses the
      default arrow cursor; the pointer hand is reserved for real links. */
   cursor: default;
+}
+
+.sidebar-recent-sessions::-webkit-scrollbar,
+.sidebar-recent-sessions::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar-recent-sessions--scroll-top {
+  --sidebar-sessions-mask: linear-gradient(
+    to bottom,
+    black 0,
+    black calc(100% - 23px),
+    transparent 100%
+  );
+}
+
+.sidebar-recent-sessions--scroll-middle {
+  --sidebar-sessions-mask: linear-gradient(
+    to bottom,
+    transparent 0,
+    black 23px,
+    black calc(100% - 23px),
+    transparent 100%
+  );
+}
+
+.sidebar-recent-sessions--scroll-bottom {
+  --sidebar-sessions-mask: linear-gradient(to bottom, transparent 0, black 23px, black 100%);
+}
+
+.sidebar-recent-sessions--scroll-top,
+.sidebar-recent-sessions--scroll-middle,
+.sidebar-recent-sessions--scroll-bottom {
+  -webkit-mask-image: var(--sidebar-sessions-mask);
+  mask-image: var(--sidebar-sessions-mask);
+}
+
+/* The scroller's children must not flex-shrink: shrink squeezes each section
+   to its min-height while the fixed-height rows inside overflow and paint
+   over the following section. Fixed sizing makes the list scroll instead. */
+.sidebar-recent-sessions > * {
+  flex: 0 0 auto;
 }
 
 .sidebar-recent-sessions__group {
@@ -944,7 +1222,7 @@ html.openclaw-native-macos .shell-nav-expand {
   position: sticky;
   top: 0;
   z-index: 2;
-  background: var(--bg);
+  background: var(--sidebar-bg);
 }
 
 .sidebar-recent-sessions__head .sidebar-recent-sessions__label-text {
@@ -979,11 +1257,37 @@ html.openclaw-native-macos .shell-nav-expand {
 }
 
 .sidebar-session-group-count {
+  width: 26px;
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 10px;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
+  text-align: center;
+}
+
+.sidebar-session-catalog-load-more {
+  display: block;
+  width: calc(100% - 20px);
+  margin: 3px 10px 5px;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: left;
+}
+
+.sidebar-session-catalog-load-more:hover:not(:disabled),
+.sidebar-session-catalog-load-more:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar-session-catalog-load-more:disabled {
+  cursor: wait;
+  opacity: 0.55;
 }
 
 .sidebar-session-group-drag-handle {
@@ -1108,6 +1412,26 @@ html.openclaw-native-macos .shell-nav-expand {
   min-height: 12px;
 }
 
+.sidebar-session-pagination {
+  display: flex;
+  gap: 14px;
+  padding: 0 10px 10px;
+}
+
+.sidebar-session-pagination__button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.sidebar-session-pagination__button:hover,
+.sidebar-session-pagination__button:focus-visible {
+  color: var(--text);
+}
+
 .sidebar-recent-session--dragging {
   opacity: 0.45;
 }
@@ -1120,13 +1444,11 @@ html.openclaw-native-macos .shell-nav-expand {
   min-width: 0;
   min-height: 34px;
   padding-right: 4px;
-  border: 1px solid transparent;
   border-radius: var(--radius-md);
   color: var(--muted);
   cursor: default;
   transition:
     background var(--duration-fast) ease,
-    border-color var(--duration-fast) ease,
     color var(--duration-fast) ease;
 }
 
@@ -1135,9 +1457,20 @@ html.openclaw-native-macos .shell-nav-expand {
   color: var(--text);
 }
 
-.sidebar-recent-session--active {
-  background: color-mix(in srgb, var(--accent-subtle) 68%, transparent);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+/* Selection is a filled neutral pill (hover fill, one step stronger), not an
+   accent border: 1px accent outlines read as focus/error chrome on the
+   red-leaning themes. Derive from --text so it holds in light + dark.
+   Doubled class outranks .sidebar-recent-session:hover so the selection fill
+   does not degrade to the weaker hover fill while the row is under pointer. */
+.sidebar-recent-session.sidebar-recent-session--active {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text-strong);
+}
+
+/* Multi-select is an accent wash so it stays distinguishable by hue from the
+   neutral --active fill when a selection includes the active row. */
+.sidebar-recent-session.sidebar-recent-session--selected {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
   color: var(--text-strong);
 }
 
@@ -1280,6 +1613,10 @@ html.openclaw-native-macos .shell-nav-expand {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 26px;
+  height: 26px;
+  min-width: 0;
+  flex: 0 0 26px;
   opacity: 0.5;
   transition: transform var(--duration-fast) ease;
 }
@@ -1322,7 +1659,7 @@ html.openclaw-native-macos .shell-nav-expand {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
 .sidebar-customize-menu__title {
@@ -1375,6 +1712,7 @@ html.openclaw-native-macos .shell-nav-expand {
 }
 
 .sidebar-customize-menu__text {
+  flex: 1;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1394,10 +1732,15 @@ html.openclaw-native-macos .shell-nav-expand {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
-openclaw-native-link-menu[popover] {
+/* Popover hosts live in the top layer so menus escape in-page stacking
+   contexts (e.g. the sidebar resizer above the nav); the host itself must
+   stay a zero-size shell around its fixed-position menu. */
+openclaw-menu-surface[popover],
+openclaw-native-link-menu[popover],
+openclaw-session-menu[popover] {
   width: 0;
   height: 0;
   margin: 0;
@@ -1416,7 +1759,7 @@ openclaw-native-link-menu[popover] {
   border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
-  box-shadow: 0 18px 40px color-mix(in srgb, black 26%, transparent);
+  box-shadow: var(--shadow-lg);
 }
 
 .sidebar-session-sort-menu__title {
@@ -1606,67 +1949,141 @@ openclaw-native-link-menu[popover] {
   color: var(--accent);
 }
 
-/* Single compact icon row: status dot, then utility icons right-aligned.
-   The footer signals connectivity only; gateway version lives in Settings. */
-.sidebar-footer-bar {
+/* Footer agent chip: identity-first entrance to the active agent. The body
+   resumes the latest conversation; trailing actions create/open the menu. */
+.sidebar-agent-chip {
   display: flex;
   align-items: center;
   gap: 2px;
-  min-height: 34px;
-  padding: 0 10px;
+  padding: 2px 8px 6px;
 }
 
-.sidebar-footer-bar__spacer {
+.sidebar-agent-chip__main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: default;
+  transition: background var(--duration-fast) ease;
 }
 
-/* Footer icons mix in-app anchors, buttons, and one external docs link: the
-   chrome gets the default arrow; only the external (target=_blank) anchor is
-   a real hyperlink and keeps the pointer. */
-.sidebar-footer-icon {
+.sidebar-agent-chip__main:hover,
+.sidebar-agent-chip__main:focus-visible {
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.sidebar-agent-chip__main:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
+  outline-offset: 1px;
+}
+
+.sidebar-agent-chip__avatar {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
-  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--accent-subtle) 80%, transparent);
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sidebar-agent-chip__avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-full);
+  object-fit: cover;
+}
+
+/* Presence fuses connection state into the identity: no separate online dot. */
+.sidebar-agent-chip__presence {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 9px;
+  height: 9px;
+  border-radius: var(--radius-full);
+  border: 2px solid var(--sidebar-bg);
+}
+
+.sidebar-agent-chip__presence.sidebar-connection-status--online {
+  background: var(--ok);
+}
+
+.sidebar-agent-chip__presence.sidebar-connection-status--offline {
+  background: var(--danger);
+}
+
+.sidebar-agent-chip__text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.sidebar-agent-chip__name {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-chip__subtitle {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-agent-chip__action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: none;
   border: none;
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
   cursor: default;
-  text-decoration: none;
   transition:
     color var(--duration-fast) ease,
     background var(--duration-fast) ease;
 }
 
-.sidebar-footer-icon[target] {
-  cursor: pointer;
-}
-
-.sidebar-footer-icon:hover:not(:disabled),
-.sidebar-footer-icon:focus-visible {
+.sidebar-agent-chip__action:hover:not(:disabled),
+.sidebar-agent-chip__action:focus-visible {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  text-decoration: none;
 }
 
-.sidebar-footer-icon:focus-visible {
+.sidebar-agent-chip__action:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 48%, transparent);
   outline-offset: 1px;
 }
 
-.sidebar-footer-icon:disabled {
+.sidebar-agent-chip__action:disabled {
   cursor: not-allowed;
   opacity: 0.42;
 }
 
-.sidebar-footer-icon--active {
-  color: var(--accent);
-}
-
-.sidebar-footer-icon svg {
+.sidebar-agent-chip__action svg {
   width: 16px;
   height: 16px;
   stroke: currentColor;
@@ -1674,6 +2091,89 @@ openclaw-native-link-menu[popover] {
   stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.sidebar-agent-chip__menu-toggle svg {
+  transition: transform var(--duration-fast) ease;
+}
+
+.sidebar-agent-chip__menu-toggle--open svg {
+  transform: rotate(180deg);
+}
+
+/* The docs row is the menu's only real hyperlink; keep it looking like a row. */
+.sidebar-agent-menu a.sidebar-customize-menu__item {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Footer menu row: build identity left, theme switch right. */
+.sidebar-agent-menu__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 8px 2px;
+}
+
+/* Host elements are display:contents, so the anchor itself is the flex item;
+   min-width 0 lets it yield to the footer icons and ellipsize. */
+.sidebar-footer-build {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.sidebar-footer-build:hover,
+.sidebar-footer-build:focus-visible {
+  color: var(--text);
+  text-decoration: none;
+}
+
+/* Dev-checkout branch strip: only rendered when the gateway runs from a git
+   checkout off main. Sits on its own row above the icon bar so the full branch
+   name stays readable without crowding the footer controls. */
+.sidebar-footer-branch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 10px 2px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--danger);
+}
+
+.sidebar-footer-branch__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.sidebar-footer-branch__icon svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-footer-branch__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sidebar-status__dot {
@@ -1691,11 +2191,6 @@ openclaw-native-link-menu[popover] {
 .sidebar-status__dot.sidebar-connection-status--offline {
   background: var(--danger);
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
-}
-
-.sidebar-pair-mobile svg * {
-  stroke: currentColor;
-  fill: none;
 }
 
 .sidebar-mode-switch {
@@ -1787,6 +2282,12 @@ openclaw-native-link-menu[popover] {
   transition:
     margin-bottom 0.16s ease,
     margin-right 0.16s ease;
+}
+
+/* Programmatic focus anchor (tabindex="-1") used when collapsing the sidebar
+   with no visible in-page expand control; skip-link-style, so no ring. */
+.content:focus {
+  outline: none;
 }
 
 .content > * + * {
@@ -2226,167 +2727,4 @@ openclaw-native-link-menu[popover] {
 .sidebar-recent-session--draft .sidebar-recent-session__name {
   color: var(--text-strong);
   font-style: italic;
-}
-
-/* New-session draft dialog. */
-.new-session-dialog__backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 12vh 16px 16px;
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  backdrop-filter: blur(2px);
-}
-
-.new-session-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: min(640px, 100%);
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--panel);
-  box-shadow: 0 18px 48px color-mix(in srgb, var(--bg) 55%, transparent);
-}
-
-.new-session-dialog__head {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-
-.new-session-dialog__title {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-strong);
-}
-
-.new-session-dialog__hint {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.new-session-dialog__close {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-}
-
-.new-session-dialog__close:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
-  color: var(--text);
-}
-
-.new-session-dialog__targets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.new-session-dialog__target {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--bg-elevated) 70%, transparent);
-  font-size: 12px;
-  color: var(--text);
-}
-
-.new-session-dialog__target select,
-.new-session-dialog__target input[type="text"] {
-  border: 0;
-  background: transparent;
-  color: var(--text);
-  font-size: 12px;
-  outline: none;
-}
-
-.new-session-dialog__target--folder {
-  flex: 1 1 220px;
-  min-width: 0;
-}
-
-.new-session-dialog__target--folder input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.new-session-dialog__target-icon {
-  display: inline-flex;
-  color: var(--muted);
-}
-
-.new-session-dialog__target-icon svg {
-  width: 14px;
-  height: 14px;
-}
-
-.new-session-dialog__branch {
-  width: 140px;
-}
-
-.new-session-dialog__error {
-  font-size: 12px;
-  color: var(--danger);
-}
-
-.new-session-dialog__message {
-  width: 100%;
-  resize: vertical;
-  min-height: 88px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-}
-
-.new-session-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.new-session-dialog__cancel,
-.new-session-dialog__start {
-  padding: 6px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.new-session-dialog__start {
-  border-color: transparent;
-  background: var(--accent);
-  color: var(--accent-contrast, #fff);
-  font-weight: 600;
-}
-
-.new-session-dialog__start:disabled {
-  opacity: 0.5;
-  cursor: default;
 }

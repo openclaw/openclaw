@@ -24,6 +24,7 @@ function inspectors(): GatewayActiveWorkInspectors {
     getQueueSize: () => 0,
     getPendingReplies: () => 0,
     getEmbeddedRuns: () => 0,
+    getBackgroundExecSessions: () => 0,
     getCronRuns: () => 0,
     getActiveTasks: () => 0,
     getTaskBlockers: () => [],
@@ -113,7 +114,7 @@ describe("scheduled restart during gateway suspension", () => {
     });
     expect(prepared).toMatchObject({
       status: "busy",
-      reason: "active-work",
+      reason: "gateway-draining",
       activeCount: 1,
     });
     expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(0);
@@ -144,7 +145,7 @@ describe("scheduled restart during gateway suspension", () => {
     scheduleGatewaySigusr1Restart({ delayMs: 0, skipCooldown: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(1);
-    expect(preRestartCheck).toHaveBeenCalledOnce();
+    expect(preRestartCheck).toHaveBeenCalledTimes(2);
     expect(isGatewayWorkAdmissionClosed()).toBe(true);
 
     testing.resetSigusr1TransientState();
@@ -154,7 +155,7 @@ describe("scheduled restart during gateway suspension", () => {
     scheduleGatewaySigusr1Restart({ delayMs: 0, skipCooldown: true });
     await vi.advanceTimersByTimeAsync(0);
     expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
-    expect(preRestartCheck).toHaveBeenCalledTimes(2);
+    expect(preRestartCheck).toHaveBeenCalledTimes(4);
   });
 
   it("cancels delayed restart work during a transient reset", async () => {

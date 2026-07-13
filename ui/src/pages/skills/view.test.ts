@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
@@ -74,7 +75,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     filter: "",
     statusFilter: "all",
     edits: {},
-    busyKey: null,
+    operation: null,
     messages: {},
     detailKey: null,
     detailTab: "overview",
@@ -92,7 +93,6 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     clawhubDetailSlug: null,
     clawhubDetailLoading: false,
     clawhubDetailError: null,
-    clawhubInstallSlug: null,
     clawhubInstallMessage: null,
     onAgentChange: () => undefined,
     onFilterChange: () => undefined,
@@ -156,6 +156,85 @@ describe("renderSkills", () => {
     expect(onAgentChange).toHaveBeenCalledWith("main");
   });
 
+  it("locks every skill mutation control behind the active mutation", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    const calendar = createSkill({
+      skillKey: "calendar",
+      name: "Calendar",
+      missing: { bins: ["calendar-cli"], env: [], config: [], os: [] },
+      install: [
+        { id: "calendar-cli", kind: "brew", label: "Install calendar-cli", bins: ["calendar-cli"] },
+      ],
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [createSkill(), calendar],
+    };
+    const onRefresh = vi.fn();
+    const onToggle = vi.fn();
+    const onSaveKey = vi.fn();
+    const onInstall = vi.fn();
+    const onClawHubInstall = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          report,
+          detailKey: "calendar",
+          operation: { kind: "skill", skillKey: "repo-skill" },
+          clawhubResults: [{ score: 1, slug: "github", displayName: "GitHub", version: "1.0.0" }],
+          onRefresh,
+          onToggle,
+          onSaveKey,
+          onInstall,
+          onClawHubInstall,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      container.querySelector<HTMLSelectElement>('select[name="skills-agent"]')?.disabled,
+    ).toBe(true);
+    const refresh = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Refresh",
+    );
+    expect(refresh?.disabled).toBe(true);
+    expect(
+      Array.from(container.querySelectorAll<HTMLInputElement>(".skill-toggle")).every(
+        (toggle) => toggle.disabled,
+      ),
+    ).toBe(true);
+    expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
+      true,
+    );
+    const mutationButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button"),
+    ).filter((button) => /^(Install|Save key)/.test(normalizeText(button)));
+    expect(mutationButtons.length).toBeGreaterThanOrEqual(3);
+    expect(mutationButtons.every((button) => button.disabled)).toBe(true);
+
+    refresh?.click();
+    for (const toggle of container.querySelectorAll<HTMLInputElement>(".skill-toggle")) {
+      toggle.click();
+    }
+    for (const button of mutationButtons) {
+      button.click();
+    }
+    expect(onRefresh).not.toHaveBeenCalled();
+    expect(onToggle).not.toHaveBeenCalled();
+    expect(onSaveKey).not.toHaveBeenCalled();
+    expect(onInstall).not.toHaveBeenCalled();
+    expect(onClawHubInstall).not.toHaveBeenCalled();
+  });
+
   it("does not transfer toggle state when a skill leaves the disabled tab", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -178,13 +257,15 @@ describe("renderSkills", () => {
 
     const toggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
     expect(toggles).toHaveLength(2);
-    expect(toggles[0].checked).toBe(false);
-    expect(toggles[1].checked).toBe(false);
+    const passwordToggle = expectDefined(toggles[0], "password skill toggle");
+    const appleNotesToggle = expectDefined(toggles[1], "apple notes skill toggle");
+    expect(passwordToggle.checked).toBe(false);
+    expect(appleNotesToggle.checked).toBe(false);
 
     // Simulate the user clicking the 1password toggle before the re-render propagates.
     // Without repeat(), Lit's dirty-check skips re-setting `.checked = false` on the reused
     // DOM node, so apple-notes inherits this stale user-driven state.
-    toggles[0].checked = true;
+    passwordToggle.checked = true;
 
     const updatedReport: SkillStatusReport = {
       workspaceDir: "/tmp/workspace",
@@ -200,7 +281,9 @@ describe("renderSkills", () => {
 
     const updatedToggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
     expect(updatedToggles).toHaveLength(1);
-    expect(updatedToggles[0].checked).toBe(false);
+    expect(expectDefined(updatedToggles[0], "updated apple notes skill toggle").checked).toBe(
+      false,
+    );
   });
 
   it("treats skills blocked by the selected agent filter as needing setup", async () => {

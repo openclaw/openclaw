@@ -1,7 +1,7 @@
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 // Applies runtime-only config overrides without mutating persisted config.
 import { isPlainObject } from "../utils.js";
 import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;
@@ -95,4 +95,13 @@ export function applyConfigOverrides(cfg: OpenClawConfig): OpenClawConfig {
     return cfg;
   }
   return mergeOverrides(cfg, overrides) as OpenClawConfig;
+}
+
+/** Capture an immutable applier for the process-local overrides active at this instant. */
+export function captureConfigOverrideApplier(): (cfg: OpenClawConfig) => OpenClawConfig {
+  const capturedOverrides = structuredClone(overrides);
+  if (Object.keys(capturedOverrides).length === 0) {
+    return (cfg) => cfg;
+  }
+  return (cfg) => mergeOverrides(cfg, capturedOverrides) as OpenClawConfig;
 }
