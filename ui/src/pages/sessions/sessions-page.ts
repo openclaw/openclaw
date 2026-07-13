@@ -40,6 +40,7 @@ import {
   sessionAgentIdentityById,
   sessionAgentIds,
 } from "./agent-scope.ts";
+import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { loadStoredGroupBy, parseFilterInteger, saveStoredGroupBy } from "./page-state.ts";
 import { renderSessions, type SessionsProps, type TranscriptSearchState } from "./view.ts";
 
@@ -693,17 +694,8 @@ class SessionsPage extends OpenClawLightDomElement {
     await this.deleteSessions([row.key]);
   }
 
-  private customGroups(): readonly string[] {
-    return this.context?.sessions.state.groups ?? [];
-  }
-
   private knownCategories(): string[] {
-    const fromRows = (this.result?.sessions ?? [])
-      .map((row) => row.category?.trim())
-      .filter((name): name is string => Boolean(name));
-    return [
-      ...new Set([...this.customGroups(), ...fromRows.toSorted((a, b) => a.localeCompare(b))]),
-    ];
+    return sessionCategoryNames(this.result, this.context?.sessions.state.groups ?? []);
   }
 
   private setGroupBy(mode: SessionsGroupBy) {
@@ -712,21 +704,16 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private async rememberCustomGroup(name: string) {
-    const known = this.knownCategories();
-    if (known.includes(name)) {
-      return;
-    }
     const scope = this.captureRequestScope();
-    if (!scope) {
-      return;
-    }
-    try {
-      await scope.sessions.groupsPut([...(scope.sessions.state.groups ?? []), name]);
-    } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = String(error);
-      }
-    }
+    await rememberSessionCustomGroup({
+      name,
+      knownCategories: this.knownCategories(),
+      sessions: scope?.sessions,
+      isCurrent: () => Boolean(scope && this.isRequestScopeCurrent(scope)),
+      onError: (message) => {
+        this.error = message;
+      },
+    });
   }
 
   private assignCategory(key: string, category: string | null) {
