@@ -155,7 +155,7 @@ describe("workspace CLI", () => {
       "workspaces.gallery.list",
       expect.anything(),
       { url: "https://gallery.example/index.json" },
-      { mode: "cli", scopes: ["operator.write", "operator.read"] },
+      { mode: "cli", scopes: ["operator.read"] },
     );
     expect(gatewayRuntime.callGatewayFromCli).toHaveBeenNthCalledWith(
       2,

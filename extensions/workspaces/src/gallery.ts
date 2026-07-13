@@ -1,6 +1,6 @@
-import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeWorkspaceDataLogicalPath } from "./binding-contract.js";
@@ -13,6 +13,7 @@ import {
 } from "./manifest.js";
 import type { WorkspaceActor, WorkspaceWidgetRegistryEntry } from "./schema.js";
 import type { WorkspaceStore } from "./store.js";
+import { withWidgetInstallLock } from "./widget-install-lock.js";
 
 const MAX_ALLOWED_ORIGINS = 16;
 const MAX_URL_LENGTH = 2_048;
@@ -51,6 +52,7 @@ type WorkspaceGalleryRegistry = {
 
 type GuardedFetchOptions = Parameters<typeof fetchWithSsrFGuard>[0];
 type GuardedFetchResult = Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+type GalleryRoot = Awaited<ReturnType<typeof fsRoot>>;
 export type WorkspaceGalleryFetch = (options: GuardedFetchOptions) => Promise<GuardedFetchResult>;
 
 type GalleryNetworkOptions = WorkspaceGalleryConfig & {
@@ -187,7 +189,6 @@ async function fetchGalleryJson(
       requireHttps: true,
       maxRedirects: 0,
       timeoutMs: FETCH_TIMEOUT_MS,
-      policy: { allowedOrigins: [...options.allowedOrigins] },
       auditContext: "workspaces-gallery",
       init: { method: "GET", headers: { Accept: "application/json" }, redirect: "manual" },
     });
@@ -356,47 +357,88 @@ async function installBundle(
   options: Pick<InstallGalleryOptions, "actor" | "stateDir" | "store">,
 ): Promise<WorkspaceWidgetRegistryEntry> {
   const stateDir = path.resolve(options.stateDir ?? resolveStateDir());
-  const widgetDir = resolveWidgetDir(bundle.name, stateDir);
-  await fs.mkdir(path.dirname(widgetDir), { recursive: true, mode: 0o700 });
+  resolveWidgetDir(bundle.name, stateDir);
+  const root = await fsRoot(stateDir, { mkdir: true, mode: 0o600, symlinks: "reject" });
+  const widgetsRoot = path.posix.join("workspaces", "widgets");
+  const targetDir = path.posix.join(widgetsRoot, bundle.name);
+  const stagedDir = path.posix.join(widgetsRoot, `.gallery-install-${randomUUID()}`);
+  await root.mkdir(widgetsRoot);
+  await root.mkdir(stagedDir);
+  const files = new Map(bundle.files);
+  files.set("widget.json", `${JSON.stringify(bundle.manifest, null, 2)}\n`);
+  const installedPaths = [...files.keys()].map((logicalPath) =>
+    path.posix.join(stagedDir, logicalPath),
+  );
+  let cleanupDir = stagedDir;
   try {
-    await fs.mkdir(widgetDir, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`workspace widget already exists: ${bundle.name}`, { cause: error });
-    }
-    throw error;
-  }
-  try {
-    const files = new Map(bundle.files);
-    files.set("widget.json", `${JSON.stringify(bundle.manifest, null, 2)}\n`);
     for (const [logicalPath, content] of files) {
-      const target = path.resolve(widgetDir, logicalPath);
-      if (!target.startsWith(`${widgetDir}${path.sep}`)) {
-        throw new Error(`widget bundle file escapes its directory: ${logicalPath}`);
-      }
-      await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
-      await replaceFileAtomic({
-        filePath: target,
-        content,
-        mode: 0o600,
-        tempPrefix: ".workspace-gallery-install",
-        throwOnCleanupError: true,
-      });
+      const relativePath = path.posix.join(stagedDir, logicalPath);
+      await root.create(relativePath, content, { mkdir: true, mode: 0o600 });
     }
-    const result = await options.store.mutate(
-      (draft) => {
-        if (draft.widgetsRegistry[bundle.name]) {
+    const result = await withWidgetInstallLock(bundle.name, stateDir, async () => {
+      try {
+        if (await root.exists(targetDir)) {
           throw new Error(`workspace widget already exists: ${bundle.name}`);
         }
-        draft.widgetsRegistry[bundle.name] = { status: "pending", createdBy: options.actor };
-      },
-      { actor: options.actor },
-    );
+        // The per-widget reservation covers every creator. The completed staged
+        // tree therefore becomes visible in one rename without replacing a peer.
+        await root.move(stagedDir, targetDir, { overwrite: true });
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          ["already-exists", "EEXIST", "ENOTEMPTY"].includes(
+            (error as NodeJS.ErrnoException).code ?? "",
+          )
+        ) {
+          throw new Error(`workspace widget already exists: ${bundle.name}`, { cause: error });
+        }
+        throw error;
+      }
+      cleanupDir = targetDir;
+      return options.store.mutate(
+        (draft) => {
+          if (draft.widgetsRegistry[bundle.name]) {
+            throw new Error(`workspace widget already exists: ${bundle.name}`);
+          }
+          draft.widgetsRegistry[bundle.name] = { status: "pending", createdBy: options.actor };
+        },
+        { actor: options.actor },
+      );
+    });
     return result.doc.widgetsRegistry[bundle.name]!;
   } catch (error) {
-    await fs.rm(widgetDir, { recursive: true, force: true }).catch(() => {});
+    await removeInstalledTree(root, cleanupDir, installedPaths, stagedDir).catch(() => {});
     throw error;
   }
+}
+
+async function removeInstalledTree(
+  root: GalleryRoot,
+  cleanupDir: string,
+  writtenPaths: readonly string[],
+  stagedDir: string,
+): Promise<void> {
+  const paths = writtenPaths.map((entry) =>
+    cleanupDir === stagedDir
+      ? entry
+      : path.posix.join(cleanupDir, path.posix.relative(stagedDir, entry)),
+  );
+  const directories = new Set<string>();
+  for (const filePath of paths) {
+    await root.remove(filePath).catch(() => {});
+    for (
+      let parent = path.posix.dirname(filePath);
+      parent !== cleanupDir;
+      parent = path.posix.dirname(parent)
+    ) {
+      directories.add(parent);
+    }
+  }
+  for (const directory of [...directories].toSorted((left, right) => right.length - left.length)) {
+    await root.remove(directory).catch(() => {});
+  }
+  await root.remove(cleanupDir);
 }
 
 export async function installWorkspaceGalleryWidget(

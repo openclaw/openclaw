@@ -132,7 +132,9 @@ async function callWorkspaceGateway(
   const scopes =
     method === "workspaces.widget.approve" || method === "workspaces.gallery.install"
       ? (["operator.approvals"] as const)
-      : (["operator.write", "operator.read"] as const);
+      : method === "workspaces.gallery.list"
+        ? (["operator.read"] as const)
+        : (["operator.write", "operator.read"] as const);
   return await callGatewayFromCli(method, options, params, { mode: "cli", scopes: [...scopes] });
 }
 

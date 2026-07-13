@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -128,6 +130,47 @@ describe("renderWorkspace", () => {
     expect(container.querySelector('[data-test-id="workspace-fullbleed"]')).not.toBeNull();
     expect(container.querySelector('[data-test-id="workspace-grid"]')).toBeNull();
     expect(container.textContent).toContain("hello");
+  });
+
+  it("sizes an approved custom widget as full-bleed content", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const style = document.createElement("style");
+    const uiRoot =
+      path.basename(process.cwd()) === "ui" ? process.cwd() : path.join(process.cwd(), "ui");
+    style.textContent = await fs.readFile(path.join(uiRoot, "src/styles/workspace.css"), "utf8");
+    document.head.append(style);
+    const request = vi.fn(async () => ({
+      frameToken: "1111111111111111111111111111111111111111111",
+      frameExpiresAt: Date.now() + 60 * 60 * 1_000,
+      manifest: { entrypoint: "index.html", bindings: [], capabilities: [] },
+    }));
+    const client = {
+      request,
+      addEventListener: vi.fn(() => () => undefined),
+    } as unknown as GatewayBrowserClient;
+    const state = getWorkspaceState(host);
+    state.loaded = true;
+    state.activeSlug = "main";
+    state.workspace = structuredClone(doc);
+    state.workspace.tabs[0]!.layout = "full";
+    state.workspace.tabs[0]!.widgets[0]!.kind = "custom:weather";
+    state.workspace.widgetsRegistry.weather = { status: "approved" };
+
+    try {
+      render(renderWorkspace({ host, client, connected: true }), host);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => {
+        render(renderWorkspace({ host, client, connected: true }), host);
+        const custom = host.querySelector<HTMLElement>(".workspace-widget__custom");
+        expect(custom).not.toBeNull();
+        expect(getComputedStyle(custom!).minHeight).toBe("480px");
+      });
+    } finally {
+      stopWorkspace(host);
+      style.remove();
+      host.remove();
+    }
   });
 
   it("surfaces an action error toast", () => {

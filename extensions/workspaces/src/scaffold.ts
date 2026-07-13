@@ -8,6 +8,7 @@ import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { validateWidgetManifest } from "./manifest.js";
+import { withWidgetInstallLock } from "./widget-install-lock.js";
 
 type WorkspaceScaffoldOptions = {
   name: string;
@@ -131,7 +132,8 @@ export async function scaffoldWorkspaceWidget(
   if (!CUSTOM_WIDGET_NAME_PATTERN.test(name)) {
     throw new Error("widget name is invalid");
   }
-  const widgetsRoot = path.resolve(options.stateDir ?? resolveStateDir(), "workspaces", "widgets");
+  const stateDir = path.resolve(options.stateDir ?? resolveStateDir());
+  const widgetsRoot = path.resolve(stateDir, "workspaces", "widgets");
   const widgetDir = path.resolve(widgetsRoot, name);
   // The charset pattern permits dots, so `.` and `..` pass it — containment is what
   // actually keeps the directory inside the widgets root. Check it before anything
@@ -145,34 +147,36 @@ export async function scaffoldWorkspaceWidget(
   // error at creation time.
   validateWidgetManifest(widgetManifest(name, title), name);
   await fs.mkdir(widgetsRoot, { recursive: true, mode: 0o700 });
-  try {
-    await fs.mkdir(widgetDir, { mode: 0o700 });
-  } catch (error) {
-    if (isErrnoException(error) && error.code === "EEXIST") {
-      throw new Error("widget already exists", { cause: error });
+  return await withWidgetInstallLock(name, stateDir, async () => {
+    try {
+      await fs.mkdir(widgetDir, { mode: 0o700 });
+    } catch (error) {
+      if (isErrnoException(error) && error.code === "EEXIST") {
+        throw new Error("widget already exists", { cause: error });
+      }
+      throw error;
     }
-    throw error;
-  }
-  const manifestPath = path.join(widgetDir, "widget.json");
-  const htmlPath = path.join(widgetDir, "index.html");
-  const readmePath = path.join(widgetDir, "README.md");
-  await Promise.all([
-    fs.writeFile(
-      `${manifestPath}.tmp`,
-      `${JSON.stringify(widgetManifest(name, title), null, 2)}\n`,
-      {
+    const manifestPath = path.join(widgetDir, "widget.json");
+    const htmlPath = path.join(widgetDir, "index.html");
+    const readmePath = path.join(widgetDir, "README.md");
+    await Promise.all([
+      fs.writeFile(
+        `${manifestPath}.tmp`,
+        `${JSON.stringify(widgetManifest(name, title), null, 2)}\n`,
+        {
+          mode: 0o600,
+        },
+      ),
+      fs.writeFile(`${htmlPath}.tmp`, widgetHtml(title, options.createdBy ?? "an agent"), {
         mode: 0o600,
-      },
-    ),
-    fs.writeFile(`${htmlPath}.tmp`, widgetHtml(title, options.createdBy ?? "an agent"), {
-      mode: 0o600,
-    }),
-    fs.writeFile(`${readmePath}.tmp`, widgetReadme(name), { mode: 0o600 }),
-  ]);
-  await Promise.all([
-    fs.rename(`${manifestPath}.tmp`, manifestPath),
-    fs.rename(`${htmlPath}.tmp`, htmlPath),
-    fs.rename(`${readmePath}.tmp`, readmePath),
-  ]);
-  return { name, title, dir: widgetDir, manifestPath, htmlPath, readmePath };
+      }),
+      fs.writeFile(`${readmePath}.tmp`, widgetReadme(name), { mode: 0o600 }),
+    ]);
+    await Promise.all([
+      fs.rename(`${manifestPath}.tmp`, manifestPath),
+      fs.rename(`${htmlPath}.tmp`, htmlPath),
+      fs.rename(`${readmePath}.tmp`, readmePath),
+    ]);
+    return { name, title, dir: widgetDir, manifestPath, htmlPath, readmePath };
+  });
 }

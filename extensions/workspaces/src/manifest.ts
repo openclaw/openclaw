@@ -362,7 +362,7 @@ export function resolveWidgetDir(name: string, stateDir = resolveStateDir()): st
   const widgetDir = path.resolve(widgetsRoot, name);
   // Belt-and-braces: the charset check already forbids separators, but confirm
   // containment so the resolved directory can never escape the widgets root.
-  if (widgetDir !== widgetsRoot && !widgetDir.startsWith(`${widgetsRoot}${path.sep}`)) {
+  if (widgetDir === widgetsRoot || !widgetDir.startsWith(`${widgetsRoot}${path.sep}`)) {
     throw new Error("widget name is invalid");
   }
   return widgetDir;

@@ -107,9 +107,10 @@ default. Enable only the exact HTTPS origins you trust in the plugin configurati
 
 The gateway performs gallery requests server-side with the shared SSRF guard and pinned
 DNS. It sends no gateway token, cookies, authorization header, or other credentials.
-Requests have strict time and byte limits, accept JSON only, and reject redirects so an
-allowed URL cannot bounce the gateway to an unapproved origin. Registry entries, bundle URLs, manifests, file
-paths, file counts, and file sizes are validated before anything is written.
+Requests have strict time and byte limits and accept JSON only. Redirects are followed for at
+most three hops, and every destination must remain HTTPS and match the explicit origin allowlist,
+so an allowed URL cannot bounce the gateway to an unapproved origin. Registry entries, bundle
+URLs, manifests, file paths, file counts, and file sizes are validated before anything is written.
 
 Gallery trust has two deliberate approvals:
 
