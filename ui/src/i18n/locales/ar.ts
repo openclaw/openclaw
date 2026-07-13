@@ -228,6 +228,16 @@ export const ar: TranslationMap = {
       title: "OpenClaw للأجهزة المحمولة",
       subtitle: "امسح رمز QR هذا في تطبيق الهاتف المحمول لتوصيل هاتف جديد.",
       generating: "جارٍ إنشاء رمز إعداد آمن…",
+      accessTitle: "الوصول عبر الهاتف المحمول",
+      fullAccess: "وصول كامل (موصى به)",
+      fullAccessHint:
+        "العقدة بالإضافة إلى عناصر التحكم الكاملة في Gateway، بما في ذلك الإعدادات والترقيات.",
+      limitedAccess: "وصول محدود",
+      limitedAccessHint: "العقدة والدردشة والموافقات من دون عناصر التحكم الإدارية.",
+      generateCode: "إنشاء رمز الإعداد",
+      transportLimitedTitle: "محدود لأمان الشبكة",
+      transportLimitedHint:
+        "يستخدم عنوان URL الخاص بـ Gateway اتصال ws:// بنص عادي. استخدم wss:// أو Tailscale Serve، ثم أنشئ رمزًا جديدًا للوصول الكامل.",
       failed: "تعذر إنشاء رمز إعداد.",
       qrAlt: "رمز QR لإقران OpenClaw للأجهزة المحمولة",
       qrUnavailable: "رمز QR غير متاح. انسخ رمز الإعداد بدلًا من ذلك.",
