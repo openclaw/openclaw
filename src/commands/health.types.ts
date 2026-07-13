@@ -1,5 +1,5 @@
 // Shared summary types returned by gateway health and rendered by the CLI.
-import type { GatewayModelPricingHealth } from "../gateway/model-pricing-cache-state.js";
+import type { GatewayModelPricingHealth } from "../gateway/model-pricing-cache.types.js";
 /** Health snapshot for one configured channel account. */
 export type ChannelAccountHealthSummary = {
   accountId: string;

@@ -3,6 +3,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeModelRef } from "../agents/model-selection.js";
+import type { GatewayModelPricingHealth } from "./model-pricing-cache.types.js";
 
 export type CachedPricingTier = {
   input: number;
@@ -22,19 +23,7 @@ export type CachedModelPricing = {
   tieredPricing?: CachedPricingTier[];
 };
 
-type GatewayModelPricingHealthSource = "openrouter" | "litellm" | "bootstrap" | "refresh";
-
-export type GatewayModelPricingHealth = {
-  state: "ok" | "degraded" | "disabled";
-  sources: Array<{
-    source: GatewayModelPricingHealthSource;
-    state: "ok" | "degraded";
-    lastFailureAt?: number;
-    detail?: string;
-  }>;
-  lastFailureAt?: number;
-  detail?: string;
-};
+type GatewayModelPricingHealthSource = GatewayModelPricingHealth["sources"][number]["source"];
 
 let cachedPricing = new Map<string, CachedModelPricing>();
 let cachedAt = 0;
