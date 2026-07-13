@@ -164,3 +164,129 @@ describe("ReefTransportClient device authentication", () => {
     expect(new Set(seenTs).size).toBe(3);
   });
 });
+
+function createTrackedOverflowResponse(params: {
+  status: number;
+  chunkBytes: number;
+  totalChunks: number;
+}): {
+  response: Response;
+  state: { emittedBytes: number; cancelled: boolean };
+} {
+  const chunk = new Uint8Array(params.chunkBytes).fill(0x78);
+  const state = { emittedBytes: 0, cancelled: false };
+  let remaining = params.totalChunks;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (remaining <= 0) {
+        controller.close();
+        return;
+      }
+      remaining -= 1;
+      state.emittedBytes += chunk.byteLength;
+      controller.enqueue(chunk);
+    },
+    cancel() {
+      state.cancelled = true;
+    },
+  });
+  return {
+    response: new Response(body, {
+      status: params.status,
+      headers: { "content-type": "application/json" },
+    }),
+    state,
+  };
+}
+
+describe("ReefTransportClient response body bounds", () => {
+  it("accepts near-limit success JSON without cancelling the stream", async () => {
+    const payload = { entries: [], cursor: 9, pad: "x".repeat(8 * 1024) };
+    const body = JSON.stringify(payload);
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(body));
+          controller.close();
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => response,
+      () => ts,
+    );
+
+    await expect(client.pull(0)).resolves.toEqual(payload);
+    expect(cancelled).toBe(false);
+  });
+
+  it("cancels oversized success bodies before buffering the rest", async () => {
+    const offered = createTrackedOverflowResponse({
+      status: 200,
+      chunkBytes: 64 * 1024,
+      totalChunks: 320, // 20 MiB offered
+    });
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => offered.response,
+      () => ts,
+    );
+
+    await expect(client.pull(0)).rejects.toThrow(
+      /reef\.relay: JSON response exceeds 16777216 bytes/,
+    );
+    expect(offered.state.cancelled).toBe(true);
+    expect(offered.state.emittedBytes).toBeGreaterThan(16 * 1024 * 1024);
+    expect(offered.state.emittedBytes).toBeLessThan(20 * 1024 * 1024);
+  });
+
+  it("keeps status fallback and cancels oversized error bodies", async () => {
+    const offered = createTrackedOverflowResponse({
+      status: 503,
+      chunkBytes: 8 * 1024,
+      totalChunks: 16, // 128 KiB offered against 64 KiB error cap
+    });
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => offered.response,
+      () => ts,
+    );
+
+    await expect(client.listFriends()).rejects.toMatchObject({
+      name: "ReefRelayError",
+      status: 503,
+      message: "relay HTTP 503",
+    });
+    expect(offered.state.cancelled).toBe(true);
+    expect(offered.state.emittedBytes).toBeGreaterThan(64 * 1024);
+    expect(offered.state.emittedBytes).toBeLessThan(128 * 1024);
+  });
+
+  it("still surfaces bounded relay error messages", async () => {
+    const client = new ReefTransportClient(
+      "https://relay.example",
+      "alice",
+      keys,
+      async () => Response.json({ error: "friend code expired" }, { status: 400 }),
+      () => ts,
+    );
+
+    await expect(client.requestFriend("bob", "code")).rejects.toMatchObject({
+      name: "ReefRelayError",
+      status: 400,
+      message: "friend code expired",
+    });
+  });
+});
