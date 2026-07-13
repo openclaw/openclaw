@@ -7,6 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { execa, type Options as ExecaOptions, type ResultPromise } from "execa";
 import { danger, shouldLogVerbose } from "../globals.js";
+import { resolveExecutablePath } from "../infra/executable-path.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import {
   decodeWindowsOutputBuffer,
@@ -96,15 +97,28 @@ function resolveNpmArgvForWindows(argv: string[]): string[] | null {
  * On Windows, non-.exe commands (like pnpm, yarn) are resolved to .cmd; npm/npx
  * are handled by resolveNpmArgvForWindows to avoid spawn EINVAL (no direct .cmd).
  */
-function resolveCommand(command: string): string {
-  return resolveWindowsCommandShim({
-    command,
+function resolveCommand(command: string, env: NodeJS.ProcessEnv): string {
+  const resolvedCommand =
+    process.platform === "win32" ? (resolveExecutablePath(command, { env }) ?? command) : command;
+  const shimmedCommand = resolveWindowsCommandShim({
+    command: resolvedCommand,
     cmdCommands: ["corepack", "pnpm", "yarn"],
   });
+  if (process.platform !== "win32") {
+    return shimmedCommand;
+  }
+  const ext = normalizeLowercaseStringOrEmpty(path.extname(shimmedCommand));
+  if (ext === ".exe" || ext === ".com" || ext === ".cmd" || ext === ".bat") {
+    return shimmedCommand;
+  }
+  // Cross-spawn routes every other Windows command through process.env.ComSpec.
+  // Force unsupported or unresolved commands down the direct-spawn error path.
+  return `${shimmedCommand}.exe`;
 }
 
 function resolveChildProcessInvocation(params: {
   argv: string[];
+  env: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
 }): {
   args: string[];
@@ -118,7 +132,9 @@ function resolveChildProcessInvocation(params: {
       ? (resolveNpmArgvForWindows(params.argv) ?? params.argv)
       : params.argv;
   const resolvedCommand =
-    finalArgv !== params.argv ? (finalArgv[0] ?? "") : resolveCommand(params.argv[0] ?? "");
+    finalArgv !== params.argv
+      ? (finalArgv[0] ?? "")
+      : resolveCommand(params.argv[0] ?? "", params.env);
   const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
 
   return {
@@ -161,10 +177,15 @@ export function spawnCommand<OptionsType extends SpawnCommandOptions = SpawnComm
   options: OptionsType = {} as OptionsType,
 ): ResultPromise<OptionsType> {
   const { baseEnv, env, windowsVerbatimArguments, ...execaOptions } = options;
-  const invocation = resolveChildProcessInvocation({ argv, windowsVerbatimArguments });
+  const commandEnv = resolveCommandEnv({ argv, baseEnv, env });
+  const invocation = resolveChildProcessInvocation({
+    argv,
+    env: commandEnv,
+    windowsVerbatimArguments,
+  });
   return execa(invocation.command, invocation.args, {
     ...execaOptions,
-    env: resolveCommandEnv({ argv, baseEnv, env }),
+    env: commandEnv,
     extendEnv: false,
     shell: false,
     windowsHide: invocation.windowsHide,
@@ -223,7 +244,15 @@ export async function runExec(
   } catch (err) {
     const windowsEncoding = resolveWindowsConsoleEncoding();
     if (err && typeof err === "object") {
-      const errorWithOutput = err as { stdout?: unknown; stderr?: unknown };
+      const errorWithOutput = err as {
+        code?: string | number;
+        exitCode?: unknown;
+        stdout?: unknown;
+        stderr?: unknown;
+      };
+      if (errorWithOutput.code === undefined && typeof errorWithOutput.exitCode === "number") {
+        errorWithOutput.code = errorWithOutput.exitCode;
+      }
       if (errorWithOutput.stdout instanceof Uint8Array) {
         errorWithOutput.stdout = decodeWindowsOutputBuffer({
           buffer: Buffer.from(errorWithOutput.stdout),
@@ -455,6 +484,7 @@ export async function runCommandWithTimeout(
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
   const invocation = resolveChildProcessInvocation({
     argv,
+    env: resolveCommandEnv({ argv, baseEnv, env }),
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
 

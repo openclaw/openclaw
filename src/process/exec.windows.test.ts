@@ -9,6 +9,7 @@ import {
   getWindowsSystem32ExePath,
   resetWindowsInstallRootsForTests,
 } from "../infra/windows-install-roots.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const { execaMock, spawnSyncMock } = vi.hoisted(() => ({
@@ -180,6 +181,26 @@ describe("Windows command execution", () => {
     }
   });
 
+  it("resolves implicit batch shims before Execa can consult ComSpec", async () => {
+    await withTempDir("openclaw-execa-windows-shim-", async (binDir) => {
+      const shimPath = path.join(binDir, "custom-shim.cmd");
+      fs.writeFileSync(shimPath, "@echo off\r\n", "utf8");
+
+      await withMockedWindowsPlatform(async () => {
+        void spawnCommand(["custom-shim", "--version"], {
+          baseEnv: {
+            ComSpec: "C:\\workspace\\evil\\cmd.exe",
+            PATH: binDir,
+            PATHEXT: ".CMD",
+          },
+        });
+        const call = requireExecaCall(0);
+        expect(call[0]).toBe(expectedTrustedCmdExe());
+        expect(call[1][3]).toContain(`${shimPath} --version`);
+      });
+    });
+  });
+
   it("escapes command arguments inside the trusted cmd.exe wrapper", async () => {
     await withMockedWindowsPlatform(async () => {
       await runCommandWithTimeout(["pnpm", "run", "value^with^carets"], { timeoutMs: 1_000 });
@@ -211,7 +232,9 @@ describe("Windows command execution", () => {
   it("sets windowsHide and disables shell on direct commands", async () => {
     await withMockedWindowsPlatform(async () => {
       void spawnCommand(["node", "script.js"]);
-      expect(requireExecaCall(0)[2]).toMatchObject({ shell: false, windowsHide: true });
+      const [command, , options] = requireExecaCall(0);
+      expect(command).toBe("node.exe");
+      expect(options).toMatchObject({ shell: false, windowsHide: true });
     });
   });
 

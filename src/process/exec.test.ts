@@ -222,6 +222,13 @@ describe("runExec", () => {
       runExec(process.execPath, ["-e", "process.stdout.write('ok'); process.stderr.write('warn')"]),
     ).resolves.toEqual({ stdout: "ok", stderr: "warn" });
   });
+
+  it("preserves the numeric exit code on command failures", async () => {
+    await expect(runExec(process.execPath, ["-e", "process.exit(7)"])).rejects.toMatchObject({
+      code: 7,
+      exitCode: 7,
+    });
+  });
 });
 
 describe("attachChildProcessBridge", () => {
