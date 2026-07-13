@@ -65,13 +65,10 @@ function getActionCommandPath(actionCommand: Command): string[] {
 
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   const root = getRootCommand(actionCommand);
-  if (typeof root.getOptionValueSource !== "function") {
-    return undefined;
-  }
   if (root.getOptionValueSource("logLevel") !== "cli") {
     return undefined;
   }
-  const logLevel = root.opts<Record<string, unknown>>().logLevel;
+  const logLevel = root.getOptionValue("logLevel");
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
 }
 

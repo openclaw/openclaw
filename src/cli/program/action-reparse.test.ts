@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
 
 const buildParseArgvMock = vi.hoisted(() => vi.fn());
-const resolveActionArgsMock = vi.hoisted(() => vi.fn());
 const resolveCommandOptionArgsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../argv.js", () => ({
@@ -12,7 +11,6 @@ vi.mock("../argv.js", () => ({
 }));
 
 vi.mock("./helpers.js", () => ({
-  resolveActionArgs: resolveActionArgsMock,
   resolveCommandOptionArgs: resolveCommandOptionArgsMock,
 }));
 
@@ -47,7 +45,6 @@ describe("reparseProgramFromActionArgs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     buildParseArgvMock.mockReturnValue(["node", "openclaw", "status"]);
-    resolveActionArgsMock.mockReturnValue([]);
     resolveCommandOptionArgsMock.mockReturnValue([]);
   });
 
@@ -58,8 +55,8 @@ describe("reparseProgramFromActionArgs", () => {
     const actionCommand = {
       name: () => "status",
       parent: program,
+      args: ["--json"],
     } as unknown as Command;
-    resolveActionArgsMock.mockReturnValue(["--json"]);
 
     await reparseProgramFromActionArgs(program, [actionCommand]);
 
@@ -78,8 +75,8 @@ describe("reparseProgramFromActionArgs", () => {
     const actionCommand = {
       name: () => "",
       parent: program,
+      args: ["--json"],
     } as unknown as Command;
-    resolveActionArgsMock.mockReturnValue(["--json"]);
 
     await reparseProgramFromActionArgs(program, [actionCommand]);
 
@@ -97,8 +94,8 @@ describe("reparseProgramFromActionArgs", () => {
     const actionCommand = {
       name: () => "open",
       parent: program,
+      args: ["about:blank"],
     } as unknown as Command;
-    resolveActionArgsMock.mockReturnValue(["about:blank"]);
     resolveCommandOptionArgsMock.mockReturnValue(["--json"]);
 
     await reparseProgramFromActionArgs(program, [actionCommand]);
@@ -118,9 +115,9 @@ describe("reparseProgramFromActionArgs", () => {
     const workspaces = root.command("workspaces");
     const audit = workspaces.command("audit");
     const exportCommand = audit.command("export");
+    exportCommand.args = ["--since", "1"];
     const parseAsync = vi.spyOn(root, "parseAsync").mockResolvedValue(root);
     const auditParseAsync = vi.spyOn(audit, "parseAsync");
-    resolveActionArgsMock.mockReturnValue(["--since", "1"]);
 
     await reparseProgramFromActionArgs(audit, [exportCommand]);
 
@@ -140,9 +137,9 @@ describe("reparseProgramFromActionArgs", () => {
     const workspaces = root.command("workspaces");
     const audit = workspaces.command("audit");
     const exportCommand = audit.command("export");
+    exportCommand.args = ["--since", "1"];
     deleteRawArgs(root);
     const parseAsync = vi.spyOn(root, "parseAsync").mockResolvedValue(root);
-    resolveActionArgsMock.mockReturnValue(["--since", "1"]);
 
     await reparseProgramFromActionArgs(audit, [exportCommand]);
 
@@ -160,7 +157,6 @@ describe("reparseProgramFromActionArgs", () => {
 
     await reparseProgramFromActionArgs(program, []);
 
-    expect(resolveActionArgsMock).toHaveBeenCalledWith(undefined);
     expect(buildParseArgvMock).toHaveBeenCalledWith({
       programName: "openclaw",
       rawArgs: [],
@@ -174,9 +170,9 @@ describe("reparseProgramFromActionArgs", () => {
     // still reparse from reconstructed argv if Commander stops exposing it.
     const root = new Command().name("openclaw");
     const configCommand = root.command("config");
+    configCommand.args = ["set", "key", "value"];
     deleteRawArgs(root);
     const parseAsync = vi.spyOn(root, "parseAsync").mockResolvedValue(root);
-    resolveActionArgsMock.mockReturnValue(["set", "key", "value"]);
 
     await reparseProgramFromActionArgs(root, [configCommand]);
 
