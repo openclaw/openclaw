@@ -1,4 +1,5 @@
 // Agent Core type module defines shared TypeScript contracts.
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import type {
   ImageContent,
@@ -14,6 +15,14 @@ import type { Session } from "./session/session.js";
 
 export { err, ok } from "@openclaw/normalization-core/result";
 export type { Result } from "@openclaw/normalization-core/result";
+
+/**
+ * @deprecated Use `toErrorObject` from `@openclaw/normalization-core/error-coercion`.
+ * Kept through the next major release for the shipped agent-core plugin API.
+ */
+export function toError(error: unknown): Error {
+  return toErrorObject(error, "Non-Error thrown");
+}
 
 /**
  * Skill loaded from a `SKILL.md` file or provided by an application.
