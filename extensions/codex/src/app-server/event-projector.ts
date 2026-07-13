@@ -785,9 +785,7 @@ export class CodexAppServerEventProjector {
     this.synthesizeMissingToolResults({
       synthesize: legacyFailClosed,
       recordPromptError:
-        legacyFailClosed &&
-        !hasDeliverableAssistantOnCompletedTurn &&
-        !this.aborted,
+        legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn && !this.aborted,
     });
     const lastAssistant =
       assistantTexts.length > 0
