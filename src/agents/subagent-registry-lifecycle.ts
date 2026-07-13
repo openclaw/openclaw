@@ -988,6 +988,9 @@ export function createSubagentRegistryLifecycleController(params: {
         await retireSessionMcpRuntimeForSessionKey({
           sessionKey: cleanupParams.entry.childSessionKey,
           reason: "subagent-run-cleanup",
+          // MCP App views can outlive the one-shot run through their bounded
+          // runtime lease; let the view-release path finish retirement.
+          preserveActiveLeases: true,
           onError: (error, sessionId) => {
             params.warn("failed to retire subagent bundle MCP runtime", {
               error: buildSafeLifecycleErrorMeta(error),
@@ -1056,6 +1059,9 @@ export function createSubagentRegistryLifecycleController(params: {
     await retireSessionMcpRuntimeForSessionKey({
       sessionKey: cleanupParams.entry.childSessionKey,
       reason: cleanupParams.reason,
+      // MCP App views can outlive the one-shot run through their bounded
+      // runtime lease; let the view-release path finish retirement.
+      preserveActiveLeases: true,
       onError: (error, sessionId) => {
         params.warn("failed to retire subagent bundle MCP runtime", {
           error: buildSafeLifecycleErrorMeta(error),
@@ -1897,10 +1903,57 @@ export function createSubagentRegistryLifecycleController(params: {
         params.persist();
       }
     };
+    const dispatchBrowserCleanup = async (): Promise<void> => {
+      if (entry.browserCleanupDispatchedAt !== undefined) {
+        return;
+      }
+      entry.browserCleanupDispatchedAt = Date.now();
+      let cleanupBrowserSessions: typeof cleanupBrowserSessionsForLifecycleEnd | undefined;
+      try {
+        cleanupBrowserSessions =
+          params.cleanupBrowserSessionsForLifecycleEnd ??
+          (await loadCleanupBrowserSessionsForLifecycleEnd());
+      } catch (error) {
+        params.warn("failed to cleanup browser sessions for completed subagent", {
+          error: buildSafeLifecycleErrorMeta(error),
+          runId: maskRunId(completeParams.runId),
+          childSessionKey: maskSessionKey(entry.childSessionKey),
+        });
+      }
+      // The synchronous marker owns this dispatch. A duplicate may advance the
+      // registry while the loader yields; the run owner and session gate keep
+      // this completed run's cleanup safe after that handoff.
+      if (cleanupBrowserSessions !== undefined) {
+        void runWithGatewayIndependentRootWorkAdmission(async () => {
+          try {
+            await cleanupBrowserSessions({
+              sessionKeys: [entry.childSessionKey],
+              ownerId: completeParams.runId,
+              onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+            });
+          } catch (error) {
+            params.warn("failed to cleanup browser sessions for completed subagent", {
+              error: buildSafeLifecycleErrorMeta(error),
+              runId: maskRunId(completeParams.runId),
+              childSessionKey: maskSessionKey(entry.childSessionKey),
+            });
+          }
+        }).catch((error: unknown) => {
+          params.warn("failed to admit browser cleanup for completed subagent", {
+            error: buildSafeLifecycleErrorMeta(error),
+            runId: maskRunId(completeParams.runId),
+            childSessionKey: maskSessionKey(entry.childSessionKey),
+          });
+        });
+      }
+    };
     sessionSuperseded = sessionSuperseded || newerGenerationOwnsSession(entry);
     if (sessionSuperseded) {
       // This callback belongs to an older run that shared the session key.
       // Update only its task projection; the newer generation owns all session effects.
+      if (completeParams.triggerCleanup) {
+        await dispatchBrowserCleanup();
+      }
       await retireSupersededSession(entry);
       return;
     }
@@ -1990,48 +2043,28 @@ export function createSubagentRegistryLifecycleController(params: {
     // registerSubagentRun fires both an in-process listener and a gateway
     // waitForSubagentCompletion RPC; both can reach this point for the same
     // runId in embedded mode. Dedupe only the browser driver tab-close IPC
-    // with a sync check-then-set. The retire + announce tail below must still
-    // run for every caller, so a slow or held first browser cleanup cannot
-    // strand a duplicate caller's completion behind it.
-    if (entry.browserCleanupDispatchedAt === undefined) {
-      entry.browserCleanupDispatchedAt = Date.now();
-      try {
-        const cleanupBrowserSessions =
-          params.cleanupBrowserSessionsForLifecycleEnd ??
-          (await loadCleanupBrowserSessionsForLifecycleEnd());
-        await cleanupBrowserSessions({
-          sessionKeys: [entry.childSessionKey],
-          onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-        });
-      } catch (error) {
-        params.warn("failed to cleanup browser sessions for completed subagent", {
-          error: buildSafeLifecycleErrorMeta(error),
-          runId: maskRunId(completeParams.runId),
-          childSessionKey: maskSessionKey(entry.childSessionKey),
-        });
-      }
-      if (!isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
-        return;
-      }
-      if (newerGenerationOwnsSession(entry)) {
-        await retireSupersededSession(entry);
-        return;
-      }
+    // with a sync check-then-set. Browser cleanup is independent work: its
+    // exclusive session gate protects successor browser operations while the
+    // MCP retirement and completion delivery continue immediately.
+    await dispatchBrowserCleanup();
+    if (newerGenerationOwnsSession(entry)) {
+      await retireSupersededSession(entry);
+      return;
     }
 
-    try {
-      await retireRunModeBundleMcpRuntime({
-        runId: completeParams.runId,
-        entry,
-        reason: "subagent-run-complete",
-      });
-    } catch (error) {
+    const retirement = retireRunModeBundleMcpRuntime({
+      runId: completeParams.runId,
+      entry,
+      reason: "subagent-run-complete",
+    }).catch((error: unknown) => {
       params.warn("failed to retire subagent bundle MCP runtime after completion", {
         error: buildSafeLifecycleErrorMeta(error),
         runId: maskRunId(completeParams.runId),
         childSessionKey: maskSessionKey(entry.childSessionKey),
       });
-    }
+    });
+
+    await retirement;
     if (!isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
       return;
     }

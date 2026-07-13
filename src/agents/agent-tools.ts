@@ -869,6 +869,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             requesterSenderId: options?.senderId,
             senderIsOwner: options?.senderIsOwner,
             sessionId: options?.sessionId,
+            runId: options?.runId,
             oneShotCliRun: options?.oneShotCliRun,
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,

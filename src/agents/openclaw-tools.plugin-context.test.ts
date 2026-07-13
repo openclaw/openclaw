@@ -92,6 +92,17 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
   });
 
+  it("forwards the run owner for per-run plugin resources", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        runId: "run-child-1",
+      },
+    });
+
+    expect(result.context.runId).toBe("run-child-1");
+  });
+
   it("forwards runtime-owned active model metadata", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

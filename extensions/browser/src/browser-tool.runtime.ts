@@ -67,6 +67,8 @@ export { getBrowserProfileCapabilities } from "./browser/profile-capabilities.js
 export { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./browser/proxy-files.js";
 export { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 export {
+  acquireTrackedBrowserSessionAccess,
+  claimTrackedBrowserSessionOwner,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,

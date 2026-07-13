@@ -8,6 +8,10 @@ const clientMocks = vi.hoisted(() => ({
 vi.mock("./client.js", () => clientMocks);
 
 import {
+  acquireTrackedBrowserSessionAccess,
+  claimTrackedBrowserSessionOwner,
+  countTrackedSessionBrowserTabsForTests,
+  resetTrackedSessionBrowserTabsForTests,
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
   touchSessionBrowserTab,
@@ -70,6 +74,208 @@ describe("session tab registry", () => {
       baseUrl: "http://127.0.0.1:9222",
       profile: "openclaw",
     });
+  });
+
+  it("closes only tabs owned by the completed run and preserves successor tabs", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "old-tab",
+      ownerId: "run-old",
+    });
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "successor-tab",
+      ownerId: "run-successor",
+    });
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "legacy-tab",
+    });
+    const closeTab = vi.fn(async () => {});
+
+    await expect(
+      closeTrackedBrowserTabsForSessions({
+        sessionKeys: ["agent:main:subagent:child"],
+        ownerId: "run-old",
+        closeTab,
+      }),
+    ).resolves.toBe(2);
+
+    expect(closeTab).toHaveBeenCalledWith({
+      targetId: "old-tab",
+      baseUrl: undefined,
+      profile: undefined,
+    });
+    expect(closeTab).toHaveBeenCalledWith({
+      targetId: "legacy-tab",
+      baseUrl: undefined,
+      profile: undefined,
+    });
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:subagent:child")).toBe(1);
+  });
+
+  it("transfers ownership when a successor reuses an existing tab", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "reused-tab",
+      ownerId: "run-old",
+    });
+    touchSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "reused-tab",
+      ownerId: "run-successor",
+    });
+    const closeTab = vi.fn(async () => {});
+
+    await closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:subagent:child"],
+      ownerId: "run-old",
+      closeTab,
+    });
+
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:subagent:child")).toBe(1);
+  });
+
+  it("ignores a late predecessor callback after a successor claim", async () => {
+    const oldClaim = claimTrackedBrowserSessionOwner({
+      sessionKey: "agent:main:subagent:child",
+      ownerId: "run-old",
+    });
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "reused-tab",
+      ownerId: "run-old",
+      ownerClaim: oldClaim,
+    });
+    const successorClaim = claimTrackedBrowserSessionOwner({
+      sessionKey: "agent:main:subagent:child",
+      ownerId: "run-successor",
+    });
+    touchSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "reused-tab",
+      ownerId: "run-successor",
+      ownerClaim: successorClaim,
+    });
+    touchSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "reused-tab",
+      ownerId: "run-old",
+      ownerClaim: oldClaim,
+    });
+    const closeTab = vi.fn(async () => {});
+
+    await closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:subagent:child"],
+      ownerId: "run-old",
+      closeTab,
+    });
+
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:subagent:child")).toBe(1);
+  });
+
+  it("drops a blocked predecessor alias so the successor can retire the tab", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:old-alias",
+      targetId: "shared-tab",
+      ownerId: "run-old",
+    });
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:new-alias",
+      targetId: "shared-tab",
+      ownerId: "run-successor",
+    });
+    const closeTab = vi.fn(async () => {});
+
+    await closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:old-alias", "agent:main:new-alias"],
+      ownerId: "run-old",
+      closeTab,
+    });
+
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:old-alias")).toBe(0);
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:new-alias")).toBe(1);
+
+    await closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:new-alias"],
+      ownerId: "run-successor",
+      closeTab,
+    });
+    expect(closeTab).toHaveBeenCalledOnce();
+    expect(countTrackedSessionBrowserTabsForTests()).toBe(0);
+  });
+
+  it("waits for active browser access before closing and blocks successor access", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "old-tab",
+      ownerId: "run-old",
+    });
+    const releaseActiveAccess = await acquireTrackedBrowserSessionAccess({
+      sessionKey: "agent:main:subagent:child",
+    });
+    let releaseClose: (() => void) | undefined;
+    const closeTab = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        }),
+    );
+    const cleanup = closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:subagent:child"],
+      ownerId: "run-old",
+      closeTab,
+    });
+
+    await Promise.resolve();
+    expect(closeTab).not.toHaveBeenCalled();
+    releaseActiveAccess();
+    await vi.waitFor(() => expect(closeTab).toHaveBeenCalledOnce());
+
+    let successorAccessStarted = false;
+    const successorAccess = acquireTrackedBrowserSessionAccess({
+      sessionKey: "agent:main:subagent:child",
+    }).then((release) => {
+      successorAccessStarted = true;
+      return release;
+    });
+    await Promise.resolve();
+    expect(successorAccessStarted).toBe(false);
+
+    releaseClose?.();
+    await cleanup;
+    const releaseSuccessorAccess = await successorAccess;
+    releaseSuccessorAccess();
+    expect(successorAccessStarted).toBe(true);
+  });
+
+  it("keeps failed closes tracked for a later cleanup", async () => {
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:subagent:child",
+      targetId: "tab-a",
+      ownerId: "run-old",
+    });
+    const closeTab = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("browser unavailable"))
+      .mockResolvedValueOnce(undefined);
+
+    await closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:subagent:child"],
+      ownerId: "run-old",
+      closeTab,
+    });
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:subagent:child")).toBe(1);
+
+    await closeTrackedBrowserTabsForSessions({
+      sessionKeys: ["agent:main:subagent:child"],
+      ownerId: "run-old",
+      closeTab,
+    });
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:subagent:child")).toBe(0);
   });
 
   it("closes tracked tabs through the raw target-id client path", async () => {
@@ -148,6 +354,7 @@ describe("session tab registry", () => {
     expect(closed).toBe(0);
     expect(closeTab).toHaveBeenCalledTimes(2);
     expect(warnings).toEqual(["failed to close tracked browser tab tab-b: Error: network down"]);
+    expect(countTrackedSessionBrowserTabsForTests()).toBe(1);
   });
 
   it("sweeps idle tracked tabs and keeps recently touched tabs", async () => {

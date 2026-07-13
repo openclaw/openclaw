@@ -34,6 +34,8 @@ export type OpenClawPluginToolOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   requesterAgentIdOverride?: string;
   sessionId?: string;
+  /** Stable run identifier used by plugins that own per-run resources. */
+  runId?: string;
   /**
    * Explicit one-shot local CLI runs should not keep plugin-owned process
    * resources alive after emitting their result.
@@ -93,6 +95,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentId: sessionAgentId,
       sessionKey: options?.agentSessionKey,
       sessionId: options?.sessionId,
+      runId: options?.runId,
       activeModel,
       browser: {
         sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,

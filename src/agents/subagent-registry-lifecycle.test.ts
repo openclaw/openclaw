@@ -200,6 +200,8 @@ function createLifecycleController({
     notifyContextEngineSubagentEnded: vi.fn(async () => {}),
     retireSupersededRun: vi.fn(async () => {}),
     resumeSubagentRun: vi.fn(),
+    cleanupBrowserSessionsForLifecycleEnd:
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
     callGateway: async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> =>
       (await gatewayMocks.callGateway(opts)) as T,
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
@@ -282,7 +284,7 @@ describe("subagent registry lifecycle hardening", () => {
     bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockResolvedValue(true);
   });
 
-  it("keeps task finalization, resource retirement, and announce cleanup root-admitted", async () => {
+  it("does not hold MCP retirement or announce cleanup behind browser cleanup", async () => {
     const entry = createRunEntry({ expectsCompletionMessage: true });
     let releaseBrowserCleanup: (() => void) | undefined;
     let releaseAnnounce: ((didAnnounce: boolean) => void) | undefined;
@@ -313,17 +315,70 @@ describe("subagent registry lifecycle hardening", () => {
         browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
       ).toHaveBeenCalledOnce(),
     );
+    const browserCleanupArg = firstCallArg(
+      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+    );
+    expectFields(browserCleanupArg, {
+      sessionKeys: [entry.childSessionKey],
+      ownerId: entry.runId,
+    });
     expect(taskExecutorMocks.completeTaskRunByRunId).toHaveBeenCalledOnce();
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
-
-    releaseBrowserCleanup?.();
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledOnce();
     await vi.waitFor(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
-    await completion;
-    expect(getActiveGatewayRootWorkCount()).toBe(1);
+    expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
 
     releaseAnnounce?.(true);
+    await completion;
+    expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
+
+    releaseBrowserCleanup?.();
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
     expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
+  it("cleans the old browser owner without retiring a successor MCP runtime", async () => {
+    const entry = createRunEntry({ generation: 1 });
+    const successor = createRunEntry({
+      runId: "run-successor",
+      generation: 2,
+      createdAt: entry.createdAt + 1,
+      startedAt: entry.startedAt + 1,
+    });
+    const runs = new Map([
+      [entry.runId, entry],
+      [successor.runId, successor],
+    ]);
+    const retireSupersededRun = vi.fn(async (runId: string) => {
+      runs.delete(runId);
+    });
+    const controller = createLifecycleController({ entry, runs, retireSupersededRun });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() =>
+      expect(
+        browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+      ).toHaveBeenCalledOnce(),
+    );
+    expect(
+      firstCallArg(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd),
+    ).toEqual(
+      expect.objectContaining({
+        sessionKeys: [entry.childSessionKey],
+        ownerId: entry.runId,
+      }),
+    );
+    expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).not.toHaveBeenCalled();
+    expect(retireSupersededRun).toHaveBeenCalledWith(entry.runId, entry);
+    expect(runs.get(successor.runId)).toBe(successor);
   });
 
   it("keeps direct delete cleanup root-admitted until the gateway call settles", async () => {
@@ -359,11 +414,11 @@ describe("subagent registry lifecycle hardening", () => {
     vi.useFakeTimers();
     try {
       const entry = createRunEntry({ expectsCompletionMessage: true });
-      let releaseBrowserCleanup: (() => void) | undefined;
-      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd.mockImplementationOnce(
+      let releaseRetirement: (() => void) | undefined;
+      bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey.mockImplementationOnce(
         () =>
-          new Promise<void>((resolve) => {
-            releaseBrowserCleanup = resolve;
+          new Promise<boolean>((resolve) => {
+            releaseRetirement = () => resolve(true);
           }),
       );
       const runSubagentAnnounceFlow = vi.fn(async () => true);
@@ -383,9 +438,9 @@ describe("subagent registry lifecycle hardening", () => {
         reason: SUBAGENT_ENDED_REASON_COMPLETE,
         triggerCleanup: true,
       });
-      await vi.waitFor(() => expect(releaseBrowserCleanup).toBeTypeOf("function"));
+      await vi.waitFor(() => expect(releaseRetirement).toBeTypeOf("function"));
       markGatewayRestartDraining();
-      releaseBrowserCleanup?.();
+      releaseRetirement?.();
       await completion;
       await vi.waitFor(() =>
         expect(runtimeMocks.log).toHaveBeenCalledWith(
@@ -1843,9 +1898,12 @@ describe("subagent registry lifecycle hardening", () => {
     expect(lifecycleEventMocks.emitSessionLifecycleEvent).not.toHaveBeenCalled();
     expect(emitSubagentEndedHookForRun).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(
-      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
-    ).not.toHaveBeenCalled();
+    expect(browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKeys: [entry.childSessionKey],
+        ownerId: entry.runId,
+      }),
+    );
     expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.delete" }),
     );
@@ -2597,6 +2655,7 @@ describe("subagent registry lifecycle hardening", () => {
     expectFields(retireArg, {
       sessionKey: entry.childSessionKey,
       reason: "subagent-run-cleanup",
+      preserveActiveLeases: true,
     });
     expect(retireArg.onError).toBeTypeOf("function");
   });
@@ -3309,9 +3368,11 @@ describe("subagent registry lifecycle hardening", () => {
       controller.completeSubagentRun(completeParams),
     ]);
 
-    expect(
-      browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
-    ).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(
+        browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
+      ).toHaveBeenCalledTimes(1),
+    );
     expect(entry.browserCleanupDispatchedAt).toBeTypeOf("number");
   });
 

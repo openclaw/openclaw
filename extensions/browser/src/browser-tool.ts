@@ -51,6 +51,8 @@ import {
   saveMediaBuffer,
   selectDefaultNodeFromList,
   stageBrowserScreenshotForSharing,
+  acquireTrackedBrowserSessionAccess,
+  claimTrackedBrowserSessionOwner,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
@@ -63,6 +65,8 @@ import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/
 import { wrapExternalContent } from "./sdk-security-runtime.js";
 
 const browserToolDeps = {
+  acquireTrackedBrowserSessionAccess,
+  claimTrackedBrowserSessionOwner,
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
@@ -89,6 +93,82 @@ const browserToolDeps = {
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
+};
+
+export const testing = {
+  setDepsForTest(
+    overrides: Partial<{
+      browserAct: typeof browserAct;
+      acquireTrackedBrowserSessionAccess: typeof acquireTrackedBrowserSessionAccess;
+      claimTrackedBrowserSessionOwner: typeof claimTrackedBrowserSessionOwner;
+      browserArmDialog: typeof browserArmDialog;
+      browserArmFileChooser: typeof browserArmFileChooser;
+      browserCloseTab: typeof browserCloseTab;
+      browserDoctor: typeof browserDoctor;
+      browserFocusTab: typeof browserFocusTab;
+      browserImportProfile: typeof browserImportProfile;
+      browserNavigate: typeof browserNavigate;
+      browserOpenTab: typeof browserOpenTab;
+      browserPdfSave: typeof browserPdfSave;
+      browserProfiles: typeof browserProfiles;
+      browserSystemProfiles: typeof browserSystemProfiles;
+      browserScreenshotAction: typeof browserScreenshotAction;
+      browserStart: typeof browserStart;
+      browserStatus: typeof browserStatus;
+      browserStop: typeof browserStop;
+      describeImageFile: typeof describeImageFile;
+      imageResultFromFile: typeof imageResultFromFile;
+      getRuntimeConfig: typeof getRuntimeConfig;
+      listNodes: typeof listNodes;
+      callGatewayTool: typeof callGatewayTool;
+      normalizeBrowserScreenshot: typeof normalizeBrowserScreenshot;
+      saveMediaBuffer: typeof saveMediaBuffer;
+      stageBrowserScreenshotForSharing: typeof stageBrowserScreenshotForSharing;
+      touchSessionBrowserTab: typeof touchSessionBrowserTab;
+      trackSessionBrowserTab: typeof trackSessionBrowserTab;
+      untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
+    }> | null,
+  ) {
+    browserToolDeps.acquireTrackedBrowserSessionAccess =
+      overrides?.acquireTrackedBrowserSessionAccess ?? acquireTrackedBrowserSessionAccess;
+    browserToolDeps.claimTrackedBrowserSessionOwner =
+      overrides?.claimTrackedBrowserSessionOwner ?? claimTrackedBrowserSessionOwner;
+    browserToolDeps.browserAct = overrides?.browserAct ?? browserAct;
+    browserToolDeps.browserArmDialog = overrides?.browserArmDialog ?? browserArmDialog;
+    browserToolDeps.browserArmFileChooser =
+      overrides?.browserArmFileChooser ?? browserArmFileChooser;
+    browserToolDeps.browserCloseTab = overrides?.browserCloseTab ?? browserCloseTab;
+    browserToolDeps.browserDoctor = overrides?.browserDoctor ?? browserDoctor;
+    browserToolDeps.browserFocusTab = overrides?.browserFocusTab ?? browserFocusTab;
+    browserToolDeps.browserImportProfile = overrides?.browserImportProfile ?? browserImportProfile;
+    browserToolDeps.browserNavigate = overrides?.browserNavigate ?? browserNavigate;
+    browserToolDeps.browserOpenTab = overrides?.browserOpenTab ?? browserOpenTab;
+    browserToolDeps.browserPdfSave = overrides?.browserPdfSave ?? browserPdfSave;
+    browserToolDeps.browserProfiles = overrides?.browserProfiles ?? browserProfiles;
+    browserToolDeps.browserSystemProfiles =
+      overrides?.browserSystemProfiles ?? browserSystemProfiles;
+    browserToolDeps.browserScreenshotAction =
+      overrides?.browserScreenshotAction ?? browserScreenshotAction;
+    browserToolDeps.browserStart = overrides?.browserStart ?? browserStart;
+    browserToolDeps.browserStatus = overrides?.browserStatus ?? browserStatus;
+    browserToolDeps.browserStop = overrides?.browserStop ?? browserStop;
+    browserToolDeps.describeImageFile = overrides?.describeImageFile ?? describeImageFile;
+    browserToolDeps.imageResultFromFile = overrides?.imageResultFromFile ?? imageResultFromFile;
+    browserToolDeps.getRuntimeConfig = overrides?.getRuntimeConfig ?? getRuntimeConfig;
+    browserToolDeps.listNodes = overrides?.listNodes ?? listNodes;
+    browserToolDeps.callGatewayTool = overrides?.callGatewayTool ?? callGatewayTool;
+    browserToolDeps.normalizeBrowserScreenshot =
+      overrides?.normalizeBrowserScreenshot ?? normalizeBrowserScreenshot;
+    browserToolDeps.saveMediaBuffer = overrides?.saveMediaBuffer ?? saveMediaBuffer;
+    browserToolDeps.stageBrowserScreenshotForSharing =
+      overrides?.stageBrowserScreenshotForSharing ?? stageBrowserScreenshotForSharing;
+    browserToolDeps.touchSessionBrowserTab =
+      overrides?.touchSessionBrowserTab ?? touchSessionBrowserTab;
+    browserToolDeps.trackSessionBrowserTab =
+      overrides?.trackSessionBrowserTab ?? trackSessionBrowserTab;
+    browserToolDeps.untrackSessionBrowserTab =
+      overrides?.untrackSessionBrowserTab ?? untrackSessionBrowserTab;
+  },
 };
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
@@ -387,11 +467,28 @@ function readToolTimeoutMs(params: Record<string, unknown>) {
   });
 }
 
+function withBrowserSessionAccess(
+  opts: { agentSessionKey?: string },
+  execute: AnyAgentTool["execute"],
+): AnyAgentTool["execute"] {
+  return async function (this: void, ...args: Parameters<AnyAgentTool["execute"]>) {
+    const releaseSessionAccess = await browserToolDeps.acquireTrackedBrowserSessionAccess({
+      sessionKey: opts.agentSessionKey,
+    });
+    try {
+      return await execute(...args);
+    } finally {
+      releaseSessionAccess();
+    }
+  };
+}
+
 /** Create the Browser tool exposed to agents. */
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  runId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -404,6 +501,12 @@ export function createBrowserTool(opts?: {
     chatType?: string;
   };
 }): AnyAgentTool {
+  const ownerClaim = opts?.runId
+    ? browserToolDeps.claimTrackedBrowserSessionOwner({
+        sessionKey: opts.agentSessionKey,
+        ownerId: opts.runId,
+      })
+    : undefined;
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -412,7 +515,7 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: withBrowserSessionAccess(opts ?? {}, async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
@@ -501,6 +604,12 @@ export function createBrowserTool(opts?: {
           targetId,
           baseUrl,
           profile,
+          ...(opts?.runId
+            ? {
+                ownerId: opts.runId,
+                ...(ownerClaim !== undefined ? { ownerClaim } : {}),
+              }
+            : {}),
         });
       };
 
@@ -593,7 +702,9 @@ export function createBrowserTool(opts?: {
             });
           }
           return jsonResult({
-            profiles: await browserToolDeps.browserProfiles(baseUrl, { timeoutMs: toolTimeoutMs }),
+            profiles: await browserToolDeps.browserProfiles(baseUrl, {
+              timeoutMs: toolTimeoutMs,
+            }),
             systemProfiles,
           });
         }
@@ -649,6 +760,12 @@ export function createBrowserTool(opts?: {
             targetId: opened.targetId,
             baseUrl,
             profile,
+            ...(opts?.runId
+              ? {
+                  ownerId: opts.runId,
+                  ...(ownerClaim !== undefined ? { ownerClaim } : {}),
+                }
+              : {}),
           });
           return jsonResult(opened);
         }
@@ -711,6 +828,12 @@ export function createBrowserTool(opts?: {
               targetId,
               baseUrl,
               profile,
+              ...(opts?.runId
+                ? {
+                    ownerId: opts.runId,
+                    ...(ownerClaim !== undefined ? { ownerClaim } : {}),
+                  }
+                : {}),
             });
           } else {
             await browserToolDeps.browserAct(
@@ -1010,6 +1133,6 @@ export function createBrowserTool(opts?: {
         default:
           throw new Error(`Unknown action: ${action}`);
       }
-    },
+    }),
   };
 }
