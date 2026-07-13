@@ -143,7 +143,7 @@ Slash command dispatch also uses the Gateway subagent runtime, so it follows the
 
 ## Permissions
 
-The CLI dispatch path normally requests Gateway `operator.write` and `operator.read` scopes, running workers directly inside configured agent workspaces without creating a Git worktree. Pass `--admin` to explicitly request `operator.admin`, allow another host checkout, and enable managed-worktree creation; the connection fails if that scope is not approved for the client. A read-only Gateway token can inspect Workboard data through read methods, but it cannot create cards or dispatch workers.
+The CLI dispatch path normally requests Gateway `operator.write` and `operator.read` scopes. Workspace-bound Git workers use a protected managed worktree rooted in a configured agent workspace, with repository checkout hooks and setup scripts disabled. Pass `--admin` to explicitly request `operator.admin`, allow another host checkout, and keep normal managed-worktree setup; the connection fails if that scope is not approved for the client. A read-only Gateway token can inspect Workboard data through read methods, but it cannot create cards or dispatch workers.
 
 Local `list`, `create`, and `show` commands operate on the local OpenClaw state directory used by the current profile. Use `--dev` or `--profile <name>` on the top-level `openclaw` command when you need a different state root.
 

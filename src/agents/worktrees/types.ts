@@ -26,8 +26,10 @@ export type CreateManagedWorktreeParams = {
   // cannot change the repository between authorization and creation.
   expectedSourcePath?: string;
   expectedSourceRoot?: string;
-  // Running .openclaw/worktree-setup.sh executes repo-local code, so callers reachable from
-  // less-privileged surfaces (write-scoped session worktrees) opt out; admin paths keep it on.
+  expectedCommonDir?: string;
+  expectedFingerprint?: string;
+  // False disables Git checkout hooks and .openclaw/worktree-setup.sh. Callers reachable from
+  // less-privileged surfaces opt out so materialization never executes repository code.
   runSetupScript?: boolean;
 };
 

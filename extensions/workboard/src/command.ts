@@ -9,8 +9,8 @@ import {
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
 import {
-  canMaterializeWorkboardWorktree,
   resolveCommandWorkboardWorkspaceAccess,
+  resolveWorkboardAgentWorkspace,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
@@ -91,6 +91,7 @@ export async function handleWorkboardCommand(params: {
   args?: string;
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
+  resolveAgentWorkspace?: (agentId?: string) => string;
   workspaceAccess?: WorkboardWorkspaceAccess;
 }): Promise<{ text: string; isError?: boolean }> {
   const [action = "list", ...rest] = splitArgs(params.args);
@@ -135,13 +136,16 @@ export async function handleWorkboardCommand(params: {
     if (accessError) {
       return accessError;
     }
+    const workspaceAccess = params.workspaceAccess ?? { unrestricted: true };
     const result = await dispatchAndStartWorkboardCards({
       store: params.store,
       subagent: params.api.runtime.subagent,
       worktrees: params.api.runtime.worktrees,
       options: {
-        materializeWorktree: canMaterializeWorkboardWorktree(params.gatewayClientScopes),
-        workspaceAccess: params.workspaceAccess ?? { unrestricted: true },
+        materializeWorktree: true,
+        runWorktreeSetup: workspaceAccess.unrestricted,
+        resolveAgentWorkspace: params.resolveAgentWorkspace,
+        workspaceAccess,
       },
     });
     return {
@@ -173,6 +177,7 @@ export function registerWorkboardCommand(params: {
         args: ctx.args,
         senderIsOwner: ctx.senderIsOwner,
         gatewayClientScopes: ctx.gatewayClientScopes,
+        resolveAgentWorkspace: (agentId) => resolveWorkboardAgentWorkspace(ctx.config, agentId),
         workspaceAccess: resolveCommandWorkboardWorkspaceAccess({
           config: ctx.config,
           agentId: ctx.agentId,

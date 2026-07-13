@@ -38,6 +38,8 @@ describe("dispatchAndStartWorkboardCards", () => {
         canonicalRoot: repoRoot,
         requestedPath: repoRoot,
         sourceRoot: repoRoot,
+        commonDir: `${repoRoot}/.git`,
+        fingerprint: "fingerprint",
       })),
       create: vi.fn().mockResolvedValue({
         id: "managed-id",
@@ -52,7 +54,12 @@ describe("dispatchAndStartWorkboardCards", () => {
       store,
       subagent: { run },
       worktrees,
-      options: { now: 10, maxStarts: 1 },
+      options: {
+        now: 10,
+        maxStarts: 1,
+        materializeWorktree: true,
+        runWorktreeSetup: true,
+      },
     });
 
     expect(worktrees.create).toHaveBeenCalledWith(
@@ -61,6 +68,9 @@ describe("dispatchAndStartWorkboardCards", () => {
         baseRef: "main",
         ownerKind: "workboard",
         ownerId: card.id,
+        expectedCommonDir: "/repo/.git",
+        expectedFingerprint: "fingerprint",
+        runSetupScript: true,
       }),
     );
     expect(run).toHaveBeenCalledWith(
@@ -154,6 +164,83 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
   });
 
+  it("does not launch a mutable nested directory for a workspace-bound caller", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Mutable nested directory",
+      status: "ready",
+      workspace: { kind: "dir", path: "/workspace/repo" },
+    });
+    const run = vi.fn();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        maxStarts: 1,
+        workspaceAccess: { unrestricted: false, roots: ["/workspace"] },
+      },
+    });
+
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({
+        cardId: card.id,
+        error: "workspace path must equal one of the caller's allowed workspace roots.",
+      }),
+    ]);
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("does not let an implicit target agent workspace widen caller access", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Other agent scratch",
+      status: "ready",
+      agentId: "other",
+    });
+    const run = vi.fn();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        maxStarts: 1,
+        resolveAgentWorkspace: (agentId) =>
+          agentId === "other" ? "/workspace-other" : "/workspace",
+        workspaceAccess: { unrestricted: false, roots: ["/workspace"] },
+      },
+    });
+
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({
+        cardId: card.id,
+        error: "workspace path must equal one of the caller's allowed workspace roots.",
+      }),
+    ]);
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("pins an allowed implicit worker to the caller's workspace root", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.create({ title: "Workspace scratch", status: "ready", agentId: "main" });
+    const run = vi.fn().mockResolvedValue({ runId: "run-scratch" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        maxStarts: 1,
+        resolveAgentWorkspace: () => "/workspace",
+        workspaceAccess: { unrestricted: false, roots: ["/workspace"] },
+      },
+    });
+
+    expect(result.started).toHaveLength(1);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/workspace" }));
+  });
+
   it("preserves an authorized repository subdirectory as the worker cwd", async () => {
     const store = new WorkboardStore(createMemoryStore());
     await store.create({
@@ -167,6 +254,8 @@ describe("dispatchAndStartWorkboardCards", () => {
         canonicalRoot: "/repo",
         requestedPath: "/repo/packages/app",
         sourceRoot: "/repo",
+        commonDir: "/repo/.git",
+        fingerprint: "fingerprint",
       }),
       create: vi.fn().mockResolvedValue({
         id: "managed-id",
@@ -183,7 +272,8 @@ describe("dispatchAndStartWorkboardCards", () => {
       worktrees,
       options: {
         maxStarts: 1,
-        workspaceAccess: { unrestricted: false, roots: ["/repo/packages/app"] },
+        materializeWorktree: true,
+        workspaceAccess: { unrestricted: false, roots: ["/repo"] },
       },
     });
 
@@ -219,6 +309,8 @@ describe("dispatchAndStartWorkboardCards", () => {
             canonicalRoot: "/repo",
             requestedPath: "/repo/packages/app",
             sourceRoot: "/repo",
+            commonDir: "/repo/.git",
+            fingerprint: "fingerprint",
           }),
           create: vi.fn().mockResolvedValue({
             id: "managed-id",
@@ -228,7 +320,7 @@ describe("dispatchAndStartWorkboardCards", () => {
           release: vi.fn(),
           removeIfLossless,
         },
-        options: { maxStarts: 1 },
+        options: { maxStarts: 1, materializeWorktree: true },
       });
 
       expect(result.startFailures).toEqual([
@@ -273,12 +365,14 @@ describe("dispatchAndStartWorkboardCards", () => {
           canonicalRoot: repoRoot,
           requestedPath: repoRoot,
           sourceRoot: repoRoot,
+          commonDir: `${repoRoot}/.git`,
+          fingerprint: "fingerprint",
         })),
         create,
         release: vi.fn(),
         removeIfLossless: vi.fn(),
       },
-      options: { maxStarts: 1 },
+      options: { maxStarts: 1, materializeWorktree: true },
     });
 
     expect(create).toHaveBeenCalledWith(

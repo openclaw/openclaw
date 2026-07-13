@@ -6,8 +6,8 @@ import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
 import {
-  canMaterializeWorkboardWorktree,
   resolveConfiguredWorkboardWorkspaceAccess,
+  resolveWorkboardAgentWorkspace,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
 
@@ -99,6 +99,7 @@ export function createWorkboardDispatchHandler(params: {
       const maxStarts = options.supportsMaxStarts
         ? readOptionalPositiveInteger(rawMaxStarts, "maxStarts")
         : undefined;
+      const workspaceAccess = resolveGatewayWorkboardWorkspaceAccess({ context, client });
       const result = await dispatchAndStartWorkboardCards({
         store: params.store,
         subagent: params.api.runtime.subagent,
@@ -106,13 +107,11 @@ export function createWorkboardDispatchHandler(params: {
         options: {
           boardId: typeof boardId === "string" ? boardId : undefined,
           ...(maxStarts !== undefined ? { maxStarts } : {}),
-          materializeWorktree: canMaterializeWorkboardWorktree(
-            Array.isArray(client?.connect?.scopes) ? client.connect.scopes : undefined,
-          ),
-          workspaceAccess: resolveGatewayWorkboardWorkspaceAccess({
-            context,
-            client,
-          }),
+          materializeWorktree: true,
+          runWorktreeSetup: workspaceAccess.unrestricted,
+          resolveAgentWorkspace: (agentId) =>
+            resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
+          workspaceAccess,
         },
       });
       respond(true, {

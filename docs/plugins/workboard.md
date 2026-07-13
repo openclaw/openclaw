@@ -167,11 +167,13 @@ Gateway clients with `operator.write` can use configured agent workspaces;
 `operator.admin` clients can use other host checkouts. Agent tools follow the
 active agent's `tools.fs.workspaceOnly` policy and workspace root. Dispatch
 rechecks the current caller boundary before materializing a persisted worktree,
-so a card created through one surface cannot widen a later dispatch. Write-scoped
-dispatch runs directly in the authorized source workspace; it does not invoke Git
-checkout hooks or repository setup scripts. Admin and trusted local dispatch may
-create a managed worktree. When an allowed workspace is a repository subdirectory,
-the generated worker keeps that same subdirectory as its workspace root.
+so a card created through one surface cannot widen a later dispatch. Workspace-bound
+dispatch accepts a directory or Git checkout only when its repository root is the
+configured workspace root. Git workers run in a protected managed worktree without
+invoking checkout hooks or repository setup scripts. Full-host dispatch may target
+other local checkouts and keeps normal managed-worktree setup. When an allowed
+workspace selects a repository subdirectory, the generated worker keeps that same
+subdirectory as its workspace root.
 
 ### Worker selection
 

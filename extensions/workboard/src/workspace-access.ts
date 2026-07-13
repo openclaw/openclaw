@@ -18,10 +18,8 @@ export type WorkboardWorkspaceAccess =
 
 type WorkboardConfig = NonNullable<OpenClawPluginToolContext["config"]>;
 
-export function canMaterializeWorkboardWorktree(
-  gatewayClientScopes: readonly string[] | undefined,
-): boolean {
-  return gatewayClientScopes === undefined || gatewayClientScopes.includes("operator.admin");
+export function resolveWorkboardAgentWorkspace(config: WorkboardConfig, agentId?: string): string {
+  return resolveAgentWorkspaceDir(config, agentId ?? resolveDefaultAgentId(config));
 }
 
 export function resolveConfiguredWorkboardWorkspaceAccess(params: {
@@ -63,10 +61,9 @@ export function resolveCommandWorkboardWorkspaceAccess(params: {
       unrestricted: params.gatewayClientScopes.includes("operator.admin"),
     });
   }
-  const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   return resolveAgentWorkboardWorkspaceAccess({
     config: params.config,
-    agentId,
+    agentId: params.agentId ?? resolveDefaultAgentId(params.config),
   });
 }
 
@@ -96,6 +93,22 @@ export async function assertCanonicalWorkboardPathAccess(
     }
   }
   throw new Error("workspace path is outside the caller's allowed workspaces.");
+}
+
+export async function assertCanonicalWorkboardRootAccess(
+  candidate: string,
+  access: WorkboardWorkspaceAccess,
+): Promise<string> {
+  if (access.unrestricted) {
+    return candidate;
+  }
+  for (const root of access.roots) {
+    const canonicalRoot = await canonicalPathFromExistingAncestor(root);
+    if (canonicalRoot === candidate) {
+      return candidate;
+    }
+  }
+  throw new Error("workspace path must equal one of the caller's allowed workspace roots.");
 }
 
 async function assertPathAllowed(

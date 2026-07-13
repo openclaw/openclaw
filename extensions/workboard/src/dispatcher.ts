@@ -10,6 +10,7 @@ import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import type { WorkboardCard, WorkboardExecution, WorkboardWorkspace } from "./types.js";
 import {
   assertCanonicalWorkboardPathAccess,
+  assertCanonicalWorkboardRootAccess,
   assertWorkboardWorkspaceSourceAccess,
   type WorkboardWorkspaceAccess,
 } from "./workspace-access.js";
@@ -29,6 +30,8 @@ type WorkboardDispatchStartOptions = {
   boardId?: string;
   now?: number;
   materializeWorktree?: boolean;
+  runWorktreeSetup?: boolean;
+  resolveAgentWorkspace?: (agentId?: string) => string;
   workspaceAccess?: WorkboardWorkspaceAccess;
 };
 
@@ -113,6 +116,7 @@ async function materializeWorkspace(params: {
   card: WorkboardCard;
   worktrees?: WorkboardWorktreeRuntime;
   materializeWorktree: boolean;
+  runWorktreeSetup: boolean;
   workspaceAccess: WorkboardWorkspaceAccess;
 }): Promise<{ workspace?: WorkboardWorkspace; cwd?: string }> {
   const workspace = params.card.metadata?.automation?.workspace;
@@ -133,8 +137,12 @@ async function materializeWorkspace(params: {
   if (!canonicalSourcePath) {
     throw new Error("worktree workspace path is required");
   }
-  if (workspace.kind === "dir" || !params.materializeWorktree) {
+  if (workspace.kind === "dir") {
+    await assertCanonicalWorkboardRootAccess(canonicalSourcePath, params.workspaceAccess);
     return { cwd: canonicalSourcePath };
+  }
+  if (!params.materializeWorktree) {
+    throw new Error("managed worktree materialization was not explicitly authorized");
   }
   if (!params.worktrees) {
     throw new Error("managed worktree runtime is unavailable");
@@ -143,6 +151,8 @@ async function materializeWorkspace(params: {
     repoRoot: canonicalSourcePath,
   });
   await assertCanonicalWorkboardPathAccess(repository.requestedPath, params.workspaceAccess);
+  await assertCanonicalWorkboardRootAccess(repository.sourceRoot, params.workspaceAccess);
+  await assertCanonicalWorkboardPathAccess(repository.commonDir, params.workspaceAccess);
   const relativeWorkspacePath = path.relative(repository.sourceRoot, repository.requestedPath);
   if (
     path.isAbsolute(relativeWorkspacePath) ||
@@ -159,6 +169,9 @@ async function materializeWorkspace(params: {
     ownerId: params.card.id,
     expectedSourcePath: repository.requestedPath,
     expectedSourceRoot: repository.sourceRoot,
+    expectedCommonDir: repository.commonDir,
+    expectedFingerprint: repository.fingerprint,
+    runSetupScript: params.runWorktreeSetup,
   });
   let cwd: string;
   try {
@@ -291,14 +304,52 @@ export async function dispatchAndStartWorkboardCards(params: {
     const sessionKey = buildSessionKey(card);
     let token = "";
     let materializedWorkspace: WorkboardWorkspace | undefined;
+    let implicitWorkspaceCwd: string | undefined;
     let runStarted = false;
     const requestedWorkspace = card.metadata?.automation?.workspace;
-    if (requestedWorkspace && requestedWorkspace.kind !== "scratch") {
+    const workspaceAccess = params.options?.workspaceAccess ?? { unrestricted: true };
+    if (!requestedWorkspace || requestedWorkspace.kind === "scratch") {
+      if (!workspaceAccess.unrestricted) {
+        const targetWorkspace = params.options?.resolveAgentWorkspace?.(card.agentId);
+        if (!targetWorkspace) {
+          startFailures.push({
+            cardId: card.id,
+            title: card.title,
+            error: "target agent workspace is unavailable for restricted dispatch",
+          });
+          continue;
+        }
+        try {
+          implicitWorkspaceCwd = await canonicalPathFromExistingAncestor(targetWorkspace);
+          await assertCanonicalWorkboardRootAccess(implicitWorkspaceCwd, workspaceAccess);
+        } catch (error) {
+          startFailures.push({
+            cardId: card.id,
+            title: card.title,
+            error: formatErrorMessage(error),
+          });
+          continue;
+        }
+      }
+    } else {
       try {
-        await assertWorkboardWorkspaceSourceAccess(
+        const canonicalSourcePath = await assertWorkboardWorkspaceSourceAccess(
           requestedWorkspace,
-          params.options?.workspaceAccess ?? { unrestricted: true },
+          workspaceAccess,
         );
+        if (canonicalSourcePath && requestedWorkspace.kind === "dir") {
+          await assertCanonicalWorkboardRootAccess(canonicalSourcePath, workspaceAccess);
+        } else if (canonicalSourcePath && !workspaceAccess.unrestricted) {
+          if (!params.worktrees) {
+            throw new Error("managed worktree runtime is unavailable");
+          }
+          const repository = await params.worktrees.resolveRepositoryPaths({
+            repoRoot: canonicalSourcePath,
+          });
+          await assertCanonicalWorkboardPathAccess(repository.requestedPath, workspaceAccess);
+          await assertCanonicalWorkboardRootAccess(repository.sourceRoot, workspaceAccess);
+          await assertCanonicalWorkboardPathAccess(repository.commonDir, workspaceAccess);
+        }
       } catch (error) {
         startFailures.push({
           cardId: card.id,
@@ -318,7 +369,8 @@ export async function dispatchAndStartWorkboardCards(params: {
       const materialized = await materializeWorkspace({
         card: claimed.card,
         worktrees: params.worktrees,
-        materializeWorktree: params.options?.materializeWorktree !== false,
+        materializeWorktree: params.options?.materializeWorktree === true,
+        runWorktreeSetup: params.options?.runWorktreeSetup === true,
         workspaceAccess: params.options?.workspaceAccess ?? { unrestricted: true },
       });
       materializedWorkspace = materialized.workspace;
@@ -339,7 +391,9 @@ export async function dispatchAndStartWorkboardCards(params: {
         idempotencyKey: `workboard:${card.id}:${claimed.card.updatedAt}`,
         lightContext: true,
         deliver: false,
-        ...(materialized.cwd ? { cwd: materialized.cwd } : {}),
+        ...(materialized.cwd || implicitWorkspaceCwd
+          ? { cwd: materialized.cwd ?? implicitWorkspaceCwd }
+          : {}),
       });
       runStarted = true;
       const updated = await params.store.update(card.id, {

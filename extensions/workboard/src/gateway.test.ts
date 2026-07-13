@@ -446,6 +446,8 @@ describe("workboard gateway methods", () => {
             canonicalRoot: repoRoot,
             requestedPath: repoRoot,
             sourceRoot: repoRoot,
+            commonDir: `${repoRoot}/.git`,
+            fingerprint: "fingerprint",
           })),
           create: createWorktree,
           release: vi.fn(),
@@ -491,7 +493,7 @@ describe("workboard gateway methods", () => {
     const allowed = await store.create({
       title: "Allowed checkout",
       status: "ready",
-      workspace: { kind: "worktree", path: "/workspace/repo-allowed" },
+      workspace: { kind: "worktree", path: "/workspace" },
     });
     await handler?.({
       client: { connect: { scopes: ["operator.write"] } },
@@ -501,8 +503,16 @@ describe("workboard gateway methods", () => {
       respond: vi.fn(),
     } as never);
 
-    expect(createWorktree).not.toHaveBeenCalled();
-    expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/workspace/repo-allowed" }));
+    expect(createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: "/workspace",
+        ownerId: allowed.id,
+        runSetupScript: false,
+      }),
+    );
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/state/worktrees/fingerprint/wb-card" }),
+    );
     expect(run).toHaveBeenCalledOnce();
   });
 

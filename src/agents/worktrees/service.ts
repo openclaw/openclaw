@@ -28,7 +28,7 @@ import {
   listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
-import { resolveWorktreeRepository } from "./repository.js";
+import { assertWorktreeRepositoryIdentity, resolveWorktreeRepository } from "./repository.js";
 import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
@@ -357,13 +357,14 @@ export class ManagedWorktreeService {
   }
 
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
-    const repository = await resolveWorktreeRepository(params.repoRoot);
-    if (
-      (params.expectedSourcePath && repository.requestedPath !== params.expectedSourcePath) ||
-      (params.expectedSourceRoot && repository.sourceRoot !== params.expectedSourceRoot)
-    ) {
-      throw new Error("repository path changed after authorization");
-    }
+    let repository = await resolveWorktreeRepository(params.repoRoot);
+    const expectedRepository = {
+      sourcePath: params.expectedSourcePath,
+      sourceRoot: params.expectedSourceRoot,
+      commonDir: params.expectedCommonDir,
+      fingerprint: params.expectedFingerprint,
+    };
+    assertWorktreeRepositoryIdentity(repository, expectedRepository);
     const name = validateName(params.name ?? generateName());
     const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
     const worktreePath = path.join(root, name);
@@ -404,10 +405,16 @@ export class ManagedWorktreeService {
       throw commandError("git show-ref --verify", branchExists);
     }
     const base = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
+    if (params.expectedCommonDir || params.expectedFingerprint) {
+      repository = await resolveWorktreeRepository(params.repoRoot);
+      assertWorktreeRepositoryIdentity(repository, expectedRepository);
+    }
     await fs.mkdir(root, { recursive: true });
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
-    let added = await runGit(repository.repoRoot, [
+    const runRepositorySetup = params.runSetupScript !== false;
+    const worktreeAddArgs = () => [
+      ...(runRepositorySetup ? [] : ["-c", `core.hooksPath=${os.devNull}`]),
       "worktree",
       "add",
       "-b",
@@ -415,7 +422,8 @@ export class ManagedWorktreeService {
       "--",
       worktreePath,
       gitBase,
-    ]);
+    ];
+    let added = await runGit(repository.repoRoot, worktreeAddArgs());
     if (added.code !== 0 && base.remote) {
       if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
         throw commandError("git worktree add", added);
@@ -423,22 +431,14 @@ export class ManagedWorktreeService {
       await resetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch);
       gitBase = "HEAD";
       recordBase = "HEAD";
-      added = await runGit(repository.repoRoot, [
-        "worktree",
-        "add",
-        "-b",
-        branch,
-        "--",
-        worktreePath,
-        gitBase,
-      ]);
+      added = await runGit(repository.repoRoot, worktreeAddArgs());
     }
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
     }
     try {
       await copyIncludedFiles(repository.sourceRoot, worktreePath);
-      if (params.runSetupScript !== false) {
+      if (runRepositorySetup) {
         await runSetupScript(repository.sourceRoot, worktreePath);
       }
     } catch (error) {
@@ -487,14 +487,20 @@ export class ManagedWorktreeService {
   }
 
   /** Resolves the canonical registry root and the caller's own checkout root. */
-  async resolveRepositoryPaths(
-    repoRoot: string,
-  ): Promise<{ canonicalRoot: string; requestedPath: string; sourceRoot: string }> {
+  async resolveRepositoryPaths(repoRoot: string): Promise<{
+    canonicalRoot: string;
+    requestedPath: string;
+    sourceRoot: string;
+    commonDir: string;
+    fingerprint: string;
+  }> {
     const resolved = await resolveWorktreeRepository(repoRoot);
     return {
       canonicalRoot: resolved.repoRoot,
       requestedPath: resolved.requestedPath,
       sourceRoot: resolved.sourceRoot,
+      commonDir: resolved.commonDir,
+      fingerprint: resolved.fingerprint,
     };
   }
 

@@ -12,6 +12,25 @@ export type ResolvedWorktreeRepository = {
   fingerprint: string;
 };
 
+export function assertWorktreeRepositoryIdentity(
+  repository: ResolvedWorktreeRepository,
+  expected: {
+    sourcePath?: string;
+    sourceRoot?: string;
+    commonDir?: string;
+    fingerprint?: string;
+  },
+): void {
+  if (
+    (expected.sourcePath && repository.requestedPath !== expected.sourcePath) ||
+    (expected.sourceRoot && repository.sourceRoot !== expected.sourceRoot) ||
+    (expected.commonDir && repository.commonDir !== expected.commonDir) ||
+    (expected.fingerprint && repository.fingerprint !== expected.fingerprint)
+  ) {
+    throw new Error("repository identity changed after authorization");
+  }
+}
+
 export async function resolveWorktreeRepository(
   repoRoot: string,
 ): Promise<ResolvedWorktreeRepository> {

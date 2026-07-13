@@ -35,6 +35,8 @@ function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): {
           canonicalRoot: repoRoot,
           requestedPath: repoRoot,
           sourceRoot: repoRoot,
+          commonDir: `${repoRoot}/.git`,
+          fingerprint: "fingerprint",
         })),
         create: vi.fn(),
         release: vi.fn(),
@@ -163,9 +165,31 @@ describe("handleWorkboardCommand", () => {
     expect(denied).toMatchObject({ status: "ready" });
     await store.update(denied!.id, { status: "blocked" });
 
+    const restricted = await store.create({
+      title: "Workspace checkout",
+      status: "ready",
+      agentId: "restricted",
+      workspace: { kind: "worktree", path: "/workspace" },
+    });
+    await handleWorkboardCommand({
+      api,
+      store,
+      args: "dispatch",
+      senderIsOwner: true,
+      workspaceAccess: { unrestricted: false, roots: ["/workspace"] },
+    });
+    expect(createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: "/workspace",
+        ownerId: restricted.id,
+        runSetupScript: false,
+      }),
+    );
+
     const allowed = await store.create({
       title: "Allowed checkout",
       status: "ready",
+      agentId: "admin",
       workspace: { kind: "worktree", path: "/repo-allowed" },
     });
     await handleWorkboardCommand({
@@ -180,6 +204,7 @@ describe("handleWorkboardCommand", () => {
       expect.objectContaining({
         repoRoot: "/repo-allowed",
         ownerId: allowed.id,
+        runSetupScript: true,
       }),
     );
   });

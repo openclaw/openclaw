@@ -114,8 +114,24 @@ describe("ManagedWorktreeService", () => {
         expectedSourcePath: path.join(root, "other"),
         expectedSourceRoot: resolved.sourceRoot,
       }),
-    ).rejects.toThrow("repository path changed after authorization");
+    ).rejects.toThrow("repository identity changed after authorization");
     expect(await git(repo, "branch", "--list", "openclaw/pinned-source")).toBe("");
+  });
+
+  it("rejects repository common-dir identity changes after authorization", async () => {
+    const resolved = await service.resolveRepositoryPaths(repo);
+
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "pinned-identity",
+        expectedSourcePath: resolved.requestedPath,
+        expectedSourceRoot: resolved.sourceRoot,
+        expectedCommonDir: path.join(root, "other.git"),
+        expectedFingerprint: resolved.fingerprint,
+      }),
+    ).rejects.toThrow("repository identity changed after authorization");
+    expect(await git(repo, "branch", "--list", "openclaw/pinned-identity")).toBe("");
   });
 
   it("does not remove a worktree owned by another caller", async () => {
@@ -463,6 +479,27 @@ describe("ManagedWorktreeService", () => {
     expect(
       (await fs.readFile(path.join(created.path, "setup-paths.txt"), "utf8")).split("\n"),
     ).toEqual([repo, created.path, ""]);
+  });
+
+  it("does not execute repository hooks or setup scripts when setup is disabled", async () => {
+    const hookMarker = path.join(root, "checkout-hook-ran");
+    const setupMarker = path.join(root, "setup-script-ran");
+    await fs.writeFile(
+      path.join(repo, ".git", "hooks", "post-checkout"),
+      `#!/bin/sh\nprintf ran > "${hookMarker}"\n`,
+      { mode: 0o755 },
+    );
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\nprintf ran > "${setupMarker}"\n`,
+      { mode: 0o755 },
+    );
+
+    await service.create({ repoRoot: repo, name: "no-repo-code", runSetupScript: false });
+
+    await expect(fs.access(hookMarker)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.access(setupMarker)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("removes the worktree and branch when setup fails", async () => {
