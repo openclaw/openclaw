@@ -10,6 +10,7 @@ import type { ProcessSession } from "./bash-process-registry.js";
 export function createProcessSessionFixture(params: {
   id: string;
   command?: string;
+  scopeKey?: string;
   startedAt?: number;
   cwd?: string;
   maxOutputChars?: number;
@@ -40,6 +41,9 @@ export function createProcessSessionFixture(params: {
     backgrounded: params.backgrounded ?? false,
     cursorKeyMode: params.cursorKeyMode ?? "normal",
   };
+  if (params.scopeKey !== undefined) {
+    session.scopeKey = params.scopeKey;
+  }
   if (params.pid !== undefined) {
     session.pid = params.pid;
   }
