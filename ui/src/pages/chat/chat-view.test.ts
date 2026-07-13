@@ -5096,6 +5096,7 @@ describe("chat model controls", () => {
 
   it("orders model-dependent patches after a pending model switch", async () => {
     const modelPatch = createDeferred<unknown>();
+    const thinkingUpdate = createDeferred<unknown>();
     const patches: Array<Record<string, unknown>> = [];
     const patchResult = {
       ok: true,
@@ -5107,7 +5108,13 @@ describe("chat model controls", () => {
       state: { modelOverrides: {} },
       patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
         patches.push(patch);
-        return Object.hasOwn(patch, "model") ? modelPatch.promise : Promise.resolve(patchResult);
+        if (Object.hasOwn(patch, "model")) {
+          return modelPatch.promise;
+        }
+        if (Object.hasOwn(patch, "thinkingLevel")) {
+          return thinkingUpdate.promise;
+        }
+        return Promise.resolve(patchResult);
       }),
       refresh: async () => {},
       setModelOverride: vi.fn(),
@@ -5137,13 +5144,21 @@ describe("chat model controls", () => {
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
     const fastModePatch = switchChatFastMode(host, "on");
+    const laterModelSwitch = switchChatModel(host, "google/gemini-3-pro");
 
     expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
     modelPatch.resolve(patchResult);
     await expect(modelSwitch).resolves.toBe(true);
-    await expect(Promise.all([thinkingPatch, fastModePatch])).resolves.toEqual([true, true]);
-    expect(patches).toHaveLength(3);
-    expect(patches.slice(1)).toEqual(
+    await vi.waitFor(() => expect(patches).toHaveLength(3));
+    expect(patches).not.toContainEqual({ model: "google/gemini-3-pro" });
+    thinkingUpdate.resolve(patchResult);
+    await expect(Promise.all([thinkingPatch, fastModePatch, laterModelSwitch])).resolves.toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(patches.at(-1)).toEqual({ model: "google/gemini-3-pro" });
+    expect(patches.slice(1, -1)).toEqual(
       expect.arrayContaining([{ thinkingLevel: "ultra" }, { fastMode: true }]),
     );
   });

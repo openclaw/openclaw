@@ -20,10 +20,11 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { ChatHistoryResult } from "./chat-history.ts";
 import {
   getPendingChatModelSwitch,
+  getPendingChatPickerPatch,
   trackPendingChatModelSwitch,
   trackPendingChatPickerPatch,
 } from "./chat-settings-patches.ts";
-export { getPendingChatPickerPatch, trackPendingChatPickerPatch } from "./chat-settings-patches.ts";
+export { getPendingChatPickerPatch, trackPendingChatPickerPatch };
 
 const CHAT_SESSION_LIST_ACTIVE_MINUTES = 0;
 const CHAT_SESSION_LIST_LIMIT = 50;
@@ -370,7 +371,7 @@ export async function switchChatModel(
     return true;
   }
   const previousModelOverride = host.sessions.state.modelOverrides[targetSessionKey];
-  const previousModelSwitch = getPendingChatModelSwitch(host, targetSessionKey);
+  const previousPickerPatch = getPendingChatPickerPatch(host, targetSessionKey);
   setChatError(host, null, true);
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const clearPendingSwitch = () => {
@@ -383,9 +384,9 @@ export async function switchChatModel(
   const switchPromise: Promise<boolean> = (async () => {
     try {
       // Rapid selections can enter before the disabled state renders. Preserve
-      // user order so an older model response cannot overwrite the newer one.
-      if (previousModelSwitch) {
-        await previousModelSwitch;
+      // user order across both model and model-dependent settings patches.
+      if (previousPickerPatch) {
+        await previousPickerPatch;
       }
       const patched = await host.sessions.patch(
         targetSessionKey,
