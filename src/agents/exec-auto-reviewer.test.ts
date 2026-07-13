@@ -238,6 +238,7 @@ describe("createModelExecAutoReviewer", () => {
       auth: { apiKey: "key", mode: "env" },
     }));
     const complete = vi.fn(async () => ({
+      stopReason: "stop" as const,
       content: [
         {
           type: "text",
@@ -285,6 +286,7 @@ describe("createModelExecAutoReviewer", () => {
       auth: { apiKey: "key", mode: "env" },
     }));
     const complete = vi.fn(async () => ({
+      stopReason: "stop" as const,
       content: [
         {
           type: "text",
@@ -308,9 +310,10 @@ describe("createModelExecAutoReviewer", () => {
 
     await reviewer(input);
     await reviewer({ ...input, argv: ["git", "status", "--short"] });
+    await reviewer({ ...input, resolvedPath: "/opt/homebrew/bin/git" });
 
-    expect(prepare).toHaveBeenCalledTimes(2);
-    expect(complete).toHaveBeenCalledTimes(2);
+    expect(prepare).toHaveBeenCalledTimes(3);
+    expect(complete).toHaveBeenCalledTimes(3);
   });
 
   it("does not memoize human-review fallback decisions", async () => {
@@ -324,6 +327,7 @@ describe("createModelExecAutoReviewer", () => {
       auth: { apiKey: "key", mode: "env" },
     }));
     const complete = vi.fn(async () => ({
+      stopReason: "stop" as const,
       content: [
         {
           type: "text",

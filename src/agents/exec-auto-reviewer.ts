@@ -83,6 +83,7 @@ function buildReviewerMemoKey(input: ExecAutoReviewInput): string {
   return JSON.stringify({
     command: input.command,
     argv: input.argv ?? [],
+    resolvedPath: input.resolvedPath ?? null,
     cwd: input.cwd ?? null,
     envKeys: input.envKeys ?? [],
     host: input.host,
