@@ -8,7 +8,6 @@ import {
   type ModelsProbeResult,
   validateModelsProbeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   type AuthProbeResult,
   type AuthProbeStatus,
@@ -120,16 +119,18 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
     );
     try {
       const cfg = context.getRuntimeConfig();
-      // Probe under the canonical auth provider so credentials stored/aliased
-      // there resolve, matching models.list/models.authStatus. The response
-      // echoes the requested id; the UI correlates by that.
-      const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
+      // Probe under the requested provider so model selection, catalog rows, and
+      // a models.providers.<id> override resolve against the surface the client
+      // asked about. Auth-alias split surfaces (e.g. a coding-plan-only
+      // credential stored under a canonical provider) are a known gap tracked
+      // as follow-up; canonicalizing here instead would probe the wrong
+      // endpoint for override providers.
       const summary = await runAuthProbes({
         cfg,
-        providers: [authProvider],
+        providers: [provider],
         modelCandidates: modelCandidatesFromConfig(cfg),
         options: {
-          provider: authProvider,
+          provider,
           ...(profileId ? { profileIds: [profileId] } : {}),
           ...(!profileId ? { includeDirectKeys: true } : {}),
           timeoutMs,

@@ -16,13 +16,6 @@ vi.mock("../../commands/models/list.probe.js", async () => {
   return { ...actual, runAuthProbes: mocks.runAuthProbes };
 });
 
-// Route the probe through the provider->auth alias table like the rest of the
-// model surface; the test map aliases "byteplus-plan" to its canonical auth id.
-vi.mock("../../agents/provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) =>
-    provider === "byteplus-plan" ? "byteplus" : provider,
-}));
-
 import { modelsProbeHandlers } from "./models-probe.js";
 
 const handler = expectDefined(
@@ -101,13 +94,13 @@ describe("models.probe", () => {
     });
   });
 
-  it("probes under the canonical auth provider while echoing the requested id", async () => {
+  it("probes the requested provider so overrides and model selection resolve", async () => {
     const { options, respond } = createOptions({ provider: "byteplus-plan" });
     await handler(options);
     expect(mocks.runAuthProbes).toHaveBeenCalledWith(
       expect.objectContaining({
-        providers: ["byteplus"],
-        options: expect.objectContaining({ provider: "byteplus" }),
+        providers: ["byteplus-plan"],
+        options: expect.objectContaining({ provider: "byteplus-plan" }),
       }),
     );
     expect(respond).toHaveBeenCalledWith(

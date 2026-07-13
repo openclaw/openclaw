@@ -822,7 +822,13 @@ async function probeTarget(params: {
     // synthetic profile; marker values are resolved by the runtime from the
     // profile-order-cleared config.
     if (target.boundValue) {
-      isolatedAgentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-probe-"));
+      // Canonicalize so the isolated agent DB registers and unregisters under
+      // one path. os.tmpdir() is a symlink on macOS (/var -> /private/var), and
+      // disposeOpenClawAgentDatabaseByPath's exact-path guard would otherwise
+      // skip the registry row, leaking an agent_databases entry per probe.
+      isolatedAgentDir = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-probe-")),
+      );
     }
     if (target.boundValue && !target.useRuntimeAuth && isolatedAgentDir) {
       isolatedProfileId = `${target.provider}:probe-${crypto.randomUUID()}`;
