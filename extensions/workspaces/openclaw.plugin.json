@@ -29,7 +29,11 @@
       "workspace_replace",
       "workspace_widget_scaffold",
       "workspace_undo",
-      "workspace_data_read"
+      "workspace_data_read",
+      "workspace_tab_get",
+      "workspace_change_request_create",
+      "workspace_change_request_list",
+      "workspace_change_request_cancel"
     ]
   }
 }

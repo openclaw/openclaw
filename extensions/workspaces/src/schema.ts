@@ -31,6 +31,10 @@ export type WorkspaceWidget = {
   props?: JsonValue;
 };
 export type WorkspaceTab = {
+  /** Immutable authorization resource id; presentation continues to use mutable `slug`. */
+  id: string;
+  /** Store-owned optimistic-concurrency counter. */
+  revision: number;
   slug: string;
   title: string;
   icon?: string;
@@ -47,16 +51,20 @@ export type WorkspaceWidgetRegistryEntry = {
   approvedFiles?: Record<string, string>;
 };
 export type WorkspaceDoc = {
-  schemaVersion: 1;
+  schemaVersion: 2;
+  /** Immutable workspace authorization resource id. */
+  workspaceId: string;
   workspaceVersion: number;
   tabs: WorkspaceTab[];
   widgetsRegistry: Record<string, WorkspaceWidgetRegistryEntry>;
   prefs: { tabOrder: string[] };
 };
 
-const CURRENT_WORKSPACE_SCHEMA_VERSION = 1;
+const CURRENT_WORKSPACE_SCHEMA_VERSION = 2;
+export const DEFAULT_WORKSPACE_ID = "default";
 
 const TAB_SLUG_PATTERN = /^[a-z0-9-]{1,40}$/;
+const RESOURCE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const ACTOR_PATTERN = /^(user|system|agent:[A-Za-z0-9._-]{1,64})$/;
 const WIDGET_ID_PATTERN = /^[A-Za-z0-9_-]{1,48}$/;
 /** The trusted widget set. Exported so tool schemas can name them for the model. */
@@ -295,7 +303,21 @@ function validateWidget(value: unknown, path: string): WorkspaceWidget {
 
 function validateTab(value: unknown, path: string): WorkspaceTab {
   const record = assertRecord(value, path);
-  assertKnownKeys(record, ["slug", "title", "icon", "hidden", "createdBy", "widgets"], path);
+  assertKnownKeys(
+    record,
+    ["id", "revision", "slug", "title", "icon", "hidden", "createdBy", "widgets"],
+    path,
+  );
+  const id = requireString(record, "id", path);
+  if (!RESOURCE_ID_PATTERN.test(id)) {
+    throw new Error(`${path}.id is invalid`);
+  }
+  const revision = assertIntegerRange(
+    record.revision,
+    `${path}.revision`,
+    1,
+    Number.MAX_SAFE_INTEGER,
+  );
   const slug = requireString(record, "slug", path);
   if (!TAB_SLUG_PATTERN.test(slug)) {
     throw new Error(`${path}.slug is invalid`);
@@ -313,6 +335,8 @@ function validateTab(value: unknown, path: string): WorkspaceTab {
     throw new Error(`${path}.widgets must contain at most 24 entries`);
   }
   return {
+    id,
+    revision,
     slug,
     title,
     ...(icon !== undefined ? { icon } : {}),
@@ -403,11 +427,16 @@ function validatePrefs(value: unknown, tabSlugs: Set<string>): WorkspaceDoc["pre
 }
 
 function assertUniqueTabs(tabs: WorkspaceTab[]): Set<string> {
+  const ids = new Set<string>();
   const slugs = new Set<string>();
   for (const tab of tabs) {
+    if (ids.has(tab.id)) {
+      throw new Error(`duplicate tab id: ${tab.id}`);
+    }
     if (slugs.has(tab.slug)) {
       throw new Error(`duplicate tab slug: ${tab.slug}`);
     }
+    ids.add(tab.id);
     slugs.add(tab.slug);
   }
   return slugs;
@@ -429,11 +458,15 @@ export function validateWorkspaceDoc(value: unknown): WorkspaceDoc {
   const record = assertRecord(value, "workspaces");
   assertKnownKeys(
     record,
-    ["schemaVersion", "workspaceVersion", "tabs", "widgetsRegistry", "prefs"],
+    ["schemaVersion", "workspaceId", "workspaceVersion", "tabs", "widgetsRegistry", "prefs"],
     "workspaces",
   );
   if (record.schemaVersion !== CURRENT_WORKSPACE_SCHEMA_VERSION) {
     throw new Error(`schemaVersion must be ${CURRENT_WORKSPACE_SCHEMA_VERSION}`);
+  }
+  const workspaceId = requireString(record, "workspaceId", "workspaces");
+  if (!RESOURCE_ID_PATTERN.test(workspaceId)) {
+    throw new Error("workspaces.workspaceId is invalid");
   }
   const workspaceVersion = assertIntegerRange(
     record.workspaceVersion,
@@ -450,9 +483,40 @@ export function validateWorkspaceDoc(value: unknown): WorkspaceDoc {
   assertUniqueWidgets(tabs);
   return {
     schemaVersion: CURRENT_WORKSPACE_SCHEMA_VERSION,
+    workspaceId,
     workspaceVersion,
     tabs,
     widgetsRegistry: validateWidgetsRegistry(record.widgetsRegistry),
     prefs: validatePrefs(record.prefs, tabSlugs),
   };
+}
+
+export function migrateWorkspaceDoc(value: unknown): { doc: WorkspaceDoc; changed: boolean } {
+  const record = assertRecord(value, "workspaces");
+  const schemaVersion = record.schemaVersion;
+  if (typeof schemaVersion !== "number" || !Number.isInteger(schemaVersion)) {
+    throw new Error("schemaVersion must be an integer");
+  }
+  if (schemaVersion > CURRENT_WORKSPACE_SCHEMA_VERSION) {
+    throw new Error(`unsupported future workspace schemaVersion: ${schemaVersion}`);
+  }
+  if (schemaVersion < 1) {
+    throw new Error(`unsupported old workspace schemaVersion: ${schemaVersion}`);
+  }
+  if (schemaVersion === 1) {
+    const tabs: Record<string, unknown>[] = [];
+    for (const [index, entry] of requireArray(record.tabs, "tabs").entries()) {
+      const tab = assertRecord(entry, `tabs[${index}]`);
+      const slug = requireString(tab, "slug", `tabs[${index}]`);
+      tabs.push({ ...tab, id: slug, revision: 1 });
+    }
+    const migrated = {
+      ...record,
+      schemaVersion: CURRENT_WORKSPACE_SCHEMA_VERSION,
+      workspaceId: DEFAULT_WORKSPACE_ID,
+      tabs,
+    };
+    return { doc: validateWorkspaceDoc(migrated), changed: true };
+  }
+  return { doc: validateWorkspaceDoc(record), changed: false };
 }

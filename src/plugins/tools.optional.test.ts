@@ -6,6 +6,11 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import {
+  bindPluginToolAuthorizationSubject,
+  requireCurrentPluginToolAuthorizationInvocation,
+  requirePluginToolAuthorizationInvocation,
+} from "./tool-authorization-context.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
@@ -611,6 +616,210 @@ describe("resolvePluginTools optional tools", () => {
         pluginSource: "/tmp/optional-demo.js",
       },
     ]);
+  });
+
+  it("binds Teams authority to the exact factory context and execute lifetime", async () => {
+    const firstContext = createContext();
+    const secondContext = createContext();
+    const subject = {
+      principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      agentSession: {
+        id: "binding-1",
+        invokingPrincipal: {
+          issuer: "trusted-proxy",
+          subject: "owner@example.com",
+          kind: "human" as const,
+        },
+      },
+    };
+    bindPluginToolAuthorizationSubject(firstContext as never, subject);
+    bindPluginToolAuthorizationSubject(secondContext as never, subject);
+    subject.domain.id = "forged-domain";
+    subject.delegation.assignmentId = "forged-assignment";
+    const factoryContexts: unknown[] = [];
+    let retainedInvocation: ReturnType<typeof requirePluginToolAuthorizationInvocation> | undefined;
+    const rawTool = {
+      name: "authorized_tool",
+      description: "authorized tool",
+      parameters: { type: "object", properties: {} },
+      prepareArguments() {
+        for (const context of factoryContexts) {
+          expect(() =>
+            requirePluginToolAuthorizationInvocation({
+              pluginId: "multi",
+              context: context as never,
+            }),
+          ).toThrow(/active host-authorized plugin tool invocation/i);
+        }
+        return {};
+      },
+      async execute() {
+        const active = factoryContexts.flatMap((context) => {
+          try {
+            return [
+              requirePluginToolAuthorizationInvocation({
+                pluginId: "multi",
+                context: context as never,
+              }),
+            ];
+          } catch {
+            return [];
+          }
+        });
+        expect(active).toHaveLength(1);
+        const currentInvocation = active[0];
+        if (!currentInvocation) {
+          throw new Error("expected one active plugin tool invocation");
+        }
+        retainedInvocation = currentInvocation;
+        expect(currentInvocation.subject).toEqual({
+          principal: { issuer: "core", subject: "agent:main", kind: "service" },
+          domain: { id: "domain-1" },
+          delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+          agentSession: {
+            id: "binding-1",
+            invokingPrincipal: {
+              issuer: "trusted-proxy",
+              subject: "owner@example.com",
+              kind: "human",
+            },
+          },
+        });
+        expect(() =>
+          requirePluginToolAuthorizationInvocation({
+            pluginId: "other-plugin",
+            context: currentInvocation.context,
+          }),
+        ).toThrow(/active host-authorized plugin tool invocation/i);
+        expect(() =>
+          requirePluginToolAuthorizationInvocation({
+            pluginId: "multi",
+            context: { ...currentInvocation.context },
+          }),
+        ).toThrow(/active host-authorized plugin tool invocation/i);
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    };
+    setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["authorized_tool"],
+        factory: (context) => {
+          factoryContexts.push(context);
+          return rawTool;
+        },
+      },
+    ]);
+
+    const first = expectDefined(
+      resolvePluginTools(createResolveToolsParams({ context: firstContext }))[0],
+      "first resolved tool test invariant",
+    );
+    const second = expectDefined(
+      resolvePluginTools(createResolveToolsParams({ context: secondContext }))[0],
+      "second resolved tool test invariant",
+    );
+    expect(first).not.toBe(second);
+    first.prepareArguments?.({});
+    await first.execute("call-1", {}, undefined);
+    await second.execute("call-2", {}, undefined);
+    expect(retainedInvocation).toBeDefined();
+    expect(() => requireCurrentPluginToolAuthorizationInvocation(retainedInvocation!)).toThrow(
+      /no longer active/i,
+    );
+  });
+
+  it("revokes retained Teams authority when an abort-ignoring tool is cancelled", async () => {
+    const context = createContext();
+    bindPluginToolAuthorizationSubject(context as never, {
+      principal: { issuer: "core", subject: "agent:main", kind: "service" },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      agentSession: {
+        id: "binding-1",
+        invokingPrincipal: {
+          issuer: "trusted-proxy",
+          subject: "owner@example.com",
+          kind: "human",
+        },
+      },
+    });
+    let releaseRetainedCallback: (() => void) | undefined;
+    let settleTool: (() => void) | undefined;
+    let factoryContext: unknown;
+    let resolveProbe: ((error?: Error) => void) | undefined;
+    const probed = new Promise<Error | undefined>((resolve) => {
+      resolveProbe = resolve;
+    });
+    setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        names: ["abort_ignoring_tool"],
+        factory: (toolContext) => {
+          factoryContext = toolContext;
+          return {
+            name: "abort_ignoring_tool",
+            description: "abort ignoring tool",
+            parameters: { type: "object", properties: {} },
+            execute() {
+              const invocation = requirePluginToolAuthorizationInvocation({
+                pluginId: "multi",
+                context: factoryContext as never,
+              });
+              const retainedGate = new Promise<void>((resolve) => {
+                releaseRetainedCallback = resolve;
+              });
+              void retainedGate.then(() => {
+                try {
+                  expect(() => requireCurrentPluginToolAuthorizationInvocation(invocation)).toThrow(
+                    /no longer active/i,
+                  );
+                  resolveProbe?.();
+                } catch (error) {
+                  resolveProbe?.(error instanceof Error ? error : new Error(String(error)));
+                }
+              });
+              return new Promise((resolve) => {
+                settleTool = () =>
+                  resolve({ content: [{ type: "text" as const, text: "finished" }] });
+              });
+            },
+          };
+        },
+      },
+    ]);
+    const tool = expectDefined(
+      resolvePluginTools(createResolveToolsParams({ context }))[0],
+      "resolved abort-ignoring tool test invariant",
+    );
+    const controller = new AbortController();
+    const pending = tool.execute("call-abort", {}, controller.signal);
+    await vi.waitFor(() => expect(releaseRetainedCallback).toBeTypeOf("function"));
+
+    controller.abort();
+    releaseRetainedCallback?.();
+    const error = await probed;
+    if (error) {
+      throw error;
+    }
+    settleTool?.();
+    await pending;
+  });
+
+  it("rejects delegated plugin-tool authority without an agent-session proof", () => {
+    expect(() =>
+      bindPluginToolAuthorizationSubject(createContext() as never, {
+        principal: { issuer: "core", subject: "agent:main", kind: "service" },
+        domain: { id: "domain-1" },
+        delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+      }),
+    ).toThrow(/agent-session proof/i);
   });
 
   it("wraps every array tool callback and restores caller scope after errors", async () => {

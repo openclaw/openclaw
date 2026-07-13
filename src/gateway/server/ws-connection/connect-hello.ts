@@ -2,6 +2,7 @@
 import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
+  type HelloOk,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   redeemDeviceBootstrapTokenProfile,
@@ -13,6 +14,7 @@ import { resolveRuntimeServiceVersion } from "../../../version.js";
 import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
+import { filterAdvertisedGatewayMethodsForRole } from "../../role-policy.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import { formatError } from "../../server-utils.js";
 import { formatForLog, logWs } from "../../ws-log.js";
@@ -33,6 +35,7 @@ export async function sendGatewayHello(
     nodeReapprovalCoordinator,
     gatewayMethods,
     events,
+    getMethodRegistry,
     buildRequestContext,
     refreshHealthSnapshot,
     close,
@@ -56,6 +59,7 @@ export async function sendGatewayHello(
     hasTokenAuth,
     hasPasswordAuth,
     bootstrapTokenCandidate,
+    authResult,
     authMethod,
     issuedBootstrapProfile,
     handoffBootstrapProfile,
@@ -65,14 +69,27 @@ export async function sendGatewayHello(
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
   });
-  const cachedHealth = getHealthCache();
-  if (cachedHealth) {
+  const cachedHealth = role === "member" ? null : getHealthCache();
+  if (role === "member") {
+    snapshot.presence = [];
+    snapshot.health = {};
+    snapshot.stateVersion.presence = 0;
+    snapshot.stateVersion.health = 0;
+    delete snapshot.sessionDefaults;
+    delete snapshot.updateAvailable;
+  } else if (cachedHealth) {
     snapshot.health = cachedHealth;
     snapshot.stateVersion.health = getHealthVersion();
   }
   const helloOkAuthScopes = deviceToken ? deviceToken.scopes : scopes;
   const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes);
-  const helloOk = {
+  const advertisedMethodRegistry = role === "member" ? getMethodRegistry?.() : undefined;
+  const advertisedGatewayMethods = filterAdvertisedGatewayMethodsForRole(
+    role,
+    gatewayMethods,
+    (method) => advertisedMethodRegistry?.getAccessPolicy(method),
+  );
+  const helloOk: HelloOk = {
     type: "hello-ok",
     protocol: PROTOCOL_VERSION,
     server: {
@@ -80,19 +97,22 @@ export async function sendGatewayHello(
       connId,
     },
     features: {
-      methods: gatewayMethods,
-      events,
+      methods: advertisedGatewayMethods,
+      events: role === "member" ? [] : events,
       capabilities: [
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
         GATEWAY_SERVER_CAPS.CRESTODIAN_SETUP_MODEL_REF,
       ],
     },
     snapshot,
-    ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
-    ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
+    ...(role !== "member" && controlUiTabs.length > 0 ? { controlUiTabs } : {}),
+    ...(role !== "member" && Object.keys(pluginSurfaceUrls).length > 0
+      ? { pluginSurfaceUrls }
+      : {}),
     auth: {
       role,
       scopes: helloOkAuthScopes,
+      ...(authResult.principal ? { principal: authResult.principal } : {}),
       ...(deviceToken
         ? {
             deviceToken: deviceToken.token,
@@ -218,7 +238,7 @@ export async function sendGatewayHello(
   }
   logWs("out", "hello-ok", {
     connId,
-    methods: gatewayMethods.length,
+    methods: advertisedGatewayMethods.length,
     events: events.length,
     presence: snapshot.presence.length,
     stateVersion: snapshot.stateVersion.presence,

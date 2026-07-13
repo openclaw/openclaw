@@ -92,6 +92,27 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     });
   });
 
+  it("forwards the server-owned Teams subject into plugin tool construction", async () => {
+    const authorizationSubject = {
+      principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+      domain: { id: "domain-1" },
+      delegation: { id: "delegation-1", assignmentId: "assignment-1" },
+    };
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:main",
+      tempPaths,
+      attemptOverrides: {
+        authorizationSubject,
+        disableTools: false,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ authorizationSubject }),
+    );
+  });
+
   it("skips runtime tool construction when the selected model does not support tools", async () => {
     hoisted.supportsModelToolsMock.mockReturnValueOnce(false);
 

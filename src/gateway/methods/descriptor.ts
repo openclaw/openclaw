@@ -1,3 +1,4 @@
+import type { GatewayMethodAccessPolicy } from "../authorization/contracts.js";
 // Gateway method descriptor types define the reusable contract shared by core, plugin, channel, and auxiliary methods.
 import type { OperatorScope } from "../operator-scopes.js";
 
@@ -29,6 +30,7 @@ export type GatewayMethodDescriptor = {
   name: string;
   handler: GatewayMethodHandler;
   scope: GatewayMethodScope;
+  access?: GatewayMethodAccessPolicy;
   owner: GatewayMethodOwner;
   startup?: GatewayMethodStartupAvailability;
   controlPlaneWrite?: boolean;
@@ -47,6 +49,8 @@ export type GatewayMethodRegistryView = {
   listMethods: () => string[];
   listAdvertisedMethods: () => string[];
   getScope: (name: string) => GatewayMethodScope | undefined;
+  getOwner: (name: string) => GatewayMethodOwner | undefined;
+  getAccessPolicy: (name: string) => GatewayMethodAccessPolicy | undefined;
   isStartupUnavailable: (name: string) => boolean;
   isControlPlaneWrite: (name: string) => boolean;
   descriptors: () => readonly GatewayMethodDescriptor[];

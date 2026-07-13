@@ -3,6 +3,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayAuthorizationSubject } from "./authorization/contracts.js";
 
 type CreateOpenClawToolsArg = {
   clientCaps?: string[];
@@ -12,6 +13,7 @@ type CreateOpenClawToolsArg = {
   pluginToolDenylist?: string[];
   sandboxed?: boolean;
   requesterAgentIdOverride?: string;
+  authorizationSubject?: GatewayAuthorizationSubject;
 };
 
 type LazyExecToolDefaults = {
@@ -102,6 +104,22 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     });
 
     expect(readCreateToolsArgs().clientCaps).toEqual(["tool-events", "inline-widgets"]);
+  });
+
+  it("forwards the server-owned Teams subject into plugin tool construction", () => {
+    const authorizationSubject = {
+      principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+      domain: { id: "domain-1" },
+    };
+
+    resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      authorizationSubject,
+    });
+
+    expect(readCreateToolsArgs().authorizationSubject).toBe(authorizationSubject);
   });
 
   it("filters loopback dedup exclusions without inheriting policy denies", () => {

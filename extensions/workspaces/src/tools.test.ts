@@ -74,6 +74,10 @@ describe("workspace tools", () => {
     const tools = toolsByName(new WorkspaceStore({ stateDir: "/tmp/unused" }));
     expect([...tools.keys()]).toEqual([
       "workspace_get",
+      "workspace_tab_get",
+      "workspace_change_request_create",
+      "workspace_change_request_list",
+      "workspace_change_request_cancel",
       "workspace_tab_create",
       "workspace_tab_update",
       "workspace_tab_delete",
@@ -90,6 +94,15 @@ describe("workspace tools", () => {
     ]);
     const validSamples: Record<string, unknown> = {
       workspace_get: {},
+      workspace_tab_get: { id: "main" },
+      workspace_change_request_create: {
+        tabId: "main",
+        baseRevision: 1,
+        proposal: {},
+        idempotencyKey: "request-1",
+      },
+      workspace_change_request_list: { tabId: "main" },
+      workspace_change_request_cancel: { tabId: "main", requestId: "request-1" },
       workspace_tab_create: { title: "Finance" },
       workspace_tab_update: { slug: "main", hidden: true },
       workspace_tab_delete: { slug: "old" },
@@ -133,6 +146,180 @@ describe("workspace tools", () => {
         false,
       );
     }
+  });
+
+  it("keeps workspace_get available to ordinary unbound local agent contexts", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new WorkspaceStore({ stateDir });
+      const result = await toolsByName(store).get("workspace_get")?.execute("local-read", {});
+      expect(details(result).doc).toMatchObject({ workspaceId: "default" });
+      store.close();
+    });
+  });
+
+  it("authorizes and returns only one exact tab for a delegated tool call", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const legacy = new WorkspaceStore({ stateDir });
+      const domainStore = new WorkspaceStore({ stateDir, isolationDomainId: "domain-1" });
+      domainStore.mutate(
+        (draft) => {
+          draft.tabs[0]!.title = "Shared tab";
+          draft.tabs[0]!.widgets.push({
+            id: "private-widget",
+            kind: "custom:private-dashboard",
+            title: "Private",
+            grid: { x: 0, y: 4, w: 12, h: 4 },
+            collapsed: false,
+            hidden: false,
+            createdBy: "user",
+            bindings: { source: { source: "file", path: "private.json" } },
+            props: { secret: "do-not-return" },
+          });
+        },
+        { actor: "user" },
+      );
+      const toolContext = { agentId: "main", sessionKey: "agent:main:main" } as never;
+      const callContext = { callId: "call-1" };
+      const requireContext = vi.fn(() => callContext);
+      const decide = vi.fn(async () => ({
+        allowed: true as const,
+        context: {
+          isolationDomainId: "domain-1",
+          principal: { id: "principal-agent", kind: "agent" as const },
+          delegatedSession: {
+            id: "delegation-1",
+            assignmentId: "assignment-1",
+            sponsorPrincipalId: "principal-owner",
+          },
+          requestId: "call-1",
+        },
+      }));
+      const api = {
+        teams: {
+          context: { isBound: vi.fn(() => true), require: requireContext },
+          authorization: { decide },
+        },
+      };
+      const tools = new Map(
+        createWorkspaceTools({
+          api: api as unknown as OpenClawPluginApi,
+          context: toolContext,
+          store: legacy,
+          storeForDomain: (domainId) => (domainId === "domain-1" ? domainStore : legacy),
+        }).map((tool) => [tool.name, tool]),
+      );
+
+      const result = await tools.get("workspace_tab_get")?.execute("call-1", { id: "main" });
+      expect(requireContext).toHaveBeenCalledWith(toolContext);
+      expect(decide).toHaveBeenCalledWith({
+        context: callContext,
+        permission: "workspaces.tab.read",
+        resources: [{ namespace: "workspaces", type: "tab", id: "main" }],
+      });
+      expect(details(result)).toEqual({
+        workspaceId: "default",
+        workspaceVersion: 2,
+        tab: expect.objectContaining({ id: "main", revision: 2, title: "Shared tab" }),
+      });
+      expect(JSON.stringify(details(result))).not.toContain("private.json");
+      expect(JSON.stringify(details(result))).not.toContain("do-not-return");
+      const updated = await tools.get("workspace_tab_update")?.execute("call-2", {
+        id: "main",
+        ifRevision: 2,
+        title: "Delegated edit",
+      });
+      expect(decide).toHaveBeenLastCalledWith({
+        context: callContext,
+        permission: "workspaces.tab.write",
+        resources: [{ namespace: "workspaces", type: "tab", id: "main" }],
+      });
+      expect(details(updated)).toMatchObject({
+        workspaceId: "default",
+        workspaceVersion: 3,
+        tab: { id: "main", revision: 3, title: "Delegated edit" },
+      });
+      expect(details(updated)).not.toHaveProperty("doc");
+      expect(JSON.stringify(details(updated))).not.toContain("private.json");
+      expect(JSON.stringify(details(updated))).not.toContain("do-not-return");
+      const current = domainStore.read().tabs[0]!;
+      const proposal = {
+        slug: current.slug,
+        title: "Agent proposal",
+        ...(current.icon ? { icon: current.icon } : {}),
+        hidden: current.hidden,
+        widgets: current.widgets.map(({ createdBy: _createdBy, ...widget }) => widget),
+      };
+      const createdRequest = await tools.get("workspace_change_request_create")?.execute("call-3", {
+        tabId: "main",
+        baseRevision: 3,
+        proposal,
+        idempotencyKey: "request-1",
+      });
+      const requestId = (details(createdRequest).request as { id: string }).id;
+      expect(details(createdRequest)).toMatchObject({
+        request: {
+          id: requestId,
+          state: "pending",
+          requester: {
+            principalId: "principal-agent",
+            kind: "agent",
+            delegationId: "delegation-1",
+            sponsorPrincipalId: "principal-owner",
+          },
+        },
+      });
+      const listed = await tools.get("workspace_change_request_list")?.execute("call-4", {
+        tabId: "main",
+        state: "pending",
+      });
+      expect(details(listed).requests).toEqual([
+        expect.objectContaining({ id: requestId, state: "pending" }),
+      ]);
+      const cancelled = await tools.get("workspace_change_request_cancel")?.execute("call-5", {
+        tabId: "main",
+        requestId,
+      });
+      expect(details(cancelled)).toMatchObject({
+        request: { id: requestId, state: "cancelled" },
+      });
+      await expect(
+        tools.get("workspace_replace")?.execute("call-admin", { doc: domainStore.read() }),
+      ).rejects.toThrow(/admin tool is unavailable/i);
+      legacy.close();
+      domainStore.close();
+    });
+  });
+
+  it("fails closed when a bound Teams tool context is no longer active", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const store = new WorkspaceStore({ stateDir });
+      const api = {
+        teams: {
+          context: {
+            isBound: vi.fn(() => true),
+            require: vi.fn(() => {
+              throw new Error("tool invocation is inactive");
+            }),
+          },
+          authorization: { decide: vi.fn() },
+        },
+      };
+      const tools = new Map(
+        createWorkspaceTools({
+          api: api as unknown as OpenClawPluginApi,
+          context: { agentId: "main", sessionKey: "agent:main:main" } as never,
+          store,
+        }).map((tool) => [tool.name, tool]),
+      );
+
+      await expect(tools.get("workspace_get")?.execute("call-read", {})).rejects.toThrow(
+        /inactive/i,
+      );
+      await expect(
+        tools.get("workspace_replace")?.execute("call-admin", { doc: store.read() }),
+      ).rejects.toThrow(/inactive/i);
+      store.close();
+    });
   });
 
   it("stamps tool provenance from context and rejects createdBy override params", async () => {
@@ -206,6 +393,8 @@ describe("workspace tools", () => {
       const replacement = structuredClone(store.read());
       replacement.tabs[0]!.createdBy = "agent:forged";
       replacement.tabs.push({
+        id: "agent-tab",
+        revision: 1,
         slug: "agent-tab",
         title: "Agent Tab",
         hidden: false,

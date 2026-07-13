@@ -15,6 +15,7 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type { GatewayAuthorizationSubject } from "../../gateway/authorization/contracts.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { CliBackendExecutionMode } from "../../plugins/cli-backend.types.js";
@@ -99,6 +100,8 @@ export type RunCliAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Server-owned Teams authorization subject forwarded only through the opaque loopback grant. */
+  authorizationSubject?: GatewayAuthorizationSubject;
   /** Immutable lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   lane?: string;

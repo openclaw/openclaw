@@ -74,6 +74,7 @@ function createLocalGatewayRequestContext(
     }
   };
   return {
+    authorization: { mode: "legacy" },
     deps: params.deps,
     cron: unavailableCron,
     cronStorePath: "",

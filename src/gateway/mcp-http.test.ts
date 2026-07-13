@@ -45,6 +45,7 @@ type ScopedToolsCall = {
   runtimePolicySessionKey?: string;
   agentId?: string;
   sessionId?: string;
+  authorizationSubject?: import("./authorization/contracts.js").GatewayAuthorizationSubject;
   modelProvider?: string;
   modelId?: string;
   yieldContextCacheKey?: string;
@@ -1045,6 +1046,11 @@ describe("mcp loopback server", () => {
 
   it("binds a CLI grant's complete context and ignores spoofed scope headers", async () => {
     const { port, runtime } = await startLoopbackServerForTest();
+    const authorizationSubject = {
+      principal: { issuer: "core", subject: "agent:worker", kind: "service" as const },
+      domain: { id: "domain-bound" },
+      delegation: { id: "delegation-bound", assignmentId: "assignment-bound" },
+    };
     const grant = mintMcpLoopbackClientGrant({
       context: {
         sessionKey: "agent:main:discord:channel:bound",
@@ -1052,6 +1058,7 @@ describe("mcp loopback server", () => {
         agentId: "worker",
         sessionId: "session-bound",
         runId: "run-bound",
+        authorizationSubject,
         modelProvider: "anthropic",
         modelId: "claude-opus-4-7",
         messageProvider: "discord",
@@ -1133,6 +1140,7 @@ describe("mcp loopback server", () => {
       runtimePolicySessionKey: "agent:worker:discord:default:direct:bound-user",
       agentId: "worker",
       sessionId: "session-bound",
+      authorizationSubject,
       modelProvider: "anthropic",
       modelId: "claude-opus-4-7",
       messageProvider: "discord",
@@ -1479,6 +1487,38 @@ describe("mcp loopback server", () => {
     expect(unknownSecond.toolSchema.map((tool) => tool.name)).toContain("cron");
 
     expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps Teams authorization subjects domain-bound in the loopback cache", () => {
+    const cache = new McpLoopbackToolCache();
+    const baseParams = {
+      cfg: {} as never,
+      sessionKey: "agent:main:direct:test",
+      messageProvider: undefined,
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      currentMessageId: undefined,
+      currentInboundAudio: undefined,
+      accountId: undefined,
+      inboundEventKind: undefined,
+      sourceReplyDeliveryMode: undefined,
+      senderIsOwner: false,
+    } satisfies Parameters<McpLoopbackToolCache["resolve"]>[0];
+    const subjectFor = (domainId: string) => ({
+      principal: { issuer: "core", subject: "agent:main", kind: "service" as const },
+      domain: { id: domainId },
+    });
+    resolveGatewayScopedToolsMock.mockImplementation((input: unknown) => ({
+      agentId: "main",
+      tools: [makeMockTool({ name: (input as ScopedToolsCall).authorizationSubject?.domain.id })],
+    }));
+
+    const first = cache.resolve({ ...baseParams, authorizationSubject: subjectFor("domain-a") });
+    const second = cache.resolve({ ...baseParams, authorizationSubject: subjectFor("domain-b") });
+
+    expect(first.toolSchema.map((tool) => tool.name)).toContain("domain-a");
+    expect(second.toolSchema.map((tool) => tool.name)).toContain("domain-b");
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps CLI node-exec capability and session defaults cache-bound", () => {

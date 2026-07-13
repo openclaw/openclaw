@@ -238,6 +238,14 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   return row?.ok === 1;
 }
 
+function hasCanonicalAuthorizationResourcesPrimaryKey(db: DatabaseSync): boolean {
+  return (
+    !tableExists(db, "authorization_resources") ||
+    JSON.stringify(tablePrimaryKeyColumns(db, "authorization_resources")) ===
+      JSON.stringify(["domain_id", "namespace", "resource_type", "resource_id"])
+  );
+}
+
 function ensureColumn(db: DatabaseSync, tableName: string, columnSql: string): boolean {
   const columnName = columnSql.trim().split(/\s+/, 1)[0];
   if (!columnName || !tableExists(db, tableName) || tableHasColumn(db, tableName, columnName)) {
@@ -782,6 +790,11 @@ function assertCanonicalStateSchemaShape(db: DatabaseSync, pathname: string): vo
     }
     throw new Error(
       `OpenClaw state database ${pathname} has a noncanonical audit event schema that cannot be repaired automatically; restore the canonical audit_events shape before retrying.`,
+    );
+  }
+  if (!hasCanonicalAuthorizationResourcesPrimaryKey(db)) {
+    throw new Error(
+      `OpenClaw state database ${pathname} has a noncanonical authorization resource schema; rebuild the unpublished Teams authorization state before enabling isolated mode.`,
     );
   }
 }
@@ -1518,6 +1531,12 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_signature_count INTEGER");
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_threshold INTEGER");
   ensureColumn(db, "official_external_plugin_catalog_snapshots", "trust_verified_at TEXT");
+  ensureColumn(db, "authorization_resources", "parent_namespace TEXT");
+  ensureColumn(db, "authorization_resources", "parent_resource_type TEXT");
+  ensureColumn(db, "authorization_resources", "parent_resource_id TEXT");
+  ensureColumn(db, "authorization_resources", "retired_at INTEGER");
+  ensureColumn(db, "authorization_resources", "retired_by_principal_id TEXT");
+  ensureColumn(db, "authorization_resources", "updated_at INTEGER NOT NULL DEFAULT 0");
   const addedTaskRequesterAgentId = ensureColumn(db, "task_runs", "requester_agent_id TEXT");
   if (addedTaskRequesterAgentId) {
     repairLegacyTaskAgentAttribution(db);
@@ -1543,6 +1562,33 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureOperatorApprovalResolutionRefs(db);
 }
 
+function replaceAuthorizationResourceRetirementTrigger(db: DatabaseSync, pathname: string): void {
+  if (
+    !tableExists(db, "authorization_resources") ||
+    !tableHasColumn(db, "authorization_resources", "retired_by_principal_id")
+  ) {
+    return;
+  }
+  const ambiguousRetirement = db
+    .prepare(
+      `SELECT 1 AS found
+         FROM authorization_resources
+        WHERE retired_at IS NOT NULL
+          AND retired_by_principal_id IS NULL
+        LIMIT 1`,
+    )
+    .get() as { found?: number } | undefined;
+  if (ambiguousRetirement) {
+    throw new Error(
+      `noncanonical authorization retirement provenance in ${pathname}; rebuild this unpublished authorization state before continuing`,
+    );
+  }
+  // The prior dormant schema used this trigger name with an older column list.
+  // CREATE TRIGGER IF NOT EXISTS cannot upgrade it, so replace it deliberately;
+  // the canonical schema execution immediately below recreates the current guard.
+  db.exec("DROP TRIGGER IF EXISTS authorization_resources_retirement_monotonic;");
+}
+
 function ensureSchema(db: DatabaseSync, pathname: string): void {
   const now = Date.now();
   const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
@@ -1552,6 +1598,7 @@ function ensureSchema(db: DatabaseSync, pathname: string): void {
       assertSupportedSchemaVersion(db, pathname);
       ensureAdditiveStateColumns(db);
       assertCanonicalStateSchemaShape(db, pathname);
+      replaceAuthorizationResourceRetirementTrigger(db, pathname);
       db.exec(OPENCLAW_STATE_SCHEMA_SQL);
       repairCanonicalSqliteUniqueIndexes(db, pathname, OPENCLAW_STATE_CANONICAL_UNIQUE_INDEXES);
       // Retired node_pairing_* tables were created by earlier schema revisions but
