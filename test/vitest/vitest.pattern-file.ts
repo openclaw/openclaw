@@ -124,6 +124,55 @@ function patternsCouldOverlap(value: string, pattern: string): boolean {
   );
 }
 
+function narrowIncludePatterns(
+  includePatterns: string[],
+  candidatePatterns: string[] | null,
+): string[] | null {
+  if (!candidatePatterns) {
+    return null;
+  }
+
+  return [
+    ...new Set(
+      candidatePatterns.filter((value) =>
+        includePatterns.some((pattern) => patternsCouldOverlap(value, pattern)),
+      ),
+    ),
+  ];
+}
+
+function isPlainRepoRelativePath(value: string): boolean {
+  if (!/^[A-Za-z0-9_./-]+$/u.test(value) || path.isAbsolute(value)) {
+    return false;
+  }
+  return value.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+export function intersectIncludePatterns(
+  includePatterns: string[],
+  candidatePatterns: string[] | null,
+): string[] | null {
+  if (!candidatePatterns) {
+    return null;
+  }
+
+  for (const candidate of candidatePatterns) {
+    // Glob text matching cannot prove set containment. Accept only the plain,
+    // repo-relative file paths emitted by the project runner.
+    if (!isPlainRepoRelativePath(candidate)) {
+      throw new Error(`cannot safely intersect non-literal include path: ${candidate}`);
+    }
+  }
+
+  return [
+    ...new Set(
+      candidatePatterns.filter((candidate) =>
+        includePatterns.some((include) => path.matchesGlob(candidate, include)),
+      ),
+    ),
+  ];
+}
+
 function loadPatternListFile(filePath: string, label: string): string[] {
   const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
   if (!Array.isArray(parsed)) {
@@ -186,9 +235,5 @@ export function narrowIncludePatternsForCli(
     return null;
   }
 
-  const matched = cliPatterns.filter((value) =>
-    includePatterns.some((pattern) => patternsCouldOverlap(value, pattern)),
-  );
-
-  return [...new Set(matched)];
+  return narrowIncludePatterns(includePatterns, cliPatterns);
 }
