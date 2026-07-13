@@ -2,8 +2,6 @@
 import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
 import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 
-export { PLUGIN_REGISTRY_STATE };
-
 type GlobalChannelRegistryState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
     activeVersion?: number;
