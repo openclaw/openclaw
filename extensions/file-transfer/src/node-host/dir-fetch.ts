@@ -180,6 +180,15 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   }
 
   if (preflightOnly) {
+    const withinBudget = await preflightDu(canonical, maxBytes);
+    if (!withinBudget) {
+      return {
+        ok: false,
+        code: "TREE_TOO_LARGE",
+        message: `directory tree exceeds estimated size limit (${maxBytes} bytes raw)`,
+        canonicalPath: canonical,
+      };
+    }
     try {
       const entries = await listTreeEntries(canonical, 5000);
       if (entries === "TOO_MANY") {

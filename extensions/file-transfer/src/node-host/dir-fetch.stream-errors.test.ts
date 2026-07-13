@@ -54,6 +54,25 @@ describe("dir.fetch process wrapper", () => {
     );
   });
 
+  it("rejects preflight-only requests when du reports an oversized directory", async () => {
+    runCommandBufferedMock.mockResolvedValueOnce(
+      commandResult({ stdout: Buffer.from("999\t/tmp/project\n") }),
+    );
+
+    await expect(
+      handleDirFetch({ path: tmpRoot, maxBytes: 64 * 1024, preflightOnly: true }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "TREE_TOO_LARGE",
+      message: "directory tree exceeds estimated size limit (65536 bytes raw)",
+    });
+    expect(runCommandBufferedMock).toHaveBeenCalledOnce();
+    expect(runCommandBufferedMock).toHaveBeenCalledWith(
+      ["du", "-sk", tmpRoot],
+      expect.objectContaining({ discardOutput: { stderr: true } }),
+    );
+  });
+
   it("fails tar entry listing closed on wrapper errors", async () => {
     runCommandBufferedMock
       .mockResolvedValueOnce(commandResult({ stdout: Buffer.from("1\tproject\n") }))
