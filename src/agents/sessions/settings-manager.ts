@@ -8,6 +8,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import lockfile from "proper-lockfile";
+import { mergeDeep } from "../../infra/deep-merge.js";
 import type { Transport } from "../../llm/types.js";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.js";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.js";
@@ -123,33 +124,7 @@ export interface Settings {
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
 function deepMergeSettings(base: Settings, overrides: Settings): Settings {
-  const result: Settings = { ...base };
-
-  for (const key of Object.keys(overrides) as (keyof Settings)[]) {
-    const overrideValue = overrides[key];
-    const baseValue = base[key];
-
-    if (overrideValue === undefined) {
-      continue;
-    }
-
-    // For nested objects, merge recursively
-    if (
-      typeof overrideValue === "object" &&
-      overrideValue !== null &&
-      !Array.isArray(overrideValue) &&
-      typeof baseValue === "object" &&
-      baseValue !== null &&
-      !Array.isArray(baseValue)
-    ) {
-      (result as Record<string, unknown>)[key] = { ...baseValue, ...overrideValue };
-    } else {
-      // For primitives and arrays, override value wins
-      (result as Record<string, unknown>)[key] = overrideValue;
-    }
-  }
-
-  return result;
+  return mergeDeep(base, overrides) as Settings;
 }
 
 export type SettingsScope = "global" | "project";
