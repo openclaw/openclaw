@@ -1991,7 +1991,7 @@
     "tui:pty:test:watch:all": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode all",
     "tui:pty:test:watch:fake": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode fake",
     "tui:pty:test:watch:local": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode local",
-    "ui:build": "node scripts/ui.js build && node scripts/check-control-ui-precompressed-assets.mjs",
+    "ui:build": "node scripts/ui.js build && node scripts/check-control-ui-precompressed-assets.mjs && node scripts/check-control-ui-performance.mjs",
     "ui:dev": "node scripts/ui.js dev",
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",

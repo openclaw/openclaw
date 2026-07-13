@@ -7,16 +7,10 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  getActiveNodeContext,
-  resetActiveNodeContextForTests,
-} from "../infra/active-node-context.js";
+import { getActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  listConnectedNodePluginTools,
-  resetConnectedNodePluginToolsForTest,
-} from "./node-plugin-tool-snapshot.js";
+import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -24,6 +18,24 @@ import type { GatewayWsClient } from "./server/ws-types.js";
 let testNodeHostCommands: NonNullable<
   ReturnType<typeof createEmptyPluginRegistry>["nodeHostCommands"]
 > = [];
+const activeTestRegistries = new Set<NodeRegistry>();
+
+function createNodeRegistry(options?: ConstructorParameters<typeof NodeRegistry>[0]): NodeRegistry {
+  const registry = new NodeRegistry(options);
+  activeTestRegistries.add(registry);
+  return registry;
+}
+
+afterEach(() => {
+  for (const registry of activeTestRegistries) {
+    for (const session of registry.listConnected()) {
+      registry.unregister(session.connId);
+    }
+  }
+  activeTestRegistries.clear();
+  testNodeHostCommands = [];
+  setActiveNodeContext(null);
+});
 
 function makeClient(
   connId: string,
@@ -86,12 +98,6 @@ function makeClient(
   };
 }
 
-afterEach(() => {
-  testNodeHostCommands = [];
-  resetConnectedNodePluginToolsForTest();
-  resetActiveNodeContextForTests();
-});
-
 function registerDemoNodePluginTool(params: {
   name: string;
   command: string;
@@ -121,7 +127,7 @@ function registerDemoNodePluginTool(params: {
 }
 
 function createTestNodeRegistry(): NodeRegistry {
-  return new NodeRegistry({
+  return createNodeRegistry({
     listRegisteredNodePluginToolCommands: () => testNodeHostCommands,
   });
 }
@@ -401,7 +407,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("rejects invoke when the node connection changed before dispatch", async () => {
-    const registry = new NodeRegistry();
+    const registry = createNodeRegistry();
     const replacementFrames: string[] = [];
     registry.register(makeClient("conn-old", "node-1"), {});
     registry.register(makeClient("conn-new", "node-1", replacementFrames), {});
@@ -508,7 +514,7 @@ describe("gateway/node-registry", () => {
 
   it("keeps zero-timeout invokes pending until the node responds", async () => {
     vi.useFakeTimers();
-    const registry = new NodeRegistry();
+    const registry = createNodeRegistry();
     try {
       const frames = registerNode(registry);
       const invoke = registry.invoke({
@@ -542,7 +548,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("rejects zero-timeout invokes when the node disconnects", async () => {
-    const registry = new NodeRegistry();
+    const registry = createNodeRegistry();
     registerNode(registry);
     const invoke = registry.invoke({
       nodeId: "node-1",
@@ -558,7 +564,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("returns a structured unavailable result when a node disconnects during an MCP call", async () => {
-    const registry = new NodeRegistry();
+    const registry = createNodeRegistry();
     registerNode(registry);
     const invoke = registry.invoke({
       nodeId: "node-1",
@@ -1141,7 +1147,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("ignores published node tools when gateway publication is disabled", () => {
-    const registry = new NodeRegistry({ nodePluginToolsEnabled: false });
+    const registry = createNodeRegistry({ nodePluginToolsEnabled: false });
     registry.register(
       makeClient("conn-1", "node-1", [], {
         commands: ["demo.echo"],
@@ -1228,7 +1234,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("ignores node skills when publication is disabled or the connection is stale", () => {
-    const disabled = new NodeRegistry({ nodeSkillsEnabled: false });
+    const disabled = createNodeRegistry({ nodeSkillsEnabled: false });
     disabled.register(makeClient("conn-1", "node-1"), {});
     expect(publishNodeSkills(disabled, [nodeSkill("disabled")])?.nodeSkills).toEqual([]);
 
@@ -1260,7 +1266,7 @@ describe("gateway/node-registry", () => {
   });
 
   it("preserves a legacy session feature ceiling across surface approvals", () => {
-    const registry = new NodeRegistry();
+    const registry = createNodeRegistry();
     const client = makeClient("conn-1", "node-1", [], {
       caps: [],
       commands: [],

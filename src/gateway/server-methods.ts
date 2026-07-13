@@ -1,5 +1,4 @@
-// Gateway method registry aggregator wires core and plugin RPC descriptors to
-// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
+// Gateway registry wires RPC descriptors to handlers, scopes, and budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -548,6 +547,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.session.endTurn",
       "talk.session.cancelTurn",
       "talk.session.cancelOutput",
+      "talk.session.acknowledgeMark",
       "talk.session.submitToolResult",
       "talk.session.steer",
       "talk.session.close",

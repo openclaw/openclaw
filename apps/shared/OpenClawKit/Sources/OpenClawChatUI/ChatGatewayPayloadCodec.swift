@@ -48,6 +48,16 @@ public enum OpenClawChatGatewayPayloadCodec {
         return decoded.models.map(self.modelChoice)
     }
 
+    public static func decodeSessionRoutingIdentity(_ data: Data) throws -> OpenClawChatSessionRoutingIdentity {
+        let decoded = try JSONDecoder().decode(AgentsListResult.self, from: data)
+        guard let identity = OpenClawChatSessionRoutingIdentity(
+            scope: decoded.scope.value as? String,
+            mainSessionKey: decoded.mainkey,
+            defaultAgentID: decoded.defaultid)
+        else { throw CancellationError() }
+        return identity
+    }
+
     public static func modelChoice(_ model: ModelChoice) -> OpenClawChatModelChoice {
         let name = model.name.trimmingCharacters(in: .whitespacesAndNewlines)
         return OpenClawChatModelChoice(

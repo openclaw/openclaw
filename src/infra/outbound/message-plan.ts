@@ -21,7 +21,7 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
 /**
  * Planned outbound delivery unit after text chunking or media expansion.
  */
-export type OutboundMessageUnit =
+type OutboundMessageUnit =
   | {
       kind: "text";
       text: string;
@@ -37,7 +37,7 @@ export type OutboundMessageUnit =
 /**
  * Splits outbound text with optional formatting-aware context.
  */
-export type OutboundMessageChunker = (
+type OutboundMessageChunker = (
   text: string,
   limit: number,
   ctx?: { formatting?: OutboundDeliveryFormattingOptions },
