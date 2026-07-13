@@ -2736,26 +2736,6 @@ openclaw-session-menu[popover] {
   gap: 20px;
 }
 
-.grid-cols-2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.grid-cols-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.stat-grid {
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-}
-
-.note-grid {
-  display: grid;
-  gap: 16px;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
 .row {
   display: flex;
   gap: 12px;
@@ -2789,11 +2769,6 @@ openclaw-session-menu[popover] {
       "topbar"
       "nav"
       "content";
-  }
-
-  .grid-cols-2,
-  .grid-cols-3 {
-    grid-template-columns: 1fr;
   }
 
   .topbar {

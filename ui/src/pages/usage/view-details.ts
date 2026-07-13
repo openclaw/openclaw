@@ -121,7 +121,7 @@ function renderSessionSummary(
   return html`
     ${badges.length > 0
       ? html`<div class="usage-badges">
-          ${badges.map((b) => html`<span class="usage-badge">${b}</span>`)}
+          ${badges.map((b) => html`<span class="settings-row__value">${b}</span>`)}
         </div>`
       : nothing}
     <div class="session-summary-grid">
@@ -275,7 +275,7 @@ function renderSessionDetailPanel(
   const cursorIndicator = filteredUsage ? t("usage.details.filtered") : "";
 
   return html`
-    <div class="card session-detail-panel">
+    <div class="settings-group usage-panel session-detail-panel">
       <div class="session-detail-header">
         <div class="session-detail-header-left">
           <div class="session-detail-title">

@@ -153,10 +153,12 @@ function renderSkillWorkshopPage(
           ${renderSkillWorkshopHeaderControls(state, renderContext, requestUpdate)}
         </div>
       </section>
-      ${renderPluginsHubTabs({
-        active: "workshop",
-        onSelect: (tab) => selectPluginsHubTab(context, tab),
-      })}
+      <div class="plugins-hub-tabs-row">
+        ${renderPluginsHubTabs({
+          active: "workshop",
+          onSelect: (tab) => selectPluginsHubTab(context, tab),
+        })}
+      </div>
       <div
         id="plugins-hub-panel"
         class="sw-hub-panel"
