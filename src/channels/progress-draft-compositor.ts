@@ -312,6 +312,9 @@ export function createChannelProgressDraftCompositor(params: {
       // The opt-in commentary lane already renders every preamble as an
       // interleaved 💬 line; letting the headline also consume it would
       // replace those documented lines with a duplicate status paragraph.
+      // Deliberate: the headline itself is default-on presentation of the
+      // typed preamble (owner decision, #105872); `commentary` only picks the
+      // interleaved-lane presentation, it is not a preamble kill switch.
       if (commentaryProgressEnabled) {
         return false;
       }
