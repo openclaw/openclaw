@@ -271,15 +271,23 @@ function appendTranscriptEntry(
   );
 }
 
+type CliContextBudgetTestCase = {
+  name: string;
+  provider: string;
+  agentContextTokens?: number;
+  expectedContextTokens: number;
+  model: string;
+  modelAliases?: Record<string, string>;
+};
+
 describe("shouldSkipLocalCliCredentialEpoch", () => {
-  it.each([
+  it.each<CliContextBudgetTestCase>([
     {
       name: "Claude CLI with a selected-agent cap",
       provider: "claude-cli",
       agentContextTokens: 80_000,
       expectedContextTokens: 80_000,
       model: "claude-opus-4-7",
-      modelAliases: undefined,
     },
     {
       name: "a Claude CLI user alias",
@@ -303,7 +311,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       agentContextTokens: undefined,
       expectedContextTokens: 100_000,
       model: "claude-opus-4-7",
-      modelAliases: undefined,
     },
   ])("resolves canonical model budgets for $name", async (testCase) => {
     const { dir, sessionFile } = createSessionFile();
