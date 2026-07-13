@@ -162,6 +162,7 @@ function stripKotlinComments(source) {
   let index = 0;
   let blockDepth = 0;
   let lineComment = false;
+  /** @type {Array<{type: "code" | "raw" | "quoted" | "char", templateDepth: number | null}>} */
   const contexts = [{ type: "code", templateDepth: null }];
 
   while (index < source.length) {
@@ -196,7 +197,7 @@ function stripKotlinComments(source) {
     }
 
     if (context.type === "raw") {
-      if (triple === '\"\"\"') {
+      if (triple === '"""') {
         output += triple;
         contexts.pop();
         index += 3;
@@ -224,7 +225,7 @@ function stripKotlinComments(source) {
         index += 2;
         continue;
       }
-      const delimiter = context.type === "quoted" ? '\"' : "'";
+      const delimiter = context.type === "quoted" ? '"' : "'";
       if (char === delimiter) {
         contexts.pop();
       }
@@ -244,13 +245,13 @@ function stripKotlinComments(source) {
       index += 2;
       continue;
     }
-    if (triple === '\"\"\"') {
+    if (triple === '"""') {
       output += triple;
       contexts.push({ type: "raw" });
       index += 3;
       continue;
     }
-    if (char === '\"') {
+    if (char === '"') {
       output += char;
       contexts.push({ type: "quoted" });
       index += 1;

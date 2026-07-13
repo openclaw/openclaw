@@ -38,6 +38,7 @@ const constantsOutputPath = path.join(
   repoRoot,
   "apps/android/app/src/main/java/ai/openclaw/app/protocol/OpenClawProtocolConstants.kt",
 );
+const protocolSchemas = ProtocolSchemas as unknown as Record<string, JsonSchema>;
 
 const schemaNames = new Map<string, string>([
   ["ErrorShape", "GatewayProtocolError"],
@@ -50,24 +51,21 @@ const schemaNames = new Map<string, string>([
 ]);
 
 const androidEnums: EnumSpec[] = [
-  {
-    name: "OpenClawCapability",
-    values: [
-      ["Canvas", "canvas"],
-      ["Camera", "camera"],
-      ["Sms", "sms"],
-      ["Talk", "talk"],
-      ["Location", "location"],
-      ["Device", "device"],
-      ["Notifications", "notifications"],
-      ["System", "system"],
-      ["Photos", "photos"],
-      ["Contacts", "contacts"],
-      ["Calendar", "calendar"],
-      ["Motion", "motion"],
-      ["CallLog", "callLog"],
-    ].map(([name, rawValue]) => ({ name, rawValue })),
-  },
+  enumSpec("OpenClawCapability", "", [
+    ["Canvas", "canvas"],
+    ["Camera", "camera"],
+    ["Sms", "sms"],
+    ["Talk", "talk"],
+    ["Location", "location"],
+    ["Device", "device"],
+    ["Notifications", "notifications"],
+    ["System", "system"],
+    ["Photos", "photos"],
+    ["Contacts", "contacts"],
+    ["Calendar", "calendar"],
+    ["Motion", "motion"],
+    ["CallLog", "callLog"],
+  ]),
   enumSpec("OpenClawCanvasCommand", "canvas.", [
     ["Present", "present"],
     ["Hide", "hide"],
@@ -213,7 +211,7 @@ function emitWireModels(): string[] {
   const selectedSchemas = new Map<JsonSchema, string>();
   const selectedSignatures = new Map<string, string>();
   for (const [schemaName, kotlinName] of schemaNames) {
-    const schema = ProtocolSchemas[schemaName] as JsonSchema | undefined;
+    const schema = protocolSchemas[schemaName];
     if (!schema) {
       throw new Error(`Missing ProtocolSchemas.${schemaName}`);
     }
@@ -224,13 +222,24 @@ function emitWireModels(): string[] {
   const nestedModels = new Map<string, JsonSchema>();
   const kotlinType = (schema: JsonSchema, nestedName: string): string => {
     const selected = selectedSchemas.get(schema) ?? selectedSignatures.get(schemaSignature(schema));
-    if (selected) return selected;
-    if (schema.type === "string" || typeof schema.const === "string") return "String";
-    if (schema.type === "integer") return "Long";
-    if (schema.type === "number") return "Double";
-    if (schema.type === "boolean") return "Boolean";
-    if (schema.type === "array")
+    if (selected) {
+      return selected;
+    }
+    if (schema.type === "string" || typeof schema.const === "string") {
+      return "String";
+    }
+    if (schema.type === "integer") {
+      return "Long";
+    }
+    if (schema.type === "number") {
+      return "Double";
+    }
+    if (schema.type === "boolean") {
+      return "Boolean";
+    }
+    if (schema.type === "array") {
       return `List<${kotlinType(schema.items ?? {}, `${nestedName}Item`)}>`;
+    }
     if (schema.patternProperties) {
       const valueSchema = Object.values(schema.patternProperties)[0] ?? {};
       return `Map<String, ${kotlinType(valueSchema, `${nestedName}Value`)}>`;
@@ -259,17 +268,16 @@ function emitWireModels(): string[] {
         },`,
       };
     });
-    return [
-      "@Serializable",
-      `data class ${name}(`,
-      ...properties.flatMap((property) => [...property.annotation, property.declaration]),
-      ")",
-    ].join("\n");
+    const fields: string[] = [];
+    for (const property of properties) {
+      fields.push(...property.annotation, property.declaration);
+    }
+    return ["@Serializable", `data class ${name}(`, ...fields, ")"].join("\n");
   };
 
   const output: string[] = [];
   for (const [schemaName, kotlinName] of schemaNames) {
-    output.push(emitModel(kotlinName, ProtocolSchemas[schemaName] as JsonSchema));
+    output.push(emitModel(kotlinName, protocolSchemas[schemaName]!));
   }
   for (const [nestedName, schema] of nestedModels) {
     if (!output.some((model) => model.startsWith(`@Serializable\ndata class ${nestedName}(`))) {
