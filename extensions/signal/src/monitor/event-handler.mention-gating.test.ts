@@ -42,7 +42,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
-  { renderSignalMentions, resolveSignalNativeMentionFacts },
+  { renderSignalMentions, resolveSignalMentionFacts },
   { clearSignalReplyAuthorsForTest, resolveSignalReplyContextWithPersistence },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
@@ -491,16 +491,14 @@ describe("renderSignalMentions", () => {
   });
 });
 
-describe("resolveSignalNativeMentionFacts", () => {
+describe("resolveSignalMentionFacts", () => {
   const PLACEHOLDER = "\uFFFC";
 
   it("reports bot, any, and capability facts for valid UUID metadata", () => {
     expect(
-      resolveSignalNativeMentionFacts({
-        message: `${PLACEHOLDER} ping`,
-        mentions: [{ uuid: "bot-uuid", start: 0, length: 1 }],
-        accountUuid: "bot-uuid",
-      }),
+      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, `${PLACEHOLDER} ping`, [
+        { uuid: "bot-uuid", start: 0, length: 1 },
+      ]),
     ).toEqual({
       canDetectBotMention: true,
       hasAnyMention: true,
@@ -510,11 +508,9 @@ describe("resolveSignalNativeMentionFacts", () => {
 
   it("reports unrelated valid metadata without treating it as a bot mention", () => {
     expect(
-      resolveSignalNativeMentionFacts({
-        message: `${PLACEHOLDER} ping`,
-        mentions: [{ uuid: "other-user", start: 0, length: 1 }],
-        accountUuid: "bot-uuid",
-      }),
+      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, `${PLACEHOLDER} ping`, [
+        { uuid: "other-user", start: 0, length: 1 },
+      ]),
     ).toEqual({
       canDetectBotMention: true,
       hasAnyMention: true,
@@ -524,11 +520,9 @@ describe("resolveSignalNativeMentionFacts", () => {
 
   it("accepts valid mention metadata over ordinary message text", () => {
     expect(
-      resolveSignalNativeMentionFacts({
-        message: "Hi X!",
-        mentions: [{ uuid: "bot-uuid", start: 3, length: 1 }],
-        accountUuid: "bot-uuid",
-      }),
+      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, "Hi X!", [
+        { uuid: "bot-uuid", start: 3, length: 1 },
+      ]),
     ).toEqual({
       canDetectBotMention: true,
       hasAnyMention: true,
@@ -538,11 +532,9 @@ describe("resolveSignalNativeMentionFacts", () => {
 
   it("ignores matching metadata whose span is outside the message", () => {
     expect(
-      resolveSignalNativeMentionFacts({
-        message: "plain ping",
-        mentions: [{ uuid: "bot-uuid", start: 99, length: 1 }],
-        accountUuid: "bot-uuid",
-      }),
+      resolveSignalMentionFacts({ accountUuid: "bot-uuid" }, "plain ping", [
+        { uuid: "bot-uuid", start: 99, length: 1 },
+      ]),
     ).toEqual({
       canDetectBotMention: true,
       hasAnyMention: false,
@@ -552,10 +544,9 @@ describe("resolveSignalNativeMentionFacts", () => {
 
   it("keeps mention facts but no bot detection capability without account identity", () => {
     expect(
-      resolveSignalNativeMentionFacts({
-        message: `${PLACEHOLDER} ping`,
-        mentions: [{ uuid: "bot-uuid", start: 0, length: 1 }],
-      }),
+      resolveSignalMentionFacts({}, `${PLACEHOLDER} ping`, [
+        { uuid: "bot-uuid", start: 0, length: 1 },
+      ]),
     ).toEqual({
       canDetectBotMention: false,
       hasAnyMention: true,

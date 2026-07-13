@@ -63,7 +63,7 @@ function normalizeAccountPhone(account?: string | null) {
   return trimmed ? normalizeE164(trimmed) : undefined;
 }
 
-export function resolveSignalNativeMentionFacts(params: {
+function resolveSignalNativeMentionFacts(params: {
   message: string;
   mentions?: SignalMention[] | null;
   account?: string | null;
