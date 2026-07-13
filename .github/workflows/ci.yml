@@ -8,6 +8,11 @@ on:
         required: false
         default: ""
         type: string
+      loc_base_ref:
+        description: Exact LOC comparison-base SHA for manual runs; required by release-gate runs
+        required: false
+        default: ""
+        type: string
       include_android:
         description: Run Android lanes for this manual CI dispatch.
         required: false
@@ -130,12 +135,23 @@ jobs:
       - name: Validate release-gate dispatch
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
+          LOC_BASE_REF: ${{ inputs.loc_base_ref }}
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
 
           if [[ ! "$TARGET_REF" =~ ^[0-9a-f]{40}$ ]]; then
             echo "release_gate requires target_ref to be a full commit SHA" >&2
+            exit 1
+          fi
+
+          if [[ ! "$LOC_BASE_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "release_gate requires loc_base_ref to be a full commit SHA" >&2
+            exit 1
+          fi
+
+          if [[ "$LOC_BASE_REF" == "$TARGET_REF" ]]; then
+            echo "release_gate requires loc_base_ref to differ from target_ref" >&2
             exit 1
           fi
 
@@ -226,6 +242,29 @@ jobs:
       - name: Resolve checkout SHA
         id: checkout_ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release-gate LOC merge base
+        if: github.event_name == 'workflow_dispatch' && inputs.release_gate
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          LOC_BASE_REF: ${{ inputs.loc_base_ref }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          comparison_ref="$(jq -rn --arg value "${BASE_BRANCH}...${TARGET_REF}" '$value | @uri')"
+          merge_base="$(
+            gh api --method GET "repos/${GITHUB_REPOSITORY}/compare/${comparison_ref}" \
+              --jq '.merge_base_commit.sha // ""'
+          )"
+          if [[ ! "$merge_base" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the release-gate merge base against ${BASE_BRANCH}." >&2
+            exit 1
+          fi
+          if [[ "$merge_base" != "$LOC_BASE_REF" ]]; then
+            echo "release_gate loc_base_ref must equal the ${BASE_BRANCH} merge base ${merge_base}" >&2
+            exit 1
+          fi
 
       - name: Validate historical release target
         id: historical_target
@@ -1567,19 +1606,36 @@ jobs:
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
+          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || inputs.loc_base_ref || '' }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
         shell: bash
         run: |
           set -euo pipefail
+          has_package_script() {
+            node -e '
+              const scripts = require("./package.json").scripts ?? {};
+              process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+            ' "$1"
+          }
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
+              # Frozen compatibility targets were governed by their original CI. Comparing
+              # them with moving main would turn unrelated branch drift into release failures.
+              if [[ "$HISTORICAL_TARGET" != "true" ]] && [ -n "$LOC_BASE_SHA" ] && [[ ! "$LOC_BASE_SHA" =~ ^0+$ ]]; then
+                git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/ci-base"
+                if has_package_script "check:loc"; then
+                  pnpm check:loc --base refs/remotes/origin/ci-base --head HEAD
+                else
+                  echo "Current CI targets must provide the check:loc package script." >&2
+                  exit 1
+                fi
+              fi
               if [ -n "$PR_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD --no-merge-base
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
@@ -1603,12 +1659,6 @@ jobs:
               fi
               ;;
             dependencies)
-              has_package_script() {
-                node -e '
-                  const scripts = require("./package.json").scripts ?? {};
-                  process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
-                ' "$1"
-              }
               if has_package_script "deadcode:dependencies" &&
                 has_package_script "deadcode:unused-files"; then
                 pnpm deadcode:dependencies

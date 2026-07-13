@@ -177,8 +177,12 @@ Stop watchers before ending the turn or switching strategy.
 7. If a required PR CI run is capacity-stalled with queued jobs and no active
    jobs, do not cancel unrelated work or accept a generic manual dispatch.
    From the PR head branch, dispatch the explicit exact-SHA fallback:
+   refresh the base with `git fetch origin main`, resolve
+   `<full-pr-merge-base-sha>` with `git merge-base <full-pr-sha> origin/main`,
+   then run
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-target_ref=<full-pr-sha> -f include_android=true -f release_gate=true`.
+target_ref=<full-pr-sha> -f loc_base_ref=<full-pr-merge-base-sha> -f
+include_android=true -f release_gate=true`.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.
