@@ -3751,7 +3751,6 @@ export const chatHandlers: GatewayRequestHandlers = {
             });
             cleanupAdmittedRun({ force: true });
             clearAgentRunContext(clientRunId, lifecycleGeneration);
-            context.removeChatRun(clientRunId, clientRunId, sessionKey);
             await persistAbortTranscript();
             return;
           }
@@ -3761,7 +3760,6 @@ export const chatHandlers: GatewayRequestHandlers = {
           // chat.abort cannot publish or cache a contradictory terminal state.
           context.chatAbortedRuns.delete(clientRunId);
           activeRunAbort.cleanup({ force: true });
-          context.removeChatRun(clientRunId, clientRunId, sessionKey);
 
           let restartSafeDispatchFailureTerminalized = false;
           if (restartSafeAdmission) {
