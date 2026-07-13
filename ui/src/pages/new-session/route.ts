@@ -21,7 +21,7 @@ async function loadNewSessionData(
   const agentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
   const agents = agentsList?.agents ?? [];
   const fallback = agentsList?.defaultId ?? agents[0]?.id ?? "main";
-  const agentId = resolveAgentId(location, agents, fallback);
+  const agentId = resolveAgentId(plain, agents, fallback);
   const scoped = { ...plain, agentId };
   const target = await resolveCreateTarget(gateway.client, location.catalogId, agentId);
   return target ? { ...scoped, ...target } : scoped;
