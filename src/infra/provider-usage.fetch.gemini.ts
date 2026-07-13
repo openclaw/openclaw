@@ -53,7 +53,12 @@ export async function fetchGeminiUsage(
   const data = parsed.data as GeminiUsageResponse;
   const quotas: Record<string, number> = {};
 
-  for (const bucket of data.buckets || []) {
+  // Malformed APIs may return a non-array `buckets` object; iterating it throws.
+  const buckets = Array.isArray(data.buckets) ? data.buckets : [];
+  for (const bucket of buckets) {
+    if (!bucket || typeof bucket !== "object") {
+      continue;
+    }
     const model = bucket.modelId || "unknown";
     const frac = bucket.remainingFraction ?? 1;
     if (!quotas[model] || frac < quotas[model]) {
