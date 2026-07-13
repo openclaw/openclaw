@@ -147,6 +147,7 @@ Skills own workflows; root owns hard policy and routing.
 - In Codex or linked worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
 - Crabbox wrapper `stop` has no `--timing-json`; use `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <id>`.
 - Repo-native PR worktree may omit `node_modules`; prove remotely, then use `git commit --no-verify`, not `scripts/committer`.
+- Release-branch formatting: Testbox or existing binary; never local `pnpm exec` reconciliation.
 - Parallel agents share the checkout; never switch its branch while sibling work runs.
 - Testbox status: `blacksmith testbox status --id <tbx_id>`; no `--json` flag.
 - QA CLI `--output-dir` must be repo-relative.
@@ -176,8 +177,9 @@ Skills own workflows; root owns hard policy and routing.
 - `scripts/pr` artifacts: preserve template enum values; validate before prepare.
 - `scripts/pr` subcommands require a PR number; no subcommand `--help` placeholder.
 - `scripts/pr` review: checkout main baseline, then PR, before artifact validation.
+- `scripts/pr` prepare/merge: `main` PRs only; non-main uses reviewed release-branch flow.
 - PR head changed: rerun `scripts/pr review-init`; checkout alone leaves stale guard SHA.
-- `rg`: options before `--`; use `--` before patterns starting with `-`.
+- `rg`: options/globs before `--`; `--` immediately before a leading-dash pattern only.
 - `gh --jq` is not standalone `jq`; pipe JSON to `jq` for variables or `--arg`.
 - `gh api --paginate '<endpoint>' | jq -s ...`; gh `--slurp` may emit nothing and forbids `--jq`/`--template`.
 - Main-bound workflow dispatch: resolve server `main` SHA immediately before dispatch; retry if identity fails after `main` advances.
