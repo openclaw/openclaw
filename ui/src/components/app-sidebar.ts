@@ -2722,7 +2722,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       connected: this.connected,
       basePath: this.basePath,
       routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
-      newSessionAgentId: this.context?.agents.state.agentsList?.defaultId ?? this.expandedAgentId(),
+      newSessionAgentId: this.expandedAgentId(),
       collapsedSections: this.collapsedSessionSections,
       loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
       liveRows: [

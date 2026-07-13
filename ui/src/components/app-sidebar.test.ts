@@ -713,7 +713,7 @@ describe("AppSidebar session catalog pagination", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(
       gateway,
-      createSessions("main", ["agent:main:main"]),
+      createSessions("research", ["agent:research:main"]),
       "panel",
       {
         defaultId: "main",
@@ -746,7 +746,7 @@ describe("AppSidebar session catalog pagination", () => {
     expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
     button?.click();
 
-    expect(onOpenNewSession).toHaveBeenCalledWith("main", { catalogId: "claude" });
+    expect(onOpenNewSession).toHaveBeenCalledWith("research", { catalogId: "claude" });
   });
 
   it("shows a catalog-owned OpenClaw session only in its catalog section", async () => {
