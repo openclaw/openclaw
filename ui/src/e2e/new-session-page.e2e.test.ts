@@ -392,7 +392,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             },
           ],
         },
-        "sessions.create": { key: "agent:main:claude-draft" },
+        "sessions.create": { key: "agent:research:claude-draft" },
       },
     });
 
@@ -403,7 +403,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       );
 
       const catalogRequest = await gateway.waitForRequest("sessions.catalog.list");
-      expect(catalogRequest.params).toMatchObject({ catalogId: "claude" });
+      expect(catalogRequest.params).toMatchObject({
+        agentId: "research",
+        catalogId: "claude",
+      });
       const runtime = page.locator(".new-session-page__runtime");
       await expect.poll(() => runtime.textContent()).toContain("Claude Code");
       expect(await runtime.getAttribute("title")).toBe(model);
@@ -414,7 +417,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
-        agentId: "main",
+        agentId: "research",
         message: "use Claude Code",
         model,
       });
@@ -471,7 +474,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
             },
           ],
         },
-        "sessions.create": { key: "agent:main:claude-reconnect" },
+        "sessions.create": { key: "agent:research:claude-reconnect" },
       },
     });
 
@@ -518,12 +521,14 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => page.locator(".new-session-page__runtime").textContent())
         .toContain("Claude Code");
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
-      await expect.poll(() => page.getByRole("heading").first().textContent()).toContain("Main");
+      await expect
+        .poll(() => page.getByRole("heading").first().textContent())
+        .toContain("Research");
 
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
-        agentId: "main",
+        agentId: "research",
         message: "keep this reconnect draft",
         model: "anthropic/claude-opus-4-8",
       });

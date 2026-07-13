@@ -3,17 +3,27 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { resolveAgentId } from "./catalog-target.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
 async function loadNewSessionData(
   context: ApplicationContext,
   search: string,
 ): Promise<NewSessionRouteData> {
-  const location = newSessionLocationFromSearch(search);
-  const plain = { ...location, model: "", catalogLabel: "" };
-  if (!location.catalogId) {
-    return plain;
+  const requestedLocation = newSessionLocationFromSearch(search);
+  if (!requestedLocation.catalogId) {
+    return { ...requestedLocation, model: "", catalogLabel: "" };
   }
+  const agentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
+  const availableAgents =
+    agentsList?.agents ?? (requestedLocation.agentId ? [{ id: requestedLocation.agentId }] : []);
+  const agentId = resolveAgentId(
+    requestedLocation,
+    availableAgents,
+    agentsList?.defaultId ?? agentsList?.agents[0]?.id ?? "main",
+  );
+  const location = { ...requestedLocation, agentId };
+  const plain = { ...location, model: "", catalogLabel: "" };
   const gateway = context.gateway.snapshot;
   if (!gateway.connected || !gateway.client) {
     return plain;
@@ -22,6 +32,7 @@ async function loadNewSessionData(
     const result = await gateway.client.request<SessionsCatalogListResult>(
       "sessions.catalog.list",
       {
+        agentId,
         catalogId: location.catalogId,
         limitPerHost: 1,
       },

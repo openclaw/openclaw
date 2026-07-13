@@ -16,13 +16,10 @@ export function isResolvedTarget(data?: NewSessionRouteData): boolean {
 }
 
 export function resolveAgentId(
-  data: NewSessionRouteData | undefined,
+  data: Pick<NewSessionRouteData, "agentId" | "catalogId"> | undefined,
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {
-  if (isTarget(data)) {
-    return normalizeAgentId(fallback);
-  }
   const requested = normalizeAgentId(data?.agentId ?? "");
   return availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
     ? requested

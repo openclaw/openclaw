@@ -138,6 +138,57 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("resolves runtime-bound targets for the requested agent", async () => {
+    activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("claude", {
+          createSession: {
+            model: "anthropic/claude-opus-4-8",
+            requiredAgentRuntimeId: "claude-cli",
+          },
+        }),
+      },
+    ];
+    const configured = {
+      agents: {
+        list: [
+          { id: "main" },
+          {
+            id: "research",
+            models: {
+              "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        ],
+      },
+    };
+
+    const available = await call("sessions.catalog.list", { agentId: "research" }, configured);
+    expect(available).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          capabilities: {
+            continueSession: false,
+            archive: false,
+            createSession: { model: "anthropic/claude-opus-4-8" },
+          },
+        }),
+      ],
+    });
+
+    const unavailable = await call("sessions.catalog.list", { agentId: "main" }, configured);
+    expect(unavailable).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          capabilities: {
+            continueSession: false,
+            archive: false,
+          },
+        }),
+      ],
+    });
+  });
+
   it("dispatches continue by catalog id", async () => {
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:adopted" }));
     activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];

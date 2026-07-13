@@ -71,6 +71,7 @@ export const SessionCatalogSchema = Type.Object(
 );
 
 const SessionsCatalogListCommonProperties = {
+  agentId: Type.Optional(NonEmptyString),
   search: Type.Optional(Type.String()),
   limitPerHost: Type.Optional(Type.Integer({ minimum: 1 })),
   hostIds: Type.Optional(Type.Array(NonEmptyString)),

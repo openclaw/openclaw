@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -11,11 +12,11 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
+import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -55,6 +56,7 @@ function catalogResult(
   provider: SessionCatalogProvider,
   hosts: SessionCatalog["hosts"],
   config: OpenClawConfig,
+  agentId: string,
   error?: SessionCatalog["error"],
 ): SessionCatalog {
   const createSession = provider.createSession;
@@ -64,7 +66,7 @@ function catalogResult(
       ? resolveModelRuntimePolicy({
           config,
           modelId: createSession.model,
-          agentId: resolveDefaultAgentId(config),
+          agentId,
         }).policy?.id?.trim()
       : undefined;
   const canCreateSession =
@@ -109,6 +111,15 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       selected = providers();
     }
     const config = context.getRuntimeConfig();
+    const resolvedAgent = resolveAgentIdOrRespondError({
+      rawAgentId: request.agentId,
+      respond,
+      cfg: config,
+      normalize: normalizeOptionalString,
+    });
+    if (!resolvedAgent) {
+      return;
+    }
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         try {
@@ -118,9 +129,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             hostIds: request.hostIds,
             ...("cursors" in request ? { cursors: request.cursors } : {}),
           });
-          return catalogResult(provider, hosts, config);
+          return catalogResult(provider, hosts, config, resolvedAgent.agentId);
         } catch (error) {
-          return catalogResult(provider, [], config, catalogError(error));
+          return catalogResult(provider, [], config, resolvedAgent.agentId, catalogError(error));
         }
       }),
     );
