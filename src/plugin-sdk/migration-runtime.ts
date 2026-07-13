@@ -40,10 +40,8 @@ export type PlannedMigrationTargets = {
 };
 
 /**
- * Resolves the default agent's workspace/state/agent directories for a
- * migration run. Prefers the runtime resolver, then a configured agentDir
- * (home-relative paths honor the effective-home resolution used by the rest
- * of the product), then the canonical state-dir layout.
+ * Resolves default agent workspace/state/agent directories. Prefers the runtime resolver,
+ * then configured agentDir (using effective-home resolution), then canonical state layout.
  */
 export function resolvePlannedMigrationTargets(
   ctx: MigrationProviderContext,
