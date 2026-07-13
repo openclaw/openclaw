@@ -434,7 +434,7 @@ export function emitGatewayRestart(
  * The caller must already own root-work admission. Scheduled restarts use the
  * independent-root wrapper below; config reloads run inside their reload root.
  */
-export function emitGatewayRestartWithSignalAdmission(
+function emitGatewayRestartWithSignalAdmission(
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
 ): boolean {
@@ -565,7 +565,7 @@ export type GatewayRestartEmitter = (
   intent?: GatewayRestartIntent,
 ) => GatewayRestartEmitResult;
 
-export type GatewayRestartEmitResult =
+type GatewayRestartEmitResult =
   | { status: "emitted" }
   | { status: "coalesced" }
   | { status: "failed" };
