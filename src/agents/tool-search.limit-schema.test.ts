@@ -20,8 +20,6 @@ const tools = createToolSearchTools({} as any);
 const searchTool = tools.find((t) => t.name === TOOL_SEARCH_RAW_TOOL_NAME)!;
 const schema = searchTool.parameters;
 
-const validInput = { query: "test", limit: 5 };
-
 describe("toolSearch limit schema (production)", () => {
   it("accepts valid positive integer limit", () => {
     expect(Value.Check(schema, { query: "test", limit: 5 })).toBe(true);
