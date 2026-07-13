@@ -1,11 +1,28 @@
 // Line tests cover auto reply delivery plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 
 type LineAutoReplyDeps = Parameters<typeof deliverLineAutoReply>[0]["deps"];
+
+// The LINE-specific media path runs the real resolveLineOutboundMedia, which
+// validates the URL through the SSRF guard. Stub the guard so the resolver
+// builds the video/audio/image message offline.
+const ssrfMock = vi.hoisted(() => ({ resolvePinnedHostnameWithPolicy: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: ssrfMock.resolvePinnedHostnameWithPolicy,
+}));
+ssrfMock.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+  hostname: "example.com",
+  addresses: ["93.184.216.34"],
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
 
 const createFlexMessage = (altText: string, contents: unknown) => ({
   type: "flex" as const,
@@ -54,7 +71,6 @@ describe("deliverLineAutoReply", () => {
       chatId: "u1",
       receipt: createLineSendReceipt({ messageId: "push", chatId: "u1", kind: "text" }),
     }));
-
     const deps: LineAutoReplyDeps = {
       buildTemplateMessageFromPayload: () => null,
       processLineMessage: (text) => ({ text, flexMessages: [] }),
@@ -374,6 +390,100 @@ describe("deliverLineAutoReply", () => {
     expect(pushMessagesLine).toHaveBeenCalledWith(
       "line:user:1",
       [createFlexMessage("Card", { type: "bubble" })],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+  });
+
+  it("honors channelData.line.mediaKind on the reply-token path instead of forcing image", async () => {
+    // The push path resolves mediaKind into a video/audio message; the reply path
+    // used to hardcode createImageMessage, silently downgrading video to a broken
+    // image. LINE-specific media must now resolve to the matching kind.
+    const lineData = {
+      mediaKind: "video" as const,
+      previewImageUrl: "https://example.com/preview.jpg",
+    };
+    const { deps, replyMessageLine } = createDeps({
+      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      chunkMarkdownText: () => [],
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: {
+        mediaUrls: ["https://example.com/clip.mp4"],
+        channelData: { line: lineData },
+      },
+      lineData,
+      deps,
+    });
+
+    expect(result.status).toBe("delivered");
+    expect(replyMessageLine).toHaveBeenCalledWith(
+      "token",
+      [
+        {
+          type: "video",
+          originalContentUrl: "https://example.com/clip.mp4",
+          previewImageUrl: "https://example.com/preview.jpg",
+        },
+      ],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+  });
+
+  it("keeps the image route for generic media without LINE-specific options", async () => {
+    // Parity with the push path (docs/channels/line.md): a bare media URL with no
+    // LINE media options stays on the image route and does not attempt resolution.
+    // A .mp4 proves it: if the generic path wrongly resolved by kind it would infer
+    // "video" (missing preview → build failure), so an image bubble means image route.
+    const { deps, replyMessageLine } = createDeps({
+      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      chunkMarkdownText: () => [],
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: {
+        mediaUrls: ["https://example.com/clip.mp4"],
+        channelData: { line: {} },
+      },
+      lineData: {},
+      deps,
+    });
+
+    expect(result.status).toBe("delivered");
+    expect(replyMessageLine).toHaveBeenCalledWith(
+      "token",
+      [createImageMessage("https://example.com/clip.mp4")],
+      { cfg: LINE_TEST_CFG, accountId: "acc" },
+    );
+  });
+
+  it("surfaces a visible partial delivery when a media message cannot be built", async () => {
+    // A video missing its preview image cannot be built. The text still reaches the
+    // user, but the lost media bubble must surface as a partial delivery.
+    const lineData = { mediaKind: "video" as const };
+    const { deps, replyMessageLine } = createDeps();
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: {
+        text: "here is your clip",
+        mediaUrls: ["https://example.com/clip.mp4"],
+        channelData: { line: lineData },
+      },
+      lineData,
+      deps,
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      error: { sentBeforeError: true, visibleReplySent: true },
+    });
+    // Text still reached the user over the reply token despite the media failure.
+    expect(replyMessageLine).toHaveBeenCalledWith(
+      "token",
+      [{ type: "text", text: "here is your clip" }],
       { cfg: LINE_TEST_CFG, accountId: "acc" },
     );
   });

@@ -6,9 +6,14 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
+import {
+  buildLineReplyMediaMessage,
+  hasLineSpecificMediaOptions,
+  type ResolveLineOutboundMediaOpts,
+} from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
-import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
+import type { LineChannelDataWithMedia, LineTemplateMessagePayload } from "./types.js";
 
 type LineAutoReplyDeps = {
   buildTemplateMessageFromPayload: (
@@ -59,7 +64,7 @@ function markLineVisibleDeliveryError(error: unknown): Error {
 
 export async function deliverLineAutoReply(params: {
   payload: ReplyPayload;
-  lineData: LineChannelData;
+  lineData: LineChannelDataWithMedia;
   to: string;
   replyToken?: string | null;
   replyTokenUsed: boolean;
@@ -147,11 +152,36 @@ export async function deliverLineAutoReply(params: {
 
   const chunks = processed.text ? deps.chunkMarkdownText(processed.text, textLimit) : [];
 
+  // Match the push path (outbound.ts): honor channelData.line.mediaKind and the
+  // other LINE media options so a reply-token video/audio is not silently
+  // downgraded to an image. Generic media sends without LINE-specific options
+  // keep the image route. A media that cannot be built (e.g. a video missing its
+  // preview image) surfaces as a visible partial delivery instead of dropping.
   const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-  const mediaMessages = mediaUrls
-    .map((url) => url?.trim())
-    .filter((url): url is string => Boolean(url))
-    .map((url) => deps.createImageMessage(url));
+  const useLineSpecificMedia = hasLineSpecificMediaOptions(lineData);
+  const mediaOpts: ResolveLineOutboundMediaOpts = {
+    mediaKind: lineData.mediaKind,
+    previewImageUrl: lineData.previewImageUrl,
+    durationMs: lineData.durationMs,
+    trackingId: lineData.trackingId,
+  };
+  const mediaMessages: messagingApi.Message[] = [];
+  let richMediaError: unknown;
+  for (const rawUrl of mediaUrls) {
+    const url = rawUrl?.trim();
+    if (!url) {
+      continue;
+    }
+    if (!useLineSpecificMedia) {
+      mediaMessages.push(deps.createImageMessage(url));
+      continue;
+    }
+    try {
+      mediaMessages.push(await buildLineReplyMediaMessage(url, mediaOpts, to));
+    } catch (err) {
+      richMediaError ??= err;
+    }
+  }
 
   if (chunks.length > 0) {
     const hasRichOrMedia = richMessages.length > 0 || mediaMessages.length > 0;
@@ -160,12 +190,11 @@ export async function deliverLineAutoReply(params: {
     // failure instead of swallowing it: the text still sends below, but a lost
     // rich/media bubble must surface as a partial delivery, not silent success.
     const sendRichBeforeText = hasQuickReplies && hasRichOrMedia;
-    let richMediaError: unknown;
     if (sendRichBeforeText) {
       try {
         await sendLineMessages([...richMessages, ...mediaMessages], false);
       } catch (err) {
-        richMediaError = err;
+        richMediaError ??= err;
       }
     }
     const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
@@ -189,17 +218,8 @@ export async function deliverLineAutoReply(params: {
           await sendLineMessages(mediaMessages, false);
         }
       } catch (err) {
-        richMediaError = err;
+        richMediaError ??= err;
       }
-    }
-    if (richMediaError !== undefined) {
-      // Preserve both generic send evidence and foreground visibility: downstream
-      // callers must surface the failure without retrying text the user already saw.
-      return {
-        status: "partial",
-        replyTokenUsed,
-        error: markLineVisibleDeliveryError(richMediaError),
-      };
     }
   } else {
     const combined = [...richMessages, ...mediaMessages];
@@ -231,6 +251,18 @@ export async function deliverLineAutoReply(params: {
       }
       await sendLineMessages(combined, true);
     }
+  }
+
+  if (richMediaError !== undefined) {
+    // A rich/media bubble was lost — either it failed to build (e.g. a video
+    // missing its preview image) or failed to send. Preserve both generic send
+    // evidence and foreground visibility: the caller surfaces the failure without
+    // retrying text the user already saw.
+    return {
+      status: "partial",
+      replyTokenUsed,
+      error: markLineVisibleDeliveryError(richMediaError),
+    };
   }
 
   return { status: "delivered", replyTokenUsed };

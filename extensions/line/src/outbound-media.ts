@@ -1,10 +1,12 @@
 // Line plugin module implements outbound media behavior.
+import type { messagingApi } from "@line/bot-sdk";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { LineChannelDataWithMedia } from "./types.js";
 
 type LineOutboundMediaKind = "image" | "video" | "audio";
 
-export type LineOutboundMediaResolved = {
+type LineOutboundMediaResolved = {
   mediaUrl: string;
   mediaKind: LineOutboundMediaKind;
   previewImageUrl?: string;
@@ -12,7 +14,7 @@ export type LineOutboundMediaResolved = {
   trackingId?: string;
 };
 
-type ResolveLineOutboundMediaOpts = {
+export type ResolveLineOutboundMediaOpts = {
   mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
   durationMs?: number;
@@ -104,4 +106,69 @@ export async function resolveLineOutboundMedia(
     }
   }
   throw new Error("LINE outbound media currently requires a public HTTPS URL");
+}
+
+export function isLineUserTarget(target: string): boolean {
+  const normalized = target
+    .trim()
+    .replace(/^line:(group|room|user):/i, "")
+    .replace(/^line:/i, "");
+  return /^U/i.test(normalized);
+}
+
+export function hasLineSpecificMediaOptions(lineData: LineChannelDataWithMedia): boolean {
+  return Boolean(
+    lineData.mediaKind ??
+    lineData.previewImageUrl?.trim() ??
+    (typeof lineData.durationMs === "number" ? lineData.durationMs : undefined) ??
+    lineData.trackingId?.trim(),
+  );
+}
+
+export function buildLineMediaMessageObject(
+  resolved: LineOutboundMediaResolved,
+  opts?: { allowTrackingId?: boolean },
+): Record<string, unknown> {
+  switch (resolved.mediaKind) {
+    case "video": {
+      const previewImageUrl = resolved.previewImageUrl?.trim();
+      if (!previewImageUrl) {
+        throw new Error("LINE video messages require previewImageUrl to reference an image URL");
+      }
+      return {
+        type: "video",
+        originalContentUrl: resolved.mediaUrl,
+        previewImageUrl,
+        ...(opts?.allowTrackingId && resolved.trackingId
+          ? { trackingId: resolved.trackingId }
+          : {}),
+      };
+    }
+    case "audio":
+      return {
+        type: "audio",
+        originalContentUrl: resolved.mediaUrl,
+        duration: resolved.durationMs ?? 60000,
+      };
+    default:
+      return {
+        type: "image",
+        originalContentUrl: resolved.mediaUrl,
+        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
+      };
+  }
+}
+
+// Reply-token delivery entry point: resolve the LINE media kind for a URL and
+// build the matching video/audio/image message, gating trackingId on user
+// targets — the same resolution the push path uses, in one call.
+export async function buildLineReplyMediaMessage(
+  mediaUrl: string,
+  opts: ResolveLineOutboundMediaOpts,
+  target: string,
+): Promise<messagingApi.Message> {
+  const resolved = await resolveLineOutboundMedia(mediaUrl, opts);
+  return buildLineMediaMessageObject(resolved, {
+    allowTrackingId: isLineUserTarget(target),
+  }) as messagingApi.Message;
 }

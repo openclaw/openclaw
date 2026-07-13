@@ -12,71 +12,18 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
-import { resolveLineOutboundMedia, type LineOutboundMediaResolved } from "./outbound-media.js";
+import {
+  buildLineMediaMessageObject,
+  hasLineSpecificMediaOptions,
+  isLineUserTarget,
+  resolveLineOutboundMedia,
+} from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import { getLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
-import type { LineChannelData, LineSendResult } from "./types.js";
+import type { LineChannelDataWithMedia, LineSendResult } from "./types.js";
 
 const loadLineOutboundRuntime = createLazyRuntimeModule(() => import("./outbound.runtime.js"));
-
-type LineChannelDataWithMedia = LineChannelData & {
-  mediaKind?: "image" | "video" | "audio";
-  previewImageUrl?: string;
-  durationMs?: number;
-  trackingId?: string;
-};
-
-function isLineUserTarget(target: string): boolean {
-  const normalized = target
-    .trim()
-    .replace(/^line:(group|room|user):/i, "")
-    .replace(/^line:/i, "");
-  return /^U/i.test(normalized);
-}
-
-function hasLineSpecificMediaOptions(lineData: LineChannelDataWithMedia): boolean {
-  return Boolean(
-    lineData.mediaKind ??
-    lineData.previewImageUrl?.trim() ??
-    (typeof lineData.durationMs === "number" ? lineData.durationMs : undefined) ??
-    lineData.trackingId?.trim(),
-  );
-}
-
-function buildLineMediaMessageObject(
-  resolved: LineOutboundMediaResolved,
-  opts?: { allowTrackingId?: boolean },
-): Record<string, unknown> {
-  switch (resolved.mediaKind) {
-    case "video": {
-      const previewImageUrl = resolved.previewImageUrl?.trim();
-      if (!previewImageUrl) {
-        throw new Error("LINE video messages require previewImageUrl to reference an image URL");
-      }
-      return {
-        type: "video",
-        originalContentUrl: resolved.mediaUrl,
-        previewImageUrl,
-        ...(opts?.allowTrackingId && resolved.trackingId
-          ? { trackingId: resolved.trackingId }
-          : {}),
-      };
-    }
-    case "audio":
-      return {
-        type: "audio",
-        originalContentUrl: resolved.mediaUrl,
-        duration: resolved.durationMs ?? 60000,
-      };
-    default:
-      return {
-        type: "image",
-        originalContentUrl: resolved.mediaUrl,
-        previewImageUrl: resolved.previewImageUrl ?? resolved.mediaUrl,
-      };
-  }
-}
 
 export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["outbound"]> = {
   deliveryMode: "direct",

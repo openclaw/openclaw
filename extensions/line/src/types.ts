@@ -129,3 +129,10 @@ export type LineChannelData = {
   flexMessage?: LineFlexMessagePayload;
   templateMessage?: LineTemplateMessagePayload;
 };
+
+export type LineChannelDataWithMedia = LineChannelData & {
+  mediaKind?: "image" | "video" | "audio";
+  previewImageUrl?: string;
+  durationMs?: number;
+  trackingId?: string;
+};
