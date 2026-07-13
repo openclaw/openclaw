@@ -312,11 +312,8 @@ extension SettingsProTab {
                         Text("This phone has limited Gateway access.")
                             .font(OpenClawType.subheadSemiBold)
                         Text(
-                            """
-                            Scan a full-access setup code from the Control UI or openclaw qr, then \
-                            reconnect to enable settings and upgrades.
-                            """)
-                            .font(OpenClawType.caption)
+                            "Scan a full-access setup code from the Control UI or openclaw qr, then reconnect to enable settings and upgrades.") // swiftlint:disable:this line_length
+                            .font(OpenClawType.caption) // Keep the native localization key contiguous.
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
