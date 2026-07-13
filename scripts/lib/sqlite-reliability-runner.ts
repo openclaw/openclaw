@@ -27,6 +27,7 @@ import {
   type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
+import { monitorSqliteWalDuring } from "./sqlite-reliability-wal-monitor.js";
 import {
   startWriter,
   stopWriter,
@@ -524,26 +525,31 @@ export async function runReliabilityStress(options: CliOptions): Promise<Reliabi
     });
     const metrics: IterationMetric[] = [];
     for (let iteration = 0; iteration < profile.iterations; iteration += 1) {
-      metrics.push(
-        await runSnapshotIteration({
-          cleanupArtifacts: cleanupIterationArtifacts,
-          iteration,
-          repositoryProvider,
-          restoreRoot,
-          rowsPerBatch: profile.rowsPerBatch,
-          syncedProvider,
-          syncedRepository,
-          target,
-          uncommittedBatch: iteration === 0 ? partial.batch : null,
-        }),
-      );
-      const currentWalBytes = fileSize(`${target.path}-wal`);
-      peakWalBytes = Math.max(peakWalBytes, currentWalBytes);
-      if (currentWalBytes > profile.maxWalBytes) {
-        throw new Error(
-          `SQLite reliability WAL exceeded the ${profile.maxWalBytes}-byte ${options.profile} profile limit: ${currentWalBytes} bytes`,
-        );
-      }
+      const iterationProof = await monitorSqliteWalDuring({
+        maxWalBytes: profile.maxWalBytes,
+        onLimitExceeded: () => {
+          try {
+            writer?.child.send?.({ kind: "stop" }, () => undefined);
+          } catch {
+            // The operation still fails on the recorded peak if the writer exited first.
+          }
+        },
+        operation: async () =>
+          await runSnapshotIteration({
+            cleanupArtifacts: cleanupIterationArtifacts,
+            iteration,
+            repositoryProvider,
+            restoreRoot,
+            rowsPerBatch: profile.rowsPerBatch,
+            syncedProvider,
+            syncedRepository,
+            target,
+            uncommittedBatch: iteration === 0 ? partial.batch : null,
+          }),
+        walPath: `${target.path}-wal`,
+      });
+      metrics.push(iterationProof.result);
+      peakWalBytes = Math.max(peakWalBytes, iterationProof.peakWalBytes);
       if (iteration === 0) {
         await waitForWriterMessage(writer, "released", () => {
           writer?.child.send?.({ action: "rollback", kind: "release-partial" });

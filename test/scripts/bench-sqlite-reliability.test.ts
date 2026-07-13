@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { monitorSqliteWalDuring } from "../../scripts/lib/sqlite-reliability-wal-monitor.js";
 
 const tempDirs: string[] = [];
 
@@ -96,6 +97,29 @@ afterEach(() => {
 });
 
 describe("scripts/bench-sqlite-reliability", () => {
+  it("detects a transient WAL overrun before the file shrinks", async () => {
+    const walPath = path.join(makeTempDir(), "database.sqlite-wal");
+    let stopRequests = 0;
+
+    await expect(
+      monitorSqliteWalDuring({
+        maxWalBytes: 1024,
+        onLimitExceeded: () => {
+          stopRequests += 1;
+        },
+        operation: async () => {
+          fs.writeFileSync(walPath, Buffer.alloc(2048));
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          fs.truncateSync(walPath, 0);
+          return "complete";
+        },
+        pollIntervalMs: 5,
+        walPath,
+      }),
+    ).rejects.toThrow("SQLite reliability WAL exceeded the 1024-byte profile limit: 2048 bytes");
+    expect(stopRequests).toBe(1);
+  });
+
   it("rejects malformed arguments before creating state", () => {
     const unknown = runProof(["--wat"]);
     expect(unknown.status).toBe(2);
