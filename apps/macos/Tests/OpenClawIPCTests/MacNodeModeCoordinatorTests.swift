@@ -161,13 +161,13 @@ struct MacNodeModeCoordinatorTests {
 
         notificationCenter.post(name: .openclawConfigDidChange, object: nil)
 
-        try await self.waitUntil("node-host worker restart") {
+        try await self.waitUntil("node-host worker restart", timeout: .seconds(10)) {
             await worker.stops() == 1
         }
 
         notificationCenter.post(name: .openclawCLIInstalled, object: nil)
 
-        try await self.waitUntil("node-host worker restart") {
+        try await self.waitUntil("node-host worker restart", timeout: .seconds(10)) {
             await worker.stops() == 2
         }
     }
