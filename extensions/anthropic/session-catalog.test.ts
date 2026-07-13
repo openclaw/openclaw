@@ -141,7 +141,10 @@ describe("Claude session catalog", () => {
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
 
-    expect(provider?.createSession).toEqual({ model: "anthropic/claude-opus-4-8" });
+    expect(provider?.createSession).toEqual({
+      model: "anthropic/claude-opus-4-8",
+      requiredAgentRuntimeId: "claude-cli",
+    });
 
     await expect(
       provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
@@ -164,24 +167,6 @@ describe("Claude session catalog", () => {
         }),
       }),
     );
-  });
-
-  it("does not advertise creation without a configured Claude CLI route", () => {
-    let provider: SessionCatalogProvider | undefined;
-    const api = {
-      id: "anthropic",
-      config: {},
-      runtime: {
-        config: { current: () => ({}) },
-      },
-      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
-        provider = candidate;
-      },
-    } as unknown as OpenClawPluginApi;
-
-    registerClaudeSessionCatalog(api);
-
-    expect(provider?.createSession).toBeUndefined();
   });
 
   it("links a catalog row to an existing OpenClaw session with the same CLI binding", async () => {

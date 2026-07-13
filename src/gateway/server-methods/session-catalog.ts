@@ -11,6 +11,9 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -51,15 +54,28 @@ function providerOrRespond(
 function catalogResult(
   provider: SessionCatalogProvider,
   hosts: SessionCatalog["hosts"],
+  config: OpenClawConfig,
   error?: SessionCatalog["error"],
 ): SessionCatalog {
+  const createSession = provider.createSession;
+  const requiredAgentRuntimeId = createSession?.requiredAgentRuntimeId?.trim();
+  const resolvedAgentRuntimeId =
+    createSession && requiredAgentRuntimeId
+      ? resolveModelRuntimePolicy({
+          config,
+          modelId: createSession.model,
+          agentId: resolveDefaultAgentId(config),
+        }).policy?.id?.trim()
+      : undefined;
+  const canCreateSession =
+    createSession && (!requiredAgentRuntimeId || resolvedAgentRuntimeId === requiredAgentRuntimeId);
   const result: SessionCatalog = {
     id: provider.id,
     label: provider.label,
     capabilities: {
       continueSession: Boolean(provider.continueSession),
       archive: Boolean(provider.archive),
-      ...(provider.createSession ? { createSession: provider.createSession } : {}),
+      ...(canCreateSession ? { createSession: { model: createSession.model } } : {}),
     },
     hosts,
   };
@@ -70,7 +86,7 @@ function catalogResult(
 }
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
-  "sessions.catalog.list": async ({ params, respond }) => {
+  "sessions.catalog.list": async ({ params, respond, context }) => {
     if (
       !assertValidParams(
         params,
@@ -92,6 +108,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     } else {
       selected = providers();
     }
+    const config = context.getRuntimeConfig();
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         try {
@@ -101,9 +118,9 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
             hostIds: request.hostIds,
             ...("cursors" in request ? { cursors: request.cursors } : {}),
           });
-          return catalogResult(provider, hosts);
+          return catalogResult(provider, hosts, config);
         } catch (error) {
-          return catalogResult(provider, [], catalogError(error));
+          return catalogResult(provider, [], config, catalogError(error));
         }
       }),
     );

@@ -23,9 +23,17 @@ function provider(
   };
 }
 
-async function call(method: keyof typeof sessionCatalogHandlers, params: unknown) {
+async function call(
+  method: keyof typeof sessionCatalogHandlers,
+  params: unknown,
+  config: Record<string, unknown> = {},
+) {
   const respond = vi.fn();
-  await sessionCatalogHandlers[method]?.({ params, respond } as never);
+  await sessionCatalogHandlers[method]?.({
+    params,
+    respond,
+    context: { getRuntimeConfig: () => config },
+  } as never);
   return respond;
 }
 
@@ -77,6 +85,53 @@ describe("session catalog Gateway methods", () => {
             continueSession: false,
             archive: false,
             createSession: { model: "anthropic/claude-opus-4-8" },
+          },
+        }),
+      ],
+    });
+  });
+
+  it("advertises a runtime-bound target only when the model resolves to that runtime", async () => {
+    activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("claude", {
+          createSession: {
+            model: "anthropic/claude-opus-4-8",
+            requiredAgentRuntimeId: "claude-cli",
+          },
+        }),
+      },
+    ];
+    const configured = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+
+    const available = await call("sessions.catalog.list", {}, configured);
+    expect(available).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          capabilities: {
+            continueSession: false,
+            archive: false,
+            createSession: { model: "anthropic/claude-opus-4-8" },
+          },
+        }),
+      ],
+    });
+
+    const unavailable = await call("sessions.catalog.list", {});
+    expect(unavailable).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          capabilities: {
+            continueSession: false,
+            archive: false,
           },
         }),
       ],
