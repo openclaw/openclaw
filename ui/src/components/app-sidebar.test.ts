@@ -228,11 +228,12 @@ async function mountSidebar(
     "openclaw-app-sidebar",
   ) as unknown as SidebarLifecycleState;
   sidebar.variant = variant;
-  provider.setContext(createContext(gateway, sessions, agentsList));
+  const context = createContext(gateway, sessions, agentsList);
+  provider.setContext(context);
   provider.append(sidebar);
   document.body.append(provider);
   await sidebar.updateComplete;
-  return { provider, sidebar };
+  return { provider, sidebar, context };
 }
 
 afterEach(() => {
@@ -335,7 +336,7 @@ describe("AppSidebar agent chip", () => {
   it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
-    const { sidebar } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
+    const { sidebar, context } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
     sidebar.connected = true;
     const defaults = { modelProvider: null, model: null, contextTokens: null };
     harness.publishList({
@@ -373,8 +374,10 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(1);
     expect(sidebar.querySelector(".sidebar-agent-chip__menu-unread")).not.toBeNull();
 
-    // Mid-switch (route agent != loaded result agent) the list renders the
+    // Mid-switch (selected agent != loaded result agent) the list renders the
     // target agent's cached rows instead of flashing empty until refresh.
+    // Chip switch and chat-pane both sync agentSelection with the route.
+    context.agentSelection.state.selectedId = "research";
     sidebar.sessionKey = "agent:research:one";
     await sidebar.updateComplete;
     const rows = [...sidebar.querySelectorAll(".sidebar-recent-session")];

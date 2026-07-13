@@ -2603,18 +2603,24 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
-  /** While a chip switch's refresh is in flight, the loaded result still holds
-      the previous agent; render the target agent's cached rows instead of
-      flashing an empty list. Converges once the refreshed list publishes. */
+  /** The list follows the chip-selected agent. While route and loaded result
+      agree with it (every settled online state), keep the navigation rows and
+      their pinned-active semantics; mid-switch or offline, fall back to that
+      agent's loaded/cached raw rows instead of flashing empty or stale. */
   private selectedAgentSessionRows(
     navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
   ): SidebarRecentSession[] {
-    const selected = normalizeAgentId(navigationState.selectedAgentId);
-    if (normalizeAgentId(this.sessionsAgentId ?? "") === selected) {
+    const selected = this.expandedAgentId();
+    const loadedAgentId = normalizeAgentId(this.sessionsAgentId ?? "");
+    const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);
+    if (selected === routeAgentId && selected === loadedAgentId) {
       return navigationState.visibleSessions;
     }
-    const cached = this.sessionRowsByAgent[selected] ?? [];
-    return filterVisibleSessionRows(cached, {
+    const rows =
+      selected === loadedAgentId
+        ? (this.sessionsResult?.sessions ?? [])
+        : (this.sessionRowsByAgent[selected] ?? []);
+    return filterVisibleSessionRows(rows, {
       agentId: selected,
       defaultAgentId: resolveUiDefaultAgentId({
         agentsList: this.context?.agents.state.agentsList,
