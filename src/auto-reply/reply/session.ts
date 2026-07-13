@@ -1,6 +1,13 @@
 // Manages reply session records, labels, ids, and route persistence.
 import crypto from "node:crypto";
 import {
+/**
+ * Maximum retries for session initialization conflicts during concurrent session writes.
+ * Each retry uses exponential backoff to allow the active turn to finish writing.
+ */
+const SESSION_INIT_MAX_RETRIES = 3;
+const SESSION_INIT_RETRY_BASE_MS = 100;
+
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -337,12 +344,12 @@ export function resolveReplySessionPreprocessingState(
 
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  return await initSessionStateAttempt(params, 0);
 }
 
 async function initSessionStateAttempt(
   params: InitSessionStateParams,
-  staleSnapshotRetried: boolean,
+  staleRetryCount: number,
 ): Promise<SessionInitResult> {
   const attemptContext = resolveInitSessionStateAttemptContext(params);
   // Guarded revision checks only serialize correctly when the snapshot and
@@ -350,7 +357,7 @@ async function initSessionStateAttempt(
   const attempt = await runExclusiveSessionStoreWrite(
     attemptContext.storePath,
     async () =>
-      await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried, undefined),
+      await initSessionStateAttemptLocked(params, attemptContext, staleRetryCount, undefined),
   );
   if (attempt.kind === "complete") {
     return attempt.result;
@@ -372,7 +379,7 @@ async function initSessionStateAttempt(
         // before interrupting, then reacquire any refreshed identity first.
         const revalidated = await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
+          async () => await initSessionStateAttemptLocked(params, attemptContext, 0, undefined),
         );
         if (
           revalidated.kind === "complete" ||
@@ -401,7 +408,7 @@ async function initSessionStateAttempt(
         // must match this exact fenced identity before any rollover side effect.
         return await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, candidate),
+          async () => await initSessionStateAttemptLocked(params, attemptContext, 0, candidate),
         );
       },
     });
@@ -415,7 +422,7 @@ async function initSessionStateAttempt(
 async function initSessionStateAttemptLocked(
   params: InitSessionStateParams,
   attemptContext: InitSessionStateAttemptContext,
-  staleSnapshotRetried: boolean,
+  staleRetryCount: number,
   lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
@@ -1053,8 +1060,9 @@ async function initSessionStateAttemptLocked(
     storePath,
   });
   if (!committed.ok) {
-    if (!staleSnapshotRetried) {
-      return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
+    if (staleRetryCount < SESSION_INIT_MAX_RETRIES) {
+      await new Promise((resolve) => setTimeout(resolve, SESSION_INIT_RETRY_BASE_MS * 2 ** Math.min(staleRetryCount, 4)));
+      return await initSessionStateAttemptLocked(params, attemptContext, staleRetryCount + 1, undefined);
     }
     throw new Error(`reply session initialization conflicted for ${sessionKey}`);
   }
