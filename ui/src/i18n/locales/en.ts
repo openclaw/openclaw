@@ -139,7 +139,6 @@ export const en: TranslationMap = {
       stateRunning: "Running",
       stateConfigured: "Configured",
       stateAttention: "Needs attention",
-      stateSetup: "Not set up",
       setUp: "Set up",
       guidedSetup: "Guided step-by-step setup",
       openDetails: "Open details",

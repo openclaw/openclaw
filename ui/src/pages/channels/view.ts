@@ -1,4 +1,4 @@
-// Channels hub: connected-channel cards, add-a-channel gallery, setup wizard,
+// Channels hub: connected-channel rows, add-a-channel gallery, setup wizard,
 // and a per-channel detail overlay with the full config form.
 import { html, nothing } from "lit";
 import "../../styles/channels.css";
@@ -15,6 +15,13 @@ import type {
   TelegramStatus,
   WhatsAppStatus,
 } from "../../api/types.ts";
+import { icons } from "../../components/icons.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsPage,
+  renderSettingsSection,
+  renderSettingsStatus,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { renderChannelArt } from "./hub-meta.ts";
@@ -23,7 +30,7 @@ import { channelEnabled, resolveChannelDisplayState } from "./view.shared.ts";
 import type { ChannelKey, ChannelsChannelData, ChannelsProps } from "./view.types.ts";
 import { renderChannelWizard } from "./wizard-view.ts";
 
-type ChannelCardState = "running" | "configured" | "attention" | "setup";
+type ChannelCardState = "running" | "configured" | "attention";
 
 export function renderChannels(props: ChannelsProps) {
   const channelOrder = resolveChannelOrder(props.snapshot);
@@ -35,7 +42,7 @@ export function renderChannels(props: ChannelsProps) {
   const selected = props.selectedChannel;
 
   return html`
-    <div class="channels-hub">
+    ${renderSettingsPage(html`
       ${showingStaleSnapshot
         ? html`<div class="callout info">${t("channels.refreshingStaleSnapshot")}</div>`
         : nothing}
@@ -51,54 +58,55 @@ export function renderChannels(props: ChannelsProps) {
       ${props.setupBlockedByDirtyConfig && props.configFormDirty
         ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>`
         : nothing}
-
-      <section>
-        <div class="channels-group__heading">
-          <h2>${t("channels.hub.connectedTitle")}</h2>
-          <span class="muted">
-            ${props.lastSuccessAt
-              ? t("channels.hub.updatedAgo", {
-                  ago: formatRelativeTimestamp(props.lastSuccessAt),
-                })
-              : t("common.na")}
+      ${renderSettingsSection(
+        {
+          title: t("channels.hub.connectedTitle"),
+          ...(connected.length > 0 ? { count: connected.length } : {}),
+          actions: html`
+            <span class="settings-row__value">
+              ${props.lastSuccessAt
+                ? t("channels.hub.updatedAgo", {
+                    ago: formatRelativeTimestamp(props.lastSuccessAt),
+                  })
+                : t("common.na")}
+            </span>
             <button
               type="button"
               class="btn btn--sm"
-              style="margin-left: 10px;"
               ?disabled=${props.loading}
               @click=${() => props.onRefresh(true)}
             >
               ${t("common.refresh")}
             </button>
-          </span>
-        </div>
-        ${connected.length === 0
-          ? html`<div class="muted">${t("channels.hub.noneConnected")}</div>`
-          : html`
-              <div class="channels-grid">
-                ${connected.map((key) => renderConnectedCard(key, props))}
-              </div>
-            `}
-      </section>
-
-      <section>
-        <div class="channels-group__heading">
-          <h2>${t("channels.hub.addTitle")}</h2>
-          <span class="muted">${t("channels.hub.addSubtitle")}</span>
-        </div>
-        <div class="channels-grid">
-          ${available.map((key) => renderAvailableCard(key, props))} ${renderBrowseAllCard(props)}
-        </div>
-      </section>
-
-      <details class="channels-health">
-        <summary>${t("channels.health.title")}</summary>
-        <pre class="code-block" style="margin-top: 12px;">
+          `,
+        },
+        connected.length === 0
+          ? renderSettingsEmpty(t("channels.hub.noneConnected"))
+          : connected.map((key) => renderConnectedRow(key, props)),
+      )}
+      ${renderSettingsSection(
+        {
+          title: t("channels.hub.addTitle"),
+          description: t("channels.hub.addSubtitle"),
+        },
+        html`
+          ${available.map((key) => renderAvailableRow(key, props))} ${renderBrowseAllRow(props)}
+        `,
+      )}
+      ${renderSettingsSection(
+        {
+          title: t("channels.health.title"),
+          description: t("channels.health.subtitle"),
+        },
+        html`
+          <div class="settings-row settings-row--stacked">
+            <pre class="code-block">
 ${props.snapshot ? JSON.stringify(props.snapshot, null, 2) : t("channels.health.noSnapshotYet")}
-        </pre>
-      </details>
-    </div>
-
+            </pre>
+          </div>
+        `,
+      )}
+    `)}
     ${selected
       ? renderChannelDetail({
           channelId: selected,
@@ -174,7 +182,7 @@ function resolveChannelDetailLabel(
   return detail && detail !== resolveChannelLabel(snapshot, key) ? detail : null;
 }
 
-function resolveCardState(key: ChannelKey, props: ChannelsProps): ChannelCardState {
+function resolveRowState(key: ChannelKey, props: ChannelsProps): ChannelCardState {
   const displayState = resolveChannelDisplayState(key, props);
   const lastError =
     typeof displayState.status?.lastError === "string" && displayState.status.lastError.trim()
@@ -187,22 +195,17 @@ function resolveCardState(key: ChannelKey, props: ChannelsProps): ChannelCardSta
   if (displayState.running === true || displayState.connected === true) {
     return "running";
   }
-  if (displayState.configured === true || displayState.hasAnyActiveAccount) {
-    return "configured";
-  }
-  return "setup";
+  return "configured";
 }
 
-function cardStateLabel(state: ChannelCardState): string {
+function rowStatus(state: ChannelCardState) {
   switch (state) {
     case "running":
-      return t("channels.hub.stateRunning");
+      return renderSettingsStatus({ kind: "ok", label: t("channels.hub.stateRunning") });
     case "configured":
-      return t("channels.hub.stateConfigured");
+      return renderSettingsStatus({ kind: "muted", label: t("channels.hub.stateConfigured") });
     case "attention":
-      return t("channels.hub.stateAttention");
-    case "setup":
-      return t("channels.hub.stateSetup");
+      return renderSettingsStatus({ kind: "danger", label: t("channels.hub.stateAttention") });
     default:
       return state satisfies never;
   }
@@ -219,58 +222,72 @@ function lastActivityLine(key: ChannelKey, props: ChannelsProps): string | null 
   return t("channels.hub.lastMessageAgo", { ago: formatRelativeTimestamp(lastInbound) });
 }
 
-function renderConnectedCard(key: ChannelKey, props: ChannelsProps) {
+function renderConnectedRow(key: ChannelKey, props: ChannelsProps) {
   const label = resolveChannelLabel(props.snapshot, key);
-  const state = resolveCardState(key, props);
-  const activity = lastActivityLine(key, props);
-  const detailLabel = resolveChannelDetailLabel(props.snapshot, key);
+  const description =
+    lastActivityLine(key, props) ??
+    resolveChannelDetailLabel(props.snapshot, key) ??
+    t("channels.hub.openDetails");
   return html`
-    <button type="button" class="channels-card" @click=${() => props.onShowDetail(key)}>
-      ${renderChannelArt(key, label, "cover")}
-      <span class="channels-card__body">
-        <span class="channels-card__title">
-          ${label}
-          <span class="channels-state channels-state--${state}">${cardStateLabel(state)}</span>
-        </span>
-        <span class="channels-card__sub">
-          ${activity ?? detailLabel ?? t("channels.hub.openDetails")}
-        </span>
-      </span>
+    <button
+      type="button"
+      class="settings-row settings-row--nav channels-item"
+      @click=${() => props.onShowDetail(key)}
+    >
+      ${renderChannelArt(key, label, "tile")}
+      <div class="settings-row__text">
+        <span class="settings-row__title">${label}</span>
+        <span class="settings-row__desc">${description}</span>
+      </div>
+      <div class="settings-row__control">
+        ${rowStatus(resolveRowState(key, props))}
+        <span class="settings-row__chevron">${icons.chevronRight}</span>
+      </div>
     </button>
   `;
 }
 
-function renderAvailableCard(key: ChannelKey, props: ChannelsProps) {
+function renderAvailableRow(key: ChannelKey, props: ChannelsProps) {
   const label = resolveChannelLabel(props.snapshot, key);
-  const detailLabel = resolveChannelDetailLabel(props.snapshot, key);
+  const description =
+    resolveChannelDetailLabel(props.snapshot, key) ?? t("channels.hub.guidedSetup");
   return html`
-    <button type="button" class="channels-card" @click=${() => props.onStartSetup(key)}>
-      ${renderChannelArt(key, label, "cover")}
-      <span class="channels-card__body">
-        <span class="channels-card__title">
-          ${label}
-          <span class="channels-state channels-state--setup">${t("channels.hub.setUp")}</span>
-        </span>
-        <span class="channels-card__sub">${detailLabel ?? t("channels.hub.guidedSetup")}</span>
-      </span>
-    </button>
+    <div class="settings-row channels-item">
+      ${renderChannelArt(key, label, "tile")}
+      <div class="settings-row__text">
+        <span class="settings-row__title">${label}</span>
+        <span class="settings-row__desc">${description}</span>
+      </div>
+      <div class="settings-row__control">
+        <button type="button" class="btn btn--sm" @click=${() => props.onStartSetup(key)}>
+          ${t("channels.hub.setUp")}
+        </button>
+      </div>
+    </div>
   `;
 }
 
-function renderBrowseAllCard(props: ChannelsProps) {
+function renderBrowseAllRow(props: ChannelsProps) {
   return html`
-    <button type="button" class="channels-card" @click=${() => props.onStartSetup(null)}>
+    <button
+      type="button"
+      class="settings-row settings-row--nav channels-item"
+      @click=${() => props.onStartSetup(null)}
+    >
       <span
-        class="channels-cover channels-cover--fallback"
+        class="channels-tile channels-tile--fallback"
         style="--channels-art-a:#64748b;--channels-art-b:#1e293b"
         aria-hidden="true"
       >
         <span>+</span>
       </span>
-      <span class="channels-card__body">
-        <span class="channels-card__title">${t("channels.hub.browseAllTitle")}</span>
-        <span class="channels-card__sub">${t("channels.hub.browseAllSubtitle")}</span>
-      </span>
+      <div class="settings-row__text">
+        <span class="settings-row__title">${t("channels.hub.browseAllTitle")}</span>
+        <span class="settings-row__desc">${t("channels.hub.browseAllSubtitle")}</span>
+      </div>
+      <div class="settings-row__control">
+        <span class="settings-row__chevron">${icons.chevronRight}</span>
+      </div>
     </button>
   `;
 }
