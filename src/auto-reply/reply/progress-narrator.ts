@@ -7,6 +7,7 @@ import {
 } from "../../agents/simple-completion-runtime.js";
 import { formatToolSummary, resolveToolDisplay } from "../../agents/tool-display.js";
 import { resolveUtilityModelRefForAgent } from "../../agents/utility-model.js";
+import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
 import { isChannelProgressDraftWorkToolName, isCommandToolName } from "../../channels/streaming.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -58,7 +59,13 @@ type ProgressNarrator = {
     status?: string;
     exitCode?: number | null;
   }) => void;
-  noteItemEvent: (payload: { name?: string; title?: string; status?: string }) => void;
+  noteItemEvent: (payload: {
+    kind?: string;
+    name?: string;
+    title?: string;
+    status?: string;
+    progressText?: string;
+  }) => void;
 };
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
@@ -204,6 +211,7 @@ export function createProgressNarrator(params: {
   let preparedPromise: ReturnType<typeof prepareNarrationModel> | undefined;
   let lastFailure: string | undefined;
   let utilityModelLabel: string | undefined;
+  let lastPreambleAt: number | undefined;
 
   const generate =
     params.generate ??
@@ -273,6 +281,12 @@ export function createProgressNarrator(params: {
       return;
     }
     if (params.isProgressDraftVisible?.() === false) {
+      return;
+    }
+    if (
+      lastPreambleAt !== undefined &&
+      now() - lastPreambleAt < PROGRESS_STATUS_PREAMBLE_FRESH_MS
+    ) {
       return;
     }
     if (inFlight) {
@@ -362,6 +376,12 @@ export function createProgressNarrator(params: {
       addNote(`${subject} failed${exit}`, { immediate: true });
     },
     noteItemEvent(payload) {
+      const preambleText = payload.progressText?.replace(/\s+/g, " ").trim();
+      if (payload.kind === "preamble" && preambleText) {
+        lastPreambleAt = now();
+        addNote(`model: ${preambleText}`);
+        return;
+      }
       if (payload.status !== "failed") {
         return;
       }

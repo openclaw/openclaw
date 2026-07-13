@@ -2166,7 +2166,9 @@ async function runAgentTurnWithFallbackInternal(
                         ]);
                       },
                       onCommentaryText:
-                        params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
+                        params.opts?.onItemEvent &&
+                        (params.opts.commentaryProgressEnabled === true ||
+                          params.opts.progressPreambleEnabled === true)
                           ? async (payload) => {
                               await params.opts?.onItemEvent?.({
                                 itemId: payload.itemId,

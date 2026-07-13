@@ -154,6 +154,7 @@ type DispatchInboundParams = {
     }) => Promise<false | void> | false | void;
     onNarrationUpdate?: (payload: { text: string }) => Promise<void> | void;
     isProgressDraftVisible?: () => boolean;
+    progressPreambleEnabled?: boolean;
     narrationHideCommandText?: boolean;
     onVerboseProgressVisibility?: (isActive: () => boolean) => void;
     onPlanUpdate?: (payload: {
@@ -3083,59 +3084,43 @@ describe("processDiscordMessage draft streaming", () => {
     ).toBe(true);
   });
 
-  it.each([
-    // commentary now defaults on; only an explicit false hides it.
-    ["false", false],
-  ])("hides Discord commentary progress when commentary is %s", async (_label, commentary) => {
+  it("renders a preamble headline without enabling commentary progress", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      expect(params?.replyOptions?.progressPreambleEnabled).toBe(true);
       await params?.replyOptions?.onItemEvent?.({
         itemId: "preamble-1",
         kind: "preamble",
         progressText: "Checking private context before replying.",
       });
-      await params?.replyOptions?.onItemEvent?.({
-        itemId: "tool-1",
-        kind: "tool",
-        name: "exec",
-        progressText: "curl weather api",
-      });
+      expect(draftStream.update).not.toHaveBeenCalled();
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await elapseProgressDraftStartDelay();
-      return createNoQueuedDispatchResult();
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
-    const progress =
-      commentary === undefined
-        ? {
-            label: false,
-            toolProgress: true,
-          }
-        : {
-            label: false,
-            toolProgress: true,
-            commentary,
-          };
     const ctx = await createAutomaticSourceDeliveryContext({
       discordConfig: {
         streaming: {
           mode: "progress",
-          progress,
+          progress: { label: false, commentary: false },
         },
       },
     });
 
     await runProcessDiscordMessage(ctx);
 
-    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
-    expect(updates).toContain("Exec");
-    expect(updates).toContain("curl weather api");
-    expect(updates).not.toContain("Checking private context");
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "Checking private context before replying.",
+    );
+    expectFinalWithProgressReceipt("done", "🛠️ 1 tool call");
+    expect(getDeliveredFinalTexts()[0]).not.toContain("💬");
   });
 
-  it("shows opt-in Discord commentary progress independently from tool progress", async () => {
+  it("keeps opt-in commentary receipts independent from hidden tool progress", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -3153,17 +3138,7 @@ describe("processDiscordMessage draft streaming", () => {
       await params?.replyOptions?.onItemEvent?.({
         itemId: "preamble-2",
         kind: "preamble",
-        progressText: "[[reply_to_current]] Checking route impacts.",
-      });
-      await params?.replyOptions?.onItemEvent?.({
-        itemId: "preamble-2",
-        kind: "preamble",
-        progressText: "NO_REPLY",
-      });
-      await params?.replyOptions?.onItemEvent?.({
-        itemId: "preamble-3",
-        kind: "preamble",
-        progressText: "**NO_REPLY",
+        progressText: "Checking route impacts.",
       });
       await params?.replyOptions?.onItemEvent?.({
         itemId: "tool-1",
@@ -3171,7 +3146,8 @@ describe("processDiscordMessage draft streaming", () => {
         name: "exec",
         progressText: "curl weather api",
       });
-      return createNoQueuedDispatchResult();
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
     const ctx = await createAutomaticSourceDeliveryContext({
@@ -3189,14 +3165,11 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenLastCalledWith(
-      "💬 Checking the current weather source before summarizing clearly.",
-    );
+    expect(draftStream.update).toHaveBeenLastCalledWith("Checking route impacts.");
     const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
     expect(updates).not.toContain("Exec");
     expect(updates).not.toContain("curl weather api");
-    expect(updates).not.toContain("reply_to_current");
-    expect(updates).not.toContain("NO_REPLY");
+    expectFinalWithProgressReceipt("done", "💬 2 notes", "🛠️ 1 tool call");
   });
 
   it.each([
@@ -3285,7 +3258,7 @@ describe("processDiscordMessage draft streaming", () => {
     },
   );
 
-  it("keeps Discord progress drafts usable after the last commentary line becomes silent", async () => {
+  it("keeps the preamble headline when its commentary item retracts", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -3297,7 +3270,7 @@ describe("processDiscordMessage draft streaming", () => {
       await params?.replyOptions?.onItemEvent?.({
         itemId: "preamble-1",
         kind: "preamble",
-        progressText: "NO_REPLY",
+        progressText: "",
       });
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       return createNoQueuedDispatchResult();
@@ -3317,10 +3290,10 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
-    expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec");
-    // The tool update creates a fresh draft after the commentary draft was
-    // deleted; with no final reply, cleanup removes that unfinished message.
+    expect(draftStream.deleteCurrentMessage).not.toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenLastCalledWith("Temporary note.");
+    // Empty preamble updates never retract the headline; cleanup still removes
+    // the unfinished draft message at the end of the run.
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
@@ -3358,7 +3331,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates).toEqual(["💬 Checking source data."]);
+    expect(updates).toEqual(["Checking source data."]);
     expectFinalWithProgressReceipt("done");
   });
 

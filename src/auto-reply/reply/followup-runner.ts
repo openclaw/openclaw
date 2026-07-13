@@ -1235,7 +1235,9 @@ export function createFollowupRunner(params: {
                         ]);
                       },
                       onCommentaryText:
-                        progressOpts?.commentaryProgressEnabled === true && progressOpts.onItemEvent
+                        progressOpts?.onItemEvent &&
+                        (progressOpts.commentaryProgressEnabled === true ||
+                          progressOpts.progressPreambleEnabled === true)
                           ? async ({ text, itemId }) => {
                               await forwardFollowupProgressEvent({
                                 evt: {

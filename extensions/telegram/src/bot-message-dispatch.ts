@@ -490,8 +490,29 @@ function renderTelegramProgressDraftPreview(
   text: string,
   lines: readonly ChannelProgressDraftCompositorLine[],
   richMessages: boolean,
+  statusHeadlineActive = false,
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
+  if (statusHeadlineActive) {
+    const statusLines = trimmed
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const html =
+      statusLines.length > 1
+        ? [
+            `<b>${escapeTelegramProgressHtml(statusLines[0] ?? "")}</b>`,
+            ...statusLines.slice(1).map(renderTelegramProgressStringLine),
+          ].join("<br>")
+        : statusLines.map(renderTelegramProgressStringLine).join("<br>");
+    if (!richMessages) {
+      return { text: html, parseMode: "HTML" };
+    }
+    return {
+      text: trimmed,
+      richMessage: buildTelegramRichHtml(html, { skipEntityDetection: true }),
+    };
+  }
   const renderedLines = lines.map(renderTelegramProgressLine).filter(Boolean);
   const textLines = trimmed
     .split(/\r?\n/u)
@@ -1124,12 +1145,17 @@ export const dispatchTelegramMessage = async ({
   const progressSummaryStartedAt = Date.now();
   const progressSummary = createTelegramProgressSummaryTracker();
   let progressSummaryDelivered = false;
+  let progressHeadlineActive = false;
   const progressDraft = createChannelProgressDraftCompositor({
     entry: telegramCfg,
     mode: streamMode,
     active: Boolean(answerLane.stream),
     seed: progressSeed,
-    formatLine: formatTelegramProgressLine,
+    formatLine: (text) => {
+      // Status headlines carry model Markdown. Tool lines keep their compact
+      // code formatting when no headline owns the status slot.
+      return progressHeadlineActive ? text : formatTelegramProgressLine(text);
+    },
     reasoningGate: streamReasoningInProgressDraft,
     // Distinguish the streamed lanes in the window the way Discord does: 🧠
     // reasoning (italic, default) vs 💬 commentary (plain). Without these the
@@ -1148,6 +1174,7 @@ export const dispatchTelegramMessage = async ({
           streamText,
           options?.lines ?? [],
           telegramCfg.richMessages === true,
+          progressHeadlineActive,
         ),
       );
       if (options?.flush) {
@@ -1216,9 +1243,11 @@ export const dispatchTelegramMessage = async ({
     progressDraft.markFinalReplyDelivered();
   };
   const resetProgressDraftState = () => {
+    progressHeadlineActive = false;
     progressDraft.reset();
   };
   const suppressProgressDraftState = () => {
+    progressHeadlineActive = false;
     progressDraft.suppress();
   };
   let splitReasoningOnNextStream = false;
@@ -2756,6 +2785,8 @@ export const dispatchTelegramMessage = async ({
                   },
                   commentaryProgressEnabled:
                     streamMode === "progress" ? progressDraft.commentaryProgressEnabled : undefined,
+                  progressPreambleEnabled:
+                    streamMode === "progress" && answerLane.stream ? true : undefined,
                   reasoningPayloadsEnabled: durableReasoningPayloadsEnabled,
                   onToolStart: async (payload) => {
                     const toolName = payload.name?.trim();
@@ -2816,12 +2847,18 @@ export const dispatchTelegramMessage = async ({
                         // the collapse summary — it did not stream to the window.
                         return;
                       }
-                      // Window path: the note renders to the progress window, so
-                      // tally it for the collapse bar (counted per-burst, D3).
-                      progressSummary.noteCommentary(payload.itemId, payload.progressText);
-                      await progressDraft.pushCommentaryProgress(payload.progressText, {
-                        itemId: payload.itemId,
-                      });
+                      if (streamMode === "progress") {
+                        progressHeadlineActive ||= Boolean(payload.progressText?.trim());
+                        await progressDraft.pushPreambleHeadline(payload.progressText);
+                      }
+                      if (streamMode === "progress" && progressDraft.commentaryProgressEnabled) {
+                        // Only the opt-in commentary lane contributes receipt notes;
+                        // the always-on headline is display state, not a second lane.
+                        progressSummary.noteCommentary(payload.itemId, payload.progressText);
+                        await progressDraft.pushCommentaryProgress(payload.progressText, {
+                          itemId: payload.itemId,
+                        });
+                      }
                       return;
                     }
                     await pushStreamToolProgress(

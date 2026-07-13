@@ -1,5 +1,5 @@
 // Stateful progress-draft compositor for channel streaming previews.
-// It merges tool, reasoning, and commentary updates until the final reply replaces them.
+// It merges status, tool, reasoning, and commentary updates until the final reply replaces them.
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
 import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
@@ -19,6 +19,11 @@ import {
   type StreamingCompatEntry,
   type StreamingMode,
 } from "./streaming.js";
+
+// A recent model preamble remains the primary status; utility narration fills
+// the slot only after the model has been quiet for this interval. Exported for
+// the narrator, deliberately not re-exported through the SDK barrels.
+export const PROGRESS_STATUS_PREAMBLE_FRESH_MS = 20_000;
 
 // Composes transient channel progress drafts from tool, reasoning, and
 // commentary updates. It owns draft lifecycle state before the final reply wins.
@@ -49,7 +54,9 @@ export function createChannelProgressDraftCompositor(params: {
   commentaryLinePrefix?: string;
   reasoningGate?: boolean;
   commentaryItalics?: boolean;
+  now?: () => number;
 }) {
+  const now = params.now ?? Date.now;
   const reasoningLinePrefix = params.reasoningLinePrefix ?? "";
   const commentaryLinePrefix = params.commentaryLinePrefix ?? "";
   const commentaryItalics = params.commentaryItalics ?? true;
@@ -75,11 +82,19 @@ export function createChannelProgressDraftCompositor(params: {
   let lastRenderedText = "";
   let reasoningRawText = "";
   let lastReasoningLine: string | undefined;
-  // Narration replaces tool lines in the rendered draft while set; the lines
-  // still accumulate underneath so the draft falls back if narration stops.
+  // Model preambles and narration share the status slot while tool lines keep
+  // accumulating underneath for turns where neither source is available.
+  let preambleText = "";
+  let preambleAt: number | undefined;
   let narrationText = "";
   let finalReplyStarted = false;
   let finalReplyDelivered = false;
+
+  const resolveStatusText = () => {
+    const preambleIsFresh =
+      preambleAt !== undefined && now() - preambleAt < PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    return preambleText && (preambleIsFresh || !narrationText) ? preambleText : narrationText;
+  };
 
   const formatDraftText = (draftLines = lines, options?: { formatted?: boolean }) =>
     formatChannelProgressDraftText({
@@ -87,7 +102,7 @@ export function createChannelProgressDraftCompositor(params: {
       lines: draftLines,
       seed: params.seed,
       formatLine: options?.formatted === false ? undefined : params.formatLine,
-      narration: narrationText || undefined,
+      narration: resolveStatusText() || undefined,
     });
 
   const clearProgressState = (suppressed: boolean) => {
@@ -96,6 +111,8 @@ export function createChannelProgressDraftCompositor(params: {
     lastRenderedText = "";
     reasoningRawText = "";
     lastReasoningLine = undefined;
+    preambleText = "";
+    preambleAt = undefined;
     narrationText = "";
   };
 
@@ -281,6 +298,23 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     },
     pushToolProgress: noteProgress,
+    async pushPreambleHeadline(text?: string) {
+      if (!params.active || params.mode !== "progress" || progressSuppressed) {
+        return false;
+      }
+      if (finalReplyStarted || finalReplyDelivered) {
+        return false;
+      }
+      const normalized = text?.replace(/\s+/g, " ").trim() ?? "";
+      if (!normalized) {
+        return false;
+      }
+      preambleText = normalized;
+      preambleAt = now();
+      // Work activity owns the delayed start gate. Retain preambles from fast
+      // turns without making their draft visible.
+      return gate.hasStarted ? await render() : false;
+    },
     async pushNarrationProgress(text?: string) {
       if (!params.active || params.mode !== "progress" || progressSuppressed) {
         return false;
@@ -293,8 +327,8 @@ export function createChannelProgressDraftCompositor(params: {
         return false;
       }
       if (!normalized) {
-        // Narrator stopped (failures/cap): fall back to the raw tool lines
-        // instead of pinning stale narration for the rest of the turn.
+        // Release stopped narration without retracting the model's headline;
+        // raw tool lines return only when no preamble remains.
         narrationText = "";
         return await render();
       }

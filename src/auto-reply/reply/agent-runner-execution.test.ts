@@ -3477,7 +3477,7 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
-  it("bridges CLI commentary agent events into onItemEvent for live preview", async () => {
+  it("bridges CLI preambles for progress headlines when commentary is disabled", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-6"),
@@ -3513,7 +3513,11 @@ describe("runAgentTurnWithFallback", () => {
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
-      opts: { onItemEvent, commentaryProgressEnabled: true },
+      opts: {
+        onItemEvent,
+        commentaryProgressEnabled: false,
+        progressPreambleEnabled: true,
+      },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -3539,7 +3543,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.itemId).toBe("commentary-1");
   });
 
-  it("does not emit CLI commentary when commentary progress is explicitly disabled", async () => {
+  it("does not emit CLI preambles when both progress lanes are disabled", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-6"),
@@ -3549,13 +3553,14 @@ describe("runAgentTurnWithFallback", () => {
     }));
     state.runCliAgentMock.mockImplementationOnce(
       async (params: { runId: string; emitCommentaryText?: boolean }) => {
-        // Defined-but-off commentary progress must leave commentary emission off
-        // so pre-tool text stays in the assistant stream (#92092).
+        // With no commentary lane or headline consumer, pre-tool text stays in
+        // the assistant stream instead of being split into progress events.
         expect(params.emitCommentaryText).toBe(false);
         return { payloads: [{ text: "done" }], meta: {} };
       },
     );
 
+    const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>();
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "claude-cli";
@@ -3565,7 +3570,11 @@ describe("runAgentTurnWithFallback", () => {
       commandBody: "hi",
       followupRun,
       sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
-      opts: { commentaryProgressEnabled: false },
+      opts: {
+        onItemEvent,
+        commentaryProgressEnabled: false,
+        progressPreambleEnabled: false,
+      },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -3582,6 +3591,7 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(onItemEvent).not.toHaveBeenCalled();
   });
 
   it("does not bridge CLI tool deltas when silentExpected is set", async () => {
@@ -5861,6 +5871,14 @@ describe("runAgentTurnWithFallback", () => {
           exitCode: 1,
         },
       });
+      await params.onAgentEvent?.({
+        stream: "assistant",
+        data: {
+          phase: "commentary",
+          itemId: "commentary-1",
+          text: "This must stay suppressed.",
+        },
+      });
       releaseItemEvent?.();
       await itemEventPromise;
       return { payloads: [{ text: "NO_REPLY" }], meta: {} };
@@ -5879,6 +5897,7 @@ describe("runAgentTurnWithFallback", () => {
       opts: {
         onItemEvent,
         onCommandOutput,
+        progressPreambleEnabled: true,
       } satisfies GetReplyOptions,
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
@@ -5902,6 +5921,7 @@ describe("runAgentTurnWithFallback", () => {
         status: "completed",
       }),
     );
+    expect(onItemEvent).toHaveBeenCalledTimes(1);
     expect(onCommandOutput).not.toHaveBeenCalled();
   });
 

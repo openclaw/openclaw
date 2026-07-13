@@ -195,6 +195,11 @@ export function createDiscordDraftPreviewController(params: {
     async pushNarrationProgress(text?: string) {
       await progressDraft.pushNarrationProgress(text);
     },
+    async pushPreambleHeadline(text?: string) {
+      if (discordStreamMode === "progress") {
+        await progressDraft.pushPreambleHeadline(text);
+      }
+    },
     async pushCommentaryProgress(text?: string, options?: { itemId?: string }) {
       await progressDraft.pushCommentaryProgress(text, options);
     },

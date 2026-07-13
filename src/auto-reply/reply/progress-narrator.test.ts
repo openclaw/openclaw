@@ -1,5 +1,6 @@
 // Progress narrator tests cover trigger policy, gating, and reply-option wiring.
 import { describe, expect, it, vi } from "vitest";
+import { PROGRESS_STATUS_PREAMBLE_FRESH_MS } from "../../channels/progress-draft-compositor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 
@@ -110,6 +111,42 @@ describe("createProgressNarrator", () => {
     expect(generate).toHaveBeenCalledTimes(1);
     expect(inputs[0]?.activityNotes.join("\n")).toContain("first");
     expect(inputs[0]?.activityNotes.join("\n")).toContain("second");
+  });
+
+  it("buffers model preamble notes without generating while the preamble is fresh", async () => {
+    let nowMs = 0;
+    const { narrator, generate } = createNarratorHarness({ now: () => nowMs });
+
+    narrator.noteItemEvent({
+      kind: "preamble",
+      progressText: "Checking   the current configuration.",
+    });
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS - 1;
+    narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "openclaw config" } });
+    await flushNarrations();
+
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("narrates the buffered model preamble after it becomes stale", async () => {
+    let nowMs = 0;
+    const { narrator, generate, inputs } = createNarratorHarness({ now: () => nowMs });
+
+    narrator.noteItemEvent({
+      kind: "preamble",
+      progressText: "Checking   the current configuration.",
+    });
+    narrator.noteToolStart({ name: "read", phase: "start" });
+    await flushNarrations();
+    expect(generate).not.toHaveBeenCalled();
+
+    nowMs += PROGRESS_STATUS_PREAMBLE_FRESH_MS;
+    narrator.noteToolStart({ name: "exec", phase: "start", args: { command: "openclaw config" } });
+    await flushNarrations();
+
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(inputs[0]?.activityNotes).toContain("model: Checking the current configuration.");
+    expect(inputs[0]?.activityNotes.join("\n")).toContain("openclaw config");
   });
 
   it("batches follow-up events until the event threshold", async () => {

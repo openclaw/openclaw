@@ -340,7 +340,9 @@ in the draft:
 
 - **`streaming.progress.commentary`** - render the model's pre-tool
   **commentary** (a short "I'll check... then..." narration) interleaved with
-  tool lines in the progress draft.
+  tool lines in the progress draft. In progress mode, the same preamble always
+  supplies the status headline even when this optional interleaved lane is off;
+  see [Progress drafts](/concepts/progress-drafts#status-headline).
 
 ```json
 {
