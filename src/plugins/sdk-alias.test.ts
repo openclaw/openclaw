@@ -588,12 +588,11 @@ describe("plugin sdk alias helpers", () => {
       env: { NODE_ENV: undefined },
       expected: "src" as const,
     },
-  ])("$name", ({ modulePath, argv1, env, expected }) => {
+  ])("$name", ({ modulePath, env, expected }) => {
     const fixture = createExtensionApiAliasFixture();
     expectExtensionApiAliasResolution({
       fixture,
       modulePath,
-      argv1,
       env,
       expected,
     });

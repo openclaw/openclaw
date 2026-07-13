@@ -2,7 +2,7 @@ import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import type { PluginProcessGlobalState } from "./plugin-registration-transaction.js";
 import type { PluginRegistry } from "./registry-types.js";
 
-type CachedPluginState = {
+export type CachedPluginState = {
   registry: PluginRegistry;
   processGlobalState: PluginProcessGlobalState;
 };

@@ -50,7 +50,7 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
-import { pluginLoaderCacheInstances } from "./loader-cache-instances.js";
+import { pluginLoaderCacheInstances, type CachedPluginState } from "./loader-cache-instances.js";
 import {
   channelPluginIdBelongsToManifest,
   loadBundledRuntimeChannelPlugin,
@@ -99,7 +99,6 @@ import {
 } from "./plugin-module-loader-cache.js";
 import {
   createPluginRegistrationTransaction,
-  type PluginProcessGlobalState,
   restorePluginProcessGlobalState,
   snapshotPluginProcessGlobalState,
 } from "./plugin-registration-transaction.js";
