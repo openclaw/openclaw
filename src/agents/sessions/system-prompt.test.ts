@@ -4,14 +4,15 @@ import { buildSystemPrompt } from "./system-prompt.js";
 
 function expectGitWorkIsolation(prompt: string): void {
   expect(prompt).toContain("## Git Work Isolation");
-  expect(prompt).toContain("intended PR target repository");
-  expect(prompt).toContain("`upstream` preferred when it matches");
+  expect(prompt).toContain("Coding tasks that modify a Git-backed project");
+  expect(prompt).toContain("Read-only tasks and non-Git scratch work");
+  expect(prompt).toContain("`upstream` when it matches that target");
   expect(prompt).toContain("git fetch --prune <canonical>");
   expect(prompt).toContain("isolated worktree");
-  expect(prompt).toContain("initial `HEAD` must equal that fetched base");
+  expect(prompt).toContain("initial `HEAD` equals the fetched base SHA");
   expect(prompt).toContain("Existing PR/shared branch");
   expect(prompt).toContain("fetch canonical and the contributor branch");
-  expect(prompt).toContain("rebase/merge/reset/force-push");
+  expect(prompt).toContain("Preserve contributor history");
   expect(prompt).toContain("git merge-base --is-ancestor");
 }
 

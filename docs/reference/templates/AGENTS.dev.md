@@ -42,16 +42,6 @@ git commit -m "Add agent workspace"
 
 Before proposing or building a custom system, feature, workflow, tool, integration, or automation, do a brief check for open-source projects, maintained libraries, existing OpenClaw plugins, or free platforms that already solve it well enough. Prefer those when adequate. Build custom only when existing options are unsuitable, too expensive, unmaintained, unsafe, non-compliant, or the user explicitly asks for custom. Avoid paid-service recommendations unless the user explicitly approves spend. Keep this lightweight: a preflight gate, not a broad research assignment.
 
-## Git Work Isolation
-
-For new coding work that may become a pull request, use a fresh canonical worktree rather than editing the primary checkout. For an existing PR or shared branch, preserve the fetched contributor head in an isolated worktree.
-
-- Establish the intended PR target repository, then select a matching remote: prefer `upstream` when it matches, otherwise verify `origin`. Resolve that remote's default branch instead of assuming `main`; stop if the target or remote cannot be verified.
-- For new work, run `git fetch --prune <canonical>` immediately before creating an isolated worktree and branch from `<canonical>/<default>`.
-- Before editing, verify and record the canonical remote, default branch, and base SHA; the new worktree's initial `HEAD` must equal the fetched base SHA.
-- For an existing PR or shared branch, fetch canonical and the contributor branch immediately before creating an isolated worktree from the fetched contributor head. Report divergence from the refreshed canonical default, and do not automatically rebase, merge, reset, force-push, or otherwise rewrite contributor history.
-- Immediately before the final push or PR for newly authored work, fetch canonical again and run `git merge-base --is-ancestor <canonical>/<default> HEAD`. If it fails, update the new branch onto the latest canonical base and rerun the relevant proof.
-
 ## Daily memory (recommended)
 
 - Keep a short daily log at memory/YYYY-MM-DD.md (create memory/ if needed).

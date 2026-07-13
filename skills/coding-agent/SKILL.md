@@ -48,19 +48,19 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - If user asked for a specific agent, use that agent.
 - If worker fails/hangs, respawn or ask; do not silently hand-code instead.
 - Never checkout branches or run background coding agents in `~/Projects/openclaw`; use an isolated checkout.
-- Prepare and verify the Git worktree before launch, then include the exact Git preparation block below in every worker prompt.
+- For tasks that modify a Git-backed project, prepare and verify the Git worktree before launch, then include the exact Git preparation block below in the worker prompt.
 
 ## Mandatory Git preparation
 
-Before launching Codex, Claude Code, or OpenCode for coding work that may become a PR:
+Before launching Codex, Claude Code, or OpenCode for work that modifies a Git-backed project:
 
-1. Establish the intended PR target repository, then select a matching remote. Prefer `upstream` when it exists and matches that target; otherwise verify `origin`. Resolve the selected remote's default branch dynamically, and stop if the target or remote cannot be proven.
+1. Establish the intended target repository, then select its canonical remote. Prefer `upstream` when it exists and matches that target; otherwise verify `origin`. Resolve the selected remote's default branch dynamically, and stop if the target or remote cannot be proven.
 2. For new work, run `git fetch --prune <canonical>` immediately before creating a new isolated worktree and branch from `<canonical>/<default>`.
 3. For new work, verify the worktree's initial `HEAD` equals the fetched canonical base SHA. Record the canonical remote, default branch, base SHA, worktree path, and branch.
 4. For an existing PR or shared branch, fetch canonical and the contributor branch immediately before creating an isolated worktree from the fetched contributor branch. Record that source ref and starting SHA, report its divergence from the refreshed canonical default, and do not automatically rebase, merge, reset, force-push, or otherwise rewrite contributor history.
 5. Launch the worker in the isolated worktree, never the primary checkout. For OpenClaw, the primary checkout under `~/Projects/openclaw` remains forbidden.
 
-Append this block to **every** worker prompt with real values:
+For tasks that modify a Git-backed project, append this block to the worker prompt with real values:
 
 ```text
 Git preparation (mandatory before edits):
@@ -78,7 +78,7 @@ Before editing, verify the current directory is the isolated worktree and its in
 Immediately before the final push or PR for newly authored work, run `git fetch --prune <canonicalRemote>` and `git merge-base --is-ancestor <canonicalRemote>/<canonicalDefaultBranch> HEAD`. If the ancestry check fails, update the new branch onto the latest canonical base, rerun the relevant proof, and only then push without force. For existing PR/shared-branch work, report a failed ancestry check and follow the repository workflow without rewriting the branch.
 ```
 
-If the worker must create the worktree itself, give it a non-primary administrative checkout and require the same fetch, creation, and SHA-verification steps before any edit. Never start it in `~/Projects/openclaw`. For non-PR scratch work with no canonical remote, keep the block, mark its fields `not applicable`, and require fresh canonical preparation before the task can become PR work.
+If the worker must create the worktree itself, give it a non-primary administrative checkout and require the same fetch, creation, and SHA-verification steps before any edit. Never start it in `~/Projects/openclaw`. Read-only tasks and non-Git scratch work do not require the Git preparation block.
 
 ## Notification block
 

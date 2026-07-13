@@ -266,13 +266,14 @@ describe("buildAgentSystemPrompt", () => {
 
     for (const prompt of prompts) {
       expect(prompt.value, prompt.name).toContain("## Git Work Isolation");
-      expect(prompt.value, prompt.name).toContain("intended PR target repository");
-      expect(prompt.value, prompt.name).toContain("`upstream` preferred when it matches");
+      expect(prompt.value, prompt.name).toContain("Coding tasks that modify a Git-backed project");
+      expect(prompt.value, prompt.name).toContain("Read-only tasks and non-Git scratch work");
+      expect(prompt.value, prompt.name).toContain("`upstream` when it matches that target");
       expect(prompt.value, prompt.name).toContain("git fetch --prune <canonical>");
-      expect(prompt.value, prompt.name).toContain("initial `HEAD` must equal that fetched base");
+      expect(prompt.value, prompt.name).toContain("initial `HEAD` equals the fetched base SHA");
       expect(prompt.value, prompt.name).toContain("Existing PR/shared branch");
       expect(prompt.value, prompt.name).toContain("fetch canonical and the contributor branch");
-      expect(prompt.value, prompt.name).toContain("rebase/merge/reset/force-push");
+      expect(prompt.value, prompt.name).toContain("Preserve contributor history");
       expect(prompt.value, prompt.name).toContain("git merge-base --is-ancestor");
     }
   });
