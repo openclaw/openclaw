@@ -1216,6 +1216,10 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
+  it("starts agent runtime plugin prewarm in the first post-ready turn", () => {
+    expect(testing.agentRuntimePluginPrewarmStartDelayMs).toBe(0);
+  });
+
   it("keeps provider auth prewarm alive when Gmail post-ready sidecars stop", async () => {
     vi.useFakeTimers();
     const onPostReadySidecars = vi.fn();
@@ -1682,12 +1686,16 @@ describe("startGatewayPostAttachRuntime", () => {
   it("emits a startup trace span when channel startup is skipped", async () => {
     const trace = createStartupTraceRecorder();
     const logChannels = { info: vi.fn(), error: vi.fn() };
+    const prewarmPrimaryModel = vi.fn(async () => {});
 
     await withEnvAsync(
       { OPENCLAW_SKIP_CHANNELS: "1", OPENCLAW_SKIP_PROVIDERS: undefined },
       async () => {
         await startGatewaySidecars({
-          cfg: { hooks: { internal: { enabled: false } } } as never,
+          cfg: {
+            hooks: { internal: { enabled: false } },
+            agents: { defaults: { model: "openai/gpt-5.6" } },
+          } as never,
           pluginRegistry: createPostAttachParams().pluginRegistry,
           defaultWorkspaceDir: "/tmp/openclaw-workspace",
           deps: {} as never,
@@ -1700,10 +1708,14 @@ describe("startGatewayPostAttachRuntime", () => {
           },
           logChannels,
           startupTrace: trace.startupTrace,
+          prewarmPrimaryModel,
         });
       },
     );
 
+    await vi.waitFor(() => {
+      expect(prewarmPrimaryModel).toHaveBeenCalledOnce();
+    });
     expect(trace.measures).toContain("sidecars.channels");
     expect(trace.measures).toContain("sidecars.channel-skip");
     expect(logChannels.info).toHaveBeenCalledWith(
@@ -2119,6 +2131,68 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     expect([...unavailableGatewayMethods]).toStrictEqual([]);
     expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts the worker environment sidecar before releasing startup-gated methods", async () => {
+    let finishReconcile: (() => void) | undefined;
+    const reconcileReady = new Promise<void>((resolve) => {
+      finishReconcile = resolve;
+    });
+    const workerSidecar = { stop: vi.fn() };
+    const startWorkerEnvironmentRuntime = vi.fn(async () => {
+      await reconcileReady;
+      return workerSidecar;
+    });
+    const onGatewayLifetimeSidecars = vi.fn();
+    const unavailableGatewayMethods = new Set<string>(STARTUP_UNAVAILABLE_GATEWAY_METHODS);
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        unavailableGatewayMethods,
+        sidecarStartup: "defer",
+        startWorkerEnvironmentRuntime,
+        onGatewayLifetimeSidecars,
+      },
+      createPostAttachRuntimeDeps({
+        startGatewaySidecars: vi.fn(async () => ({
+          pluginServices: null,
+          postReadySidecars: [],
+        })),
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(startWorkerEnvironmentRuntime).toHaveBeenCalledTimes(1);
+    });
+    expect([...unavailableGatewayMethods]).toEqual([...STARTUP_UNAVAILABLE_GATEWAY_METHODS]);
+
+    finishReconcile?.();
+    await vi.waitFor(() => {
+      expect([...unavailableGatewayMethods]).toEqual([]);
+    });
+    expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(expect.arrayContaining([workerSidecar]));
+  });
+
+  it("does not start the worker environment sidecar after close begins", async () => {
+    const startWorkerEnvironmentRuntime = vi.fn(() => ({ stop: vi.fn() }));
+    const startGatewaySidecarsValue = vi.fn(async () => ({
+      pluginServices: null,
+      postReadySidecars: [],
+    }));
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams(),
+        sidecarStartup: "defer",
+        startWorkerEnvironmentRuntime,
+        isClosing: () => true,
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars: startGatewaySidecarsValue }),
+    );
+
+    await vi.waitFor(() => expect(startGatewaySidecarsValue).toHaveBeenCalledTimes(1));
+    expect(startWorkerEnvironmentRuntime).not.toHaveBeenCalled();
   });
 
   it("loads lazy startup plugins before returning with deferred sidecars", async () => {

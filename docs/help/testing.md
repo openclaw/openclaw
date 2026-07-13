@@ -37,7 +37,7 @@ Most days:
 
 When you touch tests or want extra confidence:
 
-- Coverage gate: `pnpm test:coverage`
+- Informational V8 coverage report: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
 
 ## Test Temp Directories
@@ -84,9 +84,9 @@ When debugging real providers/models (requires real creds):
 - Live suite (models + gateway tool/image probes): `pnpm test:live`
 - Target one live file quietly: `pnpm test:live -- src/agents/models.profiles.live.test.ts`
 - Runtime performance reports: dispatch `OpenClaw Performance` with
-  `live_openai_candidate=true` for a real `openai/gpt-5.5` agent turn or
+  `live_openai_candidate=true` for a real `openai/gpt-5.6-luna` agent turn or
   `deep_profile=true` for Kova CPU/heap/trace artifacts. Daily scheduled runs
-  publish mock-provider, deep-profile, and GPT 5.5 lane reports to
+  publish mock-provider, deep-profile, and GPT-5.6 Luna lane reports to
   `openclaw/clawgrit-reports` from a separate artifact-consuming publisher job;
   missing or invalid publisher authentication fails scheduled and
   `profile=release` runs. Manual non-release dispatches keep the GitHub artifacts
@@ -136,15 +136,15 @@ When debugging real providers/models (requires real creds):
     surface. Exercises `/crestodian status`, queues a persistent model
     change, replies `/crestodian yes`, and verifies the audit/config write
     path.
-- Crestodian planner Docker smoke: `pnpm test:docker:crestodian-planner`
-  - Runs Crestodian in a configless container with a fake Claude CLI on
-    `PATH` and verifies the fuzzy planner fallback translates into an
-    audited typed config write.
 - Crestodian first-run Docker smoke: `pnpm test:docker:crestodian-first-run`
-  - Starts from an empty OpenClaw state dir, verifies the modern onboard
-    Crestodian entrypoint, applies setup/model/agent/Discord plugin +
-    SecretRef writes, validates config, and verifies audit entries. The same
-    Ring 0 setup path is also covered in QA Lab by
+  - Starts from an empty OpenClaw state dir and first proves the packaged
+    `openclaw crestodian` CLI fails closed without inference. It then
+    tests and activates fake Claude through the packaged activation module.
+    Only afterward does a fuzzy packaged CLI request reach the planner and
+    resolve to typed setup, followed by one-shot model, agent, Discord plugin,
+    and SecretRef operations. It validates config and audit entries. This is
+    supporting gate/operation evidence, not an interactive onboarding or
+    Crestodian agent/tool/approval proof. The same lane is exposed in QA Lab by
     `pnpm openclaw qa suite --scenario crestodian-ring-zero-setup`.
 - Moonshot/Kimi cost smoke: with `MOONSHOT_API_KEY` set, run
   `openclaw models list --provider moonshot --json`, then run an isolated
@@ -173,7 +173,7 @@ explicitly, while the Matrix CLI and manual workflow input default remains
 `all`; manual dispatch can shard `all` into `transport`, `media`,
 `e2ee-smoke`, `e2ee-deep`, and `e2ee-cli` jobs. `OpenClaw Release Checks` runs
 parity plus the fast Matrix and Telegram lanes before release approval, using
-`mock-openai/gpt-5.5` for release transport checks so they stay deterministic
+`mock-openai/gpt-5.6-luna` for release transport checks so they stay deterministic
 and avoid normal provider-plugin startup. These live transport gateways
 disable memory search; memory behavior stays covered by the QA parity suites.
 
@@ -369,7 +369,7 @@ gh workflow run package-acceptance.yml --ref main \
   - Use `--platform macos`, `--platform windows`, or `--platform linux`
     while iterating on one guest. Use `--json` for the summary artifact
     path and per-lane status.
-  - The OpenAI lane uses `openai/gpt-5.5` for the live agent-turn proof by
+  - The OpenAI lane uses `openai/gpt-5.6-luna` for the live agent-turn proof by
     default. Pass `--model <provider/model>` or set
     `OPENCLAW_PARALLELS_OPENAI_MODEL` to validate another OpenAI model.
   - Wrap long local runs in a host timeout so Parallels transport stalls

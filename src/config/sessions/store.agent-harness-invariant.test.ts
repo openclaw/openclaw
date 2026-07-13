@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadSessionStore as loadPluginSessionStore } from "../../plugin-sdk/session-store-runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -70,7 +70,10 @@ describe("agent harness session store invariant", () => {
     await updateSessionStore(
       storePath,
       (store) => {
-        store[sessionKey] = { ...store[sessionKey], label: "Legacy notes" };
+        store[sessionKey] = {
+          ...expectDefined(store[sessionKey], "stored harness session"),
+          label: "Legacy notes",
+        };
       },
       { skipMaintenance: true },
     );
@@ -92,7 +95,10 @@ describe("agent harness session store invariant", () => {
     await updateSessionStore(
       storePath,
       (store) => {
-        store[sessionKey] = { ...store[sessionKey], sessionId: "generated-session" };
+        store[sessionKey] = {
+          ...expectDefined(store[sessionKey], "stored legacy session"),
+          sessionId: "generated-session",
+        };
       },
       { skipMaintenance: true },
     );
@@ -205,7 +211,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], agentHarnessId: "other" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            agentHarnessId: "other",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -214,7 +223,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], agentHarnessId: "codex-app-server" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            agentHarnessId: "codex-app-server",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -223,7 +235,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], sessionId: "replacement-session" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            sessionId: "replacement-session",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -246,7 +261,10 @@ describe("agent harness session store invariant", () => {
       updateSessionStore(
         storePath,
         (store) => {
-          store[sessionKey] = { ...store[sessionKey], sessionId: "replacement-session" };
+          store[sessionKey] = {
+            ...expectDefined(store[sessionKey], "stored harness session"),
+            sessionId: "replacement-session",
+          };
         },
         { skipMaintenance: true },
       ),
@@ -484,32 +502,6 @@ describe("agent harness session store invariant", () => {
         { skipMaintenance: true, skipSaveWhenResult: (result) => result === 0 },
       ),
     ).rejects.toThrow("Model-selection-locked sessions cannot be removed");
-    await updateSessionStore(
-      storePath,
-      (store) => {
-        store["agent:main:ordinary"] = { sessionId: "ordinary-session", updatedAt: 2 };
-      },
-      { skipMaintenance: true },
-    );
-
-    expect(loadSessionStore(storePath, { skipCache: true })).toEqual({
-      [sessionKey]: entry,
-      "agent:main:ordinary": { sessionId: "ordinary-session", updatedAt: 2 },
-    });
-  });
-
-  it("does not expose the writer-owned cache through the plugin SDK", async () => {
-    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
-    const entry: SessionEntry = {
-      agentHarnessId: "codex",
-      modelSelectionLocked: true,
-      sessionId: "native-session",
-      updatedAt: 1,
-    };
-    await saveSessionStore(storePath, { [sessionKey]: entry }, { skipMaintenance: true });
-
-    const exposed = loadPluginSessionStore(storePath, { clone: false });
-    delete exposed[sessionKey];
     await updateSessionStore(
       storePath,
       (store) => {

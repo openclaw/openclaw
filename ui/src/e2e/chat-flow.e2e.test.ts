@@ -1,4 +1,5 @@
 // Control UI tests cover chat flow behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
@@ -421,6 +422,30 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       const commandRequests = await waitForRequests(gateway, "chat.send", 2);
       const commandParams = requireRecord(commandRequests[1]?.params);
       expect(commandParams.message).toBe(spacedPairCommand);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("sends idle stop aliases as ordinary chat messages", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await composer.fill("wait");
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(sendRequest.params).message).toBe("wait");
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
     } finally {
       await closeBrowserContext(context);
     }
@@ -993,6 +1018,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       const copyButton = page.locator(".code-block-copy").first();
       await copyButton.waitFor({ timeout: 10_000 });
+      await waitForChatScrollIdle(page);
       await copyButton.evaluate((element) => element.scrollIntoView({ block: "center" }));
       const thread = page.locator(".chat-thread");
       const scrollTopBefore = await thread.evaluate((element) =>
@@ -1045,7 +1071,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".chat-workspace-open").click();
+      await page.locator(".chat-workspace-toggle").click();
       await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
 
       await page.getByRole("button", { name: "Copy path" }).click();
@@ -1116,7 +1142,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       // Collapsed rails render nothing; the floating opener (with the
       // changed-file badge) is the only pointer affordance.
-      const opener = page.locator(".chat-workspace-open");
+      const opener = page.locator(".chat-workspace-toggle");
       await opener.waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(0);
       expect(await page.locator(".chat-workspace-rail").count()).toBe(0);
@@ -1152,8 +1178,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.getByText("AGENTS.md").waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("sessions.files.list")).toHaveLength(1);
 
-      await page.setViewportSize({ height: 900, width: 1000 });
-      expect(await page.locator(".chat-workspace-rail").isHidden()).toBe(true);
+      await page.setViewportSize({ height: 900, width: 760 });
+      const workbench = page.locator(".chat-workbench");
+      await expect
+        .poll(() => workbench.getAttribute("class"))
+        .toContain("chat-workbench--dock-bottom");
+      expect(await page.locator(".chat-workspace-rail").isVisible()).toBe(true);
+      expect(await page.locator(".chat-workspace-rail__dock").count()).toBe(0);
+      expect(await page.locator(".chat-workspace-rail__grip").count()).toBe(0);
     } finally {
       await closeBrowserContext(context);
     }
@@ -1188,7 +1220,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".chat-workspace-open").click();
+      await page.locator(".chat-workspace-toggle").click();
       await page.locator(".chat-workspace-rail__file-name", { hasText: "file-60.ts" }).waitFor({
         timeout: 10_000,
       });
@@ -1403,28 +1435,26 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
-  it("creates a worktree chat from the git-backed agent sidebar action", async () => {
+  it("opens a git-backed agent draft from the sidebar new-session action", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.create": { key: "agent:main:dashboard:worktree", ok: true },
-      },
-      workspaceGit: true,
-    });
+    const gateway = await installMockGateway(page, { workspaceGit: true });
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const worktreeButton = page.getByRole("button", { name: "New chat in worktree" });
-      await worktreeButton.waitFor({ state: "visible", timeout: 10_000 });
-      await worktreeButton.click();
+      const newSessionButton = page
+        .locator("openclaw-app-sidebar")
+        .getByRole("button", { name: "New session" });
+      await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
+      await newSessionButton.click();
 
-      const request = await gateway.waitForRequest("sessions.create");
-      expect(requireRecord(request.params)).toMatchObject({ agentId: "main", worktree: true });
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await expect.poll(() => new URL(page.url()).searchParams.get("agent")).toBe("main");
+      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await closeBrowserContext(context);
     }
@@ -1770,6 +1800,46 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps a steerable queued message above the composer while a run is active", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const activePrompt = "keep this run active";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(activePrompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const queuedPrompt = "show this only above the composer";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
+      await page.getByRole("button", { name: "Queue message" }).click();
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
+      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-thread").getByText(queuedPrompt).count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/steer-queue-composer-only.png`,
+          fullPage: true,
+        });
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("scrolls a delayed pending send into view before the ACK resolves", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -1826,6 +1896,65 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .toBeLessThanOrEqual(4);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("overlays the scroll-to-bottom affordance without shrinking the transcript", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTs = Date.now() - 100_000;
+    const historyMessages = Array.from({ length: 50 }, (_, index) => ({
+      content: [
+        {
+          text: `Scrollable history ${index}\n${"extra transcript line\n".repeat(4)}`,
+          type: "text",
+        },
+      ],
+      role: index % 2 === 0 ? "assistant" : "user",
+      timestamp: baseTs + index,
+    }));
+    await installMockGateway(page, { historyMessages });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Scrollable history 49").waitFor({ timeout: 10_000 });
+      await waitForChatScrollIdle(page);
+
+      const readLayout = () =>
+        page.locator(".chat-main").evaluate((container) => {
+          const thread = container.querySelector<HTMLElement>(".chat-thread");
+          const composer = container.querySelector<HTMLElement>(".agent-chat__composer-shell");
+          const button = container.querySelector<HTMLElement>(".chat-scroll-to-bottom");
+          if (!thread || !composer) {
+            throw new Error("expected chat thread and composer");
+          }
+          const threadRect = thread.getBoundingClientRect();
+          const composerRect = composer.getBoundingClientRect();
+          const buttonRect = button?.getBoundingClientRect();
+          return {
+            buttonBottom: buttonRect ? Math.round(buttonRect.bottom) : null,
+            composerTop: Math.round(composerRect.top),
+            threadBottom: Math.round(threadRect.bottom),
+          };
+        });
+
+      const before = await readLayout();
+      expect(before.buttonBottom).toBeNull();
+
+      await scrollChatThreadToTop(page);
+      await page.getByRole("button", { name: "Scroll to latest" }).waitFor({ timeout: 10_000 });
+      const after = await readLayout();
+
+      expect(after.threadBottom).toBe(before.threadBottom);
+      expect(after.composerTop).toBe(before.composerTop);
+      expect(after.buttonBottom).not.toBeNull();
+      expect(after.buttonBottom!).toBeLessThan(after.composerTop);
     } finally {
       await closeBrowserContext(context);
     }
@@ -2479,6 +2608,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .waitFor({
           timeout: 10_000,
         });
+      await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 10));
+      await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 
       await page
@@ -2525,8 +2656,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const sessions = chatSessionListResponse();
-    sessions.sessions[0].label = "Short";
-    sessions.sessions[1].label =
+    const firstSession = expectDefined(sessions.sessions[0], "first chat session fixture");
+    const secondSession = expectDefined(sessions.sessions[1], "second chat session fixture");
+    firstSession.label = "Short";
+    secondSession.label =
       "Review and repair the intentionally overlong sidebar session title before navigation ".repeat(
         4,
       );
@@ -2551,15 +2684,38 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       }));
       expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
 
+      await recentRow.dispatchEvent("mouseenter");
+      await page.waitForTimeout(250);
+      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
+        "hover-marquee--scrolling",
+      );
+      await recentRow.dispatchEvent("mouseleave");
+      await page.waitForTimeout(300);
+      expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
+        "hover-marquee--scrolling",
+      );
+      await recentRow.dispatchEvent("mouseenter");
+      await expect
+        .poll(() => recentLabel.evaluate((label) => label.classList.value), { timeout: 1_500 })
+        .toContain("hover-marquee--scrolling");
+      await recentRow.dispatchEvent("mouseleave");
+      await expect
+        .poll(
+          () =>
+            recentLabel.evaluate((label) => ({
+              textIndent: getComputedStyle(label).textIndent,
+              textOverflow: getComputedStyle(label).textOverflow,
+            })),
+          { timeout: 1_500 },
+        )
+        .toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
+
       await recentRow.locator("a.sidebar-recent-session__link").dispatchEvent("click", {
         button: 0,
       });
-      await page
-        .locator(".sidebar-recent-session--active")
-        .getByText(sessions.sessions[1].label)
-        .waitFor({
-          timeout: 10_000,
-        });
+      await page.locator(".sidebar-recent-session--active").getByText(secondSession.label).waitFor({
+        timeout: 10_000,
+      });
 
       const activeRow = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-b"]',

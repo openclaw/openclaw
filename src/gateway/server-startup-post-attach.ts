@@ -17,6 +17,7 @@ import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cach
 import type { PluginRegistry } from "../plugins/registry.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
+import { sweepSessionStateWatchNotices } from "../sessions/session-state-events.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
@@ -39,7 +40,7 @@ const PRIMARY_MODEL_PREWARM_TIMEOUT_MS = 5_000;
 const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 5_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
-const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 10_000;
+const AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS = 0;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
@@ -635,7 +636,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
-    log: { warn: (msg: string) => void };
+    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
     timeoutMs?: number;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
@@ -652,7 +653,7 @@ async function prewarmConfiguredPrimaryModelWithTimeout(
     ref: false,
   }).then(() => {
     if (!settled) {
-      params.log.warn(
+      params.log.debug?.(
         `startup model warmup timed out after ${params.timeoutMs ?? PRIMARY_MODEL_PREWARM_TIMEOUT_MS}ms; continuing without waiting`,
       );
     }
@@ -664,7 +665,7 @@ function schedulePrimaryModelPrewarm(
   params: {
     cfg: OpenClawConfig;
     workspaceDir?: string;
-    log: { warn: (msg: string) => void };
+    log: { warn: (msg: string) => void; debug?: (msg: string) => void };
     startupTrace?: GatewayStartupTrace;
   },
   prewarm: typeof prewarmConfiguredPrimaryModel = prewarmConfiguredPrimaryModel,
@@ -745,6 +746,17 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  // Agent RPC remains available when transport startup is disabled, so its model metadata must
+  // warm independently instead of leaving the first headless request on the cold path.
+  schedulePrimaryModelPrewarm(
+    {
+      cfg: params.cfg,
+      workspaceDir: params.defaultWorkspaceDir,
+      log: params.log,
+      startupTrace: params.startupTrace,
+    },
+    params.prewarmPrimaryModel,
+  );
   await measureStartup(params.startupTrace, "sidecars.main-session-recovery", async () => {
     try {
       const { markStartupOrphanedMainSessionsForRecovery } =
@@ -759,15 +771,6 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.channels", async () => {
     if (!skipChannels) {
       try {
-        schedulePrimaryModelPrewarm(
-          {
-            cfg: params.cfg,
-            workspaceDir: params.defaultWorkspaceDir,
-            log: params.log,
-            startupTrace: params.startupTrace,
-          },
-          params.prewarmPrimaryModel,
-        );
         await measureStartup(params.startupTrace, "sidecars.channel-start", () =>
           params.startChannels(),
         );
@@ -1147,6 +1150,7 @@ export async function startGatewayPostAttachRuntime(
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
     onGatewayLifetimeSidecars?: (sidecars: GatewayPostReadySidecarHandle[]) => void;
+    startWorkerEnvironmentRuntime?: () => Awaitable<GatewayPostReadySidecarHandle | null>;
     onSidecarsReady?: () => void;
     isClosing?: () => boolean;
     startupTrace?: GatewayStartupTrace;
@@ -1291,6 +1295,9 @@ export async function startGatewayPostAttachRuntime(
             startupOutcomes,
           }),
         );
+        const workerEnvironmentSidecar = params.isClosing?.()
+          ? null
+          : ((await params.startWorkerEnvironmentRuntime?.()) ?? null);
         const loaderStatsAfter = getPluginModuleLoaderStats();
         params.startupTrace?.detail("sidecars.plugin-loader", [
           ["callsCount", loaderStatsAfter.calls - loaderStatsBefore.calls],
@@ -1322,6 +1329,9 @@ export async function startGatewayPostAttachRuntime(
         }
         const postReadySidecars = [...result.postReadySidecars];
         const gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
+        if (workerEnvironmentSidecar) {
+          gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
+        }
         if (params.agentRuntimePluginPrewarm?.enabled !== false) {
           gatewayLifetimeSidecars.push(
             scheduleAgentRuntimePluginPrewarm({
@@ -1383,6 +1393,10 @@ export async function startGatewayPostAttachRuntime(
         log: params.log,
         refreshLatestUpdateRestartSentinel: runtimeDeps.refreshLatestUpdateRestartSentinel,
       });
+      const sessionStateSweepHandle = setImmediate(() => {
+        sweepSessionStateWatchNotices();
+      });
+      sessionStateSweepHandle.unref?.();
       if (!hasGatewayStartHooks(sidecarsResult.pluginRegistry)) {
         return;
       }
@@ -1440,6 +1454,7 @@ export async function startGatewayPostAttachRuntime(
 }
 
 export const testing = {
+  agentRuntimePluginPrewarmStartDelayMs: AGENT_RUNTIME_PLUGIN_PREWARM_START_DELAY_MS,
   providerAuthPrewarmStartDelayMs: PROVIDER_AUTH_PREWARM_START_DELAY_MS,
   hasRestartSentinelFast,
   prewarmConfiguredPrimaryModel,

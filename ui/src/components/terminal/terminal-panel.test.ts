@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 
@@ -11,7 +11,19 @@ type CreateOptions = {
   onResize?: (size: { columns: number; rows: number }) => void;
 };
 
-const createGhosttyTerminalMock = vi.hoisted(() => vi.fn());
+type CreateGhosttyTerminalMock = Mock<
+  (options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>
+>;
+
+// Vitest resets this test module but can retain terminal-panel.ts. Reuse one
+// mock so retained imports and the current test graph share the same identity.
+const createGhosttyTerminalMock = vi.hoisted(() => {
+  const scope = globalThis as typeof globalThis & {
+    openclawTestCreateGhosttyTerminalMock?: CreateGhosttyTerminalMock;
+  };
+  return (scope.openclawTestCreateGhosttyTerminalMock ??=
+    vi.fn<(options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>>());
+});
 
 function createTerminalController(dispose: () => void = vi.fn()) {
   return {
@@ -52,15 +64,13 @@ vi.mock("./terminal-runtime.ts", () => {
 
 import { OpenClawTerminalPanel } from "./terminal-panel.ts";
 
-const TERMINAL_PANEL_ELEMENT_NAME = "test-openclaw-terminal-panel";
+const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-${crypto.randomUUID()}`;
 
 // Keep the mounted panel and i18n manager in the current module graph when
 // the non-isolated runner has retained an earlier production registration.
 class TestTerminalPanel extends OpenClawTerminalPanel {}
 
-if (!customElements.get(TERMINAL_PANEL_ELEMENT_NAME)) {
-  customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
-}
+customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
 
 describe("OpenClawTerminalPanel", () => {
   beforeEach(async () => {
@@ -200,18 +210,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("opens a fresh terminal after the last tab is closed", async () => {
-    const controllers = Array.from({ length: 2 }, () => ({
-      terminal: {
-        cols: 100,
-        rows: 30,
-        viewportY: 0,
-        write: vi.fn(),
-        focus: vi.fn(),
-      },
-      write: vi.fn(),
-      fit: vi.fn(),
-      dispose: vi.fn(),
-    }));
+    const controllers = [createTerminalController(), createTerminalController()] as const;
     createGhosttyTerminalMock
       .mockResolvedValueOnce(controllers[0])
       .mockResolvedValueOnce(controllers[1]);
@@ -281,7 +280,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("rebinds to a replacement client while availability stays true", async () => {
-    const controllers = [createTerminalController(), createTerminalController()];
+    const controllers = [createTerminalController(), createTerminalController()] as const;
     createGhosttyTerminalMock
       .mockResolvedValueOnce(controllers[0])
       .mockResolvedValueOnce(controllers[1]);

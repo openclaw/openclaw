@@ -33,6 +33,8 @@ export const ChatHistoryParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
+    messageId: Type.Optional(NonEmptyString),
+    sessionId: Type.Optional(NonEmptyString),
     maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
   },
   { additionalProperties: false },
@@ -235,3 +237,13 @@ export const ChatEventSchema = Type.Union([
   ChatAbortedEventSchema,
   ChatErrorEventSchema,
 ]);
+
+// Wire types derive directly from local schema consts so public d.ts graphs never
+// pull in the ProtocolSchemas registry.
+export type ChatMetadataParams = Static<typeof ChatMetadataParamsSchema>;
+export type ChatToolTitlesParams = Static<typeof ChatToolTitlesParamsSchema>;
+export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
+export type LogsTailResult = Static<typeof LogsTailResultSchema>;
+export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
+export type ChatInjectParams = Static<typeof ChatInjectParamsSchema>;
+export type ChatEvent = Static<typeof ChatEventSchema>;

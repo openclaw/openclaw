@@ -263,12 +263,13 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       const sidebarReleasePin = sidebarRows
         .filter({ hasText: "Release planning" })
         .getByRole("button", { name: "Unpin session" });
-      // Pinned badge stays visible without hover.
-      await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("1");
+      await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("0");
       await sidebarResearch.hover();
       await expect.poll(() => actionOpacity(sidebarResearchPin)).toBe("1");
       await captureUiProof(page, "sidebar-sessions.png");
 
+      await sidebarRows.filter({ hasText: "Release planning" }).hover();
+      await expect.poll(() => actionOpacity(sidebarReleasePin)).toBe("1");
       await sidebarReleasePin.click();
       const pinPatch = await waitForPatch(
         gateway,
@@ -549,6 +550,43 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps a session row when the Gateway reports no deletion", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const key = "agent:main:research";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: false },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+    page.on("dialog", (dialog) => void dialog.accept());
+
+    try {
+      await page.goto(`${server.baseUrl}sessions`);
+      const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      const menu = page.getByRole("menu", { name: "Actions for Research notes" });
+      await menu.getByRole("menuitem", { name: "Delete…" }).click();
+
+      const request = await gateway.waitForRequest("sessions.delete");
+      expect(requireRecord(request.params)).toMatchObject({ key });
+      await row.waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps sidebar sessions visible through a same-client Gateway reconnect", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -557,7 +595,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:disconnect-proof";
-    const otherSessionKeys = ["agent:main:other-a", "agent:main:other-b"];
+    const otherSessionKeys = ["agent:main:other-a", "agent:main:other-b"] as const;
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": sessionsListResponse([
@@ -745,7 +783,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     }
   });
 
-  it("shows every sidebar session and supports complete drag-managed groups", async () => {
+  it("pages sidebar sessions and supports complete drag-managed groups", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({
       locale: "en-US",
@@ -771,6 +809,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       const sidebarRows = page.locator(".sidebar-recent-session");
+      await expect.poll(() => sidebarRows.count()).toBe(10);
+      await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => sidebarRows.count()).toBe(12);
       await expect.poll(() => page.getByText("All sessions", { exact: true }).count()).toBe(0);
       await captureUiProof(page, "sidebar-all-sessions.png");
@@ -867,6 +907,8 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             .getAttribute("aria-expanded"),
         )
         .toBe("false");
+      await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(9);
+      await page.getByRole("button", { name: "Load more" }).click();
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
@@ -1071,14 +1113,99 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
           .filter((rect) => rect.bottom > rect.top)
           .toSorted((a, b) => a.top - b.top);
         let bad = 0;
-        for (let index = 1; index < rects.length; index += 1) {
-          if (rects[index].top < rects[index - 1].bottom - 2) {
+        let previousBottom: number | undefined;
+        for (const rect of rects) {
+          if (previousBottom !== undefined && rect.top < previousBottom - 2) {
             bad += 1;
           }
+          previousBottom = rect.bottom;
         }
         return bad;
       });
       expect(overlaps).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("scrolls long session lists in short windows instead of squeezing sections", async () => {
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const rows = [
+      ...Array.from({ length: 8 }, (_, index) =>
+        sessionRow(`agent:main:work-${index}`, `Work session ${index}`, baseTime - index * 60_000, {
+          worktree: { branch: `openclaw/wt-${index}`, repoRoot: "/Users/dev/Projects/clawdbot" },
+        }),
+      ),
+      ...Array.from({ length: 30 }, (_, index) =>
+        sessionRow(`agent:main:chat-${index}`, `Chat ${index}`, baseTime - (index + 10) * 60_000),
+      ),
+    ];
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 620, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse(rows),
+      },
+      sessionKey: "agent:main:main",
+    });
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const seeMore = page.getByRole("button", { name: "Load more" });
+      for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
+        await seeMore.click();
+      }
+      await page.locator(".sidebar-recent-sessions").evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await expect
+        .poll(() => page.locator(".sidebar-recent-session").count(), { timeout: 15_000 })
+        .toBeGreaterThanOrEqual(rows.length);
+      await captureUiProof(page, "short-window-session-sections.png");
+
+      // Sections must stack below each other, not paint over the rows above.
+      const overlaps = await page.evaluate(() => {
+        const rects = [
+          ...document.querySelectorAll(".sidebar-recent-session, .sidebar-recent-sessions__head"),
+        ]
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            return { top: rect.top, bottom: rect.bottom };
+          })
+          .filter((rect) => rect.bottom > rect.top)
+          .toSorted((a, b) => a.top - b.top);
+        let bad = 0;
+        let previousBottom: number | undefined;
+        for (const rect of rects) {
+          if (previousBottom !== undefined && rect.top < previousBottom - 2) {
+            bad += 1;
+          }
+          previousBottom = rect.bottom;
+        }
+        return bad;
+      });
+      expect(overlaps).toBe(0);
+
+      // The squeeze regression compressed sections into the viewport with no
+      // overflow; a healthy list is taller than its container and scrolls.
+      const scroll = await page.evaluate(() => {
+        const list = document.querySelector(".sidebar-recent-sessions");
+        if (!list) {
+          return null;
+        }
+        list.scrollTop = list.scrollHeight;
+        return {
+          clientHeight: list.clientHeight,
+          scrollHeight: list.scrollHeight,
+          scrollTop: list.scrollTop,
+        };
+      });
+      expect(scroll).not.toBeNull();
+      expect(scroll?.scrollHeight ?? 0).toBeGreaterThan(scroll?.clientHeight ?? 0);
+      expect(scroll?.scrollTop ?? 0).toBeGreaterThan(0);
     } finally {
       await context.close();
     }

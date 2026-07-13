@@ -1,5 +1,7 @@
 // Model auth status tests cover profile health summaries, provider usage,
 // credential cleanup, secret refresh, and provider run abort side effects.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthHealthSummary } from "../../agents/auth-health.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
@@ -29,7 +31,7 @@ const mocks = vi.hoisted(() => ({
     (params: { agentDir?: string }) => params.agentDir,
   ),
   clearRuntimeAuthProfileStoreSnapshots: vi.fn(),
-  refreshActiveSecretsRuntimeSnapshot: vi.fn(async () => false),
+  refreshActiveProviderAuthRuntimeSnapshot: vi.fn(async () => false),
   clearCurrentProviderAuthState: vi.fn(),
   warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
   buildAuthHealthSummary: vi.fn(
@@ -77,7 +79,7 @@ vi.mock("../../infra/provider-usage.load.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime.js", () => ({
-  refreshActiveSecretsRuntimeSnapshot: mocks.refreshActiveSecretsRuntimeSnapshot,
+  refreshActiveProviderAuthRuntimeSnapshot: mocks.refreshActiveProviderAuthRuntimeSnapshot,
 }));
 
 vi.mock("../../agents/model-provider-auth.js", () => ({
@@ -107,8 +109,14 @@ function createOptions(
   } as unknown as GatewayRequestHandlerOptions & { respond: ReturnType<typeof vi.fn> };
 }
 
-const handler = modelsAuthStatusHandlers["models.authStatus"];
-const logoutHandler = modelsAuthStatusHandlers["models.authLogout"];
+const handler = expectDefined(
+  modelsAuthStatusHandlers["models.authStatus"],
+  'modelsAuthStatusHandlers["models.authStatus"] test invariant',
+);
+const logoutHandler = expectDefined(
+  modelsAuthStatusHandlers["models.authLogout"],
+  'modelsAuthStatusHandlers["models.authLogout"] test invariant',
+);
 
 function createActiveRun(providerId: string, authProviderId?: string) {
   return {
@@ -222,7 +230,7 @@ function resetAuthStatusMocks(): void {
     providers: [],
   });
   mocks.loadProviderUsageSummary.mockResolvedValue(emptyUsageSummary());
-  mocks.refreshActiveSecretsRuntimeSnapshot.mockResolvedValue(false);
+  mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValue(false);
 }
 
 function firstExternalCliAuthOption() {
@@ -309,10 +317,21 @@ describe("models.authStatus", () => {
     expect(error).toBeUndefined();
     const result = payload as ModelAuthStatusResult;
     expect(result.providers).toHaveLength(1);
-    expect(result.providers[0].provider).toBe("openai");
-    expect(result.providers[0].status).toBe("ok");
-    expect(result.providers[0].expiry?.at).toBe(1_000_000);
-    expect(result.providers[0].profiles[0].type).toBe("oauth");
+    expect(expectDefined(result.providers[0], "result.providers[0] test invariant").provider).toBe(
+      "openai",
+    );
+    expect(expectDefined(result.providers[0], "result.providers[0] test invariant").status).toBe(
+      "ok",
+    );
+    expect(
+      expectDefined(result.providers[0], "result.providers[0] test invariant").expiry?.at,
+    ).toBe(1_000_000);
+    expect(
+      expectDefined(
+        expectDefined(result.providers[0], "result.providers[0] test invariant").profiles[0],
+        'expectDefined(result.providers[0], "result.providers[0] test invarian... test invariant',
+      ).type,
+    ).toBe("oauth");
   });
 
   it("forwards unresolved auth reason codes to status clients", async () => {
@@ -368,7 +387,7 @@ describe("models.authStatus", () => {
 
     await handler(createOptions({ refresh: true }));
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
-    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearRuntimeAuthProfileStoreSnapshots).toHaveBeenCalledTimes(1);
     const clearOrder = mocks.clearRuntimeAuthProfileStoreSnapshots.mock.invocationCallOrder[0];
     const refreshReadOrder = mocks.ensureAuthProfileStore.mock.invocationCallOrder.at(-1);
@@ -376,21 +395,23 @@ describe("models.authStatus", () => {
   });
 
   it("keeps refreshed secrets runtime snapshots on explicit refresh", async () => {
-    mocks.refreshActiveSecretsRuntimeSnapshot.mockResolvedValueOnce(true);
+    mocks.refreshActiveProviderAuthRuntimeSnapshot.mockResolvedValueOnce(true);
 
     await handler(createOptions({ refresh: true }));
 
-    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearRuntimeAuthProfileStoreSnapshots).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
   });
 
   it("keeps last-good secrets runtime snapshots when explicit refresh fails", async () => {
-    mocks.refreshActiveSecretsRuntimeSnapshot.mockRejectedValueOnce(new Error("refresh failed"));
+    mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValueOnce(
+      new Error("refresh failed"),
+    );
 
     await handler(createOptions({ refresh: true }));
 
-    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearRuntimeAuthProfileStoreSnapshots).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
   });
@@ -398,6 +419,40 @@ describe("models.authStatus", () => {
   it("invalidateModelAuthStatusCache() clears the cached response", async () => {
     await handler(createOptions());
     invalidateModelAuthStatusCache();
+    await handler(createOptions());
+    expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache status captured before a concurrent logout", async () => {
+    let releaseUsage: (() => void) | undefined;
+    const usageBlocked = new Promise<void>((resolve) => {
+      releaseUsage = resolve;
+    });
+    const oauthProfile = {
+      profileId: "openrouter:default",
+      provider: "openrouter",
+      type: "oauth",
+      status: "ok",
+      source: "store",
+      label: "openrouter:default",
+    } satisfies AuthHealthSummary["profiles"][number];
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [oauthProfile],
+      providers: [{ provider: "openrouter", status: "ok", profiles: [oauthProfile] }],
+    });
+    mocks.loadProviderUsageSummary.mockImplementationOnce(async () => {
+      await usageBlocked;
+      return emptyUsageSummary();
+    });
+
+    const inFlightStatus = handler(createOptions());
+    await vi.waitFor(() => expect(mocks.loadProviderUsageSummary).toHaveBeenCalledOnce());
+    await logoutHandler(createLogoutOptions({ provider: "openrouter" }));
+    releaseUsage?.();
+    await inFlightStatus;
+
     await handler(createOptions());
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(2);
   });
@@ -551,7 +606,9 @@ describe("models.authStatus", () => {
     expect(ok).toBe(true);
     const result = payload as ModelAuthStatusResult;
     expect(result.providers).toHaveLength(1);
-    expect(result.providers[0].usage).toBeUndefined();
+    expect(
+      expectDefined(result.providers[0], "result.providers[0] test invariant").usage,
+    ).toBeUndefined();
   });
 
   it("does not leak secret-looking fields from upstream profile data", async () => {
@@ -798,7 +855,7 @@ describe("models.authLogout", () => {
       provider: "openrouter",
       agentDir: "/tmp/agent",
     });
-    expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.refreshActiveProviderAuthRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearCurrentProviderAuthState).toHaveBeenCalled();
     expect(mocks.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith({});
     const [ok, payload] = firstRespondCall(opts) ?? [];
@@ -921,7 +978,9 @@ describe("models.authLogout", () => {
   it("does not abort runs when runtime auth snapshot refresh fails", async () => {
     await expectLogoutFailureDoesNotAbortRun({
       arrangeFailure: () => {
-        mocks.refreshActiveSecretsRuntimeSnapshot.mockRejectedValue(new Error("refresh failed"));
+        mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValue(
+          new Error("refresh failed"),
+        );
       },
       message: "refresh failed",
     });

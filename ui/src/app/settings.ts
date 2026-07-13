@@ -109,8 +109,7 @@ export type UiSettings = {
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" section
-  sidebarMoreExpanded: boolean; // Whether the sidebar "More" section is expanded
+  sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" menu row
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
   locale?: string;
@@ -342,13 +341,34 @@ function deriveDefaultGatewayUrl(): { pageUrl: string; effectiveUrl: string } {
   return { pageUrl, effectiveUrl };
 }
 
+/**
+ * Standalone documents are owned by the Gateway that served their URL. Do not
+ * let the full app's persisted remote selection retarget a security decision.
+ * Native auth and explicit URL overrides are applied after this default.
+ */
+export function resolvePageGatewaySettings(settings: UiSettings): UiSettings {
+  const { effectiveUrl } = deriveDefaultGatewayUrl();
+  if (
+    normalizeGatewayTokenScope(settings.gatewayUrl) === normalizeGatewayTokenScope(effectiveUrl)
+  ) {
+    return settings;
+  }
+  const session = loadGatewaySessionSelection(effectiveUrl);
+  return {
+    ...settings,
+    gatewayUrl: effectiveUrl,
+    token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, effectiveUrl, settings.token),
+    sessionKey: session.sessionKey,
+    lastActiveSessionKey: session.lastActiveSessionKey,
+  };
+}
+
 function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
 }
 
 type PersistedSettingsSource = {
   gatewayUrl: string;
-  legacy: boolean;
   parsed: PersistedUiSettings;
 };
 
@@ -363,42 +383,17 @@ function parsePersistedSettings(raw: string | null): PersistedUiSettings | null 
   }
 }
 
-function settingsMatchGatewayTarget(
-  parsed: PersistedUiSettings,
-  targetUrl: string,
-  aliases: readonly string[] = [],
-): boolean {
+function settingsMatchGatewayTarget(parsed: PersistedUiSettings, targetUrl: string): boolean {
   const storedUrl = normalizeOptionalString(parsed.gatewayUrl);
   if (!storedUrl) {
     return false;
   }
-  const storedScope = normalizeGatewayTokenScope(storedUrl);
-  return [targetUrl, ...aliases].some(
-    (candidate) => normalizeGatewayTokenScope(candidate) === storedScope,
-  );
-}
-
-function isClaimableLegacyGateway(storedUrl: string | undefined, pageUrl: string): boolean {
-  if (!storedUrl) {
-    return false;
-  }
-  try {
-    const stored = new URL(normalizeGatewayTokenScope(storedUrl));
-    const page = new URL(normalizeGatewayTokenScope(pageUrl));
-    return stored.host !== page.host || page.pathname === "/";
-  } catch {
-    return false;
-  }
+  return normalizeGatewayTokenScope(storedUrl) === normalizeGatewayTokenScope(targetUrl);
 }
 
 function readSettingsForGateway(
   storage: Storage | null,
   targetUrl: string,
-  options: {
-    includeLegacy?: boolean;
-    legacyAliases?: readonly string[];
-    remoteLegacyPageUrl?: string;
-  } = {},
 ): PersistedSettingsSource | null {
   const scoped = parsePersistedSettings(storage?.getItem(settingsKeyForGateway(targetUrl)) ?? null);
   if (
@@ -407,30 +402,8 @@ function readSettingsForGateway(
   ) {
     return {
       gatewayUrl: normalizeOptionalString(scoped.gatewayUrl) ?? targetUrl,
-      legacy: false,
       parsed: scoped,
     };
-  }
-  if (!options.includeLegacy) {
-    return null;
-  }
-  for (const key of [`${SETTINGS_KEY_PREFIX}default`, LEGACY_SETTINGS_KEY]) {
-    const parsed = parsePersistedSettings(storage?.getItem(key) ?? null);
-    if (!parsed) {
-      continue;
-    }
-    const storedUrl = normalizeOptionalString(parsed.gatewayUrl);
-    const matchesTarget = settingsMatchGatewayTarget(parsed, targetUrl, options.legacyAliases);
-    const isRemote = options.remoteLegacyPageUrl
-      ? isClaimableLegacyGateway(storedUrl, options.remoteLegacyPageUrl)
-      : false;
-    if (matchesTarget || isRemote) {
-      return {
-        gatewayUrl: storedUrl ?? targetUrl,
-        legacy: true,
-        parsed,
-      };
-    }
   }
   return null;
 }
@@ -471,7 +444,7 @@ export function loadGatewaySessionSelection(gatewayUrl: string): ScopedSessionSe
   const fallback = { sessionKey: "main", lastActiveSessionKey: "main" };
   try {
     const storage = getSafeLocalStorage();
-    const source = readSettingsForGateway(storage, gatewayUrl, { includeLegacy: true });
+    const source = readSettingsForGateway(storage, gatewayUrl);
     return source ? resolveScopedSessionSelection(gatewayUrl, source.parsed, fallback) : fallback;
   } catch {
     return fallback;
@@ -507,7 +480,7 @@ export function resolveGatewayTokenForUrlEdit(
   return loadSessionToken(nextGatewayUrl);
 }
 
-function persistSessionToken(gatewayUrl: string, token: string) {
+export function persistSessionToken(gatewayUrl: string, token: string) {
   try {
     const storage = getSessionStorage();
     if (!storage) {
@@ -546,7 +519,6 @@ export function loadSettings(): UiSettings {
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
     sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
-    sidebarMoreExpanded: false,
     textScale: 100,
   };
 
@@ -557,13 +529,7 @@ export function loadSettings(): UiSettings {
     const selected = selectedGatewayUrl
       ? readSettingsForGateway(storage, selectedGatewayUrl)
       : null;
-    // Legacy state has no page owner. Only the current page target or a deliberate
-    // cross-origin remote can claim it; ambiguous same-origin sibling paths cannot.
-    const defaultSource = readSettingsForGateway(storage, defaultUrl, {
-      includeLegacy: true,
-      legacyAliases: [pageDerivedUrl],
-      remoteLegacyPageUrl: pageDerivedUrl,
-    });
+    const defaultSource = readSettingsForGateway(storage, defaultUrl);
     const source = selected ?? defaultSource;
     if (!source) {
       return defaults;
@@ -618,17 +584,15 @@ export function loadSettings(): UiSettings {
           : defaults.navWidth,
       sidebarPinnedRoutes:
         normalizeSidebarPinnedRoutes(parsed.sidebarPinnedRoutes) ?? defaults.sidebarPinnedRoutes,
-      sidebarMoreExpanded:
-        typeof parsed.sidebarMoreExpanded === "boolean"
-          ? parsed.sidebarMoreExpanded
-          : defaults.sidebarMoreExpanded,
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
       ...(parsed.lobsterPetVisits === false ? { lobsterPetVisits: false } : {}),
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
     };
-    if (source.legacy || "token" in parsed) {
+    // Scoped blobs from builds that persisted tokens durably get rewritten once
+    // so the plaintext token leaves localStorage.
+    if ("token" in parsed) {
       persistSettings(settings, { selectGateway: true });
     }
     return settings;
@@ -641,9 +605,14 @@ export function saveSettings(next: UiSettings) {
   persistSettings(next);
 }
 
-export function patchSettings(patch: Partial<UiSettings>): UiSettings {
+export function patchSettings(
+  patch: Partial<UiSettings>,
+  options: { selectGateway?: boolean } = {},
+): UiSettings {
   const next = { ...loadSettings(), ...patch };
-  persistSettings(next, { selectGateway: patch.gatewayUrl !== undefined });
+  persistSettings(next, {
+    selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
+  });
   return next;
 }
 
@@ -667,7 +636,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
-    const source = readSettingsForGateway(storage, next.gatewayUrl, { includeLegacy: true });
+    const source = readSettingsForGateway(storage, next.gatewayUrl);
     if (source) {
       const parsed = source.parsed;
       if (parsed.sessionsByGateway && typeof parsed.sessionsByGateway === "object") {
@@ -710,7 +679,6 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
     sidebarPinnedRoutes: next.sidebarPinnedRoutes,
-    sidebarMoreExpanded: next.sidebarMoreExpanded,
     textScale: normalizeTextScale(next.textScale),
     ...(next.customTheme ? { customTheme: next.customTheme } : {}),
     sessionsByGateway,

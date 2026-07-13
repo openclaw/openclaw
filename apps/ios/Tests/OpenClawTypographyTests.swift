@@ -163,6 +163,9 @@ struct OpenClawTypographyTests {
         let settingsSupport = try String(
             contentsOf: Self.sourceURL("Design/SettingsProTabSupport.swift"),
             encoding: .utf8)
+        let approvalDialog = try String(
+            contentsOf: Self.sourceURL("Gateway/ExecApprovalPromptDialog.swift"),
+            encoding: .utf8)
         let privacyAccess = try String(
             contentsOf: Self.sourceURL("Settings/PrivacyAccessSectionView.swift"),
             encoding: .utf8)
@@ -198,8 +201,8 @@ struct OpenClawTypographyTests {
             encoding: .utf8)
 
         #expect(proComponents.contains(".font(OpenClawType.subheadSemiBold)"))
-        #expect(proComponents.contains("Text(primaryActionTitle)"))
-        #expect(proComponents.contains("Text(secondaryActionTitle)"))
+        #expect(proComponents.contains("primaryActionTitle.text"))
+        #expect(proComponents.contains("secondaryActionTitle.text"))
 
         #expect(chatTab.contains("Text(\"Export Transcript\")"))
         #expect(chatTab.contains(".font(OpenClawType.body)"))
@@ -254,13 +257,22 @@ struct OpenClawTypographyTests {
         #expect(onboardingSecureOption.contains(".font(OpenClawType.captionSemiBold)"))
 
         #expect(settingsSections.contains(".font(OpenClawType.body)"))
+        #expect(settingsSections.contains("Text(warningText)"))
+        #expect(settingsSections.contains(".font(OpenClawType.caption)"))
+        #expect(approvalDialog.contains("Text(warningText)"))
+        #expect(approvalDialog.contains(".font(OpenClawType.footnote)"))
+        #expect(approvalDialog.contains("ScrollView {"))
+        #expect(approvalDialog.contains("self.actionFooter"))
+        #expect(approvalDialog.contains("exec-approval-review-scroll"))
+        #expect(approvalDialog.contains("exec-approval-actions"))
+        #expect(approvalDialog.contains("ViewThatFits(in: .horizontal)"))
         #expect(settingsSections.contains("self.settingsToggle(\"Show Talk Control\", isOn: self.$talkButtonEnabled)"))
         #expect(settingsSections.contains("OpenClawToggleIndicator(isOn: isOn.wrappedValue)"))
         #expect(settingsSections.contains("TextField(\"Default Share Instruction\""))
         #expect(settingsSections.contains(".font(OpenClawType.subhead)"))
         #expect(settingsSections.contains("private struct AppearanceSettingsScreen"))
         #expect(settingsSections.contains("Section(\"Gateway\")"))
-        #expect(settingsSections.contains("SettingsDetailRow(\"Address\", value: self.gatewayAddress)"))
+        #expect(settingsSections.contains("SettingsDetailRow(\"Address\", value: .verbatim(self.gatewayAddress))"))
         #expect(settingsSections.contains("func gatewayActionButton"))
         #expect(settingsSections.contains("func settingsToggle"))
         #expect(settingsSections.contains(".font(OpenClawType.subheadSemiBold)"))
@@ -277,7 +289,7 @@ struct OpenClawTypographyTests {
             settingsSections,
             from: "func gatewaySecureField",
             to: "    var voiceFeatureCard")
-        #expect(gatewaySecureField.contains(".accessibilityLabel(placeholder)"))
+        #expect(gatewaySecureField.contains(".accessibilityLabel(Text(placeholder))"))
         #expect(gatewaySecureField.contains(".accessibilityHidden(true)"))
         #expect(gatewaySecureField.contains(".textInputAutocapitalization(.never)"))
         #expect(gatewaySecureField.contains(".autocorrectionDisabled()"))
@@ -457,7 +469,10 @@ struct OpenClawTypographyTests {
     private static func hasAllowedBrandedFontParameter(_ window: String, line: String, in url: URL) -> Bool {
         switch self.relativePath(url) {
         case "apps/ios/Sources/Design/OpenClawProComponents.swift":
-            window.contains(".font(self.titleFont)") || window.contains(".font(self.subtitleFont)")
+            line.contains("Text(key)") ||
+                line.contains("Text(verbatim: value)") ||
+                window.contains(".font(self.titleFont)") ||
+                window.contains(".font(self.subtitleFont)")
         case "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift":
             // Qualified values are composed here, then styled at the prose render boundary.
             line.contains("SwiftUI.Text(") || window.contains(".font(self.font)")

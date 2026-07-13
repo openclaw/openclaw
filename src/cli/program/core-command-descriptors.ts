@@ -34,7 +34,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "backup",
-    description: "Create and verify local backup archives for OpenClaw state",
+    description: "Create and verify backup archives and SQLite snapshots",
     hasSubcommands: true,
   },
   {
@@ -100,7 +100,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "audit",
-    description: "Inspect metadata-only agent run and tool action records",
+    description: "Inspect metadata-only run, tool, and message lifecycle records",
     hasSubcommands: false,
   },
   {

@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { isNamedProfile } from "../config/paths.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -417,7 +418,7 @@ function resolveLegacyExecApprovalsPath(): string {
 }
 
 function hasUnmigratedLegacyExecApprovals(filePath: string): boolean {
-  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+  if (!process.env.OPENCLAW_STATE_DIR?.trim() || isNamedProfile()) {
     return false;
   }
   const legacyPath = resolveLegacyExecApprovalsPath();
@@ -1105,6 +1106,18 @@ export function loadExecApprovals(): ExecApprovalsFile {
   } catch {
     // A busy, malformed, or unreadable approvals store must never restore the
     // permissive defaults while another process is revoking access.
+    return createFailClosedExecApprovalsFallback();
+  }
+}
+
+export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
+  try {
+    return await withExecApprovalsReadLock(resolveExecApprovalsPath(), async () =>
+      loadExecApprovalsUnlocked(),
+    );
+  } catch {
+    // Match the synchronous reader's fail-closed contract while allowing
+    // same-process async writers to finish instead of rejecting valid state.
     return createFailClosedExecApprovalsFallback();
   }
 }

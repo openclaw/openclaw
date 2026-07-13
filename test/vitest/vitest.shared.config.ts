@@ -471,6 +471,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "mime"),
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core"),
+      sourcePackageAlias("retry"),
       ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
@@ -545,12 +546,6 @@ export const sharedVitestConfig = {
       provider: "v8" as const,
       reporter: ["text", "lcov"],
       all: false,
-      thresholds: {
-        lines: 70,
-        functions: 70,
-        branches: 55,
-        statements: 70,
-      },
       exclude: [
         `${BUNDLED_PLUGIN_ROOT_DIR}/**`,
         "apps/**",

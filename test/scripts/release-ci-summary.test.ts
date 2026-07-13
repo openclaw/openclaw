@@ -1,9 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   expectedChildDispatches,
@@ -33,6 +34,7 @@ import {
 
 const SCRIPT = "scripts/release-ci-summary.mjs";
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
+const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
 
 function crc32(input: Buffer): number {
   let crc = 0xffffffff;
@@ -136,7 +138,7 @@ function rawManifest({
   workflowRefType,
   workflowSha,
 }: {
-  evidenceReuse?: Record<string, unknown>;
+  evidenceReuse?: unknown;
   rerunGroup?: string;
   runId?: string;
   targetSha?: string;
@@ -144,7 +146,25 @@ function rawManifest({
   workflowFullRef?: string;
   workflowRefType?: "branch" | "tag";
   workflowSha?: string;
-}) {
+}): {
+  childRuns: Record<string, string | { blocking: boolean; conclusion: string; runId: string }>;
+  controls: Record<string, unknown>;
+  evidenceReuse?: unknown;
+  releaseProfile: string;
+  rerunGroup: string;
+  runAttempt: string;
+  runId: string;
+  runReleaseSoak: string;
+  targetRef?: string;
+  targetSha: string;
+  validationInputs: Record<string, string>;
+  version: 2 | 3;
+  workflowFullRef?: string;
+  workflowName: string;
+  workflowRef: string;
+  workflowRefType?: "branch" | "tag";
+  workflowSha?: string;
+} {
   return {
     childRuns: {
       normalCi: "101",
@@ -173,6 +193,7 @@ function rawManifest({
       packageAcceptancePackageSpec: "",
       provider: "openai",
       releasePackageSpec: "",
+      targetContextRef: "",
     },
     version,
     workflowName: "Full Release Validation",
@@ -311,10 +332,10 @@ function trustedMainPackageFixture({
       return [parentJob];
     },
     getRun(requestedRunId: string) {
-      if (String(requestedRunId) === runId) {
+      if (requestedRunId === runId) {
         return parentRun;
       }
-      if (String(requestedRunId) === childRunId) {
+      if (requestedRunId === childRunId) {
         return childRun;
       }
       throw new Error(`unexpected run: ${requestedRunId}`);
@@ -524,50 +545,53 @@ describe("release CI summary child correlation", () => {
     );
   });
 
-  it("hashes and safely streams one bounded manifest entry from the exact artifact ZIP", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-manifest-artifact-"));
-    try {
-      const archivePath = join(root, "manifest.zip");
-      const manifest = { runAttempt: 1, runId: "29071366025" };
-      const archive = makeStoredZip({
-        [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
-      });
-      writeFileSync(archivePath, archive);
-      expect(readManifestArtifactArchive(archivePath, artifactDigest(archive))).toEqual(manifest);
-      expect(() => readManifestArtifactArchive(archivePath, `sha256:${"0".repeat(64)}`)).toThrow(
-        "artifact digest mismatch",
-      );
+  it.skipIf(!hasUnzip)(
+    "hashes and safely streams one bounded manifest entry from the exact artifact ZIP",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "release-manifest-artifact-"));
+      try {
+        const archivePath = join(root, "manifest.zip");
+        const manifest = { runAttempt: 1, runId: "29071366025" };
+        const archive = makeStoredZip({
+          [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
+        });
+        writeFileSync(archivePath, archive);
+        expect(readManifestArtifactArchive(archivePath, artifactDigest(archive))).toEqual(manifest);
+        expect(() => readManifestArtifactArchive(archivePath, `sha256:${"0".repeat(64)}`)).toThrow(
+          "artifact digest mismatch",
+        );
 
-      const extraEntryArchive = makeStoredZip({
-        [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
-        "unexpected.json": "{}",
-      });
-      writeFileSync(archivePath, extraEntryArchive);
-      expect(() =>
-        readManifestArtifactArchive(archivePath, artifactDigest(extraEntryArchive)),
-      ).toThrow(`must contain only ${MANIFEST_ARTIFACT_ENTRY}`);
+        const extraEntryArchive = makeStoredZip({
+          [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(manifest),
+          "unexpected.json": "{}",
+        });
+        writeFileSync(archivePath, extraEntryArchive);
+        expect(() =>
+          readManifestArtifactArchive(archivePath, artifactDigest(extraEntryArchive)),
+        ).toThrow(`must contain only ${MANIFEST_ARTIFACT_ENTRY}`);
 
-      const oversizedManifestArchive = makeStoredZip({
-        [MANIFEST_ARTIFACT_ENTRY]: "x".repeat(128 * 1024 + 1),
-      });
-      writeFileSync(archivePath, oversizedManifestArchive);
-      expect(() =>
-        readManifestArtifactArchive(archivePath, artifactDigest(oversizedManifestArchive)),
-      ).toThrow("artifact entry size is invalid");
+        const oversizedManifestArchive = makeStoredZip({
+          [MANIFEST_ARTIFACT_ENTRY]: "x".repeat(128 * 1024 + 1),
+        });
+        writeFileSync(archivePath, oversizedManifestArchive);
+        expect(() =>
+          readManifestArtifactArchive(archivePath, artifactDigest(oversizedManifestArchive)),
+        ).toThrow("artifact entry size is invalid");
 
-      const oversizedArchive = Buffer.alloc(256 * 1024 + 1);
-      writeFileSync(archivePath, oversizedArchive);
-      expect(() =>
-        readManifestArtifactArchive(archivePath, artifactDigest(oversizedArchive)),
-      ).toThrow("artifact compressed size is invalid");
+        const oversizedArchive = Buffer.alloc(256 * 1024 + 1);
+        writeFileSync(archivePath, oversizedArchive);
+        expect(() =>
+          readManifestArtifactArchive(archivePath, artifactDigest(oversizedArchive)),
+        ).toThrow("artifact compressed size is invalid");
 
-      const source = readFileSync(SCRIPT, "utf8");
-      expect(source).toContain('execFileSync("unzip", ["-p", archivePath');
-      expect(source).not.toContain('execFileSync("unzip", ["-q", archivePath, "-d"');
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        const source = readFileSync(SCRIPT, "utf8");
+        expect(source).toContain('execFileSync("unzip", ["-p", archivePath');
+        expect(source).not.toContain('execFileSync("unzip", ["-q", archivePath, "-d"');
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("bridges only attempt-one manifest v2 artifacts with the legacy stable name", () => {
     const legacyV2 = trustedMainPackageFixture();
@@ -1148,17 +1172,17 @@ describe("release CI summary child correlation", () => {
       id: 999,
     };
     const pages = Array.from({ length: 10 }, (_, pageIndex) =>
-      Array.from({ length: 100 }, (_, runIndex) => ({
+      Array.from({ length: 100 }, (_unused, runIndex) => ({
         display_title: `decoy-${pageIndex}-${runIndex}`,
         event: "workflow_dispatch",
         head_branch: "main",
         id: pageIndex * 100 + runIndex,
       })),
     );
-    pages[9][99] = exact;
+    expectDefined(pages[9], "last child run page")[99] = exact;
 
     expect(selectExactChildRunFromPages(pages, expected, "main")).toBe(exact);
-    pages[0][0] = { ...exact, id: 1001 };
+    expectDefined(pages[0], "first child run page")[0] = { ...exact, id: 1001 };
     expect(() => selectExactChildRunFromPages(pages, expected, "main")).toThrow(
       "multiple child runs have exact dispatch title and branch",
     );
@@ -1469,7 +1493,10 @@ describe("release CI summary child correlation", () => {
   });
 
   it("validates manifest child workflow, dispatch tuple, branch, and attempt", () => {
-    const child = expectedChildDispatches("29090000000", 3, "main")[0];
+    const child = expectDefined(
+      expectedChildDispatches("29090000000", 3, "main")[0],
+      "expected CI child dispatch",
+    );
     const parentManifest = {
       runAttempt: 3,
       runId: "29090000000",

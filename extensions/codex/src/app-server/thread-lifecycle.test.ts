@@ -20,12 +20,15 @@ import {
 } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
 import {
+  buildCodexRingZeroThreadConfigPatch,
   buildDeveloperInstructions,
   buildTurnCollaborationMode,
   buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
+  areCodexDynamicToolFingerprintsCompatible,
   codexDynamicToolsFingerprint,
+  codexLegacyDynamicToolsFingerprint,
   formatCodexThreadLifecycleTimingSummary,
   resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
@@ -33,6 +36,106 @@ import {
   startOrResumeThread as startOrResumeThreadImpl,
   type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
+
+describe("Codex ring-zero thread config", () => {
+  it("disables configurable native tool sources only for the active exact Crestodian scope", () => {
+    expect(
+      buildCodexRingZeroThreadConfigPatch({ toolsAllow: ["crestodian"] }, true, [
+        "zeta",
+        "arbitrary.server",
+        "zeta",
+      ]),
+    ).toMatchObject({
+      "features.apps": false,
+      "features.current_time_reminder": false,
+      "features.deferred_executor": false,
+      "features.enable_fanout": false,
+      "features.goals": false,
+      "features.hooks": false,
+      "features.image_generation": false,
+      "features.memories": false,
+      "features.multi_agent": false,
+      "features.multi_agent_v2": false,
+      "features.plugins": false,
+      "features.standalone_web_search": false,
+      "features.token_budget": false,
+      "orchestrator.mcp.enabled": false,
+      "orchestrator.skills.enabled": false,
+      "tools.experimental_request_user_input.enabled": false,
+      hooks: {
+        PreToolUse: [],
+        PermissionRequest: [],
+        PostToolUse: [],
+        PreCompact: [],
+        PostCompact: [],
+        SessionStart: [],
+        UserPromptSubmit: [],
+        SubagentStart: [],
+        SubagentStop: [],
+        Stop: [],
+      },
+      project_doc_max_bytes: 0,
+      notify: [],
+      web_search: "disabled",
+      mcp_servers: {
+        "arbitrary.server": { enabled: false },
+        zeta: { enabled: false },
+      },
+    });
+    expect(
+      buildCodexRingZeroThreadConfigPatch({ toolsAllow: ["crestodian"] }, false),
+    ).toBeUndefined();
+    expect(
+      buildCodexRingZeroThreadConfigPatch({ toolsAllow: ["crestodian", "read"] }, true),
+    ).toBeUndefined();
+  });
+
+  it("applies the restriction to both thread start and resume", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.toolsAllow = ["crestodian"];
+    const appServer = createAppServerOptions() as never;
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostCrestodianActive: true,
+      nativeCodeModeEnabled: false,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      hostCrestodianActive: true,
+      nativeCodeModeEnabled: false,
+      threadId: "thread-1",
+    });
+
+    expect(start.environments).toEqual([]);
+    expect(start.baseInstructions).toBe("");
+    for (const config of [start.config, resume.config]) {
+      expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
+      expect(config?.["features.multi_agent"]).toBe(false);
+      expect(config?.["features.multi_agent_v2"]).toBe(false);
+      expect(config?.["features.goals"]).toBe(false);
+      expect(config?.["orchestrator.mcp.enabled"]).toBe(false);
+      expect(config?.["orchestrator.skills.enabled"]).toBe(false);
+      expect(config?.project_doc_max_bytes).toBe(0);
+      expect(config?.hooks).toMatchObject({
+        PreToolUse: [],
+        SessionStart: [],
+        UserPromptSubmit: [],
+        Stop: [],
+      });
+    }
+
+    const normal = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostCrestodianActive: false,
+    });
+    expect(normal.baseInstructions).toBeUndefined();
+  });
+});
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -408,10 +511,10 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain("Route durable skill work");
-    expect(instructions).toContain("through the `skill_workshop` tool");
-    expect(instructions).toContain("Generated skills are pending proposals.");
-    expect(instructions).toContain("only when the user explicitly asks");
+    expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
+    expect(instructions).toContain("`skill_workshop`");
+    expect(instructions).toContain("Generated = pending proposal");
+    expect(instructions).toContain("only explicit user ask");
   });
 
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {
@@ -427,6 +530,25 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
+  });
+
+  it("instructs Codex to mark only completed message-tool-only source replies final", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.sourceReplyDeliveryMode = "message_tool_only";
+
+    const instructions = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+
+    expect(instructions).toContain("For progress, set `final=false`.");
+    expect(instructions).toContain("set `final=true`");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
@@ -464,6 +586,36 @@ describe("Codex app-server native code mode config", () => {
     ]);
 
     expect(searchableFingerprint).not.toBe(directFingerprint);
+  });
+
+  it("keeps hashed dynamic tool fingerprints compatible with legacy JSON bindings", () => {
+    const tools = [
+      {
+        type: "function" as const,
+        name: "message",
+        description: "Send a visible message",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string" },
+          },
+          required: ["text"],
+        },
+      },
+    ];
+    const hashed = codexDynamicToolsFingerprint(tools);
+    const legacy = codexLegacyDynamicToolsFingerprint(tools);
+
+    expect(hashed).toMatch(/^sha256:/);
+    expect(legacy).toContain('"name":"message"');
+    expect(
+      areCodexDynamicToolFingerprintsCompatible({
+        previous: legacy,
+        next: hashed,
+        nextLegacy: legacy,
+      }),
+    ).toBe(true);
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {
@@ -1135,7 +1287,7 @@ describe("Codex app-server turn params", () => {
       "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "Use heartbeats to create useful proactive progress",
+      "Heartbeat = useful proactive progress",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",

@@ -1,12 +1,14 @@
+import { setTimeout as sleep } from "node:timers/promises";
 /**
  * Browser agent action route registration and existing-session execution.
  *
  * Dispatches normalized actions to either Playwright-backed OpenClaw browser
  * control or Chrome MCP existing-session operations with navigation guards.
  */
-import { setTimeout as sleep } from "node:timers/promises";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  ChromeMcpDocumentUnavailableError,
   clickChromeMcpElement,
   clickChromeMcpCoords,
   dragChromeMcpElement,
@@ -16,6 +18,7 @@ import {
   hoverChromeMcpElement,
   pressChromeMcpKey,
   resizeChromeMcpPage,
+  withChromeMcpDocument,
   type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
@@ -39,6 +42,7 @@ import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
+  browserNavigationPolicyForProfile,
   readBody,
   requirePwAi,
   resolveTargetIdFromBody,
@@ -77,14 +81,16 @@ async function readExistingSessionLocationHref(params: ExistingSessionOperation)
 }
 
 async function assertExistingSessionPostInteractionNavigationAllowed(
-  params: ExistingSessionOperation & {
-    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
-    listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
-    initialTabTargetIds: ReadonlySet<string>;
-  },
+  params: ExistingSessionOperation &
+    BrowserNavigationPolicyOptions & {
+      listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
+      initialTabTargetIds: ReadonlySet<string>;
+    },
 ): Promise<void> {
-  const ssrfPolicyOpts = withBrowserNavigationPolicy(params.ssrfPolicy);
-  if (!ssrfPolicyOpts.ssrfPolicy) {
+  const navigationPolicy = withBrowserNavigationPolicy(params.ssrfPolicy, {
+    browserProxyMode: params.browserProxyMode,
+  });
+  if (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) {
     return;
   }
   const listTabs = params.listTabs;
@@ -98,7 +104,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
       }
       await assertBrowserNavigationResultAllowed({
         url: tab.url,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
     }
   };
@@ -119,7 +125,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
     }
     await assertBrowserNavigationResultAllowed({
       url: currentUrl,
-      ...ssrfPolicyOpts,
+      ...navigationPolicy,
     });
     if (currentUrl === lastObservedUrl) {
       sawStableAllowedUrl = true;
@@ -147,7 +153,7 @@ async function assertExistingSessionPostInteractionNavigationAllowed(
       const followUpUrl = await readExistingSessionLocationHref(params);
       await assertBrowserNavigationResultAllowed({
         url: followUpUrl,
-        ...ssrfPolicyOpts,
+        ...navigationPolicy,
       });
       if (followUpUrl === lastObservedUrl) {
         await assertNewTabsAllowed();
@@ -208,12 +214,17 @@ function buildExistingSessionWaitPredicate(params: {
     checks.push(`document.readyState === "complete"`);
   }
   if (params.fn) {
-    checks.push(`Boolean(await (${params.fn})())`);
+    // `fn` is admitted only by the same evaluateEnabled gate as evaluate.
+    // Preserve its async semantics; document binding guards scheduler rebinding.
+    const source = normalizeBrowserEvaluateFunctionSource(params.fn);
+    checks.push(`Boolean(await (${source})())`);
   }
   if (checks.length === 0) {
     return null;
   }
-  return checks.length === 1 ? checks[0] : checks.map((check) => `(${check})`).join(" && ");
+  return checks.length === 1
+    ? expectDefined(checks.at(0), "single existing-session condition")
+    : checks.map((check) => `(${check})`).join(" && ");
 }
 
 async function waitForExistingSessionCondition(
@@ -225,6 +236,8 @@ async function waitForExistingSessionCondition(
     url?: string;
     loadState?: "load" | "domcontentloaded" | "networkidle";
     fn?: string;
+    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+    browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   },
 ): Promise<void> {
   if (params.timeMs && params.timeMs > 0) {
@@ -237,24 +250,74 @@ async function waitForExistingSessionCondition(
   const timeoutMs = Math.max(250, params.timeoutMs ?? 10_000);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    let ready = true;
-    if (predicate) {
-      ready = Boolean(
-        await evaluateChromeMcpScript({
-          ...params,
-          fn: `async () => ${predicate}`,
-        }),
-      );
-    }
-    if (ready && params.url) {
-      const currentUrl = await evaluateChromeMcpScript({
-        ...params,
-        fn: "() => window.location.href",
+    try {
+      const ready = await withChromeMcpDocument(params, async (document) => {
+        const readAllowedUrl = async () => {
+          const url = await document.evaluate(`(root) => {
+            const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
+            return boundDocument === globalThis.document ? globalThis.location.href : null;
+          }`);
+          if (typeof url !== "string" || !url.trim()) {
+            return null;
+          }
+          await assertBrowserNavigationResultAllowed({
+            url,
+            ...withBrowserNavigationPolicy(params.ssrfPolicy, {
+              browserProxyMode: params.browserProxyMode,
+            }),
+          });
+          return url;
+        };
+        const currentUrl = await readAllowedUrl();
+        if (!currentUrl) {
+          return false;
+        }
+        if (params.url && !matchBrowserUrlPattern(params.url, currentUrl)) {
+          return false;
+        }
+        if (!predicate) {
+          return true;
+        }
+        const outcome = await document.evaluate(`async (root) => {
+          const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
+          if (boundDocument !== globalThis.document) return { kind: "navigation" };
+          try {
+            return { kind: "result", ready: Boolean(await (${predicate})) };
+          } catch (error) {
+            const message = error && typeof error === "object" && "message" in error
+              ? String(error.message)
+              : String(error);
+            return { kind: "error", message };
+          }
+        }`);
+        if (!outcome || typeof outcome !== "object") {
+          throw new Error("Document-bound wait returned an invalid result");
+        }
+        if ("kind" in outcome && outcome.kind === "error") {
+          throw new Error(
+            "message" in outcome && typeof outcome.message === "string"
+              ? outcome.message
+              : "Wait predicate failed",
+          );
+        }
+        const predicateReady =
+          "kind" in outcome &&
+          outcome.kind === "result" &&
+          "ready" in outcome &&
+          outcome.ready === true;
+        if (!predicateReady || !params.url) {
+          return predicateReady;
+        }
+        const finalUrl = await readAllowedUrl();
+        return finalUrl !== null && matchBrowserUrlPattern(params.url, finalUrl);
       });
-      ready = typeof currentUrl === "string" && matchBrowserUrlPattern(params.url, currentUrl);
-    }
-    if (ready) {
-      return;
+      if (ready) {
+        return;
+      }
+    } catch (error) {
+      if (!(error instanceof ChromeMcpDocumentUnavailableError)) {
+        throw error;
+      }
     }
     await sleep(250, undefined, { signal: params.signal });
   }
@@ -332,7 +395,7 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
         ? EXISTING_SESSION_LIMITS.act.waitNetworkIdle
         : null;
     case "evaluate":
-      return action.timeoutMs !== undefined ? EXISTING_SESSION_LIMITS.act.evaluateTimeout : null;
+      return null;
     case "batch":
       return EXISTING_SESSION_LIMITS.act.batch;
     case "resize":
@@ -390,9 +453,9 @@ export function registerBrowserAgentActRoutes(
         ctx,
         targetId,
         enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
-          const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
+          const navigationPolicy = browserNavigationPolicyForProfile(ctx, profileCtx);
           const isExistingSession = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
           const requestedTimeoutMs =
             "timeoutMs" in action && typeof action.timeoutMs === "number"
@@ -400,10 +463,10 @@ export function registerBrowserAgentActRoutes(
               : undefined;
           const existingSessionCallOptions: ChromeMcpOperationOptions = {
             timeoutMs: requestedTimeoutMs ?? ctx.state().resolved.actionTimeoutMs,
-            signal: req.signal,
+            signal,
           };
           const hasNavigationResultPolicy = Boolean(
-            withBrowserNavigationPolicy(ssrfPolicy).ssrfPolicy,
+            navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode,
           );
           const jsonOk = async (
             extra?: Record<string, unknown>,
@@ -463,7 +526,7 @@ export function registerBrowserAgentActRoutes(
               : new Set<string>();
             const existingSessionNavigationGuard = {
               ...existingSessionTarget,
-              ssrfPolicy,
+              ...navigationPolicy,
               listTabs: () => profileCtx.listTabs(existingSessionCallOptions),
               initialTabTargetIds,
             };
@@ -539,7 +602,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "scrollIntoView":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
@@ -550,7 +613,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "drag":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
@@ -561,7 +624,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "select":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
@@ -572,7 +635,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "fill":
                 await runExistingSessionActionWithNavigationGuard({
                   execute: () =>
@@ -585,7 +648,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk();
+                return await jsonOk(undefined, { resolveCurrentTarget: true });
               case "resize":
                 await resizeChromeMcpPage({
                   ...existingSessionTarget,
@@ -594,15 +657,20 @@ export function registerBrowserAgentActRoutes(
                 });
                 return await jsonOk();
               case "wait":
-                await waitForExistingSessionCondition({
-                  ...existingSessionTarget,
-                  timeMs: action.timeMs,
-                  text: action.text,
-                  textGone: action.textGone,
-                  selector: action.selector,
-                  url: action.url,
-                  loadState: action.loadState,
-                  fn: action.fn,
+                await runExistingSessionActionWithNavigationGuard({
+                  execute: () =>
+                    waitForExistingSessionCondition({
+                      ...existingSessionTarget,
+                      timeMs: action.timeMs,
+                      text: action.text,
+                      textGone: action.textGone,
+                      selector: action.selector,
+                      url: action.url,
+                      loadState: action.loadState,
+                      fn: action.fn,
+                      ...navigationPolicy,
+                    }),
+                  guard: existingSessionNavigationGuard,
                 });
                 return await jsonOk();
               case "evaluate": {
@@ -618,7 +686,7 @@ export function registerBrowserAgentActRoutes(
                     }),
                   guard: existingSessionNavigationGuard,
                 });
-                return await jsonOk({ result });
+                return await jsonOk({ result }, { resolveCurrentTarget: true });
               }
               case "close":
                 await profileCtx.closeTab(tab.targetId, {
@@ -645,8 +713,8 @@ export function registerBrowserAgentActRoutes(
             action,
             targetId: tab.targetId,
             evaluateEnabled,
-            ssrfPolicy,
-            signal: req.signal,
+            ...navigationPolicy,
+            signal,
           });
           if (result.blockedByDialog) {
             return await jsonOk({
@@ -710,7 +778,7 @@ export function registerBrowserAgentActRoutes(
         ctx,
         targetId,
         enforceCurrentUrlAllowed: true,
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
             return jsonError(res, 501, EXISTING_SESSION_LIMITS.responseBody);
           }
@@ -725,6 +793,7 @@ export function registerBrowserAgentActRoutes(
             timeoutMs: timeoutMs ?? undefined,
             maxChars: maxChars ?? undefined,
           });
+          signal.throwIfAborted();
           const currentUrl = await resolveTabUrl(tab.url);
           res.json({
             ok: true,
@@ -753,7 +822,7 @@ export function registerBrowserAgentActRoutes(
         ctx,
         targetId,
         enforceCurrentUrlAllowed: true,
-        run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
+        run: async ({ profileCtx, cdpUrl, tab, signal, resolveTabUrl }) => {
           const jsonOk = async () => {
             const currentUrl = await resolveTabUrl(tab.url);
             return res.json({
@@ -769,7 +838,7 @@ export function registerBrowserAgentActRoutes(
               targetId: tab.targetId,
               args: [ref],
               timeoutMs: ctx.state().resolved.actionTimeoutMs,
-              signal: req.signal,
+              signal,
               fn: `(el) => {
               if (!(el instanceof Element)) {
                 return false;
