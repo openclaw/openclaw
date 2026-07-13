@@ -834,31 +834,6 @@ function buildUnresumableSessionNoticeIdempotencyKey(entry: SessionEntry): strin
   return `main-session-restart-recovery:${interruptedRunId}:failed-notice`;
 }
 
-async function deliverUnresumableSessionNotice(params: {
-  cfg?: OpenClawConfig;
-  entry: SessionEntry;
-  reason: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<void> {
-  const deliveryContext = resolveRestartRecoveryDeliveryContext({
-    cfg: params.cfg,
-    entry: params.entry,
-    includeSessionDeliveryFallback: true,
-    sessionKey: params.sessionKey,
-  });
-  if (!deliveryContext) {
-    await writeUnresumableSessionNotice(params);
-    return;
-  }
-  await sendUnresumableSessionNotice({
-    deliveryContext,
-    entry: params.entry,
-    reason: params.reason,
-    sessionKey: params.sessionKey,
-  });
-}
-
 function resolveRestartRecoveryDeliveryContext(params: {
   cfg?: OpenClawConfig;
   entry: SessionEntry;
@@ -1358,13 +1333,17 @@ async function recoverStore(params: {
         transcriptResumePolicy.forceRestartSafeTools,
     };
     if (resumePolicy.blockReason) {
-      await deliverUnresumableSessionNotice({
+      const deliveryContext = resolveRestartRecoveryDeliveryContext({
         cfg: params.cfg,
         entry,
-        reason: resumePolicy.blockReason,
+        includeSessionDeliveryFallback: true,
         sessionKey,
-        storePath: params.storePath,
       });
+      // Transcript-only notices are guarded by the interrupted entry snapshot.
+      // External delivery waits until the same ownership is atomically failed.
+      if (!deliveryContext) {
+        await writeUnresumableSessionNotice({ entry, sessionKey, storePath: params.storePath });
+      }
       const failed = await markSessionFailed({
         expectedRecoveryRunId: normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
         expectedRecoverySourceRunId: normalizeOptionalString(
@@ -1376,6 +1355,14 @@ async function recoverStore(params: {
         reason: resumePolicy.blockReason,
       });
       if (failed) {
+        if (deliveryContext) {
+          await sendUnresumableSessionNotice({
+            deliveryContext,
+            entry,
+            reason: resumePolicy.blockReason,
+            sessionKey,
+          });
+        }
         result.failed++;
       } else {
         result.skipped++;

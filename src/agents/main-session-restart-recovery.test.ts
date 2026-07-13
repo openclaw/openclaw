@@ -1745,7 +1745,7 @@ describe("main-session-restart-recovery", () => {
     });
   });
 
-  it("does not fail a replacement session after unresumable notice delivery yields", async () => {
+  it("fails the interrupted owner before unresumable external notice delivery", async () => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
     const sessionKey = "agent:main:discord:direct:123";
@@ -1771,7 +1771,9 @@ describe("main-session-restart-recovery", () => {
         stopReason: "aborted",
       },
     ]);
+    let entryAtExternalSend: SessionEntry | undefined;
     vi.mocked(callGateway).mockImplementationOnce(async () => {
+      entryAtExternalSend = loadSessionEntry({ sessionKey, storePath });
       await replaceSessionEntry(
         { sessionKey, storePath },
         {
@@ -1788,10 +1790,16 @@ describe("main-session-restart-recovery", () => {
 
     await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
       recovered: 0,
-      failed: 0,
-      skipped: 1,
+      failed: 1,
+      skipped: 0,
     });
 
+    expect(entryAtExternalSend).toMatchObject({
+      sessionId: "interrupted-session",
+      status: "failed",
+    });
+    expect(entryAtExternalSend?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(entryAtExternalSend?.restartRecoveryDeliverySourceRunId).toBeUndefined();
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
       sessionId: "replacement-session",
       status: "running",
