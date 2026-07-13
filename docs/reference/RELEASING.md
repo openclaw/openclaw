@@ -77,13 +77,15 @@ Under `Approved exceptions`, record one decision per PR using exactly one of
 these forms. Only an optional `-` or `*` Markdown list marker is accepted:
 
 ```md
-#PR: pending (https://github.com/...decision...)
-#PR: approved by @captain (https://github.com/...decision...)
-#PR: rejected by @captain (https://github.com/...decision...)
+#PR: pending (https://github.com/OWNER/REPO/issues/NUMBER#issuecomment-ID)
+#PR: approved by @captain (https://github.com/OWNER/REPO/issues/NUMBER#issuecomment-ID)
+#PR: rejected by @captain (https://github.com/OWNER/REPO/pull/NUMBER#issuecomment-ID)
 ```
 
-Use `None.` when no exception entries exist. Unknown, negated, duplicate,
-missing-approver, or missing-link forms are incomplete and never approved.
+The link must be a GitHub issue or pull request decision-comment URL ending in
+`#issuecomment-ID`. Use `None.` when no exception entries exist. Unknown,
+negated, duplicate, missing-approver, or missing-link forms are incomplete and
+never approved.
 
 The allowed classes are exactly:
 
@@ -101,7 +103,7 @@ Release train: #issue
 Release class: <class>
 Blocker: #issue | not applicable
 Source on main: full SHA and PR | not applicable
-Exception decision: contract link | not required
+Exception decision: same decision-comment URL listed in the train issue | not required
 ```
 
 The explicit metadata and the train issue are authoritative; commit prefixes
@@ -114,7 +116,7 @@ are signals only. Apply the classes deterministically:
 - `release-infrastructure` covers release-owned operational machinery.
 - `changelog-only` changes exactly `CHANGELOG.md`.
 - `exception` requires the named release captain's approval and a listing in the
-  train issue.
+  train issue; the PR repeats the same decision-comment URL.
 
 The initial ClawSweeper integration is advisory. A ClawSweeper required check
 needs a completed shadow train and separate maintainer approval before it can
