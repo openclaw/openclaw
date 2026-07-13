@@ -61,7 +61,7 @@ function resolveStartupContextLimits(cfg?: OpenClawConfig) {
 
 function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string {
   const [yearRaw, monthRaw, dayRaw] = stamp.split("-").map((part) => Number.parseInt(part, 10));
-  if (!yearRaw || !monthRaw || !dayRaw) {
+  if (Number.isNaN(yearRaw) || Number.isNaN(monthRaw) || Number.isNaN(dayRaw)) {
     return stamp;
   }
   const shifted = new Date(Date.UTC(yearRaw, monthRaw - 1, dayRaw - offsetDays));
