@@ -10,7 +10,7 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const mod = await import("./pw-tools-core.js");
+const mod = await import("./pw-tools-core.interactions.js");
 
 function requireInvocationOrder(mock: { invocationCallOrder: number[] }, context: string): number {
   return expectDefined(mock.invocationCallOrder[0], context);

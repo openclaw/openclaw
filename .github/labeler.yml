@@ -68,6 +68,10 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mxc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mxc/**"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:

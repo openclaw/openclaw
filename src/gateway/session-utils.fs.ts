@@ -216,7 +216,7 @@ export type ReadSessionMessagesAsyncOptions =
       mode: "recent";
     } & ReadRecentSessionMessagesOptions);
 
-type ReadRecentSessionMessagesResult = {
+export type ReadRecentSessionMessagesResult = {
   messages: unknown[];
   totalMessages: number;
   transcriptPath?: string;
@@ -949,7 +949,7 @@ function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown
   return parsedSessionEntryToMessage(entry.record, entry.seq);
 }
 
-function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
+export function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
   const message = indexedTranscriptEntryToMessage(entry);
   return message ? [message] : [];
 }
@@ -959,7 +959,6 @@ export {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
   resolveSessionTranscriptCandidates,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
 } from "./session-transcript-files.fs.js";
 
 export function capArrayByJsonBytes<T>(
@@ -1196,7 +1195,7 @@ function extractFirstUserMessageFromTranscriptChunk(
   return null;
 }
 
-function findExistingTranscriptPath(
+export function findExistingTranscriptPath(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,

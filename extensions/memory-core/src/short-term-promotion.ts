@@ -2926,4 +2926,3 @@ export const testing = {
   SHORT_TERM_RECALL_MAX_ENTRIES,
   SHORT_TERM_RECALL_MAX_SNIPPET_CHARS,
 };
-export { testing as __testing };

@@ -39,7 +39,7 @@ type AgentToolResultLike = {
  * execute before the SDK session is up, so reading `current === undefined`
  * inside `onYield` is a no-op by design.
  */
-export interface CopilotSessionHolder {
+interface CopilotSessionHolder {
   current: { abort?: () => unknown } | undefined;
 }
 
