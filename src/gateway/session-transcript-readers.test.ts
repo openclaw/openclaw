@@ -9,6 +9,7 @@ import {
 import { appendSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { readSessionMessagesAroundIdWithStatsAsync } from "./session-transcript-anchor-reader.js";
 import {
   readLatestRecentSessionUsageFromTranscriptAsync,
   readLatestSessionUsageFromTranscriptAsync,
@@ -84,6 +85,18 @@ describe("session transcript reader facade", () => {
       oversized: false,
       seq: 2,
     });
+    await expect(
+      readSessionMessagesAroundIdWithStatsAsync(scope, {
+        messageId: "active",
+        maxMessages: 1,
+      }),
+    ).resolves.toMatchObject({
+      found: true,
+      hasOverreadContext: true,
+      messages: [{ content: "root prompt" }, { content: "active answer" }],
+      offset: 0,
+      totalMessages: 2,
+    });
   });
 
   test("reads recent tails with total counts through a scope", () => {
@@ -109,6 +122,126 @@ describe("session transcript reader facade", () => {
       "recent",
       "latest",
     ]);
+  });
+
+  test("finds an anchored reset-archive message by historical session id", async () => {
+    const sessionId = "reader-file-archive-anchor";
+    const scope = writeTranscript(sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "active-message",
+        parentId: null,
+        message: { role: "user", content: "active prompt" },
+      },
+    ]);
+    fs.writeFileSync(
+      path.join(tempDir, `${sessionId}.jsonl.reset.2026-07-12T17-00-00.000Z`),
+      `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n${JSON.stringify({
+        type: "message",
+        id: "archived-message",
+        parentId: null,
+        message: { role: "user", content: "archived prompt" },
+      })}\n`,
+      "utf-8",
+    );
+
+    await expect(
+      readSessionMessagesAroundIdWithStatsAsync(scope, {
+        messageId: "archived-message",
+        maxMessages: 1,
+        allowResetArchiveFallback: true,
+      }),
+    ).resolves.toMatchObject({
+      found: true,
+      messages: [{ content: "archived prompt" }],
+    });
+  });
+
+  test("does not reuse the current session file for a historical anchor", async () => {
+    const currentSessionId = "reader-current-collision";
+    const historicalSessionId = "reader-historical-collision";
+    const currentSessionFile = path.join(tempDir, `${currentSessionId}.jsonl`);
+    fs.writeFileSync(
+      currentSessionFile,
+      `${JSON.stringify({ type: "session", version: 3, id: currentSessionId })}\n${JSON.stringify({
+        type: "message",
+        id: "shared-message",
+        parentId: null,
+        message: { role: "user", content: "current collision" },
+      })}\n`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(tempDir, `${historicalSessionId}.jsonl.reset.2026-07-12T17-00-00.000Z`),
+      `${JSON.stringify({ type: "session", version: 3, id: historicalSessionId })}\n${JSON.stringify(
+        {
+          type: "message",
+          id: "shared-message",
+          parentId: null,
+          message: { role: "user", content: "historical collision" },
+        },
+      )}\n`,
+      "utf-8",
+    );
+
+    await expect(
+      readSessionMessagesAroundIdWithStatsAsync(
+        {
+          agentId: "main",
+          sessionId: historicalSessionId,
+          sessionKey: "agent:main:main",
+          storePath,
+          sessionEntry: { sessionId: currentSessionId, sessionFile: currentSessionFile },
+        },
+        {
+          messageId: "shared-message",
+          maxMessages: 1,
+          allowResetArchiveFallback: true,
+        },
+      ),
+    ).resolves.toMatchObject({
+      found: true,
+      messages: [{ content: "historical collision" }],
+    });
+  });
+
+  test("keeps an explicit historical session file over a mismatched current entry", async () => {
+    const historicalSessionId = "reader-explicit-historical";
+    const historicalSessionFile = path.join(tempDir, "explicit-historical.jsonl");
+    fs.writeFileSync(
+      historicalSessionFile,
+      `${JSON.stringify({ type: "session", version: 3, id: historicalSessionId })}\n${JSON.stringify(
+        {
+          type: "message",
+          id: "historical-message",
+          parentId: null,
+          message: { role: "user", content: "explicit historical" },
+        },
+      )}\n`,
+      "utf-8",
+    );
+
+    await expect(
+      readSessionMessagesAroundIdWithStatsAsync(
+        {
+          sessionFile: historicalSessionFile,
+          sessionId: historicalSessionId,
+          sessionEntry: {
+            sessionId: "reader-current-entry",
+            sessionFile: path.join(tempDir, "reader-current-entry.jsonl"),
+          },
+        },
+        {
+          messageId: "historical-message",
+          maxMessages: 1,
+          allowResetArchiveFallback: true,
+        },
+      ),
+    ).resolves.toMatchObject({
+      found: true,
+      messages: [{ content: "explicit historical" }],
+    });
   });
 
   test("reads title fields and recent usage through a scope", async () => {
