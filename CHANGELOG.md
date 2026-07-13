@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Control UI self-learning toggle:** refresh stale config snapshots and retry the idempotent toggle once so enabling or disabling self-learning no longer requires a manual page or Gateway reload after another config write.
 - **Gateway in-process restarts:** clear stale SIGUSR1 restart state and resume prepared host suspensions before rebuilding runtime admission, preventing restart cooldowns or paused scheduling from leaking into the next lifecycle.
 - **ClickClack durable media delivery:** route media replies through required delivery, reuse owner-scoped upload and message nonces across retries, repair persisted attachment state without rereading source media, fail closed when an older ClickClack server cannot prove an unknown send, and use the selected provider and model's runtime output budget instead of a channel-level token cap. Thanks @jjjhenriksen and @shakkernerd.
 - **Deepgram realtime custom endpoints:** validate Voice Call streaming base URLs with secret-safe errors, preserve explicit `ws://` and `wss://` endpoints, and map HTTP schemes to their matching WebSocket transport for dedicated and self-hosted deployments. (#105334) Thanks @dwc1997.
