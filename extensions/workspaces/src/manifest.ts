@@ -200,7 +200,7 @@ export function matchesApprovedFile(
   return expected !== undefined && expected === hashBytes(bytes);
 }
 const BINDING_ID_PATTERN = /^(?!__proto__$)[A-Za-z0-9._-]{1,64}$/;
-const WIDGET_CAPABILITIES = ["data:read", "prompt:send"] as const;
+const WIDGET_CAPABILITIES = ["data:read", "prompt:send", "state:persist"] as const;
 
 type WidgetCapability = (typeof WIDGET_CAPABILITIES)[number];
 

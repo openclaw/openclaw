@@ -26,7 +26,9 @@ export type WidgetInboundType =
   | "workspace:ready"
   | "workspace:getData"
   | "workspace:getTheme"
-  | "workspace:sendPrompt";
+  | "workspace:sendPrompt"
+  | "workspace:getState"
+  | "workspace:setState";
 
 export type WidgetErrorCode =
   | "binding_denied"
@@ -41,6 +43,7 @@ export type WidgetOutboundMessage =
   | { v: 1; type: "workspace:data"; requestId: string; bindingId: string; data: unknown }
   | { v: 1; type: "workspace:push"; bindingId: string; data: unknown }
   | { v: 1; type: "workspace:theme"; requestId: string; tokens: Record<string, string> }
+  | { v: 1; type: "workspace:state"; requestId: string; state: unknown; version?: number }
   | { v: 1; type: "workspace:error"; requestId?: string; code: WidgetErrorCode; message: string };
 
 /** Injected side effects — real implementations live in the browser host. */
@@ -60,6 +63,10 @@ export type WidgetBridgeDeps = {
   confirmPrompt: (text: string) => Promise<boolean>;
   /** Dispatch the prompt through the existing chat-send path. */
   sendPrompt: (text: string) => Promise<void>;
+  /** Read state for the parent-bound widget identity. */
+  getWidgetState?: () => Promise<{ state: unknown; version?: number }>;
+  /** Write state for the parent-bound widget identity. */
+  setWidgetState?: (state: unknown, expectedVersion?: number) => Promise<{ version: number }>;
   /** Post a message to the child (host wires targetOrigin "*"). */
   post: (message: WidgetOutboundMessage) => void;
   /** getData answer deadline; posts a timeout error if the resolver overruns. Default 10s. */
@@ -113,6 +120,8 @@ const INBOUND_TYPES = new Set<WidgetInboundType>([
   "workspace:getData",
   "workspace:getTheme",
   "workspace:sendPrompt",
+  "workspace:getState",
+  "workspace:setState",
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -245,6 +254,50 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
     }
   }
 
+  async function handleGetState(requestId: string): Promise<void> {
+    if (!capabilities.has("state:persist") || !deps.getWidgetState) {
+      error("capability_denied", "widget lacks the state:persist capability", requestId);
+      return;
+    }
+    try {
+      const result = await deps.getWidgetState();
+      if (!disposed) {
+        deps.post({
+          v: 1,
+          type: "workspace:state",
+          requestId,
+          state: result.state,
+          ...(result.version !== undefined ? { version: result.version } : {}),
+        });
+      }
+    } catch (err) {
+      if (!disposed) {
+        error("resolve_failed", err instanceof Error ? err.message : String(err), requestId);
+      }
+    }
+  }
+
+  async function handleSetState(
+    requestId: string,
+    state: unknown,
+    expectedVersion?: number,
+  ): Promise<void> {
+    if (!capabilities.has("state:persist") || !deps.setWidgetState) {
+      error("capability_denied", "widget lacks the state:persist capability", requestId);
+      return;
+    }
+    try {
+      const { version } = await deps.setWidgetState(state, expectedVersion);
+      if (!disposed) {
+        deps.post({ v: 1, type: "workspace:state", requestId, state, version });
+      }
+    } catch (err) {
+      if (!disposed) {
+        error("resolve_failed", err instanceof Error ? err.message : String(err), requestId);
+      }
+    }
+  }
+
   function handleMessage(data: unknown): boolean {
     if (disposed) {
       return false;
@@ -283,6 +336,38 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
           return false;
         }
         void handleSendPrompt(requestId, text);
+        return true;
+      }
+      case "workspace:getState": {
+        const requestId = typeof data.requestId === "string" ? data.requestId : null;
+        if (requestId === null) {
+          dropped += 1;
+          return false;
+        }
+        void handleGetState(requestId);
+        return true;
+      }
+      case "workspace:setState": {
+        const requestId = typeof data.requestId === "string" ? data.requestId : null;
+        const hasState = Object.hasOwn(data, "state");
+        const hasExpectedVersion = Object.hasOwn(data, "expectedVersion");
+        const expectedVersion = data.expectedVersion;
+        if (
+          requestId === null ||
+          !hasState ||
+          (hasExpectedVersion &&
+            (typeof expectedVersion !== "number" ||
+              !Number.isInteger(expectedVersion) ||
+              expectedVersion < 0))
+        ) {
+          dropped += 1;
+          return false;
+        }
+        void handleSetState(
+          requestId,
+          data.state,
+          hasExpectedVersion ? (expectedVersion as number) : undefined,
+        );
         return true;
       }
       default:
