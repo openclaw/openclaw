@@ -6959,11 +6959,6 @@
       "translated": "Sto pensando..."
     },
     {
-      "id": "native.android.ff4a092a02bd5d17",
-      "source": "Tools",
-      "translated": "Strumenti"
-    },
-    {
       "id": "native.android.3788802f6c138c8b",
       "source": "Running tools...",
       "translated": "Esecuzione degli strumenti..."
@@ -7029,11 +7024,6 @@
       "translated": "assistente"
     },
     {
-      "id": "native.android.dfbd755eb43b4d26",
-      "source": "OpenClaw · Live",
-      "translated": "OpenClaw · Live"
-    },
-    {
       "id": "native.android.b3ff30d4e0b3ce58",
       "source": "You",
       "translated": "Tu"
@@ -7042,6 +7032,16 @@
       "id": "native.android.d29098025118ce4b",
       "source": "System",
       "translated": "Sistema"
+    },
+    {
+      "id": "native.android.ff4a092a02bd5d17",
+      "source": "Tools",
+      "translated": "Strumenti"
+    },
+    {
+      "id": "native.android.dfbd755eb43b4d26",
+      "source": "OpenClaw · Live",
+      "translated": "OpenClaw · Live"
     },
     {
       "id": "native.android.82e9fe45e93909b6",

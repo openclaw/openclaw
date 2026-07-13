@@ -127,7 +127,7 @@ internal fun ChatMessageBubble(
     onToggleListen = toggleListen,
     modifier = Modifier.fillMaxWidth(),
   ) {
-    ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
+    ChatBubbleContainer(style = style, roleLabel = chatRoleLabel(role)) {
       ChatMessageBody(content = displayableContent, textColor = mobileText)
       ChatMessageLinkPreview(messageId = message.id, role = role, content = displayableContent)
       messageSpeech?.let { speech ->
@@ -366,7 +366,7 @@ private fun linkPreviewDomain(url: String): String =
 fun ChatTypingIndicatorBubble() {
   ChatBubbleContainer(
     style = bubbleStyle("assistant"),
-    roleLabel = roleLabel("assistant"),
+    roleLabel = chatRoleLabel("assistant"),
   ) {
     Row(
       verticalAlignment = Alignment.CenterVertically,
@@ -389,7 +389,7 @@ fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
 
   ChatBubbleContainer(
     style = bubbleStyle("assistant"),
-    roleLabel = "Tools",
+    roleLabel = chatRoleLabel("tools"),
   ) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
       Text(nativeString("Running tools..."), style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
@@ -445,7 +445,7 @@ fun ChatOutboxBubble(
 
   ChatBubbleContainer(
     style = bubbleStyle("user").copy(borderColor = statusColor.copy(alpha = 0.6f)),
-    roleLabel = nativeString("You"),
+    roleLabel = chatRoleLabel("user"),
   ) {
     if (item.text.isNotBlank()) {
       ChatMarkdown(text = item.text, textColor = mobileText)
@@ -505,7 +505,7 @@ private fun ChatOutboxAction(
 fun ChatStreamingAssistantBubble(text: String) {
   ChatBubbleContainer(
     style = bubbleStyle("assistant").copy(borderColor = mobileAccent),
-    roleLabel = "OpenClaw · Live",
+    roleLabel = chatRoleLabel("assistant_live"),
   ) {
     ChatMarkdown(text = text, textColor = mobileText, isStreaming = true)
   }
@@ -539,10 +539,12 @@ private fun bubbleStyle(role: String): ChatBubbleStyle =
       )
   }
 
-private fun roleLabel(role: String): String =
+internal fun chatRoleLabel(role: String): String =
   when (role) {
     "user" -> nativeString("You")
     "system" -> nativeString("System")
+    "tools" -> nativeString("Tools")
+    "assistant_live" -> nativeString("OpenClaw · Live")
     else -> nativeString("OpenClaw")
   }
 

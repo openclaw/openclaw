@@ -208,6 +208,8 @@ class ChatController internal constructor(
   // any run the gateway still reports in flight (chat.history `inFlightRun`).
   private var restoreRunStateOnReconnect = false
   private var reconnectRecoveryGeneration: Long? = null
+  // Screenshot proof state must survive the fixture's normal chat.history refresh.
+  private var screenshotChatProofEnabled = false
 
   private fun updateErrorText(
     message: String?,
@@ -1561,6 +1563,9 @@ class ChatController internal constructor(
         // replace) adopt the gateway's in-flight run snapshot so restored
         // runs keep their pending state and streaming text.
         adoptInFlightRun(history.inFlightRun)
+        if (screenshotChatProofEnabled) {
+          publishScreenshotChatProof()
+        }
         history.thinkingLevel
           ?.trim()
           ?.takeIf { it.isNotEmpty() }
@@ -2645,6 +2650,24 @@ class ChatController internal constructor(
   private fun publishPendingToolCalls() {
     _pendingToolCalls.value =
       pendingToolCallsById.values.sortedBy { it.startedAtMs }
+  }
+
+  internal fun applyScreenshotChatProof() {
+    screenshotChatProofEnabled = true
+    publishScreenshotChatProof()
+  }
+
+  private fun publishScreenshotChatProof() {
+    _pendingRunCount.value = 1
+    pendingToolCallsById.clear()
+    pendingToolCallsById["screenshot-tool"] =
+      ChatPendingToolCall(
+        toolCallId = "screenshot-tool",
+        name = "read_file",
+        startedAtMs = 1_783_555_210_000,
+      )
+    publishPendingToolCalls()
+    _streamingAssistantText.value = "Checking Android localization wiring..."
   }
 
   /**

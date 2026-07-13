@@ -11,6 +11,7 @@ enum class AndroidScreenshotScene(
 ) {
   Home("home", HomeDestination.Connect),
   Chat("chat", HomeDestination.Chat),
+  ChatProof("chat-proof", HomeDestination.Chat),
   Voice("voice", HomeDestination.Voice),
   Settings("settings", HomeDestination.Settings),
   ;

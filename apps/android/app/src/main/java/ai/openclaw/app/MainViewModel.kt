@@ -199,6 +199,9 @@ class MainViewModel(
         "Screenshot fixture mode must be selected before live runtime startup"
       }
       runtime.setForeground(foreground)
+      if (scene == AndroidScreenshotScene.ChatProof) {
+        runtime.applyScreenshotChatProof()
+      }
       _requestedHomeDestination.value = scene.homeDestination
       return
     }
@@ -208,6 +211,9 @@ class MainViewModel(
     prefs.setSpeakerEnabled(true)
     val runtime = nodeApp.ensureScreenshotFixtureRuntime()
     runtime.setForeground(foreground)
+    if (scene == AndroidScreenshotScene.ChatProof) {
+      runtime.applyScreenshotChatProof()
+    }
     runtimeRef.value = runtime
     _requestedHomeDestination.value = scene.homeDestination
   }

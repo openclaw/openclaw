@@ -11130,14 +11130,6 @@
       "id": "native.android.a50e44d8f380f9ad"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 392,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
-      "source": "Tools",
-      "surface": "android",
-      "id": "native.android.ff4a092a02bd5d17"
-    },
-    {
       "kind": "ui-call",
       "line": 395,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
@@ -11242,14 +11234,6 @@
       "id": "native.android.5d4f893886312f82"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 508,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
-      "source": "OpenClaw · Live",
-      "surface": "android",
-      "id": "native.android.dfbd755eb43b4d26"
-    },
-    {
       "kind": "ui-call",
       "line": 544,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
@@ -11269,13 +11253,29 @@
       "kind": "ui-call",
       "line": 546,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
+      "source": "Tools",
+      "surface": "android",
+      "id": "native.android.ff4a092a02bd5d17"
+    },
+    {
+      "kind": "ui-call",
+      "line": 547,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
+      "source": "OpenClaw · Live",
+      "surface": "android",
+      "id": "native.android.dfbd755eb43b4d26"
+    },
+    {
+      "kind": "ui-call",
+      "line": 548,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "OpenClaw",
       "surface": "android",
       "id": "native.android.82e9fe45e93909b6"
     },
     {
       "kind": "ui-call",
-      "line": 569,
+      "line": 571,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Attachment",
       "surface": "android",
@@ -11283,7 +11283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 582,
+      "line": 584,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Open image preview",
       "surface": "android",
@@ -11291,7 +11291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 600,
+      "line": 602,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Image preview",
       "surface": "android",
@@ -11299,7 +11299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 614,
+      "line": 616,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Close image preview",
       "surface": "android",
@@ -11307,7 +11307,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 623,
+      "line": 625,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Unsupported attachment",
       "surface": "android",

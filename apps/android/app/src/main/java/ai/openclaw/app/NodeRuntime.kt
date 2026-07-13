@@ -2150,6 +2150,11 @@ class NodeRuntime private constructor(
 
   fun deleteChatOutboxCommand(id: String) = chat.deleteOutboxCommand(id)
 
+  internal fun applyScreenshotChatProof() {
+    check(mode == NodeRuntimeMode.ScreenshotFixture) { "Chat proof is only available in screenshot fixture mode" }
+    chat.applyScreenshotChatProof()
+  }
+
   private fun applyScreenshotFixture() {
     check(BuildConfig.DEBUG) { "Android screenshot fixtures require a debug build" }
     _serverName.value = "OpenClaw Gateway"
