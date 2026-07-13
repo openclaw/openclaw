@@ -115,7 +115,10 @@ export function createTeamsReplyStreamController(params: {
    * default) and prepends collected tool-progress lines when configured.
    */
   const renderInformativeUpdate = (): void => {
-    if (!stream || wasCanceled()) {
+    // A late gate timer must not touch the stream once the final text is
+    // queued: the SDK resets its stream id on close, so an update after that
+    // would post a fresh stale "working" card below the final answer.
+    if (!stream || wasCanceled() || streamFinalizationPending) {
       return;
     }
     const informativeText = formatChannelProgressDraftText({
@@ -329,6 +332,9 @@ export function createTeamsReplyStreamController(params: {
     },
 
     async finalize(): Promise<Maybe<ReplyPayload>> {
+      // The delay gate may still hold a pending start timer for fast turns;
+      // stop it before closing so it cannot fire against the closed stream.
+      progressDraftGate.cancel();
       if (!stream || !streamFinalizationPending || wasCanceled()) {
         return undefined;
       }
