@@ -392,6 +392,9 @@ export const th: TranslationMap = {
     working: "กำลังทำงาน…",
     ready: "พร้อมแชต",
     whatCanAgentDo: "{name} ทำอะไรได้บ้าง?",
+    getHelp: "ขอความช่วยเหลือ",
+    discord: "ชุมชน Discord",
+    viewChangelog: "ดูบันทึกการเปลี่ยนแปลง",
   },
   newSession: {
     title: "เซสชันใหม่",
