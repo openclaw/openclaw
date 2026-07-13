@@ -36,9 +36,25 @@ import {
 } from "./main-session-restart-recovery.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
+const transcriptMocks = vi.hoisted(() => ({
+  appendAssistantMessageToSessionTranscript: vi.fn(),
+}));
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async () => ({ runId: "run-resumed" })),
 }));
+
+vi.mock("../config/sessions/transcript.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/transcript.js")>();
+  transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementation(
+    actual.appendAssistantMessageToSessionTranscript,
+  );
+  return {
+    ...actual,
+    appendAssistantMessageToSessionTranscript:
+      transcriptMocks.appendAssistantMessageToSessionTranscript,
+  };
+});
 
 let tmpDir: string;
 
@@ -1743,6 +1759,75 @@ describe("main-session-restart-recovery", () => {
     expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
       restartRecoveryTerminalRunIds: ["control-ui-run", "control-ui-run-2"],
     });
+  });
+
+  it("keeps an unresumable Control UI claim recoverable until its notice is durable", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "control-ui-run",
+        restartRecoveryDeliverySourceRunId: "control-ui-run",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "partial answer" }],
+        stopReason: "aborted",
+      },
+    ]);
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockResolvedValueOnce({
+      ok: false,
+      reason: "simulated SQLite write failure",
+    });
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 1,
+      skipped: 0,
+    });
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryDeliveryRunId: "control-ui-run",
+      restartRecoveryDeliverySourceRunId: "control-ui-run",
+    });
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.restartRecoveryTerminalRunIds,
+    ).toBeUndefined();
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 1,
+      skipped: 0,
+    });
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      status: "failed",
+      abortedLastRun: true,
+      restartRecoveryTerminalRunIds: ["control-ui-run"],
+    });
+    const notices = (
+      await loadTranscriptEvents({
+        agentId: "main",
+        sessionId: "main-session",
+        sessionKey: "agent:main:main",
+        storePath,
+      })
+    ).filter((event) => {
+      const record = event as { type?: unknown; message?: { idempotencyKey?: unknown } };
+      return (
+        record.type === "message" &&
+        record.message?.idempotencyKey ===
+          "main-session-restart-recovery:control-ui-run:failed-notice"
+      );
+    });
+    expect(notices).toHaveLength(1);
   });
 
   it("fails the interrupted owner before unresumable external notice delivery", async () => {

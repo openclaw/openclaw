@@ -803,7 +803,7 @@ async function writeUnresumableSessionNotice(params: {
   entry: SessionEntry;
   sessionKey: string;
   storePath: string;
-}): Promise<void> {
+}): Promise<boolean> {
   const result = await appendAssistantMessageToSessionTranscript({
     agentId: resolveAgentIdFromSessionKey(params.sessionKey),
     sessionKey: params.sessionKey,
@@ -824,6 +824,7 @@ async function writeUnresumableSessionNotice(params: {
       `failed to write interrupted main session notice ${params.sessionKey}: ${result.reason}`,
     );
   }
+  return result.ok;
 }
 
 function buildUnresumableSessionNoticeIdempotencyKey(entry: SessionEntry): string {
@@ -1341,8 +1342,17 @@ async function recoverStore(params: {
       });
       // Transcript-only notices are guarded by the interrupted entry snapshot.
       // External delivery waits until the same ownership is atomically failed.
-      if (!deliveryContext) {
-        await writeUnresumableSessionNotice({ entry, sessionKey, storePath: params.storePath });
+      if (
+        !deliveryContext &&
+        !(await writeUnresumableSessionNotice({
+          entry,
+          sessionKey,
+          storePath: params.storePath,
+        }))
+      ) {
+        // Keep the claim recoverable until its user-visible terminal notice is durable.
+        result.failed++;
+        continue;
       }
       const failed = await markSessionFailed({
         expectedRecoveryRunId: normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
