@@ -32,6 +32,10 @@ import {
 } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  migrateSessionEntryStatusProjection,
+  readSqliteTableColumns,
+} from "./openclaw-agent-db-session-migrations.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
@@ -156,43 +160,6 @@ function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): 
   }
 }
 
-function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set<string> | null {
-  const table = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName);
-  if (!table) {
-    return null;
-  }
-  const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{
-    name?: unknown;
-  }>;
-  return new Set(rows.flatMap((row) => (typeof row.name === "string" ? [row.name] : [])));
-}
-
-function migrateSessionEntryStatusProjection(db: DatabaseSync): void {
-  const columns = readSqliteTableColumns(db, "session_entries");
-  if (!columns) {
-    return;
-  }
-  if (!columns.has("status")) {
-    db.exec(
-      "ALTER TABLE session_entries ADD COLUMN status TEXT CHECK (status IS NULL OR status IN ('running', 'done', 'failed', 'killed', 'timeout'));",
-    );
-  }
-  const rows = db.prepare("SELECT session_key, entry_json FROM session_entries").all() as Array<{
-    entry_json?: unknown;
-    session_key?: unknown;
-  }>;
-  const update = db.prepare("UPDATE session_entries SET status = ? WHERE session_key = ?");
-  for (const row of rows) {
-    if (typeof row.session_key !== "string") {
-      continue;
-    }
-    const entry = parseMigratedSessionEntry(row.entry_json);
-    update.run(entry ? migratedStatus(entry.status) : null, row.session_key);
-  }
-}
-
 function migratedSessionColumn(
   columns: ReadonlySet<string>,
   columnName: string,
@@ -262,7 +229,10 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   }
   if (userVersion < 7) {
     db.exec("DROP INDEX IF EXISTS idx_agent_sessions_status;");
-    migrateSessionEntryStatusProjection(db);
+    migrateSessionEntryStatusProjection(db, (entryJson) => {
+      const entry = parseMigratedSessionEntry(entryJson);
+      return entry ? migratedStatus(entry.status) : null;
+    });
   }
   if (userVersion < 6) {
     db.exec("DROP INDEX IF EXISTS idx_agent_session_entries_session_id;");

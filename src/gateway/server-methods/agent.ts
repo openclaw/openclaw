@@ -8,10 +8,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -155,7 +152,6 @@ import {
 } from "../../sessions/session-key-utils.js";
 import {
   beginSessionWorkAdmission,
-  consumeSessionWorkAdmissionHandoff,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -208,7 +204,22 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
+import {
+  isAcceptedAgentDedupePayload,
+  isPreRegistrationAbortedAgentDedupeEntryForSession,
+  readGatewayDedupeEntry,
+  resolveAgentDedupeKeys,
+  setAbortedAgentDedupeEntries,
+  setGatewayDedupeEntries,
+} from "./agent-dedupe.js";
+import {
+  assertExpectedExistingSession,
+  consumeExpectedSessionWorkAdmission,
+  ExpectedExistingSessionChangedError,
+  resolveExpectedExistingSessionConstraint,
+  validateExpectedExistingSessionTarget,
+} from "./agent-expected-session.js";
+import { waitForAgentJob } from "./agent-job.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
@@ -875,138 +886,6 @@ function tryFinalizeTrackedAgentTask(params: {
   }
 }
 
-function resolveAgentDedupeKeys(params: {
-  idempotencyKey: string;
-  execApprovalFollowupApprovalId?: string;
-}): string[] {
-  const keys = [`agent:${params.idempotencyKey}`];
-  const approvalId = params.execApprovalFollowupApprovalId?.trim();
-  if (approvalId) {
-    keys.push(`agent:exec-approval-followup:${approvalId}`);
-  }
-  return uniqueStrings(keys);
-}
-
-function readGatewayDedupeEntry(params: {
-  dedupe: GatewayRequestContext["dedupe"];
-  keys: readonly string[];
-}) {
-  for (const key of params.keys) {
-    const entry = params.dedupe.get(key);
-    if (entry) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
-function isAcceptedAgentDedupePayload(payload: unknown): payload is {
-  acceptedAt?: unknown;
-  agentId?: unknown;
-  dedupeKeys?: unknown;
-  expiresAtMs?: unknown;
-  ownerConnId?: unknown;
-  ownerDeviceId?: unknown;
-  reservationId?: unknown;
-  runId?: unknown;
-  sessionKey?: unknown;
-  status: "accepted";
-} {
-  return (
-    typeof payload === "object" &&
-    payload !== null &&
-    (payload as { status?: unknown }).status === "accepted"
-  );
-}
-
-function isPreRegistrationAbortedAgentDedupePayload(payload: unknown): payload is {
-  agentId?: unknown;
-  runId?: unknown;
-  sessionKey?: unknown;
-  status: "timeout";
-  stopReason?: unknown;
-} {
-  const stopReason = (payload as { stopReason?: unknown } | null)?.stopReason;
-  return (
-    typeof payload === "object" &&
-    payload !== null &&
-    (payload as { status?: unknown }).status === "timeout" &&
-    (stopReason === "rpc" || stopReason === "stop")
-  );
-}
-
-function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
-  entry: ReturnType<typeof readGatewayDedupeEntry> | undefined;
-  runId: string;
-  sessionKey?: string;
-  alternateSessionKeys?: Array<string | undefined>;
-}): boolean {
-  if (!params.entry?.ok || !isPreRegistrationAbortedAgentDedupePayload(params.entry.payload)) {
-    return false;
-  }
-  const payload = params.entry.payload;
-  const payloadRunId = typeof payload.runId === "string" ? payload.runId.trim() : "";
-  if (payloadRunId && payloadRunId !== params.runId) {
-    return false;
-  }
-  const payloadSessionKey =
-    typeof payload.sessionKey === "string" && payload.sessionKey.trim()
-      ? payload.sessionKey.trim()
-      : undefined;
-  const expectedSessionKeys = new Set(
-    [params.sessionKey, ...(params.alternateSessionKeys ?? [])].filter((value): value is string =>
-      Boolean(value?.trim()),
-    ),
-  );
-  return (
-    !payloadSessionKey ||
-    expectedSessionKeys.size === 0 ||
-    expectedSessionKeys.has(payloadSessionKey)
-  );
-}
-
-function setGatewayDedupeEntries(params: {
-  dedupe: GatewayRequestContext["dedupe"];
-  keys: readonly string[];
-  entry: Parameters<typeof setGatewayDedupeEntry>[0]["entry"];
-}) {
-  for (const key of params.keys) {
-    setGatewayDedupeEntry({
-      dedupe: params.dedupe,
-      key,
-      entry: params.entry,
-    });
-  }
-}
-
-function setAbortedAgentDedupeEntries(params: {
-  dedupe: GatewayRequestContext["dedupe"];
-  keys: readonly string[];
-  agentId?: string;
-  sessionKey?: string;
-  runId: string;
-  stopReason: string;
-}) {
-  setGatewayDedupeEntries({
-    dedupe: params.dedupe,
-    keys: params.keys,
-    entry: {
-      ts: Date.now(),
-      ok: true,
-      payload: {
-        runId: params.runId,
-        ...(params.agentId ? { agentId: params.agentId } : {}),
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-        status: "timeout" as const,
-        summary: "aborted",
-        stopReason: params.stopReason,
-        timeoutPhase: "queue",
-        providerStarted: false,
-      },
-    },
-  });
-}
-
 function readAgentRunTimeoutAttribution(meta: unknown) {
   const record =
     meta && typeof meta === "object" && !Array.isArray(meta)
@@ -1377,10 +1256,21 @@ export const agentHandlers: GatewayRequestHandlers = {
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
     const canUseCronRunContinuation = resolveCanUseCronRunContinuation(client);
-    const expectedExistingSessionId = normalizeOptionalString(request.expectedExistingSessionId);
-    const sessionWorkAdmissionHandoffId = expectedExistingSessionId
-      ? normalizeOptionalString(request.internalRuntimeHandoffId)
-      : undefined;
+    const expectedSessionResult = resolveExpectedExistingSessionConstraint({
+      canUseInternalRuntimeHandoff,
+      expectedExistingSessionId: request.expectedExistingSessionId,
+      internalRuntimeHandoffId: request.internalRuntimeHandoffId,
+    });
+    if (!expectedSessionResult.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, expectedSessionResult.error),
+      );
+      return;
+    }
+    const expectedSession = expectedSessionResult.constraint;
+    const expectedExistingSessionId = expectedSession?.sessionId;
     const requestedModelOverride = Boolean(request.provider || request.model);
     const requestedInternalSessionEffects = request.sessionEffects === "internal";
     const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
@@ -1418,17 +1308,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         errorShape(
           ErrorCodes.INVALID_REQUEST,
           "internal session-effect controls are reserved for backend callers.",
-        ),
-      );
-      return;
-    }
-    if (expectedExistingSessionId && !canUseInternalRuntimeHandoff) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "expectedExistingSessionId is reserved for backend callers.",
         ),
       );
       return;
@@ -1776,27 +1655,13 @@ export const agentHandlers: GatewayRequestHandlers = {
             agentId,
           })
         : undefined);
-    if (expectedExistingSessionId && !requestedSessionKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "expectedExistingSessionId requires an explicit session key.",
-        ),
-      );
-      return;
-    }
-    if (
-      expectedExistingSessionId &&
-      requestedSessionId &&
-      requestedSessionId !== expectedExistingSessionId
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "conflicting session identity constraints."),
-      );
+    const expectedSessionTargetError = validateExpectedExistingSessionTarget({
+      constraint: expectedSession,
+      requestedSessionId,
+      requestedSessionKey,
+    });
+    if (expectedSessionTargetError) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, expectedSessionTargetError));
       return;
     }
     if (agentId && requestedSessionKeyRaw) {
@@ -2384,11 +2249,11 @@ export const agentHandlers: GatewayRequestHandlers = {
             clone: false,
           }).entry;
         }
-        if (expectedExistingSessionId && latestEntry?.sessionId !== expectedExistingSessionId) {
-          throw new Error(
-            `Session "${resolvedSessionKey}" changed while starting expected work. Retry.`,
-          );
-        }
+        assertExpectedExistingSession({
+          constraint: expectedSession,
+          entry: latestEntry,
+          message: `Session "${resolvedSessionKey}" changed while starting expected work. Retry.`,
+        });
         if (sessionPersistedBeforeGatewayAdmission && !latestEntry) {
           throw new Error(
             `Session "${resolvedSessionKey}" was deleted while starting work. Retry.`,
@@ -2437,16 +2302,14 @@ export const agentHandlers: GatewayRequestHandlers = {
         if (gatewayWorkAdmission) {
           return;
         }
-        if (sessionWorkAdmissionHandoffId) {
-          gatewayWorkAdmission = consumeSessionWorkAdmissionHandoff({
-            handoffId: sessionWorkAdmissionHandoffId,
-            scope,
-            identities: [resolvedSessionKey, resolvedSessionId],
-            onInterrupt: interruptGatewayWorkAdmission,
-          });
-          if (!gatewayWorkAdmission) {
-            throw new Error("session work admission handoff is unavailable");
-          }
+        const handedOffAdmission = consumeExpectedSessionWorkAdmission({
+          constraint: expectedSession,
+          scope,
+          identities: [resolvedSessionKey, resolvedSessionId],
+          onInterrupt: interruptGatewayWorkAdmission,
+        });
+        if (handedOffAdmission) {
+          gatewayWorkAdmission = handedOffAdmission;
           return;
         }
         gatewayWorkAdmission = await beginSessionWorkAdmission({
@@ -3142,7 +3005,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           let persisted: SessionEntry | undefined;
           let archivedDuringStoreUpdateError: string | undefined;
           let deletedDuringStoreUpdateError: string | undefined;
-          let expectedSessionChangedDuringStoreUpdateError: string | undefined;
           try {
             persisted =
               (await patchSessionEntryTarget(
@@ -3159,13 +3021,11 @@ export const agentHandlers: GatewayRequestHandlers = {
                   // transaction admission; once admitted, let the atomic write finish.
                   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
                   const freshEntry = patchContext.existingEntry;
-                  if (
-                    expectedExistingSessionId &&
-                    freshEntry?.sessionId !== expectedExistingSessionId
-                  ) {
-                    expectedSessionChangedDuringStoreUpdateError = `Session "${canonicalSessionKey}" changed before expected work could start.`;
-                    throw new Error(expectedSessionChangedDuringStoreUpdateError);
-                  }
+                  assertExpectedExistingSession({
+                    constraint: expectedSession,
+                    entry: freshEntry,
+                    message: `Session "${canonicalSessionKey}" changed before expected work could start.`,
+                  });
                   // A completed delete must win over this request's earlier read;
                   // otherwise the initial touch would recreate the removed row.
                   // The accessor target already spans the requested key plus its
@@ -3295,12 +3155,8 @@ export const agentHandlers: GatewayRequestHandlers = {
               respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
               return;
             }
-            if (expectedSessionChangedDuringStoreUpdateError) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, expectedSessionChangedDuringStoreUpdateError),
-              );
+            if (err instanceof ExpectedExistingSessionChangedError) {
+              respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, err.message));
               return;
             }
             if (restoredCronContinuationError) {

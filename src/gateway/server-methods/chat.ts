@@ -1,6 +1,6 @@
 // Chat gateway methods implement chat.send/history/abort/inject/metadata and
 // bridge UI RPCs to agent dispatch, transcripts, media, and streaming state.
-import { createHash, createHmac, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -30,15 +30,12 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/run-state.js";
-import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-catalog-browse.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { shouldComputeCommandAuthorized } from "../../auto-reply/command-detection.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
   getReplyPayloadMetadata,
@@ -47,42 +44,24 @@ import {
 } from "../../auto-reply/reply-payload.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
-import {
-  isReplyRunAbortableForSignal,
-  replyRunRegistry,
-} from "../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunAbortableForSignal } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   stageSandboxMedia,
   type StageSandboxMediaResult,
 } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
-import {
-  resolveChannelResetConfig,
-  resolveSessionResetType,
-  resolveSessionWorkStartError,
-  type SessionEntry,
-} from "../../config/sessions.js";
-import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
+import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import {
   resolveSessionRoutingContract,
   SESSION_ROUTING_CHANGED_ERROR_REASON,
 } from "../../config/sessions/main-session.js";
-import {
-  buildRestartRecoveryClaimCleanupPatch,
-  hasRestartRecoveryTerminalRun,
-} from "../../config/sessions/restart-recovery-state.js";
-import {
-  patchSessionEntry,
-  resolveTranscriptSessionKeyBySessionId,
-  type SessionTranscriptTurnExpectedState,
-} from "../../config/sessions/session-accessor.js";
+import { resolveTranscriptSessionKeyBySessionId } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   claimAgentRunContext,
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
-import { loadOrCreateProcessDeviceIdentity } from "../../infra/device-identity.js";
 import {
   emitDiagnosticsTimelineEvent,
   measureDiagnosticsTimelineSpan,
@@ -98,29 +77,16 @@ import { parseInboundMediaUri } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { deleteMediaBuffer, MEDIA_MAX_BYTES, type SavedMedia } from "../../media/store.js";
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
-import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import {
   retainGatewayRootWorkAdmissionContinuation,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../process/gateway-work-admission.js";
-import {
-  isCronSessionKey,
-  isSubagentSessionKey,
-  normalizeAgentId,
-  scopeLegacySessionKeyToAgent,
-} from "../../routing/session-key.js";
-import {
-  isAgentHarnessSessionKey,
-  resolveMissingAgentHarnessSessionError,
-} from "../../sessions/agent-harness-session-key.js";
+import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
+import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type UserTurnInput,
-  type UserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
+import { type UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import {
   parseInlineDirectives,
   stripInlineDirectiveTagsForDelivery,
@@ -223,6 +189,14 @@ import {
   type AssistantDisplayContentBlock,
 } from "./chat-assistant-content.js";
 import {
+  broadcastChatError,
+  broadcastChatFinal,
+  broadcastSideResult,
+  isBtwReplyPayload,
+  isSourceReplyTranscriptMirrorPayload,
+  sendGlobalAwareNodeChatPayload,
+} from "./chat-broadcast.js";
+import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
@@ -247,6 +221,15 @@ import {
   type ChatSendExplicitOrigin,
 } from "./chat-origin-routing.js";
 import { normalizeWebchatReplyMediaPathsForDisplay } from "./chat-reply-media.js";
+import {
+  createRestartSafeChatRequest,
+  hasRestartRecoveryTerminalRun,
+  isRetryableUnadoptedChatClaim,
+  resolveDurableChatClaim,
+  resolveRestartSafeChatAdmission,
+  terminalizeRestartSafeChatAdmission,
+  type RestartSafeChatAdmission,
+} from "./chat-restart-recovery.js";
 import {
   chatSendAckServerTimingAttributes,
   emitOperatorChatSendServerTiming,
@@ -273,6 +256,7 @@ import {
   buildTtsSupplementTranscriptMarker,
   stripVisibleTextFromTtsSupplement,
 } from "./chat-tts-markers.js";
+import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
 import { buildWebchatAssistantMessageFromReplyPayloads } from "./chat-webchat-media.js";
 import {
   loadOptionalServerMethodModelCatalog,
@@ -517,146 +501,6 @@ export {
 } from "./chat-history-budget.js";
 
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
-const RESTART_SAFE_CHAT_UNSAFE_HOOKS = [
-  "before_dispatch",
-  "before_agent_reply",
-  "before_agent_run",
-  "before_message_write",
-  "reply_dispatch",
-] as const;
-
-function hasRestartUnsafeMessageSemantics(rawMessage: string, cfg: OpenClawConfig): boolean {
-  if (
-    shouldComputeCommandAuthorized(rawMessage, cfg) ||
-    rawMessage.startsWith("/") ||
-    rawMessage.startsWith("!")
-  ) {
-    return true;
-  }
-  const directives = parseInlineDirectives(rawMessage, {
-    stripAudioTag: false,
-    stripReplyTags: false,
-  });
-  return directives.hasAudioTag || directives.hasReplyTag;
-}
-
-function isRestartSafeChatSession(params: {
-  entry?: SessionEntry;
-  requestedSessionId?: string;
-  sessionKey: string;
-}): boolean {
-  const entry = params.entry;
-  if (
-    !entry?.sessionId ||
-    params.sessionKey === "global" ||
-    entry.status === "running" ||
-    entry.abortedLastRun === true ||
-    entry.archivedAt !== undefined ||
-    entry.initializationPending === true ||
-    entry.pendingFinalDelivery === true ||
-    entry.pendingFinalDeliveryText != null ||
-    entry.pendingFinalDeliveryContext !== undefined ||
-    entry.agentHarnessId !== undefined ||
-    entry.pluginOwnerId !== undefined ||
-    entry.spawnedBy !== undefined ||
-    entry.subagentRole !== undefined ||
-    (entry.spawnDepth ?? 0) > 0 ||
-    entry.acp !== undefined ||
-    entry.cronRunContinuation !== undefined ||
-    isSubagentSessionKey(params.sessionKey) ||
-    isCronSessionKey(params.sessionKey) ||
-    isAcpSessionKey(params.sessionKey) ||
-    isAgentHarnessSessionKey(params.sessionKey) ||
-    (params.requestedSessionId !== undefined && params.requestedSessionId !== entry.sessionId)
-  ) {
-    return false;
-  }
-  return true;
-}
-
-const RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN = "openclaw.chat.restart-retry.v1";
-
-function fingerprintRestartSafeChatRequest(params: {
-  message: string;
-  senderIsOwner: boolean;
-}): string {
-  const identity = loadOrCreateProcessDeviceIdentity();
-  const digest = createHmac("sha256", identity.privateKeyPem)
-    .update(
-      JSON.stringify([
-        RESTART_SAFE_CHAT_REQUEST_VERIFIER_DOMAIN,
-        params.message,
-        params.senderIsOwner,
-      ]),
-    )
-    .digest("hex");
-  // The verifier can survive a gateway restart without retaining an offline
-  // digest of redacted prompt material in the session database.
-  return `hmac-sha256:v1:${identity.deviceId}:${digest}`;
-}
-
-type RetryableUnadoptedChatClaim = SessionEntry & {
-  abortedLastRun?: false;
-  restartRecoveryDeliveryContext?: undefined;
-  restartRecoveryDeliveryRequestFingerprint: string;
-  restartRecoveryDeliveryRunId: string;
-  restartRecoveryDeliverySourceRunId: string;
-  status: "failed" | "killed";
-};
-
-function isRetryableUnadoptedChatClaim(
-  entry: SessionEntry | undefined,
-  clientRunId: string,
-): entry is RetryableUnadoptedChatClaim {
-  return Boolean(
-    entry &&
-    entry.abortedLastRun !== true &&
-    (entry.status === "failed" || entry.status === "killed") &&
-    entry.restartRecoveryDeliveryContext === undefined &&
-    entry.restartRecoveryDeliveryRunId === clientRunId &&
-    entry.restartRecoveryDeliverySourceRunId === clientRunId &&
-    entry.restartRecoveryDeliveryRequestFingerprint,
-  );
-}
-
-function isAdoptedRestartRecoveryClaim(
-  entry: SessionEntry | undefined,
-  clientRunId: string,
-): entry is SessionEntry & {
-  restartRecoveryDeliveryRunId: string;
-  restartRecoveryDeliverySourceRunId: string;
-} {
-  return Boolean(
-    entry?.restartRecoveryDeliveryRunId &&
-    entry.restartRecoveryDeliverySourceRunId === clientRunId &&
-    !isRetryableUnadoptedChatClaim(entry, clientRunId),
-  );
-}
-
-function hasRestartUnsafeChatWork(params: {
-  context: GatewayRequestContext;
-  sessionId: string;
-  sessionKey: string;
-}): boolean {
-  if (
-    RESTART_SAFE_CHAT_UNSAFE_HOOKS.some((hookName) => hasGlobalHooks(hookName)) ||
-    listActiveEmbeddedRunSessionIds().includes(params.sessionId) ||
-    replyRunRegistry.isActive(params.sessionKey)
-  ) {
-    return true;
-  }
-  for (const active of params.context.chatAbortControllers.values()) {
-    if (active.sessionKey === params.sessionKey || active.sessionId === params.sessionId) {
-      return true;
-    }
-  }
-  for (const queued of params.context.chatQueuedTurns?.values() ?? []) {
-    if (queued.sessionKey === params.sessionKey || queued.sessionId === params.sessionId) {
-      return true;
-    }
-  }
-  return false;
-}
 function formatAttachmentFailureForLog(err: unknown): string {
   const primary = formatUncaughtError(err);
   const cause = err instanceof Error ? err.cause : undefined;
@@ -680,17 +524,6 @@ function logAttachmentFailure(
     consoleMessage: `${label}: ${formatForLog(err)}`,
   });
 }
-
-type SideResultPayload = {
-  kind: "btw";
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  question: string;
-  text: string;
-  isError?: boolean;
-  ts: number;
-};
 
 function buildTranscriptReplyText(payloads: ReplyPayload[]): string {
   const chunks = payloads
@@ -1052,162 +885,6 @@ function normalizeExplicitChatSendOrigin(
       ...(messageThreadId ? { messageThreadId } : {}),
     },
   };
-}
-
-function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: string) {
-  const next = (context.agentRunSeq.get(runId) ?? 0) + 1;
-  context.agentRunSeq.set(runId, next);
-  return next;
-}
-
-function broadcastChatFinal(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  message?: Record<string, unknown>;
-}) {
-  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
-  const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
-  const payload = {
-    runId: params.runId,
-    sessionKey: params.sessionKey,
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq,
-    state: "final" as const,
-    message: projectChatDisplayMessage(params.message),
-  };
-  params.context.broadcast("chat", payload);
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat",
-    payload,
-  });
-  params.context.agentRunSeq.delete(params.runId);
-}
-
-function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyPayload & {
-  btw: { question: string };
-  text: string;
-} {
-  return (
-    typeof payload?.btw?.question === "string" &&
-    payload.btw.question.trim().length > 0 &&
-    typeof payload.text === "string" &&
-    payload.text.trim().length > 0
-  );
-}
-
-function broadcastSideResult(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
-  payload: SideResultPayload;
-}) {
-  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.payload.runId);
-  const payloadAgentId =
-    params.payload.sessionKey === "global" ? params.payload.agentId : undefined;
-  const payload = {
-    ...params.payload,
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq,
-  };
-  params.context.broadcast("chat.side_result", payload);
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.payload.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat.side_result",
-    payload,
-  });
-}
-
-function broadcastChatError(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
-  runId: string;
-  sessionKey: string;
-  agentId?: string;
-  errorMessage?: string;
-}) {
-  const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
-  const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
-  const errorText = params.errorMessage?.trim();
-  const payload = {
-    runId: params.runId,
-    sessionKey: params.sessionKey,
-    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
-    seq,
-    state: "error" as const,
-    errorMessage: params.errorMessage,
-    ...(errorText
-      ? {
-          message: {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text:
-                  errorText.startsWith("⚠️") || errorText.startsWith("Error:")
-                    ? errorText
-                    : `Error: ${errorText}`,
-              },
-            ],
-            timestamp: Date.now(),
-          },
-        }
-      : {}),
-  };
-  params.context.broadcast("chat", payload);
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat",
-    payload,
-  });
-  params.context.agentRunSeq.delete(params.runId);
-}
-
-function sendGlobalAwareNodeChatPayload(params: {
-  context: Pick<GatewayRequestContext, "nodeSendToSession"> &
-    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
-  sessionKey: string;
-  agentId?: string;
-  event: string;
-  payload: unknown;
-}) {
-  const deliveryKeys = resolveGlobalAwareNodeChatDeliveryKeys({
-    cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  for (const deliveryKey of deliveryKeys) {
-    params.context.nodeSendToSession(deliveryKey, params.event, params.payload);
-  }
-}
-
-function resolveGlobalAwareNodeChatDeliveryKeys(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId?: string;
-}): string[] {
-  if (params.sessionKey !== "global") {
-    return [params.sessionKey];
-  }
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const scopedAgentId = params.agentId ?? defaultAgentId;
-  const keys = [`agent:${scopedAgentId}:global`];
-  if (scopedAgentId === defaultAgentId) {
-    keys.push("global");
-  }
-  return keys;
-}
-
-function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined) {
-  return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
 }
 
 function resolveChatHistoryNextOffset(params: {
@@ -1966,27 +1643,25 @@ export const chatHandlers: GatewayRequestHandlers = {
       overrideMs: p.timeoutMs,
     });
     const now = Date.now();
-    const restartSafeRequest =
-      isBrowserOperatorUiClient(clientInfo) &&
-      turnKind === "main" &&
-      normalizedAttachments.length === 0 &&
-      !controlUiReconnectResume.resumeRequested &&
-      explicitOriginResult.value === undefined &&
-      p.deliver !== true &&
-      p.thinking === undefined &&
-      p.fastMode === undefined &&
-      p.fastAutoOnSeconds === undefined &&
-      p.timeoutMs === undefined &&
-      systemInputProvenance === undefined &&
-      systemProvenanceReceipt === undefined &&
-      !suppressCommandInterpretation &&
-      !hasRestartUnsafeMessageSemantics(rawMessage, cfg);
-    const restartSafeRequestFingerprint = restartSafeRequest
-      ? fingerprintRestartSafeChatRequest({
-          message: rawMessage,
-          senderIsOwner: hasGatewayAdminScope(client),
-        })
-      : undefined;
+    const restartSafeRequest = createRestartSafeChatRequest({
+      cfg,
+      eligible:
+        isBrowserOperatorUiClient(clientInfo) &&
+        turnKind === "main" &&
+        normalizedAttachments.length === 0 &&
+        !controlUiReconnectResume.resumeRequested &&
+        explicitOriginResult.value === undefined &&
+        p.deliver !== true &&
+        p.thinking === undefined &&
+        p.fastMode === undefined &&
+        p.fastAutoOnSeconds === undefined &&
+        p.timeoutMs === undefined &&
+        systemInputProvenance === undefined &&
+        systemProvenanceReceipt === undefined &&
+        !suppressCommandInterpretation,
+      message: rawMessage,
+      senderIsOwner: hasGatewayAdminScope(client),
+    });
 
     const sendPolicy = resolveSendPolicy({
       cfg,
@@ -2092,79 +1767,32 @@ export const chatHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    let durableClaimEntry = entry;
-    if (
-      isAdoptedRestartRecoveryClaim(durableClaimEntry, clientRunId) &&
-      durableClaimEntry.status === "running" &&
-      durableClaimEntry.abortedLastRun === true
-    ) {
-      const recoverySessionError = resolveSessionWorkStartError(sessionKey, durableClaimEntry);
-      if (recoverySessionError) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, recoverySessionError, { retryable: false }),
-        );
-        return;
-      }
-      // Startup retries may have exhausted while preserving an ambiguous, stable
-      // recovery run id. Re-dispatch that id before retiring the browser outbox.
-      try {
-        const { retryRestartAbortedMainSessionRecovery } =
-          await import("../../agents/main-session-restart-recovery.js");
-        await retryRestartAbortedMainSessionRecovery({
-          canonicalSessionKey: sessionKey,
-          cfg,
-          expectedRecoveryRunId: durableClaimEntry.restartRecoveryDeliveryRunId,
-          expectedRecoverySourceRunId: durableClaimEntry.restartRecoveryDeliverySourceRunId,
-          expectedSessionId: durableClaimEntry.sessionId,
-          sessionKey: legacyKey ?? sessionKey,
-          storePath,
-        });
-      } catch (err) {
-        context.logGateway.warn(
-          `failed to retry durable chat recovery ${clientRunId}: ${formatForLog(err)}`,
-        );
-      }
-      durableClaimEntry = loadSessionEntry(rawSessionKey, sessionLoadOptions).entry;
-      if (
-        isAdoptedRestartRecoveryClaim(durableClaimEntry, clientRunId) &&
-        durableClaimEntry.status === "running" &&
-        durableClaimEntry.abortedLastRun === true
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "accepted chat turn recovery is still pending; retry",
-            {
-              retryable: true,
-            },
-          ),
-        );
-        return;
-      }
-      if (
-        !isAdoptedRestartRecoveryClaim(durableClaimEntry, clientRunId) &&
-        !hasRestartRecoveryTerminalRun(durableClaimEntry, clientRunId)
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "accepted chat turn recovery ownership changed; automatic retry stopped to avoid duplicate execution",
-            { retryable: false },
-          ),
-        );
-        return;
-      }
+    const durableClaim = await resolveDurableChatClaim({
+      canonicalSessionKey: sessionKey,
+      cfg,
+      clientRunId,
+      entry,
+      persistedSessionKey: legacyKey ?? sessionKey,
+      reloadEntry: () => loadSessionEntry(rawSessionKey, sessionLoadOptions).entry,
+      storePath,
+      warn: (message) =>
+        context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
+    });
+    if (durableClaim.kind === "pending" || durableClaim.kind === "rejected") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          durableClaim.kind === "pending" || durableClaim.unavailable
+            ? ErrorCodes.UNAVAILABLE
+            : ErrorCodes.INVALID_REQUEST,
+          durableClaim.message,
+          { retryable: durableClaim.kind === "pending" },
+        ),
+      );
+      return;
     }
-    if (
-      isAdoptedRestartRecoveryClaim(durableClaimEntry, clientRunId) ||
-      hasRestartRecoveryTerminalRun(durableClaimEntry, clientRunId)
-    ) {
+    if (durableClaim.kind === "accepted") {
       // An active source claim or terminal tombstone proves the durable turn
       // was already accepted. Retire the outbox without dispatching twice.
       respond(true, { runId: clientRunId, status: "ok" as const }, undefined, {
@@ -2242,9 +1870,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     let admittedSessionId = backingSessionId ?? clientRunId;
     let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
     let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
-    let restartSafeAdmission = false;
-    let restartSafePriorTerminalSourceRunId: string | undefined;
-    let restartSafeRetryExpectedState: SessionTranscriptTurnExpectedState | undefined;
+    let restartSafeAdmission: RestartSafeChatAdmission | undefined;
     let reservationSuperseded = false;
     let supersedingResult: DedupeEntry | undefined;
     const assertChatWorkAdmissionAllowed = (commitOutcome: boolean) => {
@@ -2346,54 +1972,22 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
       admittedSessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
-      restartSafeAdmission =
-        restartSafeRequest &&
-        isRestartSafeChatSession({
-          entry: latestEntry,
-          requestedSessionId,
-          sessionKey: latestSession.canonicalKey,
-        }) &&
-        resolveSessionEntryResetFreshness({
-          agentId,
-          now: Date.now(),
-          resetOverride: resolveChannelResetConfig({
-            sessionCfg: latestSession.cfg.session,
-            channel: latestEntry?.lastChannel ?? latestEntry?.channel,
-          }),
-          resetType: resolveSessionResetType({ sessionKey: latestSession.canonicalKey }),
-          sessionCfg: latestSession.cfg.session,
-          sessionKey: latestSession.canonicalKey,
-          storePath: latestSession.storePath,
-        }).state === "fresh" &&
-        !hasRestartUnsafeChatWork({
-          context,
-          sessionId: admittedSessionId,
-          sessionKey,
-        });
-      if (retryableClaim) {
-        if (
-          !restartSafeAdmission ||
-          restartSafeRequestFingerprint === undefined ||
-          latestEntry.restartRecoveryDeliveryRequestFingerprint !== restartSafeRequestFingerprint
-        ) {
-          throw new Error("chat retry does not match its durable admission");
-        }
-        restartSafeRetryExpectedState = {
-          abortedLastRun: latestEntry.abortedLastRun,
-          restartRecoveryDeliveryRequestFingerprint:
-            latestEntry.restartRecoveryDeliveryRequestFingerprint,
-          restartRecoveryDeliveryRunId: latestEntry.restartRecoveryDeliveryRunId,
-          restartRecoveryDeliverySourceRunId: latestEntry.restartRecoveryDeliverySourceRunId,
-          status: latestEntry.status,
-          updatedAt: latestEntry.updatedAt,
-        };
-      } else {
-        restartSafeRetryExpectedState = undefined;
+      restartSafeAdmission = resolveRestartSafeChatAdmission({
+        agentId,
+        cfg: latestSession.cfg,
+        clientRunId,
+        context,
+        entry: latestEntry,
+        now: Date.now(),
+        request: restartSafeRequest,
+        requestedSessionId,
+        sessionId: admittedSessionId,
+        sessionKey: latestSession.canonicalKey,
+        storePath: latestSession.storePath,
+      });
+      if (retryableClaim && !restartSafeAdmission) {
+        throw new Error("chat retry does not match its durable admission");
       }
-      restartSafePriorTerminalSourceRunId =
-        restartSafeAdmission && !retryableClaim
-          ? latestEntry?.restartRecoveryDeliverySourceRunId
-          : undefined;
       // A terminal Control UI claim can survive a crash after status commit.
       // The transcript transaction merges its source with fresh tombstones.
       admittedRunAbort = registerChatAbortController({
@@ -2635,115 +2229,39 @@ export const chatHandlers: GatewayRequestHandlers = {
     const terminalizeRestartSafeAdmission = async (terminalState: {
       retryable: boolean;
       status: "failed" | "killed";
-    }): Promise<boolean> => {
-      const endedAt = Date.now();
-      let terminalized = false;
-      await patchSessionEntry(
-        { sessionKey, storePath },
-        (current) => {
-          if (
-            current.sessionId !== admittedSessionId ||
-            current.restartRecoveryDeliveryRunId !== clientRunId
-          ) {
-            return null;
-          }
-          terminalized = true;
-          return {
-            abortedLastRun: terminalState.retryable ? false : terminalState.status === "killed",
-            endedAt,
-            ...(terminalState.retryable
-              ? {}
-              : buildRestartRecoveryClaimCleanupPatch({
-                  entry: current,
-                  recordTerminalSource: true,
-                  terminalSourceRunId: current.restartRecoveryDeliverySourceRunId,
-                })),
-            runtimeMs: Math.max(0, endedAt - admissionStartedAt),
-            status: terminalState.status,
-            updatedAt: endedAt,
-          };
-        },
-        { requireWriteSuccess: true, skipMaintenance: true },
-      );
-      return terminalized;
-    };
+    }): Promise<boolean> =>
+      await terminalizeRestartSafeChatAdmission({
+        admittedSessionId,
+        clientRunId,
+        sessionKey,
+        startedAt: admissionStartedAt,
+        storePath,
+        ...terminalState,
+      });
 
     try {
-      const baseUserTurnInput: UserTurnInput = {
-        text: rawMessage,
-        timestamp: now,
-        idempotencyKey: `${clientRunId}:user`,
-        ...(hasGatewayAdminScope(client) ? { senderIsOwner: true } : {}),
+      const userTurn = createGatewayChatUserTurnController({
+        agentId,
+        cfg,
+        clientRunId,
+        initialSessionId: admittedSessionId,
+        now,
         ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
-      };
-      let userTurnInputPromise: Promise<UserTurnInput> = Promise.resolve(baseUserTurnInput);
-      let acceptedUserTurnSessionId = admittedSessionId;
-      const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-        input: baseUserTurnInput,
-        resolveInput: () => userTurnInputPromise,
-        target: () => {
-          const {
-            storePath: latestStorePath,
-            store: latestStore,
-            entry: latestEntry,
-          } = loadSessionEntry(sessionKey, sessionLoadOptions);
-          if (!latestEntry?.sessionId || latestEntry.sessionId !== acceptedUserTurnSessionId) {
-            return undefined;
-          }
-          return {
-            sessionId: latestEntry.sessionId,
-            expectedSessionId: latestEntry.sessionId,
-            sessionKey,
-            sessionEntry: latestEntry,
-            sessionStore: latestStore,
-            storePath: latestStorePath,
-            agentId,
-            config: cfg,
-          };
-        },
-        ...(restartSafeAdmission
-          ? {
-              ...(restartSafeRetryExpectedState
-                ? { expectedSessionState: restartSafeRetryExpectedState }
-                : {}),
-              sessionLifecyclePatch: {
-                status: "running",
-                startedAt: admissionStartedAt,
-                endedAt: undefined,
-                restartRecoveryDeliveryContext: undefined,
-                restartRecoveryDeliveryRequestFingerprint: restartSafeRequestFingerprint,
-                restartRecoveryDeliveryRunId: clientRunId,
-                restartRecoveryDeliverySourceRunId: clientRunId,
-                ...(restartSafePriorTerminalSourceRunId
-                  ? { restartRecoveryTerminalRunIds: [restartSafePriorTerminalSourceRunId] }
-                  : {}),
-                runtimeMs: undefined,
-                abortedLastRun: false,
-                updatedAt: admissionStartedAt,
-              },
-            }
-          : {}),
-        errorContext: "gateway chat user turn transcript",
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-        onPersistenceError: (error) => {
-          context.logGateway.warn(
-            `gateway user transcript persistence failed: ${formatForLog(error)}`,
-          );
-        },
+        rawMessage,
+        ...(restartSafeAdmission ? { restartAdmission: restartSafeAdmission } : {}),
+        senderIsOwner: hasGatewayAdminScope(client),
+        sessionKey,
+        ...(sessionLoadOptions ? { sessionLoadOptions } : {}),
+        startedAt: admissionStartedAt,
+        traceAttributes: chatSendTraceAttributes,
+        warn: (message) => context.logGateway.warn(message),
       });
-      const persistGatewayUserTurnTranscript = async () =>
-        await measureDiagnosticsTimelineSpan(
-          "gateway.chat_send.persist_user_transcript",
-          () => userTurnRecorder.persistFallback(),
-          {
-            phase: "agent-turn",
-            config: cfg,
-            attributes: chatSendTraceAttributes,
-          },
-        );
-      const persistGatewayUserTurnTranscriptBestEffort = async () => {
-        await persistGatewayUserTurnTranscript().catch(() => undefined);
-      };
+      const {
+        baseInput: baseUserTurnInput,
+        persist: persistGatewayUserTurnTranscript,
+        persistBestEffort: persistGatewayUserTurnTranscriptBestEffort,
+        recorder: userTurnRecorder,
+      } = userTurn;
       if (restartSafeAdmission) {
         const persistedUserTurn = await persistGatewayUserTurnTranscript();
         const admittedEntry = persistedUserTurn?.sessionEntry;
@@ -2876,15 +2394,17 @@ export const chatHandlers: GatewayRequestHandlers = {
       const preparedUserTurnMediaPromise =
         normalizedAttachments.length > 0 ? getPersistedMediaForTranscript() : Promise.resolve([]);
       const userTurnMediaPromise = preparedUserTurnMediaPromise.then(buildChatSendUserTurnMedia);
-      userTurnInputPromise = userTurnMediaPromise.then((media) => ({
-        ...baseUserTurnInput,
-        ...(media.length > 0
-          ? {
-              media,
-              mediaOnlyText: "[User sent media without caption]",
-            }
-          : {}),
-      }));
+      userTurn.setInputPromise(
+        userTurnMediaPromise.then((media) => ({
+          ...baseUserTurnInput,
+          ...(media.length > 0
+            ? {
+                media,
+                mediaOnlyText: "[User sent media without caption]",
+              }
+            : {}),
+        })),
+      );
       const pluginBoundMediaFieldsPromise =
         explicitOriginTargetsPlugin && parsedImages.length > 0
           ? preparedUserTurnMediaPromise.then(resolveChatSendManagedMediaFields)
@@ -3203,7 +2723,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   resumeRequestedSession: controlUiReconnectResume.resumeRequested,
                   onSessionPrepared: (binding) => {
                     if (binding.sessionKey === sessionKey) {
-                      acceptedUserTurnSessionId = binding.sessionId;
+                      userTurn.setAcceptedSessionId(binding.sessionId);
                     }
                   },
                   abortSignal: activeRunAbort.controller.signal,

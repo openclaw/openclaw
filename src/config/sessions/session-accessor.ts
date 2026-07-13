@@ -29,6 +29,10 @@ import {
   shouldSkipPluginHostCleanupStore,
   type PluginHostSessionCleanupStoreParams,
 } from "./plugin-host-cleanup.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-accessor.sqlite-contract.js";
 import {
   appendSqliteTranscriptEvent,
   appendSqliteTranscriptEventSync,
@@ -72,6 +76,12 @@ import {
   withSqliteTranscriptWriteLock,
   withSqliteTranscriptWriteTransaction,
 } from "./session-accessor.sqlite.js";
+import {
+  cloneOptionalSessionEntry as cloneOptionalEntry,
+  normalizeTargetStoreKeys,
+  resolveFreshestTargetEntry,
+  resolveProjectionExistingEntry,
+} from "./session-entry-selection.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -118,6 +128,10 @@ export type {
   SessionIdentityMutationListener,
   SessionIdentityMutationTarget,
 } from "../../sessions/session-lifecycle-events.js";
+export type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-accessor.sqlite-contract.js";
 
 /**
  * Session access API for callers that need entries or transcripts without
@@ -398,30 +412,6 @@ export type SessionTranscriptTurnPersistOptions = {
    * after that transaction commits.
    */
   touchSessionEntry?: boolean;
-};
-
-export type SessionTranscriptTurnExpectedState = {
-  abortedLastRun: SessionEntry["abortedLastRun"];
-  restartRecoveryDeliveryRequestFingerprint: SessionEntry["restartRecoveryDeliveryRequestFingerprint"];
-  restartRecoveryDeliveryRunId: SessionEntry["restartRecoveryDeliveryRunId"];
-  restartRecoveryDeliverySourceRunId: SessionEntry["restartRecoveryDeliverySourceRunId"];
-  status: SessionEntry["status"];
-  updatedAt: SessionEntry["updatedAt"];
-};
-
-export type SessionTranscriptTurnLifecyclePatch = {
-  abortedLastRun?: SessionEntry["abortedLastRun"];
-  endedAt?: SessionEntry["endedAt"];
-  restartRecoveryDeliveryContext?: SessionEntry["restartRecoveryDeliveryContext"];
-  restartRecoveryDeliveryRequestFingerprint?: SessionEntry["restartRecoveryDeliveryRequestFingerprint"];
-  restartRecoveryDeliveryRunId?: SessionEntry["restartRecoveryDeliveryRunId"];
-  restartRecoveryDeliverySourceRunId?: SessionEntry["restartRecoveryDeliverySourceRunId"];
-  /** Durable tombstones merged with the fresh row inside the SQLite write transaction. */
-  restartRecoveryTerminalRunIds?: SessionEntry["restartRecoveryTerminalRunIds"];
-  runtimeMs?: SessionEntry["runtimeMs"];
-  startedAt?: SessionEntry["startedAt"];
-  status?: SessionEntry["status"];
-  updatedAt?: SessionEntry["updatedAt"];
 };
 
 export type SessionTranscriptTurnPersistResult = {
@@ -1304,44 +1294,6 @@ export async function canonicalizeSessionEntryAliases(params: {
   };
 }
 
-// Normalizes caller-supplied alias sets while always preserving the canonical key.
-function normalizeTargetStoreKeys(target: SessionLifecycleStoreTarget): string[] {
-  const keys = new Set<string>();
-  const remember = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      keys.add(trimmed);
-    }
-  };
-  remember(target.canonicalKey);
-  for (const key of target.storeKeys) {
-    remember(key);
-  }
-  return [...keys];
-}
-
-// Selects the row that current JSON-store alias migration would promote.
-function resolveFreshestTargetEntry(
-  store: Record<string, SessionEntry>,
-  targetKeys: readonly string[],
-): { key: string; entry: SessionEntry } | undefined {
-  let freshest: { key: string; entry: SessionEntry } | undefined;
-  for (const key of targetKeys) {
-    const entry = store[key];
-    if (!entry) {
-      continue;
-    }
-    if (!freshest || (entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = { key, entry };
-    }
-  }
-  return freshest;
-}
-
-function cloneOptionalEntry(entry: SessionEntry | undefined): SessionEntry | undefined {
-  return entry ? structuredClone(entry) : undefined;
-}
-
 /**
  * Creates or updates one session entry and initializes its transcript header as
  * one SQLite-backed lifecycle operation. Callers do not compose row creation,
@@ -1853,24 +1805,6 @@ export async function applySessionPatchProjection<
     skipMaintenance: true,
   });
   return { ...projected, entry: structuredClone(projected.entry) };
-}
-
-function resolveProjectionExistingEntry(
-  entries: readonly { sessionKey: string; entry: SessionEntry }[],
-  target: SessionPatchProjectionTarget,
-): SessionEntry | undefined {
-  const candidateKeys = target.candidateKeys ?? [target.primaryKey];
-  let freshest: SessionEntry | undefined;
-  for (const candidateKey of candidateKeys) {
-    const entry = entries.find((candidate) => candidate.sessionKey === candidateKey)?.entry;
-    if (!entry) {
-      continue;
-    }
-    if (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0)) {
-      freshest = entry;
-    }
-  }
-  return freshest ? structuredClone(freshest) : undefined;
 }
 
 /**

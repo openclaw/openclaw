@@ -27,6 +27,44 @@ export function normalizeRestartRecoveryTerminalRunIds(value: unknown): string[]
   return bounded.length > 0 ? bounded : undefined;
 }
 
+type RestartRecoveryNormalizedField =
+  | "restartRecoveryDeliveryRequestFingerprint"
+  | "restartRecoveryDeliveryRunId"
+  | "restartRecoveryDeliverySourceRunId"
+  | "restartRecoveryTerminalRunIds";
+
+function sameOptionalStringArray(left: unknown, right: string[] | undefined): boolean {
+  if (!Array.isArray(left) || !right) {
+    return left === undefined && right === undefined;
+  }
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/** Normalizes restart-claim fields while preserving an already-canonical array identity. */
+export function normalizeRestartRecoveryEntryFields(
+  entry: SessionEntry,
+  assign: (key: RestartRecoveryNormalizedField, value: string | string[] | undefined) => void,
+): void {
+  assign(
+    "restartRecoveryDeliveryRequestFingerprint",
+    normalizeRunId(entry.restartRecoveryDeliveryRequestFingerprint),
+  );
+  assign("restartRecoveryDeliveryRunId", normalizeRunId(entry.restartRecoveryDeliveryRunId));
+  assign(
+    "restartRecoveryDeliverySourceRunId",
+    normalizeRunId(entry.restartRecoveryDeliverySourceRunId),
+  );
+  const terminalRunIds = normalizeRestartRecoveryTerminalRunIds(
+    entry.restartRecoveryTerminalRunIds,
+  );
+  assign(
+    "restartRecoveryTerminalRunIds",
+    sameOptionalStringArray(entry.restartRecoveryTerminalRunIds, terminalRunIds)
+      ? entry.restartRecoveryTerminalRunIds
+      : terminalRunIds,
+  );
+}
+
 /** Appends new terminal ids without refreshing or evicting existing members. */
 export function mergeRestartRecoveryTerminalRunIds(
   current: unknown,

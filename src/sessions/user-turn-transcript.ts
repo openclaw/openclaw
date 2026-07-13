@@ -3,18 +3,14 @@ import path from "node:path";
 import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
-import type {
-  SessionTranscriptTurnExpectedState,
-  SessionTranscriptTurnLifecyclePatch,
-} from "../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
 import type {
+  CreateUserTurnTranscriptRecorderParams,
+  PersistUserTurnTranscriptParams,
   PersistedUserTurnMediaInput,
   PersistedUserTurnMessage,
-  UserTurnBeforeMessageWrite,
+  UserTurnMessagePersistenceParams,
   UserTurnInput,
-  UserTurnSessionEntry,
   UserTurnTranscriptPersistResult,
   UserTurnTranscriptRecorder,
   UserTurnTranscriptTarget,
@@ -33,53 +29,6 @@ type PersistedUserTurnMediaFields = {
   MediaPaths?: string[];
   MediaType?: string;
   MediaTypes?: string[];
-};
-
-type UserTurnMessagePersistenceParams = {
-  input?: UserTurnInput;
-  message?: PersistedUserTurnMessage;
-  sessionId?: string;
-  agentId?: string;
-  sessionKey?: string;
-  cwd?: string;
-  config?: OpenClawConfig;
-  updateMode?: UserTurnTranscriptUpdateMode;
-  beforeMessageWrite?: UserTurnBeforeMessageWrite;
-};
-
-type PersistUserTurnTranscriptParams = {
-  input?: UserTurnInput;
-  message?: PersistedUserTurnMessage;
-  sessionId: string;
-  expectedSessionId?: string;
-  sessionKey: string;
-  sessionEntry: UserTurnSessionEntry | undefined;
-  sessionStore?: Record<string, UserTurnSessionEntry>;
-  storePath?: string;
-  agentId: string;
-  threadId?: string | number;
-  cwd?: string;
-  config?: unknown;
-  updateMode?: UserTurnTranscriptUpdateMode;
-  beforeMessageWrite?: UserTurnBeforeMessageWrite;
-  expectedSessionState?: SessionTranscriptTurnExpectedState;
-  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
-};
-
-type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
-
-type CreateUserTurnTranscriptRecorderParams = {
-  input?: UserTurnInput;
-  message?: PersistedUserTurnMessage;
-  resolveInput?: UserTurnInputResolver;
-  target: UserTurnTranscriptTargetResolver;
-  updateMode?: UserTurnTranscriptUpdateMode;
-  beforeMessageWrite?: UserTurnBeforeMessageWrite;
-  errorContext?: string;
-  onPersistenceError?: (error: unknown) => void;
-  onMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
-  expectedSessionState?: SessionTranscriptTurnExpectedState;
-  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 };
 
 type ResolvePersistedUserTurnTextOptions = {
@@ -479,7 +428,7 @@ export async function persistUserTurnTranscript(
     },
     {
       ...(params.cwd ? { cwd: params.cwd } : {}),
-      ...(params.config ? { config: params.config as OpenClawConfig } : {}),
+      ...(params.config ? { config: params.config } : {}),
       ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
       ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
       ...(params.sessionLifecyclePatch

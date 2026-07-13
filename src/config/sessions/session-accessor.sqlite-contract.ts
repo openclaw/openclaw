@@ -105,6 +105,30 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
   shouldAppend?: (context: SessionTranscriptTurnWriteContext) => Promise<boolean> | boolean;
 };
 
+export type SessionTranscriptTurnExpectedState = {
+  abortedLastRun: SessionEntry["abortedLastRun"];
+  restartRecoveryDeliveryRequestFingerprint: SessionEntry["restartRecoveryDeliveryRequestFingerprint"];
+  restartRecoveryDeliveryRunId: SessionEntry["restartRecoveryDeliveryRunId"];
+  restartRecoveryDeliverySourceRunId: SessionEntry["restartRecoveryDeliverySourceRunId"];
+  status: SessionEntry["status"];
+  updatedAt: SessionEntry["updatedAt"];
+};
+
+export type SessionTranscriptTurnLifecyclePatch = {
+  abortedLastRun?: SessionEntry["abortedLastRun"];
+  endedAt?: SessionEntry["endedAt"];
+  restartRecoveryDeliveryContext?: SessionEntry["restartRecoveryDeliveryContext"];
+  restartRecoveryDeliveryRequestFingerprint?: SessionEntry["restartRecoveryDeliveryRequestFingerprint"];
+  restartRecoveryDeliveryRunId?: SessionEntry["restartRecoveryDeliveryRunId"];
+  restartRecoveryDeliverySourceRunId?: SessionEntry["restartRecoveryDeliverySourceRunId"];
+  /** Durable tombstones merged with the fresh row inside the SQLite write transaction. */
+  restartRecoveryTerminalRunIds?: SessionEntry["restartRecoveryTerminalRunIds"];
+  runtimeMs?: SessionEntry["runtimeMs"];
+  startedAt?: SessionEntry["startedAt"];
+  status?: SessionEntry["status"];
+  updatedAt?: SessionEntry["updatedAt"];
+};
+
 export type SessionTranscriptTurnWriteContext = {
   agentId?: string;
   sessionFile: string;

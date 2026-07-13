@@ -34,7 +34,6 @@ import {
   resolveSessionPluginTraceLines,
   type SessionEntry,
 } from "../../config/sessions.js";
-import { buildRestartRecoveryClaimCleanupPatch } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
@@ -141,6 +140,7 @@ import {
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
+import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -1528,174 +1528,38 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  let restartRecoveryDeliveryRunId: string = crypto.randomUUID();
-  let restartRecoveryDeliverySourceRunId: string | undefined;
-  let trackedRestartRecoveryDeliveryClaim = false;
-  const persistRestartRecoveryDeliveryClaim = async (): Promise<void> => {
-    if (!sessionKey || !storePath) {
-      return;
-    }
-    const entry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;
-    const admittedRunId = normalizeOptionalString(sessionCtx.MessageSid);
-    const activeClaimRunId = normalizeOptionalString(entry?.restartRecoveryDeliveryRunId);
-    if (
-      admittedRunId &&
-      entry &&
-      entry.restartRecoveryDeliveryContext === undefined &&
-      activeClaimRunId === admittedRunId
-    ) {
-      // Control UI admission already committed this transcript-only claim.
-      // Clear its retry marker before execution so a terminal cleanup failure
-      // cannot make an already-adopted turn eligible for dispatch again.
-      const adopted = await updateSessionEntry(
-        {
-          storePath,
-          sessionKey,
-        },
-        (current) =>
-          current.sessionId === replyOperation.sessionId &&
-          current.status === "running" &&
-          current.abortedLastRun !== true &&
-          current.restartRecoveryDeliveryContext === undefined &&
-          current.restartRecoveryDeliveryRunId === admittedRunId &&
-          current.restartRecoveryDeliverySourceRunId === entry.restartRecoveryDeliverySourceRunId &&
-          current.restartRecoveryDeliveryRequestFingerprint ===
-            entry.restartRecoveryDeliveryRequestFingerprint
-            ? {
-                restartRecoveryDeliveryRequestFingerprint: undefined,
-                updatedAt: Date.now(),
-              }
-            : null,
-      );
-      if (!adopted) {
-        throw new Error("restart recovery claim changed before agent adoption");
-      }
-      activeSessionEntry = adopted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = adopted;
-      }
-      restartRecoveryDeliveryRunId = admittedRunId;
-      restartRecoveryDeliverySourceRunId = normalizeOptionalString(
-        adopted.restartRecoveryDeliverySourceRunId,
-      );
-      trackedRestartRecoveryDeliveryClaim = true;
-      return;
-    }
-    const deliveryContext = resolveReplyRunDeliveryContext({
-      cfg,
-      sessionCtx,
-      sessionEntry: entry,
-      sessionKey,
-      runtimePolicySessionKey,
-      opts,
-    });
-    if (!deliveryContext && !activeClaimRunId) {
-      return;
-    }
-    const updatedAt = Date.now();
-    const persisted = await updateSessionEntry(
-      {
-        storePath,
-        sessionKey,
-      },
-      async (current) => {
-        if (current.sessionId !== replyOperation.sessionId || current.abortedLastRun === true) {
-          return null;
-        }
-        const currentClaimRunId = normalizeOptionalString(current.restartRecoveryDeliveryRunId);
-        if (activeClaimRunId) {
-          if (currentClaimRunId !== activeClaimRunId || current.status === "running") {
-            return null;
-          }
-          const retiredClaim = buildRestartRecoveryClaimCleanupPatch({
-            entry: current,
-            recordTerminalSource: true,
-            terminalSourceRunId: normalizeOptionalString(
-              current.restartRecoveryDeliverySourceRunId,
-            ),
-          });
-          // A terminal owner cannot protect the next turn. Retire it and, when
-          // this run is externally deliverable, install the new owner atomically.
-          return deliveryContext
-            ? {
-                ...retiredClaim,
-                restartRecoveryDeliveryContext: deliveryContext,
-                restartRecoveryDeliveryRequestFingerprint: undefined,
-                restartRecoveryDeliveryRunId,
-                restartRecoveryDeliverySourceRunId: undefined,
-                updatedAt,
-              }
-            : { ...retiredClaim, updatedAt };
-        }
-        return currentClaimRunId === undefined && deliveryContext
-          ? {
-              restartRecoveryDeliveryContext: deliveryContext,
-              restartRecoveryDeliveryRequestFingerprint: undefined,
-              restartRecoveryDeliveryRunId,
-              restartRecoveryDeliverySourceRunId: undefined,
-              updatedAt,
-            }
-          : null;
-      },
-    );
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
-      }
-      trackedRestartRecoveryDeliveryClaim =
-        persisted.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId;
-    }
-  };
-  const clearRestartRecoveryDeliveryClaim = async (): Promise<void> => {
-    if (!trackedRestartRecoveryDeliveryClaim || !sessionKey || !storePath) {
-      return;
-    }
-    if (
+  const {
+    clear: clearRestartRecoveryDeliveryClaim,
+    isArmed: isRestartRecoveryArmed,
+    persist: persistRestartRecoveryDeliveryClaim,
+  } = createReplyRestartRecoveryClaimController({
+    admittedRunId: sessionCtx.MessageSid,
+    getEntry: () =>
+      sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
+    isRestartAbort: () =>
       replyOperation.result?.kind === "aborted" &&
-      replyOperation.result.code === "aborted_for_restart"
-    ) {
-      // Restart recovery adopts this exact claim after process startup. Other
-      // terminal aborts must release it so a later turn can claim the session.
-      return;
-    }
-    const persisted = await updateSessionEntry(
-      {
-        storePath,
-        sessionKey,
-      },
-      async (current) =>
-        current.sessionId === replyOperation.sessionId &&
-        current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
-          ? {
-              ...buildRestartRecoveryClaimCleanupPatch({
-                entry: current,
-                recordTerminalSource: true,
-                terminalSourceRunId: restartRecoveryDeliverySourceRunId,
-              }),
-              updatedAt: Date.now(),
-            }
-          : null,
-    );
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
+      replyOperation.result.code === "aborted_for_restart",
+    resolveDeliveryContext: (entry) =>
+      sessionKey
+        ? resolveReplyRunDeliveryContext({
+            cfg,
+            sessionCtx,
+            sessionEntry: entry,
+            sessionKey,
+            runtimePolicySessionKey,
+            opts,
+          })
+        : undefined,
+    sessionId: replyOperation.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    setEntry: (entry) => {
+      activeSessionEntry = entry;
+      if (activeSessionStore && sessionKey) {
+        activeSessionStore[sessionKey] = entry;
       }
-    }
-  };
-  const isRestartRecoveryArmed = (): boolean => {
-    if (!trackedRestartRecoveryDeliveryClaim || !sessionKey || !storePath) {
-      return false;
-    }
-    const persisted = loadSessionEntry({
-      sessionKey,
-      storePath,
-      clone: false,
-      hydrateSkillPromptRefs: false,
-    });
-    return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
-  };
+    },
+    ...(storePath ? { storePath } : {}),
+  });
   type SessionResetOptions = {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;

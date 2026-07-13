@@ -88,6 +88,12 @@ import {
   resolveMessageChannel,
 } from "../utils/message-channel.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import {
+  buildCurrentRunRestartRecoveryClaim,
+  shouldPersistCurrentRunSessionCleanup,
+  shouldPersistRestartRecoveryCleanup,
+  shouldPersistRestartRecoveryContextClaim,
+} from "./agent-command-restart-recovery.js";
 import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
@@ -541,44 +547,6 @@ async function resolveCurrentRunDeliveryContext(params: {
     accountId: effectivePlan.resolvedAccountId,
     threadId,
   });
-}
-
-function shouldPersistCurrentRunSessionCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-): boolean {
-  return (
-    current !== undefined && current.sessionId === sessionId && current.abortedLastRun !== true
-  );
-}
-
-function shouldPersistRestartRecoveryContextClaim(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-  allowCreate: boolean,
-): boolean {
-  if (!current) {
-    return allowCreate;
-  }
-  if (!shouldPersistCurrentRunSessionCleanup(current, sessionId)) {
-    return false;
-  }
-  return (
-    current.restartRecoveryDeliveryRunId === undefined ||
-    current.restartRecoveryDeliveryRunId === runId
-  );
-}
-
-function shouldPersistRestartRecoveryCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-): boolean {
-  return (
-    shouldPersistCurrentRunSessionCleanup(current, sessionId) &&
-    current?.restartRecoveryDeliveryRunId === runId
-  );
 }
 
 function containsControlCharacters(value: string): boolean {
@@ -1150,12 +1118,6 @@ async function agentCommandInternal(
           opts,
           sessionEntry: entry,
         });
-        // Restart recovery preclaims suppressed runs by id only. Retain that
-        // ownership until this exact run completes or another restart aborts it.
-        const adoptsTranscriptOnlyRecoveryClaim =
-          currentRunDeliveryContext === undefined &&
-          normalizeDeliveryContext(entry.restartRecoveryDeliveryContext) === undefined &&
-          entry.restartRecoveryDeliveryRunId === runId;
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
         const next: SessionEntry = {
           ...entry,
@@ -1163,12 +1125,11 @@ async function agentCommandInternal(
           updatedAt: now,
           sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
           lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
-          restartRecoveryDeliveryContext: currentRunDeliveryContext,
-          restartRecoveryDeliveryRunId:
-            currentRunDeliveryContext || adoptsTranscriptOnlyRecoveryClaim ? runId : undefined,
-          restartRecoveryDeliverySourceRunId: adoptsTranscriptOnlyRecoveryClaim
-            ? entry.restartRecoveryDeliverySourceRunId
-            : undefined,
+          ...buildCurrentRunRestartRecoveryClaim({
+            deliveryContext: currentRunDeliveryContext,
+            entry,
+            runId,
+          }),
         };
         const persisted = await persistSessionEntry({
           sessionStore,

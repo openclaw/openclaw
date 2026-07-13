@@ -12,7 +12,7 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
-import { normalizeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
+import { normalizeRestartRecoveryEntryFields } from "./restart-recovery-state.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
@@ -77,10 +77,6 @@ function normalizeOptionalStringOrNull(value: unknown): string | null | undefine
   return undefined;
 }
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 function normalizeRecordKey(value: string): string | undefined {
   const key = value.trim();
   return key.length > 0 ? key : undefined;
@@ -114,13 +110,6 @@ function sameDeliveryContext(
     (left?.accountId ?? undefined) === (right?.accountId ?? undefined) &&
     (left?.threadId ?? undefined) === (right?.threadId ?? undefined)
   );
-}
-
-function sameOptionalStringArray(left: unknown, right: string[] | undefined): boolean {
-  if (!Array.isArray(left) || !right) {
-    return left === undefined && right === undefined;
-  }
-  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry {
@@ -175,26 +164,7 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
   if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartRecoveryDeliveryContext)) {
     assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
   }
-  assign(
-    "restartRecoveryDeliveryRequestFingerprint",
-    normalizeOptionalString(entry.restartRecoveryDeliveryRequestFingerprint),
-  );
-  assign(
-    "restartRecoveryDeliveryRunId",
-    normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
-  );
-  assign(
-    "restartRecoveryDeliverySourceRunId",
-    normalizeOptionalString(entry.restartRecoveryDeliverySourceRunId),
-  );
-  const restartRecoveryTerminalRunIds = normalizeRestartRecoveryTerminalRunIds(
-    entry.restartRecoveryTerminalRunIds,
-  );
-  if (
-    !sameOptionalStringArray(entry.restartRecoveryTerminalRunIds, restartRecoveryTerminalRunIds)
-  ) {
-    assign("restartRecoveryTerminalRunIds", restartRecoveryTerminalRunIds);
-  }
+  normalizeRestartRecoveryEntryFields(entry, assign);
 
   return next;
 }
