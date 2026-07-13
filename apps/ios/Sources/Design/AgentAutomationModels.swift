@@ -125,6 +125,10 @@ struct AgentAutomationRunResult: Decodable {
     let reason: String?
 }
 
+func agentAutomationRunSkipShouldRefresh(reason: String?) -> Bool {
+    reason == "invalid-spec"
+}
+
 enum AgentAutomationRunOutcome: Equatable {
     case success
     case skipped

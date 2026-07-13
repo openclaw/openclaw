@@ -72,6 +72,12 @@ struct AgentAutomationModelsTests {
         #expect(agentAutomationRunOutcome(status: "future-status", error: nil) == .unknown)
     }
 
+    @Test func `invalid spec skip refreshes persisted diagnostics`() {
+        #expect(agentAutomationRunSkipShouldRefresh(reason: "invalid-spec"))
+        #expect(!agentAutomationRunSkipShouldRefresh(reason: "already-running"))
+        #expect(!agentAutomationRunSkipShouldRefresh(reason: nil))
+    }
+
     @Test func `successful delete-after-run one-shot dismisses`() {
         let oneShot = Self.job(
             schedule: AnyCodable(["kind": AnyCodable("at"), "at": AnyCodable("2026-07-14T16:00:00Z")]),
@@ -146,7 +152,9 @@ struct AgentAutomationModelsTests {
         #expect(tabSource.contains("initialJob: selection.initialJob"))
         #expect(!tabSource.contains("overview.cronJobs.first(where:"))
         #expect(cronSource.contains("sourceGatewayID: sourceGatewayID"))
-        #expect(cronSource.contains("presentAutomationEditor(\n                    job: job,\n                    sourceGatewayID: sourceGatewayID"))
+        #expect(cronSource
+            .contains(
+                "presentAutomationEditor(\n                    job: job,\n                    sourceGatewayID: sourceGatewayID"))
     }
 
     private static func job(

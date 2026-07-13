@@ -737,6 +737,12 @@ struct AgentAutomationDetailScreen: View {
                     tone: .warning,
                     title: String(localized: "Run skipped"),
                     message: Self.runSkipMessage(result.reason))
+                if agentAutomationRunSkipShouldRefresh(reason: result.reason) {
+                    // Invalid-spec preflight persists diagnostics before returning.
+                    // Refresh every projection so the actionable Gateway error is visible.
+                    await self.reloadAfterRun(route: route)
+                    await self.loadHistory(route: route)
+                }
                 return
             }
             guard result.ran == true || result.enqueued == true else {
@@ -840,12 +846,10 @@ struct AgentAutomationDetailScreen: View {
 
     @MainActor
     private func reloadAfterRun(route: GatewayNodeSessionRoute) async {
+        defer { self.onChanged() }
         // A queued run can finish after the user starts editing. Keep that draft intact;
         // the revision-safe save path will report any real configuration conflict.
-        guard !self.hasUnsavedChanges else {
-            self.onChanged()
-            return
-        }
+        guard !self.hasUnsavedChanges else { return }
         do {
             let data = try await self.request(
                 method: "cron.get",
@@ -853,7 +857,6 @@ struct AgentAutomationDetailScreen: View {
                 timeoutSeconds: 20,
                 route: route)
             try self.applyUpdatedJob(JSONDecoder().decode(CronJob.self, from: data))
-            self.onChanged()
         } catch {
             // History already contains the authoritative terminal result.
         }
