@@ -297,7 +297,6 @@ import {
   NodePresenceAliveReasonSchema,
   NodePresenceActivityPayloadSchema,
   NodeInvokeParamsSchema,
-  type NodeInvokeProgressParams,
   NodeInvokeProgressParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeListParamsSchema,
@@ -626,7 +625,6 @@ export const validateAgentParams = lazyCompile(AgentParamsSchema);
 export const validateAuditActivityListParams = lazyCompile<AuditActivityListParams>(
   AuditActivityListParamsSchema,
 );
-<<<<<<< HEAD
 export const validateAuditListParams = lazyCompile(AuditListParamsSchema);
 export const validateAgentIdentityParams = lazyCompile(AgentIdentityParamsSchema);
 export const validateAgentWaitParams = lazyCompile(AgentWaitParamsSchema);
@@ -669,6 +667,7 @@ export const validateNodePendingAckParams = lazyCompile(NodePendingAckParamsSche
 export const validateNodeDescribeParams = lazyCompile(NodeDescribeParamsSchema);
 export const validateNodeInvokeParams = lazyCompile(NodeInvokeParamsSchema);
 export const validateNodeInvokeResultParams = lazyCompile(NodeInvokeResultParamsSchema);
+export const validateNodeInvokeProgressParams = lazyCompile(NodeInvokeProgressParamsSchema);
 export const validateNodeEventParams = lazyCompile(NodeEventParamsSchema);
 export const validateNodeEventResult = lazyCompile(NodeEventResultSchema);
 export const validateNodePresenceAlivePayload = lazyCompile(NodePresenceAlivePayloadSchema);
@@ -676,113 +675,6 @@ export const validateNodePresenceActivityPayload = lazyCompile(NodePresenceActiv
 export const validateNodePendingDrainParams = lazyCompile(NodePendingDrainParamsSchema);
 export const validateNodePendingEnqueueParams = lazyCompile(NodePendingEnqueueParamsSchema);
 export const validatePushTestParams = lazyCompile(PushTestParamsSchema);
-=======
-export const validateAuditListParams = lazyCompile<AuditListParams>(AuditListParamsSchema);
-export const validateAgentIdentityParams =
-  lazyCompile<AgentIdentityParams>(AgentIdentityParamsSchema);
-export const validateAgentWaitParams = lazyCompile<AgentWaitParams>(AgentWaitParamsSchema);
-export const validateWakeParams = lazyCompile<WakeParams>(WakeParamsSchema);
-export const validateAgentsListParams = lazyCompile<AgentsListParams>(AgentsListParamsSchema);
-export const validateWorktreesListParams =
-  lazyCompile<WorktreesListParams>(WorktreesListParamsSchema);
-export const validateWorktreesCreateParams = lazyCompile<WorktreesCreateParams>(
-  WorktreesCreateParamsSchema,
-);
-export const validateWorktreesRemoveParams = lazyCompile<WorktreesRemoveParams>(
-  WorktreesRemoveParamsSchema,
-);
-export const validateWorktreesRestoreParams = lazyCompile<WorktreesRestoreParams>(
-  WorktreesRestoreParamsSchema,
-);
-export const validateWorktreesGcParams = lazyCompile<WorktreesGcParams>(WorktreesGcParamsSchema);
-export const validateWorktreesBranchesParams = lazyCompile<WorktreesBranchesParams>(
-  WorktreesBranchesParamsSchema,
-);
-export const validateFsListDirParams = lazyCompile<FsListDirParams>(FsListDirParamsSchema);
-export const validateFsListDirResult = lazyCompile<FsListDirResult>(FsListDirResultSchema);
-export const validateAgentsCreateParams = lazyCompile<AgentsCreateParams>(AgentsCreateParamsSchema);
-export const validateAgentsUpdateParams = lazyCompile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
-export const validateAgentsDeleteParams = lazyCompile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
-export const validateAgentsFilesListParams = lazyCompile<AgentsFilesListParams>(
-  AgentsFilesListParamsSchema,
-);
-export const validateAgentsFilesGetParams = lazyCompile<AgentsFilesGetParams>(
-  AgentsFilesGetParamsSchema,
-);
-export const validateAgentsFilesSetParams = lazyCompile<AgentsFilesSetParams>(
-  AgentsFilesSetParamsSchema,
-);
-export const validateAgentsWorkspaceListParams = lazyCompile<AgentsWorkspaceListParams>(
-  AgentsWorkspaceListParamsSchema,
-);
-export const validateAgentsWorkspaceGetParams = lazyCompile<AgentsWorkspaceGetParams>(
-  AgentsWorkspaceGetParamsSchema,
-);
-export const validateArtifactsListParams =
-  lazyCompile<ArtifactsListParams>(ArtifactsListParamsSchema);
-export const validateArtifactsGetParams = lazyCompile<ArtifactsGetParams>(ArtifactsGetParamsSchema);
-export const validateArtifactsDownloadParams = lazyCompile<ArtifactsDownloadParams>(
-  ArtifactsDownloadParamsSchema,
-);
-export const validateNodePairListParams = lazyCompile<NodePairListParams>(NodePairListParamsSchema);
-export const validateNodePairApproveParams = lazyCompile<NodePairApproveParams>(
-  NodePairApproveParamsSchema,
-);
-export const validateNodePairRejectParams = lazyCompile<NodePairRejectParams>(
-  NodePairRejectParamsSchema,
-);
-export const validateNodePairRemoveParams = lazyCompile<NodePairRemoveParams>(
-  NodePairRemoveParamsSchema,
-);
-export const validateNodeRenameParams = lazyCompile<NodeRenameParams>(NodeRenameParamsSchema);
-export const validateNodeListParams = lazyCompile<NodeListParams>(NodeListParamsSchema);
-export const validateNodePluginToolsUpdateParams = lazyCompile<NodePluginToolsUpdateParams>(
-  NodePluginToolsUpdateParamsSchema,
-);
-export const validateNodeSkillsUpdateParams = lazyCompile<NodeSkillsUpdateParams>(
-  NodeSkillsUpdateParamsSchema,
-);
-export const validateEnvironmentsCreateParams = lazyCompile<EnvironmentsCreateParams>(
-  EnvironmentsCreateParamsSchema,
-);
-export const validateEnvironmentsDestroyParams = lazyCompile<EnvironmentsDestroyParams>(
-  EnvironmentsDestroyParamsSchema,
-);
-export const validateEnvironmentsListParams = lazyCompile<EnvironmentsListParams>(
-  EnvironmentsListParamsSchema,
-);
-export const validateEnvironmentsStatusParams = lazyCompile<EnvironmentsStatusParams>(
-  EnvironmentsStatusParamsSchema,
-);
-export const validateSystemInfoParams = lazyCompile<SystemInfoParams>(SystemInfoParamsSchema);
-export const validateSystemInfoResult = lazyCompile<SystemInfoResult>(SystemInfoResultSchema);
-export const validateNodePendingAckParams = lazyCompile<NodePendingAckParams>(
-  NodePendingAckParamsSchema,
-);
-export const validateNodeDescribeParams = lazyCompile<NodeDescribeParams>(NodeDescribeParamsSchema);
-export const validateNodeInvokeParams = lazyCompile<NodeInvokeParams>(NodeInvokeParamsSchema);
-export const validateNodeInvokeProgressParams = lazyCompile<NodeInvokeProgressParams>(
-  NodeInvokeProgressParamsSchema,
-);
-export const validateNodeInvokeResultParams = lazyCompile<NodeInvokeResultParams>(
-  NodeInvokeResultParamsSchema,
-);
-export const validateNodeEventParams = lazyCompile<NodeEventParams>(NodeEventParamsSchema);
-export const validateNodeEventResult = lazyCompile<NodeEventResult>(NodeEventResultSchema);
-export const validateNodePresenceAlivePayload = lazyCompile<NodePresenceAlivePayload>(
-  NodePresenceAlivePayloadSchema,
-);
-export const validateNodePresenceActivityPayload = lazyCompile<NodePresenceActivityPayload>(
-  NodePresenceActivityPayloadSchema,
-);
-export const validateNodePendingDrainParams = lazyCompile<NodePendingDrainParams>(
-  NodePendingDrainParamsSchema,
-);
-export const validateNodePendingEnqueueParams = lazyCompile<NodePendingEnqueueParams>(
-  NodePendingEnqueueParamsSchema,
-);
-export const validatePushTestParams = lazyCompile<PushTestParams>(PushTestParamsSchema);
->>>>>>> f9064f672b6e (feat(gateway): stream node.invoke progress with idle timeouts and cancel)
 export const validateWebPushVapidPublicKeyParams = lazyCompile<WebPushVapidPublicKeyParams>(
   WebPushVapidPublicKeyParamsSchema,
 );
