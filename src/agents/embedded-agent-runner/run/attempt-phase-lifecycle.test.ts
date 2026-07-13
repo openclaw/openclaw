@@ -137,7 +137,7 @@ describe("embedded attempt phase lifecycle state", () => {
         hookAgentId: "main",
         diagnosticTrace: { traceId: "trace-1", spanId: "span-1" } as never,
         skillWorkshopAvailable: false,
-        hookRunner: undefined,
+        hookRunner: null,
         promptStartedAt: Date.now(),
       },
     });
