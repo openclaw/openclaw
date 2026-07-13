@@ -148,20 +148,22 @@ struct MacNodeModeCoordinatorTests {
     @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async throws {
         let worker = CoordinatorNodeHostWorkerProbe()
         let session = GatewayNodeSession()
+        let notificationCenter = NotificationCenter()
         let coordinator = MacNodeModeCoordinator(
             session: session,
             runtime: MacNodeRuntime(nodeHostWorker: worker),
             nodeHostWorker: worker,
+            notificationCenter: notificationCenter,
             observeNotifications: true)
         _ = coordinator
 
-        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        notificationCenter.post(name: .openclawConfigDidChange, object: nil)
 
         try await self.waitUntil("node-host worker restart") {
             await worker.stops() == 1
         }
 
-        NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
+        notificationCenter.post(name: .openclawCLIInstalled, object: nil)
 
         try await self.waitUntil("node-host worker restart") {
             await worker.stops() == 2

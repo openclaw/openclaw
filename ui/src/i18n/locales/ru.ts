@@ -398,6 +398,9 @@ export const ru: TranslationMap = {
     working: "Выполняется…",
     ready: "Готово к чату",
     whatCanAgentDo: "Что умеет {name}?",
+    getHelp: "Получить помощь",
+    discord: "Сообщество Discord",
+    viewChangelog: "Посмотреть журнал изменений",
   },
   newSession: {
     title: "Новый сеанс",
