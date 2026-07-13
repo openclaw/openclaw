@@ -2130,6 +2130,21 @@ export const pl: TranslationMap = {
       enabling: "Włączanie…",
       updateError: "Nie udało się zaktualizować ustawienia samouczenia.",
     },
+    history: {
+      eyebrow: "Poprzednia praca",
+      title: "Znajdź przepływy pracy do ponownego wykorzystania",
+      body: "Przejrzyj istotne sesje od najnowszych do najstarszych. Tylko skuteczne wzorce odzyskiwania lub przepływy pracy, które ograniczają wielokrotne wywołania narzędzi, stają się oczekującymi propozycjami.",
+      findIdeas: "Znajdź pomysły na Skills",
+      scanEarlier: "Przeszukaj wcześniejsze sesje",
+      scanNew: "Przeszukaj nowe sesje",
+      scanning: "Przeglądanie sesji…",
+      loading: "Wczytywanie historii…",
+      pendingOnly: "Tylko oczekujące propozycje · używa skonfigurowanego modelu",
+      reviewed: "Liczba przejrzanych sesji: {count}",
+      found: "Liczba znalezionych pomysłów: {count}",
+      noSessions: "W tym przedziale nie znaleziono żadnych istotnych sesji.",
+      today: "dzisiaj",
+    },
     today: {
       emptyTitle: "Nic nie czeka dzisiaj",
       emptyBody:

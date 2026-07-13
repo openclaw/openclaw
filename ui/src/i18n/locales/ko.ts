@@ -2100,6 +2100,21 @@ export const ko: TranslationMap = {
       enabling: "활성화 중…",
       updateError: "자기 학습 설정을 업데이트할 수 없습니다.",
     },
+    history: {
+      eyebrow: "이전 작업",
+      title: "재사용 가능한 워크플로 찾기",
+      body: "주요 세션을 최신순으로 검토합니다. 복구 가능성이 높은 패턴이나 반복적인 도구 호출을 줄이는 워크플로만 대기 중인 제안으로 등록됩니다.",
+      findIdeas: "Skill 아이디어 찾기",
+      scanEarlier: "이전 작업 살펴보기",
+      scanNew: "새 작업 살펴보기",
+      scanning: "세션 검토 중…",
+      loading: "기록 불러오는 중…",
+      pendingOnly: "대기 중인 제안만 · 구성된 모델 사용",
+      reviewed: "세션 {count}개 검토됨",
+      found: "아이디어 {count}개 발견됨",
+      noSessions: "이 기간에 주요 세션이 없습니다.",
+      today: "오늘",
+    },
     today: {
       emptyTitle: "오늘 대기 중인 항목이 없습니다",
       emptyBody:

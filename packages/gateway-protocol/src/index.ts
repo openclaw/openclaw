@@ -1,4 +1,3 @@
-// Public gateway protocol entrypoint: wire types, schemas, and validators.
 export {
   buildClawHubTrustErrorDetails,
   ClawHubTrustErrorCodes,
@@ -7,11 +6,14 @@ export {
   type ClawHubTrustErrorCode,
   type ClawHubTrustErrorDetails,
 } from "./clawhub-trust-error-details.js";
+export { validateApprovalGetResult } from "./approval-result-validators.js";
+export { validateApprovalResolveResult } from "./approval-result-validators.js";
 import type { ValidationError } from "./validation-errors.js";
 export { formatValidationErrors, type ValidationError } from "./validation-errors.js";
 import { lazyCompile } from "./protocol-validator.js";
 export type { ProtocolValidator } from "./protocol-validator.js";
 export * from "./schema/worker-inference.js";
+export * from "./schema/skill-history.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
@@ -791,9 +793,7 @@ export const validateCancelledApprovalSnapshot = lazyCompile(CancelledApprovalSn
 export const validateApprovalSnapshot = lazyCompile(ApprovalSnapshotSchema);
 export const validateTerminalApprovalSnapshot = lazyCompile(TerminalApprovalSnapshotSchema);
 export const validateApprovalGetParams = lazyCompile(ApprovalGetParamsSchema);
-export const validateApprovalGetResult = lazyCompile(ApprovalGetResultSchema);
 export const validateApprovalResolveParams = lazyCompile(ApprovalResolveParamsSchema);
-export const validateApprovalResolveResult = lazyCompile(ApprovalResolveResultSchema);
 export const validateExecApprovalsGetParams = lazyCompile(ExecApprovalsGetParamsSchema);
 export const validateExecApprovalsSetParams = lazyCompile(ExecApprovalsSetParamsSchema);
 export const validateExecApprovalGetParams = lazyCompile(ExecApprovalGetParamsSchema);

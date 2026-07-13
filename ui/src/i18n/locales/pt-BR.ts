@@ -2117,6 +2117,21 @@ export const pt_BR: TranslationMap = {
       enabling: "Ativando…",
       updateError: "Não foi possível atualizar a configuração de autoaprendizado.",
     },
+    history: {
+      eyebrow: "Trabalhos anteriores",
+      title: "Encontre fluxos de trabalho reutilizáveis",
+      body: "Revise sessões relevantes da mais recente para a mais antiga. Apenas padrões sólidos de recuperação ou fluxos de trabalho que evitam chamadas repetidas de ferramentas se tornam propostas pendentes.",
+      findIdeas: "Encontrar ideias de Skills",
+      scanEarlier: "Verificar trabalhos anteriores",
+      scanNew: "Verificar novos trabalhos",
+      scanning: "Revisando sessões…",
+      loading: "Carregando histórico…",
+      pendingOnly: "Apenas propostas pendentes · usa o modelo configurado",
+      reviewed: "{count} sessões revisadas",
+      found: "{count} ideias encontradas",
+      noSessions: "Nenhuma sessão relevante encontrada neste período.",
+      today: "hoje",
+    },
     today: {
       emptyTitle: "Nada aguardando hoje",
       emptyBody:

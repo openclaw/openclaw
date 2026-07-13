@@ -276,6 +276,7 @@ import {
   resolveHookModelSelection,
   resolveNativeModelOwnedHarnessId,
 } from "./run/setup.js";
+import { resolveSkillWorkshopAttemptParams } from "./run/skill-workshop-attempt-params.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -348,7 +349,7 @@ async function runEmbeddedAgentInternal(
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
-    ? { remaining: 1 }
+    ? (paramsBase.skillWorkshopProposalMutationBudget ?? { remaining: 1 })
     : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -2167,9 +2168,7 @@ async function runEmbeddedAgentInternal(
             streamParams: params.streamParams,
             modelRun: params.modelRun,
             disableTrajectory: params.disableTrajectory,
-            skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
-            skillWorkshopOrigin: params.skillWorkshopOrigin,
-            skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+            ...resolveSkillWorkshopAttemptParams(params),
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,

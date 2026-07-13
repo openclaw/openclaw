@@ -708,6 +708,41 @@ describe("deliverWebReply", () => {
     expect(replyText(msg)).not.toContain("boom");
   });
 
+  it.each([
+    {
+      name: "prefers trimmed, deduplicated mediaUrls over legacy mediaUrl",
+      mediaUrl: " http://example.com/legacy.jpg ",
+      mediaUrls: [" http://example.com/preferred.jpg ", "http://example.com/preferred.jpg", "   "],
+      expectedMediaUrl: "http://example.com/preferred.jpg",
+    },
+    {
+      name: "falls back to trimmed legacy mediaUrl when mediaUrls are whitespace-only",
+      mediaUrl: " http://example.com/legacy.jpg ",
+      mediaUrls: ["   ", "\t"],
+      expectedMediaUrl: "http://example.com/legacy.jpg",
+    },
+  ])("$name during auto-reply delivery", async ({ mediaUrl, mediaUrls, expectedMediaUrl }) => {
+    vi.clearAllMocks();
+    const msg = makeMsg();
+    mockLoadedImageMedia();
+
+    await deliverWebReply({
+      replyResult: { text: "caption", mediaUrl, mediaUrls },
+      msg,
+      maxMediaBytes: 1024 * 1024,
+      textLimit: 200,
+      replyLogger,
+      skipLog: true,
+    });
+
+    expect(loadWebMedia).toHaveBeenCalledTimes(1);
+    expect(loadWebMedia).toHaveBeenCalledWith(expectedMediaUrl, {
+      maxBytes: 1024 * 1024,
+      localRoots: undefined,
+    });
+    expect(msg.platform.sendMedia).toHaveBeenCalledTimes(1);
+  });
+
   it("notifies user when a non-first media send fails instead of dropping silently", async () => {
     vi.clearAllMocks();
     const msg = makeMsg();
