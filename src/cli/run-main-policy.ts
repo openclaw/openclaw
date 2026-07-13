@@ -37,8 +37,31 @@ function isBareParentDefaultHelpArgv(argv: string[]): boolean {
 
 export function rewriteUpdateFlagArgv(argv: string[]): string[] {
   // Preserve the old root --update spelling by rewriting before Commander registration.
+  // Only rewrite when --update is used as a root-level command (before any subcommand
+  // and before the -- end-of-options marker).  --update after -- or as a positional
+  // argument to another command must be left alone.
+  const endOfOptions = argv.indexOf("--");
+  const searchEnd = endOfOptions === -1 ? argv.length : endOfOptions;
+
   const index = argv.indexOf("--update");
-  if (index === -1) {
+  if (index === -1 || index >= searchEnd) {
+    return argv;
+  }
+
+  // Find the first non-flag, non-flag-value word (the subcommand slot).
+  // If a subcommand already exists before --update, then --update is a
+  // positional argument to that command, not a root-level flag.
+  for (let i = 2; i < index; i++) {
+    const arg = argv[i];
+    if (arg.startsWith("-")) {
+      // Skip the flag value when the flag starts with -- (long form).
+      if (arg.startsWith("--") && i + 1 < index && !argv[i + 1]!.startsWith("-")) {
+        i++;
+      }
+      continue;
+    }
+    // A non-flag word appears before --update: it's a subcommand.
+    // --update is therefore a positional argument, not a root command.
     return argv;
   }
 

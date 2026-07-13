@@ -130,6 +130,27 @@ describe("rewriteUpdateFlagArgv", () => {
       "--json",
     ]);
   });
+
+  it("does not rewrite --update after the -- end-of-options marker", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "foo", "--", "--update"]);
+  });
+
+  it("does not rewrite --update used as a positional value for a subcommand", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "update.channel", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "update.channel", "--update"]);
+  });
+
+  it("does not rewrite --update when a subcommand precedes it", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "status", "--update"])).toEqual([
+      "node",
+      "entry.js",
+      "status",
+      "--update",
+    ]);
+  });
 });
 
 describe("shouldEnsureCliPath", () => {
