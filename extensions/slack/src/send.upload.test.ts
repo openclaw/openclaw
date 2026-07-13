@@ -467,6 +467,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     expectOnlyCallFirstArg(fetchWithSsrFGuard, {
       url: "https://files.slack.com/upload",
       mode: "trusted_env_proxy",
+      timeoutMs: 120_000,
       signal: expect.any(AbortSignal),
       requireHttps: true,
       policy: {
@@ -514,6 +515,7 @@ describe("sendMessageSlack file upload with user IDs", () => {
     });
     expectOnlyCallFirstArg(fetchWithSsrFGuard, {
       url: "https://files.slack.com/upload/v1/secret-capability",
+      timeoutMs: 120_000,
     });
   });
 
@@ -830,10 +832,68 @@ describe("sendMessageSlack file upload with user IDs", () => {
           operation: "slack-upload-file",
           url: baseUrl,
         });
-        expectOnlyCallFirstArg(fetchWithSsrFGuard, { signal: expect.any(AbortSignal) });
+        expectOnlyCallFirstArg(fetchWithSsrFGuard, {
+          timeoutMs: 120_000,
+          signal: expect.any(AbortSignal),
+        });
         expect(cleanupUploadTimeout).toHaveBeenCalledOnce();
         expect(uploadTimeoutControllers).toHaveLength(0);
         expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+        expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("fails closed on a hung upload peer via guarded timeoutMs floor", async () => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    await withServer(
+      (_req, _res) => {
+        // Accept TCP / request but never write headers so missing dispatcher
+        // floors hang until OS timeouts.
+      },
+      async (baseUrl) => {
+        vi.stubEnv("NO_PROXY", "127.0.0.1,localhost");
+        vi.stubEnv("no_proxy", "127.0.0.1,localhost");
+        globalThis.fetch = originalFetch;
+        // Match upload host to the configured API origin so SSRF policy allows
+        // the loopback hang peer (same pattern as alternate-origin upload tests).
+        const client = createUploadTestClient(`${baseUrl}/api/`);
+        client.files.getUploadURLExternal.mockResolvedValueOnce({
+          ok: true,
+          upload_url: `${baseUrl}/upload`,
+          file_id: "F001",
+        });
+
+        let observedTimeoutMs: number | undefined;
+        fetchWithSsrFGuard.mockImplementationOnce(async (params) => {
+          observedTimeoutMs = params.timeoutMs;
+          // Production passes the 120s floor; prove the guarded dispatcher path
+          // with a short stand-in so the hang fails far below OS timeouts.
+          return await actual.fetchWithSsrFGuard({
+            ...params,
+            timeoutMs: 80,
+          });
+        });
+
+        const started = Date.now();
+        const error = await sendMessageSlack("channel:C123CHAN", "caption", {
+          token: "xoxb-test",
+          cfg: SLACK_TEST_CFG,
+          client,
+          mediaUrl: "/tmp/hung-upload.png",
+        }).catch((cause: unknown) => cause);
+        const elapsedMs = Date.now() - started;
+
+        expect(observedTimeoutMs).toBe(120_000);
+        expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+        expect(error).toMatchObject({
+          name: "PlatformMessageNotDispatchedError",
+          code: "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED",
+        });
+        expect(elapsedMs).toBeGreaterThanOrEqual(50);
+        expect(elapsedMs).toBeLessThan(5_000);
         expect(client.files.completeUploadExternal).not.toHaveBeenCalled();
       },
     );

@@ -293,6 +293,10 @@ export async function uploadSlackFile(params: {
           ...(contentType ? { headers: { "Content-Type": contentType } } : {}),
           body: new Uint8Array(buffer) as BodyInit,
         },
+        // AbortSignal alone does not set Undici connect/headers floors; pass the
+        // same budget so a peer that accepts TCP but never returns headers fails
+        // closed via the guarded dispatcher instead of waiting on OS timeouts.
+        timeoutMs: SLACK_UPLOAD_POST_TIMEOUT_MS,
         signal: uploadTimeoutSignal,
         requireHttps: uploadTransport.requireHttps,
         policy: uploadTransport.policy,
