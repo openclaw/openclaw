@@ -52,23 +52,12 @@ async function fetchDiscordApplicationMe(
     return await fetchDiscord<{ id?: string; flags?: number }>(
       "/oauth2/applications/@me",
       normalized,
-      createDiscordTimeoutFetch(fetcher, timeoutMs),
-      { retry: { attempts: 1 } },
+      fetcher,
+      { retry: { attempts: 1 }, timeoutMs },
     );
   } catch {
     return undefined;
   }
-}
-
-function createDiscordTimeoutFetch(fetcher: typeof fetch, timeoutMs: number): typeof fetch {
-  const fetchImpl = getResolvedFetch(fetcher);
-  return ((input: RequestInfo | URL, init?: RequestInit) =>
-    fetchWithTimeout(
-      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
-      init ?? {},
-      timeoutMs,
-      fetchImpl,
-    )) as typeof fetch;
 }
 
 export function resolveDiscordPrivilegedIntentsFromFlags(
@@ -246,7 +235,8 @@ export async function fetchDiscordApplicationId(
     const json = await fetchDiscord<{ id?: string }>(
       "/oauth2/applications/@me",
       normalized,
-      createDiscordTimeoutFetch(fetcher, timeoutMs),
+      fetcher,
+      { timeoutMs },
     );
     if (json?.id) {
       return json.id;

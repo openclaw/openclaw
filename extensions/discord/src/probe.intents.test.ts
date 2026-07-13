@@ -48,6 +48,28 @@ function stalledDiscordProbeJsonResponse(onCancel: () => void): Response {
   return response;
 }
 
+function abortableStalledDiscordJsonResponse(
+  signal: AbortSignal | null | undefined,
+  onAbort: () => void,
+): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        const abort = () => {
+          onAbort();
+          controller.error(signal?.reason ?? new Error("request aborted"));
+        };
+        if (signal?.aborted) {
+          abort();
+          return;
+        }
+        signal?.addEventListener("abort", abort, { once: true });
+      },
+    }),
+    { headers: { "content-type": "application/json" }, status: 200 },
+  );
+}
+
 describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
   beforeEach(() => {
     vi.useRealTimers();
@@ -178,6 +200,57 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
       await vi.advanceTimersByTimeAsync(50);
       await assertion;
       expect(cancelCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds stalled application-summary response bodies during probes", async () => {
+    vi.useFakeTimers();
+    try {
+      let abortCount = 0;
+      const fetcher = withFetchPreconnect(async (input, init) => {
+        if (String(input).endsWith("/users/@me")) {
+          return jsonResponse({ id: "bot-1", username: "openclaw" });
+        }
+        return abortableStalledDiscordJsonResponse(init?.signal, () => {
+          abortCount += 1;
+        });
+      });
+
+      const probe = probeDiscord("MTIz.abc.def", 50, {
+        fetcher,
+        includeApplication: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(probe).resolves.toMatchObject({
+        ok: true,
+        bot: { id: "bot-1", username: "openclaw" },
+      });
+      expect(abortCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds stalled application-id response bodies", async () => {
+    vi.useFakeTimers();
+    try {
+      let abortCount = 0;
+      const fetcher = withFetchPreconnect(async (_input, init) =>
+        abortableStalledDiscordJsonResponse(init?.signal, () => {
+          abortCount += 1;
+        }),
+      );
+
+      const lookup = fetchDiscordApplicationId("unparseable.token", 50, fetcher);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(50);
+
+      await expect(lookup).resolves.toBeUndefined();
+      expect(abortCount).toBe(1);
     } finally {
       vi.useRealTimers();
     }
