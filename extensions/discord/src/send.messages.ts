@@ -44,6 +44,13 @@ function assertDiscordResponseObject(value: unknown, label: string): Record<stri
   return value as Record<string, unknown>;
 }
 
+function resolveDefaultThreadAutoArchiveDuration(channel?: APIChannel): number | undefined {
+  if (!channel || !("default_auto_archive_duration" in channel)) {
+    return undefined;
+  }
+  return channel.default_auto_archive_duration;
+}
+
 export class DiscordThreadInitialMessageError extends Error {
   readonly initialMessageError: string;
   readonly thread: APIChannel;
@@ -162,32 +169,22 @@ export async function createThreadDiscord(
     body.type = payload.type;
   }
   let channel: APIChannel | undefined;
-  let channelType: ChannelType | undefined;
   if (!payload.messageId) {
-    // Only detect channel kind for route-less thread creation.
-    // If this lookup fails, keep prior behavior and let Discord validate.
     try {
       channel = await getChannel(rest, channelId);
-      channelType = channel?.type;
     } catch {
-      channelType = undefined;
+      // Channel metadata only enriches standalone creation; Discord still validates it.
     }
   }
-  // Inherit auto_archive_duration from the parent channel when the caller does
-  // not provide an explicit value. Forum and media channels expose
-  // default_auto_archive_duration; text channels omit it so the field is left
-  // unset, preserving Discord's server-side default.
-  // APIChannel is a union; default_auto_archive_duration only exists on guild
-  // channels (text, news, forum, media) so narrow via an intersection cast.
+  // Discord clients preselect the parent default, but REST thread creation needs
+  // it explicitly. Keep a caller override authoritative when one was supplied.
   const archiveDuration =
-    payload.autoArchiveMinutes ??
-    (channel as { default_auto_archive_duration?: number } | undefined)
-      ?.default_auto_archive_duration;
+    payload.autoArchiveMinutes ?? resolveDefaultThreadAutoArchiveDuration(channel);
   if (archiveDuration !== undefined) {
     body.auto_archive_duration = archiveDuration;
   }
   const isForumLike =
-    channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
+    channel?.type === ChannelType.GuildForum || channel?.type === ChannelType.GuildMedia;
   if (isForumLike) {
     const starterContent = payload.content?.trim() ? payload.content : payload.name;
     body.message = { content: starterContent };
