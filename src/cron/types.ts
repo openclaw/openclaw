@@ -212,8 +212,6 @@ export type CronAgentExecutionStarted = {
   tool?: string;
   toolCallId?: string;
   itemId?: string;
-  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
-  firstModelCallStarted?: boolean;
 };
 
 /** Watchdog update that requires the new execution phase. */

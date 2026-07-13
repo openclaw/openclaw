@@ -129,7 +129,7 @@ export function createCronAgentWatchdog(params: {
       startPreExecutionTimeout();
       return;
     }
-    if (stage === "execution" || info.firstModelCallStarted) {
+    if (stage === "execution") {
       state = "executing";
       clearPreExecutionTimeout();
     }

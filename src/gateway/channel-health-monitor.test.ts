@@ -62,8 +62,8 @@ function startDefaultMonitor(
   return startChannelHealthMonitor({
     channelManager: manager,
     checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS,
-    startupGraceMs: 0,
     ...overrides,
+    timing: { monitorStartupGraceMs: 0, ...overrides.timing },
   });
 }
 
@@ -72,7 +72,7 @@ async function startAndRunCheck(
   overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
-  const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? overrides.startupGraceMs ?? 0;
+  const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? 0;
   const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
   await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
   return monitor;
@@ -201,7 +201,7 @@ describe("channel-health-monitor", () => {
 
   it("does not run before the grace period", async () => {
     const manager = createMockChannelManager();
-    const monitor = startDefaultMonitor(manager, { startupGraceMs: 60_000 });
+    const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
     await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
@@ -209,7 +209,9 @@ describe("channel-health-monitor", () => {
 
   it("runs health check after grace period", async () => {
     const manager = createMockChannelManager();
-    const monitor = await startAndRunCheck(manager, { startupGraceMs: 1_000 });
+    const monitor = await startAndRunCheck(manager, {
+      timing: { monitorStartupGraceMs: 1_000 },
+    });
     expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
     monitor.stop();
   });
@@ -456,7 +458,9 @@ describe("channel-health-monitor", () => {
         },
       },
     });
-    const monitor = await startAndRunCheck(manager, { channelStartupGraceMs: 60_000 });
+    const monitor = await startAndRunCheck(manager, {
+      timing: { channelConnectGraceMs: 60_000 },
+    });
     expect(manager.stopChannel).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
     monitor.stop();
@@ -845,7 +849,7 @@ describe("channel-health-monitor", () => {
         }),
       );
       const monitor = await startAndRunCheck(manager, {
-        staleEventThresholdMs: customThreshold,
+        timing: { staleEventThresholdMs: customThreshold },
       });
       expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
