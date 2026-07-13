@@ -219,9 +219,6 @@ async function persistManagerRuntimeOptions(
         agent: base.agent,
         runtimeSessionName: base.runtimeSessionName,
         ...(base.identity ? { identity: base.identity } : {}),
-        ...(base.sessionResumeSupported !== undefined
-          ? { sessionResumeSupported: base.sessionResumeSupported }
-          : {}),
         mode: base.mode,
         runtimeOptions: hasOptions ? normalized : undefined,
         cwd: normalized.cwd,

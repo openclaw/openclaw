@@ -722,7 +722,7 @@ describe("AcpSessionManager runtime handles", () => {
       agent: "claude",
       mode: "oneshot",
     });
-    expect(currentMeta?.sessionResumeSupported).toBe(true);
+    expect(currentMeta?.identity?.sessionResumeSupported).toBe(true);
     await managerA.runTurn({
       cfg: baseCfg,
       sessionKey,
@@ -731,7 +731,7 @@ describe("AcpSessionManager runtime handles", () => {
       requestId: "r-oneshot-initial",
       provenance: "system",
     });
-    expect(currentMeta?.sessionResumeSupported).toBe(true);
+    expect(currentMeta?.identity?.sessionResumeSupported).toBe(true);
     const managerB = new AcpSessionManager();
     await managerB.runTurn({
       cfg: baseCfg,
