@@ -30,7 +30,7 @@ export type ChromeCookieRow = {
   samesite: number | bigint;
 };
 
-export type CookieImportCounts = {
+type CookieImportCounts = {
   total: number;
   imported: number;
   failed: number;

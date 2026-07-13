@@ -202,6 +202,20 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
             status: .denied))
     }
 
+    @Test @MainActor func `registration permissions exclude watch availability`() async {
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+        let permissions = await controller._test_currentPermissions()
+
+        #expect(!permissions.keys.contains(where: { $0.hasPrefix("watch") }))
+    }
+
+    @Test @MainActor func `legacy EventKit permission means readable access`() {
+        #expect(GatewayConnectionController._test_hasEventKitReadAccess(.fullAccess))
+        #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.writeOnly))
+        #expect(!GatewayConnectionController._test_hasEventKitReadAccess(.denied))
+    }
+
     @Test @MainActor func `current commands exclude dangerous system exec commands`() {
         withUserDefaults([
             "node.instanceId": "ios-test",
