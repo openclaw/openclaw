@@ -1739,8 +1739,6 @@ export const ja_JP: TranslationMap = {
     cancel: "キャンセル",
     removedRestart: "{name}を削除しました。変更を適用するにはGatewayの再起動が必要です。",
     verifiedSource: "確認済みのソース",
-    menuLabel: "{name} のアクション",
-    menuDetails: "詳細を表示",
     enableAction: "有効にする",
     disableAction: "無効にする",
     working: "処理中…",

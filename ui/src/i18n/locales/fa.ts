@@ -1726,8 +1726,6 @@ export const fa: TranslationMap = {
     cancel: "لغو",
     removedRestart: "{name} حذف شد. برای اعمال تغییر، راه‌اندازی مجدد Gateway لازم است.",
     verifiedSource: "منبع تأییدشده",
-    menuLabel: "اقدامات {name}",
-    menuDetails: "مشاهده جزئیات",
     enableAction: "فعال کردن",
     disableAction: "غیرفعال کردن",
     working: "در حال انجام…",

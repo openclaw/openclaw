@@ -1746,8 +1746,6 @@ export const ru: TranslationMap = {
     cancel: "Отмена",
     removedRestart: "{name} удален. Для применения изменения требуется перезапуск Gateway.",
     verifiedSource: "Проверенный источник",
-    menuLabel: "Действия для {name}",
-    menuDetails: "Просмотреть сведения",
     enableAction: "Включить",
     disableAction: "Отключить",
     working: "Выполняется…",

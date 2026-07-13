@@ -1719,8 +1719,6 @@ export const ar: TranslationMap = {
     cancel: "إلغاء",
     removedRestart: "تمت إزالة {name}. يلزم إعادة تشغيل Gateway لتطبيق التغيير.",
     verifiedSource: "مصدر موثّق",
-    menuLabel: "إجراءات {name}",
-    menuDetails: "عرض التفاصيل",
     enableAction: "تمكين",
     disableAction: "تعطيل",
     working: "جارٍ العمل…",

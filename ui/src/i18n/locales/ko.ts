@@ -1725,8 +1725,6 @@ export const ko: TranslationMap = {
     removedRestart:
       "{name}이(가) 제거되었습니다. 변경 사항을 적용하려면 Gateway를 다시 시작해야 합니다.",
     verifiedSource: "인증된 출처",
-    menuLabel: "{name} 작업",
-    menuDetails: "세부 정보 보기",
     enableAction: "활성화",
     disableAction: "비활성화",
     working: "작업 중…",

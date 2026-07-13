@@ -1742,8 +1742,6 @@ export const pl: TranslationMap = {
     removedRestart:
       "Usunięto {name}. Aby zastosować zmianę, wymagane jest ponowne uruchomienie Gateway.",
     verifiedSource: "Zweryfikowane źródło",
-    menuLabel: "Działania dla {name}",
-    menuDetails: "Zobacz szczegóły",
     enableAction: "Włącz",
     disableAction: "Wyłącz",
     working: "Przetwarzanie…",

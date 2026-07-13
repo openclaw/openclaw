@@ -1750,8 +1750,6 @@ export const it: TranslationMap = {
     cancel: "Annulla",
     removedRestart: "{name} rimosso. È necessario riavviare il Gateway per applicare la modifica.",
     verifiedSource: "Fonte verificata",
-    menuLabel: "Azioni {name}",
-    menuDetails: "Visualizza dettagli",
     enableAction: "Abilita",
     disableAction: "Disabilita",
     working: "Elaborazione…",

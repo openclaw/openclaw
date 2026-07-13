@@ -1708,8 +1708,6 @@ export const th: TranslationMap = {
     cancel: "ยกเลิก",
     removedRestart: "ลบ {name} แล้ว ต้องรีสตาร์ท Gateway เพื่อใช้การเปลี่ยนแปลง",
     verifiedSource: "แหล่งที่มายืนยันแล้ว",
-    menuLabel: "การดำเนินการของ {name}",
-    menuDetails: "ดูรายละเอียด",
     enableAction: "เปิดใช้งาน",
     disableAction: "ปิดใช้งาน",
     working: "กำลังดำเนินการ…",

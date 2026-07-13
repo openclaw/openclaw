@@ -1749,8 +1749,6 @@ export const de: TranslationMap = {
     removedRestart:
       "{name} wurde entfernt. Ein Neustart der Gateway ist erforderlich, um die Änderung anzuwenden.",
     verifiedSource: "Verifizierte Quelle",
-    menuLabel: "{name}-Aktionen",
-    menuDetails: "Details anzeigen",
     enableAction: "Aktivieren",
     disableAction: "Deaktivieren",
     working: "Wird ausgeführt…",

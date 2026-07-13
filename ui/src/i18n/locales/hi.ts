@@ -1717,8 +1717,6 @@ export const hi: TranslationMap = {
     cancel: "रद्द करें",
     removedRestart: "{name} हटा दिया गया। परिवर्तन लागू करने के लिए Gateway को पुनः प्रारंभ करना आवश्यक है।",
     verifiedSource: "सत्यापित स्रोत",
-    menuLabel: "{name} कार्रवाइयाँ",
-    menuDetails: "विवरण देखें",
     enableAction: "सक्षम करें",
     disableAction: "अक्षम करें",
     working: "काम हो रहा है…",

@@ -1731,8 +1731,6 @@ export const pt_BR: TranslationMap = {
     cancel: "Cancelar",
     removedRestart: "{name} removido. É necessário reiniciar o Gateway para aplicar a alteração.",
     verifiedSource: "Fonte verificada",
-    menuLabel: "Ações de {name}",
-    menuDetails: "Ver detalhes",
     enableAction: "Ativar",
     disableAction: "Desativar",
     working: "Trabalhando…",

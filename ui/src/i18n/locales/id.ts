@@ -1730,8 +1730,6 @@ export const id: TranslationMap = {
     cancel: "Batal",
     removedRestart: "{name} dihapus. Gateway perlu dimulai ulang untuk menerapkan perubahan.",
     verifiedSource: "Sumber terverifikasi",
-    menuLabel: "Tindakan {name}",
-    menuDetails: "Lihat detail",
     enableAction: "Aktifkan",
     disableAction: "Nonaktifkan",
     working: "Memproses…",

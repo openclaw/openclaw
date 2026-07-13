@@ -1703,8 +1703,6 @@ export const zh_CN: TranslationMap = {
     cancel: "取消",
     removedRestart: "已移除 {name}。需要重启 Gateway 才能应用更改。",
     verifiedSource: "已验证来源",
-    menuLabel: "{name} 操作",
-    menuDetails: "查看详情",
     enableAction: "启用",
     disableAction: "禁用",
     working: "处理中…",

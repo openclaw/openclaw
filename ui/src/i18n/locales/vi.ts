@@ -1729,8 +1729,6 @@ export const vi: TranslationMap = {
     cancel: "Hủy",
     removedRestart: "Đã gỡ bỏ {name}. Cần khởi động lại Gateway để áp dụng thay đổi.",
     verifiedSource: "Nguồn đã xác minh",
-    menuLabel: "Thao tác {name}",
-    menuDetails: "Xem chi tiết",
     enableAction: "Bật",
     disableAction: "Tắt",
     working: "Đang xử lý…",

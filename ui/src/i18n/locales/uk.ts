@@ -1739,8 +1739,6 @@ export const uk: TranslationMap = {
     cancel: "Скасувати",
     removedRestart: "Видалено {name}. Щоб застосувати зміну, потрібен перезапуск Gateway.",
     verifiedSource: "Перевірене джерело",
-    menuLabel: "Дії для {name}",
-    menuDetails: "Переглянути деталі",
     enableAction: "Увімкнути",
     disableAction: "Вимкнути",
     working: "Обробка…",

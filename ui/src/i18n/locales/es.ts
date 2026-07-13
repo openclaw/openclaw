@@ -1748,8 +1748,6 @@ export const es: TranslationMap = {
     cancel: "Cancelar",
     removedRestart: "Se eliminó {name}. Es necesario reiniciar Gateway para aplicar el cambio.",
     verifiedSource: "Fuente verificada",
-    menuLabel: "Acciones de {name}",
-    menuDetails: "Ver detalles",
     enableAction: "Activar",
     disableAction: "Desactivar",
     working: "Procesando…",

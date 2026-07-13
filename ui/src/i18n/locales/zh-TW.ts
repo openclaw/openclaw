@@ -1706,8 +1706,6 @@ export const zh_TW: TranslationMap = {
     cancel: "取消",
     removedRestart: "已移除 {name}。需要重新啟動 Gateway 才能套用變更。",
     verifiedSource: "已驗證來源",
-    menuLabel: "{name} 動作",
-    menuDetails: "檢視詳細資料",
     enableAction: "啟用",
     disableAction: "停用",
     working: "處理中…",
