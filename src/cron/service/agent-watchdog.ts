@@ -113,23 +113,11 @@ export function createCronAgentWatchdog(params: {
     if (!info) {
       return;
     }
-    const previousPhase = activeExecution?.phase;
     activeExecution = { ...activeExecution, ...info };
     const stage = info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] : undefined;
-    // A fallback attempt can return to setup-like phases after execution began;
-    // re-arm pre-execution timing so the fallback path cannot stall silently.
-    if (
-      state === "executing" &&
-      previousPhase === "before_agent_reply" &&
-      stage === "pre_execution"
-    ) {
-      // Model fallback can move from an execution phase back into setup-like
-      // phases; restart the pre-execution watchdog so fallback stalls are seen.
-      state = "waiting_for_execution";
-      startPreExecutionTimeout();
-      return;
-    }
-    if (stage === "execution" || info.firstModelCallStarted) {
+    const observedProgressAfterRunnerEntry =
+      info.phase !== undefined && info.phase !== "runner_entered";
+    if (observedProgressAfterRunnerEntry || info.firstModelCallStarted) {
       state = "executing";
       clearPreExecutionTimeout();
     }
