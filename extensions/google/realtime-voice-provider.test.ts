@@ -639,7 +639,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
 
   it("creates browser-token clients with a finite request timeout", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
-    const providerConfig = Object.fromEntries([["api" + "Key", "gemini-key"]]);
+    const providerConfig = { apiKey: "gemini-key" };
 
     await provider.createBrowserSession?.({
       providerConfig,
@@ -651,13 +651,10 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
         timeout?: number;
       };
     };
-    const timeout = clientConfig.httpOptions?.timeout;
-    if (typeof timeout !== "number") {
-      throw new Error("expected Google realtime browser-token timeout");
-    }
-    expect(clientConfig.httpOptions?.apiVersion).toBe("v1alpha");
-    expect(Number.isFinite(timeout)).toBe(true);
-    expect(timeout).toBeGreaterThan(0);
+    expect(clientConfig.httpOptions).toMatchObject({
+      apiVersion: "v1alpha",
+      timeout: 30_000,
+    });
   });
 
   it("rejects browser session expiry outside Date range", async () => {

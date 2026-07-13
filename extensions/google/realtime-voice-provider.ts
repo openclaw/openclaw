@@ -61,7 +61,6 @@ const GOOGLE_REALTIME_BROWSER_WEBSOCKET_URL =
   "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained";
 const MAX_PENDING_AUDIO_CHUNKS = 320;
 const DEFAULT_AUDIO_STREAM_END_SILENCE_MS = 500;
-const GOOGLE_REALTIME_BROWSER_TOKEN_TIMEOUT_MS = 30_000;
 const GOOGLE_REALTIME_BROWSER_SESSION_TTL_MS = 30 * 60 * 1000;
 const GOOGLE_REALTIME_BROWSER_NEW_SESSION_TTL_MS = 60 * 1000;
 const GOOGLE_REALTIME_RECONNECT_MAX_ATTEMPTS = 3;
@@ -977,7 +976,6 @@ async function createGoogleRealtimeBrowserSession(
   if (!apiKey) {
     throw new Error("Google Gemini API key missing");
   }
-
   const model = req.model ?? config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
   const voice = req.voice ?? config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE;
   const nowMs = Date.now();
@@ -997,7 +995,7 @@ async function createGoogleRealtimeBrowserSession(
     apiKey,
     httpOptions: {
       apiVersion: GOOGLE_REALTIME_BROWSER_API_VERSION,
-      timeout: GOOGLE_REALTIME_BROWSER_TOKEN_TIMEOUT_MS,
+      timeout: 30_000,
     },
   });
   const token = await ai.authTokens.create({
