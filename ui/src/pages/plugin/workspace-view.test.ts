@@ -78,7 +78,7 @@ describe("renderWorkspace", () => {
     window.history.replaceState({}, "", "/");
   });
 
-  it("shows the onboarding empty state with no tabs", () => {
+  it("keeps the owner import entrypoint in a zero-tab workspace", () => {
     const host = {};
     const state = getWorkspaceState(host);
     state.loaded = true;
@@ -89,8 +89,10 @@ describe("renderWorkspace", () => {
       widgetsRegistry: {},
       prefs: { tabOrder: [] },
     };
+    state.distributionOwner = true;
     const container = renderView(host);
     expect(container.querySelector('[data-test-id="workspace-empty"]')).not.toBeNull();
+    expect(container.querySelector('[data-test-id="workspace-import"]')).not.toBeNull();
   });
 
   it("renders the tab strip with visible tabs and a hidden overflow", () => {

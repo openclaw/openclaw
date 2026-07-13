@@ -536,17 +536,25 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
     };
   };
 
-  const prunePendingImports = (now: number, reserveSlot: boolean) => {
+  const prunePendingImports = (
+    now: number,
+    reserveSlotFor?: { isolationDomainId: string; ownerPrincipalId: string },
+  ) => {
     for (const [id, pending] of pendingImports) {
       if (pending.expiresAt <= now) {
         pendingImports.delete(id);
       }
     }
-    const maximumSize = reserveSlot
-      ? MAX_PENDING_WORKSPACE_IMPORTS - 1
-      : MAX_PENDING_WORKSPACE_IMPORTS;
-    while (pendingImports.size > maximumSize) {
-      const oldest = pendingImports.keys().next().value as string | undefined;
+    if (!reserveSlotFor) {
+      return;
+    }
+    const partitionEntries = [...pendingImports].filter(
+      ([, pending]) =>
+        pending.isolationDomainId === reserveSlotFor.isolationDomainId &&
+        pending.ownerPrincipalId === reserveSlotFor.ownerPrincipalId,
+    );
+    while (partitionEntries.length >= MAX_PENDING_WORKSPACE_IMPORTS) {
+      const oldest = partitionEntries.shift()?.[0];
       if (!oldest) {
         break;
       }
@@ -738,7 +746,10 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
         const owner = await resolveCanonicalOwner(workspaceId);
         const prepared = prepareWorkspaceImport(content, owner.targetStore.read());
         const now = Date.now();
-        prunePendingImports(now, true);
+        prunePendingImports(now, {
+          isolationDomainId: owner.isolationDomainId,
+          ownerPrincipalId: owner.ownerPrincipalId,
+        });
         const previewId = randomUUID();
         const expiresAt = now + WORKSPACE_IMPORT_PREVIEW_TTL_MS;
         pendingImports.set(previewId, {
@@ -782,7 +793,7 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
           throw new Error("workspace import requires explicit owner approval");
         }
         const owner = await resolveCanonicalOwner(workspaceId);
-        prunePendingImports(Date.now(), false);
+        prunePendingImports(Date.now());
         const pending = pendingImports.get(previewId);
         if (!pending) {
           throw new Error("workspace import preview is missing or expired");
@@ -812,7 +823,7 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
           workspaceVersion: result.doc.workspaceVersion,
           imported: pending.summary,
           tabIds: pending.tabs.map((tab) => tab.id),
-          sharingSyncRequired: true,
+          sharingSyncRequired: owner.context !== undefined,
         });
       } catch (error) {
         respondError(opts.respond, error);
@@ -852,7 +863,11 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
         });
         const doc = domainStore.read();
         const currentTabIds = new Set(doc.tabs.map((tab) => tab.id));
+        const boundTabIds = new Set(boundBefore.map((resource) => resource.id));
         for (const tab of doc.tabs) {
+          if (boundTabIds.has(tab.id)) {
+            continue;
+          }
           const operation = await api.teams.resources.prepareRegister({
             context,
             resource: { namespace: "workspaces", type: "tab", id: tab.id },

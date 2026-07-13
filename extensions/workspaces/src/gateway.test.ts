@@ -273,6 +273,36 @@ describe("workspace gateway methods", () => {
     });
   });
 
+  it("does not request sharing sync for a legacy local-owner import", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { api, methods } = createApi();
+      const store = new WorkspaceStore({ stateDir });
+      registerWorkspaceGatewayMethods({ api, store });
+      const exported = await callMethod(methods.get("workspaces.export")!, {
+        workspaceId: "default",
+      });
+      const content = (exported.response?.[1] as { content?: string } | undefined)?.content;
+      if (!content) {
+        throw new Error("workspace export content missing");
+      }
+      const preview = await callMethod(methods.get("workspaces.import.preview")!, {
+        workspaceId: "default",
+        content,
+      });
+      const previewId = (preview.response?.[1] as { previewId?: string } | undefined)?.previewId;
+
+      const committed = await callMethod(methods.get("workspaces.import.commit")!, {
+        workspaceId: "default",
+        previewId,
+        approved: true,
+      });
+
+      expect(committed.response?.[0]).toBe(true);
+      expect(committed.response?.[1]).toMatchObject({ sharingSyncRequired: false });
+      store.close();
+    });
+  });
+
   it("does not evict a valid preview merely because the cache is at capacity", async () => {
     await withTempStateDir(async (stateDir) => {
       const { api, methods } = createApi({
@@ -312,6 +342,68 @@ describe("workspace gateway methods", () => {
 
       expect(committed.response?.[0]).toBe(true);
       store.close();
+    });
+  });
+
+  it("partitions preview capacity by isolation domain and owner", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const options = {
+        teamsDomainId: "domain-a",
+        principalId: "owner-a",
+        ownerPrincipalId: "owner-a",
+      };
+      const { api, methods } = createApi(options);
+      const storeA = new WorkspaceStore({ stateDir, isolationDomainId: "domain-a" });
+      const storeB = new WorkspaceStore({ stateDir, isolationDomainId: "domain-b" });
+      const stores = new Map([
+        ["domain-a", storeA],
+        ["domain-b", storeB],
+      ]);
+      registerWorkspaceGatewayMethods({
+        api,
+        store: storeA,
+        storeForDomain: (domainId) => stores.get(domainId) ?? storeA,
+      });
+      const exported = await callMethod(methods.get("workspaces.tab.export")!, {
+        workspaceId: "default",
+        tabId: "main",
+      });
+      const content = (exported.response?.[1] as { content?: string } | undefined)?.content;
+      if (!content) {
+        throw new Error("tab export content missing");
+      }
+      const previews = [];
+      for (let index = 0; index < 32; index += 1) {
+        previews.push(
+          await callMethod(methods.get("workspaces.import.preview")!, {
+            workspaceId: "default",
+            content,
+          }),
+        );
+      }
+      const firstPreviewId = (previews[0]?.response?.[1] as { previewId?: string } | undefined)
+        ?.previewId;
+
+      options.teamsDomainId = "domain-b";
+      options.principalId = "owner-b";
+      options.ownerPrincipalId = "owner-b";
+      await callMethod(methods.get("workspaces.import.preview")!, {
+        workspaceId: "default",
+        content,
+      });
+
+      options.teamsDomainId = "domain-a";
+      options.principalId = "owner-a";
+      options.ownerPrincipalId = "owner-a";
+      const committed = await callMethod(methods.get("workspaces.import.commit")!, {
+        workspaceId: "default",
+        previewId: firstPreviewId,
+        approved: true,
+      });
+
+      expect(committed.response?.[0]).toBe(true);
+      storeA.close();
+      storeB.close();
     });
   });
 
@@ -392,6 +484,9 @@ describe("workspace gateway methods", () => {
         },
         { actor: "user" },
       );
+      vi.mocked(api.teams.resources.listChildren).mockResolvedValue([
+        { namespace: "workspaces", type: "tab", id: "main" },
+      ]);
       registerWorkspaceGatewayMethods({ api, store, storeForDomain: () => store });
 
       const method = methods.get("workspaces.sharing.sync")!;
@@ -414,7 +509,7 @@ describe("workspace gateway methods", () => {
           ]),
         },
       ]);
-      expect(api.teams.resources.prepareRegister).toHaveBeenCalledTimes(store.read().tabs.length);
+      expect(api.teams.resources.prepareRegister).toHaveBeenCalledTimes(1);
       expect(api.teams.resources.prepareRegister).toHaveBeenCalledWith(
         expect.objectContaining({
           resource: { namespace: "workspaces", type: "tab", id: "finance" },
@@ -423,7 +518,7 @@ describe("workspace gateway methods", () => {
           idempotencyKey: "sharing-sync:default:finance",
         }),
       );
-      expect(api.teams.resources.replayPrepared).toHaveBeenCalledTimes(store.read().tabs.length);
+      expect(api.teams.resources.replayPrepared).toHaveBeenCalledTimes(1);
       store.close();
     });
   });

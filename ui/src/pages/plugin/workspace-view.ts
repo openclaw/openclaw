@@ -961,6 +961,7 @@ function renderBody(
   }
   if (workspace.tabs.length === 0) {
     return html`
+      ${renderWorkspacesHeader(props, state, viewState)}
       <div class="workspace-empty workspace-empty--onboarding" data-test-id="workspace-empty">
         <div class="workspace-empty__title">${t("workspaces.empty.onboardingTitle")}</div>
         <div class="workspace-empty__sub">${t("workspaces.empty.onboardingSubtitle")}</div>
@@ -1044,9 +1045,9 @@ function renderDistributionPreview(
         </div>
         <div class="exec-approval-sub">
           ${t("workspaces.distribution.previewSummary", {
-            tabs: preview.summary.tabs,
-            widgets: preview.summary.widgets,
-            customWidgets: preview.summary.customWidgets,
+            tabs: String(preview.summary.tabs),
+            widgets: String(preview.summary.widgets),
+            customWidgets: String(preview.summary.customWidgets),
           })}
         </div>
         <ul class="workspace-distribution__tabs">
@@ -1079,7 +1080,7 @@ function renderWorkspacesHeader(
   props: WorkspaceProps,
   state: WorkspaceUiState,
   viewState: WorkspaceViewState,
-  tab: WorkspaceTab,
+  tab?: WorkspaceTab,
 ): TemplateResult {
   const workspaceId = state.workspace?.workspaceId ?? "default";
   const exportCurrent = async () => {
@@ -1092,7 +1093,7 @@ function renderWorkspacesHeader(
       const exported = await exportWorkspace(
         props.client,
         workspaceId,
-        tab.id,
+        tab?.id,
         state.distributionOwner,
       );
       downloadWorkspaceFile(exported.filename, exported.content);
@@ -1129,19 +1130,21 @@ function renderWorkspacesHeader(
   return html`
     <div class="workspace-page-header" data-test-id="workspace-page-header">
       <div>
-        <div class="page-title">${tab.title}</div>
+        <div class="page-title">${tab?.title ?? t("workspaces.tabs.label")}</div>
         <div class="page-sub">${t("workspaces.header.subtitle")}</div>
       </div>
       <div class="workspace-page-header__actions">
-        <button
-          class="btn btn--small"
-          type="button"
-          data-test-id="workspace-export"
-          ?disabled=${viewState.distributionBusy}
-          @click=${exportCurrent}
-        >
-          ${t("workspaces.distribution.export")}
-        </button>
+        ${state.distributionOwner || tab?.id
+          ? html`<button
+              class="btn btn--small"
+              type="button"
+              data-test-id="workspace-export"
+              ?disabled=${viewState.distributionBusy}
+              @click=${exportCurrent}
+            >
+              ${t("workspaces.distribution.export")}
+            </button>`
+          : nothing}
         ${state.distributionOwner
           ? html`<label class="btn btn--small" data-test-id="workspace-import-label">
               ${t("workspaces.distribution.import")}
