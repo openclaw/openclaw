@@ -30667,7 +30667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 33,
+      "line": 40,
       "path": "apps/macos/Sources/OpenClaw/SessionMenuLabelView.swift",
       "source": "\\(self.row.tokens.contextSummaryShort) · \\(self.row.ageText)",
       "surface": "apple",
@@ -32811,7 +32811,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 855,
+      "line": 862,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
       "source": "Running tools…",
       "surface": "apple",
