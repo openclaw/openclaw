@@ -1,14 +1,14 @@
 // Nodes page renders the unified paired-device / node inventory card.
 import { html, nothing, type TemplateResult } from "lit";
 import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import {
   resolvePendingDeviceApprovalState,
   type DevicePairingAccessSummary,
   type PendingDeviceApprovalKind,
 } from "../../../../src/shared/device-pairing-access.js";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
@@ -152,7 +152,8 @@ export function renderNodesInventory(props: NodesProps) {
                   class="btn danger"
                   @click=${() => props.onInventoryCleanup(stale.map(toRemovalRequest))}
                 >
-                  ${icons.trash} ${t("nodes.inventory.cleanupStale", { count: String(stale.length) })}
+                  ${icons.trash}
+                  ${t("nodes.inventory.cleanupStale", { count: String(stale.length) })}
                 </button>
               `
             : nothing}
@@ -187,7 +188,9 @@ export function renderNodesInventory(props: NodesProps) {
         pending.length === 0 &&
         !gatewayPresence &&
         unpairedPresence.length === 0
-          ? html` <div class="muted">${t("nodes.inventory.empty")}</div> `
+          ? html`
+              <div class="muted">${loading ? t("common.loading") : t("nodes.inventory.empty")}</div>
+            `
           : groups.map((group) => renderInventoryGroup(group, props))}
         ${unpairedPresence.length > 0
           ? html`
@@ -480,7 +483,10 @@ function renderPresenceOnlyEntry(entry: PresenceEntry) {
   const parts = presenceMetaParts(entry);
   return html`
     <div class="list-item nodes-entry nodes-entry--presence-only">
-      ${renderDeviceTile(deviceIcon({ clientMode: entry.mode ?? undefined, platform: entry.platform ?? undefined }), true)}
+      ${renderDeviceTile(
+        deviceIcon({ clientMode: entry.mode ?? undefined, platform: entry.platform ?? undefined }),
+        true,
+      )}
       <div class="list-main">
         <div class="nodes-entry__head">
           <span class="list-title">

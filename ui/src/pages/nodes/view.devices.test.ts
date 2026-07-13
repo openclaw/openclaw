@@ -63,8 +63,7 @@ function renderNodesContainer(overrides: Partial<NodesProps>): HTMLDivElement {
 
 function getInventoryCard(container: Element): Element {
   const card = Array.from(container.querySelectorAll(".card")).find(
-    (candidate) =>
-      candidate.querySelector(".card-title")?.textContent?.trim() === "Paired devices",
+    (candidate) => candidate.querySelector(".card-title")?.textContent?.trim() === "Paired devices",
   );
   expect(card).toBeInstanceOf(Element);
   if (!(card instanceof Element)) {
