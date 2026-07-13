@@ -74,19 +74,20 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private var auth: DashboardWindowAuth
     private let updater: UpdaterProviding?
     private var updateBridgeEnabled: Bool
-    private let requestBrowserProfileImportOffer: @MainActor () -> Bool
+    private let requestBrowserProfileImportOffer: @MainActor () async -> Bool
     private var canGoBackObservation: NSKeyValueObservation?
     private var canGoForwardObservation: NSKeyValueObservation?
     private var didRequestBrowserProfileImportOffer = false
     private var browserProfileImportOfferIsArmed = false
+    private var browserProfileImportOfferRequestIsInFlight = false
 
     init(
         url: URL,
         auth: DashboardWindowAuth,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
-        requestBrowserProfileImportOffer: @escaping @MainActor () -> Bool = {
-            BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible()
+        requestBrowserProfileImportOffer: @escaping @MainActor () async -> Bool = {
+            await BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible()
         })
     {
         let shouldEnableUpdateBridge = updater?.isAvailable == true && updateBridgeEnabled
@@ -328,9 +329,18 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private func requestBrowserProfileImportOfferIfNeeded() {
         guard self.browserProfileImportOfferIsArmed,
               !self.linkBrowserItem.isCollapsed,
-              !self.didRequestBrowserProfileImportOffer
+              !self.didRequestBrowserProfileImportOffer,
+              !self.browserProfileImportOfferRequestIsInFlight
         else { return }
-        self.didRequestBrowserProfileImportOffer = self.requestBrowserProfileImportOffer()
+        self.browserProfileImportOfferRequestIsInFlight = true
+        Task { [weak self] in
+            guard let self else { return }
+            let didQuery = await self.requestBrowserProfileImportOffer()
+            self.browserProfileImportOfferRequestIsInFlight = false
+            if didQuery {
+                self.didRequestBrowserProfileImportOffer = true
+            }
+        }
     }
 
     private func closeLinkBrowser(focusDashboard: Bool = true) {

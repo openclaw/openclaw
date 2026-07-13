@@ -25,7 +25,9 @@ private actor DashboardRouteAuthGate {
         self.token = token
     }
 
-    func probes() -> Int { self.probeCount }
+    func probes() -> Int {
+        self.probeCount
+    }
 }
 
 @Suite(.serialized)
@@ -83,23 +85,22 @@ struct DashboardWindowSmokeTests {
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         #expect(controller._testNavigationWebViewIdentity == controller._testDashboardWebViewIdentity)
 
-        controller._testOpenLinkBrowser(try #require(URL(string: "https://docs.openclaw.ai/")))
+        try controller._testOpenLinkBrowser(#require(URL(string: "https://docs.openclaw.ai/")))
         let linkWebView = try #require(controller._testLinkBrowserWebViewIdentity)
         #expect(controller._testFocusLinkBrowser())
         #expect(controller._testNavigationWebViewIdentity == linkWebView)
     }
 
-    @Test func `browser import offer waits for the first eligible inline browser open`() throws {
+    @Test func `browser import offer retries until the first completed inline browser request`() async throws {
         let dashboard = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         var requestCount = 0
-        var isEligible = false
+        var didQuery = false
         let controller = DashboardWindowController(
             url: dashboard,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
             requestBrowserProfileImportOffer: {
-                guard isEligible else { return false }
                 requestCount += 1
-                return true
+                return didQuery
             })
         defer { controller.closeDashboard() }
 
@@ -108,25 +109,35 @@ struct DashboardWindowSmokeTests {
 
         let link = try #require(URL(string: "https://docs.openclaw.ai/"))
         controller._testOpenLinkBrowser(link)
-        isEligible = true
         controller.update(
             url: dashboard,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
         #expect(requestCount == 0)
 
-        isEligible = false
         controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
-        #expect(requestCount == 0)
+        for _ in 0..<200 where requestCount == 0 {
+            await Task.yield()
+        }
+        #expect(requestCount == 1)
+        for _ in 0..<10 {
+            await Task.yield()
+        }
 
-        isEligible = true
+        didQuery = true
         controller.update(
             url: dashboard,
             auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
-        #expect(requestCount == 1)
+        for _ in 0..<200 where requestCount == 1 {
+            await Task.yield()
+        }
+        #expect(requestCount == 2)
 
         controller._testCloseLinkBrowser()
         controller._testOpenLinkBrowser(link, requestBrowserProfileImportOffer: true)
-        #expect(requestCount == 1)
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+        #expect(requestCount == 2)
     }
 
     @Test func `dashboard parses only bounded native link requests`() throws {
@@ -691,9 +702,9 @@ struct DashboardWindowSmokeTests {
         manager._testSetController(controller)
         defer { manager._testController()?.closeDashboard() }
 
-        await manager.handleEndpointState(.ready(
+        try await manager.handleEndpointState(.ready(
             mode: .remote,
-            url: try #require(URL(string: "ws://127.0.0.1:60001")),
+            url: #require(URL(string: "ws://127.0.0.1:60001")),
             token: nil,
             password: nil,
             routeRevision: 2))

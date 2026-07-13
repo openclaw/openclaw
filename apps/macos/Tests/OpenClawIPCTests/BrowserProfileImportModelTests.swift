@@ -136,16 +136,23 @@ struct BrowserProfileImportModelTests {
             isOnboarded: { isOnboarded },
             isLocalMode: { isLocalMode })
 
-        #expect(!model.requestAutomaticOfferIfEligible())
+        #expect(await !model.requestAutomaticOfferIfEligible())
         isOnboarded = true
-        #expect(!model.requestAutomaticOfferIfEligible())
+        #expect(await !model.requestAutomaticOfferIfEligible())
         isLocalMode = true
-        #expect(model.requestAutomaticOfferIfEligible())
-
-        for _ in 0..<200 where stub.requests(for: "/system-profile-import/status").isEmpty {
-            await Task.yield()
-        }
+        #expect(await model.requestAutomaticOfferIfEligible())
         #expect(stub.requests(for: "/system-profile-import/status").count == 1)
+    }
+
+    @Test func `failed automatic status request stays retryable`() async {
+        let stub = BrowserImportTransportStub()
+        stub.failingPaths = ["/system-profile-import/status"]
+        let model = stub.makeModel()
+
+        #expect(await !model.requestAutomaticOfferIfEligible())
+        stub.failingPaths = []
+        #expect(await model.requestAutomaticOfferIfEligible())
+        #expect(stub.requests(for: "/system-profile-import/status").count == 2)
     }
 
     @Test func `import success records counts and target`() async throws {
