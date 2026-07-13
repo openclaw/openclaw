@@ -23,7 +23,7 @@ function memberLabel(state: APIVoiceState): string | undefined {
   );
 }
 
-export async function appendDiscordVoiceParticipantContext(params: {
+async function appendDiscordVoiceParticipantContext(params: {
   context: DiscordVoiceIngressContext | null;
   client: Client;
   entry: VoiceSessionEntry;
