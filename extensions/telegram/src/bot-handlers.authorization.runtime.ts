@@ -513,14 +513,6 @@ export function createTelegramHandlerAuthorizationRuntime({
   };
 }
 
-export type TelegramEventAuthorizationContext = Awaited<
-  ReturnType<
-    ReturnType<
-      typeof createTelegramHandlerAuthorizationRuntime
-    >["resolveTelegramEventAuthorizationContext"]
-  >
->;
-
 export type TelegramHandlerAuthorizationRuntime = ReturnType<
   typeof createTelegramHandlerAuthorizationRuntime
 >;

@@ -119,7 +119,7 @@ function resolvePromptContextTextDedupeKey(
   return `${message.timestamp_ms}:${visibleBody}`;
 }
 
-export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
+type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
 export function createTelegramHandlerMessageRuntime({
   cfg,
