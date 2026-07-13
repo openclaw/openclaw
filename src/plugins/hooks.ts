@@ -28,6 +28,12 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookSourcePolicyContext,
+  PluginHookSourcePolicyEvent,
+  PluginHookSourcePolicyResult,
+  PluginHookOutboundDeliveryPolicyDestination,
+  PluginHookOutboundDeliveryPolicyEvent,
+  PluginHookOutboundDeliveryPolicyResult,
   PluginHookHandlerMap,
   PluginHookReplyPayloadSendingContext,
   PluginHookReplyPayloadSendingEvent,
@@ -155,9 +161,11 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   // unresolved; timeout fail-opens with the original final answer.
   before_agent_finalize: 15_000,
   before_prompt_build: 15_000,
+  source_policy: 15_000,
   // Outbound modifying hooks run inside the serialized reply delivery lane.
   // A hung plugin must fail open so later hooks and queued replies can settle.
   message_sending: 15_000,
+  outbound_delivery_policy: 15_000,
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
 };
@@ -1015,6 +1023,39 @@ export function createHookRunner(
   }
 
   /**
+   * Run source_policy hook.
+   * Lets plugins tighten source-visible delivery before the model runs.
+   */
+  async function runSourcePolicy(
+    event: PluginHookSourcePolicyEvent,
+    ctx: PluginHookSourcePolicyContext,
+  ): Promise<PluginHookSourcePolicyResult | undefined> {
+    return runModifyingHook<"source_policy", PluginHookSourcePolicyResult>(
+      "source_policy",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => ({
+          sourceReplyDeliveryMode:
+            acc?.sourceReplyDeliveryMode === "message_tool_only" ||
+            next.sourceReplyDeliveryMode === "message_tool_only"
+              ? "message_tool_only"
+              : undefined,
+          promptBody: lastDefined(acc?.promptBody, next.promptBody),
+          currentInboundContext: Object.hasOwn(next, "currentInboundContext")
+            ? next.currentInboundContext
+            : acc?.currentInboundContext,
+          suppressConversationContext: stickyTrue(
+            acc?.suppressConversationContext,
+            next.suppressConversationContext,
+          ),
+          reason: lastDefined(acc?.reason, next.reason),
+        }),
+      },
+    );
+  }
+
+  /**
    * Run reply_payload_sending hook.
    * Allows plugins to modify or cancel normalized reply payloads before delivery.
    * Runs sequentially, passing each handler the latest payload.
@@ -1068,6 +1109,123 @@ export function createHookRunner(
         }
       } catch (err) {
         handleHookError({ hookName: "reply_payload_sending", pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    return result;
+  }
+
+  function acceptOutboundDeliveryDestination(
+    previous: PluginHookOutboundDeliveryPolicyDestination,
+    next: PluginHookOutboundDeliveryPolicyDestination | undefined,
+  ): PluginHookOutboundDeliveryPolicyDestination {
+    if (!next) {
+      return previous;
+    }
+    return {
+      channel: next.channel,
+      to: next.to,
+      conversationId: next.conversationId || next.to,
+      ...(next.accountId ? { accountId: next.accountId } : {}),
+      ...(next.threadId !== undefined ? { threadId: next.threadId } : {}),
+      path: next.path,
+    };
+  }
+
+  /**
+   * Run outbound_delivery_policy hook.
+   * Allows plugins to allow, cancel, or reroute resolved outbound deliveries.
+   */
+  async function runOutboundDeliveryPolicy(
+    event: PluginHookOutboundDeliveryPolicyEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<PluginHookOutboundDeliveryPolicyResult | undefined> {
+    const hooks = getHooksForName(registry, "outbound_delivery_policy");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(
+      `[hooks] running outbound_delivery_policy (${hooks.length} handlers, sequential)`,
+    );
+
+    let currentPayload: ReplyPayload = event.payload;
+    let currentDestination = event.destination;
+    let result: PluginHookOutboundDeliveryPolicyResult | undefined;
+    let currentDecision: "allow" | "cancel" | "reroute" | undefined;
+
+    for (const hook of hooks) {
+      try {
+        const handler = hook.handler as (
+          event: PluginHookOutboundDeliveryPolicyEvent,
+          ctx: PluginHookMessageContext,
+        ) => Promise<PluginHookOutboundDeliveryPolicyResult | void>;
+        const promise = Promise.resolve(
+          handler(
+            {
+              ...event,
+              payload: toPluginReplyPayload(currentPayload),
+              destination: currentDestination,
+            },
+            ctx,
+          ),
+        );
+        const timeoutMs = getModifyingHookTimeoutMs("outbound_delivery_policy", hook);
+        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+
+        if (!handlerResult) {
+          continue;
+        }
+
+        if (handlerResult.payload !== undefined) {
+          currentPayload = acceptPluginReplyPayload(currentPayload, handlerResult.payload);
+        }
+        if (handlerResult.decision === "reroute") {
+          currentDestination = acceptOutboundDeliveryDestination(
+            currentDestination,
+            handlerResult.destination,
+          );
+          currentDecision = "reroute";
+        } else if (handlerResult.decision === "cancel") {
+          currentDecision = "cancel";
+        } else if (!currentDecision) {
+          currentDecision = "allow";
+        }
+
+        if (currentDecision === "reroute") {
+          result = {
+            decision: "reroute",
+            payload: currentPayload as PluginHookReplyPayload,
+            destination: currentDestination,
+            reason: lastDefined(result?.reason, handlerResult.reason),
+          };
+        } else if (currentDecision === "cancel") {
+          result = {
+            decision: "cancel",
+            payload: currentPayload as PluginHookReplyPayload,
+            reason: lastDefined(result?.reason, handlerResult.reason),
+          };
+        } else {
+          result = {
+            decision: "allow",
+            payload: currentPayload as PluginHookReplyPayload,
+            reason: lastDefined(result?.reason, handlerResult.reason),
+          };
+        }
+
+        if (handlerResult.decision === "cancel") {
+          const priority = hook.priority ?? 0;
+          logger?.debug?.(
+            `[hooks] outbound_delivery_policy cancel decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
+          );
+          break;
+        }
+      } catch (err) {
+        handleHookError({
+          hookName: "outbound_delivery_policy",
+          pluginId: hook.pluginId,
+          error: err,
+        });
       }
     }
 
@@ -1581,8 +1739,10 @@ export function createHookRunner(
     runChannelPairingRequested,
     runMessageReceived,
     runBeforeDispatch,
+    runSourcePolicy,
     runReplyDispatch,
     runReplyPayloadSending,
+    runOutboundDeliveryPolicy,
     runMessageSending,
     runMessageSent,
     // Tool hooks

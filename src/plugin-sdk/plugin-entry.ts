@@ -282,9 +282,16 @@ export type {
   PluginConversationBindingRequestResult,
 } from "../plugins/conversation-binding.types.js";
 export type {
+  PluginHookCurrentInboundPromptContext,
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookInboundClaimResult,
+  PluginHookOutboundDeliveryPolicyDestination,
+  PluginHookOutboundDeliveryPolicyEvent,
+  PluginHookOutboundDeliveryPolicyResult,
+  PluginHookOutboundDeliveryPolicySource,
+  PluginHookSourcePolicyEvent,
+  PluginHookSourcePolicyResult,
 } from "../plugins/hook-types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type {

@@ -19,6 +19,7 @@ import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
+import type { OutboundDeliveryPolicyDecision } from "./delivery-policy-hook.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
@@ -107,6 +108,13 @@ const mocks = vi.hoisted(() => ({
   cancelTerminalSourceReplyDelivery: vi.fn(),
   isDeliveredCurrentSourceReply: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
+  runOutboundDeliveryPolicyHook: vi.fn<
+    (params: { payload: unknown; destination: unknown }) => Promise<OutboundDeliveryPolicyDecision>
+  >(async (params: { payload: unknown; destination: unknown }) => ({
+    decision: "allow",
+    payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+    destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+  })),
 }));
 
 vi.mock("./channel-resolution.js", () => ({
@@ -137,6 +145,11 @@ vi.mock("./source-reply-mirror.js", () => ({
 
 vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: mocks.maybeApplyTtsToPayload,
+}));
+
+vi.mock("./delivery-policy-hook.js", () => ({
+  MAX_OUTBOUND_DELIVERY_POLICY_REROUTES: 4,
+  runOutboundDeliveryPolicyHook: mocks.runOutboundDeliveryPolicyHook,
 }));
 
 vi.mock("./outbound-session.js", () => ({
@@ -336,10 +349,248 @@ describe("runMessageAction plugin dispatch", () => {
     mocks.maybeApplyTtsToPayload.mockImplementation(
       async (params: { payload: unknown }) => params.payload,
     );
+    mocks.runOutboundDeliveryPolicyHook.mockReset();
+    mocks.runOutboundDeliveryPolicyHook.mockImplementation(
+      async (params: { payload: unknown; destination: unknown }) => ({
+        decision: "allow",
+        payload: params.payload as OutboundDeliveryPolicyDecision["payload"],
+        destination: params.destination as OutboundDeliveryPolicyDecision["destination"],
+      }),
+    );
     mocks.prepareOutboundMirrorRoute.mockClear();
     mocks.beginTerminalSourceReplyDelivery.mockReset();
     mocks.cancelTerminalSourceReplyDelivery.mockReset();
     mocks.reconcileTerminalSourceReplyDelivery.mockReset();
+  });
+
+  it("applies outbound delivery policy before plugin send dispatch", async () => {
+    const handleAction = vi.fn(async ({ channel, params }: ChannelMessageActionContext) =>
+      jsonResult({ ok: true, channel, to: params.to, message: params.message }),
+    );
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sourcechat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "sourcechat",
+            label: "Source Chat",
+            blurb: "Source chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction,
+          }),
+        },
+        {
+          pluginId: "relaychat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "relaychat",
+            label: "Relay Chat",
+            blurb: "Relay chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction,
+          }),
+        },
+      ]),
+    );
+    mocks.runOutboundDeliveryPolicyHook.mockResolvedValueOnce({
+      decision: "reroute",
+      payload: { text: "relayed text" },
+      destination: {
+        channel: "relaychat",
+        to: "relay-room",
+        conversationId: "relay-room",
+        path: "message_action",
+      },
+    });
+
+    const result = await runMessageAction({
+      cfg: {
+        channels: {
+          sourcechat: { enabled: true },
+          relaychat: { enabled: true },
+        },
+      } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "sourcechat",
+        to: "blocked-room",
+        message: "original text",
+      },
+      dryRun: false,
+    });
+
+    expect(mocks.runOutboundDeliveryPolicyHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "message_action",
+        action: "send",
+        destination: expect.objectContaining({
+          channel: "sourcechat",
+          to: "blocked-room",
+          path: "message_action",
+        }),
+      }),
+    );
+    expect(mocks.executeSendAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          channel: "relaychat",
+          params: expect.objectContaining({
+            channel: "relaychat",
+            to: "relay-room",
+            target: "relay-room",
+            message: "relayed text",
+          }),
+          skipOutboundDeliveryPolicy: true,
+        }),
+        to: "relay-room",
+        message: "relayed text",
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "relaychat",
+      to: "relay-room",
+      handledBy: "plugin",
+      payload: {
+        ok: true,
+        channel: "relaychat",
+        to: "relay-room",
+        message: "relayed text",
+      },
+    });
+  });
+
+  it("cancels policy-blocked message actions before dispatch", async () => {
+    const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sourcechat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "sourcechat",
+            label: "Source Chat",
+            blurb: "Source chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction,
+          }),
+        },
+      ]),
+    );
+    mocks.runOutboundDeliveryPolicyHook.mockResolvedValueOnce({
+      decision: "cancel",
+      payload: { text: "SKIP_RELAY" },
+      destination: {
+        channel: "sourcechat",
+        to: "blocked-room",
+        conversationId: "blocked-room",
+        path: "message_action",
+      },
+      reason: "skip_relay",
+    });
+
+    const result = await runMessageAction({
+      cfg: { channels: { sourcechat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: {
+        channel: "sourcechat",
+        to: "blocked-room",
+        message: "SKIP_RELAY",
+      },
+      dryRun: false,
+    });
+
+    expect(handleAction).not.toHaveBeenCalled();
+    expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "sourcechat",
+      to: "blocked-room",
+      payload: {
+        status: "suppressed",
+        reason: "cancelled_by_outbound_delivery_policy",
+        hookReason: "skip_relay",
+      },
+    });
+  });
+
+  it("applies outbound delivery policy before internal source reply fallback", async () => {
+    const handleAction = vi.fn(async ({ channel, params }: ChannelMessageActionContext) =>
+      jsonResult({ ok: true, channel, to: params.to, message: params.message }),
+    );
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "relaychat",
+          source: "test",
+          plugin: createGatewayActionPlugin({
+            pluginId: "relaychat",
+            label: "Relay Chat",
+            blurb: "Relay chat",
+            actions: ["send"],
+            gatewayActions: [],
+            messaging: { targetResolver: { looksLikeId: () => true } },
+            handleAction,
+          }),
+        },
+      ]),
+    );
+    mocks.runOutboundDeliveryPolicyHook.mockResolvedValueOnce({
+      decision: "reroute",
+      payload: { text: "relayed internal text" },
+      destination: {
+        channel: "relaychat",
+        to: "relay-room",
+        conversationId: "relay-room",
+        path: "internal_source",
+      },
+    });
+
+    const result = await runMessageAction({
+      cfg: { channels: { relaychat: { enabled: true } } } as OpenClawConfig,
+      action: "send",
+      params: { message: "original internal text" },
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main:imessage",
+      toolContext: {
+        currentChannelProvider: "imessage",
+        currentChannelId: "iMessage;-;+15551234567",
+      },
+      dryRun: false,
+    });
+
+    expect(mocks.runOutboundDeliveryPolicyHook).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({
+          channel: "imessage",
+          conversationId: "iMessage;-;+15551234567",
+        }),
+        destination: expect.objectContaining({
+          channel: "imessage",
+          to: "iMessage;-;+15551234567",
+          path: "internal_source",
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "send",
+      channel: "relaychat",
+      to: "relay-room",
+      handledBy: "plugin",
+      payload: {
+        ok: true,
+        channel: "relaychat",
+        to: "relay-room",
+        message: expect.stringContaining("relayed internal text"),
+      },
+    });
   });
 
   describe("alias-based plugin action dispatch", () => {

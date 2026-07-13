@@ -9,6 +9,8 @@ import type {
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookOutboundDeliveryPolicyEvent,
+  PluginHookOutboundDeliveryPolicyResult,
 } from "./types.js";
 
 function createDeferred<T>() {
@@ -157,6 +159,58 @@ describe("message_sent hook runner", () => {
       hookName: "message_sent",
       event,
       channelCtx: demoChannelCtx,
+    });
+  });
+});
+
+describe("outbound_delivery_policy hook runner", () => {
+  it("keeps a rerouted destination when a later handler allows it", async () => {
+    const first = vi.fn<() => PluginHookOutboundDeliveryPolicyResult>(() => ({
+      decision: "reroute",
+      destination: {
+        channel: "relay",
+        to: "relay-room",
+        conversationId: "relay-room",
+        path: "durable_delivery",
+      },
+    }));
+    const second = vi.fn<() => PluginHookOutboundDeliveryPolicyResult>(() => ({
+      decision: "allow",
+    }));
+    const { runner } = createHookRunnerWithRegistry([
+      { hookName: "outbound_delivery_policy", handler: first, pluginId: "first" },
+      { hookName: "outbound_delivery_policy", handler: second, pluginId: "second" },
+    ]);
+    const event: PluginHookOutboundDeliveryPolicyEvent = {
+      payload: { text: "hello" },
+      kind: "final",
+      destination: {
+        channel: "source",
+        to: "source-room",
+        conversationId: "source-room",
+        path: "durable_delivery",
+      },
+    };
+
+    const result = await runner.runOutboundDeliveryPolicy(event, {
+      channelId: "source",
+      conversationId: "source-room",
+    });
+
+    expect(second).toHaveBeenCalledWith(
+      expect.objectContaining({
+        destination: expect.objectContaining({ channel: "relay", to: "relay-room" }),
+      }),
+      expect.any(Object),
+    );
+    expect(result).toMatchObject({
+      decision: "reroute",
+      destination: {
+        channel: "relay",
+        to: "relay-room",
+        conversationId: "relay-room",
+        path: "durable_delivery",
+      },
     });
   });
 });

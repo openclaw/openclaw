@@ -38,6 +38,20 @@ export type ReplyThreadingPolicy = {
   implicitCurrentMessage?: "default" | "allow" | "deny";
 };
 
+export type SourcePromptContext = {
+  text: string;
+  resumableText?: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
+};
+
+export type SourcePromptPolicy = {
+  /** Model-visible replacement for the current inbound body. */
+  promptBody?: string;
+  /** Model-visible replacement for current inbound context; null clears it. */
+  currentInboundContext?: SourcePromptContext | null;
+  /** Omits prior session transcript from provider context for this turn. */
+  suppressConversationContext?: boolean;
+};
 /** Action sink available for model-proposed follow-up tasks during this turn. */
 export type TaskSuggestionDeliveryMode = "gateway";
 
@@ -300,6 +314,8 @@ export type GetReplyOptions = {
    * private unless dispatch explicitly marks a source reply as deliverable.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Source-policy prompt shaping for the current inbound turn. */
+  sourcePromptPolicy?: SourcePromptPolicy;
   /** Enables task-suggestion tools only when the initiating surface can action Gateway events. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Starts delivery tracking when this turn later drains as a queued followup. */

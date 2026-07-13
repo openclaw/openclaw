@@ -111,6 +111,8 @@ type MessageSendParams = {
   onDeliveredPayload?: (payload: NormalizedOutboundPayload) => void;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  /** True when an upstream send boundary already applied outbound delivery policy. */
+  skipOutboundDeliveryPolicy?: boolean;
   parseMode?: "HTML";
 };
 
@@ -441,6 +443,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       signal: params.abortSignal,
       silent: params.silent,
       mediaAccess: params.mediaAccess,
+      skipOutboundDeliveryPolicy: params.skipOutboundDeliveryPolicy,
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       preparedMessageId: params.preparedMessageId,
       deliveryIntentId: params.deliveryIntentId,

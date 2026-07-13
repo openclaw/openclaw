@@ -337,6 +337,7 @@ const outboundMessageProperties = {
 
 const outboundSuppressedReasonSchema = Type.Union([
   Type.Literal("cancelled_by_message_sending_hook"),
+  Type.Literal("cancelled_by_outbound_delivery_policy"),
   Type.Literal("cancelled_by_reply_payload_sending_hook"),
   Type.Literal("empty_after_message_sending_hook"),
   Type.Literal("empty_after_reply_payload_sending_hook"),
@@ -566,6 +567,7 @@ type AuditActivityOutboundMessageV1Terminal =
       errorCode?: never;
       reasonCode:
         | "cancelled_by_message_sending_hook"
+        | "cancelled_by_outbound_delivery_policy"
         | "cancelled_by_reply_payload_sending_hook"
         | "empty_after_message_sending_hook"
         | "empty_after_reply_payload_sending_hook"

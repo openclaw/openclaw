@@ -37,6 +37,7 @@ export function countPhysicalOutboundSends(results: readonly OutboundDeliveryRes
 /** Reason a payload was intentionally not sent after normalization or hooks. */
 export type OutboundPayloadDeliverySuppressionReason =
   | "cancelled_by_message_sending_hook"
+  | "cancelled_by_outbound_delivery_policy"
   | "cancelled_by_reply_payload_sending_hook"
   | "empty_after_message_sending_hook"
   | "empty_after_reply_payload_sending_hook"

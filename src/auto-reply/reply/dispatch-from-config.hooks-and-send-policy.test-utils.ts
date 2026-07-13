@@ -227,6 +227,98 @@ describe("before_dispatch hook", () => {
   });
 });
 
+describe("source_policy hook", () => {
+  beforeEach(describe2BeforeEach0);
+
+  it("can force source delivery through the message tool", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_dispatch" || hookName === "source_policy",
+    );
+    hookMocks.runner.runSourcePolicy.mockResolvedValue({
+      sourceReplyDeliveryMode: "message_tool_only",
+      reason: "read-only source",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      return { text: "private final reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        Provider: "imessage",
+        Surface: "imessage",
+        SessionKey: "test:session",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(hookMocks.runner.runSourcePolicy).toHaveBeenCalledTimes(1);
+    expect(hookMocks.runner.runSourcePolicy.mock.calls[0]?.[0]).toMatchObject({
+      channel: "imessage",
+      chatType: "direct",
+      requestedSourceReplyDeliveryMode: undefined,
+      sendPolicy: "allow",
+    });
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("passes prompt replacement without duplicating the inbound message", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "source_policy",
+    );
+    hookMocks.runner.runSourcePolicy.mockResolvedValue({
+      sourceReplyDeliveryMode: "message_tool_only",
+      promptBody: "<read_only>wrapped once</read_only>",
+      currentInboundContext: null,
+      suppressConversationContext: true,
+      reason: "read-only source",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourcePromptPolicy).toEqual({
+        promptBody: "<read_only>wrapped once</read_only>",
+        currentInboundContext: null,
+        suppressConversationContext: true,
+      });
+      return { text: "private final reply" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Body: "original body",
+        BodyForAgent: "original body",
+        ChatType: "direct",
+        Provider: "imessage",
+        Surface: "imessage",
+        SessionKey: "test:session",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("sendPolicy deny — suppress delivery, not processing (#53328)", () => {
   beforeEach(describe2BeforeEach0);
 

@@ -86,7 +86,9 @@ export type PluginHookName =
   | "inbound_claim"
   | "channel_pairing_requested"
   | "message_received"
+  | "source_policy"
   | "message_sending"
+  | "outbound_delivery_policy"
   | "reply_payload_sending"
   | "message_sent"
   | "before_tool_call"
@@ -135,7 +137,9 @@ const PLUGIN_HOOK_NAMES = [
   "inbound_claim",
   "channel_pairing_requested",
   "message_received",
+  "source_policy",
   "message_sending",
+  "outbound_delivery_policy",
   "reply_payload_sending",
   "message_sent",
   "before_tool_call",
@@ -484,6 +488,51 @@ export type PluginHookBeforeDispatchResult = {
   text?: string;
 };
 
+export type PluginHookSourcePolicyEvent = {
+  content: string;
+  body?: string;
+  channel: string;
+  accountId?: string;
+  conversationId?: string;
+  sessionKey?: string;
+  runId?: string;
+  senderId?: string;
+  replyToId?: string;
+  replyToBody?: string;
+  replyToSender?: string;
+  isGroup: boolean;
+  chatType?: string;
+  inboundEventKind?: string;
+  requestedSourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  configuredVisibleReplies?: "automatic" | "message_tool";
+  defaultVisibleReplies?: "automatic" | "message_tool";
+  sendPolicy: "allow" | "deny";
+};
+
+export type PluginHookSourcePolicyContext = PluginHookMessageContext;
+
+export type PluginHookCurrentInboundPromptContext = {
+  text: string;
+  resumableText?: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
+};
+
+export type PluginHookSourcePolicyResult = {
+  /**
+   * Force visible source replies through the message tool for this turn.
+   * This hook is restrictive-only so plugins cannot loosen configured source
+   * delivery policy.
+   */
+  sourceReplyDeliveryMode?: "message_tool_only";
+  /** Replaces the current inbound body submitted to the model for this turn. */
+  promptBody?: string;
+  /** Replaces or clears runtime current-inbound context prepended to the model prompt. */
+  currentInboundContext?: PluginHookCurrentInboundPromptContext | null;
+  /** Clears runtime current-inbound context for this source turn. */
+  suppressConversationContext?: boolean;
+  reason?: string;
+};
+
 export type PluginHookReplyDispatchEvent = {
   ctx: FinalizedMsgContext;
   runId?: string;
@@ -616,6 +665,58 @@ export type PluginHookReplyPayloadSendingResult = {
   cancel?: boolean;
   reason?: string;
 };
+
+export type PluginHookOutboundDeliveryPolicyPath =
+  | "durable_delivery"
+  | "message_action"
+  | "internal_source";
+
+export type PluginHookOutboundDeliveryPolicySource = {
+  channel?: string;
+  conversationId?: string;
+  accountId?: string;
+  sessionKey?: string;
+  senderId?: string;
+  threadId?: string | number;
+  inboundEventKind?: string;
+};
+
+export type PluginHookOutboundDeliveryPolicyDestination = {
+  channel: string;
+  to: string;
+  conversationId: string;
+  accountId?: string;
+  threadId?: string | number;
+  path: PluginHookOutboundDeliveryPolicyPath;
+};
+
+export type PluginHookOutboundDeliveryPolicyEvent = {
+  payload: PluginHookReplyPayload;
+  kind: ReplyDispatchKind | "message_action";
+  action?: string;
+  source?: PluginHookOutboundDeliveryPolicySource;
+  destination: PluginHookOutboundDeliveryPolicyDestination;
+  sessionKey?: string;
+  runId?: string;
+};
+
+export type PluginHookOutboundDeliveryPolicyResult =
+  | {
+      decision?: "allow";
+      payload?: PluginHookReplyPayload;
+      reason?: string;
+    }
+  | {
+      decision: "cancel";
+      payload?: PluginHookReplyPayload;
+      reason?: string;
+    }
+  | {
+      decision: "reroute";
+      destination: PluginHookOutboundDeliveryPolicyDestination;
+      payload?: PluginHookReplyPayload;
+      reason?: string;
+    };
 
 export type PluginHookToolKind = "code_mode_exec";
 export type PluginHookToolInputKind = "javascript" | "typescript";
@@ -1210,6 +1311,10 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
   ) => Promise<PluginHookBeforeDispatchResult | void> | PluginHookBeforeDispatchResult | void;
+  source_policy: (
+    event: PluginHookSourcePolicyEvent,
+    ctx: PluginHookSourcePolicyContext,
+  ) => Promise<PluginHookSourcePolicyResult | void> | PluginHookSourcePolicyResult | void;
   reply_dispatch: (
     event: PluginHookReplyDispatchEvent,
     ctx: PluginHookReplyDispatchContext,
@@ -1220,6 +1325,13 @@ export type PluginHookHandlerMap = {
   ) =>
     | Promise<PluginHookReplyPayloadSendingResult | void>
     | PluginHookReplyPayloadSendingResult
+    | void;
+  outbound_delivery_policy: (
+    event: PluginHookOutboundDeliveryPolicyEvent,
+    ctx: PluginHookMessageContext,
+  ) =>
+    | Promise<PluginHookOutboundDeliveryPolicyResult | void>
+    | PluginHookOutboundDeliveryPolicyResult
     | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,

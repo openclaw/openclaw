@@ -71,6 +71,11 @@ import {
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
+import {
+  MAX_OUTBOUND_DELIVERY_POLICY_REROUTES,
+  runOutboundDeliveryPolicyHook,
+  type OutboundDeliveryPolicySource,
+} from "./delivery-policy-hook.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
@@ -670,6 +675,37 @@ type SendPayloadParts = {
   silent?: boolean;
 };
 
+type PolicyResolvedSend = {
+  status: "allow";
+  channel: ChannelId;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number;
+  params: Record<string, unknown>;
+  sendPayload: SendPayloadParts;
+  rerouted: boolean;
+};
+
+type PolicyCancelledSend = {
+  status: "cancel";
+  channel: ChannelId;
+  to: string;
+  reason?: string;
+  sendPayload: SendPayloadParts;
+};
+
+type InternalSourcePolicyResult =
+  | {
+      status: "allow";
+      sendPayload: SendPayloadParts;
+    }
+  | PolicyCancelledSend
+  | {
+      status: "reroute";
+      params: Record<string, unknown>;
+      sendPayload: SendPayloadParts;
+    };
+
 function updateSendPayloadPartsFromReplyPayload(
   parts: SendPayloadParts,
   payload: ReplyPayload,
@@ -704,6 +740,188 @@ function applySendPayloadPartsToActionParams(
   actionParams.audioAsVoice = parts.asVoice || undefined;
   actionParams.asVideoNote = parts.payload.videoAsNote || undefined;
   actionParams.location = parts.payload.location;
+}
+
+function sourceFromMessageActionInput(input: RunMessageActionParams): OutboundDeliveryPolicySource {
+  const currentChannel = normalizeOptionalLowercaseString(
+    input.toolContext?.currentChannelProvider,
+  );
+  const currentTarget = normalizeOptionalString(input.toolContext?.currentChannelId);
+  const currentThreadId =
+    normalizeOptionalString(input.toolContext?.currentThreadTs) ??
+    input.toolContext?.currentMessageId;
+  return {
+    ...(currentChannel ? { channel: currentChannel } : {}),
+    ...(currentTarget ? { conversationId: currentTarget } : {}),
+    ...(input.requesterAccountId ? { accountId: input.requesterAccountId } : {}),
+    ...(input.requesterSenderId ? { senderId: input.requesterSenderId } : {}),
+    ...(currentThreadId !== undefined ? { threadId: currentThreadId } : {}),
+    ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
+    ...(input.inboundEventKind ? { inboundEventKind: input.inboundEventKind } : {}),
+  };
+}
+
+async function resolveMessageActionDeliveryPolicy(params: {
+  actionParams: Record<string, unknown>;
+  channel: ChannelId;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number;
+  sendPayload: SendPayloadParts;
+  input: RunMessageActionParams;
+}): Promise<PolicyResolvedSend | PolicyCancelledSend> {
+  let channel = params.channel;
+  let to = params.to;
+  let accountId = params.accountId;
+  let threadId = params.threadId;
+  let actionParams = params.actionParams;
+  let sendPayload = params.sendPayload;
+  let rerouted = false;
+  const copyActionParams = (): Record<string, unknown> => Object.assign({}, actionParams);
+
+  for (let depth = 0; depth <= MAX_OUTBOUND_DELIVERY_POLICY_REROUTES; depth += 1) {
+    const decision = await runOutboundDeliveryPolicyHook({
+      payload: sendPayload.payload,
+      kind: "message_action",
+      action: "send",
+      source: sourceFromMessageActionInput(params.input),
+      destination: {
+        channel,
+        to,
+        ...(accountId ? { accountId } : {}),
+        ...(threadId !== undefined ? { threadId } : {}),
+        path: "message_action",
+      },
+      ...(params.input.sessionKey ? { sessionKey: params.input.sessionKey } : {}),
+    });
+
+    const payloadChanged = decision.payload !== sendPayload.payload;
+    sendPayload = payloadChanged
+      ? updateSendPayloadPartsFromReplyPayload(sendPayload, decision.payload)
+      : sendPayload;
+    if (payloadChanged) {
+      actionParams = copyActionParams();
+      applySendPayloadPartsToActionParams(actionParams, sendPayload);
+    }
+
+    if (decision.decision === "cancel") {
+      return {
+        status: "cancel",
+        channel,
+        to,
+        ...(decision.reason ? { reason: decision.reason } : {}),
+        sendPayload,
+      };
+    }
+    if (decision.decision !== "reroute") {
+      return {
+        status: "allow",
+        channel,
+        to,
+        ...(accountId ? { accountId } : {}),
+        ...(threadId !== undefined ? { threadId } : {}),
+        params: actionParams,
+        sendPayload,
+        rerouted,
+      };
+    }
+
+    rerouted = true;
+    channel = decision.destination.channel as ChannelId;
+    to = decision.destination.to;
+    accountId = decision.destination.accountId;
+    threadId = decision.destination.threadId;
+    actionParams = copyActionParams();
+    actionParams.channel = channel;
+    actionParams.to = to;
+    actionParams.target = to;
+    if (accountId) {
+      actionParams.accountId = accountId;
+    } else {
+      delete actionParams.accountId;
+    }
+    if (threadId !== undefined) {
+      actionParams.threadId = threadId;
+    } else {
+      delete actionParams.threadId;
+    }
+    delete actionParams.replyTo;
+    applySendPayloadPartsToActionParams(actionParams, sendPayload);
+  }
+
+  throw new Error("Outbound delivery policy reroute depth exceeded.");
+}
+
+function resolveInternalSourceDestination(input: RunMessageActionParams): {
+  channel: ChannelId;
+  to: string;
+  threadId?: string | number;
+} {
+  const channel =
+    normalizeOptionalLowercaseString(input.toolContext?.currentChannelProvider) ??
+    INTERNAL_MESSAGE_CHANNEL;
+  const to = normalizeOptionalString(input.toolContext?.currentChannelId) ?? "current-run";
+  const threadId =
+    normalizeOptionalString(input.toolContext?.currentThreadTs) ??
+    input.toolContext?.currentMessageId;
+  return {
+    channel,
+    to,
+    ...(threadId !== undefined ? { threadId } : {}),
+  };
+}
+
+async function resolveInternalSourceReplyDeliveryPolicy(params: {
+  actionParams: Record<string, unknown>;
+  sendPayload: SendPayloadParts;
+  input: RunMessageActionParams;
+}): Promise<InternalSourcePolicyResult> {
+  const destination = resolveInternalSourceDestination(params.input);
+  const decision = await runOutboundDeliveryPolicyHook({
+    payload: params.sendPayload.payload,
+    kind: "message_action",
+    action: "send",
+    source: sourceFromMessageActionInput(params.input),
+    destination: {
+      channel: destination.channel,
+      to: destination.to,
+      ...(destination.threadId !== undefined ? { threadId: destination.threadId } : {}),
+      path: "internal_source",
+    },
+    ...(params.input.sessionKey ? { sessionKey: params.input.sessionKey } : {}),
+  });
+  const sendPayload =
+    decision.payload !== params.sendPayload.payload
+      ? updateSendPayloadPartsFromReplyPayload(params.sendPayload, decision.payload)
+      : params.sendPayload;
+  if (decision.decision === "cancel") {
+    return {
+      status: "cancel",
+      channel: destination.channel,
+      to: destination.to,
+      ...(decision.reason ? { reason: decision.reason } : {}),
+      sendPayload,
+    };
+  }
+  if (decision.decision === "reroute") {
+    const actionParams = { ...params.actionParams };
+    actionParams.channel = decision.destination.channel;
+    actionParams.to = decision.destination.to;
+    actionParams.target = decision.destination.to;
+    if (decision.destination.accountId) {
+      actionParams.accountId = decision.destination.accountId;
+    }
+    if (decision.destination.threadId !== undefined) {
+      actionParams.threadId = decision.destination.threadId;
+    }
+    applySendPayloadPartsToActionParams(actionParams, sendPayload);
+    return {
+      status: "reroute",
+      params: actionParams,
+      sendPayload,
+    };
+  }
+  return { status: "allow", sendPayload };
 }
 
 function collectMessageAttachmentMediaHints(value: unknown): string[] {
@@ -1061,19 +1279,22 @@ async function handleBroadcastAction(
 async function handleInternalSourceReplySendAction(
   input: RunMessageActionParams,
   params: Record<string, unknown>,
+  sourceReplyOverride?: SendPayloadParts,
 ): Promise<MessageActionRunResult> {
   throwIfAborted(input.abortSignal);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-  const sourceReply = await buildSendPayloadParts({
-    cfg: input.cfg,
-    actionParams: params,
-    input,
-    agentId:
-      input.agentId ??
-      (input.sessionKey
-        ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-        : undefined),
-  });
+  const sourceReply =
+    sourceReplyOverride ??
+    (await buildSendPayloadParts({
+      cfg: input.cfg,
+      actionParams: params,
+      input,
+      agentId:
+        input.agentId ??
+        (input.sessionKey
+          ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
+          : undefined),
+    }));
   const payload = {
     status: "ok",
     deliveryStatus: dryRun ? "dry_run" : "sent",
@@ -1342,9 +1563,9 @@ const UNRESOLVED_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
   const {
     cfg,
-    params,
-    channel,
-    accountId,
+    params: initialParams,
+    channel: initialChannel,
+    accountId: initialAccountId,
     dryRun,
     gateway,
     input,
@@ -1352,9 +1573,13 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     resolvedTarget,
     abortSignal,
   } = ctx;
+  let params = initialParams;
+  let channel = initialChannel;
+  let accountId = initialAccountId;
+  let effectiveResolvedTarget = resolvedTarget;
   throwIfAborted(abortSignal);
   const action: ChannelMessageActionName = "send";
-  const to = readStringParam(params, "to", { required: true });
+  let to = readStringParam(params, "to", { required: true });
   let sendPayload = await buildSendPayloadParts({
     cfg,
     actionParams: params,
@@ -1364,6 +1589,38 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
   });
+
+  const policySend = await resolveMessageActionDeliveryPolicy({
+    actionParams: params,
+    channel,
+    to,
+    accountId,
+    sendPayload,
+    input,
+  });
+  if (policySend.status === "cancel") {
+    return {
+      kind: "send",
+      channel: policySend.channel,
+      action,
+      to: policySend.to,
+      handledBy: "core",
+      payload: {
+        status: "suppressed",
+        reason: "cancelled_by_outbound_delivery_policy",
+        ...(policySend.reason ? { hookReason: policySend.reason } : {}),
+      },
+      dryRun,
+    };
+  }
+  params = policySend.params;
+  channel = policySend.channel;
+  to = policySend.to;
+  accountId = policySend.accountId;
+  sendPayload = policySend.sendPayload;
+  if (policySend.rerouted) {
+    effectiveResolvedTarget = undefined;
+  }
 
   // `message(action=send)` crosses into other conversations, so mirror the direct-reply
   // egress and prepend messages.responsePrefix here too; otherwise the disambiguation
@@ -1412,7 +1669,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     agentId,
     currentSessionKey: input.sessionKey,
     dryRun,
-    resolvedTarget,
+    resolvedTarget: effectiveResolvedTarget,
     resolveAutoThreadId: getChannelPlugin(channel)?.threading?.resolveAutoThreadId,
     resolveReplyTransport: getChannelPlugin(channel)?.threading?.resolveReplyTransport,
     replyToIsExplicit,
@@ -1543,6 +1800,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       deliveryCompletion: input.deliveryCompletion,
       onDeliveryIntent: input.onDeliveryIntent,
       onDeliveryResult: input.onDeliveryResult,
+      skipOutboundDeliveryPolicy: true,
       mirror:
         !dryRun && input.transcriptMirror
           ? {
@@ -1576,7 +1834,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     bestEffort: sendPayload.bestEffort,
     replyToId: resolvedReplyToId ?? undefined,
     replyToIdSource: resolvedReplyToId ? (replyToIsExplicit ? "explicit" : "implicit") : undefined,
-    threadId: resolvedThreadId ?? undefined,
+    threadId: policySend.threadId ?? resolvedThreadId ?? undefined,
   });
 
   const result: MessageActionRunResult = {
@@ -1830,6 +2088,7 @@ export async function runMessageAction(
 ): Promise<MessageActionRunResult> {
   const cfg = input.cfg;
   let params = { ...input.params };
+  let skipCrossContextPolicy = false;
   const resolvedAgentId =
     input.agentId ??
     (input.sessionKey
@@ -1852,7 +2111,42 @@ export async function runMessageAction(
     throw new Error('Poll fields require action "poll"; use action "poll" instead of "send".');
   }
   if (await shouldUseInternalSourceReplySink(input, params)) {
-    return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
+    const sourceReply = await buildSendPayloadParts({
+      cfg,
+      actionParams: params,
+      input,
+      agentId: resolvedAgentId,
+    });
+    const policySend = await resolveInternalSourceReplyDeliveryPolicy({
+      actionParams: params,
+      sendPayload: sourceReply,
+      input,
+    });
+    if (policySend.status === "cancel") {
+      const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+      return {
+        kind: "send",
+        channel: policySend.channel,
+        action: "send",
+        to: policySend.to,
+        handledBy: "core",
+        payload: {
+          status: "suppressed",
+          reason: "cancelled_by_outbound_delivery_policy",
+          ...(policySend.reason ? { hookReason: policySend.reason } : {}),
+        },
+        dryRun,
+      };
+    }
+    if (policySend.status === "allow") {
+      return handleInternalSourceReplySendAction(
+        { ...input, agentId: resolvedAgentId },
+        params,
+        policySend.sendPayload,
+      );
+    }
+    params = policySend.params;
+    skipCrossContextPolicy = true;
   }
   applyImplicitSourceReplySendPolicy(input, params);
   // Missing targets must fail before channel discovery, which can bootstrap or
@@ -1967,14 +2261,16 @@ export async function runMessageAction(
     accountId,
   });
 
-  enforceCrossContextPolicy({
-    channel,
-    action,
-    args: params,
-    toolContext: input.toolContext,
-    cfg,
-    agentId: resolvedAgentId,
-  });
+  if (!skipCrossContextPolicy) {
+    enforceCrossContextPolicy({
+      channel,
+      action,
+      args: params,
+      toolContext: input.toolContext,
+      cfg,
+      agentId: resolvedAgentId,
+    });
+  }
 
   if (action === "send") {
     await hydrateActionAttachmentParams();

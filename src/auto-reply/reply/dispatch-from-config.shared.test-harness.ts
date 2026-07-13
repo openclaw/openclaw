@@ -6,6 +6,7 @@ import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-sessi
 import type {
   PluginHookBeforeDispatchResult,
   PluginHookReplyDispatchResult,
+  PluginHookSourcePolicyResult,
 } from "../../plugins/hook-types.js";
 import type { createHookRunner } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -81,6 +82,9 @@ const hookMocks = vi.hoisted(() => ({
       ) => Promise<PluginTargetedInboundClaimOutcome>
     >(async () => ({ status: "no_handler" as const })),
     runMessageReceived: vi.fn(async () => {}),
+    runSourcePolicy: vi.fn<
+      (eventValue: unknown, _ctx: unknown) => Promise<PluginHookSourcePolicyResult | undefined>
+    >(async () => undefined),
     runBeforeDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
     >(async () => undefined),

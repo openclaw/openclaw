@@ -2797,6 +2797,45 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it("lets source policy replace the visible body without replacing transcript history", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          sourceReplyDeliveryMode: "message_tool_only",
+          sourcePromptPolicy: {
+            promptBody: "<read_only>wrapped current message</read_only>",
+            currentInboundContext: null,
+            suppressConversationContext: true,
+          },
+        },
+        ctx: {
+          Body: "raw current message",
+          RawBody: "raw current message",
+          CommandBody: "raw current message",
+          Provider: "imessage",
+          Surface: "imessage",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "raw current message",
+          BodyStripped: "raw current message",
+          Provider: "imessage",
+          Surface: "imessage",
+          ChatType: "direct",
+          MessageSid: "imsg-1",
+          SenderName: "Eric",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.commandBody).toBe("<read_only>wrapped current message</read_only>");
+    expect(call?.transcriptCommandBody).toBe("raw current message");
+    expect(call?.followupRun.prompt).toBe("<read_only>wrapped current message</read_only>");
+    expect(call?.followupRun.transcriptPrompt).toBe("raw current message");
+    expect(call?.followupRun.currentInboundContext).toBeUndefined();
+  });
+
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {
     const heartbeatPrompt = "Read HEARTBEAT.md and run any due maintenance.";
 

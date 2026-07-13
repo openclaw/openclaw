@@ -55,6 +55,9 @@ const hookMocks = vi.hoisted(() => ({
     runReplyPayloadSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
       async (event) => ({ payload: (event as { payload?: unknown }).payload }),
     ),
+    runOutboundDeliveryPolicy: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
+      async (event) => ({ payload: (event as { payload?: unknown }).payload }),
+    ),
     runMessageSent: vi.fn<(event: unknown, ctx: unknown) => Promise<void>>(async () => {}),
   },
 }));
@@ -337,6 +340,10 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => ({
       payload: (event as { payload?: unknown }).payload,
     }));
+    hookMocks.runner.runOutboundDeliveryPolicy.mockClear();
+    hookMocks.runner.runOutboundDeliveryPolicy.mockImplementation(async (event) => ({
+      payload: (event as { payload?: unknown }).payload,
+    }));
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -378,6 +385,78 @@ describe("deliverOutboundPayloads", () => {
     resetDiagnosticEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
+  });
+
+  it("reroutes outbound delivery policy before queueing the original target", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_delivery_policy",
+    );
+    hookMocks.runner.runOutboundDeliveryPolicy.mockResolvedValueOnce({
+      decision: "reroute",
+      destination: {
+        channel: "matrix",
+        to: "!relay",
+        conversationId: "!relay",
+        path: "durable_delivery",
+      },
+    });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "relay", roomId: "!relay" });
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!blocked",
+      payloads: [{ text: "visible" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(results).toHaveLength(1);
+    expect(requireMatrixSendCall(sendMatrix)[0]).toBe("!relay");
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(queueMocks.enqueueDelivery, "enqueueDelivery")).toMatchObject({
+      channel: "matrix",
+      to: "!relay",
+    });
+    expect(hookMocks.runner.runOutboundDeliveryPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "final",
+        destination: expect.objectContaining({ channel: "matrix", to: "!blocked" }),
+      }),
+      expect.objectContaining({ channelId: "matrix", conversationId: "!blocked" }),
+    );
+  });
+
+  it("cancels outbound delivery policy without queueing or sending", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "outbound_delivery_policy",
+    );
+    hookMocks.runner.runOutboundDeliveryPolicy.mockResolvedValue({
+      decision: "cancel",
+      reason: "read_only_source",
+    });
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "blocked", roomId: "!blocked" });
+    const outcomes: unknown[] = [];
+
+    const results = await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!blocked",
+      payloads: [{ text: "visible" }],
+      deps: { matrix: sendMatrix },
+      onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(results).toStrictEqual([]);
+    expect(sendMatrix).not.toHaveBeenCalled();
+    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+    expect(outcomes).toStrictEqual([
+      {
+        index: 0,
+        status: "suppressed",
+        reason: "cancelled_by_outbound_delivery_policy",
+        hookEffect: { cancelReason: "read_only_source" },
+      },
+    ]);
   });
 
   it("delivers through full active plugin when pinned setup channel has no sender", async () => {

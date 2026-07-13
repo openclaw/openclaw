@@ -702,7 +702,11 @@ export async function runPreparedReply(
     directChatContext || groupChatContext || sourceReplyDeliveryMode === "message_tool_only"
       ? "none"
       : "generic";
-  const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const sourcePromptPolicy = opts?.sourcePromptPolicy;
+  const suppressConversationContext = sourcePromptPolicy?.suppressConversationContext === true;
+  const sourcePromptBody = normalizeOptionalString(sourcePromptPolicy?.promptBody);
+  const transcriptBaseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const baseBody = sourcePromptBody ?? transcriptBaseBody;
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
@@ -771,6 +775,8 @@ export async function runPreparedReply(
   const baseBodyFinal = isBareSessionReset
     ? (bareResetPromptState?.prompt ?? "")
     : stripPromptThinkingDirectives(baseBody);
+  const transcriptBaseBodyFinal =
+    sourcePromptBody !== undefined ? stripPromptThinkingDirectives(transcriptBaseBody) : undefined;
   const hasUserBody =
     baseBodyFinal.trim().length > 0 ||
     softResetTail.length > 0 ||
@@ -949,10 +955,16 @@ export async function runPreparedReply(
       sessionCtx,
       baseBody: baseBodyFinal,
       prefixedBody: prefixedBodyCore,
+      ...(transcriptBaseBodyFinal !== undefined ? { transcriptBody: transcriptBaseBodyFinal } : {}),
       hasUserBody,
       inboundUserContext,
       activeGoalContext,
       inboundUserContextPromptJoiner,
+      ...(suppressConversationContext
+        ? { currentInboundContext: null }
+        : sourcePromptPolicy && Object.hasOwn(sourcePromptPolicy, "currentInboundContext")
+          ? { currentInboundContext: sourcePromptPolicy.currentInboundContext ?? null }
+          : {}),
       isBareSessionReset,
       startupAction,
       startupContextPrelude,
