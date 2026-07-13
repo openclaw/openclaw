@@ -341,8 +341,8 @@ describe("subagent registry lifecycle hardening", () => {
     const successor = createRunEntry({
       runId: "run-successor",
       generation: 2,
-      createdAt: entry.createdAt + 1,
-      startedAt: entry.startedAt + 1,
+      createdAt: 1_001,
+      startedAt: 1_001,
     });
     const runs = new Map([
       [entry.runId, entry],
