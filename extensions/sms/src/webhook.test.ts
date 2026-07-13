@@ -7,7 +7,6 @@ import { computeTwilioSignature, parseTwilioFormBody } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import {
   createSmsWebhookHandler,
-  resetSmsWebhookRateLimiterForTest,
   createSmsWebhookReplayGuard,
   resetSmsWebhookReplayGuardsForTest,
 } from "./webhook.js";
@@ -116,7 +115,6 @@ function createMessageSid(index: number): string {
 describe("createSmsWebhookHandler", () => {
   beforeEach(() => {
     dispatchSmsInboundEvent.mockClear();
-    resetSmsWebhookRateLimiterForTest();
     resetSmsWebhookReplayGuardsForTest();
   });
 
