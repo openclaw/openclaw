@@ -27,7 +27,7 @@ protocol MacNodeHostWorking: Sendable {
 /// The worker never connects to Gateway; this app remains the sole node identity
 /// and keeps TCC-sensitive execution behind the native exec-host socket.
 final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
-    nonisolated static let defaultStartupTimeout: TimeInterval = 120
+    nonisolated static let defaultStartupTimeout: TimeInterval = 300
 
     enum WorkerError: LocalizedError {
         case unavailable(String)

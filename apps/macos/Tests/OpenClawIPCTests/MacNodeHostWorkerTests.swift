@@ -30,7 +30,7 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
 @Suite(.serialized)
 struct MacNodeHostWorkerTests {
     @Test func `worker allows a generous cold-start window`() async throws {
-        #expect(MacNodeHostWorker.defaultStartupTimeout == 120)
+        #expect(MacNodeHostWorker.defaultStartupTimeout == 300)
 
         let worker = MacNodeHostWorker(session: GatewayNodeSession(), startupTimeout: 1)
         let script = """
