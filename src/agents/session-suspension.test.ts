@@ -184,6 +184,24 @@ describe("session suspension", () => {
     expect(enableSessionSuspensionTimersForGatewayStart()).toBe(0);
   });
 
+  it("leaves built-in lane restoration to gateway startup concurrency", async () => {
+    vi.useFakeTimers();
+    const { clearSessionSuspensionTimers, enableSessionSuspensionTimersForGatewayStart } =
+      await import("./session-suspension.js");
+
+    await suspendLane(
+      100,
+      { agents: { defaults: { maxConcurrent: 3 } } } as OpenClawConfig,
+      CommandLane.Main,
+    );
+
+    expect(clearSessionSuspensionTimers()).toBe(1);
+    commandQueueMocks.setCommandLaneConcurrency.mockClear();
+
+    expect(enableSessionSuspensionTimersForGatewayStart()).toBe(0);
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+  });
+
   it("does not throttle lanes when cleanup wins a pending suspension write race", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

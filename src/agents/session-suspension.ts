@@ -11,6 +11,7 @@ import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import { CommandLane } from "../process/lanes.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -93,6 +94,16 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
   }
 }
 
+function isGatewayManagedLane(laneId: string): boolean {
+  return (
+    laneId === CommandLane.Main ||
+    laneId === CommandLane.Subagent ||
+    laneId === CommandLane.Cron ||
+    laneId === CommandLane.CronNested ||
+    laneId === CommandLane.Nested
+  );
+}
+
 export function resolveSessionSuspensionReason(reason: FailoverReason): SessionSuspensionReason {
   if (reason === "billing") {
     return "manual";
@@ -164,6 +175,9 @@ export function enableSessionSuspensionTimersForGatewayStart(): number {
   state.cleanupActive = false;
   let restored = 0;
   for (const [laneId, resumeConcurrency] of state.clearedLaneResumes) {
+    if (isGatewayManagedLane(laneId)) {
+      continue;
+    }
     setCommandLaneConcurrency(laneId, resumeConcurrency);
     restored += 1;
   }
