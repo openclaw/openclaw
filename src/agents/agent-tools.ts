@@ -1180,7 +1180,6 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     agentId,
   });
   options?.recordToolPrepStage?.("deferred-followup-descriptions");
-
   // NOTE: Keep canonical (lowercase) tool names here.
   // shared model runtime's Anthropic OAuth transport remaps tool names to Claude Code-style names
   // on the wire and maps them back for tool dispatch.

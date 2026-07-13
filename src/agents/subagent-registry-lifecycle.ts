@@ -35,6 +35,7 @@ import {
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
+import { dispatchSubagentBrowserCleanup } from "./subagent-browser-cleanup.js";
 import {
   clearDeliveryState,
   ensureCompletionState,
@@ -79,22 +80,14 @@ import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
 type RunSubagentAnnounceFlow = (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-type BrowserCleanupModule = Pick<
-  typeof import("../browser-lifecycle-cleanup.js"),
-  "cleanupBrowserSessionsForLifecycleEnd"
->;
-
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
 
-const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
+// Keep browser runtime loading lazy so non-browser completion startup stays cheap.
+const browserCleanupLoader = createLazyImportLoader(
   () => import("../browser-lifecycle-cleanup.js"),
 );
-
-async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
-  BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
-> {
-  return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
-}
+const loadCleanupBrowserSessionsForLifecycleEnd = () =>
+  browserCleanupLoader.load().then((module) => module.cleanupBrowserSessionsForLifecycleEnd);
 
 function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
   if (
@@ -1903,56 +1896,21 @@ export function createSubagentRegistryLifecycleController(params: {
         params.persist();
       }
     };
-    const dispatchBrowserCleanup = async (): Promise<void> => {
-      if (entry.browserCleanupDispatchedAt !== undefined) {
-        return;
-      }
-      entry.browserCleanupDispatchedAt = Date.now();
-      let cleanupBrowserSessions: typeof cleanupBrowserSessionsForLifecycleEnd | undefined;
-      try {
-        cleanupBrowserSessions =
-          params.cleanupBrowserSessionsForLifecycleEnd ??
-          (await loadCleanupBrowserSessionsForLifecycleEnd());
-      } catch (error) {
-        params.warn("failed to cleanup browser sessions for completed subagent", {
-          error: buildSafeLifecycleErrorMeta(error),
-          runId: maskRunId(completeParams.runId),
-          childSessionKey: maskSessionKey(entry.childSessionKey),
-        });
-      }
-      // The synchronous marker owns this dispatch. A duplicate may advance the
-      // registry while the loader yields; the run owner and session gate keep
-      // this completed run's cleanup safe after that handoff.
-      if (cleanupBrowserSessions !== undefined) {
-        void runWithGatewayIndependentRootWorkAdmission(async () => {
-          try {
-            await cleanupBrowserSessions({
-              sessionKeys: [entry.childSessionKey],
-              ownerId: completeParams.runId,
-              onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-            });
-          } catch (error) {
-            params.warn("failed to cleanup browser sessions for completed subagent", {
-              error: buildSafeLifecycleErrorMeta(error),
-              runId: maskRunId(completeParams.runId),
-              childSessionKey: maskSessionKey(entry.childSessionKey),
-            });
-          }
-        }).catch((error: unknown) => {
-          params.warn("failed to admit browser cleanup for completed subagent", {
-            error: buildSafeLifecycleErrorMeta(error),
-            runId: maskRunId(completeParams.runId),
-            childSessionKey: maskSessionKey(entry.childSessionKey),
-          });
-        });
-      }
-    };
     sessionSuperseded = sessionSuperseded || newerGenerationOwnsSession(entry);
     if (sessionSuperseded) {
       // This callback belongs to an older run that shared the session key.
       // Update only its task projection; the newer generation owns all session effects.
       if (completeParams.triggerCleanup) {
-        await dispatchBrowserCleanup();
+        await dispatchSubagentBrowserCleanup({
+          entry,
+          runId: completeParams.runId,
+          cleanupBrowserSessionsForLifecycleEnd: params.cleanupBrowserSessionsForLifecycleEnd,
+          loadCleanupBrowserSessionsForLifecycleEnd,
+          warn: (message, meta) => params.warn(message, meta),
+          maskRunId,
+          maskSessionKey,
+          buildSafeLifecycleErrorMeta,
+        });
       }
       await retireSupersededSession(entry);
       return;
@@ -2046,7 +2004,16 @@ export function createSubagentRegistryLifecycleController(params: {
     // with a sync check-then-set. Browser cleanup is independent work: its
     // exclusive session gate protects successor browser operations while the
     // MCP retirement and completion delivery continue immediately.
-    await dispatchBrowserCleanup();
+    await dispatchSubagentBrowserCleanup({
+      entry,
+      runId: completeParams.runId,
+      cleanupBrowserSessionsForLifecycleEnd: params.cleanupBrowserSessionsForLifecycleEnd,
+      loadCleanupBrowserSessionsForLifecycleEnd,
+      warn: (message, meta) => params.warn(message, meta),
+      maskRunId,
+      maskSessionKey,
+      buildSafeLifecycleErrorMeta,
+    });
     if (newerGenerationOwnsSession(entry)) {
       await retireSupersededSession(entry);
       return;

@@ -7,6 +7,13 @@ import {
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { browserCloseTabByRawTargetId } from "./client.js";
+import {
+  acquireBrowserSessionAccess,
+  acquireBrowserSessionCleanup,
+  claimBrowserSessionOwner,
+  isCurrentBrowserSessionOwnerClaim,
+  resetBrowserSessionGatesForTests,
+} from "./session-tab-gate.js";
 
 type TrackedSessionBrowserTab = {
   sessionKey: string;
@@ -31,17 +38,6 @@ type SessionBrowserTabIdentityParams = {
 type TrackedSessionBrowserTabIdentity = Omit<TrackedSessionBrowserTab, "trackedAt" | "lastUsedAt">;
 
 const trackedTabsBySession = new Map<string, Map<string, TrackedSessionBrowserTab>>();
-
-type BrowserSessionGate = {
-  activeAccesses: number;
-  cleanupActive: boolean;
-  ownerClaimSequence: number;
-  latestOwnerClaim?: { ownerId: string; sequence: number };
-  accessWaiters: Array<(release: () => void) => void>;
-  cleanupWaiters: Array<(release: () => void) => void>;
-};
-
-const browserSessionGates = new Map<string, BrowserSessionGate>();
 
 function normalizeSessionKey(raw: string): string {
   return normalizeOptionalLowercaseString(raw) ?? "";
@@ -88,21 +84,6 @@ function resolveTrackedTabIdentity(
     ...(normalizeOwnerId(params.ownerId) ? { ownerId: normalizeOwnerId(params.ownerId) } : {}),
     ...(typeof params.ownerClaim === "number" ? { ownerClaim: params.ownerClaim } : {}),
   };
-}
-
-function isCurrentOwnerClaim(identity: {
-  sessionKey: string;
-  ownerId?: string;
-  ownerClaim?: number;
-}): boolean {
-  if (identity.ownerId === undefined || identity.ownerClaim === undefined) {
-    return true;
-  }
-  const latest = browserSessionGates.get(identity.sessionKey)?.latestOwnerClaim;
-  return (
-    latest === undefined ||
-    (latest.ownerId === identity.ownerId && latest.sequence === identity.ownerClaim)
-  );
 }
 
 function trackedTabsForIdentity(
@@ -173,71 +154,6 @@ function deleteTrackedTabAliases(
   }
 }
 
-function releaseBrowserSessionAccess(sessionKey: string, gate: BrowserSessionGate): () => void {
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    gate.activeAccesses = Math.max(0, gate.activeAccesses - 1);
-    pumpBrowserSessionGate(sessionKey, gate);
-  };
-}
-
-function releaseBrowserSessionCleanup(sessionKey: string, gate: BrowserSessionGate): () => void {
-  let released = false;
-  return () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    gate.cleanupActive = false;
-    pumpBrowserSessionGate(sessionKey, gate);
-  };
-}
-
-function pumpBrowserSessionGate(sessionKey: string, gate: BrowserSessionGate): void {
-  if (gate.cleanupActive || gate.activeAccesses > 0) {
-    return;
-  }
-  const cleanupWaiter = gate.cleanupWaiters.shift();
-  if (cleanupWaiter) {
-    gate.cleanupActive = true;
-    cleanupWaiter(releaseBrowserSessionCleanup(sessionKey, gate));
-    return;
-  }
-  while (gate.accessWaiters.length > 0) {
-    gate.activeAccesses += 1;
-    gate.accessWaiters.shift()?.(releaseBrowserSessionAccess(sessionKey, gate));
-  }
-  if (
-    gate.activeAccesses === 0 &&
-    !gate.cleanupActive &&
-    gate.accessWaiters.length === 0 &&
-    gate.cleanupWaiters.length === 0 &&
-    (!gate.latestOwnerClaim || !trackedTabsBySession.has(sessionKey))
-  ) {
-    browserSessionGates.delete(sessionKey);
-  }
-}
-
-function getBrowserSessionGate(sessionKey: string): BrowserSessionGate {
-  const existing = browserSessionGates.get(sessionKey);
-  if (existing) {
-    return existing;
-  }
-  const gate: BrowserSessionGate = {
-    activeAccesses: 0,
-    cleanupActive: false,
-    ownerClaimSequence: 0,
-    accessWaiters: [],
-    cleanupWaiters: [],
-  };
-  browserSessionGates.set(sessionKey, gate);
-  return gate;
-}
-
 /** Claims the latest browser-tab ownership slot for a run in a session. */
 export function claimTrackedBrowserSessionOwner(params: {
   sessionKey?: string;
@@ -248,10 +164,7 @@ export function claimTrackedBrowserSessionOwner(params: {
   if (!sessionKey || !ownerId) {
     return undefined;
   }
-  const gate = getBrowserSessionGate(sessionKey);
-  const sequence = ++gate.ownerClaimSequence;
-  gate.latestOwnerClaim = { ownerId, sequence };
-  return sequence;
+  return claimBrowserSessionOwner(sessionKey, ownerId);
 }
 
 /** Holds browser access for a session until the caller's operation completes. */
@@ -262,32 +175,7 @@ export function acquireTrackedBrowserSessionAccess(params: {
   if (!sessionKey) {
     return Promise.resolve(() => {});
   }
-  const gate = getBrowserSessionGate(sessionKey);
-  if (!gate.cleanupActive && gate.cleanupWaiters.length === 0) {
-    gate.activeAccesses += 1;
-    return Promise.resolve(releaseBrowserSessionAccess(sessionKey, gate));
-  }
-  return new Promise((resolve) => {
-    gate.accessWaiters.push(resolve);
-  });
-}
-
-async function acquireTrackedBrowserSessionCleanup(sessionKeys: string[]): Promise<() => void> {
-  const releases: Array<() => void> = [];
-  for (const sessionKey of [...new Set(sessionKeys)].toSorted()) {
-    const gate = getBrowserSessionGate(sessionKey);
-    releases.push(
-      await new Promise<() => void>((resolve) => {
-        gate.cleanupWaiters.push(resolve);
-        pumpBrowserSessionGate(sessionKey, gate);
-      }),
-    );
-  }
-  return () => {
-    for (const release of releases.toReversed()) {
-      release();
-    }
-  };
+  return acquireBrowserSessionAccess(sessionKey, (key) => trackedTabsBySession.has(key));
 }
 
 function isIgnorableCloseError(err: unknown): boolean {
@@ -309,7 +197,7 @@ export function trackSessionBrowserTab(params: SessionBrowserTabIdentityParams):
   const trackedId = toTrackedTabId(identity);
   const existing = trackedTabsBySession.get(identity.sessionKey)?.get(trackedId);
   if (
-    !isCurrentOwnerClaim(identity) &&
+    !isCurrentBrowserSessionOwnerClaim(identity) &&
     existing !== undefined &&
     existing.ownerId !== identity.ownerId
   ) {
@@ -340,7 +228,7 @@ export function touchSessionBrowserTab(
   if (!identity) {
     return;
   }
-  if (!isCurrentOwnerClaim(identity)) {
+  if (!isCurrentBrowserSessionOwnerClaim(identity)) {
     return;
   }
   const trackedForSession = trackedTabsForIdentity(identity);
@@ -369,7 +257,7 @@ export function untrackSessionBrowserTab(params: SessionBrowserTabIdentityParams
   if (!identity) {
     return;
   }
-  if (!isCurrentOwnerClaim(identity)) {
+  if (!isCurrentBrowserSessionOwnerClaim(identity)) {
     return;
   }
   deleteTrackedTab(identity);
@@ -483,7 +371,9 @@ export async function closeTrackedBrowserTabsForSessions(params: {
   if (sessionKeys.length === 0) {
     return 0;
   }
-  const releaseCleanup = await acquireTrackedBrowserSessionCleanup(sessionKeys);
+  const releaseCleanup = await acquireBrowserSessionCleanup(sessionKeys, (key) =>
+    trackedTabsBySession.has(key),
+  );
   const ownerId = normalizeOwnerId(params.ownerId);
   try {
     return await closeTrackedTabs({
@@ -566,7 +456,9 @@ export async function sweepTrackedBrowserTabs(params: {
   );
   let closed = 0;
   for (const sessionKey of sessionKeys) {
-    const releaseCleanup = await acquireTrackedBrowserSessionCleanup([sessionKey]);
+    const releaseCleanup = await acquireBrowserSessionCleanup([sessionKey], (key) =>
+      trackedTabsBySession.has(key),
+    );
     try {
       closed += await closeTrackedTabs({
         tabs: takeStaleTrackedTabs({
@@ -590,7 +482,7 @@ export async function sweepTrackedBrowserTabs(params: {
 /** Clears tracked tab state for tests. */
 export function resetTrackedSessionBrowserTabsForTests(): void {
   trackedTabsBySession.clear();
-  browserSessionGates.clear();
+  resetBrowserSessionGatesForTests();
 }
 
 /** Counts tracked tabs for one session or all sessions in tests. */

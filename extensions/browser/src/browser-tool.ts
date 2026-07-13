@@ -6,6 +6,7 @@
  */
 import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
 import { describeBrowserTool } from "./browser-tool-description.js";
+import * as browserToolSession from "./browser-tool-session.js";
 import {
   executeActAction,
   executeConsoleAction,
@@ -51,8 +52,6 @@ import {
   saveMediaBuffer,
   selectDefaultNodeFromList,
   stageBrowserScreenshotForSharing,
-  acquireTrackedBrowserSessionAccess,
-  claimTrackedBrowserSessionOwner,
   touchSessionBrowserTab,
   trackSessionBrowserTab,
   untrackSessionBrowserTab,
@@ -65,8 +64,6 @@ import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/
 import { wrapExternalContent } from "./sdk-security-runtime.js";
 
 const browserToolDeps = {
-  acquireTrackedBrowserSessionAccess,
-  claimTrackedBrowserSessionOwner,
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
@@ -99,8 +96,8 @@ export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
-      acquireTrackedBrowserSessionAccess: typeof acquireTrackedBrowserSessionAccess;
-      claimTrackedBrowserSessionOwner: typeof claimTrackedBrowserSessionOwner;
+      acquireTrackedBrowserSessionAccess: browserToolSession.BrowserToolSessionAccess;
+      claimTrackedBrowserSessionOwner: browserToolSession.BrowserToolSessionOwnerClaim;
       browserArmDialog: typeof browserArmDialog;
       browserArmFileChooser: typeof browserArmFileChooser;
       browserCloseTab: typeof browserCloseTab;
@@ -129,10 +126,7 @@ export const testing = {
       untrackSessionBrowserTab: typeof untrackSessionBrowserTab;
     }> | null,
   ) {
-    browserToolDeps.acquireTrackedBrowserSessionAccess =
-      overrides?.acquireTrackedBrowserSessionAccess ?? acquireTrackedBrowserSessionAccess;
-    browserToolDeps.claimTrackedBrowserSessionOwner =
-      overrides?.claimTrackedBrowserSessionOwner ?? claimTrackedBrowserSessionOwner;
+    browserToolSession.setBrowserToolSessionDepsForTest(overrides);
     browserToolDeps.browserAct = overrides?.browserAct ?? browserAct;
     browserToolDeps.browserArmDialog = overrides?.browserArmDialog ?? browserArmDialog;
     browserToolDeps.browserArmFileChooser =
@@ -178,17 +172,12 @@ function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   });
   return { targetId, timeoutMs };
 }
-
 function readTargetUrlParam(params: Record<string, unknown>) {
   const targetUrl =
     readStringParam(params, "targetUrl") ??
     readStringParam(params, "url", { required: true, label: "targetUrl" });
   parseBrowserNavigationUrl(targetUrl);
   return targetUrl;
-}
-
-function formatScreenshotShareHint(filePath: string): string {
-  return `[Screenshot saved to ${JSON.stringify(filePath)}. Use this path with the message tool to share the screenshot explicitly.]`;
 }
 
 const SCREENSHOT_SHARE_UNAVAILABLE =
@@ -461,28 +450,6 @@ function usesExistingSessionManageFlow(params: { action: string; profileName?: s
   });
 }
 
-function readToolTimeoutMs(params: Record<string, unknown>) {
-  return readPositiveIntegerParam(params, "timeoutMs", {
-    message: "timeoutMs must be a positive integer.",
-  });
-}
-
-function withBrowserSessionAccess(
-  opts: { agentSessionKey?: string },
-  execute: AnyAgentTool["execute"],
-): AnyAgentTool["execute"] {
-  return async function (this: void, ...args: Parameters<AnyAgentTool["execute"]>) {
-    const releaseSessionAccess = await browserToolDeps.acquireTrackedBrowserSessionAccess({
-      sessionKey: opts.agentSessionKey,
-    });
-    try {
-      return await execute(...args);
-    } finally {
-      releaseSessionAccess();
-    }
-  };
-}
-
 /** Create the Browser tool exposed to agents. */
 export function createBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
@@ -501,12 +468,7 @@ export function createBrowserTool(opts?: {
     chatType?: string;
   };
 }): AnyAgentTool {
-  const ownerClaim = opts?.runId
-    ? browserToolDeps.claimTrackedBrowserSessionOwner({
-        sessionKey: opts.agentSessionKey,
-        ownerId: opts.runId,
-      })
-    : undefined;
+  const ownerClaim = browserToolSession.resolveBrowserSessionOwnerClaim(opts ?? {});
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -515,12 +477,12 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
-    execute: withBrowserSessionAccess(opts ?? {}, async (_toolCallId, args) => {
+    execute: browserToolSession.withBrowserSessionAccess(opts ?? {}, async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
       const requestedNode = readStringParam(params, "node");
-      const requestedTimeoutMs = readToolTimeoutMs(params);
+      const requestedTimeoutMs = browserToolSession.readToolTimeoutMs(params);
       let target = readStringParam(params, "target") as "sandbox" | "host" | "node" | undefined;
       const configuredNode = browserToolDeps
         .getRuntimeConfig()
@@ -604,12 +566,7 @@ export function createBrowserTool(opts?: {
           targetId,
           baseUrl,
           profile,
-          ...(opts?.runId
-            ? {
-                ownerId: opts.runId,
-                ...(ownerClaim !== undefined ? { ownerClaim } : {}),
-              }
-            : {}),
+          ...browserToolSession.buildBrowserSessionTabOwner({ runId: opts?.runId, ownerClaim }),
         });
       };
 
@@ -760,12 +717,7 @@ export function createBrowserTool(opts?: {
             targetId: opened.targetId,
             baseUrl,
             profile,
-            ...(opts?.runId
-              ? {
-                  ownerId: opts.runId,
-                  ...(ownerClaim !== undefined ? { ownerClaim } : {}),
-                }
-              : {}),
+            ...browserToolSession.buildBrowserSessionTabOwner({ runId: opts?.runId, ownerClaim }),
           });
           return jsonResult(opened);
         }
@@ -828,12 +780,7 @@ export function createBrowserTool(opts?: {
               targetId,
               baseUrl,
               profile,
-              ...(opts?.runId
-                ? {
-                    ownerId: opts.runId,
-                    ...(ownerClaim !== undefined ? { ownerClaim } : {}),
-                  }
-                : {}),
+              ...browserToolSession.buildBrowserSessionTabOwner({ runId: opts?.runId, ownerClaim }),
             });
           } else {
             await browserToolDeps.browserAct(
@@ -901,7 +848,7 @@ export function createBrowserTool(opts?: {
               screenshotPath,
               imageSanitization?.maxDimensionPx,
             );
-            shareHint = formatScreenshotShareHint(sharePath);
+            shareHint = browserToolSession.formatScreenshotShareHint(sharePath);
           } catch {
             // Screenshot viewing remains useful when optional outbound staging fails.
           }
