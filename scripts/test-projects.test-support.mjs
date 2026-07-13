@@ -2618,7 +2618,7 @@ function isExistingDirectoryTarget(arg, cwd) {
 }
 
 function isGlobTarget(arg) {
-  return /[*?[\]{}]/u.test(arg);
+  return /[*?[\]{}]|[@+!]\(/u.test(arg);
 }
 
 function isFileLikeTarget(arg) {
@@ -4554,8 +4554,28 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
   );
 }
 
-export function writeVitestIncludeFile(filePath, includePatterns) {
-  fs.writeFileSync(filePath, `${JSON.stringify(includePatterns, null, 2)}\n`);
+function expandVitestIncludePatterns(includePatterns, cwd) {
+  const candidateFiles = includePatterns.some(isGlobTarget)
+    ? listExplicitTestTargetFilesForCwd(cwd)
+    : [];
+  return uniqueOrdered(
+    includePatterns.flatMap((pattern) => {
+      if (!isGlobTarget(pattern)) {
+        return [pattern];
+      }
+      return candidateFiles.filter((file) => path.matchesGlob(file, pattern));
+    }),
+  );
+}
+
+export function writeVitestIncludeFile(filePath, includePatterns, options = {}) {
+  // Shared Vitest projects intersect this file with their ownership globs.
+  // One-shot runs emit concrete paths; watch runs retain globs for new files.
+  const expandedPatterns =
+    options.expandGlobs === false
+      ? includePatterns
+      : expandVitestIncludePatterns(includePatterns, options.cwd ?? process.cwd());
+  fs.writeFileSync(filePath, `${JSON.stringify(expandedPatterns, null, 2)}\n`);
 }
 
 function shellQuote(value) {
