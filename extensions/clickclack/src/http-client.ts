@@ -218,7 +218,9 @@ export function createClickClackClient(options: ClientOptions) {
           if (error.headers.get("X-ClickClack-Message-Nonce") === "supported") {
             return undefined;
           }
-          throw new Error("ClickClack server does not support durable message nonce lookup");
+          throw new Error("ClickClack server does not support durable message nonce lookup", {
+            cause: error,
+          });
         }
         throw error;
       }
@@ -312,7 +314,9 @@ export function createClickClackClient(options: ClientOptions) {
           if (error.headers.get("X-ClickClack-Upload-Nonce") === "supported") {
             return undefined;
           }
-          throw new Error("ClickClack server does not support durable upload nonce lookup");
+          throw new Error("ClickClack server does not support durable upload nonce lookup", {
+            cause: error,
+          });
         }
         throw error;
       }

@@ -410,7 +410,10 @@ describe("ClickClack HTTP client", () => {
     ).resolves.toBeUndefined();
     await expect(
       client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "unsupported" }),
-    ).rejects.toThrow("does not support durable upload nonce lookup");
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("does not support durable upload nonce lookup"),
+      cause: expect.objectContaining({ status: 404 }),
+    });
     await expect(
       client.findUploadByNonce({ workspaceId: "wsp_1", nonce: "broken" }),
     ).rejects.toThrow("ClickClack 503");
@@ -466,7 +469,10 @@ describe("ClickClack HTTP client", () => {
     ).resolves.toBeUndefined();
     await expect(
       client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "unsupported" }),
-    ).rejects.toThrow("does not support durable message nonce lookup");
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("does not support durable message nonce lookup"),
+      cause: expect.objectContaining({ status: 404 }),
+    });
     await expect(
       client.findMessageByNonce({ workspaceId: "wsp_1", nonce: "broken" }),
     ).rejects.toThrow("ClickClack 503");
