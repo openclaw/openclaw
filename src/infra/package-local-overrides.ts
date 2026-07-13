@@ -680,8 +680,7 @@ async function copyOverridePayload(params: {
   return { savedPath, mode };
 }
 
-const BEST_EFFORT_LOCAL_IMPORT_SPECIFIER_PATTERN =
-  /(?:import|export)\b\s*(?:[^'"]*?\bfrom\s*)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|require\s*\(\s*["']([^"']+)["']\s*\)/gu;
+const BEST_EFFORT_LOCAL_PATH_LITERAL_PATTERN = /["'`]([^"'`\r\n]+)["'`]/gu;
 const CONTENT_HASHED_DIST_ARTIFACT_PATTERN = /-([A-Za-z0-9_]{8,})\.(?:cjs|css|js|mjs)(?:\.map)?$/u;
 
 function isLikelyContentHashedDistArtifact(relativePath: string): boolean {
@@ -771,8 +770,8 @@ async function collectReferencedAddedOverridePaths(params: {
             })
             .catch(() => "")
         : await fs.readFile(current.sourcePath, "utf8").catch(() => "");
-    for (const match of source.matchAll(BEST_EFFORT_LOCAL_IMPORT_SPECIFIER_PATTERN)) {
-      const specifier = match[1] ?? match[2] ?? match[3] ?? "";
+    for (const match of source.matchAll(BEST_EFFORT_LOCAL_PATH_LITERAL_PATTERN)) {
+      const specifier = match[1] ?? "";
       const referencedPath = resolveReferencedDistPath({
         fromPath: current.path,
         specifier,

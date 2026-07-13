@@ -1678,15 +1678,15 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
     {
       featureRelativePath: "dist/local-feature.js",
-      helperRelativePath: "dist/local-helper.js",
-      name: "commented dynamic import",
-      source: 'void import(/* webpackChunkName: "local" */ "./local-helper.js");\n',
+      helperRelativePath: "dist/local-helper-AbC12345.js",
+      name: "content-hashed commented dynamic import",
+      source: 'void import(/* webpackChunkName: "local" */ "./local-helper-AbC12345.js");\n',
     },
     {
       featureRelativePath: "dist/local-feature.js",
-      helperRelativePath: "dist/local-helper.js",
-      name: "template dynamic import",
-      source: "void import(`./local-helper.js`);\n",
+      helperRelativePath: "dist/local-helper-AbC12345.js",
+      name: "content-hashed template dynamic import",
+      source: "void import(`./local-helper-AbC12345.js`);\n",
     },
     {
       featureRelativePath: "dist/local-feature.js",
@@ -1702,9 +1702,9 @@ describe("runGlobalPackageUpdateSteps", () => {
     },
     {
       featureRelativePath: "dist/local-feature.js",
-      helperRelativePath: "dist/local-helper.js",
-      name: "plain runtime path string",
-      source: 'const helperPath = "./local-helper.js";\n',
+      helperRelativePath: "dist/local-helper-AbC12345.js",
+      name: "content-hashed runtime path string",
+      source: 'const helperPath = "./local-helper-AbC12345.js";\n',
     },
     {
       featureRelativePath: "dist/local-feature.css",
