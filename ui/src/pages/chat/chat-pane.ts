@@ -1819,9 +1819,8 @@ class ChatPane extends OpenClawLightDomElement {
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
     const disabledReason = selectedSessionArchived ? t("chat.archivedSessionDisabled") : null;
-    // Never flash "view-only" while metadata loads; after loading, anything
-    // short of a continuable session (including a failed lookup) explains the
-    // disabled composer instead of leaving it silently inert.
+    // Never flash "view-only" while metadata loads; after loading, anything short
+    // of a continuable session (failed lookups too) explains the disabled composer.
     const catalogDisabledReason =
       catalogKey && !this.catalogLoading && this.catalogSession?.canContinue !== true
         ? this.catalogHost?.kind === "node"
