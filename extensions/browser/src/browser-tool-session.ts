@@ -29,9 +29,12 @@ export function setBrowserToolSessionDepsForTest(
 }
 
 export function withBrowserSessionAccess(
-  opts: { agentSessionKey?: string },
+  opts: { agentSessionKey?: string; sessionAccessAlreadyHeld?: boolean },
   execute: AnyAgentTool["execute"],
 ): AnyAgentTool["execute"] {
+  if (opts.sessionAccessAlreadyHeld) {
+    return execute;
+  }
   return async function (this: void, ...args: Parameters<AnyAgentTool["execute"]>) {
     const releaseSessionAccess = await browserToolSessionDeps.acquireTrackedBrowserSessionAccess({
       sessionKey: opts.agentSessionKey,

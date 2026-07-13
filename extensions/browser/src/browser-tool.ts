@@ -457,6 +457,7 @@ export function createBrowserTool(opts?: {
   agentSessionKey?: string;
   runId?: string;
   ownerClaim?: number;
+  sessionAccessAlreadyHeld?: boolean;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {

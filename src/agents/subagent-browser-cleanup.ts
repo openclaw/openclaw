@@ -18,13 +18,17 @@ export async function dispatchSubagentBrowserCleanup(params: {
   if (params.entry.browserCleanupDispatchedAt !== undefined) {
     return;
   }
-  params.entry.browserCleanupDispatchedAt = Date.now();
+  const dispatchedAt = Date.now();
+  params.entry.browserCleanupDispatchedAt = dispatchedAt;
   let cleanupBrowserSessions: typeof cleanupBrowserSessionsForLifecycleEnd | undefined;
   try {
     cleanupBrowserSessions =
       params.cleanupBrowserSessionsForLifecycleEnd ??
       (await params.loadCleanupBrowserSessionsForLifecycleEnd());
   } catch (error) {
+    if (params.entry.browserCleanupDispatchedAt === dispatchedAt) {
+      params.entry.browserCleanupDispatchedAt = undefined;
+    }
     params.warn("failed to cleanup browser sessions for completed subagent", {
       error: params.buildSafeLifecycleErrorMeta(error),
       runId: params.maskRunId(params.runId),
@@ -48,6 +52,9 @@ export async function dispatchSubagentBrowserCleanup(params: {
         });
       }
     }).catch((error: unknown) => {
+      if (params.entry.browserCleanupDispatchedAt === dispatchedAt) {
+        params.entry.browserCleanupDispatchedAt = undefined;
+      }
       params.warn("failed to admit browser cleanup for completed subagent", {
         error: params.buildSafeLifecycleErrorMeta(error),
         runId: params.maskRunId(params.runId),
