@@ -28,7 +28,7 @@ import {
 } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiMcpCaptureSettings, writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
-import { BUNDLE_MCP_TEMP_PREFIX, writeBundleMcpOwnerMarker } from "./bundle-mcp-sweep.js";
+import { bundleMcpOwnedMkdtempPrefix } from "./bundle-mcp-sweep.js";
 
 type PreparedCliBundleMcpConfig = {
   backend: CliBackendConfig;
@@ -176,21 +176,21 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     };
   }
 
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), BUNDLE_MCP_TEMP_PREFIX));
+  // The temp dir name encodes the owning gateway (pid + boot-id prefix + process
+  // start time), so the prepared run carries durable ownership atomically, with
+  // no extra write that could fail — a concurrent gateway's startup sweep will
+  // not reclaim this dir while the run still waits in the serialization queue
+  // (its CLI child, which would put the path in argv, has not spawned yet).
+  const tempDir = await fs.mkdtemp(await bundleMcpOwnedMkdtempPrefix(os.tmpdir()));
   try {
     const mcpConfigPath = path.join(tempDir, "mcp.json");
     const runtimeConfig = resolveOpenClawMcpEnvTemplates(
       params.mergedConfig,
       params.env,
     ) as BundleMcpConfig;
+    // Roll the temp dir back if the config write fails, so a failed prepare never
+    // leaks a dir (the cleanup callback below is not registered until we return).
     await fs.writeFile(mcpConfigPath, `${JSON.stringify(runtimeConfig, null, 2)}\n`, "utf-8");
-    // Record the owning gateway before returning the prepared run. This is
-    // fail-loud: if ownership cannot be recorded the run must not proceed, since
-    // an unmarked dir aged past the grace window is reclaimable by a concurrent
-    // gateway's startup sweep (its CLI child, which would put the path in argv,
-    // has not spawned yet). The catch below rolls the temp dir back on any
-    // failure so no half-written or unowned config survives to be queued.
-    await writeBundleMcpOwnerMarker(tempDir);
     return {
       backend: {
         ...params.backend,

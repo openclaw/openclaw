@@ -24,10 +24,11 @@
  * Argv liveness alone is not enough: the config is rendered at prepare time,
  * before the run enters the serialization queue, so a run waiting in the queue
  * owns a config that no process argv references yet. To avoid a concurrent
- * gateway's sweep reclaiming such a dir, each dir carries an owner marker (the
- * creating gateway's pid + boot id); an aged, argv-unreferenced dir is only
- * removed once its owning gateway is gone. Unmarked (legacy) dirs keep the
- * prior age + liveness behaviour.
+ * gateway's sweep reclaiming such a dir, the creating gateway's identity (pid +
+ * boot-id prefix + process start time) is encoded in the dir NAME; an
+ * argv-unreferenced dir is only removed once its owning gateway is gone.
+ * Old-format (legacy) dirs without an encoded owner keep the prior age +
+ * liveness behaviour.
  */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
@@ -38,32 +39,22 @@ import { getWindowsPowerShellExePath } from "../../infra/windows-install-roots.j
 
 const execFileAsync = promisify(execFile);
 
-export const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
+const BUNDLE_MCP_TEMP_PREFIX = "openclaw-cli-mcp-";
 
 const DEFAULT_SPAWN_GRACE_MS = 5 * 60 * 1000;
 const PROCESS_SCAN_TIMEOUT_MS = 10_000;
 
 /**
- * Marker written beside the rendered `mcp.json` recording the gateway that owns
- * the dir. It lets a concurrent gateway's startup sweep distinguish a dir owned
- * by a still-live gateway (e.g. a run waiting in the serialization queue whose
- * CLI child has not spawned yet, so no argv references it) from a true orphan.
+ * Owner identity is encoded in the temp dir NAME, not a sibling file:
+ * `<prefix><pid>-<boot8>-<startTicks>-<mkdtemp suffix>`. The name is produced
+ * atomically by `mkdtemp`, so a prepared run carries durable ownership with no
+ * extra write that could fail — the run's success path is unchanged (no
+ * availability/compatibility regression), and a concurrent gateway's sweep tells
+ * a live-owned queued dir from a true orphan using only the dir name plus the OS
+ * process table. `startTicks` (the owner's Linux process start time) guards pid
+ * reuse; `boot8` (a Linux boot-id prefix) detects a reboot.
  */
-const BUNDLE_MCP_OWNER_MARKER = ".owner.json";
-
-type BundleMcpOwner = { pid: number; bootId?: string };
-
-/** Linux boot id (changes on reboot); undefined off-Linux — best-effort only. */
-async function readCurrentBootId(): Promise<string | undefined> {
-  if (process.platform !== "linux") {
-    return undefined;
-  }
-  try {
-    return (await fs.readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
+const NO_BOOT_ID = "nobootid";
 
 function defaultIsPidAlive(pid: number): boolean {
   try {
@@ -75,89 +66,107 @@ function defaultIsPidAlive(pid: number): boolean {
   }
 }
 
-/**
- * Persist the owning gateway's identity beside the rendered config. Fail-loud:
- * a caller that cannot record ownership must not queue the run, because an
- * unmarked dir aged past the grace window is reclaimable by a concurrent
- * gateway's sweep — so a silent marker failure would reintroduce the very
- * queued-run deletion this marker prevents. The creator rolls back (removes the
- * temp dir) when this throws.
- */
-export async function writeBundleMcpOwnerMarker(dir: string): Promise<void> {
-  const owner: BundleMcpOwner = { pid: process.pid, bootId: await readCurrentBootId() };
-  await fs.writeFile(path.join(dir, BUNDLE_MCP_OWNER_MARKER), `${JSON.stringify(owner)}\n`, "utf8");
+/** First 8 hex of the Linux boot id (changes on reboot); NO_BOOT_ID off-Linux. */
+async function readBootTag(): Promise<string> {
+  if (process.platform !== "linux") {
+    return NO_BOOT_ID;
+  }
+  try {
+    const raw = (await fs.readFile("/proc/sys/kernel/random/boot_id", "utf8")).replace(
+      /[^0-9a-f]/gi,
+      "",
+    );
+    return raw.length >= 8 ? raw.slice(0, 8).toLowerCase() : NO_BOOT_ID;
+  } catch {
+    return NO_BOOT_ID;
+  }
 }
 
-/** Cap the marker read/parse so a corrupt local artifact cannot exhaust memory. */
-const MAX_OWNER_MARKER_BYTES = 4 * 1024;
+/**
+ * The owner process's start time in clock ticks since boot, from
+ * `/proc/<pid>/stat` field 22. Two processes that reuse a pid within one boot
+ * still differ here, so a start-time match proves same-process identity.
+ * Returns undefined off-Linux or when the process is gone/unreadable.
+ */
+async function defaultReadStartTicks(pid: number): Promise<string | undefined> {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  try {
+    const stat = await fs.readFile(`/proc/${pid}/stat`, "utf8");
+    // Field 2 (comm) is parenthesised and may itself contain spaces or ')'.
+    const afterComm = stat.slice(stat.lastIndexOf(")") + 2);
+    const start = afterComm.split(" ")[19]; // field 22 = index 19 counting from field 3
+    return start !== undefined && /^\d+$/.test(start) ? start : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /**
- * Resolved owner state for a temp dir. Read/parse ambiguity is preserved rather
- * than collapsed to "no owner": only a definitively absent marker is `legacy`
- * (eligible for the age + argv rule); anything unreadable, oversized, or
- * malformed is `unknown` and kept (fail-closed), because an unreadable marker
- * cannot prove the owner is gone.
+ * The `mkdtemp` prefix that encodes the creating gateway's identity into the
+ * temp dir name. Passed straight to `fs.mkdtemp`, which appends the random
+ * suffix atomically — so ownership exists from the instant the dir does.
  */
-type BundleMcpOwnerMarker =
-  | { kind: "legacy" }
-  | { kind: "owned"; pid: number; bootId?: string }
-  | { kind: "unknown" };
+export async function bundleMcpOwnedMkdtempPrefix(root: string): Promise<string> {
+  const boot = await readBootTag();
+  const start = (await defaultReadStartTicks(process.pid)) ?? "0";
+  return path.join(root, `${BUNDLE_MCP_TEMP_PREFIX}${process.pid}-${boot}-${start}-`);
+}
 
-async function readBundleMcpOwner(dir: string): Promise<BundleMcpOwnerMarker> {
-  const markerPath = path.join(dir, BUNDLE_MCP_OWNER_MARKER);
-  let raw: string;
-  try {
-    const stat = await fs.stat(markerPath);
-    if (stat.size > MAX_OWNER_MARKER_BYTES) {
-      return { kind: "unknown" }; // Oversized artifact — do not read/parse.
-    }
-    raw = await fs.readFile(markerPath, "utf8");
-  } catch (err) {
-    // ENOENT is a true legacy dir; any other error (EACCES, EMFILE, transient
-    // I/O) leaves ownership unknown rather than assuming the owner is gone.
-    return (err as NodeJS.ErrnoException)?.code === "ENOENT"
-      ? { kind: "legacy" }
-      : { kind: "unknown" };
+type BundleMcpOwner = { pid: number; boot: string; start: string };
+
+// <prefix><pid>-<boot8|nobootid>-<startTicks>-<mkdtemp suffix>
+const OWNER_NAME_RE = new RegExp(
+  `^${BUNDLE_MCP_TEMP_PREFIX}(\\d+)-([0-9a-f]{8}|${NO_BOOT_ID})-(\\d+)-`,
+);
+
+function parseBundleMcpOwner(entryName: string): BundleMcpOwner | undefined {
+  const match = OWNER_NAME_RE.exec(entryName);
+  const [, pidText, boot, start] = match ?? [];
+  if (pidText === undefined || boot === undefined || start === undefined) {
+    return undefined; // Old-format (pre-ownership) dir — treated as legacy.
   }
-  let parsed: { pid?: unknown; bootId?: unknown };
-  try {
-    parsed = JSON.parse(raw) as { pid?: unknown; bootId?: unknown };
-  } catch {
-    return { kind: "unknown" }; // Corrupt JSON is unknown, not legacy.
+  const pid = Number(pidText);
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return undefined;
   }
-  if (typeof parsed.pid !== "number" || !Number.isSafeInteger(parsed.pid) || parsed.pid <= 0) {
-    return { kind: "unknown" };
-  }
-  const bootId =
-    typeof parsed.bootId === "string" && parsed.bootId.length > 0 ? parsed.bootId : undefined;
-  return { kind: "owned", pid: parsed.pid, bootId };
+  return { pid, boot, start };
 }
 
 /** Verdict on the gateway that created a dir, driving the sweep's keep/remove. */
-type BundleMcpOwnerVerdict = "legacy" | "alive" | "dead" | "unknown";
+type BundleMcpOwnerVerdict = "legacy" | "alive" | "dead";
 
 /**
- * Classify a dir by its owning gateway. An `alive` owner may be a run still
+ * Classify a dir by the owner encoded in its name. `alive` may be a run still
  * waiting in the serialization queue whose CLI child has not spawned yet — no
  * argv references it, but deleting it would make that run spawn with a missing
- * `--mcp-config`. A `dead` owner (pid gone, or boot id changed by a reboot)
- * means the queued run died with its gateway, so the dir is reclaimable
- * regardless of age. `unknown` is kept (fail-closed); `legacy` follows the
- * age + argv rule.
+ * `--mcp-config`. `dead` (pid gone, boot id changed by a reboot, or the pid
+ * reused by a different process) means the queued run died with its gateway, so
+ * the dir is reclaimable regardless of age. `legacy` (unparseable old-format
+ * name) follows the age + argv rule.
  */
 async function resolveBundleMcpOwner(
-  dir: string,
-  currentBootId: string | undefined,
+  entryName: string,
+  currentBoot: string,
   isPidAlive: (pid: number) => boolean,
+  readStartTicks: (pid: number) => Promise<string | undefined>,
 ): Promise<BundleMcpOwnerVerdict> {
-  const owner = await readBundleMcpOwner(dir);
-  if (owner.kind !== "owned") {
-    return owner.kind; // "legacy" | "unknown"
+  const owner = parseBundleMcpOwner(entryName);
+  if (!owner) {
+    return "legacy";
   }
-  if (owner.bootId !== undefined && currentBootId !== undefined && owner.bootId !== currentBootId) {
+  if (owner.boot !== NO_BOOT_ID && currentBoot !== NO_BOOT_ID && owner.boot !== currentBoot) {
     return "dead"; // Host rebooted since creation — the owning gateway is gone.
   }
-  return isPidAlive(owner.pid) ? "alive" : "dead";
+  if (!isPidAlive(owner.pid)) {
+    return "dead";
+  }
+  const actualStart = await readStartTicks(owner.pid);
+  if (actualStart === undefined) {
+    return "alive"; // Cannot verify start (off-Linux/hidden) — trust the pid (over-protect).
+  }
+  return actualStart === owner.start ? "alive" : "dead"; // start mismatch → pid reused → gone.
 }
 
 async function listPosixCommandLinesViaPs(): Promise<string[]> {
@@ -253,13 +262,16 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
   listCommandLines?: () => string[] | Promise<string[]>;
   /** Override the owner liveness probe (tests). Defaults to `process.kill(pid, 0)`. */
   isPidAlive?: (pid: number) => boolean;
-  /** Override the current boot id (tests). Defaults to the host boot id on Linux. */
-  currentBootId?: string;
+  /** Override the process start-time probe (tests). Defaults to `/proc/<pid>/stat`. */
+  readStartTicks?: (pid: number) => Promise<string | undefined>;
+  /** Override the current boot tag (tests). Defaults to the host boot-id prefix on Linux. */
+  currentBoot?: string;
   log?: { warn: (msg: string) => void };
 }): Promise<{ removed: string[]; kept: string[] }> {
   const tmpRoot = params?.tmpRoot ?? os.tmpdir();
   const spawnGraceMs = params?.spawnGraceMs ?? DEFAULT_SPAWN_GRACE_MS;
   const isPidAlive = params?.isPidAlive ?? defaultIsPidAlive;
+  const readStartTicks = params?.readStartTicks ?? defaultReadStartTicks;
   const removed: string[] = [];
   const kept: string[] = [];
 
@@ -283,7 +295,7 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
     return { removed, kept: entries.map((entry) => path.join(tmpRoot, entry)) };
   }
 
-  const currentBootId = params?.currentBootId ?? (await readCurrentBootId());
+  const currentBoot = params?.currentBoot ?? (await readBootTag());
   const now = Date.now();
 
   // Phase 1 — classify. A dir becomes a removal candidate only when nothing live
@@ -303,17 +315,16 @@ export async function sweepOrphanedBundleMcpTempDirs(params?: {
       kept.push(dir);
       continue;
     }
-    const owner = await resolveBundleMcpOwner(dir, currentBootId, isPidAlive);
-    if (owner === "alive" || owner === "unknown") {
-      // "alive": a queued run of a live gateway whose child has not spawned yet
-      // (the config is created at prepare time, before `enqueueCliRun`).
-      // "unknown": an unreadable marker cannot prove the owner is gone. Keep both.
+    const owner = await resolveBundleMcpOwner(entry, currentBoot, isPidAlive, readStartTicks);
+    if (owner === "alive") {
+      // A queued run of a live gateway whose child has not spawned yet (the
+      // config is created at prepare time, before `enqueueCliRun`).
       kept.push(dir);
       continue;
     }
     if (owner === "legacy" && now - mtimeMs < spawnGraceMs) {
-      // A legacy dir prepared moments ago may not have written its marker or
-      // spawned its child yet; keep it inside the grace window. Owner-marked
+      // An old-format dir with no encoded owner, created moments ago, may not
+      // have spawned its child yet; keep it inside the grace window. Owner-named
       // dirs skip the grace check on purpose: a dead owner's config is
       // reclaimable at any age, which is what lets a prompt gateway restart
       // reclaim its own fresh crash debris instead of leaking it until the next

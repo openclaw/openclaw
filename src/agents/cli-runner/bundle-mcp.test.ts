@@ -41,7 +41,7 @@ describe("prepareCliBundleMcpConfig", () => {
     await prepared.cleanup?.();
   });
 
-  it("rolls back the temp dir when the owner marker cannot be written (fail-loud)", async () => {
+  it("rolls back the temp dir when the config write fails (no leaked dir)", async () => {
     const realWriteFile = fs.writeFile.bind(fs);
     const realMkdtemp = fs.mkdtemp.bind(fs);
     const created: string[] = [];
@@ -60,8 +60,8 @@ describe("prepareCliBundleMcpConfig", () => {
       file: unknown,
       ...rest: unknown[]
     ) => {
-      if (String(file).endsWith(".owner.json")) {
-        throw new Error("simulated owner marker write failure");
+      if (String(file).endsWith("mcp.json")) {
+        throw new Error("simulated config write failure");
       }
       return (realWriteFile as (...a: unknown[]) => Promise<void>)(file, ...rest);
     }) as typeof fs.writeFile);
@@ -78,10 +78,10 @@ describe("prepareCliBundleMcpConfig", () => {
           workspaceDir,
           config: { plugins: { enabled: false } },
         }),
-      ).rejects.toThrow(/owner marker write failure/);
+      ).rejects.toThrow(/config write failure/);
 
       // The bundle-MCP temp dir must have been rolled back (the cleanup callback
-      // is never returned on this path), leaving no unowned config to be queued.
+      // is never returned on this path), leaving no config to be queued.
       const bundleDirs = created.filter((d) => path.basename(d).startsWith("openclaw-cli-mcp-"));
       expect(bundleDirs.length).toBeGreaterThan(0);
       for (const dir of bundleDirs) {
