@@ -495,16 +495,29 @@ describe("zalouser send helpers", () => {
     }
   });
 
-  it("makes forward progress even with a one-unit limit and non-BMP text", async () => {
-    // limit=1 with emoji at start: guard must not prevent progress
+  it("produces well-formed code-unit strings even with a one-unit limit and non-BMP text", async () => {
+    // limit=1 with emoji at start: guard must consume full surrogate pair
     mockSendText.mockResolvedValue(sendResult("mid-prog", "thread-prog"));
 
     await sendMessageZalouser("thread-prog", "\u{1F600}a", {
       textChunkLimit: 1,
     });
 
-    // Must make progress (not hang) and send each code unit separately
+    // Must make progress (not hang)
     expect(mockSendText.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // No chunk may contain a dangling surrogate
+    for (const call of mockSendText.mock.calls) {
+      const chunk = call[1] as string;
+      for (let i = 0; i < chunk.length; i++) {
+        const cu = chunk.charCodeAt(i);
+        if (cu >= 0xd800 && cu <= 0xdbff) {
+          // High surrogate must be followed by low surrogate
+          expect(i + 1 < chunk.length).toBe(true);
+          const next = chunk.charCodeAt(i + 1);
+          expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+        }
+      }
+    }
   });
 
   it("delegates delivered+seen helpers to JS transport", async () => {

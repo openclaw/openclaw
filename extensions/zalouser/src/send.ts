@@ -253,8 +253,7 @@ function splitTextRangesByPreferredBreaks(
     if (maxEnd < text.length) {
       end =
         findParagraphBreak(text, start, maxEnd) ??
-        findLastBreak(text, "
-", start, maxEnd) ??
+        findLastBreak(text, "\n", start, maxEnd) ??
         findLastWhitespaceBreak(text, start, maxEnd) ??
         maxEnd;
     }
@@ -272,9 +271,7 @@ function splitTextRangesByPreferredBreaks(
 
 function findParagraphBreak(text: string, start: number, end: number): number | undefined {
   const slice = text.slice(start, end);
-  const matches = slice.matchAll(/
-[	 ]*
-+/g);
+  const matches = slice.matchAll(/\n[\t ]*\n+/g);
   let lastMatch: RegExpMatchArray | undefined;
   for (const match of matches) {
     lastMatch = match;
