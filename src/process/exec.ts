@@ -672,11 +672,23 @@ export async function runCommandWithTimeout(
     signal?.removeEventListener("abort", onAbort);
     releaseOutput();
   });
+  // Patched Node can report null/null after a cmd.exe shim exits. Execa turns
+  // that into a cause-less failure; preserve the shim fallback only post-spawn.
+  const isCleanWindowsShimExit =
+    invocation.usesWindowsExitCodeShim &&
+    typeof child.pid === "number" &&
+    result.code === undefined &&
+    result.cause === undefined &&
+    !result.timedOut &&
+    !result.isCanceled &&
+    !result.isMaxBuffer &&
+    !result.isTerminated;
   if (
     result.failed &&
     !termination &&
     result.exitCode === undefined &&
-    result.signal === undefined
+    result.signal === undefined &&
+    !isCleanWindowsShimExit
   ) {
     if (result instanceof Error) {
       throw result;

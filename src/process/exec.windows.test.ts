@@ -25,12 +25,17 @@ vi.mock("node:child_process", async () => {
 });
 
 type MockResult = {
+  cause?: unknown;
+  code?: string;
   exitCode?: number;
   failed: boolean;
+  isCanceled?: boolean;
+  isMaxBuffer?: boolean;
   isTerminated: boolean;
   signal?: NodeJS.Signals;
   stderr?: Buffer;
   stdout?: Buffer;
+  timedOut?: boolean;
 };
 
 type MockSubprocess = EventEmitter & {
@@ -84,9 +89,11 @@ function createMockSubprocess(params?: {
     for (const chunk of params?.stderrChunks ?? []) {
       child.stderr.write(chunk);
     }
-    const exitCode = overrides.exitCode ?? params?.exitCode ?? 0;
+    const exitCode = Object.hasOwn(overrides, "exitCode")
+      ? overrides.exitCode
+      : (params?.exitCode ?? 0);
     const signal = overrides.signal ?? params?.signal;
-    child.exitCode = signal ? null : exitCode;
+    child.exitCode = signal ? null : (exitCode ?? null);
     child.signalCode = signal ?? null;
     child.emit("exit", child.exitCode, child.signalCode);
     resolve({
@@ -236,6 +243,39 @@ describe("Windows command execution", () => {
       const [command, , options] = requireExecaCall(0);
       expect(path.win32.basename(command).toLowerCase()).toBe("node.exe");
       expect(options).toMatchObject({ shell: false, windowsHide: true });
+    });
+  });
+
+  it("infers success when a spawned Windows shim has no exit state", async () => {
+    const command = createMockSubprocess({ autoFinish: false });
+    execaMock.mockReturnValueOnce(command);
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["pnpm", "--version"], {
+        timeoutMs: 1_000,
+      });
+      command.finish({ exitCode: undefined, failed: true });
+
+      await expect(resultPromise).resolves.toMatchObject({ code: 0, termination: "exit" });
+    });
+  });
+
+  it("still rejects a Windows shim launch error without an exit state", async () => {
+    const command = createMockSubprocess({ autoFinish: false });
+    execaMock.mockReturnValueOnce(command);
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["pnpm", "--version"], {
+        timeoutMs: 1_000,
+      });
+      command.finish({
+        cause: new Error("spawn pnpm ENOENT"),
+        code: "ENOENT",
+        exitCode: undefined,
+        failed: true,
+      });
+
+      await expect(resultPromise).rejects.toThrow("Failed to launch command: pnpm");
     });
   });
 
