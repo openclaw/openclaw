@@ -253,6 +253,8 @@ async function shouldProcessLineEvent(
       : groupConfig?.allowFrom !== undefined
         ? "allowlist"
         : runtimeGroupPolicy;
+  // LINE group allowlists are scoped separately from DM allowFrom.
+  // The shared ingress policy below intentionally keeps fallback disabled.
   const groupAllowFrom = normalizeStringEntries(
     firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
   );
