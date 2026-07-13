@@ -15,15 +15,15 @@ import type {
 import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-
-export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
-export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 import {
   currentClaudeSessionCatalogConfig,
   listBoundClaudeSessions,
   resolveClaudeCatalogCreateSession,
 } from "./session-catalog-runtime.js";
+
+export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
+export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
 
 const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
 const DEFAULT_PAGE_LIMIT = 50;

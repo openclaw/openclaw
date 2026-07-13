@@ -72,7 +72,7 @@ import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 /** Logger surface used by plugin update flows. */
-export type PluginUpdateLogger = {
+type PluginUpdateLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
   error?: (message: string) => void;
@@ -80,7 +80,7 @@ export type PluginUpdateLogger = {
 };
 
 /** Outcome status for one plugin update attempt. */
-export type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
+type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
 type PluginUpdateChannelFallback = {
   requestedSpec: string;
@@ -110,7 +110,7 @@ export type PluginUpdateOutcome =
       code?: string;
     });
 
-export type PluginUpdateSummary = {
+type PluginUpdateSummary = {
   config: OpenClawConfig;
   changed: boolean;
   outcomes: PluginUpdateOutcome[];
@@ -126,7 +126,7 @@ export type PluginUpdateIntegrityDriftParams = {
   dryRun: boolean;
 };
 
-export type PluginChannelSyncSummary = {
+type PluginChannelSyncSummary = {
   switchedToBundled: string[];
   switchedToClawHub: string[];
   switchedToNpm: string[];
@@ -134,7 +134,7 @@ export type PluginChannelSyncSummary = {
   errors: string[];
 };
 
-export type PluginChannelSyncResult = {
+type PluginChannelSyncResult = {
   config: OpenClawConfig;
   changed: boolean;
   summary: PluginChannelSyncSummary;

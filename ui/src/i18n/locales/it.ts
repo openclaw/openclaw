@@ -3445,6 +3445,8 @@ export const it: TranslationMap = {
       empty: "Nessuna attività in background per questo agente al momento.",
       running: "In esecuzione ({count})",
       finished: "Completate ({count})",
+      statusRunningOne: "1 attività in esecuzione",
+      statusRunningMany: "{count} attività in esecuzione",
       stopTask: "Interrompi {title}",
       viewTranscript: "Visualizza trascrizione",
       toolUseOne: "1 utilizzo dello strumento",

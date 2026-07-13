@@ -3383,6 +3383,8 @@ export const ar: TranslationMap = {
       empty: "لا توجد مهام في الخلفية لهذا الوكيل حتى الآن.",
       running: "قيد التشغيل ({count})",
       finished: "مكتملة ({count})",
+      statusRunningOne: "مهمة واحدة قيد التشغيل",
+      statusRunningMany: "{count} مهام قيد التشغيل",
       stopTask: "إيقاف {title}",
       viewTranscript: "عرض النص",
       toolUseOne: "استخدام واحد لأداة",

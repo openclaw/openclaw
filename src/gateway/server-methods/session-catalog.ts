@@ -31,19 +31,27 @@ function catalogError(error: unknown): { code: string; message: string } {
 }
 
 function providers(): SessionCatalogProvider[] {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? [])
-    .map((entry) => entry.provider)
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+  return registrations().map((entry) => entry.provider);
+}
+
+function registrations() {
+  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).toSorted((left, right) =>
+    left.provider.id.localeCompare(right.provider.id),
+  );
 }
 
 type SessionCatalogCreateTargetResolution =
-  | { ok: true; target: SessionCatalogCreateTarget }
+  | { ok: true; target: SessionCatalogCreateTarget & { pluginOwnerId: string } }
   | { ok: false; message: string; unknownCatalog?: true };
+
+type ProviderCreateTargetResolution =
+  | { ok: true; target: SessionCatalogCreateTarget }
+  | { ok: false; message: string };
 
 function resolveProviderCreateTarget(
   provider: SessionCatalogProvider,
   agentId?: string,
-): SessionCatalogCreateTargetResolution {
+): ProviderCreateTargetResolution {
   try {
     const target = provider.resolveCreateSession?.({ agentId });
     const model = target?.model.trim();
@@ -61,14 +69,18 @@ export function resolveSessionCatalogCreateTarget(
   catalogId: string,
   agentId: string,
 ): SessionCatalogCreateTargetResolution {
-  const provider = providers().find((candidate) => candidate.id === catalogId);
-  return provider
-    ? resolveProviderCreateTarget(provider, agentId)
-    : {
-        ok: false,
-        message: `unknown session catalog: ${catalogId}`,
-        unknownCatalog: true,
-      };
+  const registration = registrations().find((entry) => entry.provider.id === catalogId);
+  if (!registration) {
+    return {
+      ok: false,
+      message: `unknown session catalog: ${catalogId}`,
+      unknownCatalog: true,
+    };
+  }
+  const resolved = resolveProviderCreateTarget(registration.provider, agentId);
+  return resolved.ok
+    ? { ok: true, target: { ...resolved.target, pluginOwnerId: registration.pluginId } }
+    : resolved;
 }
 
 function providerOrRespond(

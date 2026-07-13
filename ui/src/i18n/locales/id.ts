@@ -3413,6 +3413,8 @@ export const id: TranslationMap = {
       empty: "Belum ada tugas latar belakang untuk agen ini.",
       running: "Berjalan ({count})",
       finished: "Selesai ({count})",
+      statusRunningOne: "1 tugas sedang berjalan",
+      statusRunningMany: "{count} tugas sedang berjalan",
       stopTask: "Hentikan {title}",
       viewTranscript: "Lihat transkrip",
       toolUseOne: "1 penggunaan alat",

@@ -10,11 +10,11 @@ export function routeKey(data?: NewSessionRouteData): string {
   return JSON.stringify([data?.agentId ?? "", data?.catalogId ?? ""]);
 }
 
-export function isRequested(data?: NewSessionRouteData): boolean {
+export function isTarget(data?: NewSessionRouteData): boolean {
   return Boolean(data?.catalogId);
 }
 
-export function isTarget(data?: NewSessionRouteData): boolean {
+export function isResolvedTarget(data?: NewSessionRouteData): boolean {
   return Boolean(data?.catalogId && data.model && data.catalogLabel);
 }
 
@@ -23,7 +23,7 @@ export function resolveAgentId(
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {
-  if (isRequested(data)) {
+  if (isTarget(data)) {
     return normalizeAgentId(fallback);
   }
   const requested = normalizeAgentId(data?.agentId ?? "");
@@ -36,7 +36,7 @@ export function allowsSelectedAgent(
   data: NewSessionRouteData | undefined,
   selectedAgent: unknown,
 ): boolean {
-  return !isRequested(data) || (isTarget(data) && Boolean(selectedAgent));
+  return !isTarget(data) || (isResolvedTarget(data) && Boolean(selectedAgent));
 }
 
 export async function resolveCreateTarget(
@@ -57,10 +57,10 @@ export async function resolveCreateTarget(
 }
 
 function renderTarget(data?: NewSessionRouteData) {
-  if (!isRequested(data)) {
+  if (!isTarget(data)) {
     return nothing;
   }
-  const ready = isTarget(data);
+  const ready = isResolvedTarget(data);
   const label = data?.catalogLabel || data?.catalogId || "";
   return html`<span
     class="new-session-page__trigger new-session-page__runtime"
@@ -79,10 +79,10 @@ export function renderBar(params: {
   retrying: boolean;
   onRetry: () => void;
 }) {
-  const pending = isRequested(params.data) && !isTarget(params.data);
+  const pending = isTarget(params.data) && !isResolvedTarget(params.data);
   return html`
     <div class="new-session-page__triggers">
-      ${renderTarget(params.data)} ${isRequested(params.data) ? nothing : params.agentSelect}
+      ${renderTarget(params.data)} ${isTarget(params.data) ? nothing : params.agentSelect}
       ${params.folderSelect} ${params.whereSelect}
       ${pending
         ? html`<span class="new-session-page__catalog-unavailable">

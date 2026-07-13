@@ -37,7 +37,6 @@ function boundClaudeThreadId(
     ? marker.sourceThreadId
     : undefined;
 }
-
 export function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
   const config = currentClaudeSessionCatalogConfig(api);
   const defaultAgentId = resolveDefaultAgentId(config);

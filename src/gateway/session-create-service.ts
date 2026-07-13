@@ -58,6 +58,7 @@ import { applySessionsPatchToStore } from "./sessions-patch.js";
 type TrustedCatalogSessionTarget = {
   model: string;
   agentRuntime: string;
+  pluginOwnerId: string;
 };
 
 const loadSessionLifecycleRuntime = createLazyRuntimeModule(
@@ -218,7 +219,8 @@ export async function createGatewaySession(params: {
   );
   const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
   const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
-  if (params.catalogTarget && (!catalogModel || !catalogAgentRuntime)) {
+  const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
+  if (params.catalogTarget && (!catalogModel || !catalogAgentRuntime || !catalogPluginOwnerId)) {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "invalid catalog session target"),
@@ -250,6 +252,19 @@ export async function createGatewaySession(params: {
           mainKey: params.cfg.session?.mainKey,
         })
     : undefined;
+  if (
+    params.catalogTarget &&
+    explicitTargetKey &&
+    !explicitTargetKey.startsWith(`agent:${agentId}:dashboard:`)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "catalog sessions require a generated dashboard key",
+      ),
+    };
+  }
 
   const authorizedHarnessCreation = Boolean(
     explicitTargetKey &&
@@ -527,6 +542,15 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        if (params.catalogTarget && existingEntry !== undefined) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "catalog session target requires a new session",
+            ),
+          };
+        }
         const patched = await applySessionsPatchToStore({
           cfg: params.cfg,
           store: sessionEntries,
@@ -584,6 +608,7 @@ export async function createGatewaySession(params: {
                 modelOverrideSource: "user" as const,
                 agentRuntimeOverride: catalogAgentRuntime,
                 modelSelectionLocked: true,
+                pluginOwnerId: catalogPluginOwnerId,
               }
             : {}),
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays

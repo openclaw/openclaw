@@ -145,6 +145,44 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
     await server?.close();
   });
 
+  it("recovers an empty group catalog after a transient load failure", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.groups.list"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([]),
+      },
+      sessionGroups: ["Recovered group"],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.groups.list");
+      await gateway.rejectDeferred("sessions.groups.list", {
+        code: "UNAVAILABLE",
+        message: "temporary catalog failure",
+        retryable: true,
+      });
+
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.groups.list")).length, {
+          timeout: 10_000,
+        })
+        .toBe(2);
+      await page.locator('[data-session-section="category:Recovered group"]').waitFor({
+        state: "visible",
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("manages sessions through the sidebar groups and command palette", async () => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const context = await browser.newContext({
@@ -697,6 +735,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         },
         "sessions.patch": {},
       },
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
       sessionKey: "agent:main:main",
       sessionGroups: ["Apps", "Research"],
     });
@@ -803,6 +842,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
         "sessions.list": sessionsListResponse(sessions),
         "sessions.patch": {},
       },
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
       sessionKey: "agent:main:session-0",
       sessionGroups: ["Alpha", "Beta"],
     });
@@ -937,6 +977,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
       sessionKey: "agent:main:main",
       // Stored-but-empty catalog groups stay visible as sections/move targets.
       sessionGroups: ["First group"],

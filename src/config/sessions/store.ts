@@ -1204,6 +1204,7 @@ type DeleteSessionEntryLifecycleParams = {
 async function deleteSessionEntryLifecycleInternal(
   params: DeleteSessionEntryLifecycleParams,
   allowLockedEntryRemoval: boolean,
+  expectedPluginOwnerId?: string,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   return await runExclusiveSessionStoreWrite(params.storePath, async () => {
     const store = loadMutableSessionStoreForWriter(params.storePath);
@@ -1247,6 +1248,36 @@ async function deleteSessionEntryLifecycleInternal(
         expectedEntryMismatch: true,
       };
     }
+    if (expectedPluginOwnerId) {
+      for (const sessionKey of params.target.storeKeys) {
+        const entry = store[sessionKey];
+        if (!entry) {
+          continue;
+        }
+        if (
+          isAgentHarnessSessionKey(sessionKey) ||
+          entry.agentHarnessId !== undefined ||
+          entry.modelSelectionLocked !== true ||
+          normalizeOptionalString(entry.pluginOwnerId) !== expectedPluginOwnerId
+        ) {
+          throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+        }
+      }
+    }
+    const allowedLockedEntryRemovals = allowLockedEntryRemoval
+      ? new Map(
+          params.target.storeKeys.flatMap((sessionKey) => {
+            const entry = store[sessionKey];
+            return entry?.modelSelectionLocked === true
+              ? [[sessionKey, cloneSessionEntry(entry)] as const]
+              : [];
+          }),
+        )
+      : undefined;
+    const removedEntries = params.target.storeKeys.flatMap((sessionKey) => {
+      const entry = store[sessionKey];
+      return entry ? [cloneSessionEntry(entry)] : [];
+    });
     pruneLifecycleLegacyStoreKeys({ store, target: params.target });
     const deletedSessionId = deletedEntry.sessionId;
     const deletedSessionFile = deletedEntry.sessionFile;
@@ -1257,23 +1288,73 @@ async function deleteSessionEntryLifecycleInternal(
       {
         requireWriteSuccess: params.requireWriteSuccess,
       },
-      allowLockedEntryRemoval && deletedEntry.modelSelectionLocked === true
-        ? {
-            allowedLockedEntryRemovals: new Map([
-              [params.target.canonicalKey, cloneSessionEntry(deletedEntry)],
-            ]),
-          }
+      allowedLockedEntryRemovals && allowedLockedEntryRemovals.size > 0
+        ? { allowedLockedEntryRemovals }
         : undefined,
     );
-    const archivedTranscripts = params.archiveTranscript
-      ? await archiveLifecycleSessionTranscripts({
-          sessionId: deletedSessionId,
-          storePath: params.storePath,
-          sessionFile: deletedSessionFile,
-          agentId: params.agentId,
-          reason: "deleted",
-        })
-      : [];
+    const remainingEntries = Object.values(store);
+    const referencedSessionIds = new Set(
+      remainingEntries.flatMap((entry) => (entry.sessionId ? [entry.sessionId] : [])),
+    );
+    const sessionsDir = path.dirname(params.storePath);
+    const referencedTranscriptPaths = new Set(
+      remainingEntries.flatMap((entry) => {
+        const transcriptPath = resolveLifecycleTranscriptPath({ entry, sessionsDir });
+        return transcriptPath ? [normalizePathForLifecycleComparison(transcriptPath)] : [];
+      }),
+    );
+    const removedEntriesBySessionId = new Map<string, SessionEntry[]>();
+    for (const entry of removedEntries) {
+      if (entry.sessionId) {
+        const entries = removedEntriesBySessionId.get(entry.sessionId) ?? [];
+        entries.push(entry);
+        removedEntriesBySessionId.set(entry.sessionId, entries);
+      }
+    }
+    let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
+    if (params.archiveTranscript) {
+      const fullSessionArchives = [...removedEntriesBySessionId].flatMap(([sessionId, entries]) =>
+        referencedSessionIds.has(sessionId)
+          ? []
+          : [...new Set(entries.map((entry) => entry.sessionFile))].map((sessionFile) =>
+              archiveLifecycleSessionTranscripts({
+                sessionId,
+                storePath: params.storePath,
+                sessionFile,
+                agentId: params.agentId,
+                reason: "deleted",
+              }),
+            ),
+      );
+      archivedTranscripts = (await Promise.all(fullSessionArchives)).flat();
+
+      // A surviving alias protects only its resolved path. Removed aliases can
+      // share the session ID while owning distinct files that still need archival.
+      const { archiveFileOnDisk } = await loadSessionArchiveRuntime();
+      const sharedSessionTranscriptPaths = new Set(
+        [...removedEntriesBySessionId].flatMap(([sessionId, entries]) =>
+          referencedSessionIds.has(sessionId)
+            ? entries.flatMap((entry) => {
+                const transcriptPath = resolveLifecycleTranscriptPath({ entry, sessionsDir });
+                return transcriptPath ? [normalizePathForLifecycleComparison(transcriptPath)] : [];
+              })
+            : [],
+        ),
+      );
+      for (const transcriptPath of sharedSessionTranscriptPaths) {
+        if (referencedTranscriptPaths.has(transcriptPath) || !fs.existsSync(transcriptPath)) {
+          continue;
+        }
+        try {
+          archivedTranscripts.push({
+            sourcePath: transcriptPath,
+            archivedPath: archiveFileOnDisk(transcriptPath, "deleted"),
+          });
+        } catch {
+          // Match multi-candidate archival: one failed file must not block row deletion.
+        }
+      }
+    }
     const result: DeleteSessionEntryLifecycleResult = {
       archivedTranscripts,
       deleted: true,
@@ -1327,14 +1408,10 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
     expectedPluginOwnerId: string;
   },
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  const hasExactTarget =
-    params.target.storeKeys.length === 1 &&
-    params.target.storeKeys[0] === params.target.canonicalKey;
   const expectedEntry = params.expectedEntry;
   const validPluginOwner = normalizeOptionalString(expectedEntry.pluginOwnerId);
   const expectedPluginOwner = normalizeOptionalString(params.expectedPluginOwnerId);
   if (
-    !hasExactTarget ||
     isAgentHarnessSessionKey(params.target.canonicalKey) ||
     expectedEntry.agentHarnessId !== undefined ||
     expectedEntry.modelSelectionLocked !== true ||
@@ -1343,7 +1420,7 @@ export async function rollbackPluginOwnedSessionEntryLifecycle(
   ) {
     throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
-  return await deleteSessionEntryLifecycleInternal(params, true);
+  return await deleteSessionEntryLifecycleInternal(params, true, expectedPluginOwner);
 }
 
 function shouldRemoveSessionEntry(

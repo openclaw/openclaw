@@ -24,9 +24,17 @@ function provider(
   };
 }
 
-async function call(method: keyof typeof sessionCatalogHandlers, params: unknown) {
+async function call(
+  method: keyof typeof sessionCatalogHandlers,
+  params: unknown,
+  config: Record<string, unknown> = {},
+) {
   const respond = vi.fn();
-  await sessionCatalogHandlers[method]?.({ params, respond } as never);
+  await sessionCatalogHandlers[method]?.({
+    params,
+    respond,
+    context: { getRuntimeConfig: () => config },
+  } as never);
   return respond;
 }
 
@@ -66,6 +74,7 @@ describe("session catalog Gateway methods", () => {
     };
     activeRegistry.sessionCatalogs = [
       {
+        pluginId: "anthropic",
         provider: provider("claude", {
           resolveCreateSession: () => createSession,
         }),
@@ -105,6 +114,7 @@ describe("session catalog Gateway methods", () => {
   it("keeps creation available when catalog history listing fails", async () => {
     activeRegistry.sessionCatalogs = [
       {
+        pluginId: "anthropic",
         provider: provider("claude", {
           resolveCreateSession: () => ({
             model: "anthropic/claude-opus-4-8",
@@ -136,6 +146,7 @@ describe("session catalog Gateway methods", () => {
   it("resolves the private runtime target separately from the public capability", () => {
     activeRegistry.sessionCatalogs = [
       {
+        pluginId: "anthropic",
         provider: provider("claude", {
           resolveCreateSession: () => ({
             model: "anthropic/claude-opus-4-8",
@@ -150,6 +161,7 @@ describe("session catalog Gateway methods", () => {
       target: {
         model: "anthropic/claude-opus-4-8",
         agentRuntime: "claude-cli",
+        pluginOwnerId: "anthropic",
       },
     });
     expect(resolveSessionCatalogCreateTarget("missing", "research")).toEqual({

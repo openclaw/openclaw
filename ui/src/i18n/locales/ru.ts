@@ -3435,6 +3435,8 @@ export const ru: TranslationMap = {
       empty: "Для этого агента пока нет фоновых задач.",
       running: "Выполняются ({count})",
       finished: "Завершены ({count})",
+      statusRunningOne: "1 выполняющаяся задача",
+      statusRunningMany: "{count} выполняющихся задач",
       stopTask: "Остановить {title}",
       viewTranscript: "Просмотреть расшифровку",
       toolUseOne: "1 вызов инструмента",

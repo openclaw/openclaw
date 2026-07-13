@@ -61,7 +61,7 @@ type SidebarLifecycleState = HTMLElement & {
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
   onUpdate: () => void;
-  onOpenNewSession?: (agentId: string, target?: { model: string; label: string }) => void;
+  onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
 

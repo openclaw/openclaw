@@ -3402,6 +3402,8 @@ export const vi: TranslationMap = {
       empty: "Chưa có tác vụ nền nào cho tác nhân này.",
       running: "Đang chạy ({count})",
       finished: "Đã hoàn tất ({count})",
+      statusRunningOne: "1 tác vụ đang chạy",
+      statusRunningMany: "{count} tác vụ đang chạy",
       stopTask: "Dừng {title}",
       viewTranscript: "Xem bản ghi",
       toolUseOne: "1 lần sử dụng công cụ",

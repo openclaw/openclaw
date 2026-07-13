@@ -3442,6 +3442,8 @@ export const de: TranslationMap = {
       empty: "Noch keine Hintergrundaufgaben für diesen Agenten.",
       running: "Wird ausgeführt ({count})",
       finished: "Abgeschlossen ({count})",
+      statusRunningOne: "1 laufende Aufgabe",
+      statusRunningMany: "{count} laufende Aufgaben",
       stopTask: "{title} stoppen",
       viewTranscript: "Transkript anzeigen",
       toolUseOne: "1 Tool-Aufruf",

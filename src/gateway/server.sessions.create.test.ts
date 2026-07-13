@@ -674,7 +674,7 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
 });
 
 test("sessions.create resolves a catalog target server-side and pins its runtime", async () => {
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   testState.agentConfig = { model: { primary: "anthropic/claude-opus-4-8" } };
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [
@@ -705,6 +705,7 @@ test("sessions.create resolves a catalog target server-side and pins its runtime
         modelOverride?: string;
         agentRuntimeOverride?: string;
         modelSelectionLocked?: boolean;
+        pluginOwnerId?: string;
       };
       key?: string;
     }>("sessions.create", { agentId: "main", catalogId: "claude" });
@@ -715,6 +716,7 @@ test("sessions.create resolves a catalog target server-side and pins its runtime
       modelOverride: "claude-opus-4-8",
       agentRuntimeOverride: "claude-cli",
       modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
     });
     expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "main" });
 
@@ -728,8 +730,70 @@ test("sessions.create resolves a catalog target server-side and pins its runtime
       code: "INVALID_REQUEST",
       message: "Model selection is locked for this session.",
     });
+
+    const deleted = await directSessionReq("sessions.delete", {
+      key: created.payload?.key,
+      agentId: "main",
+      deleteTranscript: false,
+    });
+    expect(deleted.ok).toBe(true);
+    expect(
+      loadSessionEntry({
+        agentId: "main",
+        sessionKey: created.payload?.key ?? "",
+        storePath,
+      }),
+    ).toBeUndefined();
   } finally {
     testState.agentConfig = undefined;
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  }
+});
+
+test("sessions.create rejects a caller-supplied key for a catalog target", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const existing = sessionStoreEntry("sess-existing-catalog-target", {
+    providerOverride: "openai",
+    modelOverride: "gpt-existing",
+  });
+  await writeSessionStore({ entries: { main: existing } });
+  const registry = createEmptyPluginRegistry();
+  registry.sessionCatalogs.push({
+    pluginId: "anthropic",
+    source: "test",
+    provider: {
+      id: "claude",
+      label: "Claude Code",
+      resolveCreateSession: () => ({
+        model: "anthropic/claude-opus-4-8",
+        agentRuntime: "claude-cli",
+      }),
+      list: vi.fn(async () => []),
+      read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
+    },
+  });
+  setActivePluginRegistry(registry);
+
+  try {
+    const created = await directSessionReq("sessions.create", {
+      key: "main",
+      agentId: "main",
+      catalogId: "claude",
+    });
+
+    expect(created.ok).toBe(false);
+    expect(created.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "sessions.create catalogId cannot include key",
+    });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+    ).toMatchObject({
+      sessionId: existing.sessionId,
+      providerOverride: "openai",
+      modelOverride: "gpt-existing",
+    });
+  } finally {
     setActivePluginRegistry(createEmptyPluginRegistry());
   }
 });

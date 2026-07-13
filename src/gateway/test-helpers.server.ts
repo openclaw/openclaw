@@ -36,7 +36,7 @@ import { __testing as restartTesting } from "../infra/restart.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
+import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.test-fixtures.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import {
   DEFAULT_AGENT_ID,

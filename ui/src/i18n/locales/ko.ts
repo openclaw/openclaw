@@ -3398,6 +3398,8 @@ export const ko: TranslationMap = {
       empty: "이 에이전트에는 아직 백그라운드 작업이 없습니다.",
       running: "실행 중({count})",
       finished: "완료됨({count})",
+      statusRunningOne: "실행 중인 작업 1개",
+      statusRunningMany: "실행 중인 작업 {count}개",
       stopTask: "{title} 중지",
       viewTranscript: "트랜스크립트 보기",
       toolUseOne: "도구 사용 1회",

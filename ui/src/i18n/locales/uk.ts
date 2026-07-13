@@ -3419,6 +3419,8 @@ export const uk: TranslationMap = {
       empty: "Для цього агента ще немає фонових завдань.",
       running: "Виконуються ({count})",
       finished: "Завершено ({count})",
+      statusRunningOne: "1 активне завдання",
+      statusRunningMany: "{count} активних завдань",
       stopTask: "Зупинити {title}",
       viewTranscript: "Переглянути транскрипт",
       toolUseOne: "1 використання інструмента",
