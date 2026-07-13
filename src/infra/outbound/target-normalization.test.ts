@@ -18,7 +18,7 @@ let resolveNormalizedTargetInput: TargetNormalizationModule["resolveNormalizedTa
 let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
 let resetTargetNormalizerCacheForTests: TargetNormalizationModule["testing"]["resetTargetNormalizerCacheForTests"];
 
-vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
+vi.mock("../../channels/plugins/registry-loaded.js", () => ({
   getLoadedChannelPluginForRead: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
 }));
 
