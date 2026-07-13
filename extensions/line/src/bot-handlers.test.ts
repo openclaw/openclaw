@@ -529,7 +529,7 @@ describe("handleLineWebhookEvents", () => {
     await expectGroupMessageBlocked({
       processMessage,
       event: createTestMessageEvent({
-        message: { id: "m5c", type: "text", text: "hi" },
+        message: { id: "m5c", type: "text", text: "hi", quoteToken: "q-open-dm-group-deny" },
         source: { type: "group", groupId: "group-1", userId: "user-open-dm" },
         webhookEventId: "evt-5c",
       }),
