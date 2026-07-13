@@ -21,6 +21,7 @@ import {
 } from "./openclaw-tools.plugin-context.js";
 import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
 import type { AnyAgentTool } from "./tools/common.js";
+import { hasProviderAuthForTool } from "./tools/model-config.helpers.js";
 
 type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   pluginToolAllowlist?: string[];
@@ -93,9 +94,18 @@ export function resolveOpenClawPluginToolsForOptions(params: {
           provider: providerId,
         })
     : undefined;
-  const hasAuthForProvider = authProfileStore
-    ? (providerId: string) => (resolveAuthProfileIdsForProvider?.(providerId) ?? []).length > 0
-    : undefined;
+  // Availability must match what chat routing can actually resolve: env keys
+  // (incl. OPENCLAW_SERVICE_MANAGED_ENV_KEYS-injected ones), config apiKey
+  // SecretRefs, and managed secrets count too, not only auth-profile entries.
+  // A store-only check rejected providers whose key lives solely in the
+  // service-managed environment (#103828).
+  const hasAuthForProvider = (providerId: string) =>
+    hasProviderAuthForTool({
+      provider: providerId,
+      cfg: resolveCurrentRuntimeConfig(),
+      agentDir: params.options?.agentDir,
+      ...(authProfileStore ? { authStore: authProfileStore } : {}),
+    });
   const resolveApiKeyForProvider = authProfileStore
     ? async (providerId: string): Promise<string | undefined> => {
         for (const profileId of resolveAuthProfileIdsForProvider?.(providerId) ?? []) {
@@ -123,14 +133,14 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     ...pluginToolInputs,
     context: {
       ...pluginToolInputs.context,
-      ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
+      hasAuthForProvider,
       ...(resolveApiKeyForProvider ? { resolveApiKeyForProvider } : {}),
     },
     existingToolNames,
     toolAllowlist: params.options?.pluginToolAllowlist,
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
-    ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
+    hasAuthForProvider,
   });
   for (const tool of pluginTools) {
     existingToolNames.add(tool.name);

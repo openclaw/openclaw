@@ -234,6 +234,29 @@ describe("image custom provider auth regression", () => {
     });
   });
 
+  it("accepts a custom provider whose key arrives only via the process environment", async () => {
+    // Service-managed env keys (OPENCLAW_SERVICE_MANAGED_ENV_KEYS) land in
+    // process.env, not in the auth profile store; availability gating must
+    // count them like chat routing does (#103828).
+    const cfg = createUserReportedConfig({ includeApiKey: false });
+    const providers = (cfg.models?.providers ?? {}) as Record<string, { apiKey?: unknown }>;
+    const providerEntry = providers[USER_PROVIDER];
+    if (providerEntry) {
+      providerEntry.apiKey = "${NVIDIA_TEST_API_KEY}";
+    }
+    const previous = process.env.NVIDIA_TEST_API_KEY;
+    process.env.NVIDIA_TEST_API_KEY = "test-env-only-key";
+    try {
+      expect(hasProviderAuthForTool({ provider: USER_PROVIDER, cfg })).toBe(true);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.NVIDIA_TEST_API_KEY;
+      } else {
+        process.env.NVIDIA_TEST_API_KEY = previous;
+      }
+    }
+  });
+
   it("still rejects the same config when apiKey is missing", async () => {
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig({ includeApiKey: false });
