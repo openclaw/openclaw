@@ -83,6 +83,8 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
 }
 
 /** Reads npm registry metadata for a package spec without running package scripts. */
+export type NpmMetadataFailureCategory = "metadata-env";
+
 export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
   | {
       ok: true;
@@ -91,6 +93,7 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
   | {
       ok: false;
       error: string;
+      category?: NpmMetadataFailureCategory;
     }
 > {
   const res = await runCommandWithTimeout(
@@ -125,11 +128,19 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
     const parsed = JSON.parse(res.stdout.trim()) as unknown;
     const metadata = normalizeNpmViewMetadata(parsed);
     if (!metadata?.name || !metadata.version) {
-      return { ok: false, error: "npm view produced incomplete package metadata" };
+      return {
+        ok: false,
+        error: "npm view produced incomplete package metadata",
+        category: "metadata-env",
+      };
     }
     return { ok: true, metadata };
   } catch (err) {
-    return { ok: false, error: `npm view produced invalid JSON: ${String(err)}` };
+    return {
+      ok: false,
+      error: `npm view produced invalid JSON: ${String(err)}`,
+      category: "metadata-env",
+    };
   }
 }
 

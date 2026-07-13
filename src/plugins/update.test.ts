@@ -59,6 +59,7 @@ vi.mock("./install.js", () => ({
   },
   PLUGIN_INSTALL_ERROR_CODE: {
     NPM_PACKAGE_NOT_FOUND: "npm_package_not_found",
+    NPM_METADATA_FAILURE: "npm_metadata_failure",
   },
 }));
 

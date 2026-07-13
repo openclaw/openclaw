@@ -1425,7 +1425,19 @@ export async function updateNpmInstalledPlugins(params: {
     pluginId: string,
     message: string,
     channelFallback?: PluginUpdateChannelFallback,
+    code?: PluginInstallErrorCode,
   ) => {
+    // Metadata/environment failures are not plugin problems — skip disabling
+    // so the plugin keeps running and update can be retried after the env issue is resolved.
+    if (code === PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE) {
+      outcomes.push({
+        pluginId,
+        status: "error",
+        message,
+        ...(channelFallback ? { channelFallback } : {}),
+      });
+      return;
+    }
     if (params.disableOnFailure && !params.dryRun) {
       const disabledMessage =
         `Disabled "${pluginId}" after plugin update failure; OpenClaw will continue without it. ` +
@@ -1752,7 +1764,14 @@ export async function updateNpmInstalledPlugins(params: {
         }
       } else {
         if (!parseRegistryNpmSpec(effectiveSpec!)) {
-          recordFailure(pluginId, `Failed to check ${pluginId}: ${metadataResult.error}`);
+          recordFailure(
+            pluginId,
+            `Failed to check ${pluginId}: ${metadataResult.error}`,
+            undefined,
+            metadataResult.category === "metadata-env"
+              ? PLUGIN_INSTALL_ERROR_CODE.NPM_METADATA_FAILURE
+              : undefined,
+          );
           continue;
         }
         logger.warn?.(
@@ -1998,6 +2017,7 @@ export async function updateNpmInstalledPlugins(params: {
                     error: probe.error,
                   }),
           npmChannelFallback,
+          "code" in probe && probe.code ? probe.code : undefined,
         );
         continue;
       }
@@ -2301,6 +2321,7 @@ export async function updateNpmInstalledPlugins(params: {
                   error: result.error,
                 }),
         npmChannelFallback,
+        resultSource === "npm" && result && "code" in result ? result.code : undefined,
       );
       continue;
     }
