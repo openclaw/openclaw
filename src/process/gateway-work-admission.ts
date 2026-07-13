@@ -1,6 +1,7 @@
 // Coordinates process-wide root work admission with reversible host suspension.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 type GatewaySuspendAdmissionPhase = "accepting" | "preparing" | "prepared";
 
@@ -316,7 +317,7 @@ export async function waitForActiveGatewayRootWork(
   }
   const timeout =
     typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.max(0, Math.floor(timeoutMs))
+      ? resolveTimerTimeoutMs(timeoutMs, 0, 0)
       : undefined;
   if (timeout === 0) {
     return { drained: false, active: GATEWAY_WORK_ADMISSION_STATE.activeRootWork.size };

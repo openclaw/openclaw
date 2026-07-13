@@ -5,7 +5,7 @@ import {
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { clampPositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import {
   GatewayDrainingError,
@@ -680,7 +680,13 @@ export function waitForActiveTasks(timeoutMs?: number): Promise<{ drained: boole
   if (activeAtStart.size === 0) {
     return Promise.resolve({ drained: true });
   }
-  if (timeoutMs !== undefined && timeoutMs <= 0) {
+  const timeout =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? timeoutMs <= 0
+        ? 0
+        : resolveTimerTimeoutMs(timeoutMs, 1)
+      : undefined;
+  if (timeout === 0) {
     return Promise.resolve({ drained: false });
   }
 
@@ -689,10 +695,10 @@ export function waitForActiveTasks(timeoutMs?: number): Promise<{ drained: boole
       activeTaskIds: activeAtStart,
       resolve,
     };
-    if (timeoutMs !== undefined) {
+    if (timeout !== undefined) {
       waiter.timeout = setTimeout(() => {
         resolveActiveTaskWaiter(waiter, { drained: false });
-      }, timeoutMs);
+      }, timeout);
     }
     queueState.activeTaskWaiters.add(waiter);
     notifyActiveTaskWaiters();

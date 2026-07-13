@@ -1,4 +1,5 @@
 // Covers root work counting and reversible suspension admission transitions.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   beginGatewayRestartSignalAdmission,
@@ -45,6 +46,26 @@ it("waits for admitted roots and reports a bounded timeout", async () => {
   root?.release();
 
   await expect(pending).resolves.toEqual({ drained: true, active: 0 });
+});
+
+it("clamps oversized root-work drain timeouts before arming timers", async () => {
+  const root = tryBeginGatewayRootWorkAdmission();
+  expect(root).not.toBeNull();
+
+  vi.useFakeTimers();
+  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+  try {
+    const pending = waitForActiveGatewayRootWork(MAX_TIMER_TIMEOUT_MS + 1);
+    await Promise.resolve();
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    root?.release();
+    await expect(pending).resolves.toEqual({ drained: true, active: 0 });
+  } finally {
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  }
 });
 
 it("rolls back or releases a generation-bound suspension without resetting roots", () => {

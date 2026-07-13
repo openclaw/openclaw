@@ -577,7 +577,7 @@ export function resolveGatewayRestartDeferralTimeoutMs(timeoutMs: unknown): numb
   if (timeoutMs <= 0) {
     return undefined;
   }
-  return Math.floor(timeoutMs);
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
 }
 
 function canReplacePendingRestartEmitHooks(

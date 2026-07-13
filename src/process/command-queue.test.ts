@@ -417,6 +417,46 @@ describe("command queue", () => {
     }
   });
 
+  it("waitForActiveTasks keeps positive fractional timeouts asynchronous", async () => {
+    const { task, release } = enqueueBlockedMainTask();
+
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const waitPromise = waitForActiveTasks(0.5);
+      await Promise.resolve();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1);
+
+      release();
+      await expect(waitPromise).resolves.toEqual({ drained: true });
+      await task;
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("waitForActiveTasks clamps oversized drain timeouts before arming timers", async () => {
+    const { task, release } = enqueueBlockedMainTask();
+
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const waitPromise = waitForActiveTasks(MAX_TIMER_TIMEOUT_MS + 1);
+      await Promise.resolve();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+      release();
+      await expect(waitPromise).resolves.toEqual({ drained: true });
+      await task;
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("resetAllLanes drains queued work immediately after reset", async () => {
     const lane = `reset-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);

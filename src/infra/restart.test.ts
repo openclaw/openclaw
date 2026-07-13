@@ -1,4 +1,5 @@
 // Covers gateway restart process and supervisor paths.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -36,7 +37,8 @@ vi.mock("../config/paths.js", () => ({
 
 const { testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
-const { triggerOpenClawRestart } = await import("./restart.js");
+const { resolveGatewayRestartDeferralTimeoutMs, triggerOpenClawRestart } =
+  await import("./restart.js");
 
 let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
@@ -74,6 +76,15 @@ function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
   }
   return call as [unknown, unknown, unknown];
 }
+
+describe("resolveGatewayRestartDeferralTimeoutMs", () => {
+  it("keeps indefinite zero and clamps oversized finite restart drain budgets", () => {
+    expect(resolveGatewayRestartDeferralTimeoutMs(0)).toBeUndefined();
+    expect(resolveGatewayRestartDeferralTimeoutMs(MAX_TIMER_TIMEOUT_MS + 1)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+  });
+});
 
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
   it("parses lsof output and filters non-openclaw/current processes", () => {
