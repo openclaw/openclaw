@@ -1,11 +1,12 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
-  applyRemoteSlashCommandsResult,
-  resetChatSlashCommandMetadataForTest,
-} from "./chat-commands.ts";
+  buildFallbackSlashCommands,
+  replaceSlashCommands,
+  SLASH_COMMANDS,
+} from "../../lib/chat/commands.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
+import { applyRemoteSlashCommandsResult } from "./chat-commands.ts";
 import {
   admitQueuedMessageForSession,
   removeQueuedMessage,
@@ -40,7 +41,7 @@ vi.mock("../../app/assistant-identity.ts", async (importOriginal) => ({
 }));
 
 afterEach(() => {
-  resetChatSlashCommandMetadataForTest();
+  replaceSlashCommands(buildFallbackSlashCommands());
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });

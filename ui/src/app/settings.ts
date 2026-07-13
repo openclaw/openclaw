@@ -3,7 +3,7 @@ const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
 export const NAV_WIDTH_MIN = 240;
 export const NAV_WIDTH_MAX = 400;
-export const NAV_WIDTH_DEFAULT = 258;
+const NAV_WIDTH_DEFAULT = 258;
 const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
@@ -140,7 +140,7 @@ export function setLastActiveSessionKey(host: LastActiveSessionHost, next: strin
   host.applySettings({ ...host.settings, lastActiveSessionKey: trimmed });
 }
 
-export function isViteDevPage(): boolean {
+function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
     return false;
   }

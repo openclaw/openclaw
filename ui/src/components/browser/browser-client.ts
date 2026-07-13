@@ -22,12 +22,12 @@ export type BrowserPanelTab = {
   url: string;
 };
 
-export type BrowserTabsSnapshot = {
+type BrowserTabsSnapshot = {
   running: boolean;
   tabs: BrowserPanelTab[];
 };
 
-export type BrowserScreenshotCapture = {
+type BrowserScreenshotCapture = {
   path: string;
   targetId: string;
   url: string;

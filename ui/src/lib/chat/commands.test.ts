@@ -2,16 +2,16 @@
 import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   getRemoteCommandEntries,
   parseSlashCommand,
   replaceSlashCommands,
-  resetSlashCommandsForTest,
   SLASH_COMMANDS,
 } from "./commands.ts";
 
 afterEach(() => {
-  resetSlashCommandsForTest();
+  replaceSlashCommands(buildFallbackSlashCommands());
 });
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

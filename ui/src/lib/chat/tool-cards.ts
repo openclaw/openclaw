@@ -91,7 +91,7 @@ function hasToolErrorStatus(value: unknown): boolean {
   return typeof value === "string" && TOOL_ERROR_STATUSES.has(value.trim().toLowerCase());
 }
 
-export function isToolErrorOutput(outputText: string | undefined): boolean {
+function isToolErrorOutput(outputText: string | undefined): boolean {
   if (!outputText) {
     return false;
   }
@@ -284,7 +284,7 @@ function findFirstUnmatchedCard(
   return nameOnlyCandidate;
 }
 
-export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
+function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
   const messageIsError = readToolErrorFlag(m);

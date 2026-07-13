@@ -16,7 +16,7 @@ import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
-export type ModelProvidersViewProps = {
+type ModelProvidersViewProps = {
   connected: boolean;
   loading: boolean;
   refreshing: boolean;

@@ -3,7 +3,9 @@
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { formatControlUiBuildDate, renderAbout, type AboutProps } from "./view.ts";
+import { renderAbout } from "./view.ts";
+
+type AboutProps = Parameters<typeof renderAbout>[0];
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const BUILT_AT = "2026-07-10T12:34:56.000Z";
@@ -94,7 +96,11 @@ describe("renderAbout", () => {
     expect(time?.getAttribute("datetime")).toBe(BUILT_AT);
     expect(time?.getAttribute("title")).toBe(BUILT_AT);
     expect(time?.getAttribute("dir")).toBe("auto");
-    expect(time?.textContent).toBe(formatControlUiBuildDate(BUILT_AT, "en"));
+    expect(time?.textContent).toBe(
+      new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone: "UTC" }).format(
+        new Date(BUILT_AT),
+      ),
+    );
   });
 
   it("keeps the connected Gateway version separate from the browser artifact", () => {

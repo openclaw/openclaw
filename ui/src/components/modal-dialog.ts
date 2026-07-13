@@ -14,7 +14,7 @@ const FOCUSABLE_SELECTOR = [
   "[tabindex]:not([tabindex='-1'])",
 ].join(",");
 
-export class OpenClawModalDialog extends OpenClawLitElement {
+class OpenClawModalDialog extends OpenClawLitElement {
   @property() label = "";
   @property() description = "";
 

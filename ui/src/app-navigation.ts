@@ -136,8 +136,9 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-export const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] =
-  SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
+const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = SETTINGS_NAVIGATION_GROUPS.flatMap(
+  (group) => group.routes,
+);
 
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",

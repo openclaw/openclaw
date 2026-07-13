@@ -34,7 +34,7 @@ type ApplicationStatusBanner = {
   text: string;
 };
 
-export type ApplicationOverlaySnapshot = {
+type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
   updateRunning: boolean;
   updateReconciliationPending: boolean;

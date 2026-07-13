@@ -15,13 +15,13 @@ import { providerDisplayLabel } from "../../components/provider-icon.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
-export type ModelProviderAuthSummary = {
+type ModelProviderAuthSummary = {
   kind: ModelProviderAuthKind;
   profileCount: number;
   expiryLabel?: string;
 };
 
-export type ModelProviderLocalCost = {
+type ModelProviderLocalCost = {
   totalCost: number;
   totalTokens: number;
   sessionCount: number;
@@ -40,7 +40,7 @@ export type ModelProviderCard = {
   localCost?: ModelProviderLocalCost;
 };
 
-export type ModelProviderCardsInput = {
+type ModelProviderCardsInput = {
   authStatus: ModelAuthStatusResult | null;
   models: ModelCatalogEntry[] | null;
   providerUsage: UsageSummary | null;
