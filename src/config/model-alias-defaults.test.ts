@@ -449,6 +449,69 @@ describe("applyModelDefaults", () => {
     expect(model?.maxTokens).toBe(16384);
   });
 
+  it("propagates provider-level contextTokens default to models", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            contextTokens: 120_000,
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextTokens).toBe(120_000);
+  });
+
+  it("lets per-model contextTokens override provider-level default", () => {
+    const cfg = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            contextTokens: 120_000,
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200_000,
+                maxTokens: 8192,
+                contextTokens: 96_000,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextTokens).toBe(96_000);
+  });
+
   it("propagates a provider policy api default to models", () => {
     const cfg = {
       models: {
