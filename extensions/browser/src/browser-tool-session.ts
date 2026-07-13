@@ -40,6 +40,7 @@ export function withBrowserSessionAccess(
       sessionKey: opts.agentSessionKey,
     });
     try {
+      args[2]?.throwIfAborted();
       return await execute(...args);
     } finally {
       releaseSessionAccess();

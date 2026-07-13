@@ -94,7 +94,9 @@ function createLazyBrowserTool(opts?: {
         ? await acquireBrowserSessionAccess(sessionKey, () => true)
         : () => {};
       try {
+        signal?.throwIfAborted();
         const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
+        signal?.throwIfAborted();
         const tool = createBrowserTool({ ...opts, ownerClaim, sessionAccessAlreadyHeld: true });
         return await tool.execute(toolCallId, args, signal, onUpdate);
       } finally {
