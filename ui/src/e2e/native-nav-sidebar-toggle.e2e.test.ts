@@ -82,8 +82,8 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
           __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
           __OPENCLAW_NATIVE_HISTORY__?: { canGoBack: boolean; canGoForward: boolean };
         };
-        nativeWindow.__OPENCLAW_NATIVE_WEB_CHROME__ = true;
-        nativeWindow.__OPENCLAW_NATIVE_HISTORY__ = {
+        nativeWindow["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
+        nativeWindow["__OPENCLAW_NATIVE_HISTORY__"] = {
           canGoBack: false,
           canGoForward: false,
         };

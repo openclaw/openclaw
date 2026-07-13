@@ -16,13 +16,13 @@ afterEach(() => {
 describe("native web chrome capability", () => {
   it("requires the document-start capability flag", () => {
     expect(isNativeWebChromeHost()).toBe(false);
-    (window as TestNativeWindow).__OPENCLAW_NATIVE_WEB_CHROME__ = true;
+    (window as TestNativeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] = true;
     expect(isNativeWebChromeHost()).toBe(true);
   });
 
   it("reads native history state and defaults safely", () => {
     expect(readNativeHistoryState()).toEqual({ canGoBack: false, canGoForward: false });
-    (window as TestNativeWindow).__OPENCLAW_NATIVE_HISTORY__ = {
+    (window as TestNativeWindow)["__OPENCLAW_NATIVE_HISTORY__"] = {
       canGoBack: true,
       canGoForward: false,
     };

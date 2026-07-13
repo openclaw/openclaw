@@ -13,11 +13,11 @@ type NativeWebChromeWindow = Window & {
 };
 
 export function isNativeWebChromeHost(): boolean {
-  return (window as NativeWebChromeWindow).__OPENCLAW_NATIVE_WEB_CHROME__ === true;
+  return (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_WEB_CHROME__"] === true;
 }
 
 export function readNativeHistoryState(): NativeHistoryState {
-  const state = (window as NativeWebChromeWindow).__OPENCLAW_NATIVE_HISTORY__;
+  const state = (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_HISTORY__"];
   return state && typeof state.canGoBack === "boolean" && typeof state.canGoForward === "boolean"
     ? state
     : { canGoBack: false, canGoForward: false };
