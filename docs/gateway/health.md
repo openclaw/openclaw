@@ -39,7 +39,7 @@ health commands above for live connectivity checks.
 
 - `gateway.channelHealthCheckMinutes`: how often the gateway checks channel health. Default: `5`. Set `0` to disable health-monitor restarts globally.
 - `gateway.channelStaleEventThresholdMinutes`: how long a connected channel can stay idle before the health monitor treats it as stale and restarts it. Default: `30`. Keep this greater than or equal to `gateway.channelHealthCheckMinutes`.
-- `gateway.channelMaxRestartsPerHour`: rolling one-hour cap for health-monitor restarts per channel/account. Default: `10`.
+- `gateway.channelMaxRestartsPerHour`: rolling one-hour cap for health-monitor restarts per channel/account. Default: `10`. This limits the _recorded restart slots_ in the rolling window. When a channel in continuing-pending-restart state (`running=false`, `restartPending=true`, `reconnectAttempts=0`) consumes the last available slot, it receives one extra recovery attempt (a _completion pass_) without recording a new slot — so the effective maximum calls in a window is `maxRestartsPerHour + 1` for stuck pending channels. After the window rolls over and old records are pruned, the completion-pass flag resets, allowing the pattern to repeat.
 - `channels.<provider>.healthMonitor.enabled`: disable health-monitor restarts for a specific channel while leaving global monitoring enabled.
 - `channels.<provider>.accounts.<accountId>.healthMonitor.enabled`: multi-account override that wins over the channel-level setting.
 - These per-channel overrides apply to the built-in channels that expose them today: Discord, Google Chat, iMessage, IRC, Microsoft Teams, Signal, Slack, Telegram, and WhatsApp.

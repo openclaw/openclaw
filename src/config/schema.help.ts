@@ -164,7 +164,7 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.channelStaleEventThresholdMinutes":
     "How many minutes a connected channel can go without provider-proven transport activity before the health monitor treats it as a stale socket and triggers a restart. Default: 30.",
   "gateway.channelMaxRestartsPerHour":
-    "Maximum number of health-monitor-initiated channel restarts allowed within a rolling one-hour window. Once hit, further restarts are skipped until the window expires. Default: 10.",
+    "Maximum number of recorded health-monitor restart slots per channel/account in a rolling one-hour window. Once the recorded count hits the limit, further restarts skip until records age out. A pending restart that consumed the last slot gets one extra recovery attempt (completion pass) without recording a new slot. Default: 10.",
   "gateway.tailscale":
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":
