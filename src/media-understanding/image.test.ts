@@ -149,6 +149,16 @@ vi.mock("../plugin-sdk/provider-auth.js", () => ({
   resolveCopilotApiToken: resolveCopilotApiTokenMock,
 }));
 
+const imageTestFetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+vi.mock("../infra/net/fetch-guard.js", async () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mod = (await vi.importActual("../infra/net/fetch-guard.js")) as any;
+  return {
+    ...mod,
+    fetchWithSsrFGuard: imageTestFetchWithSsrFGuardMock,
+  };
+});
+
 const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
@@ -170,6 +180,17 @@ describe("describeImageWithModel", () => {
         base_resp: { status_code: 0 },
         content: "portal ok",
       }),
+    );
+    // Bridge fetchWithSsrFGuard through the globally-stubbed fetch so existing
+    // assertions on fetchMock call count and arguments continue to work.
+    imageTestFetchWithSsrFGuardMock.mockImplementation(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async (opts: any) => {
+        const signal = AbortSignal.timeout(opts.timeoutMs ?? 60_000);
+        const init = { ...opts.init, signal };
+        const response = await globalThis.fetch(opts.url, init);
+        return { response, release: vi.fn(), finalUrl: opts.url };
+      },
     );
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({

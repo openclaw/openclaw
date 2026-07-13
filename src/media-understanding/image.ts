@@ -347,7 +347,7 @@ async function describeImagesWithMinimax(params: {
   images: Array<{ buffer: Buffer; mime?: string }>;
 }): Promise<ImagesDescriptionResult> {
   const responses: string[] = [];
-  // MiniMax VLM owns a direct fetch path, so unwrap only at this final handoff.
+  // MiniMax VLM handles its own outbound fetch, so unwrap only at this final handoff.
   const apiKey = unwrapSecretSentinelsForProviderEgress(params.apiKey, "MiniMax VLM request");
   for (const [index, image] of params.images.entries()) {
     const prompt =

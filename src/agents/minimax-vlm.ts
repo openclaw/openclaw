@@ -2,7 +2,10 @@ import { readResponseBodySnippet } from "../infra/http-error-body.js";
 /**
  * Adapts MiniMax VLM image-understanding requests for agent image inputs.
  */
-import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
+import {
+  fetchWithSsrFGuard,
+  withTrustedEnvProxyGuardedFetchMode,
+} from "../infra/net/fetch-guard.js";
 import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { isRecord } from "../utils.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
@@ -109,62 +112,69 @@ export async function minimaxUnderstandImage(params: {
   });
   const url = new URL("/v1/coding_plan/vlm", host).toString();
 
-  // Ensure env-based proxy dispatcher is active before the outbound fetch call.
-  // Without this, HTTP_PROXY/HTTPS_PROXY env vars are silently ignored (#51619).
-  ensureGlobalUndiciEnvProxyDispatcher();
-
   const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, DEFAULT_MINIMAX_VLM_TIMEOUT_MS);
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "MM-API-Source": "OpenClaw",
-    },
-    signal: AbortSignal.timeout(timeoutMs),
-    body: JSON.stringify({
-      prompt,
-      image_url: imageDataUrl,
+  const guarded = await fetchWithSsrFGuard(
+    withTrustedEnvProxyGuardedFetchMode({
+      url,
+      init: {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "MM-API-Source": "OpenClaw",
+        },
+        body: JSON.stringify({
+          prompt,
+          image_url: imageDataUrl,
+        }),
+      },
+      timeoutMs,
+      auditContext: "minimax-vlm",
     }),
-  });
+  );
+  const res = guarded.response;
 
-  const traceId = res.headers.get("Trace-Id") ?? "";
-  if (!res.ok) {
-    const body = await readResponseBodySnippet(res, {
-      maxBytes: MINIMAX_VLM_ERROR_BODY_MAX_BYTES,
-      maxChars: MINIMAX_VLM_ERROR_BODY_MAX_CHARS,
-    });
-    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
-    throw new Error(
-      `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
-        body ? ` Body: ${body}` : ""
-      }`,
-    );
+  try {
+    const traceId = res.headers.get("Trace-Id") ?? "";
+    if (!res.ok) {
+      const body = await readResponseBodySnippet(res, {
+        maxBytes: MINIMAX_VLM_ERROR_BODY_MAX_BYTES,
+        maxChars: MINIMAX_VLM_ERROR_BODY_MAX_CHARS,
+      });
+      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+      throw new Error(
+        `MiniMax VLM request failed (${res.status} ${res.statusText}).${trace}${
+          body ? ` Body: ${body}` : ""
+        }`,
+      );
+    }
+
+    const responseLabel = traceId
+      ? `MiniMax VLM response [Trace-Id=${traceId}]`
+      : "MiniMax VLM response";
+    const json = await readProviderJsonResponse<unknown>(res, responseLabel);
+    if (!isRecord(json)) {
+      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+      throw new Error(`MiniMax VLM response was not JSON.${trace}`);
+    }
+
+    const baseResp = isRecord(json.base_resp) ? (json.base_resp as MinimaxBaseResp) : {};
+    const code = typeof baseResp.status_code === "number" ? baseResp.status_code : -1;
+    if (code !== 0) {
+      const msg = (baseResp.status_msg ?? "").trim();
+      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+      throw new Error(`MiniMax VLM API error (${code})${msg ? `: ${msg}` : ""}.${trace}`);
+    }
+
+    const content = pickString(json, "content").trim();
+    if (!content) {
+      const trace = traceId ? ` Trace-Id: ${traceId}` : "";
+      throw new Error(`MiniMax VLM returned no content.${trace}`);
+    }
+
+    return content;
+  } finally {
+    await guarded.release();
   }
-
-  const responseLabel = traceId
-    ? `MiniMax VLM response [Trace-Id=${traceId}]`
-    : "MiniMax VLM response";
-  const json = await readProviderJsonResponse<unknown>(res, responseLabel);
-  if (!isRecord(json)) {
-    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
-    throw new Error(`MiniMax VLM response was not JSON.${trace}`);
-  }
-
-  const baseResp = isRecord(json.base_resp) ? (json.base_resp as MinimaxBaseResp) : {};
-  const code = typeof baseResp.status_code === "number" ? baseResp.status_code : -1;
-  if (code !== 0) {
-    const msg = (baseResp.status_msg ?? "").trim();
-    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
-    throw new Error(`MiniMax VLM API error (${code})${msg ? `: ${msg}` : ""}.${trace}`);
-  }
-
-  const content = pickString(json, "content").trim();
-  if (!content) {
-    const trace = traceId ? ` Trace-Id: ${traceId}` : "";
-    throw new Error(`MiniMax VLM returned no content.${trace}`);
-  }
-
-  return content;
 }
