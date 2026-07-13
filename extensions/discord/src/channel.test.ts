@@ -572,10 +572,7 @@ describe("discordPlugin outbound", () => {
   });
 
   it("subtracts lazy probe loading from the status budget", async () => {
-    const nowSpy = vi
-      .spyOn(Date, "now")
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_200);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(1_200);
     probeDiscordMock.mockResolvedValue({ ok: true, elapsedMs: 1 });
     try {
       const cfg = createCfg();
