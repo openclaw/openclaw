@@ -148,6 +148,7 @@ export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-e
 export { formatDocsLink } from "../../../terminal-core/src/links.js";
 export { colorize, isRich, theme } from "../../../terminal-core/src/theme.js";
 export { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
+export { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
 export {
   resolveUserPath,
