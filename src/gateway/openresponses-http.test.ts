@@ -1509,7 +1509,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("No response from OpenClaw.");
   });
 
-  it("clears accumulated text on empty replace with mediaUrl:\"\"", async () => {
+  it('clears accumulated text on empty replace with mediaUrl:""', async () => {
     const port = enabledPort;
     agentCommand.mockClear();
     agentCommand.mockImplementationOnce((async (opts: unknown) => {
