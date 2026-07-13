@@ -391,8 +391,7 @@ async function sendChunkedOversizedBody(params: {
 
 async function sendStalledBody(params: {
   port: number;
-  token?: string;
-  authorization?: string;
+  token: string;
   bodyAfterDelay?: string;
   delayMs?: number;
 }): Promise<{ status: number | undefined; body: string; closed: boolean }> {
@@ -407,7 +406,7 @@ async function sendStalledBody(params: {
         path: "/mcp",
         method: "POST",
         headers: {
-          authorization: params.authorization ?? `Bearer ${params.token ?? ""}`,
+          authorization: `Bearer ${params.token}`,
           "content-type": "application/json",
           "transfer-encoding": "chunked",
         },
@@ -2836,7 +2835,7 @@ describe("mcp loopback server", () => {
 
       const response = await sendStalledBody({
         port: server.port,
-        authorization: `Bearer ${runtime.ownerToken}`,
+        token: runtime.ownerToken,
         bodyAfterDelay: mcpToolsListBody(),
         delayMs: 25,
       });
