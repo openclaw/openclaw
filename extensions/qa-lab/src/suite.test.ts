@@ -533,9 +533,7 @@ describe("qa suite", () => {
       "smoke.json",
     );
     const providerReadinessArtifactPath = path.join(
-      outputDir,
-      "crabline-generations",
-      "generation-1",
+      path.dirname(smokeArtifactPath),
       "provider-readiness.json",
     );
     await fs.mkdir(path.dirname(capabilityMatrixPath), { recursive: true });
