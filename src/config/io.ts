@@ -1455,6 +1455,19 @@ async function collectInvalidConfigLegacyIssues(
   return findDoctorLegacyConfigIssues(raw, sourceRaw);
 }
 
+/** Strips JSON5 string literals and returns true when `//` or `/*` survive. */
+function hasJSON5Comments(raw: string): boolean {
+  // Remove double-quoted, single-quoted, and backtick strings while
+  // handling JSON5 line continuations (backslash + newline) inside
+  // strings so the next line is not exposed as a false comment token.
+  // After stripping, match // or /* anywhere in the remaining text.
+  const withoutStrings = raw.replace(
+    /"(?:[^"\\]|\\(?:.|\r\n?|\n))*"|'(?:[^'\\]|\\(?:.|\r\n?|\n))*'|`(?:[^`\\]|\\(?:.|\r\n?|\n))*`/g,
+    "",
+  );
+  return /\/\/|\/\*/m.test(withoutStrings);
+}
+
 export function createConfigIO(
   overrides: ConfigIoDeps & {
     pluginValidation?: "full" | "skip";
@@ -2518,19 +2531,17 @@ export function createConfigIO(
       outputConfig,
       options.lastTouchedVersionOverride,
     );
-    // JSON5.stringify produces human-readable output with unquoted keys and
-    // trailing commas, reducing formatting churn. Original JSON5 comments are
-    // not preserved through the parse-modify-stringify roundtrip.
-    const json = JSON5.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
+    const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
     // Warn when the original config has JSON5 comments that will be lost through
-    // the parse-modify-stringify roundtrip. JSON5.stringify produces valid JSON5
-    // (supports future comments), but existing comments are not preserved.
+    // the parse-modify-stringify roundtrip. Strips string literals before
+    // checking so URLs (http://...) and string content do not cause false
+    // positives while still detecting // and /* outside of string values.
     if (
       typeof snapshot.raw === "string" &&
       !options.skipOutputLogs &&
-      /^\s*\/\/|^\s*\/\*/m.test(snapshot.raw)
+      hasJSON5Comments(snapshot.raw)
     ) {
       deps.logger?.warn?.(
         `Config write will strip JSON5 comments from ${configPath}. ` +
