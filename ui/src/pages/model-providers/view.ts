@@ -399,6 +399,7 @@ function renderAddProvider(props: ModelProvidersViewProps) {
               <label class="field">
                 <span>${t("modelProviders.add.provider")}</span>
                 <select
+                  class="settings-select"
                   .value=${props.addProviderId}
                   @change=${(event: Event) =>
                     props.onAddProviderIdChange((event.target as HTMLSelectElement).value)}
