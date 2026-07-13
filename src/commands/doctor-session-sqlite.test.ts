@@ -1648,14 +1648,14 @@ describe("runDoctorSessionSqlite", () => {
     ).toEqual([]);
   });
 
-  it("accepts an unstarted legacy session without a transcript sidecar", async () => {
+  it("accepts an unstarted legacy session with a later metadata timestamp", async () => {
     const store = createLegacyStore({
       entryOverrides: {
         compactionCount: 0,
         lastInteractionAt: 1000,
         sessionStartedAt: 1000,
         systemSent: false,
-        updatedAt: 1000,
+        updatedAt: 1001,
       },
     });
     fs.rmSync(store.transcriptPath);

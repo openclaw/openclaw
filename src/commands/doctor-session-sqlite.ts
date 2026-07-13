@@ -434,7 +434,7 @@ function isUnstartedLegacySession(entry: SessionEntry): boolean {
   return (
     entry.systemSent === false &&
     typeof startedAt === "number" &&
-    entry.updatedAt === startedAt &&
+    entry.updatedAt >= startedAt &&
     (entry.lastInteractionAt === undefined || entry.lastInteractionAt === startedAt) &&
     (entry.compactionCount === undefined || entry.compactionCount === 0)
   );
