@@ -416,28 +416,28 @@ describe("createScopedVitestConfig", () => {
     }
   });
 
-  it.each([
-    "src/gateway/**/*{server,client}*.test.ts",
-    "src/gateway/@(server|core).test.ts",
-  ])("rejects non-literal include-file target %s at an ownership boundary", (candidate) => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
-    try {
-      const includeFile = path.join(tempDir, "include.json");
-      fs.writeFileSync(includeFile, JSON.stringify([candidate]), "utf8");
+  it.each(["src/gateway/**/*{server,client}*.test.ts", "src/gateway/@(server|core).test.ts"])(
+    "rejects non-literal include-file target %s at an ownership boundary",
+    (candidate) => {
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
+      try {
+        const includeFile = path.join(tempDir, "include.json");
+        fs.writeFileSync(includeFile, JSON.stringify([candidate]), "utf8");
 
-      expect(() =>
-        createScopedVitestConfig(["src/gateway/**/*server*.test.ts"], {
-          dir: "src/gateway",
-          env: {
-            OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
-          },
-          intersectIncludeFile: true,
-        }),
-      ).toThrow(`cannot safely intersect non-literal include path: ${candidate}`);
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
+        expect(() =>
+          createScopedVitestConfig(["src/gateway/**/*server*.test.ts"], {
+            dir: "src/gateway",
+            env: {
+              OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+            },
+            intersectIncludeFile: true,
+          }),
+        ).toThrow(`cannot safely intersect non-literal include path: ${candidate}`);
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps shared gateway include files inside their actual child projects", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vitest-scoped-"));
