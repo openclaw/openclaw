@@ -545,6 +545,7 @@ describe("detectChangedScope", () => {
       ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
       "scripts/github/run-openclaw-cross-os-release-checks.sh",
       "scripts/openclaw-cross-os-release-checks.ts",
+      "scripts/lib/cross-os-release-checks/runtime.ts",
       "test/scripts/openclaw-cross-os-release-workflow.test.ts",
     ]) {
       expect(detectChangedScope([releaseCheckPath]), releaseCheckPath).toEqual({

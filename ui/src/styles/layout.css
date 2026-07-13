@@ -784,6 +784,14 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   min-width: 0;
   overflow: hidden;
   background: var(--sidebar-bg);
+  /* Sidebar chrome is controls, not copy; drag-selecting row labels reads as
+     broken. Editable fields inside (menu filters) re-enable selection below. */
+  user-select: none;
+}
+
+.sidebar input,
+.sidebar textarea {
+  user-select: text;
 }
 
 :root[data-theme-mode="light"] .sidebar {
@@ -2102,6 +2110,34 @@ openclaw-session-menu[popover] {
   text-decoration: none;
 }
 
+/* Large rosters: the switcher list scrolls; the utility rows below stay put. */
+.sidebar-agent-menu__list {
+  max-height: 264px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sidebar-agent-menu__filter {
+  padding: 2px 8px 6px;
+}
+
+.sidebar-agent-menu__filter input {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sidebar-agent-menu__empty {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* Footer menu row: build identity left, theme switch right. */
 .sidebar-agent-menu__footer {
   display: flex;
@@ -2355,6 +2391,14 @@ openclaw-session-menu[popover] {
 
 .content-header--page + * {
   margin-top: 20px;
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
 }
 
 .content--chat .content-header.content-header--chat-hidden {

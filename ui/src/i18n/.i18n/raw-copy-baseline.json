@@ -3,6 +3,27 @@
   "entries": [
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/app-host.ts",
+      "text": "browser panel"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/app-host.ts",
+      "text": "command palette"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/app/app-host.ts",
+      "text": "terminal panel"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/app-sidebar.ts",
