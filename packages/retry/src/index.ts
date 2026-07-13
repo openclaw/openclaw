@@ -8,7 +8,7 @@ export type BackoffPolicy = {
 };
 
 export function computeBackoff(policy: BackoffPolicy, attempt: number): number {
-  const base = policy.initialMs * policy.factor ** Math.max(attempt - 1, 0);
+  const base = Math.min(policy.maxMs, policy.initialMs * policy.factor ** Math.max(attempt - 1, 0));
   const jitter = base * policy.jitter * Math.random();
   return Math.min(policy.maxMs, Math.round(base + jitter));
 }

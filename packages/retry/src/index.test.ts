@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  computeBackoff,
   computeBackoffSchedule,
   createRetryRunner,
   RetrySupervisor,
@@ -31,6 +32,12 @@ describe("RetrySupervisor", () => {
     expect(
       [0, 1, 2, 3, 4, 5].map((attempt) => computeBackoffSchedule([5, 25, 120], attempt)),
     ).toEqual([0, 5, 25, 120, 120, 120]);
+  });
+
+  it("keeps long-lived exponential backoff at its cap", () => {
+    expect(computeBackoff({ initialMs: 1_000, maxMs: 30_000, factor: 2, jitter: 0 }, 1_016)).toBe(
+      30_000,
+    );
   });
 
   it("cancels a pending wait with the canonical abort error", async () => {
