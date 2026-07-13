@@ -1709,18 +1709,20 @@ describe("gateway agent handler", () => {
         "task",
         "background cli seam task",
       );
-      expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
-      expectRecordFields(mockCallArg(finalizeTaskRunByRunIdSpy), {
-        runtime: "cli",
-        runId: "task-registry-agent-seam",
-        status: "succeeded",
-        terminalSummary: "completed",
-      });
-      expectRecordFields(findTaskByRunId("task-registry-agent-seam"), {
-        runtime: "cli",
-        childSessionKey: "agent:main:main",
-        status: "succeeded",
-        terminalSummary: "completed",
+      await waitForAssertion(() => {
+        expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
+        expectRecordFields(mockCallArg(finalizeTaskRunByRunIdSpy), {
+          runtime: "cli",
+          runId: "task-registry-agent-seam",
+          status: "succeeded",
+          terminalSummary: "completed",
+        });
+        expectRecordFields(findTaskByRunId("task-registry-agent-seam"), {
+          runtime: "cli",
+          childSessionKey: "agent:main:main",
+          status: "succeeded",
+          terminalSummary: "completed",
+        });
       });
     });
   });
@@ -2024,23 +2026,27 @@ describe("gateway agent handler", () => {
         { context, respond, reqId: "task-registry-finalize-throw" },
       );
 
-      // Finalize threw, but the run must still complete (second res frame with ok status).
-      expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
-      const completed = respond.mock.calls.some(([ok, payload]) => {
-        return ok === true && (payload as { status?: string } | undefined)?.status === "ok";
-      });
-      expect(completed).toBe(true);
-
-      // The swallowed finalize error stays observable via a warn log.
       const warnMock = context.logGateway.warn as ReturnType<typeof vi.fn>;
-      const loggedFinalizeError = warnMock.mock.calls.some(([message]) => {
-        return (
-          typeof message === "string" &&
-          message.includes("failed to finalize tracked agent task") &&
-          message.includes("finalize boom")
-        );
+      await waitForAssertion(() => {
+        // Finalize threw, but the run must still complete (second res frame with ok status).
+        expect(finalizeTaskRunByRunIdSpy).toHaveBeenCalledTimes(1);
+        expect(
+          respond.mock.calls.some(([ok, payload]) => {
+            return ok === true && (payload as { status?: string } | undefined)?.status === "ok";
+          }),
+        ).toBe(true);
+
+        // The swallowed finalize error stays observable via a warn log.
+        expect(
+          warnMock.mock.calls.some(([message]) => {
+            return (
+              typeof message === "string" &&
+              message.includes("failed to finalize tracked agent task") &&
+              message.includes("finalize boom")
+            );
+          }),
+        ).toBe(true);
       });
-      expect(loggedFinalizeError).toBe(true);
     });
   });
 });
