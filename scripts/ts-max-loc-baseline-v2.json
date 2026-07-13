@@ -878,7 +878,7 @@
   "src/gateway/cli-session-history.claude.ts": 602,
   "src/gateway/config-reload.ts": 1022,
   "src/gateway/control-ui-session-prs.ts": 648,
-  "src/gateway/control-ui.ts": 1153,
+  "src/gateway/control-ui.ts": 1152,
   "src/gateway/exec-approval-manager.ts": 1141,
   "src/gateway/gateway-cli-backend.live-helpers.ts": 648,
   "src/gateway/gateway-cli-backend.live-probe-helpers.ts": 513,
