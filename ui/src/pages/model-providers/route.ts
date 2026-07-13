@@ -6,8 +6,10 @@ import type { ModelProvidersRouteData } from "./model-providers-page.ts";
 async function loadModelProvidersRouteData(
   context: ApplicationContext,
 ): Promise<ModelProvidersRouteData> {
-  const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
+  // Capture provenance before the lazy import; reconnects while the chunk loads
+  // must not redirect this preload to a replacement gateway client.
   const gatewaySnapshot = context.gateway.snapshot;
+  const { EMPTY_MODEL_PROVIDERS_DATA, loadModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.connected ? gatewaySnapshot.client : null;
   if (!client) {
     return { data: EMPTY_MODEL_PROVIDERS_DATA, client: null };
