@@ -41,7 +41,6 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
     "src/state/openclaw-state-db.ts",
-    "src/state/openclaw-state-db-schema-helpers.ts",
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
   "backup snapshot maintenance": [

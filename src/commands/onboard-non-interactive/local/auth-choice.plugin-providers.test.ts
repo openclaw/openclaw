@@ -400,6 +400,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       cfg: installedConfig,
       required: true,
       installed: true,
+      status: "installed",
     });
     resolvePluginProviders.mockReturnValue([{ id: "openai", pluginId: "openai" }] as never);
     resolveProviderPluginChoice.mockReturnValue({
@@ -450,6 +451,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       cfg: installedConfig,
       required: true,
       installed: true,
+      status: "installed",
     });
     resolvePluginProviders.mockReturnValue([
       { id: "github-copilot", pluginId: "github-copilot" },
