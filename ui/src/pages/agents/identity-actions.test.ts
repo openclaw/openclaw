@@ -1,15 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  resetIdentityDraft,
-  saveIdentityDraft,
-  selectIdentityAvatar,
-} from "./identity-actions.ts";
+import { resetIdentityDraft, saveIdentityDraft, selectIdentityAvatar } from "./identity-actions.ts";
 
 const mocks = vi.hoisted(() => ({ fileToAvatarDataUrl: vi.fn() }));
 vi.mock("./avatar-image.ts", () => ({ fileToAvatarDataUrl: mocks.fileToAvatarDataUrl }));
 
-function host() {
+function host(): Parameters<typeof resetIdentityDraft>[0] {
   return {
     identityDraft: { name: null, emoji: null, avatar: null },
     identitySaving: false,

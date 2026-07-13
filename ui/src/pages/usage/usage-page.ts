@@ -205,6 +205,15 @@ class UsagePage extends OpenClawLightDomElement {
       this.usageLoading = false;
       return;
     }
+    const currentAgentId = this.context.agentSelection.state.scopeId;
+    if (data.query.agentId !== currentAgentId) {
+      // Route loaders may finish after the page scope changes. Ignore their
+      // stale result and restart from the current scope in one operation.
+      this.usageAgentId = currentAgentId;
+      this.clearSelectionsAndDetails();
+      this.reloadUsage();
+      return;
+    }
 
     this.usageStartDate = data.query.startDate;
     this.usageEndDate = data.query.endDate;

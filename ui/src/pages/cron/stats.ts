@@ -20,9 +20,12 @@ export function renderCronStats(props: {
   const total = props.agentScoped
     ? (props.scopedTotal ?? t("common.na"))
     : (props.status?.jobs ?? Math.max(props.jobsTotal, props.jobs.length));
-  const nextWakeAtMs = props.agentScoped
-    ? props.scopedNextWakeAtMs
-    : (props.status?.nextWakeAtMs ?? null);
+  const nextWakeAtMs =
+    props.status?.enabled !== false
+      ? props.agentScoped
+        ? props.scopedNextWakeAtMs
+        : (props.status?.nextWakeAtMs ?? null)
+      : null;
   const failing = props.failingCount;
   return html`
     <div class="cron-stats">

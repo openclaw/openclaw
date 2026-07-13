@@ -6,6 +6,7 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
+import { resetDraftState } from "../../lib/workboard/card-state.ts";
 import {
   configureWorkboardPolling,
   loadWorkboard,
@@ -15,6 +16,7 @@ import {
 } from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { matchesAgentScope } from "./agent-filter.ts";
 import { renderWorkboard } from "./view.ts";
 
 class WorkboardPage extends OpenClawLightDomElement {
@@ -165,9 +167,22 @@ class WorkboardPage extends OpenClawLightDomElement {
     const nextScopeId = context.agentSelection.state.scopeId;
     if (this.observedAgentScopeId !== nextScopeId) {
       this.observedAgentScopeId = nextScopeId;
+      const state = context.workboard.state;
+      const agentsList = context.agents.state.agentsList;
+      const remainsVisible = (cardId: string) => {
+        const card = state.cards.find((entry) => entry.id === cardId);
+        return Boolean(card && matchesAgentScope(card, agentsList, nextScopeId));
+      };
       // The board's richer agent filter is a secondary control available only
       // in all-agent scope; a chip switch must not retain a hidden subfilter.
-      context.workboard.state.agentFilter = "all";
+      state.agentFilter = "all";
+      if (state.detailCardId && !remainsVisible(state.detailCardId)) {
+        state.detailCardId = null;
+        state.detailCommentBody = "";
+      }
+      if (state.editingCardId && !remainsVisible(state.editingCardId)) {
+        resetDraftState(state);
+      }
       context.workboard.notify();
     }
   }
