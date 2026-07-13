@@ -87,7 +87,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         this.wizardMultiselect = initial;
       }
       if (wizard.phase === "done" && this.lastWizardPhase !== "done") {
-        void this.handleWizardCompleted(wizard.channel);
+        void this.handleWizardCompleted(wizard.channels);
       }
       this.lastWizardPhase = wizard.phase;
       this.requestUpdate();
@@ -100,7 +100,7 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private lastWizardPhase = "idle";
 
-  private async handleWizardCompleted(channel: string | null) {
+  private async handleWizardCompleted(channels: readonly string[]) {
     const context = this.context;
     if (!context) {
       return;
@@ -108,7 +108,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     // The wizard rewrote openclaw.json on the gateway; resync the local draft.
     await context.runtimeConfig.refresh({ discardPendingChanges: true });
     await context.channels.refresh(true);
-    if (channel === "whatsapp") {
+    if (channels.includes("whatsapp")) {
       // Jump straight into QR pairing; the wizard modal renders the QR phase.
       await context.channels.startWhatsApp(false);
     }

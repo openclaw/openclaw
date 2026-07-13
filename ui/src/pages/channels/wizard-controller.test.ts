@@ -55,7 +55,11 @@ describe("ChannelWizardController", () => {
     );
 
     await controller.answer("telegram");
-    expect(controller.state).toEqual({ phase: "done", channel: "telegram" });
+    expect(controller.state).toEqual({
+      phase: "done",
+      channel: "telegram",
+      channels: ["telegram"],
+    });
     expect(request).toHaveBeenCalledWith(
       "wizard.next",
       { sessionId: "s1", answer: { stepId: "step-select", value: "telegram" } },
@@ -140,15 +144,22 @@ describe("ChannelWizardController", () => {
 
     await controller.start(null);
     await controller.answer("whatsapp");
-    expect(controller.state).toEqual({ phase: "done", channel: "whatsapp" });
+    expect(controller.state).toEqual({
+      phase: "done",
+      channel: "whatsapp",
+      channels: ["whatsapp"],
+    });
   });
 
-  it("adopts a known channel from a multiselect answer", async () => {
+  it("tracks every known channel from a multiselect answer regardless of order", async () => {
     const multiStep = {
       id: "step-multi",
       type: "multiselect" as const,
       message: "Pick channels",
-      options: [{ value: "whatsapp", label: "WhatsApp" }],
+      options: [
+        { value: "telegram", label: "Telegram" },
+        { value: "whatsapp", label: "WhatsApp" },
+      ],
     };
     const { controller } = createController(
       async (method) => {
@@ -157,12 +168,16 @@ describe("ChannelWizardController", () => {
         }
         return { done: true, status: "done" };
       },
-      (value) => value === "whatsapp",
+      (value) => value === "whatsapp" || value === "telegram",
     );
 
     await controller.start(null);
-    await controller.answer(["whatsapp"]);
-    expect(controller.state).toEqual({ phase: "done", channel: "whatsapp" });
+    await controller.answer(["telegram", "whatsapp"]);
+    expect(controller.state).toEqual({
+      phase: "done",
+      channel: "telegram",
+      channels: ["telegram", "whatsapp"],
+    });
   });
 
   it("cancel clears the session and notifies the gateway", async () => {
@@ -199,6 +214,10 @@ describe("ChannelWizardController", () => {
     expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(1);
     resolveNext({ done: true, status: "done" });
     await first;
-    expect(controller.state).toEqual({ phase: "done", channel: "telegram" });
+    expect(controller.state).toEqual({
+      phase: "done",
+      channel: "telegram",
+      channels: ["telegram"],
+    });
   });
 });

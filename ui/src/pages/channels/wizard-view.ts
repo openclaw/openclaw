@@ -238,8 +238,8 @@ function renderWhatsAppLinking(props: ChannelWizardViewProps) {
   `;
 }
 
-function renderDoneBody(channel: string | null, props: ChannelWizardViewProps) {
-  if (channel === "whatsapp") {
+function renderDoneBody(channels: readonly string[], props: ChannelWizardViewProps) {
+  if (channels.includes("whatsapp")) {
     return renderWhatsAppLinking(props);
   }
   return html`
@@ -301,7 +301,7 @@ export function renderChannelWizard(
       </div>
     `;
   } else if (wizard.phase === "done") {
-    body = renderDoneBody(channel, props);
+    body = renderDoneBody(wizard.channels, props);
   } else if (step) {
     body = html`
       ${wizard.phase === "step" && wizard.validationError

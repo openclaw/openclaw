@@ -45,7 +45,7 @@ export type ChannelWizardState =
       busy: boolean;
       validationError: string | null;
     }
-  | { phase: "done"; channel: string | null }
+  | { phase: "done"; channel: string | null; channels: readonly string[] }
   | { phase: "error"; channel: string | null; message: string };
 
 // Long ceiling: a single step can wrap a slow gateway-side effect such as a
@@ -56,6 +56,7 @@ export class ChannelWizardController {
   private currentState: ChannelWizardState = { phase: "idle" };
   private sessionId: string | null = null;
   private channel: string | null = null;
+  private adoptedChannels = new Set<string>();
   private stepIndex = 0;
   private generation = 0;
 
@@ -84,6 +85,7 @@ export class ChannelWizardController {
     const generation = ++this.generation;
     this.sessionId = null;
     this.channel = channel;
+    this.adoptedChannels = new Set(channel ? [channel] : []);
     this.stepIndex = 0;
     this.setState({ phase: "starting", channel });
     try {
@@ -156,24 +158,21 @@ export class ChannelWizardController {
     }
   }
 
-  // Browse-all sessions start with channel null; adopt the channel the user
-  // picks in the wizard's own select/multiselect step so channel-specific
-  // completion (WhatsApp QR linking) still runs.
+  // Browse-all sessions start with channel null; adopt every known channel the
+  // user picks in the wizard's own select/multiselect steps so channel-specific
+  // completion (WhatsApp QR linking) runs regardless of pick order.
   private maybeAdoptChannel(step: ChannelWizardStep, value: unknown): void {
-    if (this.channel !== null) {
-      return;
-    }
     const candidates =
       step.type === "select"
         ? [value]
         : step.type === "multiselect" && Array.isArray(value)
           ? value
           : [];
-    const match = candidates.find(
-      (entry): entry is string => typeof entry === "string" && this.isKnownChannel(entry),
-    );
-    if (match) {
-      this.channel = match;
+    for (const entry of candidates) {
+      if (typeof entry === "string" && this.isKnownChannel(entry)) {
+        this.adoptedChannels.add(entry);
+        this.channel ??= entry;
+      }
     }
   }
 
@@ -192,7 +191,7 @@ export class ChannelWizardController {
     }
     if (result.status === "done") {
       this.sessionId = null;
-      this.setState({ phase: "done", channel: this.channel });
+      this.setState({ phase: "done", channel: this.channel, channels: [...this.adoptedChannels] });
       return;
     }
     if (result.status === "cancelled") {
