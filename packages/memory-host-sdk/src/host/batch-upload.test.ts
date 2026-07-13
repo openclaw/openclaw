@@ -104,7 +104,7 @@ describe("uploadBatchJsonlFile", () => {
         streamingTextResponse({
           body: '{"id":"file_123"}',
           status: 200,
-          headers: { "content-length": "64" },
+          headers: { "content-length": "00064" },
           onCancel: () => {
             canceled = true;
           },

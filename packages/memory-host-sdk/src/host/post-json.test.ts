@@ -192,7 +192,7 @@ describe("postJson", () => {
         streamingTextResponse({
           body: "{}",
           status: 200,
-          headers: { "content-length": "32" },
+          headers: { "content-length": "00032" },
           onCancel: () => {
             canceled = true;
           },
