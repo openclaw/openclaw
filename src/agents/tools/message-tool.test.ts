@@ -2,10 +2,6 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
-  ROOM_EVENT_DELIVERY_HINT,
-} from "../../auto-reply/reply/delivery-hints.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
@@ -15,6 +11,10 @@ import {
 } from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import {
+  MESSAGE_TOOL_DELIVERY_HINTS,
+  MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+} from "../../plugin-sdk/message-tool-delivery-hints.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import { CRITICAL_THRESHOLD } from "../tool-loop-detection.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
@@ -23,6 +23,8 @@ type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
+
+const ROOM_EVENT_DELIVERY_HINT = MESSAGE_TOOL_DELIVERY_HINTS[3];
 
 let createMessageTool: CreateMessageTool;
 let createOpenClawTools: CreateOpenClawTools;
