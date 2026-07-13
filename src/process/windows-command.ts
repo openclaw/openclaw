@@ -122,7 +122,7 @@ function resolveSupportedWindowsCommand(params: {
   );
 }
 
-export type SafeChildProcessInvocation = {
+type SafeChildProcessInvocation = {
   args: string[];
   command: string;
   usesWindowsExitCodeShim: boolean;
