@@ -8,7 +8,11 @@ import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-n
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID,
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+} from "./cli-constants.js";
 
 export function currentClaudeSessionCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
@@ -65,7 +69,7 @@ export function resolveClaudeCatalogCreateSession(
   const agentRuntime = resolveEffectiveAgentRuntime({
     cfg: config,
     provider: "anthropic",
-    modelId: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+    modelId: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID,
     agentId,
   });
   if (agentRuntime !== CLAUDE_CLI_BACKEND_ID) {

@@ -85,4 +85,6 @@ class SidebarAgentChip extends OpenClawLightDomContentsElement {
   }
 }
 
-customElements.define("openclaw-sidebar-agent-chip", SidebarAgentChip);
+if (!customElements.get("openclaw-sidebar-agent-chip")) {
+  customElements.define("openclaw-sidebar-agent-chip", SidebarAgentChip);
+}

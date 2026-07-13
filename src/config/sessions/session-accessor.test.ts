@@ -37,6 +37,7 @@ import {
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
+  rollbackPluginOwnedSessionEntryLifecycle,
   trimSessionTranscriptForManualCompact,
   updateSessionEntry,
   updateSessionLastRoute,
@@ -1852,6 +1853,43 @@ describe("session accessor seam", () => {
       });
     },
   );
+
+  it("archives shared SQLite transcript state once when plugin rollback removes aliases", async () => {
+    const sessionId = "plugin-alias-session";
+    const canonicalKey = "agent:main:plugin-alias";
+    const aliasKey = "plugin-alias";
+    const entry = {
+      modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
+      sessionId,
+      updatedAt: 10,
+    } satisfies SessionEntry;
+    await upsertSessionEntry({ sessionKey: aliasKey, storePath }, entry);
+    await upsertSessionEntry({ sessionKey: canonicalKey, storePath }, entry);
+    await replaceSqliteTranscriptEvents(
+      { agentId: "main", sessionId, sessionKey: canonicalKey, storePath },
+      [{ id: "plugin-alias-event", type: "message" }],
+    );
+    const expectedEntry = expectDefined(
+      loadSessionEntry({ sessionKey: canonicalKey, storePath }),
+      "canonical plugin alias entry",
+    );
+
+    const result = await rollbackPluginOwnedSessionEntryLifecycle({
+      archiveTranscript: true,
+      expectedEntry,
+      expectedPluginOwnerId: "anthropic",
+      storePath,
+      target: { canonicalKey, storeKeys: [canonicalKey, aliasKey] },
+    });
+
+    expect(result).toMatchObject({ deleted: true });
+    expect(result.archivedTranscripts).toHaveLength(1);
+    expect(listSessionEntries({ storePath })).toEqual([]);
+    await expect(
+      loadTranscriptEvents({ agentId: "main", sessionId, sessionKey: canonicalKey, storePath }),
+    ).resolves.toEqual([]);
+  });
 
   it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
     const now = Date.now();

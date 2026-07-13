@@ -1019,7 +1019,8 @@ async function deleteSqliteSessionEntryLifecycleInternal(
       database,
       params.target,
     );
-    const plannedSessionIds = new Set<string>();
+    // SQLite transcript state is keyed by session id; sessionFile is only its
+    // marker. Materialization dedupes aliases that share the same state owner.
     const deletePlans = params.archiveTranscript
       ? targetSnapshot.rows.flatMap(({ entry }) =>
           planSqliteSessionStateAfterEntryRemoval({
@@ -1029,12 +1030,6 @@ async function deleteSqliteSessionEntryLifecycleInternal(
             entry,
             reason: "deleted",
             referencedSessionIds: referencedAfterDelete,
-          }).filter((plan) => {
-            if (plannedSessionIds.has(plan.sessionId)) {
-              return false;
-            }
-            plannedSessionIds.add(plan.sessionId);
-            return true;
           }),
         )
       : [];
