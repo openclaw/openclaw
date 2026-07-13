@@ -22,32 +22,18 @@ import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
 import * as catalog from "./catalog-target.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
+import {
+  type BrowserTarget,
+  type DraftBranches,
+  type DraftNode,
+  readDraftNodes,
+} from "./discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { handleMenuNavigation, MENU_ITEM_SELECTOR } from "./menu-keyboard.ts";
 import { folderDisplayName, isAbsolutePath } from "./path.ts";
-
-type DraftBranches = {
-  repoRoot: string;
-  branches: Array<{ name: string; kind: "local" | "remote" }>;
-  defaultBranch?: string;
-  headBranch?: string;
-};
-
-type DraftNode = {
-  nodeId: string;
-  displayName: string;
-  connected: boolean;
-  canExec: boolean;
-  canBrowse: boolean;
-};
-
-type BrowserTarget = { nodeId: string; label: string };
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
-
-/** Focusable rows for the menu keyboard contract (menu items + browser rows). */
-const MENU_ITEM_SELECTOR =
-  ".session-menu__item:not(:disabled), .new-session-page__browser-entry:not(:disabled)";
 
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
@@ -78,10 +64,12 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private openedFor: string | null = null;
   private agentsHydrated = false;
+  private nodesRequestToken = 0;
   private branchesRequestToken = 0;
   private baseRefEditGeneration = 0;
   private browserRequestToken = 0;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
+  private gatewayClient: ApplicationContext["gateway"]["snapshot"]["client"] = null;
   private gatewayConnected = false;
   private gatewayConnectionEpoch = 0;
   private catalogRetryScope = "";
@@ -106,17 +94,45 @@ class NewSessionPage extends OpenClawLightDomElement {
     );
 
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
-    if (this.gatewaySource !== gateway) {
-      this.gatewaySource = gateway;
-      this.gatewayConnected = false;
+    const snapshot = gateway.snapshot;
+    const firstBind = this.gatewaySource === null;
+    const identityChanged =
+      !firstBind && (this.gatewaySource !== gateway || this.gatewayClient !== snapshot.client);
+    const connectionChanged = !firstBind && this.gatewayConnected !== snapshot.connected;
+    const becameConnected = snapshot.connected && (identityChanged || !this.gatewayConnected);
+    this.gatewaySource = gateway;
+    this.gatewayClient = snapshot.client;
+    this.gatewayConnected = snapshot.connected;
+    if (identityChanged || connectionChanged) {
+      this.invalidateGatewayDiscovery(identityChanged);
     }
-    const connected = gateway.snapshot.connected;
-    const becameConnected = connected && !this.gatewayConnected;
-    this.gatewayConnected = connected;
     if (becameConnected) {
       this.gatewayConnectionEpoch += 1;
       this.retryPendingCatalogTarget();
     }
+  }
+
+  private invalidateGatewayDiscovery(resetHostSelection: boolean) {
+    this.nodesRequestToken += 1;
+    this.branchesRequestToken += 1;
+    this.branchesLoading = false;
+    this.agentsHydrated = false;
+    this.closeBrowser();
+    if (!resetHostSelection) {
+      return;
+    }
+    // A replacement client may target another Gateway. Keep the user's task,
+    // but retire every selection and discovery result owned by the old host.
+    this.agentId = "";
+    this.folder = "";
+    this.worktree = false;
+    this.worktreeName = "";
+    this.baseRef = "";
+    this.baseRefEditGeneration += 1;
+    this.branches = null;
+    this.nodes = [];
+    this.execNode = "";
+    this.error = null;
   }
 
   private retryPendingCatalogTarget() {
@@ -177,7 +193,9 @@ class NewSessionPage extends OpenClawLightDomElement {
     document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     this.subscriptions.clear();
+    this.invalidateGatewayDiscovery(true);
     this.gatewaySource = null;
+    this.gatewayClient = null;
     this.gatewayConnected = false;
     this.gatewayConnectionEpoch = 0;
     this.catalogRetryScope = "";
@@ -249,36 +267,16 @@ class NewSessionPage extends OpenClawLightDomElement {
     });
   };
 
-  /** ArrowUp/Down wrap through the menu's items; Home/End jump to the edges.
-      Text fields keep native caret/datalist behavior for these keys. */
-  private readonly handleMenuKeydown = (event: KeyboardEvent) => {
-    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
-      return;
-    }
-    const origin = event.target as HTMLElement;
-    if (origin instanceof HTMLInputElement || origin instanceof HTMLTextAreaElement) {
-      return;
-    }
-    const items = [
-      ...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR),
-    ];
-    if (items.length === 0) {
-      return;
-    }
-    event.preventDefault();
-    const index = items.indexOf(document.activeElement as HTMLElement);
-    const target =
-      event.key === "Home"
-        ? items[0]
-        : event.key === "End"
-          ? items.at(-1)
-          : items[(index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length];
-    target?.focus();
-  };
-
   override updated() {
     this.retryPendingCatalogTarget();
-    const agentsReady = this.agents().length > 0;
+    const agentState = this.context?.agents.state;
+    const agentsReady = Boolean(
+      this.gatewayConnected &&
+      this.gatewayClient &&
+      agentState?.connected &&
+      agentState.client === this.gatewayClient &&
+      this.agents().length > 0,
+    );
     const openKey = catalog.routeKey(this.data);
     if (this.openedFor !== openKey) {
       this.openedFor = openKey;
@@ -376,48 +374,34 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private async loadNodes() {
-    const client = this.context?.gateway.snapshot.client;
-    if (!client || !this.isAdmin()) {
+    const requestId = ++this.nodesRequestToken;
+    const snapshot = this.context?.gateway.snapshot;
+    const client = snapshot?.client;
+    if (!snapshot?.connected || !client || !this.isAdmin()) {
       this.nodes = [];
       return;
     }
     try {
       const result = await client.request<{ nodes?: unknown }>("node.list", {});
-      const rawNodes = Array.isArray(result?.nodes) ? (result.nodes as Array<unknown>) : [];
-      this.nodes = rawNodes
-        .flatMap((raw) => {
-          const node = raw as {
-            nodeId?: unknown;
-            displayName?: unknown;
-            connected?: unknown;
-            commands?: unknown;
-          };
-          const nodeId = normalizeOptionalString(node.nodeId);
-          const commands = Array.isArray(node.commands)
-            ? node.commands.filter((command): command is string => typeof command === "string")
-            : [];
-          if (!nodeId) {
-            return [];
-          }
-          const connected = node.connected === true;
-          const canExec = connected && commands.includes("system.run");
-          return [
-            {
-              nodeId,
-              displayName: normalizeOptionalString(node.displayName) ?? nodeId,
-              connected,
-              canExec,
-              canBrowse: canExec && commands.includes("fs.listDir"),
-            },
-          ];
-        })
-        .toSorted(
-          (left, right) =>
-            left.displayName.localeCompare(right.displayName) ||
-            left.nodeId.localeCompare(right.nodeId),
-        );
+      if (requestId !== this.nodesRequestToken) {
+        return;
+      }
+      const nodes = readDraftNodes(result?.nodes);
+      this.nodes = nodes;
+      if (this.execNode && !nodes.some((node) => node.nodeId === this.execNode && node.canExec)) {
+        // A reconnect can remove a device. Its cwd is not meaningful on the
+        // Gateway, so fall back to the selected agent's workspace as one unit.
+        this.execNode = "";
+        this.folder = this.workspacePath();
+        this.worktree = false;
+        this.worktreeName = "";
+        this.closeBrowser();
+        this.maybeLoadBranches();
+      }
     } catch {
-      this.nodes = [];
+      if (requestId === this.nodesRequestToken) {
+        this.nodes = [];
+      }
     }
   }
 
@@ -439,8 +423,9 @@ class NewSessionPage extends OpenClawLightDomElement {
       this.branches = null;
       return;
     }
-    const client = this.context?.gateway.snapshot.client;
-    if (!client) {
+    const snapshot = this.context?.gateway.snapshot;
+    const client = snapshot?.client;
+    if (!snapshot?.connected || !client) {
       return;
     }
     this.branchesLoading = true;
@@ -680,9 +665,10 @@ class NewSessionPage extends OpenClawLightDomElement {
   }
 
   private loadBrowser(path: string | undefined) {
-    const client = this.context?.gateway.snapshot.client;
+    const snapshot = this.context?.gateway.snapshot;
+    const client = snapshot?.client;
     const target = this.browserTarget;
-    if (!client || !target) {
+    if (!snapshot?.connected || !client || !target) {
       return;
     }
     // Exec-only nodes still accept a typed cwd; never probe an unsupported fs.listDir.
@@ -945,7 +931,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           class="new-session-page__menu"
           role="menu"
           aria-label=${t("newSession.agent")}
-          @keydown=${this.handleMenuKeydown}
+          @keydown=${handleMenuNavigation}
         >
           ${agents.map((option) =>
             this.renderMenuItem({
@@ -1001,7 +987,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           class="new-session-page__menu"
           role="menu"
           aria-label=${t("newSession.where")}
-          @keydown=${this.handleMenuKeydown}
+          @keydown=${handleMenuNavigation}
         >
           ${showNodes
             ? html`
@@ -1143,7 +1129,7 @@ class NewSessionPage extends OpenClawLightDomElement {
         </summary>
         <div
           class="new-session-page__menu new-session-page__menu--browser"
-          @keydown=${this.handleMenuKeydown}
+          @keydown=${handleMenuNavigation}
         >
           ${this.renderBrowser()}
         </div>

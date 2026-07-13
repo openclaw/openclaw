@@ -540,6 +540,147 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("rediscovers Gateway-owned draft state when the app replaces its client", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Original agent" },
+              name: "Original agent",
+              workspace: SOURCE_REPO,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "node.list": {
+          nodes: [
+            {
+              nodeId: "old-device",
+              displayName: "Old device",
+              connected: true,
+              commands: ["system.run", "fs.listDir"],
+            },
+          ],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "alpha" }],
+          defaultBranch: "alpha",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await page.getByRole("heading", { name: "Original agent" }).waitFor();
+      await gateway.waitForRequest("node.list");
+      await gateway.waitForRequest("worktrees.branches");
+
+      const message = page.locator(".new-session-page__message");
+      const folderSelect = page.locator(".new-session-page__select--folder");
+      const whereSelect = page.locator(
+        ".new-session-page__select:not(.new-session-page__select--folder)",
+      );
+      await message.fill("preserve this replacement draft");
+      await whereSelect.locator("summary").click();
+      await page.getByRole("menuitemradio", { name: "Old device" }).click();
+
+      // Keep an old-client browser request in flight. Replacement must close
+      // its menu and prevent its eventual completion from reviving old state.
+      await gateway.deferNext("fs.listDir");
+      await folderSelect.locator("summary").click();
+      await page
+        .locator(".new-session-page__browser-list")
+        .getByRole("button", { name: "Old device" })
+        .click();
+      await gateway.waitForRequest("fs.listDir");
+
+      await gateway.setMethodResponse("agents.list", {
+        agents: [
+          {
+            id: "main",
+            identity: { name: "Replacement agent" },
+            name: "Replacement agent",
+            workspace: TARGET_REPO,
+            workspaceGit: true,
+          },
+        ],
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+      });
+      await gateway.setMethodResponse("node.list", {
+        nodes: [
+          {
+            nodeId: "new-device",
+            displayName: "New device",
+            connected: true,
+            commands: ["system.run", "fs.listDir"],
+          },
+        ],
+      });
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [{ kind: "local", name: "beta" }],
+        defaultBranch: "beta",
+      });
+      const socketsBefore = await gateway.getSocketCount();
+      const nodesBefore = (await gateway.getRequests("node.list")).length;
+      const branchesBefore = (await gateway.getRequests("worktrees.branches")).length;
+
+      await page.evaluate(() => {
+        const app = document.querySelector("openclaw-app") as HTMLElement & {
+          runtime?: { context: { gateway: { connect: () => void } } };
+        };
+        if (!app.runtime) {
+          throw new Error("OpenClaw application runtime is unavailable");
+        }
+        app.runtime.context.gateway.connect();
+      });
+
+      await expect.poll(() => gateway.getSocketCount()).toBe(socketsBefore + 1);
+      await expect
+        .poll(async () => (await gateway.getRequests("node.list")).length)
+        .toBe(nodesBefore + 1);
+      await expect
+        .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
+        .toBe(branchesBefore + 1);
+      await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
+      await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
+      await expect.poll(() => folderSelect.getAttribute("open")).toBeNull();
+      await expect
+        .poll(() => folderSelect.locator(".new-session-page__trigger-label").textContent())
+        .toBe("target-repo");
+
+      const branchRequests = await gateway.getRequests("worktrees.branches");
+      expect(branchRequests.at(-1)?.params).toEqual({ repoRoot: TARGET_REPO });
+      await whereSelect.locator("summary").click();
+      await page.getByRole("menuitemradio", { name: "New device" }).waitFor();
+      expect(await page.getByRole("menuitemradio", { name: "Old device" }).count()).toBe(0);
+      await page.getByRole("menuitemradio", { name: "Worktree" }).click();
+      await expect.poll(() => page.getByLabel("Base branch").inputValue()).toBe("beta");
+
+      await gateway.resolveDeferred("fs.listDir", {
+        path: "/stale-device-path",
+        home: "/stale-device-path",
+        entries: [],
+      });
+      await expect.poll(() => folderSelect.getAttribute("open")).toBeNull();
+      await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("resets agent-derived workspace state when retargeted to a catalog", async () => {
     const context = await browser.newContext({
       locale: "en-US",
