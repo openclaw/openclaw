@@ -37,12 +37,14 @@ Apply trust, platform, and proof requirements before provider preference. An
 untrusted checkout must not enter a credential-hydrated backend, and a local
 container must not be reported as remote, cross-platform, or Testbox proof.
 
-Within those constraints, select the provider in this order:
+Within those constraints, the wrapper selects the provider in this order:
 
 1. A provider explicitly requested by the user for this task.
-2. `CRABBOX_PROVIDER`, which is Crabbox's documented per-machine provider
+2. Platform routing, such as automatic Azure selection for Windows/WSL2 when
+   the binary advertises it.
+3. `CRABBOX_PROVIDER`, which is Crabbox's documented per-machine provider
    override.
-3. The repository default in `.crabbox.yaml`, currently
+4. The repository default in `.crabbox.yaml`, currently
    `blacksmith-testbox`.
 
 For ordinary trusted work, omit `--provider` so the existing wrapper precedence
@@ -58,17 +60,20 @@ lease and execute the test inside that container; it is not permission to run
 `scripts/run-vitest.mjs` or another test command directly on the host. Report
 local-container proof as local Docker isolation, not remote or Testbox proof.
 
-Before the first substantial run, record the effective selection without
-printing credentials:
+Before the first substantial run, record the configured environment/repository
+provider without printing credentials:
 
 ```sh
 crabbox config show --json | jq -r '.provider'
 ```
 
-Always report the provider Crabbox actually used. If the preferred provider is
-unavailable, retry once when the failure is plausibly transient, then choose a
-fallback that preserves the task's trust and proof requirements or report the
-blocker.
+This configured value is a fallback, not proof of the backend selected for a
+particular command. Treat the wrapper's emitted `[crabbox] ... provider=...`
+diagnostic as authoritative for the actual backend; it reflects explicit
+`--provider` overrides and automatic Windows/WSL2 Azure routing. If the selected
+provider is unavailable, retry once when the failure is plausibly transient,
+then choose a fallback that preserves the task's trust and proof requirements
+or report the blocker.
 
 ## First Checks
 
@@ -85,18 +90,19 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 
 - OpenClaw scripts prefer `../crabbox/bin/crabbox` when present. The user PATH
   shim can be stale.
-- Check `crabbox config show --json` for the effective provider. Omitting
-  `--provider` honors `CRABBOX_PROVIDER` before the repository default, which
-  is Blacksmith Testbox for normal Linux paths. The wrapper selects Azure for
-  unqualified Windows/WSL2 runs when the local Crabbox binary advertises Azure.
-  Pass `--provider aws` when direct brokered AWS semantics are required.
+- Check `crabbox config show --json` for the configured provider fallback.
+  Omitting `--provider` honors `CRABBOX_PROVIDER` before the repository default,
+  which is Blacksmith Testbox for normal Linux paths. The wrapper selects Azure
+  for unqualified Windows/WSL2 runs when the local Crabbox binary advertises
+  Azure. Pass `--provider aws` when direct brokered AWS semantics are required.
 - The brokered AWS image is a Linux developer image in `eu-west-1`; the repo
   config pins hot `eu-west-1a/b/c` placement so Fast Snapshot Restore can apply.
   If warmup drifts well past the minute-scale path, verify image promotion,
   region/AZ placement, and FSR state before blaming OpenClaw.
 - For trusted OpenClaw agent tests and computationally intensive work, use the
-  repo wrapper with the effective provider. Use the repo Testbox helpers or
-  explicit `--provider blacksmith-testbox` only when Testbox proof is required.
+  repo wrapper and report the provider from its emitted diagnostic. Use the repo
+  Testbox helpers or explicit `--provider blacksmith-testbox` only when Testbox
+  proof is required.
 - Treat contributor/fork source as untrusted unless a maintainer explicitly
   approves credentialed execution after review. Run untrusted source only in
   secretless fork CI or sanitized direct AWS Crabbox. For every untrusted AWS
@@ -174,7 +180,8 @@ env -u CRABBOX_AWS_INSTANCE_PROFILE \
   crabbox stop --provider aws <cbx_id>
 ```
 
-- Always report the actual provider and id from wrapper/config output. A
+- Always report the actual provider from wrapper output and the id from the run
+  details. Config output only describes the configured fallback. A
   `cbx_...` id is shared by direct providers, including local-container, so it
   does not identify AWS by itself; `tbx_...` identifies Blacksmith Testbox
   through Crabbox. If the output only says
@@ -682,7 +689,8 @@ Common Crabbox-only failures:
 - Provider missing or old CLI: use `../crabbox/bin/crabbox` from the sibling
   repo, or update/install Crabbox before retrying.
 - Bad local config: inspect `.crabbox.yaml`, `crabbox config show`, and
-  `crabbox whoami`; ordinary trusted proof should use the effective provider.
+  `crabbox whoami`; ordinary trusted proof should use the wrapper-selected
+  provider reported by its diagnostic.
   Direct AWS must use brokered auth, not raw keys.
 - Slug/claim confusion: use the raw `cbx_...` / `tbx_...` id, or run one-shot
   without `--id`.
@@ -729,8 +737,9 @@ Raw Blacksmith footguns:
 - Treat `blacksmith testbox list` as cleanup diagnostics, not a shared reusable
   queue.
 
-Use the effective provider for ordinary trusted OpenClaw agent tests and heavy
-work. When Testbox proof is required, use Blacksmith Testbox through Crabbox.
+Use the wrapper-selected provider for ordinary trusted OpenClaw agent tests and
+heavy work. When Testbox proof is required, use Blacksmith Testbox through
+Crabbox.
 If Blacksmith is down or quota-limited, do not keep probing it; switch to direct
 AWS only when that backend proves the same surface, and note the
 delegated-provider outage.
@@ -772,10 +781,11 @@ blacksmith auth login --non-interactive --organization openclaw
 
 ## Brokered AWS Backend
 
-Use direct AWS when it is the operator's effective provider, when another
-provider is unavailable, when the task needs direct-provider semantics, or when
-an explicit backend comparison is required. Pass `--provider aws` when the task
-must override a different effective provider.
+Use direct AWS when it is explicitly selected or configured through
+`CRABBOX_PROVIDER`, when another provider is unavailable, when the task needs
+direct-provider semantics, or when an explicit backend comparison is required.
+Pass `--provider aws` when the task must override a different configured
+fallback.
 
 ```sh
 pnpm crabbox:warmup -- --provider aws --class beast --market on-demand --idle-timeout 90m

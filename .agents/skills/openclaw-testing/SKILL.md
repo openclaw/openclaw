@@ -105,8 +105,8 @@ commands.
 
 1. Inspect the diff and classify the touched surface:
    - any trusted agent-run test, focused or broad: run it on the pre-warmed
-     effective Crabbox backend; local-container is valid Docker isolation but
-     is not remote proof
+     wrapper-selected Crabbox backend; local-container is valid Docker
+     isolation but is not remote proof
    - changed gates, builds, typechecks, lint fan-out, Docker, package, E2E, or
      live work: run it through Crabbox; use a remote backend when the requested
      proof requires remote, cross-platform, or Testbox semantics
