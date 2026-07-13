@@ -122,15 +122,14 @@ function renderStatusFilter(props: ActivityProps, status: ActivityStatus) {
   `;
 }
 
+const STATUS_KINDS = {
+  running: "warn",
+  done: "ok",
+  error: "danger",
+} as const satisfies Record<ActivityStatus, "warn" | "ok" | "danger">;
+
 function statusKind(status: ActivityStatus): "warn" | "ok" | "danger" {
-  switch (status) {
-    case "running":
-      return "warn";
-    case "done":
-      return "ok";
-    case "error":
-      return "danger";
-  }
+  return STATUS_KINDS[status];
 }
 
 function renderEntry(props: ActivityProps, entry: ActivityEntry) {
