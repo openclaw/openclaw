@@ -1504,8 +1504,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
     };
 
-    // Buffer was cleared, so final text is empty, not "Hello world"
-    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("");
+    // Buffer was cleared, so finalization falls back to "No response from OpenClaw."
+    // due to empty string being falsy in the `||` fallback chain (line ~1110).
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("No response from OpenClaw.");
   });
 
   it("clears accumulated text on empty replace with mediaUrl:\"\"", async () => {
@@ -1538,8 +1539,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
       response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
     };
 
-    // Buffer was cleared, so final text is empty, not "Hello world"
-    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("");
+    // Buffer was cleared, so finalization falls back to "No response from OpenClaw."
+    // due to empty string being falsy in the `||` fallback chain (line ~1110).
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("No response from OpenClaw.");
   });
 
   it("prefers final result text over buffered replaceable response drafts", async () => {
