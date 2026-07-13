@@ -38,6 +38,8 @@ export type {
 
 type JsonResult<T> = Promise<T>;
 const QA_BUS_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+/** Hang floor for `/v1/state` guarded fetches when no AbortSignal is provided. */
+export const QA_BUS_STATE_TIMEOUT_MS = 10_000;
 
 function buildQaBusUrl(baseUrl: string, path: string): URL {
   const normalizedBaseUrl = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
@@ -299,11 +301,15 @@ export async function injectQaBusInboundMessage(params: {
   );
 }
 
-export async function getQaBusState(baseUrl: string): Promise<QaBusStateSnapshot> {
+export async function getQaBusState(
+  baseUrl: string,
+  options?: { timeoutMs?: number },
+): Promise<QaBusStateSnapshot> {
   const { response, release } = await fetchWithSsrFGuard({
     url: buildQaBusUrl(baseUrl, "/v1/state").toString(),
     policy: { allowPrivateNetwork: true },
     auditContext: "qa-channel.bus-state",
+    timeoutMs: options?.timeoutMs ?? QA_BUS_STATE_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {

@@ -1,7 +1,13 @@
 // Qa Channel tests cover bus client plugin behavior.
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildQaTarget, getQaBusState, parseQaTarget, pollQaBus } from "./bus-client.js";
+import {
+  buildQaTarget,
+  getQaBusState,
+  parseQaTarget,
+  pollQaBus,
+  QA_BUS_STATE_TIMEOUT_MS,
+} from "./bus-client.js";
 
 const OVERSIZED_RESPONSE_BYTES = 18 * 1024 * 1024;
 
@@ -265,6 +271,44 @@ describe("qa-bus client", () => {
 
     await expect(getQaBusState(`http://127.0.0.1:${port}`)).rejects.toThrow(
       "qa-channel.bus-state: JSON response exceeds 16777216 bytes",
+    );
+  });
+
+  it("times out state fetches when the peer never returns headers", async () => {
+    expect(QA_BUS_STATE_TIMEOUT_MS).toBe(10_000);
+    // Accept TCP but never write headers — body idle caps never start.
+    const server = createServer((_req, _res) => {});
+    const port = await listenLoopbackServer(server);
+    stops.push(async () => {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    });
+
+    const startedAt = Date.now();
+    const outcome = await getQaBusState(`http://127.0.0.1:${port}`, { timeoutMs: 80 }).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error).toMatchObject({
+        name: "TimeoutError",
+      });
+    }
+    expect(elapsedMs).toBeGreaterThanOrEqual(60);
+    expect(elapsedMs).toBeLessThan(2_000);
+    console.log(
+      `[qa-channel bus-state hang proof] timed_out=${!outcome.ok} name=${
+        outcome.ok
+          ? "n/a"
+          : outcome.error instanceof Error
+            ? outcome.error.name
+            : typeof outcome.error
+      } elapsed_ms=${elapsedMs} production_timeout_ms=${QA_BUS_STATE_TIMEOUT_MS}`,
     );
   });
 });
