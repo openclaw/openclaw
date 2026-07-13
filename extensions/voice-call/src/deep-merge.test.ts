@@ -25,6 +25,7 @@ describe("deepMergeDefined", () => {
 
   it("replaces non-objects directly and blocks dangerous prototype keys", () => {
     expect(deepMergeDefined(["a"], ["b"])).toEqual(["b"]);
+    expect(deepMergeDefined({ values: ["a"] }, { values: ["b"] })).toEqual({ values: ["b"] });
     expect(deepMergeDefined("base", undefined)).toBe("base");
     expect(
       deepMergeDefined(

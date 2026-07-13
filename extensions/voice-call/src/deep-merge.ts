@@ -1,12 +1,15 @@
 // Voice Call plugin module implements deep merge behavior.
-// @ts-expect-error defu 6.1.5's export= declaration hides its shipped ESM named exports.
-import { createDefu } from "defu";
+import defu from "defu";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Prototype-safe deep merge for config overrides that ignores undefined values.
 
 const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const NULL_OVERRIDE = Symbol("null-override");
+
+class ArrayOverride {
+  constructor(readonly value: unknown[]) {}
+}
 
 function prepareObject(
   value: Record<string, unknown>,
@@ -19,6 +22,10 @@ function prepareObject(
     }
     if (encodeNull && entry === null) {
       prepared[key] = NULL_OVERRIDE;
+    } else if (encodeNull && Array.isArray(entry)) {
+      // Defu concatenates arrays. A non-plain wrapper preserves the plugin's
+      // existing replacement policy until the merged result is decoded.
+      prepared[key] = new ArrayOverride(entry);
     } else if (isPlainObject(entry)) {
       prepared[key] = prepareObject(entry, encodeNull);
     } else {
@@ -29,6 +36,9 @@ function prepareObject(
 }
 
 function decodeNullOverrides(value: unknown): unknown {
+  if (value instanceof ArrayOverride) {
+    return value.value;
+  }
   if (value === NULL_OVERRIDE) {
     return null;
   }
@@ -40,29 +50,10 @@ function decodeNullOverrides(value: unknown): unknown {
   );
 }
 
-const mergeObjects = createDefu(
-  (object: Record<PropertyKey, unknown>, key: PropertyKey, value: unknown) => {
-    if (typeof key === "string" && BLOCKED_MERGE_KEYS.has(key)) {
-      return true;
-    }
-    if (value === NULL_OVERRIDE) {
-      object[key] = null;
-      return true;
-    }
-    if (Array.isArray(value)) {
-      object[key] = value;
-      return true;
-    }
-    return false;
-  },
-);
-
 /** Deep-merge plain objects, keeping base values when overrides are undefined. */
 export function deepMergeDefined(base: unknown, override: unknown): unknown {
   if (!isPlainObject(base) || !isPlainObject(override)) {
     return override === undefined ? base : override;
   }
-  return decodeNullOverrides(
-    mergeObjects(prepareObject(override, true), prepareObject(base, false)),
-  );
+  return decodeNullOverrides(defu(prepareObject(override, true), prepareObject(base, false)));
 }
