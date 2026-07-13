@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getWindowsInstallRoots,
   getWindowsSystem32ExePath,
@@ -12,17 +12,8 @@ import {
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
-const { execaMock, spawnSyncMock } = vi.hoisted(() => ({
-  execaMock: vi.fn(),
-  spawnSyncMock: vi.fn(),
-}));
-
-vi.mock("execa", () => ({ execa: execaMock }));
-
-vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  return { ...actual, spawnSync: spawnSyncMock };
-});
+const execaMock = vi.fn();
+const spawnSyncMock = vi.fn();
 
 type MockResult = {
   cause?: unknown;
@@ -142,7 +133,21 @@ let spawnCommand: typeof import("./exec.js").spawnCommand;
 
 describe("Windows command execution", () => {
   beforeAll(async () => {
+    vi.resetModules();
+    vi.doMock("execa", () => ({ execa: execaMock }));
+    vi.doMock("node:child_process", async () => {
+      const actual = await vi.importActual<typeof import("node:child_process")>(
+        "node:child_process",
+      );
+      return { ...actual, spawnSync: spawnSyncMock };
+    });
     ({ runCommandWithTimeout, runExec, spawnCommand } = await import("./exec.js"));
+  });
+
+  afterAll(() => {
+    vi.doUnmock("execa");
+    vi.doUnmock("node:child_process");
+    vi.resetModules();
   });
 
   beforeEach(() => {
