@@ -3628,6 +3628,40 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 
+  it("still recovers a private final after only a message-tool progress delivery", async () => {
+    await runPrivateFinalCase({
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "whatsapp",
+          to: "+15550001111",
+          sourceReplyFinal: false,
+        },
+      ],
+    });
+
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not recover again after an explicit final message-tool delivery", async () => {
+    await runPrivateFinalCase({
+      didDeliverSourceReplyViaMessageTool: true,
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "whatsapp",
+          to: "+15550001111",
+          sourceReplyFinal: true,
+        },
+      ],
+    });
+
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
   it("still retries when the message tool sent only to a non-source target", async () => {
     await runPrivateFinalCase({
       messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15559998888" }],
