@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
+import type { OpenClawTerminalPanel as OpenClawTerminalPanelType } from "./terminal-panel.ts";
 
 type CreateOptions = {
   parent: HTMLElement;
@@ -11,19 +12,9 @@ type CreateOptions = {
   onResize?: (size: { columns: number; rows: number }) => void;
 };
 
-type CreateGhosttyTerminalMock = Mock<
-  (options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>
->;
-
-// Vitest resets this test module but can retain terminal-panel.ts. Reuse one
-// mock so retained imports and the current test graph share the same identity.
-const createGhosttyTerminalMock = vi.hoisted(() => {
-  const scope = globalThis as typeof globalThis & {
-    openclawTestCreateGhosttyTerminalMock?: CreateGhosttyTerminalMock;
-  };
-  return (scope.openclawTestCreateGhosttyTerminalMock ??=
-    vi.fn<(options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>>());
-});
+const createGhosttyTerminalMock = vi.hoisted(() =>
+  vi.fn<(options: CreateOptions) => Promise<ReturnType<typeof createTerminalController>>>(),
+);
 
 function createTerminalController(dispose: () => void = vi.fn()) {
   return {
@@ -62,7 +53,10 @@ vi.mock("./terminal-runtime.ts", () => {
   return { createIsolatedGhosttyTerminal: createGhosttyTerminalMock };
 });
 
-import { OpenClawTerminalPanel } from "./terminal-panel.ts";
+// Other UI tests import the production panel without this file's runtime mock.
+// A query gives this file a fresh panel without resetting concurrent test modules.
+// @ts-expect-error -- Vite resolves test-only module queries.
+const { OpenClawTerminalPanel } = await import("./terminal-panel.ts?terminal-panel-test");
 
 const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-${crypto.randomUUID()}`;
 
@@ -71,6 +65,10 @@ const TERMINAL_PANEL_ELEMENT_NAME = `test-openclaw-terminal-panel-${crypto.rando
 class TestTerminalPanel extends OpenClawTerminalPanel {}
 
 customElements.define(TERMINAL_PANEL_ELEMENT_NAME, TestTerminalPanel);
+
+function createPanel(): OpenClawTerminalPanelType {
+  return document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanelType;
+}
 
 describe("OpenClawTerminalPanel", () => {
   beforeEach(async () => {
@@ -116,7 +114,7 @@ describe("OpenClawTerminalPanel", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createPanel();
     panel.client = client;
     panel.agentId = "ops";
     panel.available = true;
@@ -184,7 +182,7 @@ describe("OpenClawTerminalPanel", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createPanel();
     panel.client = client;
     panel.available = true;
     panel.fullscreen = true;
@@ -242,7 +240,7 @@ describe("OpenClawTerminalPanel", () => {
         };
       },
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createPanel();
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -305,7 +303,7 @@ describe("OpenClawTerminalPanel", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createPanel();
     panel.client = oldClient;
     panel.available = true;
     document.body.append(panel);
@@ -341,7 +339,7 @@ describe("OpenClawTerminalPanel", () => {
       },
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createPanel();
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -376,7 +374,7 @@ describe("OpenClawTerminalPanel", () => {
         (method === "terminal.open" ? terminalOpenResult("session-1") : {}) as T,
       addEventListener: () => () => {},
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createPanel();
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
@@ -398,7 +396,7 @@ describe("OpenClawTerminalPanel", () => {
   });
 
   it("removes a tab host even when controller disposal throws", () => {
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createPanel();
     const host = document.createElement("div");
     document.body.append(host);
     const dispose = vi.fn(() => {
@@ -428,7 +426,7 @@ describe("OpenClawTerminalPanel", () => {
         };
       },
     };
-    const panel = document.createElement(TERMINAL_PANEL_ELEMENT_NAME) as OpenClawTerminalPanel;
+    const panel = createPanel();
     panel.client = client;
     panel.available = true;
     document.body.append(panel);
