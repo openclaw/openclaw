@@ -1785,6 +1785,7 @@ export const en: TranslationMap = {
     disabledRestart: "Disabled {name}. A Gateway restart is required to apply the change.",
   },
   aboutPage: {
+    productName: "OpenClaw",
     tagline: "Your personal AI assistant, running on your own devices.",
     waveHello: "Wave hello to Clawd",
     linksLabel: "Community and resources",
