@@ -12,7 +12,7 @@
     "src/config/sessions/session-accessor.sqlite.ts": 2,
     "src/config/sessions/session-accessor.ts": 12,
     "src/config/sessions/store-load.ts": 5,
-    "src/config/sessions/store.ts": 16,
+    "src/config/sessions/store.ts": 15,
     "src/config/sessions/test-helpers.ts": 2,
     "src/config/sessions/transcript.ts": 2
   },

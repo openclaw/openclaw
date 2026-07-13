@@ -276,7 +276,7 @@ describe("AppSidebar agent chip", () => {
     agents: [{ id: "main", identity: { name: "Molty" } }, { id: "research" }],
   } as AgentsListResult;
 
-  it("resumes the newest session for the active agent from the chip body", async () => {
+  it("resumes the newest session when the menu switches to an agent with cached rows", async () => {
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKey = vi.fn();
     (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
@@ -284,6 +284,8 @@ describe("AppSidebar agent chip", () => {
     const { sidebar } = await mountSidebar(
       gatewayHarness.gateway,
       createSessions("main", ["agent:main:main", "agent:main:task"]),
+      "panel",
+      TWO_AGENTS,
     );
     const onNavigate = vi.fn();
     sidebar.connected = true;
@@ -291,24 +293,27 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const rows = [
+      ...(sidebar.querySelectorAll<HTMLButtonElement>(
+        '.sidebar-agent-menu [role="menuitemradio"]',
+      ) ?? []),
+    ];
+    rows.find((row) => row.textContent?.includes("Molty"))?.click();
     // createSessionState stamps ascending updatedAt, so the last key is newest.
     expect(setSessionKey).toHaveBeenCalledWith("agent:main:task");
     expect(onNavigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Atask" });
   });
 
-  it("shows offline and routes the chip body to settings when disconnected", async () => {
+  it("shows offline in the chip subtitle when disconnected", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", ["agent:main:main"]));
-    const onNavigate = vi.fn();
     sidebar.connected = false;
-    sidebar.onNavigate = onNavigate;
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__subtitle")?.textContent?.trim()).toBe(
       "Offline",
     );
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
-    expect(onNavigate).toHaveBeenCalledWith("config");
   });
 
   it("shows a working subtitle while the agent has an active run", async () => {
@@ -403,7 +408,7 @@ describe("AppSidebar agent chip", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.querySelector(".sidebar-agent-chip__name")?.textContent?.trim()).toBe("Molty");
-    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__menu-toggle")?.click();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
 
     const menu = sidebar.querySelector(".sidebar-agent-menu");
