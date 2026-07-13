@@ -4090,8 +4090,8 @@ describe("gateway Gmail hot reload handlers", () => {
 
     expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
     expect(harness.promoteSnapshot).not.toHaveBeenCalled();
-    expect(harness.logReload.error).toHaveBeenCalledWith(
-      "config restart failed: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
+    expect(harness.logReload.info).toHaveBeenCalledWith(
+      "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
     );
   });
 

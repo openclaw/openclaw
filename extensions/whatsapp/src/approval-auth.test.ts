@@ -49,6 +49,26 @@ describe("whatsappApprovalAuth", () => {
     ).toEqual({ authorized: true });
   });
 
+  it("authorizes grouped DM allowFrom entries", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          allowFrom: [{ number: "+1 (555) 123-0000", group: "friends" as const }],
+        },
+      },
+    };
+
+    expect(getWhatsAppApprovalApprovers({ cfg })).toEqual(["+15551230000"]);
+    expect(
+      whatsappApprovalAuth.authorizeActorAction({
+        cfg,
+        senderId: "15551230000@s.whatsapp.net",
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toEqual({ authorized: true });
+  });
+
   it("supports explicit wildcard approval approvers", () => {
     expect(
       whatsappApprovalAuth.authorizeActorAction({

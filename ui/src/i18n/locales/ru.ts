@@ -218,10 +218,11 @@ export const ru: TranslationMap = {
   lazyView: {
     loadingTitle: "Загрузка панели",
     errorTitle: "Не удалось загрузить панель",
-    errorSubtitle:
-      "Перезагрузите страницу, чтобы загрузить последнюю версию пакета Control UI, или повторите попытку, если сетевой запрос завершился ошибкой.",
+    genericSubtitle: "При загрузке этой панели произошла ошибка.",
+    staleTitle: "Доступна новая версия",
+    staleSubtitle:
+      "OpenClaw был обновлён в фоновом режиме. Перезагрузите страницу, чтобы получить последнюю версию панели.",
     retry: "Повторить",
-    unknownError: "Неизвестная ошибка загрузки модуля.",
   },
   nodes: {
     pairing: {
@@ -570,6 +571,7 @@ export const ru: TranslationMap = {
     groupBy: "Группировать по",
     groupByNone: "Нет",
     groupByCategory: "Пользовательские группы",
+    showCronSessions: "Показать сеансы cron",
     groupByChannel: "Канал",
     groupByKind: "Тип",
     groupByAgent: "Агент",
@@ -1210,6 +1212,10 @@ export const ru: TranslationMap = {
         "чтобы добавить одну локальную тему tweakcn для браузера. В tweakcn используйте «Поделиться» и вставьте скопированную ссылку сюда.",
       textSize: "Размер текста",
     },
+    chatPrefs: {
+      title: "Чат",
+      hint: "Локальные настройки чата для этого браузера.",
+    },
     connection: {
       title: "Подключение",
       gateway: "Gateway",
@@ -1745,8 +1751,6 @@ export const ru: TranslationMap = {
     cancel: "Отмена",
     removedRestart: "{name} удален. Для применения изменения требуется перезапуск Gateway.",
     verifiedSource: "Проверенный источник",
-    menuLabel: "Действия для {name}",
-    menuDetails: "Просмотреть сведения",
     enableAction: "Включить",
     disableAction: "Отключить",
     working: "Выполняется…",
@@ -1881,6 +1885,10 @@ export const ru: TranslationMap = {
       useCurrentChatAria: "Использовать текущий чат для запросов на доработку",
       useCurrentChatTooltip:
         "Отправлять запросы на доработку в текущую сессию чата вместо сессии мастерской предложения.",
+      selfLearning: "Самообучение",
+      selfLearningAria: "Включить или выключить предложения навыков на основе самообучения",
+      selfLearningTooltip:
+        "Собирает исправления и анализирует значимые завершённые задачи, формируя из них ожидающие рассмотрения предложения по навыкам. Использует дополнительные токены в фоновом режиме; черновики появляются на этой доске как ожидающие рассмотрения предложения.",
       view: "Вид мастерской",
       board: "Доска",
       today: "Сегодня",
@@ -1960,6 +1968,14 @@ export const ru: TranslationMap = {
       noProposalsTitle: "Пока нет предложений",
       noProposalsBody: "{agent} ещё не подготовил ни одного предложения навыков.",
       noProposalsFooter: "Новые предложения появятся здесь для проверки.",
+    },
+    selfLearning: {
+      pitchTitle: "Включить самообучение",
+      pitchBody:
+        "OpenClaw анализирует исправления и значимые завершённые запуски, а затем создаёт для этой доски черновики предложений по навыкам. При этом используются дополнительные токены в фоновом режиме, а черновики поступают как ожидающие рассмотрения предложения.",
+      enable: "Включить самообучение",
+      enabling: "Включение…",
+      updateError: "Не удалось обновить настройку самообучения.",
     },
     today: {
       emptyTitle: "Сегодня ничего не ожидает",
@@ -3101,24 +3117,16 @@ export const ru: TranslationMap = {
       rateLimited:
         "Достигнут лимит запросов к GitHub API. Статус pull request может быть устаревшим до сброса лимита.",
     },
-    refreshTitle: "Обновить данные чата",
-    settings: "Настройки чата",
     usageRemaining: "Оставшееся использование",
-    voiceSettings: "Голос",
-    thinkingToggle: "Показать или скрыть вывод размышлений/работы ассистента",
-    toolCallsToggle: "Показать или скрыть вызовы инструментов и их результаты",
-    commentaryToggle: "Сохранять комментарии после окончательного ответа",
-    commentaryLabel: "Комментарии",
-    autoScrollMode: "Режим автопрокрутки",
-    autoScrollAlways: "Всегда",
-    autoScrollNearBottom: "Рядом с нижним краем",
-    autoScrollOff: "Выкл.",
+    view: {
+      menu: "Вид",
+      reasoning: "Рассуждение",
+      toolCalls: "Вызовы инструментов",
+      commentary: "Сохранять комментарии",
+    },
     sendShortcut: "Сочетание клавиш для отправки",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Скрыть сеансы cron",
-    showCronSessions: "Показать сеансы cron",
-    showCronSessionsHidden: "Показать сеансы cron (скрыто: {count})",
     onboardingDisabled: "Отключено во время настройки",
     gatewayStatus: "Статус Gateway: {status}",
     commandPaletteTitle: "Поиск или переход к… (⌘K)",
@@ -3308,7 +3316,6 @@ export const ru: TranslationMap = {
       },
       takePhoto: "Сделать фото",
       dismissVoiceInputError: "Закрыть ошибку голосового ввода",
-      loadingMicrophones: "Загрузка микрофонов…",
       microphoneAccessFailed: "Не удалось получить доступ к входам микрофона.",
       microphoneBusy: "Входы микрофона заняты или недоступны для браузера.",
       microphoneFallback: "Микрофон {number}",
@@ -3327,19 +3334,6 @@ export const ru: TranslationMap = {
       stillListening: "Прослушивание продолжается",
       stopVoiceInput: "Остановить голосовой ввод",
       systemDefaultMicrophone: "Системный по умолчанию",
-      talkAdvancedSettingsRequiresAdmin: "Для расширенных настроек требуется доступ администратора",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Для расширенных настроек Talk требуется доступ operator.admin.",
-      talkDefault: "По умолчанию",
-      talkModel: "Модель",
-      talkModelAuto: "Авто",
-      talkMoreInSettings: "Больше в настройках",
-      talkSensitivity: "Чувствительность",
-      talkSensitivityHigh: "Высокая",
-      talkSensitivityLow: "Низкая",
-      talkSensitivityMedium: "Средняя",
-      talkVoice: "Голос",
-      voiceOptions: "Параметры голоса",
       voiceTranscript: "Расшифровка голоса",
     },
     selectors: {
@@ -3424,6 +3418,8 @@ export const ru: TranslationMap = {
       empty: "Для этого агента пока нет фоновых задач.",
       running: "Выполняются ({count})",
       finished: "Завершены ({count})",
+      statusRunningOne: "1 выполняющаяся задача",
+      statusRunningMany: "{count} выполняющихся задач",
       stopTask: "Остановить {title}",
       viewTranscript: "Просмотреть расшифровку",
       toolUseOne: "1 вызов инструмента",
@@ -3582,7 +3578,6 @@ export const ru: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Планировщик",
       tasks: "Задачи",
       failing: "С ошибками",
       nextWake: "Следующее пробуждение",
@@ -3607,7 +3602,6 @@ export const ru: TranslationMap = {
       clone: "Клонировать",
       remove: "Удалить",
       more: "Другие действия",
-      history: "История",
     },
     runNotStarted: {
       notDue: "Время запуска этой автоматизации ещё не наступило.",

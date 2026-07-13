@@ -219,10 +219,11 @@ export const de: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel wird geladen",
     errorTitle: "Panel konnte nicht geladen werden",
-    errorSubtitle:
-      "Laden Sie die Seite neu, um das neueste Control UI-Bundle zu laden, oder versuchen Sie es erneut, wenn die Netzwerkanfrage fehlgeschlagen ist.",
+    genericSubtitle: "Beim Laden dieses Bereichs ist ein Fehler aufgetreten.",
+    staleTitle: "Eine neue Version ist verfügbar",
+    staleSubtitle:
+      "OpenClaw wurde im Hintergrund aktualisiert. Laden Sie die Seite neu, um das neueste Panel zu erhalten.",
     retry: "Erneut versuchen",
-    unknownError: "Unbekannter Fehler beim Laden des Moduls.",
   },
   nodes: {
     pairing: {
@@ -570,6 +571,7 @@ export const de: TranslationMap = {
     groupBy: "Gruppieren nach",
     groupByNone: "Keine",
     groupByCategory: "Benutzerdefinierte Gruppen",
+    showCronSessions: "Cron-Sitzungen anzeigen",
     groupByChannel: "Kanal",
     groupByKind: "Art",
     groupByAgent: "Agent",
@@ -1208,6 +1210,10 @@ export const de: TranslationMap = {
         "um ein browserlokales tweakcn-Design hinzuzufügen. Verwenden Sie in tweakcn Share und fügen Sie den kopierten Link hier ein.",
       textSize: "Textgröße",
     },
+    chatPrefs: {
+      title: "Chat",
+      hint: "Browserlokale Chat-Einstellungen.",
+    },
     connection: {
       title: "Verbindung",
       gateway: "Gateway",
@@ -1748,8 +1754,6 @@ export const de: TranslationMap = {
     removedRestart:
       "{name} wurde entfernt. Ein Neustart der Gateway ist erforderlich, um die Änderung anzuwenden.",
     verifiedSource: "Verifizierte Quelle",
-    menuLabel: "{name}-Aktionen",
-    menuDetails: "Details anzeigen",
     enableAction: "Aktivieren",
     disableAction: "Deaktivieren",
     working: "Wird ausgeführt…",
@@ -1887,6 +1891,10 @@ export const de: TranslationMap = {
       useCurrentChatAria: "Aktuellen Chat für Überarbeitungsanfragen verwenden",
       useCurrentChatTooltip:
         "Überarbeitungsanfragen an die aktuelle Chat-Sitzung statt an die Workshop-Sitzung des Vorschlags senden.",
+      selfLearning: "Selbstlernen",
+      selfLearningAria: "Vorschläge für selbstlernende Skills ein- oder ausschalten",
+      selfLearningTooltip:
+        "Erfasst Korrekturen und prüft umfangreiche abgeschlossene Arbeiten, um daraus ausstehende Skill-Vorschläge zu erstellen. Verbraucht zusätzliche Hintergrund-Tokens; Entwürfe erscheinen auf diesem Board als ausstehende Vorschläge.",
       view: "Workshop-Ansicht",
       board: "Board",
       today: "Heute",
@@ -1967,6 +1975,14 @@ export const de: TranslationMap = {
       noProposalsTitle: "Noch keine Vorschläge",
       noProposalsBody: "{agent} hat noch keine Skill-Vorschläge entworfen.",
       noProposalsFooter: "Neue Vorschläge werden hier zur Überprüfung angezeigt.",
+    },
+    selfLearning: {
+      pitchTitle: "Selbstlernen aktivieren",
+      pitchBody:
+        "OpenClaw prüft Korrekturen und umfangreiche abgeschlossene Durchläufe und erstellt anschließend Skill-Vorschläge für dieses Board. Dabei werden zusätzliche Hintergrund-Tokens verbraucht und die Entwürfe erscheinen als ausstehende Vorschläge.",
+      enable: "Selbstlernen aktivieren",
+      enabling: "Wird aktiviert…",
+      updateError: "Die Einstellung für das Selbstlernen konnte nicht aktualisiert werden.",
     },
     today: {
       emptyTitle: "Heute steht nichts an",
@@ -3107,24 +3123,16 @@ export const de: TranslationMap = {
       rateLimited:
         "GitHub API-Ratenlimit erreicht. Der Pull-Request-Status ist möglicherweise veraltet, bis das Limit zurückgesetzt wird.",
     },
-    refreshTitle: "Chat-Daten aktualisieren",
-    settings: "Chat-Einstellungen",
     usageRemaining: "Verbleibende Nutzung",
-    voiceSettings: "Sprache",
-    thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
-    toolCallsToggle: "Tool-Aufrufe und Tool-Ergebnisse umschalten",
-    commentaryToggle: "Kommentar nach der endgültigen Antwort behalten",
-    commentaryLabel: "Kommentar",
-    autoScrollMode: "Automatischer Scrollmodus",
-    autoScrollAlways: "Immer",
-    autoScrollNearBottom: "Nahe am unteren Rand",
-    autoScrollOff: "Aus",
+    view: {
+      menu: "Ansicht",
+      reasoning: "Argumentation",
+      toolCalls: "Tool-Aufrufe",
+      commentary: "Kommentare beibehalten",
+    },
     sendShortcut: "Tastenkürzel zum Senden",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Cron-Sitzungen ausblenden",
-    showCronSessions: "Cron-Sitzungen anzeigen",
-    showCronSessionsHidden: "Cron-Sitzungen anzeigen ({count} ausgeblendet)",
     onboardingDisabled: "Während der Einrichtung deaktiviert",
     gatewayStatus: "Gateway-Status: {status}",
     commandPaletteTitle: "Suchen oder springen zu… (⌘K)",
@@ -3314,7 +3322,6 @@ export const de: TranslationMap = {
       },
       takePhoto: "Foto aufnehmen",
       dismissVoiceInputError: "Fehler bei der Spracheingabe schließen",
-      loadingMicrophones: "Mikrofone werden geladen…",
       microphoneAccessFailed: "Auf Mikrofoneingänge kann nicht zugegriffen werden.",
       microphoneBusy: "Mikrofoneingänge sind belegt oder für den Browser nicht verfügbar.",
       microphoneFallback: "Mikrofon {number}",
@@ -3334,19 +3341,6 @@ export const de: TranslationMap = {
       stillListening: "Höre noch zu",
       stopVoiceInput: "Spracheingabe stoppen",
       systemDefaultMicrophone: "Systemstandard",
-      talkAdvancedSettingsRequiresAdmin: "Erweiterte Einstellungen erfordern Administratorzugriff",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Erweiterte Talk-Einstellungen erfordern operator.admin-Zugriff.",
-      talkDefault: "Standard",
-      talkModel: "Modell",
-      talkModelAuto: "Automatisch",
-      talkMoreInSettings: "Mehr in den Einstellungen",
-      talkSensitivity: "Empfindlichkeit",
-      talkSensitivityHigh: "Hoch",
-      talkSensitivityLow: "Niedrig",
-      talkSensitivityMedium: "Mittel",
-      talkVoice: "Stimme",
-      voiceOptions: "Sprachoptionen",
       voiceTranscript: "Sprachtranskript",
     },
     selectors: {
@@ -3431,6 +3425,8 @@ export const de: TranslationMap = {
       empty: "Noch keine Hintergrundaufgaben für diesen Agenten.",
       running: "Wird ausgeführt ({count})",
       finished: "Abgeschlossen ({count})",
+      statusRunningOne: "1 laufende Aufgabe",
+      statusRunningMany: "{count} laufende Aufgaben",
       stopTask: "{title} stoppen",
       viewTranscript: "Transkript anzeigen",
       toolUseOne: "1 Tool-Aufruf",
@@ -3589,7 +3585,6 @@ export const de: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Zeitplaner",
       tasks: "Aufgaben",
       failing: "Fehlgeschlagen",
       nextWake: "Nächste Ausführung",
@@ -3614,7 +3609,6 @@ export const de: TranslationMap = {
       clone: "Klonen",
       remove: "Entfernen",
       more: "Weitere Aktionen",
-      history: "Verlauf",
     },
     runNotStarted: {
       notDue: "Diese Automatisierung ist noch nicht fällig.",

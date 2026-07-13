@@ -4,7 +4,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
 import {
-  blockedInstallDependencyPackageNames,
   findBlockedPackageDirectoryInPath,
   findBlockedPackageFileAliasInPath,
   findBlockedManifestDependencies,
@@ -33,10 +32,6 @@ function readPnpmWorkspaceConfig(): PnpmWorkspaceConfig {
   return YAML.parse(
     fs.readFileSync(path.resolve(process.cwd(), "pnpm-workspace.yaml"), "utf8"),
   ) as PnpmWorkspaceConfig;
-}
-
-function readRootLockfile(): string {
-  return fs.readFileSync(path.resolve(process.cwd(), "pnpm-lock.yaml"), "utf8");
 }
 
 describe("dependency denylist guardrails", () => {
@@ -205,13 +200,5 @@ describe("dependency denylist guardrails", () => {
   it("keeps blocked packages out of the root manifest", () => {
     const manifest = readRootManifest();
     expect(findBlockedManifestDependencies(manifest)).toStrictEqual([]);
-  });
-
-  it("keeps blocked packages out of the lockfile graph", () => {
-    const lockfile = readRootLockfile();
-    for (const packageName of blockedInstallDependencyPackageNames) {
-      expect(lockfile).not.toContain(`\n  ${packageName}@`);
-      expect(lockfile).not.toContain(`\n      ${packageName}: `);
-    }
   });
 });

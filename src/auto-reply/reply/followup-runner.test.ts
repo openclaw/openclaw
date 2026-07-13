@@ -38,7 +38,7 @@ let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessio
 let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
 let replaceSessionEntrySync: typeof import("../../config/sessions/session-accessor.js").replaceSessionEntrySync;
 let clearSessionStoreCacheForTest: typeof import("../../config/sessions/store.js").clearSessionStoreCacheForTest;
-let clearFollowupQueue: typeof import("./queue.js").clearFollowupQueue;
+let clearFollowupQueue: typeof import("./queue/state.js").clearFollowupQueue;
 let enqueueFollowupRun: typeof import("./queue.js").enqueueFollowupRun;
 let sessionRunAccounting: typeof import("./session-run-accounting.js");
 let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
@@ -504,7 +504,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
     await import("../../config/sessions/store.js"));
   ({ replaceSessionEntrySync } = await import("../../config/sessions/session-accessor.js"));
-  ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
+  ({ clearFollowupQueue } = await import("./queue/state.js"));
+  ({ enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
   ({

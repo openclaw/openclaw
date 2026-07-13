@@ -14,7 +14,7 @@ import { buildMemorySystemPromptAddition } from "../../../context-engine/delegat
 import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
-} from "../../../plugins/memory-state.js";
+} from "../../../plugins/memory-state.test-fixtures.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,

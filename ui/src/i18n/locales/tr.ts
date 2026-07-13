@@ -219,10 +219,10 @@ export const tr: TranslationMap = {
   lazyView: {
     loadingTitle: "Panel yükleniyor",
     errorTitle: "Panel yüklenemedi",
-    errorSubtitle:
-      "En son Control UI paketini yüklemek için sayfayı yeniden yükleyin veya ağ isteği başarısız olduysa tekrar deneyin.",
+    genericSubtitle: "Bu panel yüklenirken bir sorun oluştu.",
+    staleTitle: "Yeni bir sürüm mevcut",
+    staleSubtitle: "OpenClaw arka planda güncellendi. En son paneli almak için yeniden yükleyin.",
     retry: "Tekrar dene",
-    unknownError: "Bilinmeyen modül yükleme hatası.",
   },
   nodes: {
     pairing: {
@@ -572,6 +572,7 @@ export const tr: TranslationMap = {
     groupBy: "Grupla",
     groupByNone: "Yok",
     groupByCategory: "Özel gruplar",
+    showCronSessions: "Cron oturumlarını göster",
     groupByChannel: "Kanal",
     groupByKind: "Tür",
     groupByAgent: "Aracı",
@@ -1209,6 +1210,10 @@ export const tr: TranslationMap = {
         "bir tarayıcı yerel tweakcn teması eklemek için. tweakcn'de Share'i kullanın ve kopyalanan bağlantıyı buraya yapıştırın.",
       textSize: "Metin boyutu",
     },
+    chatPrefs: {
+      title: "Sohbet",
+      hint: "Tarayıcıya özel yerel sohbet tercihleri.",
+    },
     connection: {
       title: "Bağlantı",
       gateway: "Gateway",
@@ -1747,8 +1752,6 @@ export const tr: TranslationMap = {
     removedRestart:
       "{name} kaldırıldı. Değişikliği uygulamak için Gateway yeniden başlatılmalıdır.",
     verifiedSource: "Doğrulanmış kaynak",
-    menuLabel: "{name} eylemleri",
-    menuDetails: "Ayrıntıları görüntüle",
     enableAction: "Etkinleştir",
     disableAction: "Devre dışı bırak",
     working: "Çalışıyor…",
@@ -1886,6 +1889,10 @@ export const tr: TranslationMap = {
       useCurrentChatAria: "Revizyon istekleri için mevcut sohbeti kullan",
       useCurrentChatTooltip:
         "Revizyon isteklerini önerinin çalışma alanı oturumu yerine mevcut sohbet oturumuna gönder.",
+      selfLearning: "Kendi kendine öğrenme",
+      selfLearningAria: "Kendi kendine öğrenen beceri önerilerini aç veya kapat",
+      selfLearningTooltip:
+        "Düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceleyerek bekleyen beceri önerilerine dönüştürür. Arka planda ek token harcar; taslaklar bu panoya bekleyen öneriler olarak eklenir.",
       view: "Atölye görünümü",
       board: "Pano",
       today: "Bugün",
@@ -1965,6 +1972,14 @@ export const tr: TranslationMap = {
       noProposalsTitle: "Henüz öneri yok",
       noProposalsBody: "{agent} henüz herhangi bir skill önerisi hazırlamadı.",
       noProposalsFooter: "Yeni öneriler inceleme için burada görünecek.",
+    },
+    selfLearning: {
+      pitchTitle: "Kendi kendine öğrenmeyi aç",
+      pitchBody:
+        "OpenClaw, düzeltmeleri ve tamamlanan kapsamlı çalışmaları inceler, ardından bu pano için beceri önerileri taslakları oluşturur. Arka planda ek token harcar ve taslaklar bekleyen öneriler olarak eklenir.",
+      enable: "Kendi kendine öğrenmeyi etkinleştir",
+      enabling: "Etkinleştiriliyor…",
+      updateError: "Kendi kendine öğrenme ayarı güncellenemedi.",
     },
     today: {
       emptyTitle: "Bugün bekleyen bir şey yok",
@@ -3097,24 +3112,16 @@ export const tr: TranslationMap = {
       rateLimited:
         "GitHub API hız sınırına ulaşıldı. Pull request durumu, sınır sıfırlanana kadar güncel olmayabilir.",
     },
-    refreshTitle: "Sohbet verilerini yenile",
-    settings: "Sohbet ayarları",
     usageRemaining: "Kalan kullanım",
-    voiceSettings: "Ses",
-    thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
-    toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
-    commentaryToggle: "Nihai yanıttan sonra yorumu koru",
-    commentaryLabel: "Yorum",
-    autoScrollMode: "Otomatik kaydırma modu",
-    autoScrollAlways: "Her zaman",
-    autoScrollNearBottom: "Alta yakın",
-    autoScrollOff: "Kapalı",
+    view: {
+      menu: "Görünüm",
+      reasoning: "Akıl yürütme",
+      toolCalls: "Araç çağrıları",
+      commentary: "Açıklamaları koru",
+    },
     sendShortcut: "Gönderme kısayolu",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Cron oturumlarını gizle",
-    showCronSessions: "Cron oturumlarını göster",
-    showCronSessionsHidden: "Cron oturumlarını göster ({count} gizli)",
     onboardingDisabled: "Kurulum sırasında devre dışı",
     gatewayStatus: "Gateway durumu: {status}",
     commandPaletteTitle: "Ara veya şuraya git… (⌘K)",
@@ -3304,7 +3311,6 @@ export const tr: TranslationMap = {
       },
       takePhoto: "Fotoğraf çek",
       dismissVoiceInputError: "Ses girişi hatasını kapat",
-      loadingMicrophones: "Mikrofonlar yükleniyor…",
       microphoneAccessFailed: "Mikrofon girişlerine erişilemiyor.",
       microphoneBusy: "Mikrofon girişleri meşgul veya tarayıcı tarafından kullanılamıyor.",
       microphoneFallback: "Mikrofon {number}",
@@ -3323,19 +3329,6 @@ export const tr: TranslationMap = {
       stillListening: "Hâlâ dinliyor",
       stopVoiceInput: "Ses girişini durdur",
       systemDefaultMicrophone: "Sistem varsayılanı",
-      talkAdvancedSettingsRequiresAdmin: "Gelişmiş ayarlar yönetici erişimi gerektirir",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Gelişmiş Talk ayarları operator.admin erişimi gerektirir.",
-      talkDefault: "Varsayılan",
-      talkModel: "Model",
-      talkModelAuto: "Otomatik",
-      talkMoreInSettings: "Ayarlarda daha fazlası",
-      talkSensitivity: "Hassasiyet",
-      talkSensitivityHigh: "Yüksek",
-      talkSensitivityLow: "Düşük",
-      talkSensitivityMedium: "Orta",
-      talkVoice: "Ses",
-      voiceOptions: "Ses seçenekleri",
       voiceTranscript: "Ses dökümü",
     },
     selectors: {
@@ -3420,6 +3413,8 @@ export const tr: TranslationMap = {
       empty: "Bu aracı için henüz arka plan görevi yok.",
       running: "Çalışıyor ({count})",
       finished: "Tamamlandı ({count})",
+      statusRunningOne: "1 görev çalışıyor",
+      statusRunningMany: "{count} görev çalışıyor",
       stopTask: "{title} öğesini durdur",
       viewTranscript: "Transkripti görüntüle",
       toolUseOne: "1 araç kullanımı",
@@ -3579,7 +3574,6 @@ export const tr: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Zamanlayıcı",
       tasks: "Görevler",
       failing: "Başarısız",
       nextWake: "Sonraki uyanma",
@@ -3605,7 +3599,6 @@ export const tr: TranslationMap = {
       clone: "Çoğalt",
       remove: "Kaldır",
       more: "Diğer işlemler",
-      history: "Geçmiş",
     },
     runNotStarted: {
       notDue: "Bu otomasyonun çalışma zamanı henüz gelmedi.",

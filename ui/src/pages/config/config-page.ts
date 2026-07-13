@@ -15,7 +15,9 @@ import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import {
   loadSettings,
   normalizeTextScale,
+  normalizeChatSendShortcut,
   patchSettings,
+  type ChatSendShortcut,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -26,6 +28,10 @@ import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import {
+  discoverRealtimeTalkInputs,
+  type RealtimeTalkInputDevice,
+} from "../chat/realtime-talk-input.ts";
 import {
   AI_AGENTS_SECTION_KEYS,
   AUTOMATION_SECTION_KEYS,
@@ -243,6 +249,10 @@ export class ConfigPage extends OpenClawLightDomElement {
   @state() private settingsMode: "quick" | "advanced" = "quick";
   @state() private systemInfo: SystemInfoResult | null = null;
   @state() private systemInfoUnavailable = false;
+  @state() private microphoneDevices: RealtimeTalkInputDevice[] = [];
+  @state() private microphoneLoading = false;
+  @state() private microphoneError: string | null = null;
+  private microphoneLoaded = false;
   @state() private formModes: Record<ConfigPageId, ConfigFormMode> = {
     config: "form",
     communications: "form",
@@ -354,6 +364,28 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
     this.syncSystemInfoPolling();
     this.scrollToPendingRouteTarget();
+    // Device labels stay hidden until the user grants mic permission; the
+    // refresh button next to the picker requests it explicitly.
+    if (this.pageId === "appearance" && !this.microphoneLoaded) {
+      this.microphoneLoaded = true;
+      void this.refreshMicrophones(false);
+    }
+  }
+
+  private async refreshMicrophones(requestPermission: boolean) {
+    this.microphoneLoading = true;
+    this.microphoneError = null;
+    try {
+      const result = await discoverRealtimeTalkInputs(requestPermission);
+      this.microphoneDevices = result.devices;
+      this.microphoneError = result.warning;
+    } catch (error) {
+      // Discovery is best-effort in blocked/inactive contexts; a rejection
+      // must not wedge the picker in its loading state.
+      this.microphoneError = error instanceof Error ? error.message : String(error);
+    } finally {
+      this.microphoneLoading = false;
+    }
   }
 
   private syncRouteData() {
@@ -568,6 +600,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       themeMode: next.themeMode,
       customTheme: next.customTheme,
       textScale: next.textScale,
+      chatSendShortcut: next.chatSendShortcut,
+      realtimeTalkInputDeviceId: next.realtimeTalkInputDeviceId,
       lobsterPetVisits: next.lobsterPetVisits,
       lobsterPetSounds: next.lobsterPetSounds,
     });
@@ -612,6 +646,17 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private setTextScale(value: number) {
     this.applySettings({ ...this.settings, textScale: normalizeTextScale(value) });
+  }
+
+  private setChatSendShortcut(value: ChatSendShortcut) {
+    this.applySettings({ ...this.settings, chatSendShortcut: value });
+  }
+
+  private selectMicrophone(deviceId: string) {
+    this.applySettings({
+      ...this.settings,
+      realtimeTalkInputDeviceId: deviceId.trim() || undefined,
+    });
   }
 
   private openCustomThemeImport() {
@@ -762,6 +807,16 @@ export class ConfigPage extends OpenClawLightDomElement {
       onOpenCustomThemeImport: () => this.openCustomThemeImport(),
       textScale: this.settings.textScale ?? 100,
       setTextScale: (value) => this.setTextScale(value),
+      chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
+      setChatSendShortcut: (value) => this.setChatSendShortcut(value),
+      microphone: {
+        devices: this.microphoneDevices,
+        selectedDeviceId: this.settings.realtimeTalkInputDeviceId ?? "",
+        loading: this.microphoneLoading,
+        error: this.microphoneError,
+      },
+      onMicrophoneRefresh: () => void this.refreshMicrophones(true),
+      onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
       gatewayUrl: this.context.gateway.connection.gatewayUrl,
       assistantName: this.context.config.current.assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,

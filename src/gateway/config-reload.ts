@@ -156,6 +156,10 @@ class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+function isGatewayConfigReloadSupersededError(error: unknown): boolean {
+  return error instanceof Error && error.name === "GatewayConfigReloadSupersededError";
+}
+
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   return {
     plugins: {
@@ -311,7 +315,11 @@ export function startGatewayConfigReloader(opts: {
       // transaction. Only downstream signal delivery may coalesce.
       await opts.onRestart(plan, nextConfig, ownership, sourceConfig);
     } catch (err) {
-      opts.log.error(`config restart failed: ${String(err)}`);
+      if (isGatewayConfigReloadSupersededError(err)) {
+        opts.log.info(`config restart superseded: ${String(err)}`);
+      } else {
+        opts.log.error(`config restart failed: ${String(err)}`);
+      }
       // Failed restart admission must reject the transaction. Otherwise the
       // persisted snapshot becomes the baseline and the same config cannot retry.
       throw err;
@@ -855,7 +863,11 @@ export function startGatewayConfigReloader(opts: {
         await promoteAcceptedSnapshot(snapshot, "valid-config");
       });
     } catch (err) {
-      opts.log.error(`config reload failed: ${String(err)}`);
+      if (isGatewayConfigReloadSupersededError(err)) {
+        opts.log.info(`config reload superseded: ${String(err)}`);
+      } else {
+        opts.log.error(`config reload failed: ${String(err)}`);
+      }
     } finally {
       running = false;
       if (pending) {

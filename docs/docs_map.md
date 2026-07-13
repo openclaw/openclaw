@@ -9878,6 +9878,23 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## tools/self-learning.md
+
+- Route: /tools/self-learning
+- Headings:
+  - H2: Enable self-learning
+  - H2: What OpenClaw can learn
+  - H2: When experience review runs
+  - H2: What the reviewer receives
+  - H2: Proposal safety
+  - H2: Review learned proposals
+  - H2: Configuration
+  - H2: Troubleshooting
+  - H3: No proposal appears after a long turn
+  - H3: Doctor reports that the Workshop tool is hidden
+  - H3: Too many low-value proposals appear
+  - H2: Related
+
 ## tools/show-widget.md
 
 - Route: /tools/show-widget

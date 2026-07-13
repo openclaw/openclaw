@@ -6,8 +6,8 @@ import type { StuckSessionRecoveryOutcome } from "../../logging/diagnostic-sessi
 import type {
   PluginHookBeforeDispatchResult,
   PluginHookReplyDispatchResult,
-  PluginTargetedInboundClaimOutcome,
-} from "../../plugins/hooks.js";
+} from "../../plugins/hook-types.js";
+import type { createHookRunner } from "../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -15,7 +15,8 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import type { ReplyDispatchBeforeDeliver, ReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatchBeforeDeliver } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 type AbortResult = {
@@ -24,6 +25,9 @@ type AbortResult = {
   rejectionReason?: "finalizing";
   stoppedSubagents?: number;
 };
+type PluginTargetedInboundClaimOutcome = Awaited<
+  ReturnType<ReturnType<typeof createHookRunner>["runInboundClaimForPluginOutcome"]>
+>;
 
 const mocks = vi.hoisted(() => ({
   isRoutableChannel: vi.fn((_channel: string | undefined) => true),

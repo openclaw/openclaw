@@ -108,10 +108,6 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         WatchConnectivityTransport.isSupportedOnDevice()
     }
 
-    nonisolated static func currentStatusSnapshot() -> WatchMessagingStatus {
-        WatchConnectivityTransport.currentStatusSnapshot()
-    }
-
     func status() async -> WatchMessagingStatus {
         await self.transport.status()
     }

@@ -130,6 +130,45 @@ describe("rewriteUpdateFlagArgv", () => {
       "--json",
     ]);
   });
+
+  it("does not rewrite --update after -- positional terminator", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "foo", "--", "--update"]);
+  });
+
+  it("does not rewrite --update when a subcommand appears before it", () => {
+    expect(
+      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "update.channel", "--update"]),
+    ).toEqual(["node", "entry.js", "config", "set", "update.channel", "--update"]);
+  });
+
+  it("does not rewrite --update that appears as a value after a subcommand", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--update"])).toEqual(
+      ["node", "entry.js", "config", "set", "foo", "--update"],
+    );
+  });
+
+  it("rewrites --update when it appears before any subcommand", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--update", "config", "set", "foo"])).toEqual(
+      ["node", "entry.js", "update", "config", "set", "foo"],
+    );
+  });
+
+  it("rewrites --update after root boolean flags", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--no-color", "--update"])).toEqual([
+      "node",
+      "entry.js",
+      "--no-color",
+      "update",
+    ]);
+  });
+
+  it("does not skip root boolean flag followers as option values", () => {
+    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--no-color", "status", "--update"])).toEqual(
+      ["node", "entry.js", "--no-color", "status", "--update"],
+    );
+  });
 });
 
 describe("shouldEnsureCliPath", () => {

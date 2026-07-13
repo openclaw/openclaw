@@ -38,7 +38,7 @@ export type UserTurnBeforeMessageWrite = (params: {
   sessionKey?: string;
 }) => AgentMessage | null;
 
-export type UserTurnTranscriptPersistenceTarget = {
+type UserTurnTranscriptPersistenceTarget = {
   sessionId: string;
   expectedSessionId?: string;
   sessionKey: string;
