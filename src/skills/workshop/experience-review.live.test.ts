@@ -5,11 +5,8 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import {
-  runSkillExperienceReview,
-  type ExperienceReviewCandidate,
-} from "./experience-review.js";
 import { formatSkillExperienceReviewTranscript } from "./experience-review-prompt.js";
+import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
 import { listSkillProposals } from "./service.js";
 
 const LIVE =
