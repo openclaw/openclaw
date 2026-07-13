@@ -127,34 +127,34 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
       expect(response?.status()).toBe(200);
       await page.locator(".page-title", { hasText: "Model Providers" }).first().waitFor();
 
-      const claudeCard = page.locator(".model-providers__card", { hasText: "Claude" });
+      const claudeCard = page.locator(".model-providers__row", { hasText: "Claude" });
       await claudeCard.waitFor();
       // Alias auth row (claude-cli) merges onto the canonical anthropic card.
       await expect
-        .poll(async () => claudeCard.locator(".provider-usage-card__id").textContent())
-        .toBe("anthropic");
+        .poll(async () => claudeCard.locator(".settings-row__desc").first().textContent())
+        .toContain("anthropic");
       await expect.poll(async () => claudeCard.textContent()).toContain("Max 20x");
       await expect.poll(async () => claudeCard.textContent()).toContain("Connected");
       await expect.poll(async () => claudeCard.textContent()).toContain("$4.20");
       await claudeCard.locator(".provider-usage-progress").first().waitFor();
 
-      const openrouterCard = page.locator(".model-providers__card", { hasText: "OpenRouter" });
+      const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
       await openrouterCard.waitFor();
       await expect.poll(async () => openrouterCard.textContent()).toContain("API key");
       await expect.poll(async () => openrouterCard.textContent()).toContain("$12.34");
 
       // openai qualifies via its available catalog model despite having no
       // auth row; the shared label map renders "OpenAI", not "Openai".
-      const openaiCard = page.locator(".model-providers__card", { hasText: "OpenAI" });
+      const openaiCard = page.locator(".model-providers__row", { hasText: "OpenAI" });
       await openaiCard.waitFor();
       await expect.poll(async () => openaiCard.textContent()).toContain("1 model");
 
       // google is in the configured catalog with an unavailable model; the
       // page surfaces it instead of hiding the broken provider.
-      const googleCard = page.locator(".model-providers__card", { hasText: "Google" });
+      const googleCard = page.locator(".model-providers__row", { hasText: "Google" });
       await googleCard.waitFor();
       await expect.poll(async () => googleCard.textContent()).toContain("0 of 1 models available");
-      await expect.poll(async () => page.locator(".model-providers__card").count()).toBe(4);
+      await expect.poll(async () => page.locator(".model-providers__row").count()).toBe(4);
     } finally {
       await context.close();
     }

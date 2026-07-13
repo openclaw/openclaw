@@ -6,6 +6,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsPage,
+  renderSettingsRow,
+  renderSettingsSection,
+  renderSettingsStatus,
+} from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
@@ -531,16 +538,18 @@ class WorktreesPage extends OpenClawLightDomElement {
     return html`<span>${t("worktrees.ownerManual")}</span>`;
   }
 
-  private renderCreateForm() {
+  private renderCreateRows() {
     if (!this.createOpen) {
       return nothing;
     }
     return html`
-      <div class="worktrees-create">
-        <label>
-          ${t("worktrees.repo")}
+      ${renderSettingsRow({
+        title: t("worktrees.repo"),
+        control: html`
           <input
+            class="settings-input"
             type="text"
+            aria-label=${t("worktrees.repo")}
             ?disabled=${this.creating}
             .value=${this.createRepoRoot}
             @change=${(event: Event) => {
@@ -549,11 +558,15 @@ class WorktreesPage extends OpenClawLightDomElement {
               this.loadCreateBranches();
             }}
           />
-        </label>
-        <label>
-          ${t("worktrees.name")}
+        `,
+      })}
+      ${renderSettingsRow({
+        title: t("worktrees.name"),
+        control: html`
           <input
+            class="settings-input"
             type="text"
+            aria-label=${t("worktrees.name")}
             ?disabled=${this.creating}
             placeholder=${t("newSession.worktreeNamePlaceholder")}
             .value=${this.createName}
@@ -561,11 +574,15 @@ class WorktreesPage extends OpenClawLightDomElement {
               this.createName = (event.target as HTMLInputElement).value;
             }}
           />
-        </label>
-        <label>
-          ${t("newSession.baseBranch")}
+        `,
+      })}
+      ${renderSettingsRow({
+        title: t("newSession.baseBranch"),
+        control: html`
           <input
+            class="settings-input"
             type="text"
+            aria-label=${t("newSession.baseBranch")}
             ?disabled=${this.creating}
             list="worktrees-create-branches"
             .value=${this.createBaseRef}
@@ -576,150 +593,119 @@ class WorktreesPage extends OpenClawLightDomElement {
           <datalist id="worktrees-create-branches">
             ${this.createBranches.map((name) => html`<option value=${name}></option>`)}
           </datalist>
-        </label>
-        <button
-          class="btn btn--sm"
-          ?disabled=${this.operationPending || !this.createRepoRoot.trim()}
-          @click=${() => void this.createWorktree()}
-        >
-          ${this.creating ? t("common.loading") : t("common.create")}
-        </button>
-      </div>
+        `,
+      })}
+      ${renderSettingsRow({
+        title: t("worktrees.newWorktree"),
+        control: html`
+          <button
+            class="btn btn--sm"
+            ?disabled=${this.operationPending || !this.createRepoRoot.trim()}
+            @click=${() => void this.createWorktree()}
+          >
+            ${this.creating ? t("common.loading") : t("common.create")}
+          </button>
+        `,
+      })}
     `;
   }
 
   private renderCleanupRow(key: CleanupLimitKey, label: string, help: string, value: number) {
+    // Controls stay inert until the config snapshot populates the draft values,
+    // otherwise an early edit would commit 0 over the operator's real limits.
     const disabled = !this.cleanupLoaded || !this.gatewayConnected;
-    return html`
-      <div class="worktrees-cleanup__row">
-        <div>
-          <div class="worktrees-cleanup__label">${label}</div>
-          <div class="worktrees-cleanup__help">${help}</div>
-        </div>
-        <div class="cfg-number">
-          <button
-            type="button"
-            class="cfg-number__btn"
-            aria-label=${t("worktrees.cleanupDecrease", { label })}
-            ?disabled=${disabled || value <= 0}
-            @click=${() => this.setCleanupLimit(key, value - 1)}
-          >
-            −
-          </button>
-          <input
-            type="number"
-            class="cfg-number__input"
-            min="0"
-            step=${key === "maxCount" ? "1" : "any"}
-            .value=${String(value)}
-            ?disabled=${disabled}
-            @change=${(event: Event) => {
-              this.setCleanupLimit(key, Number((event.target as HTMLInputElement).value));
-            }}
-          />
-          <button
-            type="button"
-            class="cfg-number__btn"
-            aria-label=${t("worktrees.cleanupIncrease", { label })}
-            ?disabled=${disabled}
-            @click=${() => this.setCleanupLimit(key, value + 1)}
-          >
-            +
-          </button>
-        </div>
-      </div>
-    `;
+    return renderSettingsRow({
+      title: label,
+      description: help,
+      control: html`
+        <input
+          class="settings-input"
+          type="number"
+          min="0"
+          step=${key === "maxCount" ? "1" : "any"}
+          aria-label=${label}
+          .value=${String(value)}
+          ?disabled=${disabled}
+          @change=${(event: Event) => {
+            this.setCleanupLimit(key, Number((event.target as HTMLInputElement).value));
+          }}
+        />
+      `,
+    });
   }
 
-  private renderCleanupCard() {
-    return html`
-      <section class="card">
-        <div class="card-title">${t("worktrees.cleanupTitle")}</div>
-        <div class="card-sub">${t("worktrees.cleanupSubtitle")}</div>
-        <div class="worktrees-cleanup">
-          ${this.renderCleanupRow(
-            "maxCount",
-            t("worktrees.cleanupMaxCount"),
-            t("worktrees.cleanupMaxCountHelp"),
-            this.cleanupMaxCount,
-          )}
-          ${this.renderCleanupRow(
-            "maxTotalSizeGb",
-            t("worktrees.cleanupMaxSize"),
-            t("worktrees.cleanupMaxSizeHelp"),
-            this.cleanupMaxSizeGb,
-          )}
-        </div>
-      </section>
-    `;
+  private renderRecordRow(record: WorktreeRecord) {
+    return renderSettingsRow({
+      title: record.name,
+      description: html`
+        <span title=${record.repoRoot}>${repoName(record.repoRoot)}</span> · ${record.branch} ·
+        ${this.renderOwner(record)} · ${formatRelativeTimestamp(record.lastActiveAt)}
+      `,
+      control: html`
+        ${record.removedAt
+          ? renderSettingsStatus({ kind: "muted", label: t("worktrees.restorable") })
+          : renderSettingsStatus({ kind: "ok", label: t("common.active") })}
+        ${record.removedAt
+          ? html`<button
+              class="btn btn--sm"
+              ?disabled=${this.operationPending}
+              @click=${() => void this.restore(record)}
+            >
+              ${t("worktrees.restore")}
+            </button>`
+          : html`<button
+              class="btn btn--sm danger"
+              ?disabled=${this.operationPending}
+              @click=${() => void this.removeWorktree(record)}
+            >
+              ${t("common.delete")}
+            </button>`}
+      `,
+    });
   }
 
   override render() {
-    const body = html`
-      ${this.renderCleanupCard()}
-      <section class="card">
-        <div class="row" style="justify-content: space-between;">
-          <div>
-            <div class="card-title">${t("worktrees.title")}</div>
-            <div class="card-sub">${t("worktrees.subtitle")}</div>
-          </div>
-          <div class="row" style="gap: 8px;">
-            <button class="btn" ?disabled=${this.creating} @click=${() => this.toggleCreate()}>
-              ${t("worktrees.newWorktree")}
-            </button>
-            <button class="btn" ?disabled=${this.operationPending} @click=${() => void this.gc()}>
-              ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}
-            </button>
-          </div>
-        </div>
-        ${this.renderCreateForm()}
-        ${this.error
-          ? html`<div class="callout danger" style="margin-top: 12px;">${this.error}</div>`
-          : nothing}
-        <div class="table worktrees-table" style="margin-top: 16px;">
-          <div class="table-head">
-            <div>${t("worktrees.name")}</div>
-            <div>${t("worktrees.repo")}</div>
-            <div>${t("worktrees.branch")}</div>
-            <div>${t("worktrees.owner")}</div>
-            <div>${t("worktrees.status")}</div>
-            <div>${t("worktrees.lastActive")}</div>
-            <div>${t("worktrees.actions")}</div>
-          </div>
-          ${this.records.length === 0
-            ? html`<div class="muted" style="padding: 16px;">${t("worktrees.empty")}</div>`
-            : this.records.map(
-                (record) => html`
-                  <div class="table-row">
-                    <div>${record.name}</div>
-                    <div title=${record.repoRoot}>${repoName(record.repoRoot)}</div>
-                    <div>${record.branch}</div>
-                    <div>${this.renderOwner(record)}</div>
-                    <div>${record.removedAt ? t("worktrees.restorable") : t("common.active")}</div>
-                    <div>${formatRelativeTimestamp(record.lastActiveAt)}</div>
-                    <div class="row" style="gap: 8px;">
-                      ${record.removedAt
-                        ? html`<button
-                            class="btn btn--sm"
-                            ?disabled=${this.operationPending}
-                            @click=${() => void this.restore(record)}
-                          >
-                            ${t("worktrees.restore")}
-                          </button>`
-                        : html`<button
-                            class="btn btn--sm danger"
-                            ?disabled=${this.operationPending}
-                            @click=${() => void this.removeWorktree(record)}
-                          >
-                            ${t("common.delete")}
-                          </button>`}
-                    </div>
-                  </div>
-                `,
-              )}
-        </div>
-      </section>
+    const actions = html`
+      <button class="btn" ?disabled=${this.creating} @click=${() => this.toggleCreate()}>
+        ${t("worktrees.newWorktree")}
+      </button>
+      <button class="btn" ?disabled=${this.operationPending} @click=${() => void this.gc()}>
+        ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}
+      </button>
     `;
+    const rows = html`
+      ${this.renderCreateRows()}
+      ${this.records.length === 0
+        ? renderSettingsEmpty(t("worktrees.empty"))
+        : this.records.map((record) => this.renderRecordRow(record))}
+    `;
+    const body = renderSettingsPage(
+      html`
+        ${this.error ? html`<div class="callout danger">${this.error}</div>` : nothing}
+        ${renderSettingsSection(
+          { title: t("worktrees.title"), description: t("worktrees.subtitle"), actions },
+          rows,
+        )}
+        ${renderSettingsSection(
+          { title: t("worktrees.cleanupTitle"), description: t("worktrees.cleanupSubtitle") },
+          html`
+            ${this.renderCleanupRow(
+              "maxCount",
+              t("worktrees.cleanupMaxCount"),
+              t("worktrees.cleanupMaxCountHelp"),
+              this.cleanupMaxCount,
+            )}
+            ${this.renderCleanupRow(
+              "maxTotalSizeGb",
+              t("worktrees.cleanupMaxSize"),
+              t("worktrees.cleanupMaxSizeHelp"),
+              this.cleanupMaxSizeGb,
+            )}
+          `,
+        )}
+      `,
+      { wide: true },
+    );
     return html`
       <section class="content-header">
         <div>

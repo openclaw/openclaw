@@ -50,6 +50,7 @@ type SidebarAgentMenuParams = {
   onFilterChange: (next: string) => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
+  onOpenNewSession: (agentId: string) => void;
   onClose: () => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
@@ -116,27 +117,44 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const unread = active ? 0 : params.agentUnreadCount(agentId);
   const initial = resolveAgentTextAvatar(agent) ?? (label || agent.id).slice(0, 1).toUpperCase();
   return html`
-    <button
-      type="button"
-      class="sidebar-customize-menu__item"
-      role="menuitemradio"
-      tabindex="-1"
-      aria-checked=${String(active)}
-      @click=${() => params.onSwitchAgent(agentId)}
-    >
-      <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
-      <span class="sidebar-customize-menu__text">${label}</span>
-      ${unread > 0
-        ? html`<span
-            class="session-unread-dot"
-            role="img"
-            aria-label=${t("sessionsView.unread")}
-          ></span>`
-        : nothing}
-      <span class="sidebar-customize-menu__check" aria-hidden="true">
-        ${active ? icons.check : nothing}
-      </span>
-    </button>
+    <div class="sidebar-agent-menu__agent-row">
+      <button
+        type="button"
+        class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch"
+        role="menuitemradio"
+        tabindex="-1"
+        aria-checked=${String(active)}
+        @click=${() => params.onSwitchAgent(agentId)}
+      >
+        <span class="sidebar-agent-section__avatar" aria-hidden="true">${initial}</span>
+        <span class="sidebar-customize-menu__text">${label}</span>
+        ${unread > 0
+          ? html`<span
+              class="session-unread-dot"
+              role="img"
+              aria-label=${t("sessionsView.unread")}
+            ></span>`
+          : nothing}
+        <span class="sidebar-customize-menu__check" aria-hidden="true">
+          ${active ? icons.check : nothing}
+        </span>
+      </button>
+      <button
+        type="button"
+        class="sidebar-session-sort sidebar-agent-menu__new"
+        role="menuitem"
+        tabindex="-1"
+        title=${`${t("chat.runControls.newSession")} — ${label}`}
+        aria-label=${`${t("chat.runControls.newSession")} — ${label}`}
+        ?disabled=${!params.connected}
+        @click=${() => {
+          params.onClose();
+          params.onOpenNewSession(agentId);
+        }}
+      >
+        ${icons.plus}
+      </button>
+    </div>
   `;
 }
 

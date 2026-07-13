@@ -30,6 +30,7 @@ export * from "./schema/nodes.js";
 export * from "./schema/protocol-schemas.js";
 export * from "./schema/push.js";
 export * from "./schema/secrets.js";
+export * from "./schema/session-placement.js";
 export * from "./schema/sessions.js";
 export * from "./schema/sessions-catalog.js";
 export * from "./schema/snapshot.js";
