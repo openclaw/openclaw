@@ -293,6 +293,8 @@ async function sendChunkedOversizedBody(params: {
 async function sendStalledBody(params: {
   port: number;
   token: string;
+  bodyAfterDelay?: string;
+  delayMs?: number;
 }): Promise<{ status: number | undefined; body: string; closed: boolean }> {
   return await new Promise((resolve, reject) => {
     let sawResponse = false;
@@ -355,7 +357,14 @@ async function sendStalledBody(params: {
         reject(error);
       }
     });
-    req.write("{");
+    if (params.bodyAfterDelay === undefined) {
+      req.write("{");
+      return;
+    }
+    req.flushHeaders();
+    setTimeout(() => {
+      req.end(params.bodyAfterDelay);
+    }, params.delayMs ?? 0).unref();
   });
 }
 
@@ -1628,6 +1637,37 @@ describe("mcp loopback server", () => {
         status: 408,
         body: '{"error":"request_body_timeout"}',
         closed: true,
+      });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = previousTimeout;
+      }
+    }
+  });
+
+  it("keeps delayed valid MCP request bodies open when timeout config exceeds Node's timer ceiling", async () => {
+    const previousTimeout = process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS;
+    process.env.OPENCLAW_MCP_LOOPBACK_BODY_TIMEOUT_MS = "2147483648";
+    try {
+      server = await startMcpLoopbackServer(0);
+      const runtime = getActiveMcpLoopbackRuntime();
+      if (!runtime) {
+        throw new Error("expected active MCP loopback runtime");
+      }
+      const auth = runtime.ownerToken;
+
+      const response = await sendStalledBody({
+        port: server.port,
+        token: auth,
+        bodyAfterDelay: mcpToolsListBody(),
+        delayMs: 25,
+      });
+
+      expect(response.status).toBe(200);
+      expect(JSON.parse(response.body)).toMatchObject({
+        result: { tools: [{ name: "message" }] },
       });
     } finally {
       if (previousTimeout === undefined) {
