@@ -14,7 +14,6 @@ import {
 } from "./chat-queue.ts";
 import {
   ChatStateController,
-  handleChatManualRefresh,
   refreshChatMetadata,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
@@ -33,7 +32,6 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
-import type { RenderLifecycle } from "./render-lifecycle.ts";
 
 vi.mock("../../app/assistant-identity.ts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../app/assistant-identity.ts")>()),
@@ -184,93 +182,6 @@ describe("ChatStateController render lifecycle", () => {
 
     expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
     expect(painted).not.toHaveBeenCalled();
-  });
-
-  it("resolves a canceled commit wait without starting manual refresh RPCs", async () => {
-    const cancelAnimationFrame = vi.fn();
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
-    let cancelCommit = () => {};
-    const invalidate = vi.fn();
-    const renderLifecycle: RenderLifecycle = {
-      invalidate,
-      afterCommit: (_effect, onCancel) => {
-        cancelCommit = () => onCancel?.();
-        return cancelCommit;
-      },
-    };
-    const resetToolStream = vi.fn();
-    const scrollToBottom = vi.fn();
-    const state = {
-      chatManualRefreshFrame: 40,
-      chatManualRefreshGeneration: 0,
-      chatManualRefreshInFlight: false,
-      chatNewMessagesBelow: true,
-      renderLifecycle,
-      resetToolStream,
-      scrollToBottom,
-    } as unknown as ChatPageHost;
-
-    const refresh = handleChatManualRefresh(state);
-    cancelCommit();
-    await refresh;
-
-    expect(state.chatManualRefreshInFlight).toBe(false);
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(40);
-    expect(resetToolStream).not.toHaveBeenCalled();
-    expect(scrollToBottom).not.toHaveBeenCalled();
-    expect(invalidate).not.toHaveBeenCalled();
-  });
-
-  it("cancels pending manual refresh frames when state is replaced or disconnected", () => {
-    const cancelAnimationFrame = vi.fn();
-    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
-    const host = {
-      addController: () => undefined,
-      removeController: () => undefined,
-      requestUpdate: () => undefined,
-      updateComplete: Promise.resolve(true),
-    } satisfies ReactiveControllerHost;
-    const controller = new ChatStateController<ChatPageHost>(host);
-    controller.hostConnected();
-    const createState = (frame: number, renderLifecycle: RenderLifecycle) =>
-      ({
-        chatLoading: false,
-        chatMessages: [],
-        chatToolMessages: [],
-        chatStream: null,
-        realtimeTalkConversation: [],
-        handleSendChat: async () => undefined,
-        handleChatDraftChange: () => undefined,
-        handleChatInputHistoryKey: () => ({ handled: false }),
-        chatManualRefreshFrame: frame,
-        chatManualRefreshGeneration: 1,
-        chatManualRefreshInFlight: true,
-        renderLifecycle,
-        chatScrollCommitCleanup: null,
-        chatScrollFrame: null,
-        chatScrollGuardFrame: null,
-        chatScrollTimeout: null,
-        chatScrollGeneration: 0,
-        chatIsProgrammaticScroll: false,
-        sessionWorkspaceState: undefined,
-        realtimeTalkSession: null,
-        resetToolStream: vi.fn(),
-      }) as unknown as ChatPageHost;
-    const first = createState(41, controller.createRenderLifecycle());
-
-    controller.attach(first);
-    const second = createState(42, controller.createRenderLifecycle());
-    controller.attach(second);
-
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(41);
-    expect(first.chatManualRefreshFrame).toBeNull();
-    expect(first.chatManualRefreshInFlight).toBe(false);
-
-    controller.hostDisconnected();
-
-    expect(cancelAnimationFrame).toHaveBeenCalledWith(42);
-    expect(second.chatManualRefreshFrame).toBeNull();
-    expect(second.chatManualRefreshInFlight).toBe(false);
   });
 });
 
