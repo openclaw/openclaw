@@ -78,7 +78,7 @@ Before editing, verify the current directory is the isolated worktree and its in
 Immediately before the final push or PR for newly authored work, run `git fetch --prune <canonicalRemote>` and `git merge-base --is-ancestor <canonicalRemote>/<canonicalDefaultBranch> HEAD`. If the ancestry check fails, update the new branch onto the latest canonical base, rerun the relevant proof, and only then push without force. For existing PR/shared-branch work, report a failed ancestry check and follow the repository workflow without rewriting the branch.
 ```
 
-If the worker must create the worktree itself, give it a non-primary administrative checkout and require the same fetch, creation, and SHA-verification steps before any edit. Never start it in `~/Projects/openclaw`. Read-only tasks and non-Git scratch work do not require the Git preparation block.
+The launcher must create and verify the worktree before starting the editing worker; do not delegate worktree creation to that worker. Never start it in `~/Projects/openclaw`. Read-only tasks and non-project scratch work do not require the Git preparation block.
 
 ## Notification block
 
