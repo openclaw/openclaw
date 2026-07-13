@@ -103,7 +103,7 @@ import {
   capChatHistoryAroundMessage,
   readChatHistoryMessageId,
   readChatHistoryMessageSeq,
-  readChatHistoryPage,
+  readEnrichedChatHistoryPage,
 } from "./chat-history-pages.js";
 import {
   hasGatewayAdminScope,
@@ -568,7 +568,7 @@ async function handleChatHistoryRequest({
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
-  const historyPage = await readChatHistoryPage({
+  const historyPage = await readEnrichedChatHistoryPage({
     entry: historyEntry,
     provider: resolvedSessionModel.provider,
     sessionId,
