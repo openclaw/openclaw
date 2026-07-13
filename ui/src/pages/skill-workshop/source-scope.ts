@@ -43,7 +43,7 @@ export function isCurrentSkillWorkshopSourceScope(
   },
 ): boolean {
   const context = current.context;
-  return Boolean(
+  return (
     current.state === scope.state &&
     context === scope.context &&
     current.epoch === scope.epoch &&
@@ -51,6 +51,6 @@ export function isCurrentSkillWorkshopSourceScope(
     context.agentSelection === scope.agentSelection &&
     context.sessions === scope.sessions &&
     context.skillWorkshopRevision === scope.revision &&
-    context.navigate === scope.navigate,
+    context.navigate === scope.navigate
   );
 }

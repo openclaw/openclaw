@@ -38,7 +38,7 @@ export function listSqliteTranscriptInstancesFromDatabase(params: {
       if (isInternalSessionEffectsKey(row.session_key) || row.transcript_updated_at === null) {
         return undefined;
       }
-      const updatedAtMs = Number(row.transcript_updated_at);
+      const updatedAtMs = row.transcript_updated_at;
       const current = params.currentEntries.get(row.session_key);
       // Matching identities cannot classify transcript content written before provenance existed.
       const currentIsExact = current?.sessionId === row.session_id;

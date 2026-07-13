@@ -5,6 +5,7 @@ import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/run
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
+import { toErrorObject } from "../../infra/errors.js";
 import {
   listHistoryScanCandidates,
   selectSkillHistoryScanCandidates,
@@ -364,7 +365,7 @@ async function runSkillHistoryScanCore(
     return next;
   }
   // Retry reuses its run id, durable proposal ids, and remaining mutation budget.
-  throw reviewError ?? new Error("Historical skill scan did not confirm batch completion.");
+  throw toErrorObject(reviewError, "Historical skill scan did not confirm batch completion.");
 }
 
 export function runSkillHistoryScan(

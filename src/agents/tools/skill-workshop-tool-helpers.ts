@@ -49,7 +49,7 @@ export async function completeProposalReview(completion: SkillWorkshopProposalRe
   }
   completion.phase = "completing";
   try {
-    await Promise.all([...(completion.activeMutations ?? [])]);
+    await Promise.all(Array.from(completion.activeMutations ?? []));
     await completion.complete();
     completion.completed = true;
     completion.phase = "completed";
