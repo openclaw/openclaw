@@ -239,7 +239,7 @@ export async function setDefaultAgent(
   }
 }
 
-export type AgentIdentityUpdate = {
+type AgentIdentityUpdate = {
   agentId: string;
   name?: string;
   emoji?: string;

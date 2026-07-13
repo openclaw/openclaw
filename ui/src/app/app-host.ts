@@ -686,11 +686,8 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private chatNavigationOptions(options?: ApplicationNavigationOptions) {
-    if (options) {
-      return options;
-    }
     const sessionKey = this.activeSessionKey.trim();
-    return sessionKey ? { search: searchForSession(sessionKey) } : undefined;
+    return options ?? (sessionKey ? { search: searchForSession(sessionKey) } : undefined);
   }
 
   private navigate(routeId: string, options?: ApplicationNavigationOptions) {
