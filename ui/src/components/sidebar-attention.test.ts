@@ -170,7 +170,7 @@ describe("addDismissal", () => {
       getItem: (key: string) => map.get(key) ?? null,
       key: (index: number) => [...map.keys()][index] ?? null,
       removeItem: (key: string) => void map.delete(key),
-      setItem: (key: string, value: string) => void map.set(key, String(value)),
+      setItem: (key: string, value: string) => void map.set(key, value),
     };
   }
 
