@@ -113,7 +113,7 @@ export function createProgressNarrator(params: {
   const resetTurnState = () => {
     turnGeneration += 1;
     turnActive = true;
-    notes.splice(0, notes.length);
+    notes.splice(0);
     disabled = false;
     inFlight = false;
     pendingImmediate = false;
