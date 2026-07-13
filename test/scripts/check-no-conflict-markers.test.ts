@@ -177,4 +177,43 @@ describe("check-no-conflict-markers", () => {
       },
     ]);
   });
+
+  it("main reports tracked violations with paths relative to cwd", () => {
+    const rootDir = createTempDir("openclaw-conflict-markers-main-");
+    git(rootDir, "init", "-q");
+    git(rootDir, "config", "user.email", "test@example.com");
+    git(rootDir, "config", "user.name", "Test User");
+
+    const conflictFile = "src/conflict.ts";
+    const conflictPath = path.join(rootDir, conflictFile);
+    fs.mkdirSync(path.dirname(conflictPath), { recursive: true });
+    fs.writeFileSync(
+      conflictPath,
+      [
+        "<<<<<<< HEAD",
+        'const value = "left";',
+        "=======",
+        'const value = "right";',
+        ">>>>>>> branch",
+      ].join("\n"),
+    );
+    git(rootDir, "add", conflictFile);
+
+    const scriptPath = path.resolve(__dirname, "../../scripts/check-no-conflict-markers.mjs");
+    let error: Error | undefined;
+    try {
+      execFileSync(process.execPath, [scriptPath], {
+        cwd: rootDir,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (caught) {
+      error = caught as Error;
+    }
+
+    expect(error).toBeDefined();
+    const stderr = (error as NodeJS.ErrnoException).stderr as string;
+    expect(stderr).toContain("Found unresolved merge conflict markers:");
+    expect(stderr).toContain(`- ${conflictFile}:1,3,5`);
+  });
 });

@@ -156,8 +156,8 @@ export async function main() {
 
   console.error("Found unresolved merge conflict markers:");
   for (const violation of violations) {
-    const relativePath = path.relative(cwd, violation.filePath) || violation.filePath;
-    console.error(`- ${relativePath}:${violation.lines.join(",")}`);
+    // findConflictMarkersInTrackedFiles already returns paths relative to cwd.
+    console.error(`- ${violation.filePath}:${violation.lines.join(",")}`);
   }
   process.exitCode = 1;
 }
