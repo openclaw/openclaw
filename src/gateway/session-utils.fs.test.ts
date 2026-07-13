@@ -2580,6 +2580,88 @@ describe("archiveSessionTranscripts", () => {
       expect(fs.existsSync(transcriptPath)).toBe(false);
     });
   });
+
+  test("archives cross-agent sessionFile candidate through containment boundary", () => {
+    // Cross-agent path resolution requires an .../agents/<id>/sessions/ structure.
+    // Set up two sibling agents: "main" (the archived session) and "ops".
+    const crossTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cross-archive-"));
+    try {
+      const mainSessionsDir = path.join(crossTmpDir, "agents", "main", "sessions");
+      const opsSessionsDir = path.join(crossTmpDir, "agents", "ops", "sessions");
+      fs.mkdirSync(mainSessionsDir, { recursive: true });
+      fs.mkdirSync(opsSessionsDir, { recursive: true });
+
+      const storePath = path.join(mainSessionsDir, "sessions.json");
+      const sessionId = "sess-cross-archive-1";
+      const crossTranscriptPath = path.join(opsSessionsDir, `${sessionId}.jsonl`);
+      fs.writeFileSync(crossTranscriptPath, '{"type":"session"}\n', "utf-8");
+
+      withEnv({ OPENCLAW_HOME: crossTmpDir }, () => {
+        const archived = archiveSessionTranscripts({
+          sessionId,
+          storePath,
+          sessionFile: crossTranscriptPath,
+          agentId: "main",
+          reason: "reset",
+        });
+
+        // Cross-agent candidate should be accepted through the agent containment root.
+        expect(archived).toHaveLength(1);
+        expect(archived[0]).toContain(".reset.");
+        expect(fs.existsSync(crossTranscriptPath)).toBe(false);
+      });
+    } finally {
+      fs.rmSync(crossTmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects poisoned non-jsonl sessionFile without storePath", () => {
+    // When storePath is undefined and no agentId, the resolver returns the raw
+    // sessionFile path. The containment boundary should reject non-.jsonl paths.
+    withArchiveHome(() => {
+      const archived = archiveSessionTranscripts({
+        sessionId: "sess-poisoned",
+        storePath: undefined,
+        sessionFile: "/etc/passwd",
+        reason: "reset",
+      });
+
+      expect(archived).toStrictEqual([]);
+    });
+  });
+
+  test("rejects poisoned sessionFile outside storePath containment boundary", () => {
+    // With storePath set, the containment root is dirname(storePath). A poisoned
+    // sessionFile pointing to a system path should be rejected by containment
+    // and only the valid synthesized candidate should be archived.
+    const poisonTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-poison-archive-"));
+    try {
+      fs.mkdirSync(path.join(poisonTmpDir, "agents", "main", "sessions"), { recursive: true });
+
+      const storePath = path.join(poisonTmpDir, "agents", "main", "sessions", "sessions.json");
+      const sessionId = "sess-poison-store-1";
+      const validPath = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+      fs.writeFileSync(validPath, '{"type":"session"}\n', "utf-8");
+
+      withEnv({ OPENCLAW_HOME: poisonTmpDir }, () => {
+        const archived = archiveSessionTranscripts({
+          sessionId,
+          storePath,
+          sessionFile: "/etc/passwd",
+          agentId: "main",
+          reason: "deleted",
+        });
+
+        // Poisoned path is rejected by the resolver; only the valid fallback
+        // candidate (under dirname(storePath)) is archived.
+        expect(archived).toHaveLength(1);
+        expect(archived[0]).toContain(".deleted.");
+        expect(fs.existsSync(validPath)).toBe(false);
+      });
+    } finally {
+      fs.rmSync(poisonTmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("oversized transcript line guards", () => {

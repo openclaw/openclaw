@@ -411,17 +411,51 @@ export function archiveSessionTranscriptsDetailed(opts: {
   restrictToStoreDir?: boolean;
   /**
    * Invoked when an individual transcript candidate fails to archive. The
-   * caller decides whether to log, warn-deliver, or escalate.
+   * caller decides whether to decide whether to log, warn-deliver, or escalate.
    */
   onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
-  const safeStoreDir = opts.storePath
-    ? canonicalizePathForComparison(path.dirname(opts.storePath))
-    : canonicalizePathForComparison(
-        path.join(resolveRequiredHomeDir(process.env, os.homedir), ".openclaw", "sessions"),
-      );
-  const storeDir = safeStoreDir;
+
+  // Build containment roots that match the resolver's validated boundaries.
+  // The resolver accepts candidates from the store directory, sibling agent
+  // sessions directories, and the legacy global sessions directory. Using the
+  // same multi-root set here preserves explicit custom and cross-agent
+  // candidates while still enforcing path containment for security.
+  const home = resolveRequiredHomeDir(process.env, os.homedir);
+  const containmentRoots: string[] = [];
+  if (opts.storePath) {
+    const sessionsDir = canonicalizePathForComparison(path.dirname(opts.storePath));
+    containmentRoots.push(sessionsDir);
+    // When the store path follows the .../agents/<id>/sessions/ convention,
+    // add the parent agents directory as a containment root so sibling-agent
+    // cross-agent candidates are also accepted.
+    if (path.basename(sessionsDir) === "sessions") {
+      containmentRoots.push(canonicalizePathForComparison(path.resolve(sessionsDir, "..", "..")));
+    }
+  } else if (opts.agentId) {
+    // Without a store path the resolver uses the agent sessions dir directly.
+    const agentSessionDir = canonicalizePathForComparison(
+      path.dirname(resolveSessionTranscriptPath(opts.sessionId, opts.agentId)),
+    );
+    containmentRoots.push(agentSessionDir);
+    // Add the parent agents dir so sibling-agent candidates stay contained.
+    containmentRoots.push(canonicalizePathForComparison(path.resolve(agentSessionDir, "..", "..")));
+  }
+  // Legacy global sessions directory is always a valid containment root.
+  containmentRoots.push(canonicalizePathForComparison(path.join(home, ".openclaw", "sessions")));
+  // When storePath is undefined without agentId the resolver returns the raw
+  // sessionFile path directly. Preserve this explicit custom path by adding its
+  // parent directory as a containment root so valid user-specified transcripts
+  // are not filtered out. Only .jsonl paths are accepted — non-transcript
+  // extensions (e.g. a poisoned /etc/passwd) are rejected by containment.
+  if (opts.sessionFile && !opts.storePath && !opts.agentId) {
+    const resolvedSessionFile = path.resolve(opts.sessionFile);
+    if (resolvedSessionFile.endsWith(".jsonl")) {
+      containmentRoots.push(canonicalizePathForComparison(path.dirname(resolvedSessionFile)));
+    }
+  }
+
   for (const candidate of resolveSessionTranscriptCandidates(
     opts.sessionId,
     opts.storePath,
@@ -429,11 +463,12 @@ export function archiveSessionTranscriptsDetailed(opts: {
     opts.agentId,
   )) {
     const candidatePath = canonicalizePathForComparison(candidate);
-    if (storeDir) {
-      const relative = path.relative(storeDir, candidatePath);
-      if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-        continue;
-      }
+    const contained = containmentRoots.some((root) => {
+      const relative = path.relative(root, candidatePath);
+      return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+    });
+    if (!contained) {
+      continue;
     }
     if (!fs.existsSync(candidatePath)) {
       continue;
