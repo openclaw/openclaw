@@ -107,7 +107,7 @@ function resolveMSTeamsTurnChainKey(params: { storePath?: string; sessionKey: st
   if (storePath) {
     return sessionKey ? `store:${storePath}:session:${sessionKey}` : `store:${storePath}`;
   }
-  return sessionKey ? "global" : "";
+  return sessionKey ? `session:${sessionKey}` : "";
 }
 
 async function enqueueMSTeamsSessionTurn<T>(

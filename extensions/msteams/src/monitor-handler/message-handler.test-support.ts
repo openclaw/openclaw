@@ -18,6 +18,7 @@ type MessageHandlerDepsOptions = {
   shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+  resolveStorePath?: () => string | undefined;
   getTeamDetails?: ReturnType<typeof vi.fn>;
 };
 
@@ -56,7 +57,7 @@ export function createMessageHandlerDeps(
     createInboundDebouncer: options.createInboundDebouncer,
     resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     resolveTextChunkLimit: () => 4000,
-    resolveStorePath: () => "/tmp/test-store",
+    resolveStorePath: options.resolveStorePath ?? (() => "/tmp/test-store"),
   });
 
   const conversationStore = {

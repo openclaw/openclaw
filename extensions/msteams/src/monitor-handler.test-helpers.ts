@@ -24,7 +24,7 @@ type MSTeamsTestRuntimeOptions = {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
-  resolveStorePath?: () => string;
+  resolveStorePath?: () => string | undefined;
 };
 
 export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {}): void {

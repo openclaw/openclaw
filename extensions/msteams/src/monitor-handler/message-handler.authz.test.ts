@@ -100,6 +100,7 @@ describe("msteams monitor handler authz", () => {
       shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
       createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
       resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+      resolveStorePath?: () => string | undefined;
     } = {},
   ) {
     const readAllowFromStore = vi.fn(async () => ["attacker-aad"]);
@@ -121,6 +122,7 @@ describe("msteams monitor handler authz", () => {
       shouldHandleTextCommands: options.shouldHandleTextCommands,
       createInboundDebouncer: options.createInboundDebouncer,
       resolveInboundDebounceMs: options.resolveInboundDebounceMs,
+      resolveStorePath: options.resolveStorePath,
     });
   }
 
@@ -222,6 +224,7 @@ describe("msteams monitor handler authz", () => {
   function createAttackerGroupActivity(params?: {
     text?: string;
     channelData?: Record<string, unknown>;
+    conversationId?: string;
   }): HandlerInput {
     return createMessageActivity({
       id: "msg-1",
@@ -232,7 +235,7 @@ describe("msteams monitor handler authz", () => {
         name: "Attacker",
       },
       conversation: {
-        id: "19:group@thread.tacv2",
+        id: params?.conversationId ?? "19:group@thread.tacv2",
         conversationType: "groupChat",
       },
       channelData: params?.channelData,
@@ -790,14 +793,17 @@ describe("msteams monitor handler authz", () => {
         capturedCtxPayload: params.ctxPayload,
       }),
     );
-    const { deps } = createDeps({
-      channels: {
-        msteams: {
-          groupPolicy: "open",
-          requireMention: false,
+    const { deps } = createDeps(
+      {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
         },
-      },
-    } as OpenClawConfig);
+      } as OpenClawConfig,
+      { resolveStorePath: () => undefined },
+    );
 
     const handler = createMSTeamsMessageHandler(deps);
     const first = handler(createAttackerGroupActivity({ text: "first" }));
@@ -817,6 +823,68 @@ describe("msteams monitor handler authz", () => {
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
       2,
     );
+  });
+
+  it("does not serialize concurrent turns for different Teams sessions without a store path", async () => {
+    resetThreadMocks();
+    let releaseFirstDispatch!: () => void;
+    const firstDispatchStarted = new Promise<void>((resolve) => {
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockImplementationOnce(
+        async (params: { ctxPayload: unknown }) => {
+          resolve();
+          await new Promise<void>((release) => {
+            releaseFirstDispatch = release;
+          });
+          return {
+            queuedFinal: false,
+            counts: {},
+            capturedCtxPayload: params.ctxPayload,
+          };
+        },
+      );
+    });
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockImplementation(
+      async (params: { ctxPayload: unknown }) => ({
+        queuedFinal: false,
+        counts: {},
+        capturedCtxPayload: params.ctxPayload,
+      }),
+    );
+    const { deps } = createDeps(
+      {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+            requireMention: false,
+          },
+        },
+      } as OpenClawConfig,
+      { resolveStorePath: () => undefined },
+    );
+
+    const handler = createMSTeamsMessageHandler(deps);
+    const first = handler(
+      createAttackerGroupActivity({
+        text: "first",
+        conversationId: "19:first@thread.tacv2",
+      }),
+    );
+    await firstDispatchStarted;
+
+    const second = handler(
+      createAttackerGroupActivity({
+        text: "second",
+        conversationId: "19:second@thread.tacv2",
+      }),
+    );
+    await second;
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      2,
+    );
+
+    releaseFirstDispatch();
+    await first;
   });
 
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
