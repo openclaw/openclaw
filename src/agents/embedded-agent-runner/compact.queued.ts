@@ -56,7 +56,6 @@ import {
   prepareAgentRuntimeAuth,
   type PreparedAgentRuntimeAuthAttempt,
 } from "../runtime-plan/prepare-auth.js";
-import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import { SessionManager } from "../sessions/index.js";
 import { DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON } from "./compact-reasons.js";

@@ -1,9 +1,6 @@
 // Coverage for small run-attempt decision helpers.
 import { describe, expect, it } from "vitest";
-import {
-  shouldForceCredentialScopedModelResolve,
-  shouldMaterializeAuthPlanModel,
-} from "../../runtime-plan/credential-scoped-model.js";
+import { resolveCredentialScopedAuthAttemptModelDecision } from "../../runtime-plan/credential-scoped-model.js";
 import {
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
@@ -51,37 +48,34 @@ describe("resolveAttemptStreamAuthProfileId", () => {
     ).toBeUndefined();
   });
 
-  describe("shouldMaterializeAuthPlanModel", () => {
-    it("materializes route-less plans when a provider profile scopes model metadata", () => {
-      expect(
-        shouldMaterializeAuthPlanModel({
-          forwardedAuthProfileId: "github-copilot:work",
-        }),
-      ).toBe(true);
-      expect(shouldMaterializeAuthPlanModel({}, "github-copilot:requested")).toBe(true);
-      expect(shouldMaterializeAuthPlanModel({ selectedAuthMode: "api-key" }, undefined, true)).toBe(
-        true,
-      );
-      expect(
-        shouldMaterializeAuthPlanModel({ selectedAuthMode: "api-key" }, undefined, false),
-      ).toBe(false);
-      expect(shouldMaterializeAuthPlanModel({})).toBe(false);
-    });
+  describe("resolveCredentialScopedAuthAttemptModelDecision", () => {
+    const resolveDecision = (
+      plan: Record<string, unknown>,
+      requestedProfileId?: string,
+      providerUsesProfileScopedModelMetadata = false,
+    ) =>
+      resolveCredentialScopedAuthAttemptModelDecision({
+        attempt: { kind: "implicit", plan } as never,
+        priorProfileAttempted: false,
+        requestedProfileId,
+        providerUsesProfileScopedModelMetadata,
+      });
 
-    it("forces re-resolution for profiles and provider-scoped direct credentials", () => {
+    it("materializes route-less plans when a provider profile scopes model metadata", () => {
+      expect(resolveDecision({ forwardedAuthProfileId: "github-copilot:work" })).toMatchObject({
+        forceResolve: false,
+        shouldMaterialize: true,
+      });
+      expect(resolveDecision({}, "github-copilot:requested").shouldMaterialize).toBe(true);
+      expect(resolveDecision({ selectedAuthMode: "api-key" }, undefined, true)).toMatchObject({
+        forceResolve: false,
+        shouldMaterialize: true,
+        authRequirement: "api-key",
+      });
       expect(
-        shouldForceCredentialScopedModelResolve({
-          forwardedAuthProfileId: "github-copilot:work",
-        }),
-      ).toBe(true);
-      expect(shouldForceCredentialScopedModelResolve({}, "github-copilot:requested")).toBe(true);
-      expect(
-        shouldForceCredentialScopedModelResolve({ selectedAuthMode: "api-key" }, undefined, true),
-      ).toBe(true);
-      expect(
-        shouldForceCredentialScopedModelResolve({ selectedAuthMode: "api-key" }, undefined, false),
+        resolveDecision({ selectedAuthMode: "api-key" }, undefined, false).shouldMaterialize,
       ).toBe(false);
-      expect(shouldForceCredentialScopedModelResolve({})).toBe(false);
+      expect(resolveDecision({}).shouldMaterialize).toBe(false);
     });
   });
 });

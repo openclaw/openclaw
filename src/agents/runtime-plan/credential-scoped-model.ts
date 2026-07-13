@@ -86,7 +86,7 @@ export function shouldForceDirectAuthFallbackModelResolve(params: {
 }
 
 /** Re-resolves when the selected profile or direct credential can change provider metadata. */
-export function shouldForceCredentialScopedModelResolve(
+function shouldForceCredentialScopedModelResolve(
   plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "selectedAuthMode">,
   requestedProfileId?: string,
   providerUsesProfileScopedModelMetadata = false,
@@ -99,7 +99,7 @@ export function shouldForceCredentialScopedModelResolve(
 }
 
 /** Re-resolves metadata whenever the prepared credential can change provider limits. */
-export function shouldMaterializeAuthPlanModel(
+function shouldMaterializeAuthPlanModel(
   plan: Pick<AgentRuntimeAuthPlan, "forwardedAuthProfileId" | "modelRoute" | "selectedAuthMode">,
   requestedProfileId?: string,
   providerUsesProfileScopedModelMetadata = false,
