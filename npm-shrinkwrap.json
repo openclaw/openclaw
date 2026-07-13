@@ -34,6 +34,7 @@
         "defu": "6.1.5",
         "diff": "9.0.0",
         "dotenv": "17.4.2",
+        "entities": "8.0.0",
         "express": "5.2.1",
         "file-type": "22.0.1",
         "glob": "13.0.6",
@@ -1139,6 +1140,18 @@
         "url": "https://github.com/cheeriojs/dom-serializer?sponsor=1"
       }
     },
+    "node_modules/dom-serializer/node_modules/entities": {
+      "version": "4.5.0",
+      "resolved": "https://registry.npmjs.org/entities/-/entities-4.5.0.tgz",
+      "integrity": "sha512-V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw==",
+      "license": "BSD-2-Clause",
+      "engines": {
+        "node": ">=0.12"
+      },
+      "funding": {
+        "url": "https://github.com/fb55/entities?sponsor=1"
+      }
+    },
     "node_modules/domelementtype": {
       "version": "2.3.0",
       "resolved": "https://registry.npmjs.org/domelementtype/-/domelementtype-2.3.0.tgz",
@@ -1237,12 +1250,12 @@
       }
     },
     "node_modules/entities": {
-      "version": "4.5.0",
-      "resolved": "https://registry.npmjs.org/entities/-/entities-4.5.0.tgz",
-      "integrity": "sha512-V0hjH4dGPh9Ao5p0MoRY6BVqtwCjhz6vI5LT8AJ55H+4g9/4vbHx1I54fS0XuclLhDHArPQCiMjDxjaL8fPxhw==",
+      "version": "8.0.0",
+      "resolved": "https://registry.npmjs.org/entities/-/entities-8.0.0.tgz",
+      "integrity": "sha512-zwfzJecQ/Uej6tusMqwAqU/6KL2XaB2VZ2Jg54Je6ahNBGNH6Ek6g3jjNCF0fG9EWQKGZNddNjU5F1ZQn/sBnA==",
       "license": "BSD-2-Clause",
       "engines": {
-        "node": ">=0.12"
+        "node": ">=20.19.0"
       },
       "funding": {
         "url": "https://github.com/fb55/entities?sponsor=1"
