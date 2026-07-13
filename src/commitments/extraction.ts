@@ -256,7 +256,7 @@ function parseDueMs(raw: string | undefined): number | undefined {
   if (!Number.isFinite(parsed) || parseAbsoluteTimeMs(raw) === null) {
     return undefined;
   }
-  // Strict parsing validates the calendar only; preserve Date.parse's existing interpretation.
+  // The cron parser validates the ISO shape and calendar; preserve Date.parse's existing interpretation.
   return parsed;
 }
 

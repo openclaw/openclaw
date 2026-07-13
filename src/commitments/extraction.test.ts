@@ -199,7 +199,7 @@ describe("commitment extraction", () => {
     expect(validCandidate.latestMs).toBe(validCandidate.earliestMs + 12 * 60 * 60 * 1000);
   });
 
-  it("accepts calendar-valid leap-day and offset due timestamps", () => {
+  it("accepts calendar-valid leap-day, offset, and lowercase RFC 3339 timestamps", () => {
     const valid = validateCommitmentCandidates({
       items: [item()],
       result: {
@@ -207,8 +207,8 @@ describe("commitment extraction", () => {
           candidate({
             dedupeKey: "leap-day-offset",
             dueWindow: {
-              earliest: "2028-02-29T09:00:00-08:00",
-              latest: "2028-02-29T12:00:00-08:00",
+              earliest: "2028-02-29t09:00:00-08:00",
+              latest: "2028-02-29t20:00:00z",
             },
           }),
         ],
@@ -217,8 +217,8 @@ describe("commitment extraction", () => {
     });
 
     const validCandidate = expectSingleValidCandidate(valid);
-    expect(validCandidate.earliestMs).toBe(Date.parse("2028-02-29T09:00:00-08:00"));
-    expect(validCandidate.latestMs).toBe(Date.parse("2028-02-29T12:00:00-08:00"));
+    expect(validCandidate.earliestMs).toBe(Date.parse("2028-02-29t09:00:00-08:00"));
+    expect(validCandidate.latestMs).toBe(Date.parse("2028-02-29t20:00:00z"));
   });
 
   it("clamps inferred due time to at least one heartbeat interval after write time", () => {
