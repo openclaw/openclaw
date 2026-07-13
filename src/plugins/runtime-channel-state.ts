@@ -2,7 +2,7 @@
 import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
 
 /** Global symbol that stores process-current plugin registry state. */
-export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
 
 type GlobalChannelRegistryState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
@@ -17,7 +17,7 @@ type GlobalChannelRegistryState = typeof globalThis & {
 
 type GlobalChannelRegistryRuntimeState = GlobalChannelRegistryState[typeof PLUGIN_REGISTRY_STATE];
 
-export type ActivePluginChannelRegistrySnapshot = {
+type ActivePluginChannelRegistrySnapshot = {
   registry: ActivePluginChannelRegistry | null;
   version: number;
 };

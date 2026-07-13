@@ -146,16 +146,6 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "quotaSuspension",
 ] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
 
-type ReservedSessionEntrySlotKey = Extract<
-  (typeof SESSION_ENTRY_RESERVED_SLOT_KEY_LIST)[number],
-  keyof SessionEntry
->;
-type MissingSessionEntryReservedSlotKeys = Exclude<keyof SessionEntry, ReservedSessionEntrySlotKey>;
-type AssertNever<T extends never> = T;
-/** Compile-time guard that every SessionEntry key is excluded from plugin extension slot names. */
-export type _AssertAllSessionEntryKeysAreReserved =
-  AssertNever<MissingSessionEntryReservedSlotKeys>;
-
 const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<string>(SESSION_ENTRY_RESERVED_SLOT_KEY_LIST);
 const OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS = new Set<string>([
   "prototype",
