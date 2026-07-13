@@ -1,7 +1,17 @@
 // Validates the current runtime against OpenClaw's Node engine floor.
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import type { RuntimeEnv } from "../runtime.js";
+
+// Runtime validation precedes terminal setup. Keep this default path from
+// pulling terminal-core into every CLI startup command.
+const defaultRuntime: RuntimeEnv = {
+  log: (...args) => console.log(...args),
+  error: (...args) => console.error(...args),
+  exit: (code) => {
+    process.exit(code);
+  },
+};
 
 type RuntimeKind = "bun" | "node" | "unknown";
 
