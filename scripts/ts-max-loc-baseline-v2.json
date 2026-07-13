@@ -436,7 +436,7 @@
   "packages/llm-core/src/types.ts": 677,
   "packages/markdown-core/src/ir.ts": 1161,
   "packages/memory-host-sdk/src/host/backend-config.ts": 510,
-  "packages/memory-host-sdk/src/host/internal.ts": 540,
+  "packages/memory-host-sdk/src/host/internal.ts": 544,
   "packages/memory-host-sdk/src/host/memory-schema.ts": 667,
   "packages/memory-host-sdk/src/host/query-expansion.ts": 776,
   "packages/memory-host-sdk/src/host/session-files.ts": 900,
