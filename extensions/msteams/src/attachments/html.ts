@@ -106,7 +106,7 @@ export function summarizeMSTeamsHtmlAttachments(
   };
 }
 
-export function buildMSTeamsAttachmentPlaceholder(
+function buildMSTeamsAttachmentPlaceholder(
   attachments: MSTeamsAttachmentLike[] | undefined,
   limits?: { maxInlineBytes?: number; maxInlineTotalBytes?: number },
 ): string {

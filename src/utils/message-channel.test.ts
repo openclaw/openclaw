@@ -4,8 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { NATIVE_APPROVAL_CHANNELS } from "./message-channel-constants.js";
 import {
-  NATIVE_APPROVAL_CHANNELS,
   isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,

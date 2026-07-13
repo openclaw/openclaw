@@ -18,7 +18,6 @@ import {
   writeSessionStoreCache,
 } from "./sessions/store-cache.js";
 import {
-  applySessionStoreEntryPatch,
   clearSessionStoreCacheForTest,
   loadSessionStore,
   readSessionEntries,
@@ -844,29 +843,6 @@ describe("Session Store Cache", () => {
     expect(expectDefined(cached["session:1"], 'cached["session:1"] test invariant').lastTo).toBe(
       "chat-1",
     );
-  });
-
-  it("detaches caller-owned patch objects before publishing writer-owned caches", async () => {
-    await saveSessionStore(storePath, {
-      "session:1": createSessionEntry({ sessionId: "id-1" }),
-      "session:2": createSessionEntry({ sessionId: "id-2" }),
-    });
-    const before = loadSessionStore(storePath, { clone: false });
-    const untouched = before["session:2"];
-    const deliveryContext = { channel: "telegram", to: "chat-1" };
-
-    await applySessionStoreEntryPatch({
-      storePath,
-      sessionKey: "session:1",
-      patch: { deliveryContext },
-    });
-    deliveryContext.to = "mutated-after-persist";
-
-    const cached = loadSessionStore(storePath, { clone: false });
-    expect(cached["session:2"]).toBe(untouched);
-    expect(
-      expectDefined(cached["session:1"], 'cached["session:1"] test invariant').deliveryContext?.to,
-    ).toBe("chat-1");
   });
 
   it("falls back to full projection when untouched entries need prompt blob repair", async () => {

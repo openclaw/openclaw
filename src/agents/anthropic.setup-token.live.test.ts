@@ -9,11 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  ANTHROPIC_SETUP_TOKEN_PREFIX,
-  validateAnthropicSetupToken,
-} from "../commands/auth-token.js";
+import { validateAnthropicSetupToken } from "../commands/auth-token.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { ANTHROPIC_SETUP_TOKEN_PREFIX } from "../plugins/provider-auth-token.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {

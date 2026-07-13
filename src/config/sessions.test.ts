@@ -7,7 +7,6 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../test-utils/deferred.js";
 import { withEnv } from "../test-utils/env.js";
 import {
-  applySessionStoreEntryPatch,
   buildGroupDisplayName,
   deriveSessionKey,
   loadSessionStore,
@@ -532,34 +531,6 @@ describe("sessions", () => {
       update: async () => ({ updatedAt: 200 }),
     });
 
-    const store = loadSessionStore(storePath);
-    expect(store[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(200);
-    expect(store[sessionKey]?.reasoningLevel).toBe("on");
-  });
-
-  it("applySessionStoreEntryPatch applies a precomputed patch without a callback", async () => {
-    const sessionKey = "agent:main:main";
-    const { storePath } = await createSessionStoreFixture({
-      prefix: "applySessionStoreEntryPatch",
-      entries: {
-        [sessionKey]: {
-          sessionId: "sess-1",
-          updatedAt: 100,
-          reasoningLevel: "on",
-        },
-      },
-    });
-
-    const result = await applySessionStoreEntryPatch({
-      storePath,
-      sessionKey,
-      patch: {
-        updatedAt: 200,
-        thinkingLevel: "high",
-      },
-    });
-
-    expect(result?.thinkingLevel).toBe("high");
     const store = loadSessionStore(storePath);
     expect(store[sessionKey]?.updatedAt).toBeGreaterThanOrEqual(200);
     expect(store[sessionKey]?.reasoningLevel).toBe("on");
