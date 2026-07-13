@@ -174,7 +174,7 @@ export async function withCodexAppServerJsonClient<T>(
           });
           try {
             throwIfAbandoned();
-            const scopedRequest: CodexAppServerScopedRequest = async <T>(request: {
+            const scopedRequest: CodexAppServerScopedRequest = async <R>(request: {
               method: string;
               requestParams?: unknown;
             }) => {
@@ -189,7 +189,7 @@ export async function withCodexAppServerJsonClient<T>(
                 throw new Error(sandboxBlock);
               }
               throwIfAbandoned();
-              return await client.request<T>(request.method, request.requestParams, {
+              return await client.request<R>(request.method, request.requestParams, {
                 timeoutMs: remainingTimeoutMs(),
                 signal: timeoutController.signal,
               });
