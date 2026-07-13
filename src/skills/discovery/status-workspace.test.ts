@@ -323,4 +323,149 @@ describe("buildWorkspaceSkillStatus", () => {
       expect(skill.install).toStrictEqual([]);
     }
   });
+
+  async function writeManagedSkillWithOrigin(params: {
+    managedRoot: string;
+    slug: string;
+    installedVersion: string;
+    installedAt: number;
+    registry?: string;
+  }): Promise<string> {
+    const skillDir = path.join(params.managedRoot, "skills", params.slug);
+    const registry = params.registry ?? "https://clawhub.example.com";
+    const origin = {
+      version: 1,
+      registry,
+      slug: params.slug,
+      installedVersion: params.installedVersion,
+      installedAt: params.installedAt,
+    };
+    await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
+    await fs.writeFile(
+      path.join(skillDir, "SKILL.md"),
+      `---\nname: ${params.slug}\ndescription: managed\n---\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(skillDir, ".clawhub", "origin.json"),
+      `${JSON.stringify(origin, null, 2)}\n`,
+      "utf8",
+    );
+    return skillDir;
+  }
+
+  async function writeScopeLockfile(params: {
+    scopeRoot: string;
+    slug: string;
+    entry: Record<string, unknown>;
+  }): Promise<string> {
+    const lockPath = path.join(params.scopeRoot, ".clawhub", "lock.json");
+    await fs.mkdir(path.join(params.scopeRoot, ".clawhub"), { recursive: true });
+    await fs.writeFile(
+      lockPath,
+      `${JSON.stringify({ version: 1, skills: { [params.slug]: params.entry } }, null, 2)}\n`,
+      "utf8",
+    );
+    return lockPath;
+  }
+
+  it("links a globally installed (managed) skill against the managed ClawHub lockfile", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-"));
+    tempDirs.push(managedRoot);
+    const managedSkillsDir = path.join(managedRoot, "skills");
+    const slug = "weather-global";
+    const installedAt = 1700000000000;
+    const registry = "https://clawhub.example.com";
+
+    const skillDir = await writeManagedSkillWithOrigin({
+      managedRoot,
+      slug,
+      installedVersion: "1.0.0",
+      installedAt,
+      registry,
+    });
+    const managedLockPath = await writeScopeLockfile({
+      scopeRoot: managedRoot,
+      slug,
+      entry: { version: "1.0.0", installedAt, registry },
+    });
+
+    const entry: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: slug,
+        description: "managed",
+        filePath: path.join(skillDir, "SKILL.md"),
+        baseDir: skillDir,
+        source: "openclaw-managed",
+      }),
+      frontmatter: {},
+      metadata: {},
+    };
+
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir,
+      entries: [entry],
+    });
+    const skill = requireReportedSkill(report, slug);
+
+    expect(skill.clawhub?.status).toBe("linked");
+    expect(skill.clawhub?.valid).toBe(true);
+    expect(skill.clawhub?.lockPath).toBe(managedLockPath);
+  });
+
+  it("does not cross-link a managed skill to the workspace lockfile for the same slug", async () => {
+    const workspaceDir = await createTempWorkspaceDir();
+    const managedRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-managed-"));
+    tempDirs.push(managedRoot);
+    const managedSkillsDir = path.join(managedRoot, "skills");
+    const slug = "dupe-slug";
+    const installedAt = 1700000000000;
+    const registry = "https://clawhub.example.com";
+
+    const skillDir = await writeManagedSkillWithOrigin({
+      managedRoot,
+      slug,
+      installedVersion: "1.0.0",
+      installedAt,
+      registry,
+    });
+    // Managed lockfile exists but tracks a different slug only.
+    const managedLockPath = await writeScopeLockfile({
+      scopeRoot: managedRoot,
+      slug: "other-skill",
+      entry: { version: "1.0.0", installedAt, registry },
+    });
+    // Workspace lockfile tracks the same slug - a blanket fallback would
+    // incorrectly validate the managed skill against it.
+    await writeScopeLockfile({
+      scopeRoot: workspaceDir,
+      slug,
+      entry: { version: "1.0.0", installedAt, registry },
+    });
+
+    const entry: SkillEntry = {
+      skill: createCanonicalFixtureSkill({
+        name: slug,
+        description: "managed",
+        filePath: path.join(skillDir, "SKILL.md"),
+        baseDir: skillDir,
+        source: "openclaw-managed",
+      }),
+      frontmatter: {},
+      metadata: {},
+    };
+
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir,
+      entries: [entry],
+    });
+    const skill = requireReportedSkill(report, slug);
+
+    // The managed skill must resolve against the managed lockfile (which lacks
+    // its slug), not the workspace lockfile that happens to track the same slug.
+    expect(skill.clawhub?.status).toBe("invalid");
+    expect(skill.clawhub?.valid).toBe(false);
+    expect(skill.clawhub?.lockPath).toBe(managedLockPath);
+  });
 });
