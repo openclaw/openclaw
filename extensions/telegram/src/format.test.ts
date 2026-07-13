@@ -401,7 +401,7 @@ describe("markdownToTelegramHtml", () => {
 
   it("preserves Markdown heading levels in rich HTML", () => {
     expect(markdownToTelegramRichHtml("# Title\n\n### Detail")).toBe(
-      "<h1>Title</h1>\n\n<h3>Detail</h3>",
+      "<b>Title</b>\n\n<b>Detail</b>",
     );
   });
 

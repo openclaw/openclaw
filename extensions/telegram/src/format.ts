@@ -101,12 +101,15 @@ function renderTelegramHtml(ir: MarkdownIR): string {
       code_block: { open: buildTelegramCodeBlockOpen, close: "</code></pre>" },
       spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
       blockquote: { open: "<blockquote>", close: "</blockquote>" },
-      heading_1: { open: "<h1>", close: "</h1>" },
-      heading_2: { open: "<h2>", close: "</h2>" },
-      heading_3: { open: "<h3>", close: "</h3>" },
-      heading_4: { open: "<h4>", close: "</h4>" },
-      heading_5: { open: "<h5>", close: "</h5>" },
-      heading_6: { open: "<h6>", close: "</h6>" },
+      // Use <b> instead of <h1>-<h6> to avoid a Telegram macOS desktop
+      // rendering bug where heading tags cause overlapping text layers
+      // (GitHub issue #93804).
+      heading_1: { open: "<b>", close: "</b>" },
+      heading_2: { open: "<b>", close: "</b>" },
+      heading_3: { open: "<b>", close: "</b>" },
+      heading_4: { open: "<b>", close: "</b>" },
+      heading_5: { open: "<b>", close: "</b>" },
+      heading_6: { open: "<b>", close: "</b>" },
     },
     escapeText: escapeHtml,
     buildLink: buildTelegramLink,
