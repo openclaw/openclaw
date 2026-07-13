@@ -6,6 +6,32 @@ const NIX_OPENCLAW_AGENT_FIRST_URL = "https://github.com/openclaw/nix-openclaw#q
 /** Public OpenClaw Nix overview shown with immutable-config errors. */
 const OPENCLAW_NIX_OVERVIEW_URL = "https://docs.openclaw.ai/install/nix";
 
+type RuntimeConfigWriteBlock = { reason: string };
+
+let runtimeConfigWriteBlock: RuntimeConfigWriteBlock | undefined;
+
+/** Block every config persistence path until the returned cleanup function is called. */
+export function blockConfigWritesForRuntime(reason: string): () => void {
+  const previous = runtimeConfigWriteBlock;
+  const block = { reason };
+  runtimeConfigWriteBlock = block;
+  return () => {
+    if (runtimeConfigWriteBlock === block) {
+      runtimeConfigWriteBlock = previous;
+    }
+  };
+}
+
+/** Error thrown when runtime ownership makes the canonical config immutable. */
+export class RuntimeConfigMutationBlockedError extends Error {
+  readonly code = "OPENCLAW_CONFIG_RUNTIME_IMMUTABLE";
+
+  constructor(reason: string, configPath?: string) {
+    super([reason, ...(configPath ? [`Config path: ${configPath}`] : [])].join("\n"));
+    this.name = "RuntimeConfigMutationBlockedError";
+  }
+}
+
 /** Error thrown when a mutating config path is attempted while Nix owns config state. */
 export class NixModeConfigMutationError extends Error {
   readonly code = "OPENCLAW_NIX_MODE_CONFIG_IMMUTABLE";
@@ -36,6 +62,9 @@ export function assertConfigWriteAllowedInCurrentMode(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): void {
+  if (runtimeConfigWriteBlock) {
+    throw new RuntimeConfigMutationBlockedError(runtimeConfigWriteBlock.reason, params.configPath);
+  }
   if (!resolveIsNixMode(params.env)) {
     return;
   }

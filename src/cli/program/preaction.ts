@@ -141,6 +141,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     ) {
       return;
     }
+    let managedConfigActive = false;
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
     let skipPristineStartupStateMigrations = false;
     let skipPristineCoreStateMigrations = false;
@@ -155,22 +156,28 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
       const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
       allowInvalid ||= resolvedOptions.allowUnconfigured === true;
-      const opts = {
-        force: resolvedOptions.force === true,
-        reset: resolvedOptions.reset === true,
-      };
-      const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
-      if (!shouldBootstrap) {
-        return;
+      managedConfigActive =
+        (typeof resolvedOptions.configLayer === "string" &&
+          resolvedOptions.configLayer.length > 0) ||
+        (Array.isArray(resolvedOptions.configLayer) && resolvedOptions.configLayer.length > 0);
+      if (!managedConfigActive) {
+        const opts = {
+          force: resolvedOptions.force === true,
+          reset: resolvedOptions.reset === true,
+        };
+        const shouldBootstrap = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
+        if (!shouldBootstrap) {
+          return;
+        }
+        skipPristineStartupStateMigrations = wasPreparedGatewayRunStatePristine();
+        skipPristineCoreStateMigrations = wasPreparedGatewayRunCoreStatePristine();
+        beforeStateMigrations = (snapshot) =>
+          recheckGatewayRunBootstrap({
+            opts,
+            runtime: defaultRuntime,
+            ...(snapshot ? { snapshot } : {}),
+          });
       }
-      skipPristineStartupStateMigrations = wasPreparedGatewayRunStatePristine();
-      skipPristineCoreStateMigrations = wasPreparedGatewayRunCoreStatePristine();
-      beforeStateMigrations = (snapshot) =>
-        recheckGatewayRunBootstrap({
-          opts,
-          runtime: defaultRuntime,
-          ...(snapshot ? { snapshot } : {}),
-        });
     }
     await ensureCliExecutionBootstrap({
       runtime: defaultRuntime,
@@ -180,7 +187,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-      skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
+      skipConfigGuard: managedConfigActive || shouldBypassConfigGuardForCommandPath(commandPath),
     });
     if (beforeStateMigrations) {
       const { reloadTrustedGatewayRunEnvironment } =

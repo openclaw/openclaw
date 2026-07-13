@@ -661,6 +661,7 @@ function loadSchemaWithPlugins(): ConfigSchemaResponse {
   return response;
 }
 
+<<<<<<< HEAD
 async function commitGatewayConfigWriteOrRespond(
   params: Parameters<typeof commitGatewayConfigWrite>[0] & { respond: RespondFn },
 ): Promise<Awaited<ReturnType<typeof commitGatewayConfigWrite>> | null> {
@@ -677,14 +678,25 @@ async function commitGatewayConfigWriteOrRespond(
     );
     return null;
   }
+=======
+function rejectReadOnlyConfigWrite(
+  context: GatewayRequestContext | undefined,
+  respond: RespondFn,
+): boolean {
+  if (!context?.configReadOnlyReason) {
+    return false;
+  }
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, context.configReadOnlyReason));
+  return true;
+>>>>>>> 2bbf8d8ebc3 (feat(gateway): load ordered config layers)
 }
 
 export const configHandlers: GatewayRequestHandlers = {
-  "config.get": async ({ params, respond }) => {
+  "config.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
       return;
     }
-    const snapshot = await readConfigFileSnapshot();
+    const snapshot = context?.configSnapshot ?? (await readConfigFileSnapshot());
     const schema = loadSchemaWithPlugins();
     respond(true, createConfigGetResponse(snapshot, schema.uiHints), undefined);
   },
@@ -731,6 +743,9 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigSetParams, "config.set", respond)) {
       return;
     }
+    if (rejectReadOnlyConfigWrite(context, respond)) {
+      return;
+    }
     const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
     if (!writeSnapshot) {
       return;
@@ -775,6 +790,9 @@ export const configHandlers: GatewayRequestHandlers = {
   },
   "config.patch": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
+      return;
+    }
+    if (rejectReadOnlyConfigWrite(context, respond)) {
       return;
     }
     const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
@@ -956,6 +974,9 @@ export const configHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;
     }
+    if (rejectReadOnlyConfigWrite(context, respond)) {
+      return;
+    }
     const writeSnapshot = await readConfigWriteSnapshotOrRespond(params, respond);
     if (!writeSnapshot) {
       return;
@@ -1010,6 +1031,9 @@ export const configHandlers: GatewayRequestHandlers = {
   },
   "config.openFile": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.openFile", respond)) {
+      return;
+    }
+    if (rejectReadOnlyConfigWrite(context, respond)) {
       return;
     }
     const configPath = createConfigIO().configPath;
