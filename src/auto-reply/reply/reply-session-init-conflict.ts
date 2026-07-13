@@ -44,7 +44,7 @@
  * it still cannot commit after recovery, the caller throws with clear context
  * rather than letting any runtime silently return empty tool-results.
  */
-export type ReplyInitConflictAction =
+type ReplyInitConflictAction =
   | { kind: "stale-snapshot-retry" }
   | { kind: "conflict-backoff" }
   | { kind: "self-heal-retry" }
