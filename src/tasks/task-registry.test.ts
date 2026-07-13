@@ -271,6 +271,7 @@ function createAcpSessionStoreEntry(params: {
   parentSessionKey: string;
   mode: "persistent" | "oneshot";
   resumeSessionId?: string;
+  sessionResumeSupported?: boolean;
 }): AcpSessionStoreEntry {
   const acp = {
     backend: "acpx",
@@ -279,6 +280,9 @@ function createAcpSessionStoreEntry(params: {
     mode: params.mode,
     state: "idle",
     lastActivityAt: Date.now(),
+    ...(params.sessionResumeSupported !== undefined
+      ? { sessionResumeSupported: params.sessionResumeSupported }
+      : {}),
     ...(params.resumeSessionId
       ? {
           identity: {
@@ -3191,6 +3195,7 @@ describe("task-registry", () => {
           parentSessionKey,
           mode: "oneshot",
           resumeSessionId: "claude-session-123",
+          sessionResumeSupported: true,
         }),
         closeAcpSession,
         unbindSessionBindings,
@@ -3200,6 +3205,58 @@ describe("task-registry", () => {
 
       expect(closeAcpSession).not.toHaveBeenCalled();
       expect(unbindSessionBindings).not.toHaveBeenCalled();
+    });
+  });
+
+  it("closes terminal one-shot ACP sessions when the agent cannot resume", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest();
+      const now = Date.now();
+      const parentSessionKey = "agent:main:telegram:direct:owner";
+      const childSessionKey = "agent:claude:acp:non-resumable-oneshot";
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: parentSessionKey,
+        requesterSessionKey: parentSessionKey,
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-terminal-acp-non-resumable-oneshot",
+        task: "Non-resumable ACP task",
+        status: "succeeded",
+        deliveryStatus: "delivered",
+        lastEventAt: now - 60_000,
+      });
+      finalizeTaskRunByRunId({
+        runId: "run-terminal-acp-non-resumable-oneshot",
+        runtime: "acp",
+        status: "succeeded",
+        endedAt: now - 60_000,
+        lastEventAt: now - 60_000,
+      });
+      const current = getTaskById(task.taskId)!;
+      const closeAcpSession = vi.fn().mockResolvedValue(undefined);
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks: new Map([[task.taskId, current]]),
+        snapshotTasks: [current],
+        acpEntry: createAcpSessionStoreEntry({
+          sessionKey: childSessionKey,
+          parentSessionKey,
+          mode: "oneshot",
+          resumeSessionId: "claude-session-unsupported",
+          sessionResumeSupported: false,
+        }),
+        closeAcpSession,
+        unbindSessionBindings: vi.fn().mockResolvedValue([]),
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(closeAcpSession).toHaveBeenCalledWith({
+        cfg: {},
+        sessionKey: childSessionKey,
+        reason: "terminal-task-cleanup",
+      });
     });
   });
 
@@ -3455,6 +3512,7 @@ describe("task-registry", () => {
             parentSessionKey,
             mode: "oneshot",
             resumeSessionId: "claude-session-456",
+            sessionResumeSupported: true,
           }),
         ],
         closeAcpSession,

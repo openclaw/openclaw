@@ -17,7 +17,7 @@ import {
   type AcpAgentRegistry,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
-  type AcpRuntimeHandle,
+  type AcpRuntimeHandle as AcpxRuntimeHandle,
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
   type AcpRuntimeTurn,
@@ -28,7 +28,12 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import {
+  AcpRuntimeError,
+  type AcpRuntime,
+  type AcpRuntimeErrorCode,
+  type AcpRuntimeHandle,
+} from "../runtime-api.js";
 import { splitCommandParts } from "./command-line.js";
 import {
   createAcpxProcessLeaseId,
@@ -63,6 +68,23 @@ type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
 
 const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
+
+function withSessionResumeCapability(handle: AcpxRuntimeHandle): AcpRuntimeHandle {
+  const agentCapabilities = (handle as AcpxRuntimeHandle & { agentCapabilities?: unknown })
+    .agentCapabilities;
+  if (typeof agentCapabilities !== "object" || agentCapabilities === null) {
+    return handle;
+  }
+  const capabilities = agentCapabilities as {
+    loadSession?: unknown;
+    sessionCapabilities?: { resume?: unknown };
+  };
+  return {
+    ...handle,
+    sessionResumeSupported:
+      capabilities.loadSession === true || capabilities.sessionCapabilities?.resume === true,
+  };
+}
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
 const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
 
@@ -1102,7 +1124,7 @@ export class AcpxRuntime implements AcpRuntime {
     }));
 
     if (!codexModelOverride) {
-      return await this.runWithLaunchLease({
+      const handle = await this.runWithLaunchLease({
         sessionKey: ensureInput.sessionKey,
         command: stableLaunchCommand,
         enabled: shouldStartWithLease,
@@ -1113,6 +1135,7 @@ export class AcpxRuntime implements AcpRuntime {
             run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
           }),
       });
+      return withSessionResumeCapability(handle);
     }
 
     const normalizedInput = {
@@ -1121,7 +1144,7 @@ export class AcpxRuntime implements AcpRuntime {
         ? { model: codexAcpSessionModelId(codexModelOverride) }
         : {}),
     };
-    return await this.runWithLaunchLease({
+    const handle = await this.runWithLaunchLease({
       sessionKey: input.sessionKey,
       command: stableLaunchCommand,
       enabled: shouldStartWithLease,
@@ -1134,6 +1157,7 @@ export class AcpxRuntime implements AcpRuntime {
           }),
         ),
     });
+    return withSessionResumeCapability(handle);
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
