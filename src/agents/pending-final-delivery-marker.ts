@@ -23,7 +23,7 @@ type PersistPendingFinalDeliveryMarkerParams = {
   runOwnedSessionId: string;
 };
 
-export type PendingFinalDeliveryMarkerResult = {
+type PendingFinalDeliveryMarkerResult = {
   sessionEntry?: SessionEntry;
   pendingFinalDeliveryTextForThisRun?: string;
   pendingFinalDeliveryMarkerPersisted: boolean;
