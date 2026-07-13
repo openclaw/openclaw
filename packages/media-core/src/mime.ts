@@ -2,7 +2,6 @@
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
 import { extnameFromAnyPath } from "./file-name.js";
-import { createLazyImportLoader } from "./lazy-import.js";
 
 /** Maximum byte prefix passed to dependency MIME sniffers for bounded memory/CPU work. */
 export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
@@ -87,8 +86,6 @@ const MIME_BY_EXT: Record<string, string> = {
   ".yml": "application/yaml",
 };
 
-const fileTypeModuleLoader = createLazyImportLoader(() => import("file-type"));
-
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding APNG to PNG. */
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
@@ -114,7 +111,7 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
     return undefined;
   }
   try {
-    const { fileTypeFromBuffer } = await fileTypeModuleLoader.load();
+    const { fileTypeFromBuffer } = await import("file-type");
     const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
     if (type?.mime) {
       return normalizeMimeType(type.mime);
