@@ -1442,6 +1442,9 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
       // Shallow-copy so we don't mutate the original event args (used for logging/dedup).
       const params = { ...(args as Record<string, unknown>) };
+      // `final` is a Codex app-server-only source-delivery control. It must
+      // not be dispatched to a provider or participate in idempotency.
+      delete params.final;
 
       // Sanitize outbound text fields in three layers:
       //

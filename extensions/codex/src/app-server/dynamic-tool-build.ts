@@ -347,9 +347,13 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     onToolOutcome: params.onToolOutcome,
     allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
   });
+  const codexScopedTools = addCodexMessageToolOnlyFinalControl(
+    allTools,
+    params.sourceReplyDeliveryMode,
+  );
   toolBuildStages.mark("create-openclaw-coding-tools");
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
-  const readableAllToolProjection = filterProviderNormalizableTools(allTools);
+  const readableAllToolProjection = filterProviderNormalizableTools(codexScopedTools);
   preNormalizationDiagnostics.push(...readableAllToolProjection.diagnostics);
   const webSearchPlan = resolveCodexWebSearchPlan({
     config: params.config,
@@ -927,6 +931,53 @@ function hideNodeExecDynamicToolParameters(
     ...schema,
     properties: nextProperties,
     ...(Array.isArray(rawRequired) ? { required: nextRequired } : {}),
+  };
+}
+
+/**
+ * `final` is a Codex-only control for message-tool-only source delivery. Keep
+ * it on the projected Codex schema so other agent runtimes never receive an
+ * API contract they do not implement.
+ */
+function addCodexMessageToolOnlyFinalControl(
+  tools: OpenClawDynamicTool[],
+  sourceReplyDeliveryMode: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"],
+): OpenClawDynamicTool[] {
+  if (sourceReplyDeliveryMode !== "message_tool_only") {
+    return tools;
+  }
+  // allTools is attempt-fresh from createOpenClawCodingTools inside
+  // buildDynamicTools — never a shared/cached instance across attempts or
+  // delivery modes. Project the Codex-only `final` property in place so
+  // WeakMap ownership metadata stays attached without a public SDK clone helper.
+  for (const tool of tools) {
+    if (normalizeCodexDynamicToolName(tool.name) !== "message") {
+      continue;
+    }
+    tool.parameters = addCodexMessageToolOnlyFinalParameter(tool.parameters);
+  }
+  return tools;
+}
+
+function addCodexMessageToolOnlyFinalParameter(parameters: OpenClawDynamicTool["parameters"]) {
+  if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) {
+    return parameters;
+  }
+  const schema = parameters as Record<string, unknown>;
+  const rawProperties = schema.properties;
+  if (!rawProperties || typeof rawProperties !== "object" || Array.isArray(rawProperties)) {
+    return parameters;
+  }
+  return {
+    ...schema,
+    properties: {
+      ...rawProperties,
+      final: {
+        type: "boolean",
+        description:
+          "Set true only when this message is intended to complete the reply to the current source conversation. OpenClaw stops after confirming delivery.",
+      },
+    },
   };
 }
 
