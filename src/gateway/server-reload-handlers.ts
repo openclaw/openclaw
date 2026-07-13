@@ -36,6 +36,7 @@ import {
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
+  runOutsideGatewayRootWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
@@ -737,7 +738,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           channels: [...channelsStoppedBeforePluginReload],
           run: async (channel) => {
             params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await params.startChannel(channel);
+            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(channel));
             channelsStoppedBeforePluginReload.delete(channel);
           },
           onFailure: (channel, err) => {
@@ -997,7 +998,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
               return;
             }
-            await params.startChannel(name);
+            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(name));
           };
           const restartFailures = await collectChannelOperationFailures({
             channels: channelsToRestart,

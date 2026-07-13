@@ -197,7 +197,13 @@ function resolveSuiteExecutionPlan(params: QaSuiteRunParams | undefined): QaSuit
   const requiresChannelPartitions =
     resolveQaFlowChannelGroups(params, flowScenarios).filter((group) => group.scenarios.length > 0)
       .length > 1;
-  if (testFileScenariosByKind.size === 0 && !requiresChannelPartitions) {
+  const requiresIsolatedFlowPartitions =
+    flowScenarios.length > 1 && flowScenarios.some(scenarioRequiresIsolatedQaSuiteWorker);
+  if (
+    testFileScenariosByKind.size === 0 &&
+    !requiresChannelPartitions &&
+    !requiresIsolatedFlowPartitions
+  ) {
     return { kind: "flow" };
   }
   return {

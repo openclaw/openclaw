@@ -20,7 +20,7 @@ const RENAMED_MATRIX_SCENARIOS = {
 function isMatrixModuleScenario(
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
 ) {
-  if (scenario.execution.kind !== "flow") {
+  if (scenario.execution.kind !== "flow" || scenario.id === "matrix-allowlist-hot-reload") {
     return false;
   }
   return scenario.execution.flow?.steps.some((step) =>

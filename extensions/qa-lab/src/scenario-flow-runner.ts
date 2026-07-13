@@ -40,6 +40,8 @@ const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
     import("./live-transports/matrix/scenarios/scenario-runtime-allowbots.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-approval.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-approval.js"),
+  "./live-transports/matrix/scenarios/scenario-runtime-config.js": () =>
+    import("./live-transports/matrix/scenarios/scenario-runtime-config.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-dm.js": () =>
     import("./live-transports/matrix/scenarios/scenario-runtime-dm.js"),
   "./live-transports/matrix/scenarios/scenario-runtime-e2ee-destructive.js": () =>

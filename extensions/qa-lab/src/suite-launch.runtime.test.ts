@@ -132,6 +132,40 @@ describe("qa suite runtime launcher", () => {
     expect(runQaTestFileScenarios).not.toHaveBeenCalled();
   });
 
+  it("partitions flow-only suites that request isolated workers", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-flow-only-isolated-");
+    const result = await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/flow-only-isolated",
+      concurrency: 1,
+      runtimePair: ["openclaw", "codex"],
+      scenarioIds: ["channel-chat-baseline", "matrix-allowlist-hot-reload"],
+    });
+
+    expect(result.executionKind).toBe("suite");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "flow-only-isolated");
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated-1"),
+        concurrency: 1,
+        runtimePair: ["openclaw", "codex"],
+        scenarioIds: ["channel-chat-baseline"],
+      }),
+    );
+    expect(runQaFlowSuite).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        outputDir: path.join(outputDir, "flow", "isolated-2"),
+        concurrency: 1,
+        runtimePair: ["openclaw", "codex"],
+        scenarioIds: ["matrix-allowlist-hot-reload"],
+      }),
+    );
+    expect(runQaTestFileScenarios).not.toHaveBeenCalled();
+  });
+
   it("partitions mixed Crabline flow channels into one aggregate suite", async () => {
     const repoRoot = await makeTempRepo("qa-suite-crabline-channels-");
     const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();

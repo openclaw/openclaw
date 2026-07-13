@@ -63,7 +63,11 @@ export type MatrixQaScenarioContext = {
     patch: Record<string, unknown>,
     opts?: { replacePaths?: string[]; restartDelayMs?: number },
   ) => Promise<void>;
-  waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
+  readGatewayAccountStartAt?: (accountId: string) => Promise<number | undefined>;
+  waitGatewayAccountReady?: (
+    accountId: string,
+    opts?: { afterStartAt?: number; timeoutMs?: number },
+  ) => Promise<void>;
 };
 
 const NO_REPLY_WINDOW_MS = 8_000;

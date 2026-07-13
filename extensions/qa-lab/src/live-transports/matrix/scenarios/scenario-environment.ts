@@ -71,6 +71,7 @@ async function patchGatewayConfig(params: {
 }
 
 async function waitForMatrixAccountReady(params: {
+  afterStartAt?: number;
   accountId: string;
   gateway: FlowPreparationInput["gateway"];
   timeoutMs: number;
@@ -79,30 +80,16 @@ async function waitForMatrixAccountReady(params: {
   let lastAccounts: unknown;
   while (Date.now() < deadline) {
     try {
-      const payload = (await params.gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
-      )) as {
-        channelAccounts?: Record<
-          string,
-          Array<{
-            accountId?: string;
-            connected?: boolean;
-            healthState?: string;
-            restartPending?: boolean;
-            running?: boolean;
-          }>
-        >;
-      };
-      const accounts = payload.channelAccounts?.matrix ?? [];
+      const accounts = await readMatrixAccountStatuses(params.gateway);
       lastAccounts = accounts;
       const account = accounts.find((entry) => entry.accountId === params.accountId);
       if (
         account?.running === true &&
         account.connected === true &&
         account.restartPending !== true &&
-        account.healthState !== "degraded"
+        account.healthState !== "degraded" &&
+        (params.afterStartAt === undefined ||
+          (typeof account.lastStartAt === "number" && account.lastStartAt > params.afterStartAt))
       ) {
         return;
       }
@@ -114,6 +101,24 @@ async function waitForMatrixAccountReady(params: {
   throw new Error(
     `matrix account "${params.accountId}" did not become ready; last accounts: ${JSON.stringify(lastAccounts ?? [])}`,
   );
+}
+
+type MatrixAccountStatus = {
+  accountId?: string;
+  connected?: boolean;
+  healthState?: string;
+  lastStartAt?: number;
+  restartPending?: boolean;
+  running?: boolean;
+};
+
+async function readMatrixAccountStatuses(gateway: FlowPreparationInput["gateway"]) {
+  const payload = (await gateway.call(
+    "channels.status",
+    { probe: false, timeoutMs: 2_000 },
+    { timeoutMs: 5_000 },
+  )) as { channelAccounts?: Record<string, MatrixAccountStatus[]> };
+  return payload.channelAccounts?.matrix ?? [];
 }
 
 export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnvironmentParams) {
@@ -244,8 +249,16 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
           replacePaths: opts?.replacePaths,
           restartDelayMs: opts?.restartDelayMs,
         }),
-      waitGatewayAccountReady: async (accountId: string, opts?: { timeoutMs?: number }) =>
+      readGatewayAccountStartAt: async (accountId: string) =>
+        (await readMatrixAccountStatuses(input.gateway)).find(
+          (account) => account.accountId === accountId,
+        )?.lastStartAt,
+      waitGatewayAccountReady: async (
+        accountId: string,
+        opts?: { afterStartAt?: number; timeoutMs?: number },
+      ) =>
         await waitForMatrixAccountReady({
+          afterStartAt: opts?.afterStartAt,
           accountId,
           gateway: input.gateway,
           timeoutMs: opts?.timeoutMs ?? input.timeoutMs,
