@@ -8,6 +8,7 @@ import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import { readMatrixRecoveryKeyState } from "./crypto-state-store.js";
+import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 
 function requestUrl(input: RequestInfo | URL | undefined): string {
   if (!input) {
@@ -3762,5 +3763,65 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     expect(result.success).toBe(true);
     expect(result.error).toBeUndefined();
+  });
+
+  it("bounds exhausted decrypt retry rehydration on crypto signals", async () => {
+    const cryptoApi = {};
+    const bridge = new MatrixDecryptBridge({
+      client: {
+        getCrypto: () => cryptoApi,
+      },
+      toRaw: (event) => ({
+        event_id: event.getId() ?? "",
+      }),
+      emitDecryptedEvent: vi.fn(),
+      emitFailedDecryption: vi.fn(),
+      emitMessage: vi.fn(),
+    });
+    const retryStates = (
+      bridge as unknown as {
+        exhaustedDecryptRetries: Map<
+          string,
+          {
+            event: FakeMatrixEvent;
+            roomId: string;
+            eventId: string;
+            attempts: number;
+            inFlight: boolean;
+            timer: ReturnType<typeof setTimeout> | null;
+            exhaustedAt: number;
+          }
+        >;
+      }
+    ).exhaustedDecryptRetries;
+    const events = Array.from({ length: 513 }, (_unused, index) => {
+      const event = new FakeMatrixEvent({
+        roomId: "!room:example.org",
+        eventId: `$event-${index}`,
+        sender: "@alice:example.org",
+        type: "m.room.encrypted",
+        ts: Date.now(),
+        content: {},
+        decryptionFailure: true,
+      });
+      event.onAttemptDecryption(() => {});
+      retryStates.set(`!room:example.org|$event-${index}`, {
+        event,
+        roomId: "!room:example.org",
+        eventId: `$event-${index}`,
+        attempts: 8,
+        inFlight: false,
+        timer: null,
+        exhaustedAt: Date.now(),
+      });
+      return event;
+    });
+
+    bridge.retryPendingNow("test crypto signal", { includeExhausted: true });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(events[0]?.attemptDecryption).not.toHaveBeenCalled();
+    expect(events.at(-1)?.attemptDecryption).toHaveBeenCalledTimes(1);
   });
 });

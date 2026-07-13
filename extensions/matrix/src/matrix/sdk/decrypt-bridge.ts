@@ -32,6 +32,10 @@ type MatrixDecryptRetryState = {
   timer: ReturnType<typeof setTimeout> | null;
 };
 
+type MatrixExhaustedDecryptRetryState = MatrixDecryptRetryState & {
+  exhaustedAt: number;
+};
+
 type DecryptBridgeRawEvent = {
   event_id: string;
 };
@@ -43,6 +47,8 @@ type MatrixCryptoRetrySignalSource = {
 const MATRIX_DECRYPT_RETRY_BASE_DELAY_MS = 1_500;
 const MATRIX_DECRYPT_RETRY_MAX_DELAY_MS = 30_000;
 const MATRIX_DECRYPT_RETRY_MAX_ATTEMPTS = 8;
+const MATRIX_DECRYPT_EXHAUSTED_RETRY_TTL_MS = 60 * 60_000;
+const MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES = 512;
 
 function resolveDecryptRetryKey(roomId: string, eventId: string): string | null {
   if (!roomId || !eventId) {
@@ -85,7 +91,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   private readonly decryptedMessageDedupe = new Map<string, number>();
   private readonly decryptRetries = new Map<string, MatrixDecryptRetryState>();
   private readonly failedDecryptionsNotified = new Set<string>();
-  private readonly exhaustedDecryptRetries = new Map<string, MatrixDecryptRetryState>();
+  private readonly exhaustedDecryptRetries = new Map<string, MatrixExhaustedDecryptRetryState>();
   private activeRetryRuns = 0;
   private readonly retryIdleResolvers = new Set<() => void>();
   private cryptoRetrySignalsBound = false;
@@ -135,6 +141,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
 
   retryPendingNow(reason: string, options?: { includeExhausted?: boolean }): void {
     if (options?.includeExhausted) {
+      this.pruneExhaustedDecryptRetries(Date.now());
       for (const [retryKey, state] of this.exhaustedDecryptRetries) {
         if (this.decryptRetries.has(retryKey)) {
           continue;
@@ -303,6 +310,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         clearTimeout(retry.timer);
       }
       this.decryptRetries.delete(retryKey);
+      const exhaustedAt = Date.now();
       this.exhaustedDecryptRetries.set(retryKey, {
         event: params.event,
         roomId: params.roomId,
@@ -310,7 +318,9 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
         attempts: attempts - 1,
         inFlight: false,
         timer: null,
+        exhaustedAt,
       });
+      this.pruneExhaustedDecryptRetries(exhaustedAt);
       LogService.debug(
         "MatrixClientLite",
         `Giving up decryption retry for ${params.eventId} in ${params.roomId} after ${attempts - 1} attempts`,
@@ -404,6 +414,21 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     this.decryptRetries.delete(retryKey);
     this.exhaustedDecryptRetries.delete(retryKey);
     this.failedDecryptionsNotified.delete(retryKey);
+  }
+
+  private pruneExhaustedDecryptRetries(now: number): void {
+    for (const [retryKey, state] of this.exhaustedDecryptRetries) {
+      if (now - state.exhaustedAt > MATRIX_DECRYPT_EXHAUSTED_RETRY_TTL_MS) {
+        this.exhaustedDecryptRetries.delete(retryKey);
+      }
+    }
+    while (this.exhaustedDecryptRetries.size > MATRIX_DECRYPT_EXHAUSTED_RETRY_MAX_ENTRIES) {
+      const oldest = this.exhaustedDecryptRetries.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.exhaustedDecryptRetries.delete(oldest);
+    }
   }
 
   private rememberDecryptedMessage(roomId: string, eventId: string): void {
