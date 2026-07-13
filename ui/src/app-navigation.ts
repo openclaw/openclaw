@@ -22,7 +22,6 @@ export const SIDEBAR_NAV_ROUTES = [
   "tasks",
   "agents",
   "plugins",
-  "nodes",
 ] as const satisfies readonly NavigationRouteId[];
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
@@ -134,7 +133,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupSystem",
-    routes: ["infrastructure", "worktrees", "debug", "logs", "activity", "about"],
+    routes: ["infrastructure", "nodes", "worktrees", "debug", "logs", "activity", "about"],
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
@@ -155,7 +154,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   skills: "zap",
   plugins: "puzzle",
   "skill-workshop": "wrench",
-  nodes: "monitor",
+  nodes: "monitorSmartphone",
   chat: "messageSquare",
   config: "settings",
   profile: "lobster",

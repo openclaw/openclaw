@@ -33,7 +33,7 @@ import {
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPaletteTargetDetail,
-} from "../../components/command-palette.ts";
+} from "../../components/command-palette-contract.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";

@@ -122,34 +122,45 @@ async function waitForOutputAfter(run: PtyRun, needle: string, offset: number) {
 }
 
 async function createFreshSession(run: PtyRun, newSessionPrefix: string) {
-  const retryDeadline = Date.now() + SESSION_ROLLOVER_RETRY_TIMEOUT_MS;
-  while (true) {
-    const outputOffset = run.output().length;
-    await run.write("/new\r", { delay: false });
-    const outcome = await waitFor({
-      timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
-      read: () => {
-        const hasOutput = (needle: string) => run.output().slice(outputOffset).includes(needle);
-        if (hasOutput(newSessionPrefix)) {
-          return "created" as const;
-        }
-        if (hasOutput(SESSION_ROLLOVER_BUSY_MESSAGE)) {
-          return "busy" as const;
-        }
-        return null;
-      },
-      onTimeout: () => new Error(`timed out creating a fresh session\n${run.output()}`),
-    });
-    if (outcome === "created") {
-      return;
-    }
-    if (Date.now() >= retryDeadline) {
-      throw new Error(`session rollover stayed busy\n${run.output()}`);
-    }
-    // The response text can render before terminal lifecycle cleanup. Retry only
-    // after the command's explicit guard rejects the rollover, never while creation is pending.
-    await sleep(50);
+  const outputOffset = run.output().length;
+  await run.write("/new\r", { delay: false });
+  const outcome = await waitFor({
+    timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+    read: () => {
+      const output = run.output();
+      if (output.includes(newSessionPrefix, outputOffset)) {
+        return { kind: "created" } as const;
+      }
+      const busyIndex = output.indexOf(SESSION_ROLLOVER_BUSY_MESSAGE, outputOffset);
+      if (busyIndex >= 0) {
+        return {
+          kind: "busy",
+          outputEnd: busyIndex + SESSION_ROLLOVER_BUSY_MESSAGE.length,
+        } as const;
+      }
+      return null;
+    },
+    onTimeout: () => new Error(`timed out creating a fresh session\n${run.output()}`),
+  });
+  if (outcome.kind === "created") {
+    return;
   }
+
+  // PTY redraws repeat old chat lines. Wait for post-rejection idle before one
+  // retry, or stale busy output can trigger multiple concurrent session changes.
+  await waitFor({
+    timeoutMs: SESSION_ROLLOVER_RETRY_TIMEOUT_MS,
+    read: () => (run.output().slice(outcome.outputEnd).includes("| idle") ? true : null),
+    onTimeout: () => new Error(`session rollover stayed busy\n${run.output()}`),
+  });
+
+  const retryOffset = run.output().length;
+  await run.write("/new\r", { delay: false });
+  await waitFor({
+    timeoutMs: LOCAL_STARTUP_TIMEOUT_MS,
+    read: () => (run.output().slice(retryOffset).includes(newSessionPrefix) ? true : null),
+    onTimeout: () => new Error(`timed out retrying fresh session creation\n${run.output()}`),
+  });
 }
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {

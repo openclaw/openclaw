@@ -231,6 +231,16 @@ export const ru: TranslationMap = {
       title: "OpenClaw для мобильных устройств",
       subtitle: "Отсканируйте этот QR-код в мобильном приложении, чтобы подключить новый телефон.",
       generating: "Создаём безопасный код настройки…",
+      accessTitle: "Мобильный доступ",
+      fullAccess: "Полный доступ (рекомендуется)",
+      fullAccessHint:
+        "Узел и полный набор элементов управления Gateway, включая настройки и обновления.",
+      limitedAccess: "Ограниченный доступ",
+      limitedAccessHint: "Узел, чат и подтверждения без административных элементов управления.",
+      generateCode: "Создать код настройки",
+      transportLimitedTitle: "Ограничено для безопасности сети",
+      transportLimitedHint:
+        "Этот URL-адрес Gateway использует незашифрованный протокол ws://. Используйте wss:// или Tailscale Serve, затем создайте новый код для полного доступа.",
       failed: "Не удалось создать код настройки.",
       qrAlt: "QR-код сопряжения OpenClaw для мобильных устройств",
       qrUnavailable: "QR-код недоступен. Скопируйте код настройки.",
@@ -266,7 +276,8 @@ export const ru: TranslationMap = {
     },
     inventory: {
       title: "Устройства",
-      subtitle: "Одна строка на каждый сопряжённый клиент: статус, роли, токены.",
+      summaryConnected: "Подключено: {connected} из {total}",
+      summaryPending: "Ожидают одобрения: {count}",
       cleanupStale: "Очистить устаревшие: {count}",
       pendingApproval: "Ожидает подтверждения",
       paired: "Сопряжено",

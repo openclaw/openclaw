@@ -1093,6 +1093,9 @@ importers:
       json5:
         specifier: 2.2.3
         version: 2.2.3
+      p-limit:
+        specifier: 7.3.0
+        version: 7.3.0
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1128,6 +1131,9 @@ importers:
       mdast-util-from-markdown:
         specifier: 2.0.3
         version: 2.0.3
+      p-map:
+        specifier: 7.0.5
+        version: 7.0.5
       typebox:
         specifier: 1.3.3
         version: 1.3.3
@@ -1316,6 +1322,12 @@ importers:
       typebox:
         specifier: 1.3.3
         version: 1.3.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  'extensions/onepassword':
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1991,12 +2003,12 @@ importers:
       '@openclaw/gateway-protocol':
         specifier: workspace:*
         version: link:../gateway-protocol
+      '@openclaw/net-policy':
+        specifier: workspace:*
+        version: link:../net-policy
       '@openclaw/retry':
         specifier: workspace:*
         version: link:../retry
-      ipaddr.js:
-        specifier: 2.4.0
-        version: 2.4.0
       ws:
         specifier: 8.21.0
         version: 8.21.0
@@ -2015,6 +2027,9 @@ importers:
 
   packages/markdown-core:
     dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       markdown-it:
         specifier: 14.3.0
         version: 14.3.0
@@ -2034,7 +2049,11 @@ importers:
         specifier: 22.0.1
         version: 22.0.1
 
-  packages/media-generation-core: {}
+  packages/media-generation-core:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/media-understanding-common: {}
 
@@ -2050,7 +2069,11 @@ importers:
         specifier: 7.0.5
         version: 7.0.5
 
-  packages/model-catalog-core: {}
+  packages/model-catalog-core:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/net-policy:
     dependencies:
@@ -2080,6 +2103,9 @@ importers:
 
   packages/terminal-core:
     dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       '@clack/prompts':
         specifier: 1.6.0
         version: 1.6.0
@@ -2097,6 +2123,9 @@ importers:
 
   ui:
     dependencies:
+      '@openclaw/gateway-client':
+        specifier: workspace:*
+        version: link:../packages/gateway-client
       '@codemirror/commands':
         specifier: 6.10.4
         version: 6.10.4
