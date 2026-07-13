@@ -438,4 +438,16 @@ describe("running-tasks status row", () => {
     );
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
+
+  it("hides the stale snapshot while disconnected", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      html`${renderBackgroundTasksStatusRow(
+        makeProps({ connected: false, tasks: [makeTask({ id: "t1" })] }),
+      )}`,
+      container,
+    );
+    expect(container.querySelector(".chat-tasks-status")).toBeNull();
+  });
 });

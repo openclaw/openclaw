@@ -347,7 +347,9 @@ export function renderBackgroundTasksStatusRow(
   backgroundTasks: BackgroundTasksProps | undefined,
 ): TemplateResult | typeof nothing {
   const status = activeBackgroundTasksStatus(backgroundTasks);
-  if (!backgroundTasks || !status) {
+  // Disconnected snapshots are stale: task events cannot arrive, so a ticking
+  // "running" claim would be a lie. The rail owns the disconnected state.
+  if (!backgroundTasks?.connected || !status) {
     return nothing;
   }
   const label =
