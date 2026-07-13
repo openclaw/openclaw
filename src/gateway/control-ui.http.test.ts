@@ -542,6 +542,53 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("sanitizes control characters in assistant media filenames", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-filename-control-",
+      fn: async (tmpRoot) => {
+        const filename = "draft\r\nfinal.pdf";
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `attachment; filename="draft__final.pdf"; filename*=UTF-8''draft__final.pdf`,
+        );
+      },
+    });
+  });
+
+  it("caps long assistant media filenames in content disposition", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-filename-long-",
+      fn: async (tmpRoot) => {
+        const filename = `${"a".repeat(210)}.pdf`;
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=test-token`,
+          method: "GET",
+          auth: { mode: "token", token: "test-token", allowTailscale: false },
+        });
+        const capped = "a".repeat(200);
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `attachment; filename="${capped}"; filename*=UTF-8''${capped}`,
+        );
+      },
+    });
+  });
+
   it("serves assistant media from canonical inbound media refs", async () => {
     const stateDir = resolveStateDir();
     const id = `report---${randomUUID()}.pdf`;

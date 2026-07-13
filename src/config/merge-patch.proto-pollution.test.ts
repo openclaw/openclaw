@@ -30,6 +30,31 @@ describe("applyMergePatch prototype pollution guard", () => {
     expect(Object.hasOwn(result, "prototype")).toBe(false);
   });
 
+  it("ignores legacy object accessor keys in shallow and nested patches", () => {
+    const legacyKeys = [
+      "__defineGetter__",
+      "__defineSetter__",
+      "__lookupGetter__",
+      "__lookupSetter__",
+    ] as const;
+    const patch = Object.fromEntries([
+      ["safe", true],
+      ...legacyKeys.map((key) => [key, { polluted: true }]),
+      ["nested", Object.fromEntries(legacyKeys.map((key) => [key, { polluted: true }]))],
+    ]);
+    const result = applyMergePatch({ nested: { keep: true } }, patch) as {
+      nested: Record<string, unknown>;
+      safe?: boolean;
+    };
+
+    expect(result.safe).toBe(true);
+    expect(result.nested.keep).toBe(true);
+    for (const key of legacyKeys) {
+      expect(Object.hasOwn(result, key)).toBe(false);
+      expect(Object.hasOwn(result.nested, key)).toBe(false);
+    }
+  });
+
   it("ignores __proto__ in nested patches", () => {
     const base = { nested: { x: 1 } };
     const patch = JSON.parse('{"nested": {"__proto__": {"polluted": true}, "y": 2}}');

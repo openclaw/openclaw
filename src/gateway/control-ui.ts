@@ -97,8 +97,9 @@ const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
 function buildAssistantMediaContentDisposition(filename: string, mime?: string): string {
   // Keep the RFC 6266 fallback ASCII; filename* carries the exact UTF-8 name.
-  const fallback = filename.replace(/[^\x20-\x7e]|[%"\\]/g, "_") || "download";
-  const extended = encodeURIComponent(filename).replace(
+  const sanitizedInput = filename.replace(/[\r\n]/g, "_").slice(0, 200);
+  const fallback = sanitizedInput.replace(/[^\x20-\x7e]|[%"\\]/g, "_").trim() || "download";
+  const extended = encodeURIComponent(sanitizedInput).replace(
     /[\x27()*]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
   );

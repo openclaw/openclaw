@@ -44,7 +44,17 @@ function isValidOwner(value: string): boolean {
 }
 
 function isValidRepo(value: string): boolean {
-  return value !== "." && value !== ".." && /^[a-z\d_.-]{1,100}$/iu.test(value);
+  if (value.length < 1 || value.length > 100) {
+    return false;
+  }
+  if (!/^[a-z\d](?:[a-z\d._-]*[a-z\d])?$/iu.test(value)) {
+    return false;
+  }
+  if (value.includes("..")) {
+    return false;
+  }
+  const lower = value.toLowerCase();
+  return !lower.endsWith(".git") && !lower.endsWith(".atom");
 }
 
 export function parseControlUiGitHubPreviewTarget(
@@ -183,15 +193,23 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
   }
   try {
     const url = new URL(raw);
+    const rawPathEnd = raw.search(/[?#]/u);
+    const rawPath = rawPathEnd === -1 ? raw : raw.slice(0, rawPathEnd);
     if (
       url.protocol !== "https:" ||
       url.hostname !== GITHUB_AVATAR_HOST ||
+      url.hash ||
       url.username ||
       url.password ||
-      url.port
+      url.port ||
+      rawPath.includes("..") ||
+      rawPath.includes("\\") ||
+      url.pathname.includes("..") ||
+      url.pathname.includes("\\")
     ) {
       return null;
     }
+    url.search = "";
     url.searchParams.set("s", "64");
     return url;
   } catch {

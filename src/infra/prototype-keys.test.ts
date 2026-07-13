@@ -4,7 +4,15 @@ import { isBlockedObjectKey } from "./prototype-keys.js";
 
 describe("isBlockedObjectKey", () => {
   it("blocks prototype-pollution keys and allows ordinary keys", () => {
-    for (const key of ["__proto__", "prototype", "constructor"]) {
+    for (const key of [
+      "__proto__",
+      "prototype",
+      "constructor",
+      "__defineGetter__",
+      "__defineSetter__",
+      "__lookupGetter__",
+      "__lookupSetter__",
+    ]) {
       expect(isBlockedObjectKey(key)).toBe(true);
     }
 
