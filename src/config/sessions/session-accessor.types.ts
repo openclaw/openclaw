@@ -830,20 +830,6 @@ export type {
   SessionEntryLifecycleUpsert,
 };
 
-export type SessionArchivedTranscriptFileCleanupParams = {
-  directories: string[];
-  rules: SessionArchivedTranscriptCleanupRule[];
-  nowMs?: number;
-  dryRun?: boolean;
-  excludeCanonicalPaths?: ReadonlySet<string>;
-  onRemoveFile?: (canonicalPath: string) => void;
-};
-
-export type SessionArchivedTranscriptFileCleanupResult = {
-  removed: number;
-  scanned: number;
-};
-
 export type ResetSessionEntryLifecycleParams = {
   /** Preserve legacy rotation archival unless the caller appended an in-log boundary. */
   archivePreviousTranscript?: boolean;
