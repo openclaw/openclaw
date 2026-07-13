@@ -117,10 +117,9 @@ function normalizeDeepgramRealtimeBaseUrl(value?: string): string {
 
 function toDeepgramRealtimeWsUrl(config: DeepgramRealtimeTranscriptionSessionConfig): string {
   const url = new URL(normalizeDeepgramRealtimeBaseUrl(config.baseUrl));
-  // Preserve direct ws:/wss: overrides; map http(s): to their WebSocket equivalents.
-  if (url.protocol !== "ws:" && url.protocol !== "wss:") {
-    url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-  }
+  // Map http: to ws: and everything else (https:, ws:, wss:) to wss: — this
+  // preserves a direct wss:// override and keeps the secure ws:// -> wss:// upgrade.
+  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/listen`;
   url.searchParams.set("model", config.model);
   url.searchParams.set("encoding", config.encoding);

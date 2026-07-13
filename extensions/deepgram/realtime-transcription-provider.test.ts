@@ -101,10 +101,23 @@ describe("normalizeDeepgramRealtimeBaseUrl", () => {
     );
   });
 
-  it("accepts a direct ws:// endpoint", () => {
+  it("accepts a direct ws:// endpoint but upgrades it to wss:// in the URL builder", () => {
+    // The validator accepts ws://, but the released behavior upgrades ws:// to
+    // secure wss:// — realtime audio and provider auth must not go plaintext.
     expect(testing.normalizeDeepgramRealtimeBaseUrl("ws://internal.proxy:8080/dg")).toBe(
       "ws://internal.proxy:8080/dg",
     );
+    const url = testing.toDeepgramRealtimeWsUrl({
+      apiKey: "dg-key",
+      baseUrl: "ws://internal.proxy:8080/dg",
+      model: "nova-3",
+      providerConfig: {},
+      sampleRate: 8000,
+      encoding: "mulaw",
+      interimResults: true,
+      endpointingMs: 800,
+    });
+    expect(url).toMatch(/^wss:\/\/internal\.proxy:8080\/dg\/listen\?/);
   });
 
   it("preserves custom path on a wss:// override through the URL builder", () => {
