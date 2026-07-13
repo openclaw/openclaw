@@ -319,12 +319,7 @@ import {
   hasSessionUserTurnBeenSent,
   markSessionUserTurnsSent,
 } from "../session-prompt-state.js";
-import {
-  resetEmbeddedAgentBaseStreamFnCacheForTest,
-  resolveEmbeddedAgentApiKey,
-  resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
-} from "../stream-resolution.js";
+import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import {
   collectCoreBuiltinToolNames,
@@ -345,6 +340,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
+import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { finalizeEmbeddedAttempt } from "./attempt-finalize.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
@@ -411,8 +407,10 @@ import {
   installPromptSubmissionLockRelease,
 } from "./attempt.session-lock.js";
 import {
+  isSessionsYieldAbortError,
   persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
+  SESSIONS_YIELD_ABORT_REASON,
   stripSessionsYieldArtifacts,
   waitForSessionsYieldAbortSettle,
 } from "./attempt.sessions-yield.js";
@@ -471,6 +469,10 @@ import {
   type MidTurnPrecheckRequest,
 } from "./midturn-precheck.js";
 import {
+  detachPrePersistedCurrentUserTurn,
+  sessionMessagesContainIdempotencyKey,
+} from "./pre-persisted-user-turn.js";
+import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
@@ -501,28 +503,6 @@ function buildPreflightRecoveryBudgetSnapshot(snapshot: PreflightRecoveryBudgetS
     overflowTokens: snapshot.overflowTokens,
   };
 }
-
-export {
-  appendAttemptCacheTtlIfNeeded,
-  composeSystemPromptWithHookContext,
-  resolveAttemptSpawnWorkspaceDir,
-} from "./attempt.thread-helpers.js";
-export {
-  buildAfterTurnRuntimeContext,
-  buildAfterTurnRuntimeContextFromUsage,
-  mergeOrphanedTrailingUserPrompt,
-  prependSystemPromptAddition,
-  resolveAttemptFsWorkspaceOnly,
-  resolveAttemptMediaTaskSystemPromptAddition,
-  resolvePromptBuildHookResult,
-  resolvePromptModeForSession,
-  shouldWarnOnOrphanedUserRepair,
-} from "./attempt.prompt-helpers.js";
-export {
-  resetEmbeddedAgentBaseStreamFnCacheForTest,
-  resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
-};
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
 const aggregateToolResultPressureWarnings = new Set<string>();
@@ -592,17 +572,6 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 
 function cloneHookMessages(messages: AgentMessage[]): AgentMessage[] {
   return messages.map((message) => structuredClone(message));
-}
-
-function sessionMessagesContainIdempotencyKey(
-  messages: AgentMessage[],
-  idempotencyKey: string,
-): boolean {
-  return messages.some(
-    (message) =>
-      typeof (message as { idempotencyKey?: unknown }).idempotencyKey === "string" &&
-      (message as { idempotencyKey?: unknown }).idempotencyKey === idempotencyKey,
-  );
 }
 
 function flushSessionManagerTranscript(
@@ -1296,6 +1265,7 @@ export async function runEmbeddedAttempt(
       !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
+      params.skillWorkshopProposalOnly !== true &&
       params.toolsAllow?.length !== 0 &&
       codeModeConfig.enabled;
     const toolSearchControlsEnabledForRun =
@@ -1303,6 +1273,7 @@ export async function runEmbeddedAttempt(
       !ringZeroToolRun &&
       params.disableTools !== true &&
       !isRawModelRun &&
+      params.skillWorkshopProposalOnly !== true &&
       params.toolsAllow?.length !== 0 &&
       !codeModeControlsEnabledForRun &&
       toolSearchConfig.enabled;
@@ -1465,6 +1436,11 @@ export async function runEmbeddedAttempt(
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
             modelId: params.modelId,
+            skillWorkshop: {
+              proposalOnly: params.skillWorkshopProposalOnly,
+              origin: params.skillWorkshopOrigin,
+              proposalMutationBudget: params.skillWorkshopProposalMutationBudget,
+            },
             modelCompat: extractModelCompat(params.model),
             modelApi: params.model.api,
             modelContextWindowTokens: params.model.contextWindow,
@@ -1518,7 +1494,7 @@ export async function runEmbeddedAttempt(
               yieldDetected = true;
               yieldMessage = message;
               queueYieldInterruptForSession?.();
-              runAbortController.abort("sessions_yield");
+              runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
               abortSessionForYield?.();
             },
           });
@@ -2808,6 +2784,12 @@ export async function runEmbeddedAttempt(
         params.onUserMessagePersistenceInvalidated?.();
         activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
       }
+      detachPrePersistedCurrentUserTurn({
+        activeSession,
+        preparedUserTurnMessage,
+        suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
+        userTurnAlreadyPersisted: params.userTurnTranscriptRecorder?.hasPersisted() === true,
+      });
       // Single source for the per-message timestamp prefix (issue #3658):
       // normal embedded runs stamp every user message from its own timestamp.
       // Raw model probes must keep the requested prompt text exact.
@@ -2875,8 +2857,8 @@ export async function runEmbeddedAttempt(
         trackSettlePromise(inFlightPromptSettlePromises, promise);
       const trackAbortSettlePromise = (promise: Promise<void>): Promise<void> =>
         trackSettlePromise(inFlightAbortSettlePromises, promise);
-      const abortActiveSession = (): Promise<void> =>
-        trackAbortSettlePromise(Promise.resolve(activeSession.abort()));
+      const abortActiveSession = (reason?: unknown): Promise<void> =>
+        trackAbortSettlePromise(Promise.resolve(activeSession.abort(reason)));
       abortActiveSessionForExternalSignal = abortActiveSession;
       buildAbortSettlePromise = (): Promise<void> | null => {
         const promises = [...inFlightPromptSettlePromises, ...inFlightAbortSettlePromises];
@@ -2886,7 +2868,7 @@ export async function runEmbeddedAttempt(
         return Promise.allSettled(promises).then(() => undefined);
       };
       abortSessionForYield = () => {
-        yieldAbortSettled = abortActiveSession();
+        yieldAbortSettled = abortActiveSession(SESSIONS_YIELD_ABORT_REASON);
       };
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
@@ -4939,11 +4921,7 @@ export async function runEmbeddedAttempt(
           }
         } catch (err) {
           releaseLeasedSteering(err);
-          yieldAborted =
-            yieldDetected &&
-            isRunnerAbortError(err) &&
-            err instanceof Error &&
-            err.cause === "sessions_yield";
+          yieldAborted = yieldDetected && isSessionsYieldAbortError(err);
           cleanupYieldAborted = yieldAborted;
           if (yieldAborted) {
             aborted = false;
@@ -5387,23 +5365,15 @@ export async function runEmbeddedAttempt(
               error: promptError ? formatErrorMessage(promptError) : undefined,
               durationMs: Date.now() - promptStartedAt,
             },
-            ctx: {
-              runId: params.runId,
-              trace: freezeDiagnosticTraceContext(diagnosticTrace),
+            ctx: buildEmbeddedAgentEndContext({
+              run: params,
               agentId: hookAgentId,
-              sessionKey: params.sessionKey,
-              sessionId: params.sessionId,
-              workspaceDir: params.workspaceDir,
-              trigger: params.trigger,
-              ...(params.config ? { config: params.config } : {}),
-              ...buildAgentHookContextChannelFields(params),
-              ...buildAgentHookContextIdentityFields({
-                trigger: params.trigger,
-                senderId: params.senderId,
-                chatId: params.chatId,
-                channelContext: params.channelContext,
-              }),
-            },
+              trace: freezeDiagnosticTraceContext(diagnosticTrace),
+              skillWorkshopAvailable: uncompactedEffectiveTools.some(
+                (tool) => tool.name === "skill_workshop",
+              ),
+              compacted: compactionOccurredThisAttempt,
+            }),
             hookRunner,
           });
         }

@@ -68,6 +68,10 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mxc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mxc/**"
 "plugin: bonjour":
   - changed-files:
       - any-glob-to-any-file:
@@ -354,6 +358,12 @@
           - "extensions/vault/**"
           - "docs/plugins/vault.md"
           - "docs/plugins/reference/vault.md"
+"extensions: onepassword":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/onepassword/**"
+          - "docs/plugins/onepassword.md"
+          - "docs/plugins/reference/onepassword.md"
 "extensions: webhooks":
   - changed-files:
       - any-glob-to-any-file:

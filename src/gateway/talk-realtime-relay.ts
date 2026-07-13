@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -184,10 +185,6 @@ type TalkRealtimeRelaySessionResult = {
 };
 
 const relaySessions = new Map<string, RelaySession>();
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 function realtimeRelayIssue(params: {
   message: string;
@@ -787,10 +784,10 @@ export function createTalkRealtimeRelaySession(
             })
             .catch((error: unknown) => {
               emit(
-                { relaySessionId, type: "error", message: formatError(error) },
+                { relaySessionId, type: "error", message: formatErrorMessage(error) },
                 {
                   type: "session.error",
-                  payload: { message: formatError(error) },
+                  payload: { message: formatErrorMessage(error) },
                   final: true,
                 },
               );
@@ -859,7 +856,7 @@ export function createTalkRealtimeRelaySession(
     },
     onError: (error) => {
       const issue = realtimeRelayIssue({
-        message: formatError(error),
+        message: formatErrorMessage(error),
         provider: params.provider.id,
         model: params.model,
         phase: ready ? "stream" : "connect",
@@ -932,7 +929,7 @@ export function createTalkRealtimeRelaySession(
   relaySessions.set(relaySessionId, relay);
   bridge.connect().catch((error: unknown) => {
     const issue = realtimeRelayIssue({
-      message: formatError(error),
+      message: formatErrorMessage(error),
       provider: params.provider.id,
       model: params.model,
       phase: "connect",

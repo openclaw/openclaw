@@ -984,13 +984,13 @@ function sanitizeStreamText(text: string): string {
 }
 
 function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
-  if (typeof item.sendSubmittedAtMs !== "number" || item.sendState === "failed") {
-    return false;
-  }
+  // Page-local submit timing is not persisted; durable attempts keep restored prompts visible.
+  const sendStarted = typeof item.sendSubmittedAtMs === "number" || (item.sendAttempts ?? 0) > 0;
   return (
-    item.sendState === "waiting-model" ||
-    item.sendState === "sending" ||
-    item.sendState === "waiting-reconnect"
+    sendStarted &&
+    (item.sendState === "waiting-model" ||
+      item.sendState === "sending" ||
+      item.sendState === "waiting-reconnect")
   );
 }
 

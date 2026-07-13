@@ -53,6 +53,7 @@ describe("compareOpenClawVersions", () => {
   });
 
   it("treats stable as newer than beta and compares beta identifiers", () => {
+    expect(compareOpenClawVersions("2026.6.5", "2026.6.6-beta.1")).toBe(-1);
     expect(compareOpenClawVersions("2026.3.23", "2026.3.23-beta.1")).toBe(1);
     expect(compareOpenClawVersions("2026.3.23-beta.2", "2026.3.23-beta.1")).toBe(1);
     expect(compareOpenClawVersions("2026.3.23.beta.1", "2026.3.23-beta.2")).toBe(-1);

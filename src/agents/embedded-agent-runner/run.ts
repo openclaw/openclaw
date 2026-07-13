@@ -227,6 +227,7 @@ import {
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
+import { buildHandledReplyPayloads } from "./run/handled-reply.js";
 import {
   buildErrorAgentMeta,
   buildUsageAgentMetaFields,
@@ -711,21 +712,6 @@ function assertAgentHarnessRunAdmission(params: RunEmbeddedAgentParams): void {
   }
 }
 
-function buildHandledReplyPayloads(reply?: ReplyPayload) {
-  const normalized = reply ?? { text: SILENT_REPLY_TOKEN };
-  return [
-    {
-      text: normalized.text,
-      mediaUrl: normalized.mediaUrl,
-      mediaUrls: normalized.mediaUrls,
-      replyToId: normalized.replyToId,
-      audioAsVoice: normalized.audioAsVoice,
-      isError: normalized.isError,
-      isReasoning: normalized.isReasoning,
-    },
-  ];
-}
-
 /** Marks only request parameters that OpenClaw applies to provider egress. */
 function resolveRequestStreamTransportOverrides(
   streamParams: RunEmbeddedAgentParams["streamParams"],
@@ -805,6 +791,9 @@ async function runEmbeddedAgentInternal(
   paramsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const skillWorkshopProposalMutationBudget = paramsBase.skillWorkshopProposalOnly
+    ? { remaining: 1 }
+    : undefined;
   let lifecycleGeneration = paramsBase.lifecycleGeneration!;
   const queuedLifecycleGeneration = getAgentEventLifecycleGeneration();
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
@@ -826,6 +815,7 @@ async function runEmbeddedAgentInternal(
     sessionId: runSessionTarget.sessionId,
     sessionKey: normalizeOptionalString(effectiveSessionKey ?? runSessionTarget.sessionKey),
     sessionFile: runSessionTarget.sessionFile,
+    skillWorkshopProposalMutationBudget,
   };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
@@ -1224,6 +1214,7 @@ async function runEmbeddedAgentInternal(
         attachments: buildBeforeModelResolveAttachments(params.images),
         provider,
         modelId,
+        modelSelectionLocked: params.modelSelectionLocked,
         hookRunner,
         hookContext: hookCtx,
       });
@@ -2847,6 +2838,9 @@ async function runEmbeddedAgentInternal(
             streamParams: params.streamParams,
             modelRun: params.modelRun,
             disableTrajectory: params.disableTrajectory,
+            skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
+            skillWorkshopOrigin: params.skillWorkshopOrigin,
+            skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,
@@ -4317,7 +4311,6 @@ async function runEmbeddedAgentInternal(
           };
           const finalAssistantVisibleText = resolveFinalAssistantVisibleText(attemptAssistant);
           const finalAssistantRawText = resolveFinalAssistantRawText(attemptAssistant);
-
           const payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts,
             assistantMessageIndex: attempt.lastAssistantTextMessageIndex,
@@ -4344,6 +4337,7 @@ async function runEmbeddedAgentInternal(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didDeliverSourceReplyViaMessageTool:
               attempt.didDeliverSourceReplyViaMessageTool === true,
+            messagingToolSentTargets: attempt.messagingToolSentTargets,
             messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             agentId: params.agentId,
@@ -5075,7 +5069,6 @@ function resolveAuthProfileStateProvider(
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
 }
-
 export const testing = {
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
   resolveEmbeddedRunLaneTimeoutMs,

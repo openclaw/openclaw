@@ -217,6 +217,8 @@ export async function runDoctorConfigPreflight(
     /** Return false or reject on config drift; the preflight always unwinds owned resources. */
     beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
     requireStartupMigrationCheckpoint?: boolean;
+    /** Core state was proven absent before Gateway selection could create runtime files. */
+    skipPristineCoreStateMigrations?: boolean;
     /** Prepared before Gateway bootstrap can create files under an otherwise pristine state root. */
     skipPristineStartupStateMigrations?: boolean;
     /**
@@ -237,6 +239,8 @@ export async function runDoctorConfigPreflight(
   let startupMigrationEnv = process.env;
   let shouldRecordStartupCheckpoint = false;
   let skipPristineStartupStateMigrations = options.skipPristineStartupStateMigrations === true;
+  let skipPristineCoreStateMigrations =
+    skipPristineStartupStateMigrations || options.skipPristineCoreStateMigrations === true;
   let startupMigrationLease: StartupMigrationLease | undefined;
   let startupMigrationHeartbeat: ReturnType<typeof setInterval> | undefined;
   let startupMigrationHeartbeatError: unknown;
@@ -252,14 +256,15 @@ export async function runDoctorConfigPreflight(
   try {
     if (startupCheckpoint && !skipPristineStartupStateMigrations) {
       // Capture pristine state before the Gateway's fresh-config guard can prepare runtime state.
-      const { canSkipPristineStartupStateMigrations } = await measureStartupPreflightStep(
+      const { planPristineStartupStateMigrations } = await measureStartupPreflightStep(
         "pristine-state-plan-import",
         () => import("./doctor/shared/pristine-startup-state.js"),
       );
-      skipPristineStartupStateMigrations = await measureStartupPreflightStep(
-        "pristine-state-plan",
-        () => canSkipPristineStartupStateMigrations(process.env),
+      const pristineStatePlan = await measureStartupPreflightStep("pristine-state-plan", () =>
+        planPristineStartupStateMigrations(process.env),
       );
+      skipPristineStartupStateMigrations = pristineStatePlan.skipAllStateMigrations;
+      skipPristineCoreStateMigrations ||= pristineStatePlan.skipCoreStateMigrations;
     }
     // The gateway uses this last-moment guard to ensure its prepared config did not change before
     // any automatic migration mutates state. A rejected guard skips every state migration stage.
@@ -374,7 +379,18 @@ export async function runDoctorConfigPreflight(
         autoMigrateLegacyTaskStateSidecars,
       } = stateMigrations;
       if (stateMigrationInput) {
-        if (stateMigrationInput.cfg) {
+        const pluginDoctorOnlyConfig =
+          stateMigrationInput.pluginDoctorConfig ?? stateMigrationInput.cfg;
+        if (skipPristineCoreStateMigrations && pluginDoctorOnlyConfig) {
+          // Core state is absent, but plugin paths may own external migration state.
+          // Keep their doctor owner active without loading channel/session detectors.
+          noteStartupStateMigrationResult(
+            await autoMigrateLegacyPluginDoctorState({
+              config: pluginDoctorOnlyConfig,
+              env: process.env,
+            }),
+          );
+        } else if (stateMigrationInput.cfg) {
           const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
           const cronResult = await repairLegacyCronStoreWithoutPrompt({
             cfg: stateMigrationInput.cfg,

@@ -10,11 +10,11 @@ import {
   retainGatewayRootWorkAdmissionContinuation,
   resetGatewayWorkAdmission,
   runWithGatewayIndependentRootWorkContinuation,
-  runWithGatewayRootWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
   waitForActiveGatewayRootWork,
 } from "./gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "./gateway-work-admission.test-helpers.js";
 
 beforeEach(resetGatewayWorkAdmission);
 afterEach(resetGatewayWorkAdmission);
@@ -199,7 +199,7 @@ it("defers required internal root work until suspension reopens", async () => {
   const suspension = tryBeginGatewaySuspendAdmission(() => {});
   expect(suspension?.commit()).toBe(true);
   const entered = vi.fn();
-  const pending = runWithGatewayRootWorkAdmission(async () => {
+  const pending = runWithGatewayRootWorkAdmissionForTest(async () => {
     entered();
     expect(getActiveGatewayRootWorkCount()).toBe(1);
   });
@@ -237,7 +237,7 @@ it("retires surviving root records across an in-process reset", async () => {
 it("does not wake deferred internal work into a restart drain", async () => {
   const suspension = tryBeginGatewaySuspendAdmission(() => {});
   expect(suspension?.commit()).toBe(true);
-  const pending = runWithGatewayRootWorkAdmission(async () => {});
+  const pending = runWithGatewayRootWorkAdmissionForTest(async () => {});
 
   markGatewayRestartDraining();
 
