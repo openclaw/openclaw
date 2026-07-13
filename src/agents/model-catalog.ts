@@ -70,6 +70,7 @@ export {
 } from "./model-catalog-lookup.js";
 
 type DiscoveredModel = {
+  profileId?: string;
   id: string;
   name?: string;
   provider: string;
@@ -168,9 +169,10 @@ export function setModelCatalogImportForTest(loader?: () => Promise<AgentDiscove
 /** @deprecated Use `setModelCatalogImportForTest`. */
 export { setModelCatalogImportForTest as __setModelCatalogImportForTest };
 
-function catalogEntryDedupeKey(provider: string, id: string): string {
+function catalogEntryDedupeKey(provider: string, id: string, profileId?: string): string {
   const normalizedProvider = normalizeProviderId(provider);
-  return normalizeLowercaseStringOrEmpty(modelKey(normalizedProvider, id));
+  const baseKey = modelKey(normalizedProvider, id);
+  return normalizeLowercaseStringOrEmpty(profileId ? `${baseKey}@${profileId}` : baseKey);
 }
 
 function mergeCatalogCompat(
@@ -280,10 +282,10 @@ function mergeCatalogEntries(
   options?: { preserveBaseName?: boolean },
 ): void {
   const indexByKey = new Map(
-    models.map((entry, index) => [catalogEntryDedupeKey(entry.provider, entry.id), index]),
+    models.map((entry, index) => [catalogEntryDedupeKey(entry.provider, entry.id, entry.profileId), index]),
   );
   for (const entry of entries) {
-    const key = catalogEntryDedupeKey(entry.provider, entry.id);
+    const key = catalogEntryDedupeKey(entry.provider, entry.id, entry.profileId);
     const existingIndex = indexByKey.get(key);
     if (existingIndex === undefined) {
       models.push(entry);
@@ -848,6 +850,7 @@ export async function loadModelCatalogSnapshot(
           input,
           ...(modelParams ? { params: modelParams } : {}),
           compat,
+          ...(entry.profileId ? { profileId: entry.profileId } : {}),
         } satisfies ModelCatalogEntry;
         models.push(model);
         mergeCatalogRouteVariants(routeVariants, [model]);
@@ -897,6 +900,43 @@ export async function loadModelCatalogSnapshot(
             workspaceDir,
             env: process.env,
             resolveProviderApiKey,
+            resolveProviderAuth: (providerId, options) => {
+              const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+                allowKeychainPrompt: false,
+              });
+              const provider = providerId?.trim() ? providerId : undefined;
+              const order = provider ? cfg.auth?.order?.[provider] : undefined;
+              if (!provider || !order?.length) {
+                return {
+                  apiKey: undefined,
+                  discoveryApiKey: undefined,
+                  mode: "none" as const,
+                  source: "none" as const,
+                  profileId: undefined,
+                };
+              }
+              const profiles = cfg.auth?.profiles ?? {};
+              for (const profileId of order) {
+                const credential = store.profiles[profileId];
+                if (credential) {
+                  const profile = profiles[profileId];
+                  return {
+                    apiKey: credential.apiKey,
+                    discoveryApiKey: undefined,
+                    mode: profile?.mode ?? "api_key" as const,
+                    source: "profile" as const,
+                    profileId,
+                  };
+                }
+              }
+              return {
+                apiKey: undefined,
+                discoveryApiKey: undefined,
+                mode: "none" as const,
+                source: "none" as const,
+                profileId: undefined,
+              };
+            },
             entries: augmentEntries ?? [...models],
           },
         });
