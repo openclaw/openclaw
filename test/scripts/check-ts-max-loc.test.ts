@@ -90,6 +90,23 @@ describe("scripts/check-ts-max-loc", () => {
     expect(isProductionTypeScriptFile("src/runtime.test.ts")).toBe(false);
     expect(isProductionTypeScriptFile("test/helpers/runtime.ts")).toBe(false);
     expect(isProductionTypeScriptFile("src/test-utils/command-runner.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/gateway/test-helpers.e2e.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("test-fixtures/runtime.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/plugins/runtime.test-fixtures.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/agents/model.e2e-harness.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("extensions/qa-lab/src/auth-profile.fixture.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("extensions/browser/src/session.mock.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/commands/agent-command.test-mocks.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/commands/channels.mock-harness.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/commands/doctor.fast-path-mocks.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/cli/test-runtime-mock.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("test-harness/runtime.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/acme-test-support/runner.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/test-helper-runtime.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("extensions/voice-call/src/providers/mock.ts")).toBe(true);
+    expect(isProductionTypeScriptFile("scripts/control-ui-mock-dev.ts")).toBe(true);
+    expect(isProductionTypeScriptFile("src/fixture-loader.ts")).toBe(true);
+    expect(isProductionTypeScriptFile("src/test-supportability.ts")).toBe(true);
     expect(isProductionTypeScriptFile("ui/src/i18n/locales/en.ts")).toBe(false);
   });
 
