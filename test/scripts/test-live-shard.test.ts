@@ -345,6 +345,38 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
+  it("treats the skill experience review as opt-in release proof", () => {
+    const skillReviewFile = "src/skills/workshop/experience-review.live.test.ts";
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src/agents/openai-reasoning-compat.live.test.ts"),
+          assertionResults: [{ status: "passed" }],
+        },
+        {
+          name: path.join(process.cwd(), skillReviewFile),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+    const expectedFiles = ["src/agents/openai-reasoning-compat.live.test.ts", skillReviewFile];
+
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
+      ok: true,
+    });
+    expect(
+      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW: "1",
+      }),
+    ).toEqual({
+      ok: false,
+      reason:
+        "Vitest report selected live test files had no passing assertions: src/skills/workshop/experience-review.live.test.ts",
+    });
+  });
+
   it("allows gateway core opt-in live files to be skipped until their env is enabled", () => {
     const payload = {
       numPassedTests: 1,
