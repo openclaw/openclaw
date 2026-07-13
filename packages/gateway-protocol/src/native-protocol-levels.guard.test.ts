@@ -208,8 +208,8 @@ describe("native Gateway protocol levels", () => {
     assertPattern(
       watch,
       watchPath,
-      /minprotocol: GATEWAY_MIN_NODE_PROTOCOL_VERSION/,
-      "Watch node connects must advertise GATEWAY_MIN_NODE_PROTOCOL_VERSION as minProtocol.",
+      /minprotocol: GATEWAY_MIN_PROTOCOL_VERSION/,
+      "Direct Watch HTTP connects must keep the current client protocol floor.",
     );
     assertPattern(
       watch,

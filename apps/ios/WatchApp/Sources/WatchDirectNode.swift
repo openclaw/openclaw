@@ -485,7 +485,8 @@ final class WatchDirectNode {
             ["bootstrapToken": AnyCodable(token)]
         }
         return ConnectParams(
-            minprotocol: GATEWAY_MIN_NODE_PROTOCOL_VERSION,
+            // Direct Watch HTTP transport was added after v3; only current gateways expose it.
+            minprotocol: GATEWAY_MIN_PROTOCOL_VERSION,
             maxprotocol: GATEWAY_PROTOCOL_VERSION,
             client: client,
             caps: [],
