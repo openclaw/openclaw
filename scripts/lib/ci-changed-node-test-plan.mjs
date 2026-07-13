@@ -5,6 +5,7 @@ import {
   buildVitestRunPlans,
   findUnmatchedExplicitTestTargets,
   hasReexportGraphImpactOnTargets,
+  isTestFileTarget,
   resolveChangedTestTargetPlan,
 } from "../test-projects.test-support.mjs";
 import { createNodeTestShards } from "./ci-node-test-plan.mjs";
@@ -78,7 +79,12 @@ export function createChangedNodeTestShards(changedPaths, options = {}) {
     return null;
   }
 
-  if (plan.targets.some((target) => findUnmatchedExplicitTestTargets([target], cwd).length > 0)) {
+  if (
+    plan.targets.some(
+      (target) =>
+        !isTestFileTarget(target) || findUnmatchedExplicitTestTargets([target], cwd).length > 0,
+    )
+  ) {
     return null;
   }
 

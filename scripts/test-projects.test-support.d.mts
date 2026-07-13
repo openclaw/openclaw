@@ -122,6 +122,8 @@ export function createVitestRunSpecs(
 
 export function createVitestPreflightPnpmArgs(config: string): string[] | null;
 
+export function isTestFileTarget(arg: string): boolean;
+
 export function findUnmatchedExplicitTestTargets(
   args: string[],
   cwd?: string,

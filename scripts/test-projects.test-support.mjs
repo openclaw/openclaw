@@ -2632,7 +2632,7 @@ function isFileLikeTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 
-function isTestFileTarget(arg) {
+export function isTestFileTarget(arg) {
   return /\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(arg);
 }
 

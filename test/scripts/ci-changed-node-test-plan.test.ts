@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -59,11 +59,13 @@ describe("CI changed Node test plan", () => {
     expect(createChangedNodeTestShards(["src/tui/tui-pty-harness.e2e.test.ts"])).toBeNull();
   });
 
-  it("fails safe when a source target has no matching test", () => {
+  it("fails safe when an unresolved source only finds an unrelated directory test", () => {
     const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-ci-target-"));
     try {
-      writeFileSync(path.join(cwd, "value.ts"), "export const value = 1;\n");
-      expect(createChangedNodeTestShards(["value.ts"], { cwd })).toBeNull();
+      mkdirSync(path.join(cwd, "src"));
+      writeFileSync(path.join(cwd, "src/value.ts"), "export const value = 1;\n");
+      writeFileSync(path.join(cwd, "src/unrelated.test.ts"), "export const unrelated = true;\n");
+      expect(createChangedNodeTestShards(["src/value.ts"], { cwd })).toBeNull();
     } finally {
       rmSync(cwd, { force: true, recursive: true });
     }
