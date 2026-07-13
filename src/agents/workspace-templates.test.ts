@@ -87,6 +87,35 @@ describe("resolveWorkspaceTemplateDir", () => {
     }
   });
 
+  it("ships Git work-isolation guidance in every AGENTS template and coding-agent skill", async () => {
+    const instructionFiles = [
+      "docs/reference/templates/AGENTS.md",
+      "docs/reference/templates/AGENTS.dev.md",
+      "docs/reference/AGENTS.default.md",
+      "skills/coding-agent/SKILL.md",
+    ];
+
+    for (const fileName of instructionFiles) {
+      const content = await fs.readFile(path.resolve(fileName), "utf-8");
+      expect(content, fileName).toContain("intended PR target repository");
+      expect(content, fileName).toContain("`upstream`");
+      expect(content, fileName).toContain("`origin`");
+      expect(content, fileName).toContain("git fetch --prune");
+      expect(content, fileName).toContain("isolated worktree");
+      expect(content, fileName).toContain("initial `HEAD`");
+      expect(content, fileName).toContain("existing PR");
+      expect(content, fileName).toContain("fetch canonical and the contributor branch");
+      expect(content, fileName).toContain("git merge-base --is-ancestor");
+    }
+
+    const codingAgentSkill = await fs.readFile(
+      path.resolve("skills/coding-agent/SKILL.md"),
+      "utf-8",
+    );
+    expect(codingAgentSkill).toContain("Append this block to **every** worker prompt");
+    expect(codingAgentSkill).toContain("Never start it in `~/Projects/openclaw`");
+  });
+
   it("keeps the runtime HEARTBEAT.md template effectively empty", async () => {
     const runtimeTemplatesDir = path.resolve("src", "agents", "templates");
     const content = await fs.readFile(path.join(runtimeTemplatesDir, "HEARTBEAT.md"), "utf-8");

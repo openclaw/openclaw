@@ -1,8 +1,3 @@
-/**
- * OpenClaw system prompt renderer.
- *
- * Assembles runtime, workspace, tooling, memory, delegation, channel, and cache-boundary prompt sections.
- */
 import { createHmac, createHash } from "node:crypto";
 import {
   normalizePromptCapabilityIds,
@@ -44,6 +39,7 @@ import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
 } from "./embedded-agent-runner/types.js";
+import { GIT_WORK_ISOLATION_PROMPT_LINES } from "./git-work-isolation-prompt.js";
 import {
   buildOpenClawToolFallbackText,
   shouldRenderOpenClawToolWorkflowHints,
@@ -1147,6 +1143,7 @@ export function buildAgentSystemPrompt(params: {
         fallback: [],
       }),
       ...safetySection,
+      ...GIT_WORK_ISOLATION_PROMPT_LINES,
       "## OpenClaw Control",
       "Do not invent commands.",
       "Config/restart: prefer `gateway` (`config.schema.lookup|get|patch|apply`, `restart`).",

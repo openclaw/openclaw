@@ -4,9 +4,10 @@
 
 import { formatSkillsForPrompt, type Skill } from "../../skills/loading/session.js";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
+import { buildGitWorkIsolationPrompt } from "../git-work-isolation-prompt.js";
 
 export interface BuildSystemPromptOptions {
-  /** Custom system prompt (replaces default). */
+  /** Custom system prompt (replaces the default prompt; mandatory invariants remain). */
   customPrompt?: string;
   /** Tools to include in prompt. Default: [read, bash, edit, write] */
   selectedTools?: string[];
@@ -46,12 +47,13 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
   const date = `${year}-${month}-${day}`;
 
   const appendSection = appendSystemPrompt ? `\n\n${appendSystemPrompt}` : "";
+  const gitWorkIsolationSection = `\n\n${buildGitWorkIsolationPrompt()}`;
 
   const contextFiles = providedContextFiles ?? [];
   const skills = providedSkills ?? [];
 
   if (customPrompt) {
-    let prompt = customPrompt;
+    let prompt = `${customPrompt}${gitWorkIsolationSection}`;
 
     if (appendSection) {
       prompt += appendSection;
@@ -141,7 +143,7 @@ ${toolsList}
 In addition to the tools above, you may have access to other custom tools depending on the project.
 
 Guidelines:
-${guidelines}
+${guidelines}${gitWorkIsolationSection}
 
 Embedded agent documentation (read only when the user asks about the embedded agent SDK, extensions, themes, skills, or TUI):
 - Main documentation: ${readmePath}
