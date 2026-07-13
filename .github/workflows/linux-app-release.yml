@@ -31,11 +31,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
-            # Prerelease semver (-alpha.N/-beta.N) maps to a Debian revision that
-            # sorts AFTER the plain stable version, breaking beta-to-stable
-            # upgrades; Linux bundles ship for stable tags only.
-            echo "Linux bundles ship for stable release tags only (vYYYY.M.PATCH); got: ${RELEASE_TAG}"
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+            # Alpha/beta semver suffixes map to a Debian revision that sorts
+            # AFTER the plain stable version, breaking beta-to-stable upgrades;
+            # numeric stable revisions (-N) order correctly and stay allowed.
+            echo "Linux bundles ship for stable release tags only (vYYYY.M.PATCH or vYYYY.M.PATCH-N); got: ${RELEASE_TAG}"
             exit 1
           fi
 
