@@ -1,6 +1,7 @@
 // Gateway Talk realtime relay.
 // Bridges browser Talk audio sessions with realtime voice provider plugins.
 import { randomUUID } from "node:crypto";
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -1136,6 +1137,9 @@ export function sendTalkRealtimeRelayAudio(params: {
 }): void {
   if (params.audioBase64.length > MAX_AUDIO_BASE64_BYTES) {
     throw new Error("Realtime relay audio frame is too large");
+  }
+  if (!canonicalizeBase64(params.audioBase64)) {
+    throw new Error("Realtime relay audio frame has invalid base64 encoding");
   }
   const session = getRelaySession(params.relaySessionId, params.connId);
   const turnId = ensureRelayTurn(session);
