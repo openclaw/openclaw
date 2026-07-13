@@ -439,7 +439,8 @@ struct OpenClawTypographyTests {
 
     private static func unbrandedTextCallOffenders() throws -> [String] {
         let fontTokens = ["OpenClawType", "OpenClawChatTypography"]
-        let allowedFragments = [".navigationTitle(", ".alert(\"", ".tabItem { Label("]
+        // Accessibility-only Text is spoken, never rendered, so no branded font applies.
+        let allowedFragments = [".navigationTitle(", ".alert(\"", ".tabItem { Label(", ".accessibilityLabel(Text("]
         return try self.swiftSourcesForTypographyAudit().flatMap { url -> [String] in
             let source = try String(contentsOf: url, encoding: .utf8)
             let lines = source.components(separatedBy: .newlines)

@@ -382,6 +382,22 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Allow",
+      "translations": [
+        "السماح",
+        "سماح"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Allow",
+      "translations": [
+        "İzin Ver",
+        "İzin ver"
+      ]
+    },
+    {
       "locale": "de",
       "source": "Allow Always",
       "translations": [
@@ -1427,6 +1443,22 @@
       "translations": [
         "Безпека з'єднання",
         "Безпека з’єднання"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Continue",
+      "translations": [
+        "続ける",
+        "続行"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Continue",
+      "translations": [
+        "Dalej",
+        "Kontynuuj"
       ]
     },
     {
@@ -2679,27 +2711,11 @@
       ]
     },
     {
-      "locale": "ar",
-      "source": "Enabled",
-      "translations": [
-        "مفعّل",
-        "مُمكّن"
-      ]
-    },
-    {
       "locale": "es",
       "source": "Enabled",
       "translations": [
         "Activado",
         "Habilitado"
-      ]
-    },
-    {
-      "locale": "hi",
-      "source": "Enabled",
-      "translations": [
-        "चालू",
-        "सक्षम"
       ]
     },
     {
@@ -2711,35 +2727,11 @@
       ]
     },
     {
-      "locale": "pl",
-      "source": "Enabled",
-      "translations": [
-        "Włączone",
-        "Włączono"
-      ]
-    },
-    {
       "locale": "pt-BR",
       "source": "Enabled",
       "translations": [
         "Ativado",
         "Habilitado"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "Enabled",
-      "translations": [
-        "Aktiverad",
-        "Aktiverat"
-      ]
-    },
-    {
-      "locale": "th",
-      "source": "Enabled",
-      "translations": [
-        "เปิดใช้งานแล้ว",
-        "เปิดใช้แล้ว"
       ]
     },
     {
@@ -3380,6 +3372,198 @@
     },
     {
       "locale": "ja-JP",
+      "source": "Limited",
+      "translations": [
+        "制限あり",
+        "制限付き"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Limited",
+      "translations": [
+        "Ograniczone",
+        "Ograniczony"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Limited",
+      "translations": [
+        "Ограниченный доступ",
+        "Ограничено"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Limited",
+      "translations": [
+        "Begränsad",
+        "Begränsat"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Limited",
+      "translations": [
+        "Giới hạn",
+        "Hạn chế"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Limited",
+      "translations": [
+        "受限",
+        "有限"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "اسرد التذكيرات وأضِفها وأكملها.",
+        "عرض التذكيرات وإضافتها وإكمالها."
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Erinnerungen auflisten, hinzufügen und abschließen.",
+        "Erinnerungen auflisten, hinzufügen und als erledigt markieren."
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Consulta, añade y completa recordatorios.",
+        "Enumera, añade y completa recordatorios."
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "فهرست‌کردن، افزودن و تکمیل یادآورها.",
+        "یادآورها را فهرست، اضافه و کامل کنید."
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Lister, ajouter et terminer des rappels.",
+        "Répertoriez, ajoutez et terminez des rappels."
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "रिमाइंडर की सूची देखें, जोड़ें और पूरा करें।",
+        "रिमाइंडर सूचीबद्ध करें, जोड़ें और पूर्ण करें।"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Cantumkan, tambahkan, dan selesaikan pengingat.",
+        "Lihat, tambahkan, dan selesaikan pengingat."
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Elenca, aggiungi e completa i promemoria.",
+        "Elenca, aggiungi e completa promemoria."
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "リマインダーの一覧表示、追加、完了を行います。",
+        "リマインダーを一覧表示、追加、完了します。"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "미리 알림을 나열하고, 추가하고, 완료 처리합니다.",
+        "미리 알림을 조회하고 추가하거나 완료합니다."
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Bekijk, voeg toe en voltooi herinneringen.",
+        "Geef herinneringen weer, voeg ze toe en voltooi ze."
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Wyświetlaj listę przypomnień, dodawaj je i oznaczaj jako wykonane.",
+        "Wyświetlanie, dodawanie i oznaczanie przypomnień jako ukończone."
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Просматривайте список напоминаний, добавляйте и отмечайте их как выполненные.",
+        "Просмотр, добавление и выполнение напоминаний."
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Lista, lägg till och slutför påminnelser.",
+        "Visa, lägg till och slutför påminnelser."
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "แสดงรายการ เพิ่ม และทำรายการเตือนความจำให้เสร็จ",
+        "แสดงรายการ เพิ่ม และทำรายการเตือนความจำให้เสร็จสิ้น"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Перегляд, додавання та виконання нагадувань.",
+        "Переглядайте список, додавайте й позначайте нагадування як виконані."
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "Liệt kê, thêm và hoàn thành lời nhắc.",
+        "Liệt kê, thêm và hoàn tất lời nhắc."
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "List, add, and complete reminders.",
+      "translations": [
+        "列出、新增並完成提醒事項。",
+        "列出、新增及完成提醒事項。"
+      ]
+    },
+    {
+      "locale": "ja-JP",
       "source": "Listening",
       "translations": [
         "リスニング中",
@@ -3571,6 +3755,30 @@
       "translations": [
         "Loading",
         "載入中"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Location",
+      "translations": [
+        "Localisation",
+        "Position"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Location",
+      "translations": [
+        "Геопозиция",
+        "Местоположение"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Location",
+      "translations": [
+        "Геодані",
+        "Місцезнаходження"
       ]
     },
     {
@@ -4529,6 +4737,14 @@
       ]
     },
     {
+      "locale": "de",
+      "source": "Notifications",
+      "translations": [
+        "Benachrichtigungen",
+        "Mitteilungen"
+      ]
+    },
+    {
       "locale": "sv",
       "source": "Notifications",
       "translations": [
@@ -4868,11 +5084,43 @@
       ]
     },
     {
+      "locale": "fr",
+      "source": "Open Settings",
+      "translations": [
+        "Ouvrir Réglages",
+        "Ouvrir les paramètres"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Open Settings",
+      "translations": [
+        "Settings खोलें",
+        "सेटिंग्स खोलें"
+      ]
+    },
+    {
       "locale": "it",
       "source": "Open Settings",
       "translations": [
         "Apri Impostazioni",
         "Apri impostazioni"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Open Settings",
+      "translations": [
+        "Instellingen openen",
+        "Open Instellingen"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Open Settings",
+      "translations": [
+        "Otwórz Ustawienia",
+        "Otwórz ustawienia"
       ]
     },
     {
@@ -4884,11 +5132,43 @@
       ]
     },
     {
+      "locale": "ru",
+      "source": "Open Settings",
+      "translations": [
+        "Открыть Настройки",
+        "Открыть настройки"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Open Settings",
+      "translations": [
+        "Öppna Inställningar",
+        "Öppna inställningar"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Open Settings",
+      "translations": [
+        "Відкрити Параметри",
+        "Відкрити налаштування"
+      ]
+    },
+    {
       "locale": "vi",
       "source": "Open Settings",
       "translations": [
         "Mở Cài đặt",
         "Mở cài đặt"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Open Settings",
+      "translations": [
+        "開啟「設定」",
+        "開啟設定"
       ]
     },
     {
@@ -5199,22 +5479,6 @@
       "translations": [
         "配對",
         "配對中"
-      ]
-    },
-    {
-      "locale": "nl",
-      "source": "Photos",
-      "translations": [
-        "Foto's",
-        "Foto’s"
-      ]
-    },
-    {
-      "locale": "sv",
-      "source": "Photos",
-      "translations": [
-        "Bilder",
-        "Foton"
       ]
     },
     {
