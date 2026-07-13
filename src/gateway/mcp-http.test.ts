@@ -2803,10 +2803,11 @@ describe("mcp loopback server", () => {
       if (!runtime) {
         throw new Error("expected active MCP loopback runtime");
       }
+      const auth = runtime.ownerToken;
 
       const response = await sendStalledBody({
         port: server.port,
-        token: runtime.ownerToken,
+        token: auth,
       });
 
       expect(response).toEqual({
