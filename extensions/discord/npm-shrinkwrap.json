@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.7.2",
+  "version": "2026.7.2-beta.1",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/discord",
-      "version": "2026.7.2",
+      "version": "2026.7.2-beta.1",
       "dependencies": {
         "@discord/embedded-app-sdk": "2.5.0",
         "@discordjs/voice": "0.19.2",
@@ -18,7 +18,7 @@
         "ws": "8.21.0"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.7.2"
+        "openclaw": ">=2026.7.2-beta.1"
       },
       "peerDependenciesMeta": {
         "openclaw": {
