@@ -1317,7 +1317,11 @@ export async function applyLocalPackageOverrides(params: {
           },
         });
         while (cleanupPaths.length > 0) {
-          await removeLocalOverrideCleanupPath(packageFs, cleanupPaths[0]);
+          const cleanupPath = cleanupPaths[0];
+          if (cleanupPath === undefined) {
+            break;
+          }
+          await removeLocalOverrideCleanupPath(packageFs, cleanupPath);
           cleanupPaths.shift();
         }
       }

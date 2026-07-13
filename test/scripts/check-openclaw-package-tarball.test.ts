@@ -99,7 +99,7 @@ function withTarball(
             ],
       ),
     );
-    const workspaceTemplates =
+    const workspaceTemplates: Record<string, string> =
       options.includeWorkspaceTemplates === false
         ? {}
         : Object.fromEntries(
@@ -108,7 +108,7 @@ function withTarball(
               `# ${relativePath}\n`,
             ]),
           );
-    const controlUiFiles =
+    const controlUiFiles: Record<string, string> =
       options.includeControlUi === false
         ? {}
         : {
