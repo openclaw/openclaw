@@ -774,6 +774,46 @@ describe("config io write", () => {
     });
   });
 
+  it("drops keys that exist only on the next-config prototype", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify(
+          {
+            gateway: { mode: "local", port: 18789 },
+            commands: { ownerDisplay: "hash" },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf-8",
+      );
+
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const nextConfig = Object.assign(
+        Object.create({ commands: { ownerDisplay: "raw" } }) as Record<string, unknown>,
+        { gateway: { mode: "local", port: 19001 } },
+      );
+
+      await io.writeConfigFile(nextConfig as OpenClawConfig);
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<
+        string,
+        unknown
+      >;
+      expect(persisted.gateway).toEqual({ mode: "local", port: 19001 });
+      expect(Object.hasOwn(persisted, "commands")).toBe(false);
+    });
+  });
+
   it("does not log an overwrite audit entry when creating config for the first time", async () => {
     await withSuiteHome(async (home) => {
       const warn = vi.fn();

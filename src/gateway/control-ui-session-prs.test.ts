@@ -376,6 +376,53 @@ describe("loadControlUiSessionPullRequests", () => {
     });
   });
 
+  it("keeps the proven PR list as state-only chips when detail fetches are rate limited", async () => {
+    // Cold cache: the pulls list succeeds, then quota dies on the per-PR
+    // detail fetch. The open PR must survive so the UI does not offer a
+    // duplicate Create PR row.
+    const rateLimitedResponse = () =>
+      new Response(JSON.stringify({ message: "rate limited" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json", "x-ratelimit-remaining": "0" },
+      });
+    const routes = [
+      { match: "/pulls?head=", response: () => githubJson([pullListItem()]) },
+      { match: "/pulls/103469", response: rateLimitedResponse },
+      { match: "/check-runs", response: rateLimitedResponse },
+    ];
+    const fetchImpl = routedFetch(routes);
+
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    expect(result.rateLimited).toBe(true);
+    expect(result.pullRequests).toEqual([
+      {
+        number: 103469,
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: context.branch,
+        title: "fix(macos): tighten the link-browser tab header",
+        url: "https://github.com/openclaw/openclaw/pull/103469",
+        state: "open",
+      },
+    ]);
+
+    // Outage outlives the rate-limit cache window and now even the list
+    // fetch 429s: the proven chips must survive as the last-known fallback.
+    routes.length = 0;
+    routes.push({ match: "/pulls?head=", response: rateLimitedResponse });
+    vi.advanceTimersByTime(5 * 60_000 + 1_000);
+    const stillLimited = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+    expect(stillLimited.rateLimited).toBe(true);
+    expect(stillLimited.pullRequests.map((item) => item.number)).toEqual([103469]);
+  });
+
   it("escapes create-PR URL segments while keeping branch slashes", async () => {
     const fetchImpl = routedFetch([
       { match: "/pulls?head=", response: () => githubJson([]) },
@@ -456,6 +503,45 @@ describe("session branch diff stats", () => {
       deletions: 1,
       createUrl: "https://github.com/openclaw/openclaw/pull/new/feature",
     });
+  });
+
+  it("skips non-regular and binary untracked files without blocking", async () => {
+    await git("init", "--initial-branch=main", ".");
+    await fs.writeFile(path.join(root, "a.txt"), "one\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "base");
+    await git("update-ref", "refs/remotes/origin/main", "HEAD");
+    await git("checkout", "-b", "feature");
+    await fs.appendFile(path.join(root, "a.txt"), "two\n");
+    await git("add", "a.txt");
+    await git("commit", "-m", "feature work");
+    await git("update-ref", "refs/remotes/origin/feature", "HEAD");
+    await fs.writeFile(path.join(root, "text.txt"), "alpha\nbeta\n");
+    await fs.writeFile(path.join(root, "blob.bin"), Buffer.from([0x50, 0x00, 0x4b, 0x03]));
+    if (process.platform !== "win32") {
+      // A named pipe must not block the stats path until the git timeout.
+      await execFileAsync("mkfifo", [path.join(root, "pipe")]);
+    }
+
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      {
+        fetchImpl,
+        resolveGitContext: async () => ({
+          ...context,
+          branch: "feature",
+          root,
+          defaultBranch: "main",
+        }),
+      },
+    );
+
+    // 1 committed line + 2 untracked text lines; binary and pipe count 0.
+    expect(result.branch).toMatchObject({ additions: 3, deletions: 0 });
   });
 
   it("omits the branch payload when the remote branch has nothing to compare", async () => {

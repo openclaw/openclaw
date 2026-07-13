@@ -145,7 +145,7 @@ export type WorkerLiveEventServiceResult =
   | WorkerLiveEventApplicationResult
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
-export type WorkerInferenceStartServiceResult =
+type WorkerInferenceStartServiceResult =
   | {
       ok: true;
       result: WorkerInferenceStartResult;
@@ -154,7 +154,7 @@ export type WorkerInferenceStartServiceResult =
   | { ok: false; reason: WorkerInferenceErrorReason }
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
-export type WorkerInferenceCancelServiceResult =
+type WorkerInferenceCancelServiceResult =
   | { ok: true; result: WorkerInferenceCancelResult }
   | { ok: false; reason: WorkerInferenceErrorReason }
   | { ok: false; closeReason: WorkerProtocolCloseReason };

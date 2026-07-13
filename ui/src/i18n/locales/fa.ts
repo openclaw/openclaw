@@ -391,6 +391,14 @@ export const fa: TranslationMap = {
     confirmDelete: "از {name} snapshot گرفته و حذف شود؟",
     confirmForceDelete: "snapshot ناموفق بود: {error}\n\nبدون snapshot حذف شود؟",
   },
+  agentChip: {
+    openConversation: "گفت‌وگوی خود با {name} را باز کنید",
+    menuLabel: "منوی عامل",
+    agents: "عامل‌ها",
+    working: "در حال کار…",
+    ready: "آماده گفت‌وگو",
+    whatCanAgentDo: "{name} چه کاری می‌تواند انجام دهد؟",
+  },
   newSession: {
     title: "جلسه جدید",
     hint: "انتخاب کنید این جلسه کجا کار کند، سپس بگویید چه کاری انجام دهد.",

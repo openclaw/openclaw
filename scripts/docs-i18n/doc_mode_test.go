@@ -257,6 +257,50 @@ func (splitProtocolMarkerTranslator) TranslateRaw(_ context.Context, text, _, _ 
 
 func (splitProtocolMarkerTranslator) Close() {}
 
+type fencedLiteralMaskingTranslator struct {
+	rawInputs []string
+}
+
+func (t *fencedLiteralMaskingTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (t *fencedLiteralMaskingTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	t.rawInputs = append(t.rawInputs, text)
+	return strings.NewReplacer(
+		"Outside [Warning].", "Fuera [Advertencia].",
+		"Human prose.", "Prosa humana.",
+		"Speak this.", "Di esto.",
+		"[Replying to <sender>]", "[Respondiendo a <remitente>]",
+		"[/Replying]", "[/Respondiendo]",
+		"[[tts:text]]", "[[tts:texto]]",
+		"[Notice kind=system]", "[Aviso kind=system]",
+	).Replace(text), nil
+}
+
+func (t *fencedLiteralMaskingTranslator) Close() {}
+
+type duplicateFirstFencedPlaceholderTranslator struct {
+	rawCalls int
+}
+
+func (t *duplicateFirstFencedPlaceholderTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	return text, nil
+}
+
+func (t *duplicateFirstFencedPlaceholderTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	t.rawCalls++
+	if t.rawCalls == 1 {
+		placeholder := placeholderRe.FindString(text)
+		if placeholder != "" {
+			return strings.Replace(text, placeholder, placeholder+placeholder, 1), nil
+		}
+	}
+	return strings.ReplaceAll(text, "Human prose.", "Prosa humana."), nil
+}
+
+func (t *duplicateFirstFencedPlaceholderTranslator) Close() {}
+
 func TestParseTaggedDocumentRejectsMissingBodyCloseAtEOF(t *testing.T) {
 	t.Parallel()
 
@@ -1451,25 +1495,96 @@ func TestValidateDocChunkTranslationStopsFencedLiteralsAtContainerBoundary(t *te
 	}
 }
 
-func TestTranslateDocBodyChunkedRevalidatesMarkersAfterSplit(t *testing.T) {
+func TestTranslateDocBodyChunkedPreservesMarkersAfterSplit(t *testing.T) {
 	body := strings.Join([]string{
 		"```text",
-		"[Notice kind=system]",
 		"Line 01",
 		"Line 02",
 		"Line 03",
+		"Line 04",
+		"[Notice kind=system]",
 		"[/Notice]",
 		"```",
 		"",
 	}, "\n")
 	t.Setenv("OPENCLAW_DOCS_I18N_DOC_CHUNK_MAX_BYTES", "32")
+	translator := &fencedLiteralMaskingTranslator{}
 
-	_, err := translateDocBodyChunked(context.Background(), splitProtocolMarkerTranslator{}, "channels/example.md", body, "en", "es")
-	if err == nil {
-		t.Fatal("expected recombined split marker mutation to be rejected")
+	translated, err := translateDocBodyChunked(context.Background(), translator, "channels/example.md", body, "en", "es")
+	if err != nil {
+		t.Fatalf("expected split translation to preserve masked protocol markers, got %v", err)
 	}
-	if !strings.Contains(err.Error(), "final document validation") || !strings.Contains(err.Error(), "fenced protocol marker mismatch") {
-		t.Fatalf("expected final fenced protocol validation error, got %v", err)
+	if !strings.Contains(translated, "[Notice kind=system]") || !strings.Contains(translated, "[/Notice]") {
+		t.Fatalf("expected original protocol markers after split translation:\n%s", translated)
+	}
+	if strings.Contains(translated, "[Aviso kind=system]") {
+		t.Fatalf("expected raw translator mutation to remain impossible after masking:\n%s", translated)
+	}
+	for _, input := range translator.rawInputs {
+		if strings.Contains(input, "[Notice kind=system]") {
+			t.Fatalf("expected continuation-chunk marker to be masked before splitting:\n%s", input)
+		}
+	}
+}
+
+func TestTranslateDocBodyChunkedMasksFencedLiteralsBeforeTranslation(t *testing.T) {
+	t.Parallel()
+
+	body := strings.Join([]string{
+		"Outside [Warning].",
+		"",
+		"> ```text",
+		"> [Replying to <sender>]",
+		"> Human prose.",
+		"> [/Replying]",
+		"> [[tts:text]]Speak this.[[/tts:text]]",
+		"> ```",
+		"",
+	}, "\n")
+	translator := &fencedLiteralMaskingTranslator{}
+
+	translated, err := translateDocBodyChunked(context.Background(), translator, "channels/example.md", body, "en", "es")
+	if err != nil {
+		t.Fatalf("expected fenced literals to survive translation, got %v", err)
+	}
+	for _, input := range translator.rawInputs {
+		for _, literal := range []string{"[Replying to <sender>]", "[/Replying]", "[[tts:text]]", "[[/tts:text]]"} {
+			if strings.Contains(input, literal) {
+				t.Fatalf("expected fenced literal %q to be masked from raw translator input:\n%s", literal, input)
+			}
+		}
+	}
+	for _, want := range []string{
+		"Fuera [Advertencia].",
+		"> [Replying to <sender>]",
+		"> Prosa humana.",
+		"> [/Replying]",
+		"> [[tts:text]]Di esto.[[/tts:text]]",
+	} {
+		if !strings.Contains(translated, want) {
+			t.Fatalf("expected translated output to contain %q:\n%s", want, translated)
+		}
+	}
+}
+
+func TestTranslateDocBodyChunkedRetriesDuplicatedFencedPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	body := "```text\n[Replying to <sender>]\nHuman prose.\n[/Replying]\n```\n"
+	translator := &duplicateFirstFencedPlaceholderTranslator{}
+
+	translated, err := translateDocBodyChunked(context.Background(), translator, "channels/example.md", body, "en", "es")
+	if err != nil {
+		t.Fatalf("expected duplicate placeholder response to recover through chunk retry, got %v", err)
+	}
+	if translator.rawCalls < 2 {
+		t.Fatalf("expected duplicate placeholder to trigger a chunk retry, got %d raw call(s)", translator.rawCalls)
+	}
+	if strings.Count(translated, "[Replying to <sender>]") != 1 || strings.Count(translated, "[/Replying]") != 1 {
+		t.Fatalf("expected each restored marker exactly once:\n%s", translated)
+	}
+	if !strings.Contains(translated, "Prosa humana.") {
+		t.Fatalf("expected human prose to remain translatable after retry:\n%s", translated)
 	}
 }
 
@@ -2027,7 +2142,7 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 15") {
+	if !strings.Contains(text, "prompt_version: 16") {
 		t.Fatalf("expected prompt version 15 in output metadata:\n%s", text)
 	}
 }

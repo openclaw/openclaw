@@ -412,7 +412,6 @@ function buildMediaGenerationCoreDistEntries(): Record<string, string> {
 
 function buildMediaUnderstandingCoreDistEntries(): Record<string, string> {
   return {
-    index: "packages/media-understanding-common/src/index.ts",
     "active-model": "packages/media-understanding-common/src/active-model.ts",
     defaults: "packages/media-understanding-common/src/defaults.ts",
     errors: "packages/media-understanding-common/src/errors.ts",
@@ -524,7 +523,6 @@ function buildTerminalCoreDistEntries(): Record<string, string> {
 
 function buildWebContentCoreDistEntries(): Record<string, string> {
   return {
-    index: "packages/web-content-core/src/index.ts",
     "provider-runtime-shared": "packages/web-content-core/src/provider-runtime-shared.ts",
   };
 }

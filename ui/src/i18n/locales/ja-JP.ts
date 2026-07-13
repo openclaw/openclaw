@@ -396,6 +396,14 @@ export const ja_JP: TranslationMap = {
     confirmForceDelete:
       "スナップショットに失敗しました: {error}\n\nスナップショットなしで削除しますか？",
   },
+  agentChip: {
+    openConversation: "{name}との会話を開く",
+    menuLabel: "エージェントメニュー",
+    agents: "エージェント",
+    working: "作業中…",
+    ready: "チャットできます",
+    whatCanAgentDo: "{name}には何ができますか？",
+  },
   newSession: {
     title: "新しいセッション",
     hint: "このセッションが作業する場所を選び、実行する内容を入力してください。",

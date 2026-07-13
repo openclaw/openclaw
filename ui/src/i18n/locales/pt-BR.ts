@@ -390,6 +390,14 @@ export const pt_BR: TranslationMap = {
     confirmDelete: "Criar snapshot e excluir {name}?",
     confirmForceDelete: "Falha ao criar snapshot: {error}\n\nExcluir sem um snapshot?",
   },
+  agentChip: {
+    openConversation: "Abra sua conversa com {name}",
+    menuLabel: "Menu do agente",
+    agents: "Agentes",
+    working: "Trabalhando…",
+    ready: "Pronto para conversar",
+    whatCanAgentDo: "O que {name} pode fazer?",
+  },
   newSession: {
     title: "Nova sessão",
     hint: "Escolha onde esta sessão trabalha e diga o que fazer.",
