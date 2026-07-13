@@ -1,6 +1,6 @@
-import "./agent.base.test-support.js";
-import "./agent.media-and-routing.test-support.js";
-import "./agent.events-and-subagents.test-support.js";
-import "./agent.sessions-and-models.test-support.js";
-import "./agent.reset-and-identity.test-support.js";
-import "./agent.abort-integration.test-support.js";
+import "./agent.base.test-utils.js";
+import "./agent.media-and-routing.test-utils.js";
+import "./agent.events-and-subagents.test-utils.js";
+import "./agent.sessions-and-models.test-utils.js";
+import "./agent.reset-and-identity.test-utils.js";
+import "./agent.abort-integration.test-utils.js";
