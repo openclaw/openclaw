@@ -167,7 +167,7 @@ class CronRuntimeGuardTest {
               }
             val hasMore = offset == 0
             val nextOffset = if (hasMore) "200" else "null"
-            """{"jobs":[$jobs],"total":201,"offset":$offset,"limit":200,"hasMore":$hasMore,"nextOffset":$nextOffset}"""
+            """{"jobs":[$jobs],"snapshotRevision":"rev-1","total":201,"offset":$offset,"limit":200,"hasMore":$hasMore,"nextOffset":$nextOffset}"""
           }
           else -> error("unexpected method $method")
         }
@@ -187,6 +187,94 @@ class CronRuntimeGuardTest {
           .id,
       )
       assertEquals(listOf(0, 200), requestedOffsets)
+    }
+
+  @Test
+  fun refreshCronJobsLoadsLegacyGatewayPagesWithoutSnapshotRevision() =
+    runBlocking {
+      val runtime = createTestRuntime()
+      seedConnectedRuntime(runtime)
+      val requestedOffsets = mutableListOf<Int>()
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        when (method) {
+          "cron.status" -> """{"enabled":true,"jobs":201}"""
+          "cron.list" -> {
+            val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+            val offset =
+              request
+                .getValue("offset")
+                .jsonPrimitive.content
+                .toInt()
+            requestedOffsets += offset
+            val jobs =
+              if (offset == 0) {
+                (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
+              } else {
+                cronJobSummaryJson(200)
+              }
+            val hasMore = offset == 0
+            val nextOffset = if (hasMore) "200" else "null"
+            """{"jobs":[$jobs],"total":201,"offset":$offset,"limit":200,"hasMore":$hasMore,"nextOffset":$nextOffset}"""
+          }
+          else -> error("unexpected method $method")
+        }
+      }
+
+      runtime.refreshCronJobs()
+      withTimeout(5_000) {
+        while (runtime.cronJobs.value.size != 201 && runtime.cronErrorText.value == null) delay(10)
+      }
+
+      assertEquals(null, runtime.cronErrorText.value)
+      assertEquals(201, runtime.cronJobs.value.size)
+      assertEquals(listOf(0, 200), requestedOffsets)
+    }
+
+  @Test
+  fun refreshCronJobsRetriesWhenSnapshotRevisionChangesBetweenPages() =
+    runBlocking {
+      val runtime = createTestRuntime()
+      seedConnectedRuntime(runtime)
+      val requestedOffsets = mutableListOf<Int>()
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        when (method) {
+          "cron.status" -> """{"enabled":true,"jobs":201}"""
+          "cron.list" -> {
+            val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+            val offset =
+              request
+                .getValue("offset")
+                .jsonPrimitive.content
+                .toInt()
+            val requestIndex = requestedOffsets.size
+            requestedOffsets += offset
+            when (requestIndex) {
+              0 -> {
+                val jobs = (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
+                """{"jobs":[$jobs],"snapshotRevision":"rev-1","total":201,"offset":0,"limit":200,"hasMore":true,"nextOffset":200}"""
+              }
+              1 ->
+                """{"jobs":[${cronJobSummaryJson(999)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
+              2 -> {
+                val jobs = (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
+                """{"jobs":[$jobs],"snapshotRevision":"rev-2","total":201,"offset":0,"limit":200,"hasMore":true,"nextOffset":200}"""
+              }
+              else ->
+                """{"jobs":[${cronJobSummaryJson(200)}],"snapshotRevision":"rev-2","total":201,"offset":200,"limit":200,"hasMore":false,"nextOffset":null}"""
+            }
+          }
+          else -> error("unexpected method $method")
+        }
+      }
+
+      runtime.refreshCronJobs()
+      withTimeout(5_000) {
+        while (runtime.cronJobs.value.size != 201 && runtime.cronErrorText.value == null) delay(10)
+      }
+
+      assertEquals(null, runtime.cronErrorText.value)
+      assertEquals(201, runtime.cronJobs.value.size)
+      assertEquals(listOf(0, 200, 0, 200), requestedOffsets)
     }
 
   @Test

@@ -122,6 +122,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -134,6 +135,7 @@ private const val CRON_RUN_TRACKING_POLL_MS = 2_000L
 private const val CRON_JOBS_PAGE_SIZE = 200
 private const val CRON_JOBS_MAX_PAGES = 100
 private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGES
+private const val CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS = 3
 private const val OperatorAdminScope = "operator.admin"
 
 private fun execApprovalOutcomeUnknownMessage(): String = nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.").source
@@ -4299,46 +4301,14 @@ class NodeRuntime private constructor(
           nextWakeAtMs = statusRoot.long("nextWakeAtMs"),
         )
 
-      val jobs = mutableListOf<GatewayCronJobSummary>()
-      val jobIds = mutableSetOf<String>()
-      var offset = 0
-      var complete = false
-      var pageCount = 0
-      while (pageCount < CRON_JOBS_MAX_PAGES && !complete) {
-        pageCount += 1
-        val listParams =
-          buildJsonObject {
-            put("includeDisabled", JsonPrimitive(true))
-            put("limit", JsonPrimitive(CRON_JOBS_PAGE_SIZE))
-            put("offset", JsonPrimitive(offset))
-            // nextRunAtMs changes as jobs execute; name plus the server's id tie-breaker
-            // keeps offsets stable while paging, then we restore scheduler order below.
-            put("sortBy", JsonPrimitive("name"))
-            put("sortDir", JsonPrimitive("asc"))
-          }.toString()
-        val listRes = requestGatewayData(gatewayScope, "cron.list", listParams)
-        val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
-        val rawJobs = listRoot?.get("jobs") as? JsonArray
-        val pageJobs = parseCronJobs(rawJobs)
-        pageJobs.forEach { job ->
-          require(jobIds.add(job.id)) { "Gateway returned duplicate cron job ${job.id}." }
-        }
-        jobs += pageJobs
-        require(jobs.size <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
-        listRoot.long("total")?.let { total ->
-          require(total in jobs.size.toLong()..CRON_JOBS_MAX_COUNT.toLong()) {
-            "Gateway returned an invalid cron jobs total."
-          }
-        }
-        val nextOffset = nextCronJobsPageOffset(listRoot, offset, rawJobs?.size ?: 0)
-        if (nextOffset == null) {
-          complete = true
-          break
-        }
-        require(nextOffset <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
-        offset = nextOffset
+      var snapshot: List<GatewayCronJobSummary>? = null
+      repeat(CRON_JOBS_SNAPSHOT_MAX_ATTEMPTS) {
+        if (snapshot == null) snapshot = requestCronJobsSnapshot(gatewayScope)
       }
-      require(complete) { "Gateway returned too many cron job pages." }
+      val jobs =
+        requireNotNull(snapshot) {
+          "Gateway cron jobs changed repeatedly while loading."
+        }
       val sortedJobs =
         jobs.sortedWith(
           compareBy<GatewayCronJobSummary> { it.nextRunAtMs == null }
@@ -4358,6 +4328,79 @@ class NodeRuntime private constructor(
         _cronRefreshing.value = false
       }
     }
+  }
+
+  private suspend fun requestCronJobsSnapshot(
+    gatewayScope: GatewayDataScope,
+  ): List<GatewayCronJobSummary>? {
+    val jobs = mutableListOf<GatewayCronJobSummary>()
+    val jobIds = mutableSetOf<String>()
+    var offset = 0
+    var complete = false
+    var pageCount = 0
+    var expectedTotal: Long? = null
+    var expectedSnapshotRevision: String? = null
+    var snapshotRevisionSupported: Boolean? = null
+    while (pageCount < CRON_JOBS_MAX_PAGES && !complete) {
+      pageCount += 1
+      val listParams =
+        buildJsonObject {
+          put("includeDisabled", JsonPrimitive(true))
+          put("limit", JsonPrimitive(CRON_JOBS_PAGE_SIZE))
+          put("offset", JsonPrimitive(offset))
+          // nextRunAtMs changes as jobs execute; name plus the server's id tie-breaker
+          // keeps offsets stable while paging, then we restore scheduler order below.
+          put("sortBy", JsonPrimitive("name"))
+          put("sortDir", JsonPrimitive("asc"))
+        }.toString()
+      val listRes = requestGatewayData(gatewayScope, "cron.list", listParams)
+      val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
+      val rawJobs = listRoot?.get("jobs") as? JsonArray
+      val pageJobs = parseCronJobs(rawJobs)
+      val total =
+        requireNotNull(listRoot.long("total")) {
+          "Gateway did not return a cron jobs total."
+        }
+      require(total in 0L..CRON_JOBS_MAX_COUNT.toLong()) {
+        "Gateway returned an invalid cron jobs total."
+      }
+      if (expectedTotal != null && total != expectedTotal) return null
+      expectedTotal = total
+      val snapshotRevision =
+        (listRoot?.get("snapshotRevision") as? JsonPrimitive)
+          ?.contentOrNull
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+      val pageSupportsSnapshotRevision = snapshotRevision != null
+      if (
+        snapshotRevisionSupported != null &&
+        snapshotRevisionSupported != pageSupportsSnapshotRevision
+      ) {
+        return null
+      }
+      snapshotRevisionSupported = pageSupportsSnapshotRevision
+      if (expectedSnapshotRevision != null && snapshotRevision != expectedSnapshotRevision) return null
+      expectedSnapshotRevision = snapshotRevision
+      for (job in pageJobs) {
+        // Offset pages are separately locked by the Gateway. A mutation between
+        // calls can shift a boundary; discard the partial snapshot and retry.
+        if (!jobIds.add(job.id)) return null
+      }
+      jobs += pageJobs
+      require(jobs.size <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
+      require(total >= jobs.size.toLong()) {
+        "Gateway returned an invalid cron jobs total."
+      }
+      val nextOffset = nextCronJobsPageOffset(listRoot, offset, rawJobs?.size ?: 0)
+      if (nextOffset == null) {
+        complete = true
+        break
+      }
+      require(nextOffset <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
+      offset = nextOffset
+    }
+    require(complete) { "Gateway returned too many cron job pages." }
+    return jobs.takeIf { it.size.toLong() == expectedTotal }
   }
 
   private suspend fun loadCronJobDetailFromGateway(request: CronJobDetailRequest) {

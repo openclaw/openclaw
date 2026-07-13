@@ -15,6 +15,7 @@ import {
   markCronJobActive,
   type CronActiveJobMarker,
 } from "../active-jobs.js";
+import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
@@ -440,15 +441,19 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
       );
       return haystack.includes(query);
     });
-    const sorted = sortJobs(filtered, sortBy, sortDir);
-    const total = sorted.length;
+    // Execution mutates stored job state in place. Detach the complete result
+    // under the lock so every returned page still matches its revision later.
+    const snapshot = structuredClone(sortJobs(filtered, sortBy, sortDir));
+    const snapshotRevision = resolveCronListSnapshotRevision(snapshot);
+    const total = snapshot.length;
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
     const defaultLimit = total === 0 ? 50 : total;
     const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
-    const jobs = sorted.slice(offset, offset + limit);
+    const jobs = snapshot.slice(offset, offset + limit);
     const nextOffset = offset + jobs.length;
     return {
       jobs,
+      snapshotRevision,
       total,
       offset,
       limit,

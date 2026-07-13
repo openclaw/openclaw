@@ -150,6 +150,7 @@ function createCronContext(currentJobs?: CronJob | CronJob[]) {
         const nextOffset = offset + pageJobs.length;
         return {
           jobs: pageJobs,
+          snapshotRevision: `fixture:${filteredJobs.map((job) => job.id).join(",")}`,
           total,
           offset,
           limit,
@@ -701,6 +702,36 @@ describe("cron method validation", () => {
       undefined,
     );
     expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
+  });
+
+  it("keeps caller-scoped cron.list revisions independent of hidden jobs", async () => {
+    const visibleJob = createCronJob({ id: "cron-visible", agentId: "ops" });
+    const firstContext = createCronContext([
+      visibleJob,
+      createCronJob({ id: "cron-hidden-a", agentId: "worker" }),
+    ]);
+    const secondContext = createCronContext([
+      visibleJob,
+      createCronJob({ id: "cron-hidden-b", agentId: "worker" }),
+    ]);
+
+    const first = await invokeCron(
+      "cron.list",
+      { includeDisabled: true },
+      { context: firstContext, client: callerClient("ops") },
+    );
+    const second = await invokeCron(
+      "cron.list",
+      { includeDisabled: true },
+      { context: secondContext, client: callerClient("ops") },
+    );
+    const firstPayload = requireRecord(first.respond.mock.calls[0]?.[1], "first cron.list payload");
+    const secondPayload = requireRecord(
+      second.respond.mock.calls[0]?.[1],
+      "second cron.list payload",
+    );
+
+    expect(firstPayload.snapshotRevision).toBe(secondPayload.snapshotRevision);
   });
 
   it("rejects caller-scoped cron.list for a foreign explicit agentId", async () => {
