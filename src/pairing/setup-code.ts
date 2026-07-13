@@ -34,7 +34,7 @@ import {
   resolveTailscalePublishedHost,
 } from "../shared/tailscale-status.js";
 
-export type PairingSetupPayload = {
+type PairingSetupPayload = {
   url: string;
   urls?: string[];
   bootstrapToken: string;
@@ -42,18 +42,18 @@ export type PairingSetupPayload = {
 
 const PAIRING_SETUP_MAX_URLS = 8;
 
-export type PairingSetupCommandResult = {
+type PairingSetupCommandResult = {
   code: number | null;
   stdout: string;
   stderr?: string;
 };
 
-export type PairingSetupCommandRunner = (
+type PairingSetupCommandRunner = (
   argv: string[],
   opts: { timeoutMs: number; maxOutputBytes?: number },
 ) => Promise<PairingSetupCommandResult>;
 
-export type ResolvePairingSetupOptions = {
+type ResolvePairingSetupOptions = {
   env?: NodeJS.ProcessEnv;
   publicUrl?: string;
   preferRemoteUrl?: boolean;
@@ -64,7 +64,7 @@ export type ResolvePairingSetupOptions = {
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
 };
 
-export type PairingSetupResolution =
+type PairingSetupResolution =
   | {
       ok: true;
       payload: PairingSetupPayload;

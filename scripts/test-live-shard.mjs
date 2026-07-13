@@ -256,7 +256,12 @@ function isMoonshotLiveTest(file) {
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
-      return files.filter((file) => file.startsWith("src/agents/") || file.startsWith("src/llm/"));
+      return files.filter(
+        (file) =>
+          file.startsWith("src/agents/") ||
+          file.startsWith("src/llm/") ||
+          file.startsWith("src/skills/"),
+      );
     case "native-live-src-agents-zai-coding":
       return files.filter((file) => file === "src/agents/zai.live.test.ts");
     case "native-live-src-gateway":

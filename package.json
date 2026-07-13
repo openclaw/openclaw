@@ -2031,7 +2031,6 @@
     "entities": "8.0.0",
     "express": "5.2.1",
     "file-type": "22.0.1",
-    "glob": "13.0.6",
     "grammy": "1.44.0",
     "highlight.js": "11.11.1",
     "hosted-git-info": "10.1.1",

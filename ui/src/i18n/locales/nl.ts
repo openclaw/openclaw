@@ -1737,8 +1737,6 @@ export const nl: TranslationMap = {
     removedRestart:
       "{name} verwijderd. Een herstart van de Gateway is vereist om de wijziging toe te passen.",
     verifiedSource: "Geverifieerde bron",
-    menuLabel: "{name}-acties",
-    menuDetails: "Details bekijken",
     enableAction: "Inschakelen",
     disableAction: "Uitschakelen",
     working: "Bezig…",
@@ -1875,6 +1873,10 @@ export const nl: TranslationMap = {
       useCurrentChatAria: "Huidige chat gebruiken voor revisieverzoeken",
       useCurrentChatTooltip:
         "Stuur revisieverzoeken naar de huidige chatsessie in plaats van de workshopsessie van het voorstel.",
+      selfLearning: "Zelflerend",
+      selfLearningAria: "Voorstellen voor zelflerende Skills in- of uitschakelen",
+      selfLearningTooltip:
+        "Leg correcties vast en zet omvangrijk voltooid werk na beoordeling om in openstaande skillvoorstellen. Verbruikt extra tokens op de achtergrond; concepten verschijnen op dit bord als openstaande voorstellen.",
       view: "Workshopweergave",
       board: "Bord",
       today: "Vandaag",
@@ -1955,6 +1957,14 @@ export const nl: TranslationMap = {
       noProposalsTitle: "Nog geen voorstellen",
       noProposalsBody: "{agent} heeft nog geen skill-voorstellen opgesteld.",
       noProposalsFooter: "Nieuwe voorstellen verschijnen hier ter beoordeling.",
+    },
+    selfLearning: {
+      pitchTitle: "Zelfleren inschakelen",
+      pitchBody:
+        "OpenClaw beoordeelt correcties en omvangrijke voltooide runs en stelt vervolgens skillvoorstellen op voor dit bord. Het verbruikt extra tokens op de achtergrond en concepten verschijnen als openstaande voorstellen.",
+      enable: "Zelfleren inschakelen",
+      enabling: "Inschakelen…",
+      updateError: "De instelling voor zelfleren kon niet worden bijgewerkt.",
     },
     today: {
       emptyTitle: "Vandaag niets in wachtrij",
