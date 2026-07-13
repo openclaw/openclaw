@@ -3059,6 +3059,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## gateway/1password.md
+
+- Route: /gateway/1password
+- Headings:
+  - H2: Requirements
+  - H2: Resolve config secrets with op
+  - H2: Service account setup for headless Gateways
+  - H2: The 1password skill for agents
+  - H2: Security notes
+  - H2: Troubleshooting
+
 ## gateway/audit.md
 
 - Route: /gateway/audit

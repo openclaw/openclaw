@@ -392,6 +392,9 @@ export const zh_TW: TranslationMap = {
     working: "處理中…",
     ready: "可以開始聊天",
     whatCanAgentDo: "{name} 能做什麼？",
+    getHelp: "取得協助",
+    discord: "Discord 社群",
+    viewChangelog: "查看變更記錄",
   },
   newSession: {
     title: "新工作階段",

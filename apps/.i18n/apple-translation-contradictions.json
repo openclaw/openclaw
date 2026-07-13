@@ -326,11 +326,59 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "All",
+      "translations": [
+        "Todas",
+        "Todo"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "All",
+      "translations": [
+        "Tous",
+        "Tout"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "All",
+      "translations": [
+        "Tutte",
+        "Tutti"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "All",
+      "translations": [
+        "모두",
+        "전체"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "All",
+      "translations": [
+        "Alle",
+        "Alles"
+      ]
+    },
+    {
       "locale": "pl",
       "source": "All",
       "translations": [
         "Wszystkie",
         "Wszystko"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "All",
+      "translations": [
+        "Todos",
+        "Tudo"
       ]
     },
     {
@@ -1876,6 +1924,46 @@
       ]
     },
     {
+      "locale": "fa",
+      "source": "Disable",
+      "translations": [
+        "غیرفعال کردن",
+        "غیرفعال‌کردن"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Disable",
+      "translations": [
+        "अक्षम करें",
+        "बंद करें"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Disable",
+      "translations": [
+        "Выключить",
+        "Отключить"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Disable",
+      "translations": [
+        "ปิดใช้",
+        "ปิดใช้งาน"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Disable",
+      "translations": [
+        "停用",
+        "禁用"
+      ]
+    },
+    {
       "locale": "de",
       "source": "Discovered",
       "translations": [
@@ -2495,6 +2583,30 @@
       ]
     },
     {
+      "locale": "es",
+      "source": "Enable",
+      "translations": [
+        "Activar",
+        "Habilitar"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Enable",
+      "translations": [
+        "فعال‌سازی",
+        "فعال‌کردن"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Enable",
+      "translations": [
+        "有効にする",
+        "有効化"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Enable Talk",
       "translations": [
@@ -2947,7 +3059,16 @@
       "source": "Gateway offline",
       "translations": [
         "Gateway がオフラインです",
-        "Gateway オフライン"
+        "Gateway オフライン",
+        "Gatewayはオフラインです"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Gateway offline",
+      "translations": [
+        "Gateway jest offline",
+        "Gateway offline"
       ]
     },
     {
@@ -2956,6 +3077,14 @@
       "translations": [
         "Gateway не в сети",
         "Gateway офлайн"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Gateway offline",
+      "translations": [
+        "Gateway offline",
+        "Gateway är offline"
       ]
     },
     {
@@ -3119,6 +3248,102 @@
       "translations": [
         "檢查",
         "檢視"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Installed",
+      "translations": [
+        "المثبتة",
+        "مثبّت"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Installed",
+      "translations": [
+        "Instaladas",
+        "Instalado"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Installed",
+      "translations": [
+        "Installé",
+        "Installés"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Installed",
+      "translations": [
+        "इंस्टॉल किए गए",
+        "इंस्टॉल किया गया"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Installed",
+      "translations": [
+        "Terinstal",
+        "Terpasang"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Installed",
+      "translations": [
+        "Installate",
+        "Installato"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Installed",
+      "translations": [
+        "Zainstalowane",
+        "Zainstalowano"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Installed",
+      "translations": [
+        "Instaladas",
+        "Instalado"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Installed",
+      "translations": [
+        "Установленные",
+        "Установлено"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Installed",
+      "translations": [
+        "Installerad",
+        "Installerade"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Installed",
+      "translations": [
+        "Yüklendi",
+        "Yüklü"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Installed",
+      "translations": [
+        "Встановлено",
+        "Установлені"
       ]
     },
     {
@@ -3677,6 +3902,38 @@
       ]
     },
     {
+      "locale": "fa",
+      "source": "Missing: %@",
+      "translations": [
+        "مفقود: %@",
+        "مورد مفقود: %@"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Missing: %@",
+      "translations": [
+        "Manca: %@",
+        "Mancante: %@"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Missing: %@",
+      "translations": [
+        "Brak: %@",
+        "Brakuje: %@"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Missing: %@",
+      "translations": [
+        "ขาด: %@",
+        "ขาดหาย: %@"
+      ]
+    },
+    {
       "locale": "ar",
       "source": "Needs attention",
       "translations": [
@@ -4125,6 +4382,94 @@
       "translations": [
         "沒有最近工作階段",
         "沒有最近的工作階段"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "No skills found",
+      "translations": [
+        "لم يتم العثور على Skills",
+        "لم يتم العثور على مهارات"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "No skills found",
+      "translations": [
+        "هیچ Skillsی پیدا نشد",
+        "هیچ Skillی یافت نشد"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "No skills found",
+      "translations": [
+        "कोई Skill नहीं मिला",
+        "कोई skills नहीं मिलीं"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "No skills found",
+      "translations": [
+        "Tidak ada skill yang ditemukan",
+        "Tidak ada skills ditemukan"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "No skills found",
+      "translations": [
+        "Skills를 찾을 수 없음",
+        "스킬을 찾을 수 없음"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "No skills found",
+      "translations": [
+        "Geen Skills gevonden",
+        "Geen skills gevonden"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "No skills found",
+      "translations": [
+        "Nie znaleziono Skills",
+        "Nie znaleziono umiejętności"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "No skills found",
+      "translations": [
+        "Nenhuma Skill encontrada",
+        "Nenhuma skill encontrada"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "No skills found",
+      "translations": [
+        "Skills не найдены",
+        "Навыки не найдены"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "No skills found",
+      "translations": [
+        "Inga Skills hittades",
+        "Inga färdigheter hittades"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "No skills found",
+      "translations": [
+        "未找到 Skills",
+        "未找到技能"
       ]
     },
     {
@@ -5042,6 +5387,14 @@
       ]
     },
     {
+      "locale": "it",
+      "source": "Ready",
+      "translations": [
+        "Pronta",
+        "Pronto"
+      ]
+    },
+    {
       "locale": "nl",
       "source": "Ready",
       "translations": [
@@ -5815,6 +6168,70 @@
       "translations": [
         "Область",
         "Обсяг"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Search ClawHub",
+      "translations": [
+        "جستجو در ClawHub",
+        "جستجوی ClawHub"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Search ClawHub",
+      "translations": [
+        "ClawHub खोजें",
+        "ClawHub में खोजें"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Search ClawHub",
+      "translations": [
+        "Cari ClawHub",
+        "Cari di ClawHub"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Search ClawHub",
+      "translations": [
+        "ClawHub zoeken",
+        "Zoeken in ClawHub"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Search ClawHub",
+      "translations": [
+        "Przeszukaj ClawHub",
+        "Wyszukaj w ClawHub"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Search ClawHub",
+      "translations": [
+        "Buscar no ClawHub",
+        "Pesquisar no ClawHub"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Search ClawHub",
+      "translations": [
+        "ค้นหา ClawHub",
+        "ค้นหาใน ClawHub"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Search ClawHub",
+      "translations": [
+        "Tìm kiếm ClawHub",
+        "Tìm kiếm trên ClawHub"
       ]
     },
     {
