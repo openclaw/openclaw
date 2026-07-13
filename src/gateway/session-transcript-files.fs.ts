@@ -108,8 +108,6 @@ function classifySessionTranscriptCandidate(
   return transcriptSessionId === sessionId ? "current" : "stale";
 }
 
-export { extractGeneratedTranscriptSessionId };
-
 function canonicalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
   try {
@@ -364,7 +362,7 @@ export async function resolveSessionTranscriptResetArchiveCandidatesAsync(
   return uniqueStrings(archives.map((archive) => archive.archivePath));
 }
 
-export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
+function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
   const ts = formatSessionArchiveTimestamp();
   const archived = `${filePath}.${reason}.${ts}`;
   fs.renameSync(filePath, archived);
@@ -487,7 +485,7 @@ export function resolveStableSessionEndTranscript(params: {
   return {};
 }
 
-export type SessionArchiveCleanupRule = {
+type SessionArchiveCleanupRule = {
   reason: ArchiveFileReason;
   olderThanMs: number;
 };

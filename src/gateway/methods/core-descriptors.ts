@@ -18,7 +18,7 @@ type CoreGatewayMethodSpec = {
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
-export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
+const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "health", scope: "operator.read" },
   { name: "diagnostics.stability", scope: "operator.read" },
   { name: "doctor.memory.status", scope: "operator.read" },
@@ -88,6 +88,7 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "talk.session.endTurn", scope: "operator.write" },
   { name: "talk.session.cancelTurn", scope: "operator.write" },
   { name: "talk.session.cancelOutput", scope: "operator.write" },
+  { name: "talk.session.acknowledgeMark", scope: "operator.write" },
   { name: "talk.session.submitToolResult", scope: "operator.write" },
   { name: "talk.session.steer", scope: "operator.write" },
   { name: "talk.session.close", scope: "operator.write" },
