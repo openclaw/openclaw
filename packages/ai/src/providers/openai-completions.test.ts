@@ -511,6 +511,29 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedPayload?.tools).toEqual([]);
   });
 
+  it("emits a terminal error for circular non-Error rejections without rethrowing (#106570)", async () => {
+    const circular: Record<string, unknown> = { kind: "provider-reject" };
+    circular.self = circular;
+    expect(() => JSON.stringify(circular)).toThrow();
+
+    mockChunksRef.stream = {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            return Promise.reject(circular);
+          },
+        };
+      },
+    };
+
+    const stream = streamOpenAICompletions(model, context, { apiKey: "sk-test" });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBeTruthy();
+    expect(result.errorMessage).toContain("Object");
+  });
+
   it("replays update_plan-style empty non-image tool results as no output", async () => {
     let capturedMessages:
       | Array<{ role?: string; content?: unknown; tool_call_id?: string }>

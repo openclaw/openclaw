@@ -8,6 +8,8 @@ import {
   buildGoogleGenerateContentParams,
   buildGoogleSimpleThinking,
   consumeGoogleGenerateContentStream,
+  createGoogleAssistantOutput,
+  runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
 
 const model: Model<"google-generative-ai"> = {
@@ -89,6 +91,40 @@ describe("buildGoogleSimpleThinking", () => {
 async function* chunks(items: GenerateContentResponse[]) {
   yield* items;
 }
+
+describe("runGoogleGenerateContentLifecycle", () => {
+  it("emits a terminal error for circular non-Error rejections without rethrowing (#106568)", async () => {
+    const circular: Record<string, unknown> = { kind: "google-provider-reject" };
+    circular.self = circular;
+    expect(() => JSON.stringify(circular)).toThrow();
+
+    const output = createGoogleAssistantOutput(model);
+    const stream = new AssistantMessageEventStream();
+    const events: Array<{ type: string; reason?: string }> = [];
+    const collect = (async () => {
+      for await (const event of stream) {
+        events.push({ type: event.type, reason: "reason" in event ? event.reason : undefined });
+      }
+    })();
+
+    await runGoogleGenerateContentLifecycle({
+      stream,
+      model,
+      output,
+      createClient: () => {
+        throw circular;
+      },
+      buildParams: () => ({ model: model.id, contents: [] }),
+      nextToolCallId: (name) => `generated-${name}`,
+    });
+    await collect;
+
+    expect(events.some((event) => event.type === "error")).toBe(true);
+    expect(output.stopReason).toBe("error");
+    expect(output.errorMessage).toBeTruthy();
+    expect(output.errorMessage).toContain("Object");
+  });
+});
 
 describe("consumeGoogleGenerateContentStream", () => {
   it("projects text, thinking, tool calls, response id, and usage into one stream", async () => {
