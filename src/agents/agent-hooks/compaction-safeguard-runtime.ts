@@ -1,6 +1,8 @@
 /** Session-manager scoped runtime state for compaction safeguard configuration. */
 import type { AgentCompactionIdentifierPolicy } from "../../config/types.agent-defaults.js";
 import type { Model } from "../../llm/types.js";
+import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
+import type { ModelRegistry } from "../sessions/index.js";
 import { createSessionManagerRuntimeRegistry } from "./session-manager-runtime-registry.js";
 
 /** Runtime knobs consumed by the compaction safeguard extension. */
@@ -16,6 +18,10 @@ type CompactionSafeguardRuntimeValue = {
    * (extensionRunner.initialize() is never called in that path).
    */
   model?: Model;
+  /** Auth registry paired with the prepared compaction model and credential tuple. */
+  modelRegistry?: Pick<ModelRegistry, "getApiKeyAndHeaders">;
+  /** Immutable route/profile decision that produced the prepared model. */
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
   recentTurnsPreserve?: number;
   workspaceDir?: string;
   postCompactionSections?: string[];

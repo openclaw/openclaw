@@ -318,12 +318,14 @@ type ResolvedRequestAuth =
 async function resolveModelAuth(
   ctx: ExtensionContext,
   model: NonNullable<ExtensionContext["model"]>,
+  modelRegistryOverride?: ModelRegistryWithRequestAuthLookup,
 ): Promise<
   { ok: true; apiKey?: string; headers?: Record<string, string> } | { ok: false; reason: string }
 > {
   let requestAuth: ResolvedRequestAuth;
   try {
-    const modelRegistry = ctx.modelRegistry as ModelRegistryWithRequestAuthLookup;
+    const modelRegistry =
+      modelRegistryOverride ?? (ctx.modelRegistry as ModelRegistryWithRequestAuthLookup);
     if (typeof modelRegistry.getApiKeyAndHeaders !== "function") {
       throw new Error("model registry auth lookup unavailable");
     }
@@ -946,8 +948,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
 
-    // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
-    // Fall back to runtime.model which is explicitly passed when building extension paths.
+    // compact.ts registers its resolved target in runtime because that path does
+    // not populate ctx.model; normal sessions may carry a different active model.
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
     const customInstructions = resolveCompactionInstructions(
       eventInstructions,
@@ -1042,7 +1044,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     // -----------------------------------------------------------------------
     // LLM path — resolve model + auth, prune, chunk, quality guard.
     // -----------------------------------------------------------------------
-    const model = ctx.model ?? runtime?.model;
+    const model = runtime?.model ?? ctx.model;
     if (!model) {
       if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
         missedModelWarningSessions.add(ctx.sessionManager);
@@ -1059,7 +1061,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       return { cancel: true };
     }
 
-    const authResult = await resolveModelAuth(ctx, model);
+    const authResult = await resolveModelAuth(ctx, model, runtime?.modelRegistry);
     if (!authResult.ok) {
       setCompactionSafeguardCancelReason(ctx.sessionManager, authResult.reason);
       return { cancel: true };

@@ -31,6 +31,10 @@ vi.mock("../compaction.js", async () => {
   };
 });
 
+vi.mock("../embedded-agent-runner/model.js", () => ({
+  resolveModelWithRegistry: vi.fn(),
+}));
+
 const mockSummarizeInStages = vi.mocked(compactionModule.summarizeInStages);
 
 const {
@@ -141,11 +145,12 @@ const createCompactionEvent = (params: { messageText: string; tokensBefore: numb
 
 const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
+  model?: ExtensionContext["model"];
   getApiKeyAndHeadersMock?: ReturnType<typeof vi.fn>;
   getApiKeyMock?: ReturnType<typeof vi.fn>;
 }) =>
   ({
-    model: undefined,
+    model: params.model,
     sessionManager: params.sessionManager,
     modelRegistry: {
       getApiKeyAndHeaders:
@@ -2184,6 +2189,56 @@ describe("compaction-safeguard recent-turn preservation", () => {
 });
 
 describe("compaction-safeguard extension model fallback", () => {
+  it("prefers the configured runtime model over the active session model", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue(
+      buildStructuredFallbackSummary("configured model summary"),
+    );
+
+    const sessionManager = stubSessionManager();
+    const sessionModel = createAnthropicModelFixture({
+      id: "claude-opus-4-6",
+      name: "Claude Opus 4.6",
+    });
+    const compactionModel = createAnthropicModelFixture({
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+    });
+    const targetGetApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
+      ok: true,
+      apiKey: "target-key",
+    });
+    setCompactionSafeguardRuntime(sessionManager, {
+      model: compactionModel,
+      modelRegistry: { getApiKeyAndHeaders: targetGetApiKeyAndHeadersMock },
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: false,
+    });
+    const activeGetApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
+      ok: true,
+      apiKey: "active-key",
+    });
+    const context = createCompactionContext({
+      sessionManager,
+      model: sessionModel,
+      getApiKeyAndHeadersMock: activeGetApiKeyAndHeadersMock,
+    });
+    const event = createCompactionEvent({
+      messageText: "summarize me",
+      tokensBefore: 1000,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+
+    const result = (await createCompactionHandler()(event, context)) as { cancel?: boolean };
+
+    expect(result.cancel).not.toBe(true);
+    expect(targetGetApiKeyAndHeadersMock).toHaveBeenCalledWith(compactionModel);
+    expect(activeGetApiKeyAndHeadersMock).not.toHaveBeenCalled();
+    expect(mockSummarizeInStages.mock.calls.at(-1)?.[0]?.model).toBe(compactionModel);
+  });
+
   it("uses runtime.model when ctx.model is undefined (compact.ts workflow)", async () => {
     // This test verifies the root-cause fix: when extensionRunner.initialize() is not called
     // (as happens in compact.ts), ctx.model is undefined but runtime.model is available.
@@ -2207,7 +2262,7 @@ describe("compaction-safeguard extension model fallback", () => {
 
     // KEY ASSERTION: Prove the fallback path was exercised
     // The handler should have resolved request auth with runtime.model
-    // (via ctx.model ?? runtime?.model).
+    // (via runtime?.model ?? ctx.model).
     expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
 
     // Verify runtime.model is still available (for completeness)

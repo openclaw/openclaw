@@ -532,6 +532,7 @@ vi.mock("../../agent-settings.js", () => ({
 
 vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: () => [],
+  prepareSafeguardRuntimeTarget: async () => undefined,
 }));
 
 vi.mock("../replay-history.js", () => ({
