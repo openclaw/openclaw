@@ -169,17 +169,6 @@ const hostedDiffsEntry = {
   },
 };
 
-const bundledDiffsEntry = {
-  name: "@openclaw/diffs",
-  version: "1.0.0",
-  description: "Bundled description",
-  openclaw: {
-    plugin: { id: "diffs", label: "Bundled Diffs" },
-    catalog: { featured: true, order: 40 },
-    install: { clawhubSpec: "clawhub:@openclaw/diffs", defaultChoice: "npm" },
-  },
-};
-
 // Mirrors the current default ClawHub feed shape: package identity lives in a
 // source candidate while runtime/editorial metadata remains local.
 const hostedFeedDiffsEntry = {
@@ -221,6 +210,82 @@ describe("plugin management service", () => {
       feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
       metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
     });
+  });
+
+  it("overlays bundled curation through the hosted catalog load path", async () => {
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+    mocks.officialCatalog.mockResolvedValue({
+      source: "hosted",
+      entries: [hostedDiffsEntry],
+      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+    });
+
+    const catalog = await listManagedPlugins({ config: {}, env: {} });
+
+    expect(catalog.plugins).toEqual([
+      expect.objectContaining({
+        id: "diffs",
+        name: "Diffs",
+        description: "Hosted description",
+        version: "2.0.0",
+        featured: true,
+        order: 40,
+        install: { source: "clawhub", packageName: "@openclaw/diffs" },
+      }),
+    ]);
+  });
+
+  it("normalizes package-shaped hosted rows and deduplicates their runtime id", async () => {
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+    mocks.officialCatalog.mockResolvedValue({
+      source: "hosted",
+      entries: [hostedFeedDiffsEntry],
+      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+    });
+
+    const available = await listManagedPlugins({ config: {}, env: {} });
+    expect(available.plugins).toEqual([
+      expect.objectContaining({
+        id: "diffs",
+        name: "Diffs",
+        installed: false,
+        featured: true,
+        order: 40,
+        install: { source: "official", pluginId: "diffs" },
+      }),
+    ]);
+
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({ enabled: true, id: "diffs", name: "Diffs", origin: "global" }),
+    );
+    const installed = await listManagedPlugins({ config: {}, env: {} });
+    expect(installed.plugins).toHaveLength(1);
+    expect(installed.plugins[0]).toMatchObject({ id: "diffs", installed: true, enabled: true });
+  });
+
+  it("does not transfer bundled endorsement to a package identity impostor", async () => {
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+    mocks.officialCatalog.mockResolvedValue({
+      source: "hosted",
+      entries: [
+        {
+          ...hostedDiffsEntry,
+          name: "community/impostor",
+          openclaw: {
+            ...hostedDiffsEntry.openclaw,
+            install: { clawhubSpec: "clawhub:community/impostor", defaultChoice: "clawhub" },
+          },
+        },
+      ],
+      feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
+      metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
+    });
+
+    const catalog = await listManagedPlugins({ config: {}, env: {} });
+
+    expect(catalog.plugins).toEqual([]);
   });
 
   it("normalizes hosted catalog hints before building the public DTO", async () => {

@@ -2,15 +2,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginManifest } from "./manifest.js";
-import { makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-manifest-json5", tempDirs);
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  cleanupTrackedTempDirs(tempDirs);
+});
 
 describe("loadPluginManifest JSON5 tolerance", () => {
   it("parses a standard JSON manifest without issues", () => {
