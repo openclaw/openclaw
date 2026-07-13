@@ -133,7 +133,7 @@ async function ensureSandboxWorkspaceLayout(params: {
       params.config?.agents?.defaults?.skipBootstrap,
       params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
     );
-    if (cfg.docker.skipSkillsSync) {
+    if (cfg.backend === "docker" && cfg.docker.skipSkillsSync) {
       const { eligibility: skillsElig } = await computeSandboxSkillsEligibility({
         config: params.config,
         agentId: params.agentId,
@@ -152,7 +152,7 @@ async function ensureSandboxWorkspaceLayout(params: {
     }
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
-    if (cfg.docker.skipSkillsSync) {
+    if (cfg.backend === "docker" && cfg.docker.skipSkillsSync) {
       const { eligibility: skillsElig } = await computeSandboxSkillsEligibility({
         config: params.config,
         agentId: params.agentId,
