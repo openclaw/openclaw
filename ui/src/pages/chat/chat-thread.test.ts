@@ -2258,7 +2258,7 @@ describe("tool expansion state", () => {
 });
 
 describe("thread item cache", () => {
-  it("reuses transcript items when thread inputs keep the same references", () => {
+  it("preserves stable transcript rows while the live stream changes", () => {
     resetChatThreadState();
     const messages = [{ role: "assistant", content: "ready" }];
     const toolMessages: unknown[] = [];
@@ -2268,7 +2268,22 @@ describe("thread item cache", () => {
 
     const first = buildCachedChatItems(input);
     expect(buildCachedChatItems({ ...input })).toBe(first);
-    expect(buildCachedChatItems({ ...input, messages: [...messages] })).not.toBe(first);
+    expect(buildCachedChatItems({ ...input, messages: [...messages] })).toBe(first);
+
+    const streaming = buildCachedChatItems({
+      ...input,
+      stream: "partial reply",
+      streamStartedAt: 10,
+    });
+    expect(streaming).not.toBe(first);
+    expect(streaming.find((item) => item.key === first[0]?.key)).toBe(first[0]);
+
+    expect(
+      buildCachedChatItems({
+        ...input,
+        messages: [{ role: "assistant", content: "changed" }],
+      }),
+    ).not.toBe(first);
   });
 });
 
