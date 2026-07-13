@@ -5094,6 +5094,102 @@ describe("chat model controls", () => {
     expect(speedToggle?.disabled).toBe(true);
   });
 
+  it("orders model-dependent patches after a pending model switch", async () => {
+    const modelPatch = createDeferred<unknown>();
+    const patches: Array<Record<string, unknown>> = [];
+    const patchResult = {
+      ok: true,
+      path: "",
+      key: "main",
+      entry: { sessionId: "main" },
+    };
+    const sessions = {
+      state: { modelOverrides: {} },
+      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
+        patches.push(patch);
+        return Object.hasOwn(patch, "model") ? modelPatch.promise : Promise.resolve(patchResult);
+      }),
+      refresh: async () => {},
+      setModelOverride: vi.fn(),
+    };
+    const host = {
+      client: {},
+      connected: true,
+      sessionKey: "main",
+      chatModelCatalog: [],
+      chatModelSwitchPromises: {},
+      chatThinkingLevel: "high",
+      sessions,
+      sessionsResult: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          model: "claude-fable-5",
+          modelProvider: "anthropic",
+          thinkingLevel: "high",
+          fastMode: false,
+          effectiveFastMode: false,
+        },
+      ]),
+    } as unknown as Parameters<typeof switchChatModel>[0];
+
+    const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
+    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
+    const fastModePatch = switchChatFastMode(host, "on");
+
+    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
+    modelPatch.resolve(patchResult);
+    await expect(modelSwitch).resolves.toBe(true);
+    await expect(Promise.all([thinkingPatch, fastModePatch])).resolves.toEqual([true, true]);
+    expect(patches).toHaveLength(3);
+    expect(patches.slice(1)).toEqual(
+      expect.arrayContaining([{ thinkingLevel: "ultra" }, { fastMode: true }]),
+    );
+  });
+
+  it("drops model-dependent patches when the pending model switch fails", async () => {
+    const modelPatch = createDeferred<unknown>();
+    const patches: Array<Record<string, unknown>> = [];
+    const sessions = {
+      state: { modelOverrides: {} },
+      patch: vi.fn((_key: string, patch: Record<string, unknown>) => {
+        patches.push(patch);
+        return modelPatch.promise;
+      }),
+      refresh: async () => {},
+      setModelOverride: vi.fn(),
+    };
+    const host = {
+      client: {},
+      connected: true,
+      sessionKey: "main",
+      chatModelCatalog: [],
+      chatModelSwitchPromises: {},
+      chatThinkingLevel: "high",
+      sessions,
+      sessionsResult: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          model: "claude-fable-5",
+          modelProvider: "anthropic",
+          thinkingLevel: "high",
+        },
+      ]),
+    } as unknown as Parameters<typeof switchChatModel>[0];
+
+    const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
+    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
+    modelPatch.resolve(null);
+
+    await expect(modelSwitch).resolves.toBe(false);
+    await expect(thinkingPatch).resolves.toBe(false);
+    expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
+    expect(host.chatThinkingLevel).toBe("high");
+  });
+
   it("keeps the newest speed selection when an older patch fails late", async () => {
     const pendingPatches: Array<{ resolve: () => void; reject: (error: Error) => void }> = [];
     // Minimal host: the factory's mock gateway rebuilds session rows on every
