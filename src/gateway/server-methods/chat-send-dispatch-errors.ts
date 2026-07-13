@@ -1,14 +1,14 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { clearAgentRunContext } from "../../infra/agent-events.js";
-import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntry } from "./agent-job.js";
-import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
+import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
@@ -59,22 +59,6 @@ export function createChatSendDispatchErrorLifecycle(params: {
   const handleError = async (err: unknown) => {
     const errorMessage = String(err);
     const queuedFollowupEnqueued = isQueuedFollowupEnqueued();
-    // Select terminal ownership before any awaited durable-state work. An
-    // explicit abort has both the signal and marker; restart interruption
-    // only aborts the signal and must still follow dispatch-error handling.
-    const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
-    const abortMarkerAtDispatchReject = context.chatAbortedRuns.get(clientRunId);
-    const abortStopReasonAtDispatchReject = activeRunAbort.entry?.abortStopReason ?? "rpc";
-    const persistAbortTranscript = async () => {
-      if (userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()) {
-        return;
-      }
-      await persistUserTurnTranscript().catch((transcriptErr: unknown) => {
-        context.logGateway.warn(
-          `webchat user transcript update failed after abort: ${formatForLog(transcriptErr)}`,
-        );
-      });
-    };
     if (queuedFollowupEnqueued) {
       context.logGateway.warn(
         `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
@@ -98,6 +82,23 @@ export function createChatSendDispatchErrorLifecycle(params: {
       }
       return;
     }
+
+    // Select terminal ownership before any awaited durable-state work. An
+    // explicit abort has both the signal and marker; restart interruption
+    // only aborts the signal and must still follow dispatch-error handling.
+    const abortedAtDispatchReject = activeRunAbort.controller.signal.aborted;
+    const abortMarkerAtDispatchReject = context.chatAbortedRuns.get(clientRunId);
+    const abortStopReasonAtDispatchReject = activeRunAbort.entry?.abortStopReason ?? "rpc";
+    const persistAbortTranscript = async () => {
+      if (userTurnRecorder.hasPersisted() || userTurnRecorder.isBlocked()) {
+        return;
+      }
+      await persistUserTurnTranscript().catch((transcriptErr: unknown) => {
+        context.logGateway.warn(
+          `webchat user transcript update failed after abort: ${formatForLog(transcriptErr)}`,
+        );
+      });
+    };
     if (abortedAtDispatchReject && abortMarkerAtDispatchReject !== undefined) {
       if (restartSafeAdmission) {
         await terminalizeRestartSafeAdmission({
@@ -169,10 +170,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         : async () => {
             await persistUserTurnTranscript();
           };
-    if (
-      !restartSafeDispatchFailureTerminalized &&
-      abortMarkerAtDispatchReject === undefined
-    ) {
+    if (!restartSafeDispatchFailureTerminalized && abortMarkerAtDispatchReject === undefined) {
       pendingDispatchLifecycleError = {
         endedAt: Date.now(),
         error: errorMessage,
