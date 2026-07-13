@@ -254,11 +254,7 @@ async function shouldProcessLineEvent(
         ? "allowlist"
         : runtimeGroupPolicy;
   const groupAllowFrom = normalizeStringEntries(
-    firstDefined(
-      groupConfig?.allowFrom,
-      account.config.groupAllowFrom,
-      account.config.allowFrom?.length ? account.config.allowFrom : undefined,
-    ),
+    firstDefined(groupConfig?.allowFrom, account.config.groupAllowFrom),
   );
   const mentionFacts = (() => {
     if (!isGroup || event.type !== "message") {

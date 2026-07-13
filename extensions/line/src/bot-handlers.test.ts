@@ -524,6 +524,26 @@ describe("handleLineWebhookEvents", () => {
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
+  it("does not use the DM allowlist when group allowlist policy has no group entries", async () => {
+    const processMessage = vi.fn();
+    await expectGroupMessageBlocked({
+      processMessage,
+      event: createTestMessageEvent({
+        message: { id: "m5c", type: "text", text: "hi" },
+        source: { type: "group", groupId: "group-1", userId: "user-open-dm" },
+        webhookEventId: "evt-5c",
+      }),
+      context: createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "allowlist",
+        requireMention: false,
+      }),
+    });
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
+  });
+
   it("blocks group messages without sender id when groupPolicy is allowlist", async () => {
     const processMessage = vi.fn();
     const event = {
