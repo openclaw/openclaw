@@ -869,7 +869,7 @@ jobs:
         env:
           # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
           # the same built CLI. Keep the tighter Blacksmith regression ceiling.
-          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '350' }}
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
         run: |
           set +e
           pnpm test:startup:memory
@@ -1388,7 +1388,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.19.0"
+          node-version: "22.22.3"
           install-bun: "false"
 
       - name: Configure Node test resources

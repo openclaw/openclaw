@@ -831,7 +831,7 @@ Unknown settings are rejected. Crabbox credentials and backend-specific account 
 - `lifetime.idleTimeoutMinutes`: positive integer minutes stored for later idle-reclamation policy.
 - `lifetime.maxLifetimeMinutes`: positive integer minutes stored for later lifecycle policy.
 
-A supported Node runtime (22.19+, 23.11+, or 24+) must already be installed on the worker. The opt-in `"npm"` method also requires `npm` and outbound HTTPS access to the public npm registry. Networked toolchain setup is provider policy; bootstrap reports an actionable error instead of installing toolchains itself.
+A supported Node runtime (22.22.3+, 24.15+, or 25.9+) with WAL-reset-safe SQLite must already be installed on the worker. The opt-in `"npm"` method also requires `npm` and outbound HTTPS access to the public npm registry. Networked toolchain setup is provider policy; bootstrap reports an actionable error instead of installing toolchains itself.
 
 This foundation installs and verifies the gateway build and provides tunnel start/stop lifecycle, but it does not launch the general OpenClaw CLI. The self-contained worker entry and loop land in the next cloud-worker milestone.
 

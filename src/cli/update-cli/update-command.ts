@@ -1435,7 +1435,7 @@ async function resolvePackageRuntimePreflightError(params: {
     `The requested package requires ${status.nodeEngine}.`,
     runtime.nodeRunner
       ? "Upgrade the Node runtime that owns the managed Gateway service, then rerun `openclaw update`."
-      : "Upgrade to Node 22.19 or newer 22.x, Node 23.11+, or Node 24+, then rerun `openclaw update`.",
+      : "Upgrade to Node 22.22.3+, Node 24.15.0+, or Node 25.9.0+, then rerun `openclaw update`.",
     "Bare `npm i -g openclaw` can silently install an older compatible release.",
     "After upgrading Node, use `npm i -g openclaw@latest`.",
   ].join("\n");
