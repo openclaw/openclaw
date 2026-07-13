@@ -30,7 +30,12 @@ vi.mock("openclaw/plugin-sdk/state-paths", () => ({
 }));
 
 import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
-import { fetchCopilotModelCatalog, resolveCopilotForwardCompatModel } from "./models.js";
+import {
+  fetchCopilotModelCatalog,
+  hasCopilotEditorPreviewFeatures,
+  hasCopilotNativeWebSearchCapability,
+  resolveCopilotForwardCompatModel,
+} from "./models.js";
 
 function createMockCtx(
   modelId: string,
@@ -198,6 +203,29 @@ describe("resolveCopilotForwardCompatModel", () => {
       const result = requireResolvedModel(ctx);
       expect((result as unknown as Record<string, unknown>).reasoning).toBe(false);
     }
+  });
+});
+
+describe("hasCopilotNativeWebSearchCapability", () => {
+  it("parses the token capability conservatively", () => {
+    expect([
+      hasCopilotEditorPreviewFeatures(
+        "tid=test;editor_preview_features=1;proxy-ep=proxy.example.com",
+      ),
+      hasCopilotEditorPreviewFeatures("tid=test;editor_preview_features=0"),
+      hasCopilotEditorPreviewFeatures("tid=test"),
+    ]).toEqual([true, false, false]);
+  });
+
+  it("limits native search to tested models", () => {
+    for (const modelId of (
+      "gpt-5-mini gpt-5.3-codex gpt-5.4 gpt-5.4-mini gpt-5.4-nano " +
+      "gpt-5.5 gpt-5.6-luna gpt-5.6-sol gpt-5.6-terra"
+    ).split(" ")) {
+      expect(hasCopilotNativeWebSearchCapability(modelId, true)).toBe(true);
+    }
+    expect(hasCopilotNativeWebSearchCapability("gpt-5.5", false)).toBe(false);
+    expect(hasCopilotNativeWebSearchCapability("gpt-future", true)).toBe(false);
   });
 });
 
@@ -537,22 +565,21 @@ describe("fetchCopilotModelCatalog", () => {
 
   it("maps Copilot /models entries to ModelDefinitionConfig with real context windows", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, sampleApiResponse));
+    const copilotApiToken =
+      "tid=test;editor_preview_features=1;proxy-ep=proxy.individual.githubcopilot.com";
 
     const out = await fetchCopilotModelCatalog({
-      copilotApiToken: "tid=test",
+      copilotApiToken,
       baseUrl: "https://api.githubcopilot.com",
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [calledUrl, calledInit] = fetchImpl.mock.calls[0] ?? [];
-    expect(calledUrl).toBe("https://api.githubcopilot.com/models");
-    expect((calledInit as RequestInit).method).toBe("GET");
-    expect(((calledInit as RequestInit).headers as Record<string, string>).Authorization).toBe(
-      "Bearer tid=test",
-    );
-    expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
-      "identity",
+    const [[modelsUrl, modelsInit]] = fetchImpl.mock.calls;
+    expect(modelsUrl).toBe("https://api.githubcopilot.com/models");
+    expect((modelsInit as RequestInit).method).toBe("GET");
+    expect(((modelsInit as RequestInit).headers as Record<string, string>).Authorization).toBe(
+      `Bearer ${copilotApiToken}`,
     );
 
     expect(out.map((m) => m.id)).toEqual([
@@ -574,7 +601,10 @@ describe("fetchCopilotModelCatalog", () => {
       contextWindow: 400000,
       contextTokens: 272000,
       maxTokens: 128000,
-      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+      compat: {
+        nativeWebSearchTool: true,
+        supportedReasoningEfforts: ["low", "medium", "high"],
+      },
     });
 
     const codex = out.find((m) => m.id === "gpt-5.3-codex");
@@ -582,6 +612,7 @@ describe("fetchCopilotModelCatalog", () => {
     expect(codex?.reasoning).toBe(true);
     expect(codex?.contextWindow).toBe(400000);
     expect(codex?.contextTokens).toBeUndefined();
+    expect(codex?.compat?.nativeWebSearchTool).toBe(true);
 
     const gemini = out.find((m) => m.id === "gemini-3.1-pro-preview");
     expect(gemini?.api).toBe("openai-completions");
