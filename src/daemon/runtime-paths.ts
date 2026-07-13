@@ -4,8 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { isSqliteWalResetSafeVersion } from "../infra/node-sqlite.js";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
+import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
 
