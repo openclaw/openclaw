@@ -60,7 +60,7 @@ export type WorkspaceDoc = {
   prefs: { tabOrder: string[] };
 };
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 2;
+const CURRENT_WORKSPACE_SCHEMA_VERSION = 2;
 export const DEFAULT_WORKSPACE_ID = "default";
 
 const TAB_SLUG_PATTERN = /^[a-z0-9-]{1,40}$/;
