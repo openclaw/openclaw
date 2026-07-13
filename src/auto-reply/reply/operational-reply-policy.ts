@@ -177,28 +177,16 @@ function appendOperationalReplyOnceKey(keys: readonly string[], key: string): st
   return [...keys, key];
 }
 
+function removeOperationalReplyOnceKey(keys: readonly string[], key: string): string[] {
+  return keys.filter((existingKey) => existingKey !== key);
+}
+
 function boundOperationalReplyOnceKeys(keys: readonly string[]): string[] {
   return keys.slice(-MAX_OPERATIONAL_REPLY_ONCE_KEYS);
 }
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function finalizeOperationalReplyOnceKeys(params: {
-  keys: readonly string[];
-  deliveredKey: string;
-}): string[] {
-  const stillPendingKeys = new Set(pendingOperationalReplyOnceKeys);
-  stillPendingKeys.delete(params.deliveredKey);
-  const pendingKeys = params.keys.filter((key) => stillPendingKeys.has(key));
-  const deliveredKeys = params.keys.filter(
-    (key) => key !== params.deliveredKey && !stillPendingKeys.has(key),
-  );
-  return [
-    ...boundOperationalReplyOnceKeys([...deliveredKeys, params.deliveredKey]),
-    ...pendingKeys,
-  ];
 }
 
 function resolveOperationalReplySourceScope(params: {
@@ -253,23 +241,37 @@ async function reserveOperationalReplyOnceKey(params: {
   try {
     let reserved = false;
     let alreadySeen = false;
-    const persistedEntry = await patchSessionEntry(
+    await patchSessionEntry(
       scope,
       (entry) => {
-        const keys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
-        if (keys.includes(params.key)) {
+        const deliveredKeys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
+        if (deliveredKeys.includes(params.key)) {
+          alreadySeen = true;
+          return null;
+        }
+        const pendingKeys = normalizeOperationalReplyOnceKeys(
+          entry.operationalReplyPendingOnceKeys,
+        );
+        // Durable pending keys can be stale after restart; only live in-memory
+        // pending state blocks concurrent duplicates from this process.
+        if (pendingKeys.includes(params.key) && pendingOperationalReplyOnceKeys.has(params.key)) {
           alreadySeen = true;
           return null;
         }
         reserved = true;
-        return { operationalReplyOnceKeys: appendOperationalReplyOnceKey(keys, params.key) };
+        return {
+          operationalReplyPendingOnceKeys: appendOperationalReplyOnceKey(
+            removeOperationalReplyOnceKey(pendingKeys, params.key),
+            params.key,
+          ),
+        };
       },
       { preserveActivity: true },
     );
     if (alreadySeen) {
       return null;
     }
-    if (reserved && persistedEntry) {
+    if (reserved) {
       reserveOperationalReplyOnceKeyInMemory(params.key);
       return { durableReserved: true, key: params.key, scope };
     }
@@ -295,13 +297,13 @@ async function releaseOperationalReplyOnceReservation(
     await patchSessionEntry(
       reservation.scope,
       (entry) => {
-        const keys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
+        const keys = normalizeOperationalReplyOnceKeys(entry.operationalReplyPendingOnceKeys);
         if (!keys.includes(reservation.key)) {
           return null;
         }
-        const nextKeys = keys.filter((key) => key !== reservation.key);
+        const nextKeys = removeOperationalReplyOnceKey(keys, reservation.key);
         return {
-          operationalReplyOnceKeys: nextKeys.length > 0 ? nextKeys : undefined,
+          operationalReplyPendingOnceKeys: nextKeys.length > 0 ? nextKeys : undefined,
         };
       },
       { preserveActivity: true },
@@ -324,15 +326,27 @@ async function finalizeOperationalReplyOnceReservation(
     await patchSessionEntry(
       reservation.scope,
       (entry) => {
-        const keys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
-        const nextKeys = finalizeOperationalReplyOnceKeys({
-          deliveredKey: reservation.key,
-          keys,
-        });
-        if (arraysEqual(nextKeys, keys)) {
+        const deliveredKeys = normalizeOperationalReplyOnceKeys(entry.operationalReplyOnceKeys);
+        const pendingKeys = normalizeOperationalReplyOnceKeys(
+          entry.operationalReplyPendingOnceKeys,
+        );
+        const nextDeliveredKeys = boundOperationalReplyOnceKeys(
+          appendOperationalReplyOnceKey(
+            removeOperationalReplyOnceKey(deliveredKeys, reservation.key),
+            reservation.key,
+          ),
+        );
+        const nextPendingKeys = removeOperationalReplyOnceKey(pendingKeys, reservation.key);
+        if (
+          arraysEqual(nextDeliveredKeys, deliveredKeys) &&
+          arraysEqual(nextPendingKeys, pendingKeys)
+        ) {
           return null;
         }
-        return { operationalReplyOnceKeys: nextKeys };
+        return {
+          operationalReplyOnceKeys: nextDeliveredKeys.length > 0 ? nextDeliveredKeys : undefined,
+          operationalReplyPendingOnceKeys: nextPendingKeys.length > 0 ? nextPendingKeys : undefined,
+        };
       },
       { preserveActivity: true },
     );

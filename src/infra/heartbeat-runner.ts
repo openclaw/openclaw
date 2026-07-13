@@ -2361,6 +2361,16 @@ export async function runHeartbeatOnce(opts: {
     }
 
     const deliveryAccountId = delivery.accountId;
+    let operationalPolicyResultsSettled = false;
+    const settleOperationalPolicyResults = async (delivered: boolean): Promise<void> => {
+      if (operationalPolicyResultsSettled) {
+        return;
+      }
+      operationalPolicyResultsSettled = true;
+      for (const policyResult of operationalPolicyResults) {
+        await markOperationalReplyPolicyDelivered(policyResult, delivered);
+      }
+    };
     const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
     if (heartbeatPlugin?.heartbeat?.checkReady) {
       const readiness = await heartbeatPlugin.heartbeat.checkReady({
@@ -2378,6 +2388,7 @@ export async function runHeartbeatOnce(opts: {
           channel: delivery.channel,
           accountId: delivery.accountId,
         });
+        await settleOperationalPolicyResults(false);
         log.info("heartbeat: channel not ready", {
           channel: delivery.channel,
           reason: readiness.reason,
@@ -2386,25 +2397,30 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
-    const send = await sendDurableMessageBatch({
-      cfg,
-      channel: delivery.channel,
-      to: delivery.to,
-      accountId: deliveryAccountId,
-      session: outboundSession,
-      identity: outboundIdentity,
-      threadId: delivery.threadId,
-      payloads: deliveryPayloads,
-      deps: opts.deps,
-      silent: normalized.silent,
-    });
+    let send: Awaited<ReturnType<typeof sendDurableMessageBatch>>;
+    try {
+      send = await sendDurableMessageBatch({
+        cfg,
+        channel: delivery.channel,
+        to: delivery.to,
+        accountId: deliveryAccountId,
+        session: outboundSession,
+        identity: outboundIdentity,
+        threadId: delivery.threadId,
+        payloads: deliveryPayloads,
+        deps: opts.deps,
+        silent: normalized.silent,
+      });
+    } catch (error) {
+      await settleOperationalPolicyResults(false);
+      throw error;
+    }
     if (send.status === "failed" || send.status === "partial_failed") {
+      await settleOperationalPolicyResults(false);
       throw send.error;
     }
     const visibleSendSucceeded = send.status === "sent";
-    for (const policyResult of operationalPolicyResults) {
-      await markOperationalReplyPolicyDelivered(policyResult, visibleSendSucceeded);
-    }
+    await settleOperationalPolicyResults(visibleSendSucceeded);
     const visibleMainSendSucceeded =
       visibleSendSucceeded && (shouldSkipMain || mainDeliveryAllowed);
     // Suppressed durable sends committed no visible channel message. Keep due

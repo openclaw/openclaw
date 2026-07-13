@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/reply-payload.js";
+import { clearOperationalReplyPolicyStateForTest } from "../auto-reply/reply/operational-reply-policy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
@@ -17,6 +18,10 @@ type StoredEntry = Record<string, unknown> | undefined;
 
 describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery is satisfied", () => {
   const TELEGRAM_GROUP = "-1001234567890";
+
+  beforeEach(() => {
+    clearOperationalReplyPolicyStateForTest();
+  });
 
   function createHeartbeatConfig(storePath: string): OpenClawConfig {
     return {
@@ -167,6 +172,90 @@ describe("runHeartbeatOnce clears stuck pendingFinalDelivery state once delivery
       const entry = await readEntry(storePath, sessionKey);
       expect(entry?.lastHeartbeatText).toBeUndefined();
       expectPendingFinalDeliveryCleared(entry);
+    });
+  });
+
+  it("releases operational once reservations when heartbeat send fails", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = {
+        ...createHeartbeatConfig(storePath),
+        messages: {
+          operationalReplies: { policy: "once" },
+        },
+      } as unknown as OpenClawConfig;
+      const NOW = Date.now();
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+        updatedAt: NOW - 60_000,
+      });
+      const operationalText = "usage limit reached";
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({ text: operationalText, isError: true }),
+      );
+      const sendTelegram = vi.fn().mockRejectedValue(new Error("telegram send failed"));
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: heartbeatDeps(sendTelegram, replySpy, NOW),
+      });
+
+      expect(result).toMatchObject({ status: "failed", reason: "telegram send failed" });
+      const entry = await readEntry(storePath, sessionKey);
+      expect(entry?.operationalReplyOnceKeys).toBeUndefined();
+      expect(entry?.operationalReplyPendingOnceKeys).toBeUndefined();
+    });
+  });
+
+  it("releases operational once reservations when heartbeat channel readiness fails", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            heartbeat: { every: "5m", target: "whatsapp" },
+          },
+        },
+        channels: {
+          whatsapp: {
+            allowFrom: ["*"],
+            heartbeat: { showOk: false },
+          },
+        },
+        session: { store: storePath },
+        messages: {
+          operationalReplies: { policy: "once" },
+        },
+      } as unknown as OpenClawConfig;
+      const NOW = Date.now();
+      const sessionKey = await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "whatsapp",
+        lastProvider: "whatsapp",
+        lastTo: "whatsapp-chat",
+        updatedAt: NOW - 60_000,
+      });
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: "usage limit reached",
+          isError: true,
+        }),
+      );
+      const sendWhatsApp = vi.fn();
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          ...heartbeatDeps(sendWhatsApp, replySpy, NOW),
+          whatsapp: sendWhatsApp,
+          webAuthExists: async () => false,
+        },
+      });
+
+      expect(result).toEqual({ status: "skipped", reason: "whatsapp-not-linked" });
+      expect(sendWhatsApp).not.toHaveBeenCalled();
+      const entry = await readEntry(storePath, sessionKey);
+      expect(entry?.operationalReplyOnceKeys).toBeUndefined();
+      expect(entry?.operationalReplyPendingOnceKeys).toBeUndefined();
     });
   });
 
