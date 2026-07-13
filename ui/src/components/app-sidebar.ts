@@ -49,7 +49,6 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
-import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
 import {
   readSessionDragData,
@@ -93,6 +92,10 @@ import {
   sidebarMoreMenuHoldsActiveRoute,
   sidebarPluginTabs,
 } from "./app-sidebar-nav-menus.ts";
+import {
+  catalogOwnedOpenClawSessionKeys,
+  renderSidebarSessionCatalogs,
+} from "./app-sidebar-session-catalog.ts";
 import { icons } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -875,34 +878,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.requestUpdate();
   }
 
-  private catalogOwnedOpenClawSessionKeys(): Set<string> {
-    return new Set(
-      this.sessionCatalogs.flatMap((catalog) =>
-        catalog.hosts.flatMap((host) =>
-          host.sessions.flatMap((session) =>
-            session.openClawSessionKey ? [session.openClawSessionKey] : [],
-          ),
-        ),
-      ),
-    );
-  }
-
-  private catalogBackingSessionRow(
-    sessionKey: string,
-  ): SessionsListResult["sessions"][number] | undefined {
-    const current = this.sessionsResult?.sessions.find((row) => row.key === sessionKey);
-    if (current) {
-      return current;
-    }
-    for (const rows of Object.values(this.sessionRowsByAgent)) {
-      const row = rows.find((candidate) => candidate.key === sessionKey);
-      if (row) {
-        return row;
-      }
-    }
-    return undefined;
-  }
-
   private getSessionNavigationState() {
     const context = this.context;
     const routeSessionKey = this.getRouteSessionKey();
@@ -939,7 +914,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         unread: row.unread === true,
       };
     };
-    const catalogOwnedKeys = this.catalogOwnedOpenClawSessionKeys();
+    const catalogOwnedKeys = catalogOwnedOpenClawSessionKeys(this.sessionCatalogs);
     const visibleSessions = navigation.visibleSessions
       .filter((row) => !catalogOwnedKeys.has(row.key))
       .map(toSidebarSession);
@@ -2613,7 +2588,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       selected === loadedAgentId
         ? (this.sessionsResult?.sessions ?? [])
         : (this.sessionRowsByAgent[selected] ?? []);
-    const catalogOwnedKeys = this.catalogOwnedOpenClawSessionKeys();
+    const catalogOwnedKeys = catalogOwnedOpenClawSessionKeys(this.sessionCatalogs);
     return filterVisibleSessionRows(rows, {
       agentId: selected,
       defaultAgentId: resolveUiDefaultAgentId({
@@ -2752,177 +2727,26 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
             showFallback: true,
           })}
-          ${this.renderSessionCatalogs()}
+          ${renderSidebarSessionCatalogs({
+            catalogs: this.sessionCatalogs,
+            collapsedSectionIds: this.collapsedSessionSections,
+            loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
+            connected: this.connected,
+            defaultAgentId:
+              this.context?.agents.state.agentsList?.defaultId ?? this.expandedAgentId(),
+            activeRouteId: this.activeRouteId,
+            routeSessionKey: this.getRouteSessionKey(),
+            basePath: this.basePath,
+            currentRows: this.sessionsResult?.sessions ?? [],
+            rowsByAgent: this.sessionRowsByAgent,
+            formatTimestamp: formatSidebarTimestamp,
+            onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),
+            onOpenNewSession: (agentId, target) => this.onOpenNewSession?.(agentId, target),
+            onNavigateSession: (search) => this.onNavigate?.("chat", { search }),
+            onLoadMore: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
+          })}
         </div>
       </section>
-    `;
-  }
-
-  // Catalog groups render inside the shared sessions scroller. Sibling
-  // .sidebar-sessions sections would form a second scroll-less region that
-  // flex-squeezes under the shell body's overflow clip and paints rows over
-  // the following section.
-  private renderSessionCatalogs() {
-    return this.sessionCatalogs.map((catalog) => {
-      const sectionId = `catalog:${catalog.id}`;
-      const collapsed = this.collapsedSessionSections.has(sectionId);
-      const hosts = catalog.hosts;
-      const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
-      const backingRows = rows.flatMap(({ session }) => {
-        const row = session.openClawSessionKey
-          ? this.catalogBackingSessionRow(session.openClawSessionKey)
-          : undefined;
-        return row ? [row] : [];
-      });
-      const hasActiveRun = backingRows.some((row) => row.hasActiveRun === true);
-      const hasUnread = backingRows.some((row) => row.unread === true);
-      const loadingMore = this.loadingMoreSessionCatalogIds.has(catalog.id);
-      const hasMore = hosts.some((host) => Boolean(host.nextCursor));
-      return html`
-        <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
-          <div class="sidebar-recent-sessions__head">
-            <button
-              type="button"
-              class="sidebar-session-group-toggle"
-              aria-expanded=${String(!collapsed)}
-              aria-label=${catalog.label}
-              @click=${() => this.toggleSessionSection(sectionId)}
-            >
-              <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-                >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-              >
-              <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-              ${hasActiveRun
-                ? html`<span
-                    class="session-run-spinner"
-                    role="img"
-                    aria-label=${t("sessionsView.activeRun")}
-                    title=${t("sessionsView.activeRun")}
-                  ></span>`
-                : hasUnread
-                  ? html`<span
-                      class="session-unread-dot"
-                      role="img"
-                      aria-label=${t("sessionsView.unread")}
-                    ></span>`
-                  : nothing}
-              <span class="sidebar-session-group-count">${rows.length}</span>
-            </button>
-            ${catalog.capabilities.createSession
-              ? html`<button
-                  type="button"
-                  class="sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
-                  title=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  ?disabled=${!this.connected}
-                  @click=${() =>
-                    this.onOpenNewSession?.(
-                      this.context?.agents.state.agentsList?.defaultId ?? this.expandedAgentId(),
-                      { catalogId: catalog.id },
-                    )}
-                >
-                  ${icons.plus}
-                </button>`
-              : nothing}
-          </div>
-          ${collapsed
-            ? nothing
-            : html`<div class="sidebar-recent-sessions__list">
-                  ${rows.map(({ host, session }) =>
-                    this.renderCatalogSession(catalog, host, session),
-                  )}
-                </div>
-                ${hasMore
-                  ? html`<button
-                      type="button"
-                      class="sidebar-session-catalog-load-more"
-                      data-session-catalog-load-more=${catalog.id}
-                      ?disabled=${loadingMore}
-                      aria-busy=${String(loadingMore)}
-                      @click=${() => void this.loadMoreSessionCatalog(catalog.id)}
-                    >
-                      ${t("chat.selectors.loadMoreSessions")}
-                    </button>`
-                  : nothing}`}
-        </div>
-      `;
-    });
-  }
-
-  private renderCatalogSession(
-    catalog: SessionCatalog,
-    host: SessionCatalogHost,
-    session: SessionCatalogSession,
-  ) {
-    const key =
-      session.openClawSessionKey ??
-      buildCatalogSessionKey({
-        catalogId: catalog.id,
-        hostId: host.hostId,
-        threadId: session.threadId,
-      });
-    const href = `${pathForRoute("chat", this.basePath)}${searchForSession(key)}`;
-    const hostSubtitle = catalog.hosts.length > 1 || host.kind === "node" ? host.label : undefined;
-    const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-    const timestamp =
-      typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-        ? rawTimestamp * 1000
-        : rawTimestamp;
-    const visuallyActive = this.activeRouteId === "chat" && this.getRouteSessionKey() === key;
-    const backingRow = session.openClawSessionKey
-      ? this.catalogBackingSessionRow(session.openClawSessionKey)
-      : undefined;
-    const hasActiveRun = backingRow?.hasActiveRun === true;
-    const unread = backingRow?.unread === true;
-    const rowClass = [
-      "sidebar-recent-session",
-      "session-row-host",
-      visuallyActive ? "sidebar-recent-session--active" : "",
-      hasActiveRun ? "session-row-host--running" : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-    return html`
-      <div class=${rowClass} data-session-key=${key}>
-        <a
-          href=${href}
-          class="sidebar-recent-session__link"
-          title=${`${session.name || session.threadId} · ${host.label}`}
-          @click=${(event: MouseEvent) => {
-            if (!shouldHandleNavigationClick(event)) {
-              return;
-            }
-            event.preventDefault();
-            this.onNavigate?.("chat", { search: searchForSession(key) });
-          }}
-        >
-          ${hasActiveRun
-            ? html`<span
-                class="session-run-spinner sidebar-recent-session__state"
-                role="img"
-                aria-label=${t("sessionsView.activeRun")}
-                title=${t("sessionsView.activeRun")}
-              ></span>`
-            : unread
-              ? html`<span
-                  class="session-unread-dot sidebar-recent-session__unread"
-                  role="img"
-                  aria-label=${t("sessionsView.unread")}
-                ></span>`
-              : nothing}
-          <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee"
-              >${session.name || session.threadId}</span
-            >
-            ${hostSubtitle
-              ? html`<span class="sidebar-recent-session__subtitle">${hostSubtitle}</span>`
-              : nothing}
-          </span>
-          <span class="sidebar-recent-session__aside session-row-aside">
-            <span class="session-row-trail">${formatSidebarTimestamp(timestamp)}</span>
-          </span>
-        </a>
-      </div>
     `;
   }
 

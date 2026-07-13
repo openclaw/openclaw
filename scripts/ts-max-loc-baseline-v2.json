@@ -7,7 +7,7 @@
   "extensions/amazon-bedrock/register.sync.runtime.ts": 724,
   "extensions/amazon-bedrock/stream.runtime.ts": 1185,
   "extensions/anthropic/cli-shared.ts": 501,
-  "extensions/anthropic/register.runtime.ts": 938,
+  "extensions/anthropic/register.runtime.ts": 932,
   "extensions/anthropic/session-catalog.ts": 1491,
   "extensions/anthropic/usage.ts": 517,
   "extensions/bonjour/src/advertiser.ts": 787,
