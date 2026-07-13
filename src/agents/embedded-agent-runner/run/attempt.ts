@@ -26,7 +26,6 @@ import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
 } from "../../../plugins/hook-agent-context.js";
-import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import {
   createTrajectoryRuntimeRecorder,
@@ -34,15 +33,7 @@ import {
 } from "../../../trajectory/runtime.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
 import { materializeBundleMcpToolsForRun } from "../../agent-bundle-mcp-tools.js";
-import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
-import {
-  applyAgentAutoCompactionGuard,
-  applyAgentCompactionSettingsFromConfig,
-  isSilentOverflowProneModel,
-  resolveEffectiveCompactionMode,
-} from "../../agent-settings.js";
-import { toToolDefinitions } from "../../agent-tool-definition-adapter.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -55,12 +46,10 @@ import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runti
 import type { AgentMessage } from "../../runtime/index.js";
 import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
-import { createAgentSession } from "../../sessions/index.js";
-import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { releasePendingAgentSteeringItems } from "../../subagent-registry.js";
 import {
   clearToolSearchCatalog,
-  resolveToolSearchCatalogTool,
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
@@ -68,11 +57,9 @@ import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
-import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import type { PromptCacheBreak, PromptCacheChange } from "../prompt-cache-observability.js";
-import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import {
   clearActiveEmbeddedRun,
   type EmbeddedAgentQueueHandle,
@@ -83,7 +70,6 @@ import {
   getEmbeddedSessionPromptState,
 } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
-import { applySystemPromptToSession } from "../system-prompt.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -100,7 +86,6 @@ import { completeEmbeddedAttemptAfterTurn } from "./attempt-after-turn.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
-import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { summarizeSessionContext } from "./attempt-context-summary.js";
 import { prepareEmbeddedAttemptHistory } from "./attempt-history-prepare.js";
 import {
@@ -115,7 +100,7 @@ import {
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
 import { prepareEmbeddedAttemptSessionManager } from "./attempt-session-manager-prepare.js";
-import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
+import { prepareEmbeddedAttemptAgentSession } from "./attempt-session.js";
 import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
 import {
@@ -169,7 +154,6 @@ import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js"
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { isMidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import { detachPrePersistedCurrentUserTurn } from "./pre-persisted-user-turn.js";
 import { PREEMPTIVE_OVERFLOW_ERROR_TEXT } from "./preemptive-compaction.js";
@@ -178,7 +162,7 @@ import {
   buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
-import { clearToolActivityRun, notifyToolActivity } from "./tool-activity-heartbeat.js";
+import { clearToolActivityRun } from "./tool-activity-heartbeat.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 const aggregateToolResultPressureWarnings = new Set<string>();
@@ -571,7 +555,7 @@ export async function runEmbeddedAttempt(
     // Recheck after arming so a stopped run never reaches session creation or provider prompt.
     await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
 
-    let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
+    let session: AgentSession | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
     let trajectoryRecorder: ReturnType<typeof createTrajectoryRuntimeRecorder> | null = null;
     let trajectoryEndRecorded = false;
@@ -598,161 +582,54 @@ export async function runEmbeddedAttempt(
         preparedSessionManager;
       sessionManager = preparedSessionManager.sessionManager;
 
-      const settingsManager = createPreparedEmbeddedAgentSettingsManager({
-        cwd: effectiveCwd,
-        agentDir,
-        cfg: params.config,
-        pluginMetadataSnapshot: getCurrentAttemptPluginMetadataSnapshot(),
-        contextTokenBudget: params.contextTokenBudget,
-      });
-      const autoCompactionGuardArgs = {
-        settingsManager,
-        contextEngineInfo: activeContextEngine?.info,
-        compactionMode: resolveEffectiveCompactionMode(params.config),
-        silentOverflowProneProvider: isSilentOverflowProneModel({
-          provider: params.provider,
-          modelId: params.modelId,
-          baseUrl: params.model.baseUrl ?? undefined,
-        }),
-      };
-      applyAgentAutoCompactionGuard(autoCompactionGuardArgs);
-
-      // Sets compaction/pruning runtime state and returns extension factories
-      // that must be passed to the resource loader for the safeguard to be active.
-      const extensionFactories = buildEmbeddedExtensionFactories({
-        cfg: params.config,
-        sessionManager,
-        provider: params.provider,
-        modelId: params.modelId,
-        model: params.model,
-        runId: params.runId,
-      });
-      const resourceLoader = createEmbeddedAgentResourceLoader({
-        cwd: effectiveCwd,
-        agentDir,
-        settingsManager,
-        extensionFactories,
-      });
-      await resourceLoader.reload();
-      // DefaultResourceLoader.reload() rehydrates settings from disk and can drop OpenClaw
-      // compaction overrides applied in createPreparedEmbeddedAgentSettingsManager — same
-      // rehydration also restores OpenClaw runtime's auto-compaction (openclaw#75799), so re-apply
-      // both guards.
-      applyAgentCompactionSettingsFromConfig({
-        settingsManager,
-        cfg: params.config,
-        contextTokenBudget: params.contextTokenBudget,
-      });
-      applyAgentAutoCompactionGuard(autoCompactionGuardArgs);
-      prepStages.mark("session-resource-loader");
-
-      // Get hook runner early so it's available when creating tools
-      const hookRunner = getGlobalHookRunner();
-
       const {
+        activeSession,
         allCustomTools,
         builtinToolNames,
         clientToolCallSlots,
         clientToolDefs,
         clientToolLoopDetection,
+        hasDeliveredSourceReply,
+        hookRunner,
+        markSourceReplyDelivered,
         replaySafeToolNames,
         replaySafeTools,
-        sessionToolAllowlist,
-      } = prepareEmbeddedAttemptClientTools({
+        setActiveSessionSystemPrompt,
+        settingsManager,
+      } = await prepareEmbeddedAttemptAgentSession({
         attempt: params,
-        catalogToolHookContext,
-        clientTools,
-        codeModeControlsEnabledForRun,
-        deferredDirectoryToolsCallable,
-        effectiveTools,
-        replaySafetyOptions,
-        sandboxEnabled: Boolean(sandbox?.enabled),
-        sandboxSessionKey,
-        sessionAgentId,
-        toolSearchCatalogRef,
-        toolSearchRuntimeConfig,
-        uncompactedEffectiveTools,
-      });
-
-      const createdSession = await createEmbeddedAgentSessionWithResourceLoader<
-        Awaited<ReturnType<typeof createAgentSession>>
-      >({
-        createAgentSession: async (options) =>
-          await createAgentSession(options as unknown as Parameters<typeof createAgentSession>[0]),
-        options: {
-          cwd: effectiveCwd,
-          agentDir,
-          authStorage: params.authStorage,
-          modelRegistry: params.modelRegistry,
-          model: params.model,
-          thinkingLevel: agentCoreThinkingLevel,
-          tools: sessionToolAllowlist,
-          customTools: allCustomTools,
-          sessionManager,
-          settingsManager,
-          resourceLoader,
-          resolveDeferredTool: deferredDirectoryToolsCallable
-            ? ({ toolCall }) => {
-                const tool = resolveToolSearchCatalogTool(
-                  {
-                    config: params.config,
-                    runtimeConfig: params.config,
-                    agentId: sessionAgentId,
-                    sessionKey: sandboxSessionKey,
-                    sessionId: params.sessionId,
-                    runId: params.runId,
-                    catalogRef: toolSearchCatalogRef,
-                    abortSignal: runAbortController.signal,
-                  },
-                  toolCall.name,
-                );
-                // Catalog entries already own before_tool_call wrapping.
-                const definition = tool
-                  ? toToolDefinitions([tool], catalogToolHookContext)[0]
-                  : undefined;
-                const hydratedTool = definition ? wrapToolDefinition(definition) : undefined;
-                if (hydratedTool) {
-                  log.info(`tool-search: hydrated deferred directory tool ${toolCall.name}`);
-                  const originalExecute = hydratedTool.execute;
-                  hydratedTool.execute = (async (...args: Parameters<typeof originalExecute>) => {
-                    const interval = setInterval(() => notifyToolActivity(params.runId), 60_000);
-                    interval.unref?.();
-                    try {
-                      notifyToolActivity(params.runId);
-                      const result = await originalExecute(...args);
-                      return result;
-                    } finally {
-                      clearInterval(interval);
-                      notifyToolActivity(params.runId);
-                    }
-                  }) as typeof originalExecute;
-                }
-                return hydratedTool;
-              }
-            : undefined,
-          withSessionWriteLock: (operation) =>
-            sessionLockController.withSessionWriteLock(operation),
+        activeContextEngineInfo: activeContextEngine?.info,
+        agentCoreThinkingLevel,
+        agentDir,
+        clientToolPreparation: {
+          catalogToolHookContext,
+          clientTools,
+          codeModeControlsEnabledForRun,
+          deferredDirectoryToolsCallable,
+          effectiveTools,
+          replaySafetyOptions,
+          sandboxEnabled: Boolean(sandbox?.enabled),
+          sandboxSessionKey,
+          sessionAgentId,
+          toolSearchCatalogRef,
+          toolSearchRuntimeConfig,
+          uncompactedEffectiveTools,
         },
+        effectiveCwd,
+        getCurrentAttemptPluginMetadataSnapshot,
+        initialSystemPrompt: systemPromptText,
+        markStage: (stage) => prepStages.mark(stage),
+        onSessionCreated: (createdSession) => {
+          session = createdSession;
+        },
+        onSystemPromptChanged: (nextSystemPrompt) => {
+          systemPromptText = nextSystemPrompt;
+        },
+        runAbortSignal: runAbortController.signal,
+        sessionAgentId,
+        sessionLockController,
+        sessionManager,
       });
-      session = createdSession.session;
-      if (!session) {
-        throw new Error("Embedded agent session missing");
-      }
-      session.setActiveToolsByName(sessionToolAllowlist);
-      const activeSession = session;
-      const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
-        systemPromptText = nextSystemPrompt;
-        applySystemPromptToSession(activeSession, nextSystemPrompt);
-      };
-      setActiveSessionSystemPrompt(systemPromptText);
-      let didDeliverSourceReplyViaMessageTool = false;
-      const markSourceReplyDelivered = () => (didDeliverSourceReplyViaMessageTool = true);
-      installMessageToolOnlyTerminalHook({
-        agent: activeSession.agent,
-        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-        onDeliveredSourceReply: markSourceReplyDelivered,
-      });
-      prepStages.mark("agent-session");
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
         // the selected provider/model. Reset clears restored transcript state
@@ -1254,7 +1131,7 @@ export async function runEmbeddedAttempt(
           timedOut,
           yieldDetected,
         }),
-        hasDeliveredSourceReply: () => didDeliverSourceReplyViaMessageTool,
+        hasDeliveredSourceReply,
         markSourceReplyDelivered,
         onBlockReply,
         onBlockReplyFlush,
@@ -2082,7 +1959,7 @@ export async function runEmbeddedAttempt(
           promptCache,
           contextBudgetStatus,
           yieldDetected,
-          didDeliverSourceReplyViaMessageTool,
+          didDeliverSourceReplyViaMessageTool: hasDeliveredSourceReply(),
         },
         clientToolCallSlots,
         hookRunner,

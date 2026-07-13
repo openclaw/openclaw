@@ -1,3 +1,7 @@
+:root {
+  --settings-control-height: 32px;
+}
+
 /* ── Settings design language ──────────────────────────────────────────────
  *
  * One structural pattern for every settings surface:
@@ -180,11 +184,13 @@
 
 .settings-row__control {
   display: flex;
-  flex-wrap: wrap;
+  /* No wrap here: Chromium sizes a wrappable shrink-to-fit flex container to
+     its widest item, collapsing multi-control clusters. The <=640px block
+     gives the cluster a definite width and enables wrapping there. */
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   max-width: 60%;
 }
@@ -274,6 +280,40 @@
 }
 
 /* ── Controls ── */
+
+/* One control height inside settings clusters. Buttons, inputs, selects, and
+   segmented controls share 32px so mixed rows never show ragged heights.
+   Multi-select list boxes and textareas keep their natural height. */
+.settings-row__control .btn,
+.settings-section__actions .btn,
+.settings-group .data-table-search input,
+input.settings-input,
+select.settings-select:not([multiple]) {
+  height: var(--settings-control-height);
+  padding-block: 0;
+  box-sizing: border-box;
+}
+
+/* Segmented keeps its 2px track inset; the buttons fill the inner height.
+   min-height (not height) so many-option enums can still wrap to two lines. */
+.settings-segmented {
+  min-height: var(--settings-control-height);
+  box-sizing: border-box;
+  align-items: stretch;
+}
+
+.settings-segmented > .settings-segmented__btn {
+  display: inline-flex;
+  align-items: center;
+  padding-block: 0;
+}
+
+.settings-row__control .btn--icon,
+.settings-section__actions .btn--icon {
+  width: var(--settings-control-height);
+  min-width: var(--settings-control-height);
+  padding-inline: 0;
+}
 
 .settings-toggle {
   display: inline-flex;
@@ -504,6 +544,9 @@ textarea.settings-input {
   }
 
   .settings-row__control {
+    /* Definite width makes flex-wrap size lines correctly (see desktop note). */
+    width: 100%;
     max-width: 100%;
+    flex-wrap: wrap;
   }
 }
