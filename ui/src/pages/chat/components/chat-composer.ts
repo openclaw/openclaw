@@ -1176,7 +1176,7 @@ function compactPastedTextPreview(text: string): string | null {
   if (normalized.length <= PASTED_TEXT_PREVIEW_MAX_LENGTH) {
     return normalized;
   }
-  return `${normalized.slice(0, PASTED_TEXT_PREVIEW_MAX_LENGTH).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, PASTED_TEXT_PREVIEW_MAX_LENGTH).trimEnd()}...`;
 }
 
 function pastedTextPreview(attachment: ChatAttachment): string {

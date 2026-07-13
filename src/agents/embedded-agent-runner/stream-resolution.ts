@@ -119,6 +119,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
+  transportAuthAvailable?: boolean;
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
 }): StreamFn {
@@ -171,6 +172,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   if (
     isDefaultOpenClawStreamFnForModel(params.model, params.currentStreamFn) ||
     hasResolvedRuntimeApiKey(params.resolvedApiKey) ||
+    params.transportAuthAvailable ||
     // Proxied anthropic-messages providers (provider !== "anthropic", e.g. pioneer)
     // must use the boundary-aware managed transport even without a resolved runtime
     // key — it is the only place a tool-using turn's narration gets tagged
