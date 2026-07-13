@@ -296,6 +296,10 @@ function createCrablineState(params: {
       const providerInbound = params.adapter.createInbound({
         input: {
           ...input,
+          conversation: {
+            ...input.conversation,
+            kind: input.conversation.kind === "direct" ? "direct" : "group",
+          },
           senderId: providerSenderId,
         },
       });

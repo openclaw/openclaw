@@ -1601,89 +1601,12 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   stroke-linejoin: round;
 }
 
-.nav-section {
-  display: grid;
-  gap: 4px;
-  margin-bottom: 10px;
-}
-
-.nav-section:last-child {
-  margin-bottom: 0;
-}
-
 .nav-section__items {
   display: grid;
   gap: 2px;
 }
 
-.nav-section--collapsed .nav-section__items {
-  display: none;
-}
-
-.nav-section__label {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 0 10px;
-  min-height: 28px;
-  background: transparent;
-  border: none;
-  border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--muted) 72%, var(--text) 28%);
-  text-align: left;
-  transition:
-    color var(--duration-fast) ease,
-    background var(--duration-fast) ease;
-}
-
-.nav-section__label:hover {
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-hover) 72%, transparent);
-}
-
-.nav-section__label-text {
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  opacity: 0.85;
-}
-
-.nav-section__chevron {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  min-width: 0;
-  flex: 0 0 26px;
-  opacity: 0.5;
-  transition: transform var(--duration-fast) ease;
-}
-
-.nav-section__chevron svg {
-  width: 12px;
-  height: 12px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.nav-section--collapsed .nav-section__chevron {
-  transform: rotate(-90deg);
-}
-
-/* "More" holds every nav route the user has not pinned; the uppercase label
-   is the section separator, so no divider line above it. */
-.nav-section--more {
-  margin-top: 12px;
-}
-
-/* Button variant of .nav-item (e.g. "Customize sidebar"). */
+/* Button variant of .nav-item (e.g. the "More" menu row). */
 .nav-item--action {
   width: 100%;
   font: inherit;
@@ -1727,6 +1650,9 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   font: inherit;
   font-size: 13px;
   text-align: left;
+  /* More-menu route rows are anchors acting as chrome (see base.css cursor convention). */
+  cursor: default;
+  text-decoration: none;
 }
 
 .sidebar-customize-menu__item:hover {
@@ -1763,6 +1689,16 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 .sidebar-customize-menu__separator {
   margin: 6px 4px;
   border-top: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+/* More-menu row for the route the app is currently on. */
+.sidebar-customize-menu__item--active {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
+}
+
+.sidebar-customize-menu__item--active .nav-item__icon {
+  color: var(--accent);
 }
 
 .session-menu {

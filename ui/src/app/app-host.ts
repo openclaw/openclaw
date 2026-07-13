@@ -1112,7 +1112,6 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarPinnedRoutes=${navigationSnapshot.sidebarPinnedRoutes}
-                .sidebarMoreExpanded=${navigationSnapshot.sidebarMoreExpanded}
                 .themeMode=${context.theme.mode}
                 .lobsterPetVisits=${uiSettings.lobsterPetVisits !== false}
                 .lobsterPetSounds=${uiSettings.lobsterPetSounds === true}
@@ -1131,10 +1130,6 @@ class OpenClawShell extends OpenClawLightDomElement {
                   });
                 }}
                 .draftSessionAgentId=${this.draftSessionAgentId()}
-                .onToggleMore=${() =>
-                  context.navigation.update({
-                    sidebarMoreExpanded: !context.navigation.snapshot.sidebarMoreExpanded,
-                  })}
                 .onUpdatePinnedRoutes=${(routes: SidebarNavRoute[]) =>
                   context.navigation.update({ sidebarPinnedRoutes: routes })}
                 .onPairMobile=${() => void context.overlays.openDevicePairSetup()}
