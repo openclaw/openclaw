@@ -35,7 +35,7 @@ function pointValue(value: unknown): number | undefined {
   return toFiniteNumber(value.y) ?? toFiniteNumber(value.value);
 }
 
-export function normalizeChartData(value: unknown): ChartDataResult {
+function normalizeChartData(value: unknown): ChartDataResult {
   const points = Array.isArray(value)
     ? value
     : isRecord(value) && Array.isArray(value.points)
@@ -58,7 +58,7 @@ export function normalizeChartData(value: unknown): ChartDataResult {
   return { ok: true, values };
 }
 
-export function mapChart(widget: WorkspaceWidget, value: unknown): ChartModel {
+function mapChart(widget: WorkspaceWidget, value: unknown): ChartModel {
   const props = widgetProps(widget);
   const rawType = props.type === undefined ? "line" : props.type;
   if (typeof rawType !== "string" || !CHART_TYPES.has(rawType as ChartType)) {

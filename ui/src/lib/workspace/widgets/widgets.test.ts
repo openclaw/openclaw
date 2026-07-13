@@ -186,8 +186,21 @@ describe("chart mapping", () => {
     const invalid = renderToContainer(renderChart(widget(), [1, "bad"]));
     expect(invalid.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
     expect(invalid.querySelector("svg")).toBeNull();
+
+    for (const [configuredWidget, value] of [
+      [widget({ props: { type: "pie" } }), [1]],
+      [widget({ props: { type: null } }), [1]],
+      [widget({ props: { min: 10, max: 2 } }), [4]],
+      [widget(), { points: [{ label: "missing value" }] }],
+      [widget(), { points: Array.from({ length: 501 }, () => 1) }],
+    ] as const) {
+      const error = renderToContainer(renderChart(configuredWidget, value));
+      expect(error.querySelector('[data-test-id="workspace-chart-error"]')).not.toBeNull();
+      expect(error.querySelector("svg")).toBeNull();
+    }
   });
 });
+
 describe("iframe-embed render × sandbox mode", () => {
   it("emits a sandboxed frame for an allowed URL (strict → empty sandbox attr)", () => {
     const container = renderToContainer(
