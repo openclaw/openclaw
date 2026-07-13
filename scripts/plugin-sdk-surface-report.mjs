@@ -223,7 +223,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -64; dead channel-message dispatch aliases -23.
       // Harvest: retired qa-live-transport-scenarios subpath -6.
-      10606,
+      // +1: setAgentEffectiveModelFallbacks (agent-scoped fallbacks write helper, #106414).
+      10607,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -232,7 +233,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: group scope encoder/key builder (channel-policy + compat mirror).
       // Harvest: channel-ingress -19; dead channel-message dispatch aliases -23.
       // Harvest: retired qa-live-transport-scenarios subpath -3.
-      5341,
+      // +1: setAgentEffectiveModelFallbacks (agent-scoped fallbacks write helper, #106414).
+      5342,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
