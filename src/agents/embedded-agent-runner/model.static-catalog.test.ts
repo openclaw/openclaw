@@ -57,6 +57,7 @@ import {
   loadBundledProviderStaticCatalogContextModels,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
+  resolveManifestModelCatalogProviderTransportApi,
 } from "./model.static-catalog.js";
 
 function setManifestPlugins(plugins: unknown[]) {
@@ -238,7 +239,7 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
     });
   });
 
-  it("canonicalizes Azure manifest aliases without configured endpoints back to OpenAI", () => {
+  it("canonicalizes Azure aliases without endpoints and exposes retained transport metadata", () => {
     const plugin = {
       id: "openai",
       providers: ["openai"],
@@ -268,6 +269,22 @@ describe("canonicalizeManifestModelCatalogProviderAlias", () => {
         cfg: {},
       }),
     ).toBe("openai");
+    expect(
+      resolveManifestModelCatalogProviderTransportApi({
+        provider: "azure-openai-responses",
+        modelId: "gpt-5.5",
+        cfg: {
+          models: {
+            providers: {
+              "azure-openai-responses": {
+                baseUrl: "https://example.openai.azure.com/openai/v1",
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).toBe("azure-openai-responses");
   });
 });
 

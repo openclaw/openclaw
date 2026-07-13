@@ -60,6 +60,7 @@ import {
   canonicalizeManifestModelCatalogProviderAlias,
   resolveBundledProviderStaticCatalogModel,
   resolveBundledStaticCatalogModel,
+  resolveManifestModelCatalogProviderTransportApi,
 } from "./model.static-catalog.js";
 
 type ProviderRuntimeHooks = {
@@ -756,7 +757,12 @@ function applyConfiguredProviderOverrides(params: {
       providerDefaultApi)
     : (metadataOverrideModel?.api ??
       providerConfig.api ??
-      normalizeResolvedTransportApi(params.provider) ??
+      resolveManifestModelCatalogProviderTransportApi({
+        provider: params.provider,
+        modelId,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+      }) ??
       discoveredModel.api ??
       configuredStaticCatalogModel?.api ??
       providerDefaultApi);

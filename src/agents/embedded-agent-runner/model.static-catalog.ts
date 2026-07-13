@@ -290,17 +290,23 @@ function hasManifestModelCatalogSuppression(params: {
   }).suppressions.some((suppression) => normalizeProviderId(suppression.provider) === provider);
 }
 
+type ManifestModelCatalogProviderAliasResolution = {
+  canonicalProvider?: string;
+  transportApi?: ModelCatalogAlias["api"];
+};
+
 function resolveManifestModelCatalogProviderAlias(params: {
   provider: string;
   modelId?: string;
   cfg?: OpenClawConfig;
   plugins: readonly Pick<PluginManifestRecord, "id" | "providers" | "modelCatalog">[];
-}): string | undefined {
+}): ManifestModelCatalogProviderAliasResolution {
   const provider = normalizeProviderId(params.provider);
   if (!provider) {
-    return undefined;
+    return {};
   }
   const targets = new Set<string>();
+  const transportApis = new Set<NonNullable<ModelCatalogAlias["api"]>>();
   for (const plugin of params.plugins) {
     for (const [rawAlias, alias] of Object.entries(plugin.modelCatalog?.aliases ?? {})) {
       const normalizedAlias = normalizeProviderId(rawAlias);
@@ -335,27 +341,36 @@ function resolveManifestModelCatalogProviderAlias(params: {
       if (
         normalizedAlias === provider &&
         normalizedTarget &&
-        !retainsTransportAlias &&
         plugin.providers.some((providerId) => normalizeProviderId(providerId) === normalizedTarget)
       ) {
-        targets.add(normalizedTarget);
+        if (retainsTransportAlias) {
+          if (alias.api) {
+            transportApis.add(alias.api);
+          }
+        } else {
+          targets.add(normalizedTarget);
+        }
       }
     }
   }
-  return targets.size === 1 ? [...targets][0] : undefined;
+  const [canonicalProvider] = targets;
+  const [transportApi] = transportApis;
+  return {
+    ...(targets.size === 1 && canonicalProvider ? { canonicalProvider } : {}),
+    ...(transportApis.size === 1 && transportApi ? { transportApi } : {}),
+  };
 }
 
-/** Resolves a provider alias from plugin model-catalog metadata when the alias is unambiguous. */
-export function canonicalizeManifestModelCatalogProviderAlias(params: {
+function resolveManifestModelCatalogProviderAliasMetadata(params: {
   provider: string;
   modelId?: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): string {
+}): { provider: string; transportApi?: ModelCatalogAlias["api"] } {
   const provider = normalizeProviderId(params.provider);
   if (!provider) {
-    return params.provider;
+    return { provider: params.provider };
   }
   const env = params.env ?? process.env;
   // Gateway plugin metadata is process-stable. Reuse its lifecycle-owned snapshot
@@ -376,14 +391,38 @@ export function canonicalizeManifestModelCatalogProviderAlias(params: {
       workspaceDir: params.workspaceDir,
       env,
     }).plugins;
-  return (
-    resolveManifestModelCatalogProviderAlias({
-      provider,
-      modelId: params.modelId,
-      cfg: params.cfg,
-      plugins,
-    }) ?? params.provider
-  );
+  const resolved = resolveManifestModelCatalogProviderAlias({
+    provider,
+    modelId: params.modelId,
+    cfg: params.cfg,
+    plugins,
+  });
+  return {
+    provider: resolved.canonicalProvider ?? params.provider,
+    ...(resolved.transportApi ? { transportApi: resolved.transportApi } : {}),
+  };
+}
+
+/** Resolves a provider alias from plugin model-catalog metadata when the alias is unambiguous. */
+export function canonicalizeManifestModelCatalogProviderAlias(params: {
+  provider: string;
+  modelId?: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  return resolveManifestModelCatalogProviderAliasMetadata(params).provider;
+}
+
+/** Resolves the API owned by a retained manifest provider transport alias. */
+export function resolveManifestModelCatalogProviderTransportApi(params: {
+  provider: string;
+  modelId?: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ModelCatalogAlias["api"] | undefined {
+  return resolveManifestModelCatalogProviderAliasMetadata(params).transportApi;
 }
 
 /** Returns whether a bundled static catalog asks runtime discovery to augment its rows. */

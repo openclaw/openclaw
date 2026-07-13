@@ -149,6 +149,16 @@ vi.mock("./model.static-catalog.js", () => ({
   },
   resolveBundledProviderStaticCatalogModel: resolveBundledProviderStaticCatalogModelMock,
   resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
+  resolveManifestModelCatalogProviderTransportApi: ({
+    provider,
+    cfg,
+  }: {
+    provider: string;
+    cfg?: { models?: { providers?: Record<string, { baseUrl?: string }> } };
+  }) =>
+    provider === "azure-openai-responses" && cfg?.models?.providers?.[provider]?.baseUrl
+      ? "azure-openai-responses"
+      : undefined,
 }));
 
 type OpenRouterModelCapabilities = NonNullable<
@@ -4358,6 +4368,34 @@ describe("resolveModel", () => {
       api: "anthropic-messages",
     });
   });
+
+  it.each([
+    { modelId: "claude-sonnet-4.6", expectedApi: "anthropic-messages" },
+    { modelId: "gpt-5.4-mini", expectedApi: "openai-responses" },
+  ] as const)(
+    "preserves discovered $expectedApi transport for params-only github-copilot $modelId",
+    ({ modelId, expectedApi }) => {
+      const cfg = {
+        models: {
+          providers: {
+            "github-copilot": {
+              params: { temperature: 0.2 },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveModelForTest("github-copilot", modelId, "/tmp/agent", cfg);
+
+      expect(result.error).toBeUndefined();
+      expectRecordFields(result.model, {
+        provider: "github-copilot",
+        id: modelId,
+        api: expectedApi,
+        params: { temperature: 0.2 },
+      });
+    },
+  );
 
   it("builds an openai fallback for gpt-5.5 when the live catalog cache is cold", () => {
     const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent");
