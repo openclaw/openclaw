@@ -129,6 +129,33 @@ internal class PendingCronRunRegistry {
   }
 }
 
+internal fun nextCronJobsPageOffset(
+  page: JsonObject?,
+  requestedOffset: Int,
+  pageCount: Int,
+): Int? {
+  val responseOffset =
+    page
+      ?.long("offset")
+      ?.takeIf { it in 0L..Int.MAX_VALUE.toLong() }
+      ?.toInt()
+      ?: requestedOffset
+  val total = page?.long("total")?.takeIf { it >= 0 }
+  val hasMore =
+    (page?.get("hasMore") as? JsonPrimitive)?.booleanOrNull
+      ?: (total != null && responseOffset.toLong() + pageCount < total)
+  if (!hasMore) return null
+
+  val nextOffset =
+    page
+      ?.long("nextOffset")
+      ?.takeIf { it in 0L..Int.MAX_VALUE.toLong() }
+      ?.toInt()
+      ?: Math.addExact(responseOffset, pageCount)
+  require(nextOffset > requestedOffset) { "Gateway returned a non-advancing cron jobs page." }
+  return nextOffset
+}
+
 sealed interface GatewayCronScheduleEdit {
   data class At(
     val at: String,

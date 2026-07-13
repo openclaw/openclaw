@@ -131,6 +131,9 @@ import java.util.concurrent.atomic.AtomicReference
 private const val MAX_PENDING_NOTIFICATION_EVENTS = 128
 private const val NODE_APPROVAL_COMMAND_FRESH_MS = 30_000L
 private const val CRON_RUN_TRACKING_POLL_MS = 2_000L
+private const val CRON_JOBS_PAGE_SIZE = 200
+private const val CRON_JOBS_MAX_PAGES = 100
+private const val CRON_JOBS_MAX_COUNT = CRON_JOBS_PAGE_SIZE * CRON_JOBS_MAX_PAGES
 private const val OperatorAdminScope = "operator.admin"
 
 private fun execApprovalOutcomeUnknownMessage(): String = nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified.").source
@@ -4296,12 +4299,55 @@ class NodeRuntime private constructor(
           nextWakeAtMs = statusRoot.long("nextWakeAtMs"),
         )
 
-      val listRes = requestGatewayData(gatewayScope, "cron.list", """{"includeDisabled":true,"limit":20,"sortBy":"nextRunAtMs","sortDir":"asc"}""")
-      val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
-      val jobs = parseCronJobs(listRoot?.get("jobs") as? JsonArray)
+      val jobs = mutableListOf<GatewayCronJobSummary>()
+      val jobIds = mutableSetOf<String>()
+      var offset = 0
+      var complete = false
+      var pageCount = 0
+      while (pageCount < CRON_JOBS_MAX_PAGES && !complete) {
+        pageCount += 1
+        val listParams =
+          buildJsonObject {
+            put("includeDisabled", JsonPrimitive(true))
+            put("limit", JsonPrimitive(CRON_JOBS_PAGE_SIZE))
+            put("offset", JsonPrimitive(offset))
+            // nextRunAtMs changes as jobs execute; name plus the server's id tie-breaker
+            // keeps offsets stable while paging, then we restore scheduler order below.
+            put("sortBy", JsonPrimitive("name"))
+            put("sortDir", JsonPrimitive("asc"))
+          }.toString()
+        val listRes = requestGatewayData(gatewayScope, "cron.list", listParams)
+        val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
+        val rawJobs = listRoot?.get("jobs") as? JsonArray
+        val pageJobs = parseCronJobs(rawJobs)
+        pageJobs.forEach { job ->
+          require(jobIds.add(job.id)) { "Gateway returned duplicate cron job ${job.id}." }
+        }
+        jobs += pageJobs
+        require(jobs.size <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
+        listRoot.long("total")?.let { total ->
+          require(total in jobs.size.toLong()..CRON_JOBS_MAX_COUNT.toLong()) {
+            "Gateway returned an invalid cron jobs total."
+          }
+        }
+        val nextOffset = nextCronJobsPageOffset(listRoot, offset, rawJobs?.size ?: 0)
+        if (nextOffset == null) {
+          complete = true
+          break
+        }
+        require(nextOffset <= CRON_JOBS_MAX_COUNT) { "Gateway returned too many cron jobs." }
+        offset = nextOffset
+      }
+      require(complete) { "Gateway returned too many cron job pages." }
+      val sortedJobs =
+        jobs.sortedWith(
+          compareBy<GatewayCronJobSummary> { it.nextRunAtMs == null }
+            .thenBy { it.nextRunAtMs ?: Long.MAX_VALUE }
+            .thenBy { it.id },
+        )
       publishCronRefresh(gatewayScope, refreshGeneration) {
         _cronStatus.value = status
-        _cronJobs.value = jobs
+        _cronJobs.value = sortedJobs
       }
     } catch (_: Throwable) {
       publishCronRefresh(gatewayScope, refreshGeneration) {

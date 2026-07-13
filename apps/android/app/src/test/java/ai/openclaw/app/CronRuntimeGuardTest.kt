@@ -6,6 +6,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Before
 import org.junit.Test
@@ -132,6 +135,61 @@ class CronRuntimeGuardTest {
   }
 
   @Test
+  fun refreshCronJobsLoadsEveryGatewayPage() =
+    runBlocking {
+      val runtime = createTestRuntime()
+      seedConnectedRuntime(runtime)
+      val requestedOffsets = mutableListOf<Int>()
+      runtime.gatewayDataRequestOverrideForTests = { _, method, params ->
+        when (method) {
+          "cron.status" -> """{"enabled":true,"jobs":201}"""
+          "cron.list" -> {
+            val request = Json.parseToJsonElement(requireNotNull(params)).jsonObject
+            val offset =
+              request
+                .getValue("offset")
+                .jsonPrimitive.content
+                .toInt()
+            assertEquals(
+              200,
+              request
+                .getValue("limit")
+                .jsonPrimitive.content
+                .toInt(),
+            )
+            assertEquals("name", request.getValue("sortBy").jsonPrimitive.content)
+            requestedOffsets += offset
+            val jobs =
+              if (offset == 0) {
+                (0 until 200).joinToString(",") { cronJobSummaryJson(it) }
+              } else {
+                cronJobSummaryJson(200)
+              }
+            val hasMore = offset == 0
+            val nextOffset = if (hasMore) "200" else "null"
+            """{"jobs":[$jobs],"total":201,"offset":$offset,"limit":200,"hasMore":$hasMore,"nextOffset":$nextOffset}"""
+          }
+          else -> error("unexpected method $method")
+        }
+      }
+
+      runtime.refreshCronJobs()
+      withTimeout(5_000) {
+        while (runtime.cronJobs.value.size != 201 && runtime.cronErrorText.value == null) delay(10)
+      }
+
+      assertEquals(null, runtime.cronErrorText.value)
+      assertEquals(201, runtime.cronJobs.value.size)
+      assertEquals(
+        "job-200",
+        runtime.cronJobs.value
+          .first()
+          .id,
+      )
+      assertEquals(listOf(0, 200), requestedOffsets)
+    }
+
+  @Test
   fun runningStateBlocksMutationAfterMutexRelease() =
     runBlocking {
       val runtime = createTestRuntime()
@@ -163,6 +221,11 @@ class CronRuntimeGuardTest {
   private fun seedConnectedRuntime(runtime: NodeRuntime) {
     writeField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
     writeField(runtime, "operatorConnected", true)
+  }
+
+  private fun cronJobSummaryJson(index: Int): String {
+    val nextRunAtMs = if (index == 200) 0 else index + 1
+    return """{"id":"job-$index","name":"Job $index","enabled":true,"schedule":{"kind":"every","everyMs":60000},"payload":{"kind":"systemEvent","text":"Run"},"state":{"nextRunAtMs":$nextRunAtMs}}"""
   }
 
   private fun writeField(
