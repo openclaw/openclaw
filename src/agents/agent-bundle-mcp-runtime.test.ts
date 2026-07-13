@@ -889,7 +889,7 @@ describe("session MCP runtime", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-listtools-timeout-"));
     const serverPath = path.join(tempDir, "hanging-list-tools.mjs");
     const logPath = path.join(tempDir, "server.log");
-    testing.setBundleMcpCatalogListTimeoutMsForTest(100);
+    testing.setBundleMcpCatalogListTimeoutMsForTest(50);
     await writeListToolsMcpServer({ filePath: serverPath, logPath, hang: true });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -2250,7 +2250,7 @@ describe("disposeSession timeout", () => {
     "force-closes transport and client when terminateSession hangs past the timeout",
     { timeout: 15_000 },
     async () => {
-      testing.setBundleMcpDisposeTimeoutMsForTest(100);
+      testing.setBundleMcpDisposeTimeoutMsForTest(50);
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-force-close-"));
       const serverPath = path.join(tempDir, "hanging-terminate.mjs");
       const logPath = path.join(tempDir, "server.log");
@@ -2348,7 +2348,7 @@ process.stdin.on("end", () => {
     "completes disposal even when the MCP server process ignores shutdown",
     { timeout: 15_000 },
     async () => {
-      testing.setBundleMcpDisposeTimeoutMsForTest(100);
+      testing.setBundleMcpDisposeTimeoutMsForTest(50);
       const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-dispose-timeout-"));
       const serverPath = path.join(tempDir, "hanging-close.mjs");
       const logPath = path.join(tempDir, "server.log");
@@ -2441,7 +2441,7 @@ process.stdin.on("end", () => {
     "force-closes streamable-http transport when DELETE hangs past the timeout",
     { timeout: 15_000 },
     async () => {
-      testing.setBundleMcpDisposeTimeoutMsForTest(100);
+      testing.setBundleMcpDisposeTimeoutMsForTest(50);
       const sessionId = "test-session-" + Date.now();
       const server = http.createServer((req, res) => {
         if (req.method === "GET") {
@@ -2535,7 +2535,7 @@ process.stdin.on("end", () => {
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
       const tempDir = makeTempDir(tempDirs, "bundle-mcp-parallel-");
-      const delays = [200, 400, 600];
+      const delays = [100, 200, 300];
       const serverPaths = delays.map((delay, i) => {
         const serverPath = path.join(tempDir, `slow-server-${i}.mjs`);
         const logPath = path.join(tempDir, `server-${i}.log`);
@@ -2573,7 +2573,7 @@ process.stdin.on("end", () => {
       try {
         const sumDelays = delays.reduce((a, b) => a + b, 0);
         const maxDelay = Math.max(...delays);
-        const parallelBudgetMs = maxDelay + 500;
+        const parallelBudgetMs = maxDelay + 250;
 
         const t0 = performance.now();
         const catalog = await runtime.getCatalog();
@@ -2624,7 +2624,7 @@ process.stdin.on("end", () => {
       await writeListToolsMcpServer({
         filePath: slowConnectServer.serverPath,
         logPath: slowConnectServer.logPath,
-        initializeDelayMs: 500,
+        initializeDelayMs: 200,
       });
 
       testing.setBundleMcpCatalogListTimeoutMsForTest(4_000);

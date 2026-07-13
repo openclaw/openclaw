@@ -22,6 +22,12 @@ vi.mock("./node-pairing-ssh-verify.runtime.js", () => ({
   runNodeIdentityProbe: (params: NodeIdentityProbeParams) => probeMock(params),
 }));
 
+vi.mock("../skills/runtime/remote.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/remote.js")>()),
+  // Pairing coverage does not need the unrelated 5s connect-time bin refresh.
+  refreshRemoteNodeBins: vi.fn(async () => {}),
+}));
+
 installGatewayTestHooks({ scope: "suite" });
 
 async function waitFor<T>(
@@ -116,11 +122,8 @@ describe("gateway ssh-verified node pairing auto-approve", () => {
         const res = await connectNode();
         expect(res.ok).toBe(false);
 
-        // The scoped pending request disqualifies ssh-verify entirely: no probe
-        // runs and the device is never auto-approved.
-        await new Promise((resolve) => {
-          setTimeout(resolve, 250);
-        });
+        // The scoped pending request disqualifies ssh-verify synchronously: no
+        // detached probe exists that could approve it after the response.
         expect(probeMock).not.toHaveBeenCalled();
         expect(await getPairedDevice(loaded.identity.deviceId)).toBeNull();
       },
