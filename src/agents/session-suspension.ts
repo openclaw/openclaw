@@ -197,8 +197,9 @@ export function enableSessionSuspensionTimersForGatewayStart(
   const nowMs = Date.now();
   for (const [laneId, cleared] of state.clearedLaneResumes) {
     const resumeConcurrency = resolveResumeConcurrency(laneId, cleared.resumeConcurrency);
-    const remainingMs = Math.max(0, cleared.resumeAtMs - nowMs);
+    const remainingMs = resolveTimerTimeoutMs(cleared.resumeAtMs - nowMs, 0, 0);
     if (remainingMs > 0) {
+      setCommandLaneConcurrency(laneId, 0);
       scheduleLaneAutoResume(laneId, remainingMs, resumeConcurrency, { nowMs });
       suspendedLaneIds.add(laneId);
       continue;

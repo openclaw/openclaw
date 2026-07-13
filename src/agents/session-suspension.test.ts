@@ -199,7 +199,8 @@ describe("session suspension", () => {
     const suspendedLaneIds = enableSessionSuspensionTimersForGatewayStart();
 
     expect(suspendedLaneIds).toEqual(new Set([customLaneId]));
-    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(customLaneId, 0);
+    commandQueueMocks.setCommandLaneConcurrency.mockClear();
 
     await vi.advanceTimersByTimeAsync(59);
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
@@ -223,7 +224,23 @@ describe("session suspension", () => {
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
 
     expect(enableSessionSuspensionTimersForGatewayStart()).toEqual(new Set([CommandLane.Main]));
-    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Main, 0);
+  });
+
+  it("clamps rescheduled cleanup timers after wall-clock rollback", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { enableSessionSuspensionTimersForGatewayStart, testing } =
+      await import("./session-suspension.js");
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const customLaneId = "plugin:voice:room-3";
+    testing.seedClearedLaneResumeForTest(customLaneId, {
+      resumeConcurrency: 1,
+      resumeAtMs: 1_000 + MAX_TIMER_TIMEOUT_MS + 1_000,
+    });
+
+    expect(enableSessionSuspensionTimersForGatewayStart()).toEqual(new Set([customLaneId]));
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("does not throttle lanes when cleanup wins a pending suspension write race", async () => {
