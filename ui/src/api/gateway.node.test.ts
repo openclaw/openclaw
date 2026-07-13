@@ -1,11 +1,11 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
+  ConnectErrorDetailCodes,
+  GATEWAY_CLIENT_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-} from "../../../packages/gateway-protocol/src/version.js";
+} from "@openclaw/gateway-client/browser";
 import type { DeviceIdentity } from "../lib/nodes/index.ts";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
