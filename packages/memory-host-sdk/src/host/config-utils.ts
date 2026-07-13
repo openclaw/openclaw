@@ -174,23 +174,6 @@ const LEADING_DASH_RE = /^-+/;
 const TRAILING_DASH_RE = /-+$/;
 const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
-const DURATION_MULTIPLIERS: Record<string, number> = {
-  ms: 1,
-  s: 1000,
-  m: 60_000,
-  h: 3_600_000,
-  d: 86_400_000,
-};
-
-/** Round parsed durations and reject values outside the safe integer range. */
-function roundDurationMs(raw: string, value: number): number {
-  const rounded = Math.round(value);
-  if (!Number.isSafeInteger(rounded)) {
-    throw new Error(`invalid duration: ${raw}`);
-  }
-  return rounded;
-}
-
 /** Normalize user or config agent ids to the filesystem-safe canonical form. */
 export function normalizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
@@ -378,46 +361,4 @@ export function resolveMemorySearchConfig(
     enabled,
     extraPaths: uniqueStrings(rawPaths),
   };
-}
-
-/** Parse compact duration strings such as "500ms", "5s", or "1h30m" into milliseconds. */
-export function parseDurationMs(
-  raw: string,
-  opts?: { defaultUnit?: "ms" | "s" | "m" | "h" | "d" },
-): number {
-  const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
-  if (!trimmed) {
-    throw new Error("invalid duration (empty)");
-  }
-  const single = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)?$/.exec(trimmed);
-  if (single) {
-    const value = Number(single[1]);
-    if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`invalid duration: ${raw}`);
-    }
-    const unit = single[2] ?? opts?.defaultUnit ?? "ms";
-    return roundDurationMs(raw, value * (DURATION_MULTIPLIERS[unit] ?? 1));
-  }
-
-  let totalMs = 0;
-  let consumed = 0;
-  const tokenRe = /(\d+(?:\.\d+)?)(ms|s|m|h|d)/g;
-  for (const match of trimmed.matchAll(tokenRe)) {
-    const [full, valueRaw, unitRaw] = match;
-    const index = match.index ?? -1;
-    if (!full || !valueRaw || !unitRaw || index !== consumed) {
-      throw new Error(`invalid duration: ${raw}`);
-    }
-    const value = Number(valueRaw);
-    const multiplier = DURATION_MULTIPLIERS[unitRaw];
-    if (!Number.isFinite(value) || value < 0 || !multiplier) {
-      throw new Error(`invalid duration: ${raw}`);
-    }
-    totalMs += value * multiplier;
-    consumed += full.length;
-  }
-  if (consumed !== trimmed.length || consumed === 0) {
-    throw new Error(`invalid duration: ${raw}`);
-  }
-  return roundDurationMs(raw, totalMs);
 }
