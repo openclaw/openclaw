@@ -213,6 +213,7 @@ function createDirectChatContext(): GatewayRequestContext {
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatAbortedRuns: new Map(),
+    chatQueuedTurns: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
