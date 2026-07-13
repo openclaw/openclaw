@@ -36,6 +36,11 @@ import {
   migrateSessionEntryStatusProjection,
   readSqliteTableColumns,
 } from "./openclaw-agent-db-session-migrations.js";
+import {
+  addSessionProvenanceColumns,
+  backfillSessionEntryProvenance,
+  backfillTranscriptMutationWatermarks,
+} from "./openclaw-agent-db-session-provenance.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
@@ -201,33 +206,6 @@ function dropLegacyMemoryIndexSchema(db: DatabaseSync): void {
   `);
 }
 
-function backfillTranscriptMutationWatermarks(db: DatabaseSync): void {
-  const transcriptTable = db
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get("transcript_events") as { ok?: unknown } | undefined;
-  if (transcriptTable?.ok !== 1) {
-    return;
-  }
-  db.exec(`
-    UPDATE sessions
-    SET
-      transcript_updated_at = COALESCE(
-        transcript_updated_at,
-        (
-          SELECT MAX(transcript_events.created_at)
-          FROM transcript_events
-          WHERE transcript_events.session_id = sessions.session_id
-        )
-      ),
-      transcript_observed_at = COALESCE(transcript_observed_at, updated_at)
-    WHERE EXISTS (
-      SELECT 1
-      FROM transcript_events
-      WHERE transcript_events.session_id = sessions.session_id
-    );
-  `);
-}
-
 function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
@@ -253,24 +231,7 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   if (columns && !columns.has("transcript_observed_at")) {
     db.exec("ALTER TABLE sessions ADD COLUMN transcript_observed_at INTEGER DEFAULT NULL;");
   }
-  if (columns && !columns.has("session_entry_provenance")) {
-    db.exec(
-      "ALTER TABLE sessions ADD COLUMN session_entry_provenance INTEGER NOT NULL DEFAULT 0 CHECK (session_entry_provenance IN (0, 1));",
-    );
-  }
-  if (columns && !columns.has("acp_owned")) {
-    db.exec(
-      "ALTER TABLE sessions ADD COLUMN acp_owned INTEGER NOT NULL DEFAULT 0 CHECK (acp_owned IN (0, 1));",
-    );
-  }
-  if (columns && !columns.has("plugin_owner_id")) {
-    db.exec("ALTER TABLE sessions ADD COLUMN plugin_owner_id TEXT;");
-  }
-  if (columns && !columns.has("hook_external_content_source")) {
-    db.exec(
-      "ALTER TABLE sessions ADD COLUMN hook_external_content_source TEXT CHECK (hook_external_content_source IS NULL OR hook_external_content_source IN ('gmail', 'webhook'));",
-    );
-  }
+  addSessionProvenanceColumns(db, columns);
   if (!columns) {
     return;
   }
@@ -477,45 +438,6 @@ function migratedEntryDisplayName(entry: MigratedSessionEntry): string | null {
     migratedText(entry.subject) ??
     migratedText(entry.groupId)
   );
-}
-
-function backfillSessionEntryProvenance(db: DatabaseSync, previousVersion: number): void {
-  if (previousVersion >= 8) {
-    return;
-  }
-  const rows = db
-    .prepare(
-      `
-        SELECT se.session_id, se.entry_json
-        FROM session_entries AS se
-        INNER JOIN sessions AS s
-          ON s.session_id = se.session_id AND s.session_key = se.session_key;
-      `,
-    )
-    .all() as Array<{ entry_json?: unknown; session_id?: unknown }>;
-  const update = db.prepare(`
-    UPDATE sessions
-    SET
-      session_entry_provenance = 1,
-      acp_owned = ?,
-      plugin_owner_id = ?,
-      hook_external_content_source = ?
-    WHERE session_id = ?;
-  `);
-  for (const row of rows) {
-    const sessionId = migratedText(row.session_id);
-    const entry = parseMigratedSessionEntry(row.entry_json);
-    if (!sessionId || !entry) {
-      continue;
-    }
-    const hookSource = migratedText(entry.hookExternalContentSource);
-    update.run(
-      migratedObjectField(entry, "acp") ? 1 : 0,
-      migratedText(entry.pluginOwnerId),
-      hookSource === "gmail" || hookSource === "webhook" ? hookSource : null,
-      sessionId,
-    );
-  }
 }
 
 function backfillOpenClawAgentSchema(db: DatabaseSync, previousVersion: number): void {

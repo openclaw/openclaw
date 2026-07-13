@@ -2,11 +2,6 @@
 import { formatByteSize } from "@openclaw/normalization-core";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationGateway } from "../../app/context.ts";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveUiSelectedGlobalAgentId,
-} from "../../lib/sessions/session-key.ts";
 import type {
   SkillWorkshopAction,
   SkillWorkshopActionNotice,
@@ -15,10 +10,12 @@ import type {
   SkillWorkshopProposalStatus,
   SkillWorkshopStatusFilter,
 } from "../../lib/skill-workshop/index.ts";
+import { loadedSkillWorkshopAgentParams, skillWorkshopAgentParams } from "./agent-scope.ts";
 import {
   createSkillWorkshopHistoryScanState,
   type SkillWorkshopHistoryScanState,
 } from "./history-scan.ts";
+export { resolveSkillWorkshopAgentId } from "./agent-scope.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
 
@@ -171,32 +168,6 @@ export function skillWorkshopRouteData(state: SkillWorkshopState): SkillWorkshop
 
 function getErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
-}
-
-function skillWorkshopAgentParams(context: SkillWorkshopContext): { agentId: string } {
-  const snapshot = context.gateway.snapshot;
-  const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
-  const selectedAgentId = context.agentSelection.state.selectedId;
-  return {
-    agentId: sessionAgentId
-      ? normalizeAgentId(sessionAgentId)
-      : selectedAgentId
-        ? normalizeAgentId(selectedAgentId)
-        : resolveUiSelectedGlobalAgentId(snapshot),
-  };
-}
-
-export function resolveSkillWorkshopAgentId(context: SkillWorkshopContext): string {
-  return skillWorkshopAgentParams(context).agentId;
-}
-
-function loadedSkillWorkshopAgentParams(
-  state: SkillWorkshopState,
-  context: SkillWorkshopContext,
-): { agentId: string } {
-  return {
-    agentId: state.skillWorkshopAgentId ?? skillWorkshopAgentParams(context).agentId,
-  };
 }
 
 function resetSkillWorkshopAgentScope(state: SkillWorkshopState, agentId: string): void {

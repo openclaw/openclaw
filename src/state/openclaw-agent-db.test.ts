@@ -1421,7 +1421,10 @@ describe("openclaw agent database", () => {
       "openclaw-agent.sqlite",
     );
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const currentSchema = fs.readFileSync(resolveTestOpenClawAgentSchemaPath(), "utf8");
+    const currentSchema = fs.readFileSync(
+      new URL("./openclaw-agent-schema.sql", import.meta.url),
+      "utf8",
+    );
     const v7Schema = currentSchema.replace(
       [
         "  session_entry_provenance INTEGER NOT NULL DEFAULT 0 CHECK (session_entry_provenance IN (0, 1)),\n",

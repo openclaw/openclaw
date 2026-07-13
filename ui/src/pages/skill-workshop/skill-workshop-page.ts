@@ -19,13 +19,20 @@ import { filterSkillWorkshopProposals } from "../../lib/skill-workshop/index.ts"
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderSkillWorkshopHeaderControls, setSkillWorkshopMode } from "./header-controls.ts";
-import { loadSkillWorkshopHistoryScanStatus, runSkillWorkshopHistoryScan } from "./history-scan.ts";
+import {
+  loadSkillWorkshopPageData,
+  runSkillWorkshopPageHistoryScan,
+} from "./history-scan-page-controller.ts";
+import type {
+  SkillWorkshopProposal,
+  SkillWorkshopRenderContext,
+  SkillWorkshopRevisionRequest,
+} from "./page-types.ts";
 import {
   countSkillWorkshopProposals,
   createSkillWorkshopState,
   loadSkillWorkshopProposals,
   requestSkillWorkshopRevision,
-  resolveSkillWorkshopAgentId,
   runSkillWorkshopLifecycleAction,
   selectSkillWorkshopProposal,
   type SkillWorkshopContext,
@@ -37,38 +44,14 @@ import {
   setSelfLearningEnabled,
   type SkillWorkshopSelfLearning,
 } from "./self-learning.ts";
+import {
+  captureSkillWorkshopSourceScope,
+  isCurrentSkillWorkshopSourceScope,
+  type SkillWorkshopPageContext,
+  type SkillWorkshopSourceScope,
+} from "./source-scope.ts";
 import { loadSkillWorkshopMode, loadSkillWorkshopUseCurrentChatForRevisions } from "./storage.ts";
 import { renderSkillWorkshop } from "./view.ts";
-
-type SkillWorkshopPageContext = ApplicationContext & SkillWorkshopContext;
-
-type SkillWorkshopRevisionRequest = (
-  instructions: string,
-  proposal: SkillWorkshopState["skillWorkshopProposals"][number],
-  proposalAgentId: string,
-) => Promise<void>;
-
-type SkillWorkshopRenderContext = {
-  context: SkillWorkshopPageContext;
-  workshopAgentName: string;
-  onRevisionRequest?: SkillWorkshopRevisionRequest;
-  selfLearning: SkillWorkshopSelfLearning | null;
-  onSelfLearningToggle: (enabled: boolean) => void;
-  onHistoryScan: () => void;
-};
-
-type SkillWorkshopProposal = SkillWorkshopState["skillWorkshopProposals"][number];
-
-type SkillWorkshopSourceScope = {
-  state: SkillWorkshopState;
-  context: SkillWorkshopPageContext;
-  epoch: number;
-  gateway: SkillWorkshopPageContext["gateway"];
-  agentSelection: SkillWorkshopPageContext["agentSelection"];
-  sessions: SkillWorkshopPageContext["sessions"];
-  revision: SkillWorkshopPageContext["skillWorkshopRevision"];
-  navigate: SkillWorkshopPageContext["navigate"];
-};
 
 function findRevisionSessionRow(
   result: SessionsListResult | null,
@@ -573,34 +556,19 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   }
 
   private captureSourceScope(): SkillWorkshopSourceScope | null {
-    const state = this.state;
-    const context = this.context;
-    if (!state || !context) {
-      return null;
-    }
-    return {
-      state,
-      context,
+    return captureSkillWorkshopSourceScope({
+      state: this.state,
+      context: this.context,
       epoch: this.sourceEpoch,
-      gateway: context.gateway,
-      agentSelection: context.agentSelection,
-      sessions: context.sessions,
-      revision: context.skillWorkshopRevision,
-      navigate: context.navigate,
-    };
+    });
   }
 
   private isCurrentSourceScope(scope: SkillWorkshopSourceScope): boolean {
-    return (
-      this.state === scope.state &&
-      this.context === scope.context &&
-      this.sourceEpoch === scope.epoch &&
-      this.context.gateway === scope.gateway &&
-      this.context.agentSelection === scope.agentSelection &&
-      this.context.sessions === scope.sessions &&
-      this.context.skillWorkshopRevision === scope.revision &&
-      this.context.navigate === scope.navigate
-    );
+    return isCurrentSkillWorkshopSourceScope(scope, {
+      state: this.state,
+      context: this.context,
+      epoch: this.sourceEpoch,
+    });
   }
 
   private loadProposals(force: boolean) {
@@ -609,16 +577,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!state || !context || !context.gateway.snapshot.connected) {
       return;
     }
-    const agentId = resolveSkillWorkshopAgentId(context);
-    void Promise.all([
-      loadSkillWorkshopProposals(state, context, { force }),
-      loadSkillWorkshopHistoryScanStatus({
-        agentId,
-        gateway: context.gateway,
-        state: state.skillWorkshopHistoryScan,
-        force,
-      }),
-    ]).finally(this.requestPageUpdate);
+    void loadSkillWorkshopPageData({ state, context, force }).finally(this.requestPageUpdate);
   }
 
   private readonly handleHistoryScan = () => {
@@ -626,35 +585,15 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    const agentId = resolveSkillWorkshopAgentId(scope.context);
-    const historyState = scope.state.skillWorkshopHistoryScan;
-    void runSkillWorkshopHistoryScan({
-      agentId,
-      gateway: scope.gateway,
-      state: historyState,
-    })
-      .then(() => {
+    void runSkillWorkshopPageHistoryScan({
+      state: scope.state,
+      context: scope.context,
+      current: () => {
         const state = this.state;
         const context = this.context;
-        if (!state || !context || resolveSkillWorkshopAgentId(context) !== agentId) {
-          return;
-        }
-        const refreshes: Promise<void>[] = [
-          loadSkillWorkshopProposals(state, context, { force: true }),
-        ];
-        if (state.skillWorkshopHistoryScan !== historyState) {
-          refreshes.push(
-            loadSkillWorkshopHistoryScanStatus({
-              agentId,
-              gateway: context.gateway,
-              state: state.skillWorkshopHistoryScan,
-              force: true,
-            }),
-          );
-        }
-        return Promise.all(refreshes).then(() => undefined);
-      })
-      .finally(this.requestPageUpdate);
+        return state && context ? { state, context } : undefined;
+      },
+    }).finally(this.requestPageUpdate);
     this.requestPageUpdate();
   };
 

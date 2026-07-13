@@ -1,4 +1,3 @@
-/** Orchestrates isolated cron agent turn setup, execution, delivery, and cleanup. */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
@@ -677,10 +676,8 @@ async function prepareCronRunContext(params: {
     agentId,
     nowMs: now,
     forceNew: usesDetachedRunSession,
+    hookExternalContentSource,
   });
-  if (hookExternalContentSource) {
-    cronSession.sessionEntry.hookExternalContentSource = hookExternalContentSource;
-  }
   const reservedKey = isAgentHarnessSessionKey(agentSessionKey);
   if (cronSession.initialSessionEntry?.modelSelectionLocked === true) {
     throw new Error(

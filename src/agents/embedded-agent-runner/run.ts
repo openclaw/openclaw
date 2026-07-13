@@ -271,6 +271,7 @@ import {
   resolveHookModelSelection,
   resolveNativeModelOwnedHarnessId,
 } from "./run/setup.js";
+import { resolveSkillWorkshopAttemptParams } from "./run/skill-workshop-attempt-params.js";
 import {
   isEmbeddedRunTerminalAbort,
   isEmbeddedRunTerminalInterrupted,
@@ -2176,11 +2177,7 @@ async function runEmbeddedAgentInternal(
             streamParams: params.streamParams,
             modelRun: params.modelRun,
             disableTrajectory: params.disableTrajectory,
-            skillWorkshopProposalOnly: params.skillWorkshopProposalOnly,
-            skillWorkshopProposalEnv: params.skillWorkshopProposalEnv,
-            skillWorkshopOrigin: params.skillWorkshopOrigin,
-            skillWorkshopProposalMutationBudget: params.skillWorkshopProposalMutationBudget,
-            skillWorkshopProposalReviewCompletion: params.skillWorkshopProposalReviewCompletion,
+            ...resolveSkillWorkshopAttemptParams(params),
             promptMode: params.promptMode,
             ownerNumbers: params.ownerNumbers,
             enforceFinalTag: params.enforceFinalTag,

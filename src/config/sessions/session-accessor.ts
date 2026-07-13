@@ -15,6 +15,7 @@ import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { resolveAgentMainSessionKey } from "./main-session.js";
+export * from "./session-history.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -40,8 +41,6 @@ import {
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteSessionEntryLifecycle,
   listSqliteSessionEntries,
-  listSqliteSessionEntriesByStatus,
-  listSqliteSessionTranscriptInstances,
   appendSqliteTranscriptMessageSync,
   findSqliteTranscriptEvent,
   forkSqliteSessionEntryFromParentTarget,
@@ -286,17 +285,6 @@ export type SessionEntrySummary = {
   sessionKey: string;
   /** Entry value cloned from the backing store unless the caller requested borrowed reads. */
   entry: SessionEntry;
-};
-
-export type SessionTranscriptInstance = SessionEntrySummary & {
-  /** Stable transcript identity, including rotated history for one logical session key. */
-  sessionId: string;
-  /** True when this transcript instance was owned by an ACP runtime. */
-  acpOwned: boolean;
-  /** True when exclusion-sensitive session ownership was captured for this transcript id. */
-  provenanceKnown: boolean;
-  /** Activity timestamp for this transcript instance, not the current logical session row. */
-  updatedAtMs: number;
 };
 
 export type SessionEntryReadView = {
@@ -1136,21 +1124,6 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
     return openSessionEntryReadView(scope).entries();
   }
   return listSqliteSessionEntries(scope);
-}
-
-/** Lists entries selected by the indexed normalized session status. */
-export function listSessionEntriesByStatus(
-  scope: SessionEntryListScope,
-  statuses: readonly SessionEntryStatus[],
-): SessionEntrySummary[] {
-  return listSqliteSessionEntriesByStatus(scope, statuses);
-}
-
-/** Lists every retained transcript instance, including prior ids for rotated logical sessions. */
-export function listSessionTranscriptInstances(
-  scope: SessionEntryListScope = {},
-): SessionTranscriptInstance[] {
-  return listSqliteSessionTranscriptInstances(scope);
 }
 
 /**

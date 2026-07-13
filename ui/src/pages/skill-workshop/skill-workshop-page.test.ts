@@ -474,17 +474,20 @@ describe("SkillWorkshopPage lifecycle", () => {
     await page.updateComplete;
 
     const firstReturnedStatus = deferred<unknown>();
-    const returnedRequest = vi.fn((method: string) =>
-      method === "skills.proposals.historyStatus"
-        ? callsFor(returnedRequest, "skills.proposals.historyStatus").length === 1
+    let returnedStatusCalls = 0;
+    const returnedRequest = vi.fn((method: string): Promise<unknown> => {
+      if (method === "skills.proposals.historyStatus") {
+        returnedStatusCalls += 1;
+        return returnedStatusCalls === 1
           ? firstReturnedStatus.promise
-          : Promise.resolve({ ...scanStatus, hasScanned: true, reviewedSessions: 8 })
-        : Promise.resolve({
-            schema: "openclaw.skill-workshop.proposals-manifest.v1",
-            updatedAt: "2026-07-13T00:00:00.000Z",
-            proposals: [],
-          }),
-    );
+          : Promise.resolve({ ...scanStatus, hasScanned: true, reviewedSessions: 8 });
+      }
+      return Promise.resolve({
+        schema: "openclaw.skill-workshop.proposals-manifest.v1",
+        updatedAt: "2026-07-13T00:00:00.000Z",
+        proposals: [],
+      });
+    });
     page.context = createContext(returnedRequest);
     page.requestUpdate();
     await page.updateComplete;

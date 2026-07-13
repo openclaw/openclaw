@@ -109,7 +109,7 @@ describe("Skill Workshop history scan controller", () => {
 
     const scan = runSkillWorkshopHistoryScan({ agentId: "main", gateway: appGateway, state });
     await vi.waitFor(() => expect(oldRequest).toHaveBeenCalledTimes(1));
-    (appGateway.snapshot as { client: { request: typeof newRequest } }).client = {
+    (appGateway.snapshot as unknown as { client: { request: typeof newRequest } }).client = {
       request: newRequest,
     };
     status.resolve(result());
