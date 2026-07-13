@@ -53,13 +53,9 @@ import { isSignalTimeoutReason } from "../../failover-error.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { relocateCurrentRuntimeContextCarrierToTail } from "../../internal-runtime-context.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import {
-  invalidateSessionFileRepairCache,
-  repairSessionFileIfNeeded,
-} from "../../session-file-repair.js";
-import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import type { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
-import { createAgentSession, SessionManager } from "../../sessions/index.js";
+import { createAgentSession } from "../../sessions/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { releasePendingAgentSteeringItems } from "../../subagent-registry.js";
 import {
@@ -72,7 +68,6 @@ import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
 import type { NormalizedUsage } from "../../usage.js";
 import { readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
-import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
@@ -83,8 +78,6 @@ import {
   type EmbeddedAgentQueueHandle,
   markActiveEmbeddedRunAbandoned,
 } from "../runs.js";
-import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
-import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import {
   cloneToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
@@ -121,6 +114,7 @@ import {
 } from "./attempt-prompt-preflight.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { completeEmbeddedAttemptResult } from "./attempt-result.js";
+import { prepareEmbeddedAttemptSessionManager } from "./attempt-session-manager-prepare.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
 import { createEmbeddedRunStageTracker } from "./attempt-stage-timing.js";
@@ -143,12 +137,8 @@ import {
   removeTrailingMidTurnPrecheckAssistantError,
   repairAttemptToolUseResultPairing,
   resolveAttemptTrajectorySessionFile,
-  resolveExistingAttemptTranscriptState,
 } from "./attempt-transcript-helpers.js";
-import {
-  buildLoopPromptCacheInfo,
-  runAttemptContextEngineBootstrap,
-} from "./attempt.context-engine-helpers.js";
+import { buildLoopPromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForCurrentPromptBoundary,
@@ -176,7 +166,6 @@ import {
 } from "./attempt.sessions-yield.js";
 import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
 import { composeSystemPromptWithHookContext } from "./attempt.thread-helpers.js";
-import { resolveAttemptTranscriptPolicy } from "./attempt.transcript-policy.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import { installHistoryImagePruneContextTransform } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
@@ -461,11 +450,6 @@ export async function runEmbeddedAttempt(
     let abortSessionForYield: (() => void) | null = null;
     let queueYieldInterruptForSession: (() => void) | null = null;
     let yieldAbortSettled: Promise<void> | null = null;
-    const runtimePlanModelContext = {
-      workspaceDir: effectiveWorkspace,
-      modelApi: params.model.api,
-      model: params.model,
-    };
     const preparedBundleTools = await prepareEmbeddedAttemptBundleTools({
       agentDir,
       attempt: params,
@@ -595,131 +579,24 @@ export async function runEmbeddedAttempt(
     let cleanupYieldAborted = false;
     let repairedRejectedThinkingReplay = false;
     try {
-      const trustedSessionFileSnapshot =
-        await sessionLockController.readTrustedCurrentSessionFileSnapshot();
-      const repairReport = await repairSessionFileIfNeeded({
-        sessionFile: params.sessionFile,
-        trustedSnapshot: trustedSessionFileSnapshot,
-        debug: (message) => log.debug(message),
-        warn: (message) => log.warn(message),
-      });
-      if (
-        repairReport.validatedSnapshot &&
-        !sessionLockController.publishValidatedSessionFileSnapshot(repairReport.validatedSnapshot)
-      ) {
-        invalidateSessionFileRepairCache(params.sessionFile);
-      }
-      const transcriptState = await resolveExistingAttemptTranscriptState({
-        agentId: sessionAgentId,
-        config: params.config,
-        sessionFile: params.sessionFile,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        sessionTarget: params.sessionTarget,
-      });
-
-      const transcriptPolicy = resolveAttemptTranscriptPolicy({
-        runtimePlan: params.runtimePlan,
-        runtimePlanModelContext,
-        provider: params.provider,
-        modelId: params.modelId,
-        config: params.config,
-        env: process.env,
-      });
-      const isOpenAIResponsesApi =
-        params.model.api === "openai-responses" ||
-        params.model.api === "azure-openai-responses" ||
-        params.model.api === "openai-chatgpt-responses";
-
-      await prewarmSessionFile(params.sessionFile);
-      const preparedUserTurnMessage = params.skipPreparedUserTurnMessage
-        ? undefined
-        : await params.userTurnTranscriptRecorder?.resolveMessage();
-      sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
-        agentId: sessionAgentId,
-        sessionKey: params.sessionKey,
-        config: params.config,
-        contextWindowTokens: params.contextTokenBudget,
-        inputProvenance: params.inputProvenance,
-        preparedUserTurnMessage,
-        allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
-        missingToolResultText:
-          params.model.api === "openai-responses" ||
-          params.model.api === "azure-openai-responses" ||
-          params.model.api === "openai-chatgpt-responses"
-            ? "aborted"
-            : undefined,
-        allowedToolNames: replayAllowedToolNames,
-        suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
-        suppressTranscriptOnlyAssistantPersistence:
-          params.suppressTranscriptOnlyAssistantPersistence,
-        suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
-        onMessagePersisted: () => {
-          sessionLockController.refreshAfterOwnedSessionWrite();
+      const preparedSessionManager = await prepareEmbeddedAttemptSessionManager({
+        attempt: params,
+        activeContextEngine,
+        agentDir,
+        effectiveCwd,
+        effectiveWorkspace,
+        onSessionManagerCreated: (createdSessionManager) => {
+          sessionManager = createdSessionManager;
         },
-        withCompactionPersistence: (append, validateAppend) =>
-          sessionLockController.withOwnedSessionFileWrite(append, validateAppend),
-        onUserMessagePersisted: (message) => {
-          params.onUserMessagePersisted?.(message);
-        },
-        onUserMessageBlocked: () => {
-          params.userTurnTranscriptRecorder?.markBlocked();
-        },
-        onAssistantErrorMessagePersisted: (message) => {
-          params.onAssistantErrorMessagePersisted?.(message);
-        },
+        replayAllowedToolNames,
+        resolveActiveContextEnginePluginId,
+        sessionAgentId,
+        sessionLockController,
+        withOwnedSessionWriteLock,
       });
-      trackSessionManagerAccess(params.sessionFile);
-
-      await withOwnedSessionWriteLock(async () => {
-        await runAttemptContextEngineBootstrap({
-          hadSessionFile: transcriptState.hasBootstrapTranscriptState,
-          contextEngine: activeContextEngine,
-          sessionId: params.sessionId,
-          sessionKey: params.sessionKey,
-          sessionTarget: params.sessionTarget,
-          sessionFile: params.sessionFile,
-          sessionManager,
-          runtimeContext: buildAfterTurnRuntimeContext({
-            attempt: params,
-            workspaceDir: effectiveWorkspace,
-            cwd: effectiveCwd,
-            agentDir,
-            tokenBudget: params.contextTokenBudget,
-            activeAgentId: sessionAgentId,
-            contextEnginePluginId: resolveActiveContextEnginePluginId(),
-          }),
-          contextEngineHostSupport: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
-          providerId: params.provider,
-          requestedModelId: params.requestedModelId,
-          modelId: params.modelId,
-          fallbackReason: params.fallbackReason,
-          degradedReason: params.degradedReason,
-          runMaintenance: async (contextParams) =>
-            await runContextEngineMaintenance({
-              contextEngine: contextParams.contextEngine as never,
-              sessionId: contextParams.sessionId,
-              sessionKey: contextParams.sessionKey,
-              sessionTarget: contextParams.sessionTarget,
-              sessionFile: contextParams.sessionFile,
-              reason: contextParams.reason,
-              sessionManager: contextParams.sessionManager as never,
-              runtimeContext: contextParams.runtimeContext,
-              runtimeSettings: contextParams.runtimeSettings,
-              config: params.config,
-              agentId: sessionAgentId,
-            }),
-          warn: (message) => log.warn(message),
-        });
-
-        await prepareSessionManagerForRun({
-          sessionManager,
-          sessionFile: params.sessionFile,
-          hadSessionFile: transcriptState.hasFileTranscriptState,
-          sessionId: params.sessionId,
-          cwd: effectiveCwd,
-        });
-      });
+      const { isOpenAIResponsesApi, preparedUserTurnMessage, transcriptPolicy } =
+        preparedSessionManager;
+      sessionManager = preparedSessionManager.sessionManager;
 
       const settingsManager = createPreparedEmbeddedAgentSettingsManager({
         cwd: effectiveCwd,
