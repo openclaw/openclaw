@@ -13,10 +13,10 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import {
   hasCompletedSourceReplyDeliveryEvidence,
+  hasCompletedTerminalDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
-  resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import {
@@ -140,6 +140,7 @@ import {
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
+import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -1527,89 +1528,38 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  const restartRecoveryDeliveryRunId = crypto.randomUUID();
-  let trackedRestartRecoveryDeliveryContext = false;
-  const persistRestartRecoveryDeliveryContext = async (): Promise<void> => {
-    if (!sessionKey || !storePath) {
-      return;
-    }
-    const entry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;
-    const deliveryContext = resolveReplyRunDeliveryContext({
-      cfg,
-      sessionCtx,
-      sessionEntry: entry,
-      sessionKey,
-      runtimePolicySessionKey,
-      opts,
-    });
-    if (!deliveryContext) {
-      return;
-    }
-    const updatedAt = Date.now();
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: deliveryContext,
-      restartRecoveryDeliveryRunId,
-      updatedAt,
-    };
-    const persisted = await updateSessionEntry(
-      {
-        storePath,
-        sessionKey,
-      },
-      async (current) =>
-        current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
-          ? patch
-          : null,
-    );
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
+  const {
+    clear: clearRestartRecoveryDeliveryClaim,
+    isArmed: isRestartRecoveryArmed,
+    persist: persistRestartRecoveryDeliveryClaim,
+  } = createReplyRestartRecoveryClaimController({
+    admittedRunId: sessionCtx.MessageSid,
+    getEntry: () =>
+      sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
+    isRestartAbort: () =>
+      replyOperation.result?.kind === "aborted" &&
+      replyOperation.result.code === "aborted_for_restart",
+    resolveDeliveryContext: (entry) =>
+      sessionKey
+        ? resolveReplyRunDeliveryContext({
+            cfg,
+            sessionCtx,
+            sessionEntry: entry,
+            sessionKey,
+            runtimePolicySessionKey,
+            opts,
+          })
+        : undefined,
+    sessionId: replyOperation.sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+    setEntry: (entry) => {
+      activeSessionEntry = entry;
+      if (activeSessionStore && sessionKey) {
+        activeSessionStore[sessionKey] = entry;
       }
-      trackedRestartRecoveryDeliveryContext =
-        persisted.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId;
-    }
-  };
-  const clearRestartRecoveryDeliveryContext = async (): Promise<void> => {
-    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
-      return;
-    }
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: undefined,
-      restartRecoveryDeliveryRunId: undefined,
-      updatedAt: Date.now(),
-    };
-    const persisted = await updateSessionEntry(
-      {
-        storePath,
-        sessionKey,
-      },
-      async (current) =>
-        current.sessionId === replyOperation.sessionId &&
-        current.abortedLastRun !== true &&
-        current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
-          ? patch
-          : null,
-    );
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
-      }
-    }
-  };
-  const isRestartRecoveryArmed = (): boolean => {
-    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
-      return false;
-    }
-    const persisted = loadSessionEntry({
-      sessionKey,
-      storePath,
-      clone: false,
-      hydrateSkillPromptRefs: false,
-    });
-    return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
-  };
+    },
+    ...(storePath ? { storePath } : {}),
+  });
   type SessionResetOptions = {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;
@@ -1750,7 +1700,7 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
-    await persistRestartRecoveryDeliveryContext();
+    await persistRestartRecoveryDeliveryClaim();
     // Adoption marks run start and must never be spool-replayed (would re-run tools).
     // Suppressed delivery has no recovery state to persist; crashed suppressed runs die
     // silently. When a delivery context is resolvable, this still runs after its persist.
@@ -2011,8 +1961,6 @@ export async function runReplyAgent(params: {
     const committedMessagingToolSourceReplyDelivery =
       hasCommittedSourceReplyDeliveryEvidence(runResult);
     const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
-    const hasExplicitSourceReplyCompletion =
-      resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) !== undefined;
     const visibleOutboundDelivery = hasVisibleOutboundDeliveryEvidence(runResult);
     const successfulSideEffectDelivery =
       successfulSourceReplyDelivery ||
@@ -2023,10 +1971,7 @@ export async function runReplyAgent(params: {
       hasSuccessfulTerminalSourceReplyDelivery({
         blockReplyPipeline,
         directlySentBlockPayloads,
-      }) ||
-      completedSourceReplyDelivery ||
-      (!hasExplicitSourceReplyCompletion && visibleOutboundDelivery) ||
-      runResult.didSendDeterministicApprovalPrompt === true;
+      }) || hasCompletedTerminalDeliveryEvidence(runResult);
     // Compaction notices are progress, not a terminal reply. Dispatcher-backed
     // delivery settles after this run returns, so it cannot prove turn completion here.
     const shouldDeliverTerminalFailure = Boolean(
@@ -2825,7 +2770,7 @@ export async function runReplyAgent(params: {
     throw error;
   } finally {
     try {
-      await clearRestartRecoveryDeliveryContext();
+      await clearRestartRecoveryDeliveryClaim();
     } catch (error) {
       logVerbose(
         `failed to clear restart recovery delivery context for ${sessionKey ?? "unknown"}: ${String(

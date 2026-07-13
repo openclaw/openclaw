@@ -296,7 +296,11 @@ describe("GatewayClient", () => {
         helloCount += 1;
         if (helloCount === 1) {
           // Keep the real reconnect lifecycle fast without changing production defaults.
-          (client as unknown as { backoffMs: number }).backoffMs = 10;
+          (
+            client as unknown as {
+              reconnectSupervisor: { reset(initialMs?: number): void };
+            }
+          ).reconnectSupervisor.reset(10);
           resolveFirstHello();
           return;
         }

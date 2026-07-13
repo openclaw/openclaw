@@ -20,7 +20,6 @@ import { coerceNodeInvokePayload, buildNodeInvokeResultParams } from "./invoke.j
 import { prepareNodeHostRuntime, type NodeHostInventory } from "./runtime.js";
 
 export { buildNodeInvokeResultParams };
-export { buildNodeEventParams } from "./invoke.js";
 
 type NodeHostRunOptions = {
   gatewayHost: string;

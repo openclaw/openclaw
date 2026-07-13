@@ -46,7 +46,7 @@ const MODEL_DEFINITION_CONFIG_KEYS = [
 ] as const satisfies readonly (keyof ModelDefinitionConfig)[];
 
 /** Projection of a provider catalog result into provider config entries. */
-export type ProviderCatalogResultProjection =
+type ProviderCatalogResultProjection =
   | { kind: "provider"; provider: ModelProviderConfig }
   | { kind: "providers"; providers: Array<[string, ModelProviderConfig]> }
   | { kind: "empty" };

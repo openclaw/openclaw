@@ -531,12 +531,13 @@ describe("parseDurationMs", () => {
     expect(parseDurationMs("500ms")).toBe(500);
     expect(parseDurationMs("30s")).toBe(30_000);
     expect(parseDurationMs("1.5h")).toBe(5_400_000);
+    expect(parseDurationMs("1h30m")).toBe(5_400_000);
     expect(parseDurationMs("1d")).toBe(86_400_000);
   });
 
   it("rejects non-positive and malformed durations", () => {
     expect(parseDurationMs("0s")).toBeNull();
-    expect(parseDurationMs("0.5ms")).toBeNull();
+    expect(parseDurationMs("0.5ms")).toBe(1);
     expect(parseDurationMs("0.001ms")).toBeNull();
     expect(parseDurationMs("-5s")).toBeNull();
     expect(parseDurationMs("abc")).toBeNull();

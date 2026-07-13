@@ -217,10 +217,11 @@ export const ko: TranslationMap = {
   lazyView: {
     loadingTitle: "패널 로드 중",
     errorTitle: "패널을 로드하지 못했습니다",
-    errorSubtitle:
-      "최신 Control UI 번들을 로드하려면 페이지를 새로고침하거나, 네트워크 요청이 실패한 경우 다시 시도하세요.",
+    genericSubtitle: "이 패널을 불러오는 중에 문제가 발생했습니다.",
+    staleTitle: "새 버전을 사용할 수 있습니다",
+    staleSubtitle:
+      "OpenClaw가 백그라운드에서 업데이트되었습니다. 최신 패널을 사용하려면 새로고침하세요.",
     retry: "다시 시도",
-    unknownError: "알 수 없는 모듈 로드 오류입니다.",
   },
   nodes: {
     pairing: {
@@ -395,6 +396,9 @@ export const ko: TranslationMap = {
     working: "작업 중…",
     ready: "채팅할 준비가 되었습니다",
     whatCanAgentDo: "{name}님은 무엇을 할 수 있나요?",
+    getHelp: "도움말 보기",
+    discord: "Discord 커뮤니티",
+    viewChangelog: "변경 로그 보기",
   },
   newSession: {
     title: "새 세션",
@@ -563,6 +567,7 @@ export const ko: TranslationMap = {
     groupBy: "그룹화 기준",
     groupByNone: "없음",
     groupByCategory: "사용자 지정 그룹",
+    showCronSessions: "cron 세션 표시",
     groupByChannel: "채널",
     groupByKind: "종류",
     groupByAgent: "에이전트",
@@ -1197,6 +1202,10 @@ export const ko: TranslationMap = {
         "하여 브라우저 로컬 tweakcn 테마를 하나 추가하세요. tweakcn에서 Share를 사용하고 복사된 링크를 여기에 붙여넣으세요.",
       textSize: "텍스트 크기",
     },
+    chatPrefs: {
+      title: "채팅",
+      hint: "브라우저 로컬 채팅 환경설정입니다.",
+    },
     connection: {
       title: "연결",
       gateway: "Gateway",
@@ -1721,8 +1730,6 @@ export const ko: TranslationMap = {
     removedRestart:
       "{name}이(가) 제거되었습니다. 변경 사항을 적용하려면 Gateway를 다시 시작해야 합니다.",
     verifiedSource: "인증된 출처",
-    menuLabel: "{name} 작업",
-    menuDetails: "세부 정보 보기",
     enableAction: "활성화",
     disableAction: "비활성화",
     working: "작업 중…",
@@ -1858,6 +1865,10 @@ export const ko: TranslationMap = {
       useCurrentChat: "현재 채팅 사용",
       useCurrentChatAria: "수정 요청에 현재 채팅 사용",
       useCurrentChatTooltip: "수정 요청을 제안의 워크숍 세션 대신 현재 채팅 세션으로 보냅니다.",
+      selfLearning: "자기 학습",
+      selfLearningAria: "자기 학습 스킬 제안 전환",
+      selfLearningTooltip:
+        "수정 사항과 완료된 주요 작업을 포착하고 검토하여 보류 중인 Skill 제안으로 만듭니다. 추가 백그라운드 토큰을 사용하며, 초안은 이 보드에 보류 중인 제안으로 등록됩니다.",
       view: "워크숍 보기",
       board: "보드",
       today: "오늘",
@@ -1936,6 +1947,14 @@ export const ko: TranslationMap = {
       noProposalsTitle: "아직 제안이 없습니다",
       noProposalsBody: "{agent}이(가) 아직 스킬 제안을 작성하지 않았습니다.",
       noProposalsFooter: "새 제안은 검토를 위해 여기에 표시됩니다.",
+    },
+    selfLearning: {
+      pitchTitle: "자기 학습 켜기",
+      pitchBody:
+        "OpenClaw는 수정 사항과 완료된 주요 실행을 검토한 후 이 보드에 게시할 Skill 제안 초안을 작성합니다. 추가 백그라운드 토큰을 사용하며, 초안은 보류 중인 제안으로 등록됩니다.",
+      enable: "자기 학습 활성화",
+      enabling: "활성화 중…",
+      updateError: "자기 학습 설정을 업데이트할 수 없습니다.",
     },
     today: {
       emptyTitle: "오늘 대기 중인 항목이 없습니다",
@@ -3060,24 +3079,16 @@ export const ko: TranslationMap = {
       rateLimited:
         "GitHub API 속도 제한에 도달했습니다. 제한이 재설정될 때까지 Pull request 상태가 최신이 아닐 수 있습니다.",
     },
-    refreshTitle: "채팅 데이터 새로고침",
-    settings: "채팅 설정",
     usageRemaining: "남은 사용량",
-    voiceSettings: "음성",
-    thinkingToggle: "어시스턴트 생각/작업 출력 전환",
-    toolCallsToggle: "도구 호출 및 도구 결과 전환",
-    commentaryToggle: "최종 답변 후에도 해설 유지",
-    commentaryLabel: "해설",
-    autoScrollMode: "자동 스크롤 모드",
-    autoScrollAlways: "항상",
-    autoScrollNearBottom: "하단 근처",
-    autoScrollOff: "끔",
+    view: {
+      menu: "보기",
+      reasoning: "추론",
+      toolCalls: "도구 호출",
+      commentary: "해설 유지",
+    },
     sendShortcut: "전송 단축키",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Cron 세션 숨기기",
-    showCronSessions: "Cron 세션 표시",
-    showCronSessionsHidden: "Cron 세션 표시({count}개 숨김)",
     onboardingDisabled: "설정 중에는 비활성화됨",
     gatewayStatus: "Gateway 상태: {status}",
     commandPaletteTitle: "검색하거나 이동… (⌘K)",
@@ -3267,7 +3278,6 @@ export const ko: TranslationMap = {
       },
       takePhoto: "사진 촬영",
       dismissVoiceInputError: "음성 입력 오류 닫기",
-      loadingMicrophones: "마이크를 불러오는 중…",
       microphoneAccessFailed: "마이크 입력에 액세스할 수 없습니다.",
       microphoneBusy: "마이크 입력이 사용 중이거나 브라우저에서 사용할 수 없습니다.",
       microphoneFallback: "마이크 {number}",
@@ -3287,19 +3297,6 @@ export const ko: TranslationMap = {
       stillListening: "계속 듣는 중",
       stopVoiceInput: "음성 입력 중지",
       systemDefaultMicrophone: "시스템 기본값",
-      talkAdvancedSettingsRequiresAdmin: "고급 설정에는 관리자 권한이 필요합니다",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "고급 Talk 설정에는 operator.admin 권한이 필요합니다.",
-      talkDefault: "기본값",
-      talkModel: "모델",
-      talkModelAuto: "자동",
-      talkMoreInSettings: "설정에서 더 보기",
-      talkSensitivity: "민감도",
-      talkSensitivityHigh: "높음",
-      talkSensitivityLow: "낮음",
-      talkSensitivityMedium: "보통",
-      talkVoice: "음성",
-      voiceOptions: "음성 옵션",
       voiceTranscript: "음성 기록",
     },
     selectors: {
@@ -3384,6 +3381,8 @@ export const ko: TranslationMap = {
       empty: "이 에이전트에는 아직 백그라운드 작업이 없습니다.",
       running: "실행 중({count})",
       finished: "완료됨({count})",
+      statusRunningOne: "실행 중인 작업 1개",
+      statusRunningMany: "실행 중인 작업 {count}개",
       stopTask: "{title} 중지",
       viewTranscript: "트랜스크립트 보기",
       toolUseOne: "도구 사용 1회",
@@ -3541,7 +3540,6 @@ export const ko: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "스케줄러",
       tasks: "작업",
       failing: "실패 중",
       nextWake: "다음 실행",
@@ -3566,7 +3564,6 @@ export const ko: TranslationMap = {
       clone: "복제",
       remove: "제거",
       more: "추가 작업",
-      history: "기록",
     },
     runNotStarted: {
       notDue: "이 자동화는 아직 실행할 시간이 아닙니다.",

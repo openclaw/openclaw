@@ -15,9 +15,9 @@ import {
 import type { HookEligibilityContext, HookEntry, HookInstallSpec } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
-export type HookStatusConfigCheck = RequirementConfigCheck;
+type HookStatusConfigCheck = RequirementConfigCheck;
 
-export type HookInstallOption = {
+type HookInstallOption = {
   id: string;
   kind: HookInstallSpec["kind"];
   label: string;

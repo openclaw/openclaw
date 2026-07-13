@@ -28,11 +28,31 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function createRuntimeConfigStub(options?: {
+  sourceConfig?: Record<string, unknown>;
+  patch?: ReturnType<typeof vi.fn>;
+}) {
+  return {
+    state: {
+      configSnapshot: options?.sourceConfig
+        ? { hash: "hash-1", sourceConfig: options.sourceConfig }
+        : null,
+      configLoading: false,
+      lastError: null,
+    },
+    ensureLoaded: vi.fn(async () => undefined),
+    refresh: vi.fn(async () => undefined),
+    patch: options?.patch ?? vi.fn(async () => true),
+    subscribe: () => () => undefined,
+  };
+}
+
 function createContext(
   request: ReturnType<typeof vi.fn>,
   options?: {
     gatewaySubscribe?: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => () => void;
     sessions?: ApplicationContext["sessions"];
+    runtimeConfig?: ReturnType<typeof createRuntimeConfigStub>;
   },
 ): ApplicationContext {
   const client = { request } as unknown as GatewayBrowserClient;
@@ -66,6 +86,7 @@ function createContext(
     },
     sessions: options?.sessions ?? { state: { result: null, loading: false } },
     skillWorkshopRevision: { prepare: vi.fn() },
+    runtimeConfig: options?.runtimeConfig ?? createRuntimeConfigStub(),
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
 }
@@ -295,5 +316,83 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(oldContext.navigate).not.toHaveBeenCalled();
     expect(newContext.skillWorkshopRevision.prepare).not.toHaveBeenCalled();
     expect(newContext.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe("SkillWorkshopPage self-learning toggle", () => {
+  function createLoadedPage(runtimeConfig: ReturnType<typeof createRuntimeConfigStub>) {
+    const loadedState = createSkillWorkshopState();
+    loadedState.skillWorkshopAgentId = "research";
+    loadedState.skillWorkshopLoaded = true;
+    const page = document.createElement(
+      "openclaw-skill-workshop-page",
+    ) as SkillWorkshopPageTestElement;
+    page.data = skillWorkshopRouteData(loadedState);
+    page.context = createContext(
+      vi.fn(async () => ({})),
+      { runtimeConfig },
+    );
+    document.body.append(page);
+    return page;
+  }
+
+  it("reflects the config value in the header toggle and hides it without a snapshot", async () => {
+    const enabledPage = createLoadedPage(
+      createRuntimeConfigStub({
+        sourceConfig: { skills: { workshop: { autonomous: { enabled: true } } } },
+      }),
+    );
+    await enabledPage.updateComplete;
+    const toggle = enabledPage.querySelector<HTMLInputElement>(
+      ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+    );
+    expect(toggle?.checked).toBe(true);
+    document.body.replaceChildren();
+
+    const noSnapshotPage = createLoadedPage(createRuntimeConfigStub());
+    await noSnapshotPage.updateComplete;
+    expect(
+      noSnapshotPage.querySelector(
+        ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+      ),
+    ).toBeNull();
+  });
+
+  it("enables self-learning from the empty-state pitch via a config merge patch", async () => {
+    const patch = vi.fn(async () => true);
+    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {}, patch });
+    const page = createLoadedPage(runtimeConfig);
+    await page.updateComplete;
+
+    const button = page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button");
+    expect(button).not.toBeNull();
+    button?.click();
+
+    await vi.waitFor(() =>
+      expect(patch).toHaveBeenCalledWith({
+        raw: { skills: { workshop: { autonomous: { enabled: true } } } },
+        note: "Enable Skill Workshop self-learning",
+      }),
+    );
+    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
+  });
+
+  it("surfaces a patch failure and keeps the toggle off", async () => {
+    const patch = vi.fn(async () => false);
+    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {}, patch });
+    const page = createLoadedPage(runtimeConfig);
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector(".sw-error")?.textContent).toContain(
+        "Could not update the self-learning setting.",
+      ),
+    );
+    expect(runtimeConfig.refresh).not.toHaveBeenCalled();
+    const toggle = page.querySelector<HTMLInputElement>(
+      ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+    );
+    expect(toggle?.checked).toBe(false);
   });
 });
