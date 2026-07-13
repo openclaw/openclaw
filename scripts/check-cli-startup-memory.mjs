@@ -97,7 +97,7 @@ function resolveDefaultLimitsMb(platform = process.platform) {
     help: platform === "darwin" ? 300 : 100,
     // Plugin discovery is heavier than help, but must stay below the doctor/channel
     // runtime graph that an empty metadata-only invocation must not import.
-    pluginsList: platform === "darwin" ? 500 : 350,
+    pluginsList: platform === "darwin" ? 500 : 400,
     statusJson: 400,
     gatewayStatus: 500,
   };

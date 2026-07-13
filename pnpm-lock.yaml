@@ -109,12 +109,18 @@ importers:
       croner:
         specifier: 10.0.1
         version: 10.0.1
+      defu:
+        specifier: 6.1.5
+        version: 6.1.5
       diff:
         specifier: 9.0.0
         version: 9.0.0
       dotenv:
         specifier: 17.4.2
         version: 17.4.2
+      entities:
+        specifier: 8.0.0
+        version: 8.0.0
       express:
         specifier: 5.2.1
         version: 5.2.1
@@ -1721,6 +1727,9 @@ importers:
       commander:
         specifier: 15.0.0
         version: 15.0.0
+      defu:
+        specifier: 6.1.5
+        version: 6.1.5
       typebox:
         specifier: 1.3.3
         version: 1.3.3

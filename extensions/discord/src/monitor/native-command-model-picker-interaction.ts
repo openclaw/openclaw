@@ -302,7 +302,7 @@ function resolveDiscordModelPickerSubmissionRuntime(params: {
   );
 }
 
-export async function handleDiscordModelPickerInteraction(params: {
+async function handleDiscordModelPickerInteraction(params: {
   interaction: ButtonInteraction | StringSelectMenuInteraction;
   data: ComponentData;
   ctx: DiscordModelPickerContext;
