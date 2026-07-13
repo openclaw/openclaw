@@ -28,6 +28,8 @@ import {
   deferGatewayRestartUntilIdle,
   type GatewayRestartEmitter,
   type GatewayRestartIntent,
+  type RestartAuditEvent,
+  type RestartAuditInfo,
   type RestartDeferralHandle,
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
@@ -45,7 +47,10 @@ import {
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
 import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
-import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
+import {
+  type ActiveTaskRestartBlocker,
+  formatActiveTaskRestartBlocker,
+} from "../tasks/task-restart-blocker.js";
 import { isRecord } from "../utils.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { ChannelKind } from "./config-reload-plan.js";
@@ -473,14 +478,58 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
     return details;
   };
-  const formatTaskBlockers = () => {
+  const formatDurableTaskRestartBlocker = (task: ActiveTaskRestartBlocker) => {
+    const details = [
+      `taskId=${task.taskId}`,
+      task.runId ? `runId=${task.runId}` : null,
+      `status=${task.status}`,
+      `runtime=${task.runtime}`,
+      task.label ? `label=${task.label}` : null,
+    ].filter((value): value is string => Boolean(value));
+    return details.join(" ");
+  };
+  const formatTaskBlockers = (opts: { includeTitle?: boolean } = {}) => {
     const blockers = getInspectableActiveTaskRestartBlockers();
     if (blockers.length === 0) {
       return null;
     }
-    const shown = blockers.slice(0, 8).map(formatActiveTaskRestartBlocker);
+    const formatter =
+      opts.includeTitle === false
+        ? formatDurableTaskRestartBlocker
+        : formatActiveTaskRestartBlocker;
+    const shown = blockers.slice(0, 8).map(formatter);
     const omitted = blockers.length - shown.length;
     return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
+  };
+  const buildConfigRestartAudit = (
+    plan: GatewayReloadPlan,
+    active: ReturnType<typeof getActiveCounts>,
+  ): RestartAuditEvent => {
+    const taskBlockers = formatTaskBlockers({ includeTitle: false });
+    const activeDetails = formatActiveDetails(active);
+    const audit: RestartAuditInfo = {
+      source: "config_reload",
+      changedPaths: plan.changedPaths,
+      context: {
+        restartReasons: plan.restartReasons,
+        hotReasons: plan.hotReasons,
+        reloadHooks: plan.reloadHooks,
+        reloadPlugins: plan.reloadPlugins,
+        restartChannels: [...plan.restartChannels],
+      },
+      preflight: {
+        active,
+        activeDetails,
+        ...(taskBlockers ? { taskBlockers } : {}),
+      },
+    };
+    return {
+      eventType: "scheduled",
+      reason: "config.reload",
+      source: "config_reload",
+      audit,
+      preflight: audit.preflight,
+    };
   };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
@@ -1210,6 +1259,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   const scheduleRestartEmissionRetry = (retry: {
     reason: string;
     intent?: GatewayRestartIntent;
+    auditEvent?: RestartAuditEvent;
     requestGeneration: number;
     prepareForEmit?: () => Promise<boolean>;
   }) => {
@@ -1235,7 +1285,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           scheduleRestartEmissionRetry(retry);
           return;
         }
-        const emitResult = params.requestRecoveryRestart?.(retry.reason, retry.intent);
+        const emitResult = params.requestRecoveryRestart?.(
+          retry.reason,
+          retry.intent,
+          retry.auditEvent,
+        );
         if (emitResult && emitResult.status !== "failed") {
           markRestartEmissionSettled();
         }
@@ -1362,6 +1416,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     };
 
     const active = getActiveCounts();
+    const auditEvent = buildConfigRestartAudit(plan, active);
 
     if (active.totalActive > 0 || options?.prepareRuntimeConfig) {
       // Avoid spinning up duplicate polling loops from repeated config changes.
@@ -1408,7 +1463,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
               failedEmission = { reason: resolvedReason, intent };
               return { status: "failed" };
             }
-            const emitResult = requestRecoveryRestart(resolvedReason, intent);
+            const emitResult = requestRecoveryRestart(resolvedReason, intent, auditEvent);
             if (emitResult.status !== "failed") {
               markRestartEmissionSettled();
             }
@@ -1427,6 +1482,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             params.logReload.warn("gateway restart recovery emission failed; retrying");
             scheduleRestartEmissionRetry({
               ...failedEmission,
+              auditEvent,
               requestGeneration,
               prepareForEmit,
             });
@@ -1475,7 +1531,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     // The managed reloader owns independent root admission until onRestart
     // returns. Extend that fence across signal delivery until the run loop
     // atomically promotes it to one-way restart drain.
-    const emitResult = requestRecoveryRestart(restartReason);
+    const emitResult = requestRecoveryRestart(restartReason, undefined, auditEvent);
     if (emitResult.status !== "failed") {
       markRestartEmissionSettled();
     }
@@ -1484,6 +1540,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       if (restartRecoveryAvailable) {
         scheduleRestartEmissionRetry({
           reason: restartReason,
+          auditEvent,
           requestGeneration,
           prepareForEmit,
         });

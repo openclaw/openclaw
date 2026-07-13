@@ -1,4 +1,7 @@
 // Covers gateway restart process and supervisor paths.
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv, withEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
@@ -29,6 +32,7 @@ vi.mock("./ports-lsof.js", () => ({
 }));
 
 vi.mock("../config/paths.js", () => ({
+  STATE_DIR: "/tmp/openclaw-state",
   resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
   resolveStateDir: (env: NodeJS.ProcessEnv = process.env) =>
     env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
@@ -36,7 +40,14 @@ vi.mock("../config/paths.js", () => ({
 
 const { testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
-const { triggerOpenClawRestart } = await import("./restart.js");
+const {
+  testing: restartTesting,
+  scheduleGatewaySigusr1Restart,
+  triggerOpenClawRestart,
+} = await import("./restart.js");
+const { requestSafeGatewayRestart } = await import("./restart-coordinator.js");
+const { closeOpenClawStateDatabase, openOpenClawStateDatabase } =
+  await import("../state/openclaw-state-db.js");
 
 let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
@@ -74,6 +85,198 @@ function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
   }
   return call as [unknown, unknown, unknown];
 }
+
+describe("restart diagnostics", () => {
+  it("redacts session keys in restart warning fields", () => {
+    const redacted = restartTesting.formatRestartSessionKeyForLog(
+      "agent:main:discord:channel:1515157916540211291",
+    );
+
+    expect(redacted).toMatch(/^<redacted:[a-f0-9]{12}>$/);
+    expect(redacted).not.toContain("discord");
+    expect(redacted).not.toContain("1515157916540211291");
+    expect(restartTesting.formatRestartSessionKeyForLog(undefined)).toBe("unspecified");
+  });
+
+  it("keeps truncated restart audit payloads valid JSON", () => {
+    const serialized = restartTesting.serializeRestartAuditJson({
+      context: `quote-heavy:${'\\"'.repeat(15_000)}`,
+    });
+
+    expect(serialized).not.toBeNull();
+    expect(serialized?.length).toBeLessThanOrEqual(20_000);
+    expect(() => JSON.parse(serialized ?? "")).not.toThrow();
+    expect(JSON.parse(serialized ?? "")).toEqual(
+      expect.objectContaining({
+        truncated: true,
+        originalLength: expect.any(Number),
+        preview: expect.any(String),
+      }),
+    );
+  });
+
+  it("redacts session keys in durable restart audit storage", () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-audit-test-"));
+    const sessionKey = "agent:main:discord:channel:1515157916540211291";
+    try {
+      withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+        const result = scheduleGatewaySigusr1Restart({
+          delayMs: 60_000,
+          reason: "model supplied private restart explanation",
+          sessionKey,
+          skipCooldown: true,
+          audit: {
+            source: "gateway.tool.restart",
+            sessionKey,
+            context: {
+              nestedSessionKey: sessionKey,
+              token: {
+                value: "secret-token-value",
+                nested: ["secret-token-in-array"],
+              },
+              credentials: [
+                {
+                  password: "nested-password-value",
+                },
+              ],
+            },
+            preflight: {
+              requesterSessionKey: sessionKey,
+              authorization: {
+                scheme: "Bearer",
+                value: "secret-authorization-value",
+              },
+            },
+          },
+        });
+
+        expect(result.ok).toBe(true);
+        const { db } = openOpenClawStateDatabase({ env: process.env });
+        const row = db
+          .prepare(
+            "SELECT reason, source, session_key, audit_json, preflight_json FROM gateway_restart_audit ORDER BY created_at DESC LIMIT 1",
+          )
+          .get() as {
+          reason: string | null;
+          source: string | null;
+          session_key: string | null;
+          audit_json: string | null;
+          preflight_json: string | null;
+        };
+        closeOpenClawStateDatabase();
+        restartTesting.resetSigusr1State();
+
+        expect(row.reason).toBe("gateway.tool.restart");
+        expect(row.source).toBe("gateway.tool.restart");
+        expect(row.session_key).toMatch(/^<redacted:[a-f0-9]{12}>$/);
+        expect(row.audit_json).toContain("<redacted:");
+        expect(row.audit_json).toContain('"token":"<redacted>"');
+        expect(row.audit_json).toContain('"credentials":"<redacted>"');
+        expect(row.preflight_json).toContain("<redacted:");
+        expect(row.preflight_json).toContain('"authorization":"<redacted>"');
+        expect(JSON.stringify(row)).not.toContain("1515157916540211291");
+        expect(JSON.stringify(row)).not.toContain("secret-token-value");
+        expect(JSON.stringify(row)).not.toContain("secret-token-in-array");
+        expect(JSON.stringify(row)).not.toContain("nested-password-value");
+        expect(JSON.stringify(row)).not.toContain("secret-authorization-value");
+        expect(JSON.stringify(row)).not.toContain("model supplied private restart explanation");
+      });
+    } finally {
+      restartTesting.resetSigusr1State();
+      closeOpenClawStateDatabase();
+      rmSync(stateDir, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps active task titles out of durable restart audit rows", () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-audit-task-"));
+    const taskTitle = "Investigate private customer outage prompt";
+    try {
+      withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+        const result = requestSafeGatewayRestart({
+          delayMs: 60_000,
+          reason: "test restart audit task title redaction",
+          inspect: {
+            getQueueSize: () => 0,
+            getPendingReplies: () => 0,
+            getEmbeddedRuns: () => 0,
+            getCronRuns: () => 0,
+            getActiveTasks: () => 1,
+            getTaskBlockers: () => [
+              {
+                taskId: "task-privacy",
+                runId: "run-privacy",
+                status: "running",
+                runtime: "acp",
+                label: "investigation",
+                title: taskTitle,
+              },
+            ],
+          },
+        });
+
+        expect(result.preflight.summary).toContain(taskTitle);
+        const { db } = openOpenClawStateDatabase({ env: process.env });
+        const row = db
+          .prepare(
+            "SELECT audit_json, preflight_json FROM gateway_restart_audit ORDER BY created_at DESC LIMIT 1",
+          )
+          .get() as {
+          audit_json: string | null;
+          preflight_json: string | null;
+        };
+        closeOpenClawStateDatabase();
+        restartTesting.resetSigusr1State();
+
+        expect(row.audit_json).toContain("task-privacy");
+        expect(row.preflight_json).toContain("task-privacy");
+        expect(JSON.stringify(row)).not.toContain(taskTitle);
+      });
+    } finally {
+      restartTesting.resetSigusr1State();
+      closeOpenClawStateDatabase();
+      rmSync(stateDir, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds durable restart audit retention to the newest rows", () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-audit-retention-"));
+    const maxRows = restartTesting.gatewayRestartAuditMaxRows;
+    const baseNowMs = 1_700_000_000_000;
+    let nowMs = baseNowMs;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs++);
+    try {
+      withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+        for (let index = 0; index < maxRows + 3; index += 1) {
+          const result = scheduleGatewaySigusr1Restart({
+            delayMs: 60_000,
+            reason: `retention-${index}`,
+            skipCooldown: true,
+            audit: { source: "gateway.tool.restart" },
+          });
+          expect(result.ok).toBe(true);
+        }
+
+        const { db } = openOpenClawStateDatabase({ env: process.env });
+        const rows = db
+          .prepare(
+            "SELECT created_at FROM gateway_restart_audit ORDER BY created_at ASC, event_key ASC",
+          )
+          .all() as Array<{ created_at: number }>;
+        closeOpenClawStateDatabase();
+        restartTesting.resetSigusr1State();
+
+        expect(rows).toHaveLength(maxRows);
+        expect(rows[0]?.created_at).toBeGreaterThanOrEqual(baseNowMs + 3);
+        expect(rows.at(-1)?.created_at).toBeGreaterThan(rows[0]?.created_at ?? 0);
+      });
+    } finally {
+      restartTesting.resetSigusr1State();
+      closeOpenClawStateDatabase();
+      rmSync(stateDir, { force: true, recursive: true });
+    }
+  });
+});
 
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
   it("parses lsof output and filters non-openclaw/current processes", () => {

@@ -584,6 +584,23 @@ export interface GatewayBootLifecycle {
   startup_reason: string | null;
 }
 
+export interface GatewayRestartAudit {
+  audit_json: string | null;
+  coalesced: number | null;
+  cooldown_ms: number | null;
+  created_at: number;
+  delay_ms: number | null;
+  due_at: number | null;
+  event_key: string;
+  event_type: string;
+  mode: string | null;
+  pid: number;
+  preflight_json: string | null;
+  reason: string | null;
+  session_key: string | null;
+  source: string | null;
+}
+
 export interface GatewayRestartHandoff {
   created_at: number;
   expires_at: number;
@@ -1231,6 +1248,7 @@ export interface DB {
   fleet_cells: FleetCells;
   flow_runs: FlowRuns;
   gateway_boot_lifecycle: GatewayBootLifecycle;
+  gateway_restart_audit: GatewayRestartAudit;
   gateway_restart_handoff: GatewayRestartHandoff;
   gateway_restart_intent: GatewayRestartIntent;
   gateway_restart_sentinel: GatewayRestartSentinel;

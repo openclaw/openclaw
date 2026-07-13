@@ -1,6 +1,9 @@
 /**
  * Gateway config reload handler tests.
  */
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
@@ -51,7 +54,12 @@ import {
   getActiveSecretsRuntimeSnapshotRevision,
   type PreparedSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import {
+  closeOpenClawStateDatabase,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { diffConfigPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
@@ -1405,6 +1413,7 @@ describe("gateway hot reload superseded tail recovery", () => {
       expect(requestRecoveryRestart).toHaveBeenCalledWith(
         "config reload: hot reload recovery: context window cache reload",
         undefined,
+        expect.objectContaining({ source: "config_reload" }),
       );
     } finally {
       handlers.stopRestartRetries();
@@ -2025,9 +2034,9 @@ describe("gateway restart deferral preflight", () => {
       });
       rearmed.settle("committed");
 
-      expect(requestRecoveryRestart.mock.calls).toEqual([
-        ["config reload: hot reload recovery: channel restart (discord)"],
-      ]);
+      expect(requestRecoveryRestart.mock.calls.map(([reason, intent]) => [reason, intent])).toEqual(
+        [["config reload: hot reload recovery: channel restart (discord)", undefined]],
+      );
     } finally {
       hoisted.activeTaskBlockers.length = 0;
       stopRestartRetries();
@@ -2096,7 +2105,11 @@ describe("gateway restart deferral preflight", () => {
       hoisted.activeTaskBlockers.length = 0;
       await vi.advanceTimersByTimeAsync(500);
       expect(requestRecoveryRestart).toHaveBeenCalledOnce();
-      expect(requestRecoveryRestart).toHaveBeenCalledWith("config reload: gateway.port", undefined);
+      expect(requestRecoveryRestart).toHaveBeenCalledWith(
+        "config reload: gateway.port",
+        undefined,
+        expect.objectContaining({ source: "config_reload" }),
+      );
 
       pauseGatewayRestartForConfigCandidate();
       const accepted = acceptRestartConfig(configA);
@@ -2427,10 +2440,12 @@ describe("gateway restart deferral preflight", () => {
       await vi.advanceTimersByTimeAsync(500);
       await vi.advanceTimersByTimeAsync(1_000);
 
-      expect(requestRecoveryRestart.mock.calls).toEqual([
-        ["config reload: gateway.port", { force: true, reason: "config reload forced restart" }],
-        ["config reload: gateway.port", { force: true, reason: "config reload forced restart" }],
-      ]);
+      expect(requestRecoveryRestart.mock.calls.map(([reason, intent]) => [reason, intent])).toEqual(
+        [
+          ["config reload: gateway.port", { force: true, reason: "config reload forced restart" }],
+          ["config reload: gateway.port", { force: true, reason: "config reload forced restart" }],
+        ],
+      );
       expect(
         logReload.warn.mock.calls.filter(([message]) =>
           message.includes("deferring until 1 background task run(s) complete"),
@@ -2943,6 +2958,216 @@ describe("gateway restart deferral preflight", () => {
       vi.useRealTimers();
       process.removeListener("SIGUSR1", signalSpy);
       restartTesting.resetSigusr1State();
+    }
+  });
+
+  it("threads config reload audit context through immediate restart emission", async () => {
+    restartTesting.resetSigusr1State();
+    const events: Array<Record<string, unknown>> = [];
+    restartTesting.setRestartAuditEventWriterOverride((event) => {
+      events.push(event as unknown as Record<string, unknown>);
+    });
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    vi.useFakeTimers();
+    try {
+      requestGatewayRestart(
+        {
+          changedPaths: ["gateway.port"],
+          restartGateway: true,
+          restartReasons: ["gateway.port"],
+          hotReasons: [],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        {
+          gateway: { reload: { deferralTimeoutMs: 1_000 } },
+        },
+      );
+
+      expect(signalSpy).toHaveBeenCalledTimes(1);
+      expect(events).not.toContainEqual(expect.objectContaining({ eventType: "emit_requested" }));
+      await vi.advanceTimersByTimeAsync(0);
+      const emitEvent = events.find((event) => event.eventType === "emit_requested");
+      expect(emitEvent).toEqual(
+        expect.objectContaining({
+          eventType: "emit_requested",
+          reason: "config.reload",
+          source: "config_reload",
+          audit: expect.objectContaining({
+            source: "config_reload",
+            changedPaths: ["gateway.port"],
+          }),
+          preflight: expect.objectContaining({
+            active: expect.objectContaining({ totalActive: 0 }),
+            activeDetails: [],
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+    }
+  });
+
+  it("threads config reload audit context through deferred forced restart emission", async () => {
+    restartTesting.resetSigusr1State();
+    const events: Array<Record<string, unknown>> = [];
+    restartTesting.setRestartAuditEventWriterOverride((event) => {
+      events.push(event as unknown as Record<string, unknown>);
+    });
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
+    hoisted.activeTaskCount.value = 1;
+    hoisted.activeTaskBlockers.push({
+      taskId: "task-nightly",
+      runId: "run-nightly",
+      status: "running",
+      runtime: "cron",
+      label: "nightly sync",
+      title: "refresh all accounts",
+    });
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    vi.useFakeTimers();
+
+    try {
+      requestGatewayRestart(
+        {
+          changedPaths: ["gateway.port"],
+          restartGateway: true,
+          restartReasons: ["gateway.port"],
+          hotReasons: [],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: false,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: false,
+          noopPaths: [],
+        },
+        {
+          gateway: { reload: { deferralTimeoutMs: 1_000 } },
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      expect(signalSpy).toHaveBeenCalledTimes(1);
+      const emitEvent = events.find((event) => event.eventType === "emit_requested");
+      expect(logReload.warn).toHaveBeenCalledWith(
+        expect.stringContaining("title=refresh all accounts"),
+      );
+      expect(emitEvent).toEqual(
+        expect.objectContaining({
+          eventType: "emit_requested",
+          reason: "config.reload",
+          source: "config_reload",
+          audit: expect.objectContaining({
+            source: "config_reload",
+            changedPaths: ["gateway.port"],
+          }),
+          preflight: expect.objectContaining({
+            active: expect.objectContaining({ activeTasks: 1, totalActive: 1 }),
+            activeDetails: ["1 background task run(s)"],
+            taskBlockers: expect.stringContaining("taskId=task-nightly"),
+          }),
+        }),
+      );
+      expect(JSON.stringify(emitEvent?.preflight)).not.toContain("refresh all accounts");
+    } finally {
+      hoisted.activeTaskCount.value = 0;
+      hoisted.activeTaskBlockers.length = 0;
+      vi.useRealTimers();
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+    }
+  });
+
+  it("keeps active task titles out of config reload restart audit rows", async () => {
+    const stateDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-config-reload-audit-"));
+    const taskTitle = "refresh all accounts";
+    restartTesting.resetSigusr1State();
+    const logReload = { info: vi.fn(), warn: vi.fn() };
+    const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
+    hoisted.activeTaskCount.value = 1;
+    hoisted.activeTaskBlockers.push({
+      taskId: "task-nightly",
+      runId: "run-nightly",
+      status: "running",
+      runtime: "cron",
+      label: "nightly sync",
+      title: taskTitle,
+    });
+    const signalSpy = vi.fn();
+    process.once("SIGUSR1", signalSpy);
+    vi.useFakeTimers();
+
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        requestGatewayRestart(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartHealthMonitor: false,
+            reloadPlugins: false,
+            restartChannels: new Set(),
+            disposeMcpRuntimes: false,
+            noopPaths: [],
+          },
+          {
+            gateway: { reload: { deferralTimeoutMs: 1_000 } },
+          },
+        );
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.runOnlyPendingTimersAsync();
+        await Promise.resolve();
+
+        expect(signalSpy).toHaveBeenCalledTimes(1);
+        const { db } = openOpenClawStateDatabase({ env: process.env });
+        const row = db
+          .prepare(
+            "SELECT audit_json, preflight_json FROM gateway_restart_audit ORDER BY created_at DESC LIMIT 1",
+          )
+          .get() as {
+          audit_json: string | null;
+          preflight_json: string | null;
+        };
+        closeOpenClawStateDatabase();
+
+        expect(row.audit_json).toContain("task-nightly");
+        expect(row.preflight_json).toContain("task-nightly");
+        expect(JSON.stringify(row)).not.toContain(taskTitle);
+      });
+    } finally {
+      hoisted.activeTaskCount.value = 0;
+      hoisted.activeTaskBlockers.length = 0;
+      vi.useRealTimers();
+      process.removeListener("SIGUSR1", signalSpy);
+      restartTesting.resetSigusr1State();
+      closeOpenClawStateDatabase();
+      rmSync(stateDir, { force: true, recursive: true });
     }
   });
 
@@ -3999,9 +4224,9 @@ describe("gateway Gmail hot reload handlers", () => {
         diffConfigPaths(harness.initialConfig, harness.deferredConfig),
       );
       await vi.waitFor(() =>
-        expect(harness.requestRecoveryRestart.mock.calls).toEqual([
-          [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
-        ]),
+        expect(
+          harness.requestRecoveryRestart.mock.calls.map(([reason, intent]) => [reason, intent]),
+        ).toEqual([[`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined]]),
       );
     } finally {
       hoisted.activeTaskBlockers.length = 0;
@@ -4249,9 +4474,9 @@ describe("gateway Gmail hot reload handlers", () => {
         activate: false,
       });
       await vi.waitFor(() =>
-        expect(harness.requestRecoveryRestart.mock.calls).toEqual([
-          [`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined],
-        ]),
+        expect(
+          harness.requestRecoveryRestart.mock.calls.map(([reason, intent]) => [reason, intent]),
+        ).toEqual([[`config reload: ${deferredPlan.restartReasons.join(", ")}`, undefined]]),
       );
     } finally {
       releaseEmissionPreflight();
@@ -4335,9 +4560,9 @@ describe("gateway Gmail hot reload handlers", () => {
       hoisted.activeTaskBlockers.length = 0;
       await vi.advanceTimersByTimeAsync(500);
 
-      expect(harness.requestRecoveryRestart.mock.calls).toEqual([
-        ["config reload: gateway.bind", undefined],
-      ]);
+      expect(
+        harness.requestRecoveryRestart.mock.calls.map(([reason, intent]) => [reason, intent]),
+      ).toEqual([["config reload: gateway.bind", undefined]]);
     } finally {
       hoisted.activeTaskBlockers.length = 0;
       await harness.reloader.stop();
@@ -6066,6 +6291,8 @@ describe("deferred channel reload abort generation", () => {
 
     expect(requestRecoveryRestart).toHaveBeenCalledWith(
       expect.stringContaining("hot reload recovery: plugin channel rollback"),
+      undefined,
+      expect.objectContaining({ source: "config_reload" }),
     );
   });
 

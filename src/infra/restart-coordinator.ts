@@ -1,10 +1,15 @@
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import type { ActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
 import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkBlocker,
   type GatewayActiveWorkInspectors,
 } from "./gateway-active-work.js";
-import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
+import {
+  scheduleGatewaySigusr1Restart,
+  type RestartAuditInfo,
+  type ScheduledRestart,
+} from "./restart.js";
 
 // Safe restart coordination checks active local work before scheduling SIGUSR1
 // restarts, while still allowing explicit deferral bypasses for operators.
@@ -55,6 +60,51 @@ export type SafeGatewayRestartRequestResult = {
   restart: ScheduledRestart;
 };
 
+function formatDurableTaskBlocker(task: ActiveTaskRestartBlocker): string {
+  return [
+    `taskId=${task.taskId}`,
+    task.runId ? `runId=${task.runId}` : null,
+    `status=${task.status}`,
+    `runtime=${task.runtime}`,
+    task.label ? `label=${task.label}` : null,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join(" ");
+}
+
+function createAuditSafeRestartBlocker(
+  blocker: SafeGatewayRestartBlocker,
+): SafeGatewayRestartBlocker {
+  if (blocker.kind !== "task" || !blocker.task) {
+    return { ...blocker };
+  }
+  const task: ActiveTaskRestartBlocker = {
+    taskId: blocker.task.taskId,
+    status: blocker.task.status,
+    runtime: blocker.task.runtime,
+    ...(blocker.task.runId ? { runId: blocker.task.runId } : {}),
+    ...(blocker.task.label ? { label: blocker.task.label } : {}),
+  };
+  return {
+    ...blocker,
+    message: formatDurableTaskBlocker(task),
+    task,
+  };
+}
+
+function createAuditSafeGatewayRestartPreflight(
+  preflight: SafeGatewayRestartPreflight,
+): SafeGatewayRestartPreflight {
+  const blockers = preflight.blockers.map(createAuditSafeRestartBlocker);
+  return {
+    ...preflight,
+    blockers,
+    summary:
+      blockers.length === 0
+        ? "safe to restart now"
+        : `restart deferred: ${blockers.map((blocker) => blocker.message).join("; ")}`,
+  };
+}
 export function createSafeGatewayRestartPreflight(
   inspectors: Partial<SafeRestartInspectors> = {},
 ): SafeGatewayRestartPreflight {
@@ -110,13 +160,26 @@ export function requestSafeGatewayRestart(
     skipDeferral?: boolean;
     preservePendingEmitHooks?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
+    audit?: RestartAuditInfo;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight(opts.inspect);
+  const auditPreflight = createAuditSafeGatewayRestartPreflight(preflight);
   const skipDeferral = opts.skipDeferral === true;
+  const reason = opts.reason ?? "gateway.restart.safe";
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
-    reason: opts.reason ?? "gateway.restart.safe",
+    reason,
+    audit: {
+      ...opts.audit,
+      source: "requestSafeGatewayRestart",
+      preflight: auditPreflight,
+      context: {
+        ...opts.audit?.context,
+        preflightSummary: auditPreflight.summary,
+        preflightCounts: preflight.counts,
+      },
+    },
     ...(opts.preservePendingEmitHooks === true || skipDeferral
       ? { preservePendingEmitHooksOnDeferralBypass: true }
       : {}),

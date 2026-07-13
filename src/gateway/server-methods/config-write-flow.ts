@@ -302,6 +302,7 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
         reason: params.mode,
         audit: {
           actor: params.actor.actor,
+          source: "gateway.config.write",
           deviceId: params.actor.deviceId,
           clientIp: params.actor.clientIp,
           changedPaths: params.changedPaths,

@@ -194,10 +194,67 @@ describe("safe gateway restart coordinator", () => {
     });
 
     expect(result.status).toBe("deferred");
-    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audit: expect.objectContaining({
+          preflight: expect.objectContaining({
+            safe: false,
+            summary: "restart deferred: 1 queued or active operation(s)",
+          }),
+          source: "requestSafeGatewayRestart",
+        }),
+        delayMs: 0,
+        reason: "test.safe",
+      }),
+    );
+  });
+
+  it("keeps active task titles out of durable restart audit metadata", () => {
+    scheduleGatewaySigusr1Restart.mockReturnValueOnce({
+      ok: true,
+      pid: 123,
+      signal: "SIGUSR1",
       delayMs: 0,
-      reason: "test.safe",
+      mode: "emit",
+      coalesced: false,
+      cooldownMsApplied: 0,
     });
+    const taskTitle = "Build private customer branch";
+
+    const result = requestSafeGatewayRestart({
+      reason: "test.audit-safe-preflight",
+      inspect: {
+        getQueueSize: () => 0,
+        getPendingReplies: () => 0,
+        getEmbeddedRuns: () => 0,
+        getCronRuns: () => 0,
+        getActiveTasks: () => 1,
+        getTaskBlockers: () => [
+          {
+            taskId: "task-1",
+            runId: "run-1",
+            status: "running",
+            runtime: "acp",
+            label: "build",
+            title: taskTitle,
+          },
+        ],
+      },
+    });
+
+    expect(result.preflight.summary).toContain(taskTitle);
+    const scheduled = scheduleGatewaySigusr1Restart.mock.calls.at(-1)?.[0] as {
+      audit?: { context?: Record<string, unknown>; preflight?: { blockers?: unknown[] } };
+    };
+    const persistedAuditMetadata = JSON.stringify(scheduled.audit);
+    const auditBlocker = scheduled.audit?.preflight?.blockers?.[0] as
+      | { message?: string; task?: { title?: string } }
+      | undefined;
+    expect(persistedAuditMetadata).toContain("taskId=task-1");
+    expect(persistedAuditMetadata).not.toContain(taskTitle);
+    expect(String(scheduled.audit?.context?.preflightSummary)).not.toContain(taskTitle);
+    expect(auditBlocker?.message).not.toContain(taskTitle);
+    expect(auditBlocker?.task?.title).toBeUndefined();
   });
 
   it("surfaces coalesced restart requests", () => {
@@ -251,12 +308,18 @@ describe("safe gateway restart coordinator", () => {
 
     expect(result.status).toBe("scheduled");
     expect(result.preflight.safe).toBe(false);
-    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
-      delayMs: 0,
-      preservePendingEmitHooksOnDeferralBypass: true,
-      reason: "test.skip-deferral",
-      skipDeferral: true,
-    });
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audit: expect.objectContaining({
+          preflight: expect.objectContaining({ safe: false }),
+          source: "requestSafeGatewayRestart",
+        }),
+        delayMs: 0,
+        preservePendingEmitHooksOnDeferralBypass: true,
+        reason: "test.skip-deferral",
+        skipDeferral: true,
+      }),
+    );
   });
 
   it("omits skipDeferral when not requested", () => {
@@ -282,9 +345,15 @@ describe("safe gateway restart coordinator", () => {
       },
     });
 
-    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith({
-      delayMs: 0,
-      reason: "test.no-skip",
-    });
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        audit: expect.objectContaining({
+          preflight: expect.objectContaining({ safe: true }),
+          source: "requestSafeGatewayRestart",
+        }),
+        delayMs: 0,
+        reason: "test.no-skip",
+      }),
+    );
   });
 });

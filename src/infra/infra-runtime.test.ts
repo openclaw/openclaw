@@ -139,7 +139,7 @@ describe("infra runtime", () => {
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
 
-      await vi.runAllTimersAsync();
+      await vi.runOnlyPendingTimersAsync();
     });
 
     it("holds root admission from scheduled emission until the signal is handled", async () => {
@@ -175,6 +175,93 @@ describe("infra runtime", () => {
       expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(false);
       setGatewaySigusr1RestartPolicy({ allowExternal: true });
       expect(isGatewaySigusr1RestartExternallyAllowed()).toBe(true);
+    });
+
+    it("defers audit persistence until after the restart signal returns", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      const auditWriter = vi.fn();
+      testing.setRestartAuditWriterOverride(auditWriter);
+      try {
+        expect(emitGatewayRestart()).toBe(true);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(auditWriter).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(auditWriter).toHaveBeenCalledWith("emit_requested");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("lets zero-delay restarts emit before scheduled audit persistence", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      const auditWriter = vi.fn((eventType: string) => {
+        if (eventType === "scheduled") {
+          expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        }
+      });
+      testing.setRestartAuditWriterOverride(auditWriter);
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "zero-delay audit ordering",
+          skipCooldown: true,
+        });
+
+        expect(auditWriter).not.toHaveBeenCalledWith("scheduled");
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        await vi.runOnlyPendingTimersAsync();
+        expect(auditWriter).toHaveBeenCalledWith("scheduled");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("carries scheduler audit metadata into emit audit rows", async () => {
+      const handler = () => {};
+      const events: Array<Record<string, unknown>> = [];
+      process.on("SIGUSR1", handler);
+      testing.setRestartAuditEventWriterOverride((event) => {
+        events.push(event as unknown as Record<string, unknown>);
+      });
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "config reload forced restart",
+          sessionKey: "agent:main:session-A",
+          skipCooldown: true,
+          audit: {
+            source: "gateway.config.write",
+            actor: "test-runner",
+            preflight: { check: "passed" },
+          },
+        });
+
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.runOnlyPendingTimersAsync();
+
+        const emitEvent = events.find((event) => event.eventType === "emit_requested");
+        expect(emitEvent).toEqual(
+          expect.objectContaining({
+            eventType: "emit_requested",
+            reason: "config.reload",
+            sessionKey: "agent:main:session-A",
+            source: "gateway.config.write",
+            audit: expect.objectContaining({
+              actor: "test-runner",
+              source: "gateway.config.write",
+              preflight: { check: "passed" },
+            }),
+          }),
+        );
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
     });
 
     it("suppresses duplicate emit until the restart cycle is marked handled", () => {
@@ -480,6 +567,39 @@ describe("infra runtime", () => {
         expect(firstHooks).not.toHaveBeenCalled();
         expect(latestHooks).toHaveBeenCalledTimes(1);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("re-arms an earlier restart before persisting its reschedule audit", async () => {
+      const sessionAHooks = vi.fn(async () => {});
+      const sessionBHooks = vi.fn(async () => {});
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      scheduleGatewaySigusr1Restart({
+        delayMs: 1_000,
+        sessionKey: "agent:main:session-A",
+        emitHooks: { beforeEmit: sessionAHooks },
+      });
+      const auditWriter = vi.fn((eventType: string) => {
+        if (eventType === "rescheduled") {
+          expect(sessionBHooks).toHaveBeenCalledTimes(1);
+          expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        }
+      });
+      testing.setRestartAuditWriterOverride(auditWriter);
+
+      try {
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          sessionKey: "agent:main:session-A",
+          emitHooks: { beforeEmit: sessionBHooks },
+        });
+        expect(auditWriter).not.toHaveBeenCalledWith("rescheduled");
+        await vi.runOnlyPendingTimersAsync();
+        expect(auditWriter).toHaveBeenCalledWith("rescheduled");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -1045,6 +1165,33 @@ describe("infra runtime", () => {
         expect(beforeEmit).toHaveBeenCalledTimes(1);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
         expect(peekGatewaySigusr1RestartReason()).toBe("gateway.restart.safe");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("starts an active deferral bypass before persisting its audit event", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(() => 5);
+        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "config.patch" });
+        await vi.advanceTimersByTimeAsync(0);
+        const auditWriter = vi.fn((eventType: string) => {
+          if (eventType === "bypassed_deferral") {
+            expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+          }
+        });
+        testing.setRestartAuditWriterOverride(auditWriter);
+
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipDeferral: true,
+        });
+        await Promise.resolve();
+        expect(auditWriter).toHaveBeenCalledWith("bypassed_deferral");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

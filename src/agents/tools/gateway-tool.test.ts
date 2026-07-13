@@ -211,6 +211,11 @@ describe("gateway tool restart continuation", () => {
     expect(restartArgs.delayMs).toBe(250);
     expect(restartArgs.reason).toBe("continue after reboot");
     expect(restartArgs.sessionKey).toBe("agent:main:main");
+    expect(restartArgs.audit).toEqual({
+      source: "gateway.tool.restart",
+      sessionKey: "agent:main:main",
+    });
+    expect(JSON.stringify(restartArgs.audit)).not.toContain("continue after reboot");
     expect(typeof restartArgs.emitHooks?.beforeEmit).toBe("function");
     expect(typeof restartArgs.emitHooks?.afterEmitRejected).toBe("function");
     expect(result?.details).toMatchObject({

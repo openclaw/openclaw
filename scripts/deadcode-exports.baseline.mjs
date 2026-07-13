@@ -2616,7 +2616,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/infra/restart.ts: findGatewayPidsOnPortSync",
   "src/infra/restart.ts: GatewayRestartEmitResult",
   "src/infra/restart.ts: RestartAttempt",
-  "src/infra/restart.ts: RestartAuditInfo",
   "src/infra/restart.ts: RestartDeferralHooks",
   "src/infra/restart.ts: RestartEmitHooks",
   "src/infra/restart.ts: testing",

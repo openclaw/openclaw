@@ -270,6 +270,7 @@ export const updateHandlers: GatewayRequestHandlers = {
               skipCooldown: true,
               audit: {
                 actor: actor.actor,
+                source: "gateway.update.run",
                 deviceId: actor.deviceId,
                 clientIp: actor.clientIp,
                 changedPaths: [],
@@ -403,6 +404,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             skipCooldown: updateWasPackageSwap,
             audit: {
               actor: actor.actor,
+              source: "gateway.update.run",
               deviceId: actor.deviceId,
               clientIp: actor.clientIp,
               changedPaths: [],
