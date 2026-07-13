@@ -1,13 +1,63 @@
 // Deepgram tests cover realtime transcription provider plugin behavior.
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type WebSocket from "ws";
+import { WebSocketServer } from "ws";
 import {
   testing,
   buildDeepgramRealtimeTranscriptionProvider,
 } from "./realtime-transcription-provider.js";
 
+let cleanup: (() => Promise<void>) | undefined;
+
+async function createDeepgramRealtimeServer(params: {
+  onRequest: (url: URL, headers: Record<string, string | string[] | undefined>) => void;
+}) {
+  const server = createServer();
+  const wss = new WebSocketServer({ noServer: true });
+  const clients = new Set<WebSocket>();
+
+  server.on("upgrade", (request, socket, head) => {
+    params.onRequest(new URL(request.url ?? "/", "http://127.0.0.1"), request.headers);
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      clients.add(ws);
+      ws.on("close", () => clients.delete(ws));
+    });
+  });
+
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = (server.address() as AddressInfo).port;
+  cleanup = async () => {
+    for (const ws of clients) {
+      ws.terminate();
+    }
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  };
+  return { baseUrl: `http://127.0.0.1:${port}/deepgram/v1` };
+}
+
+function buildTestRealtimeUrl(baseUrl: string): URL {
+  return new URL(
+    testing.toDeepgramRealtimeWsUrl({
+      apiKey: "dg-key",
+      baseUrl,
+      model: "nova-3",
+      providerConfig: {},
+      sampleRate: 8000,
+      encoding: "mulaw",
+      interimResults: true,
+      endpointingMs: 800,
+    }),
+  );
+}
+
 describe("buildDeepgramRealtimeTranscriptionProvider", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    await cleanup?.();
+    cleanup = undefined;
     vi.unstubAllEnvs();
   });
 
@@ -67,12 +117,6 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
       "Deepgram API key missing",
     );
   });
-});
-
-describe("normalizeDeepgramRealtimeBaseUrl", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
 
   it("returns the default when no value or env is set", () => {
     vi.stubEnv("DEEPGRAM_BASE_URL", "");
@@ -80,92 +124,65 @@ describe("normalizeDeepgramRealtimeBaseUrl", () => {
     expect(testing.normalizeDeepgramRealtimeBaseUrl("   ")).toBe("https://api.deepgram.com/v1");
   });
 
-  it("accepts a valid explicit http(s) endpoint", () => {
-    expect(testing.normalizeDeepgramRealtimeBaseUrl("https://custom.example.com")).toBe(
-      "https://custom.example.com",
+  it.each([
+    ["http://localhost:8080/deepgram/v1", "ws:"],
+    ["https://custom.example.com/deepgram/v1", "wss:"],
+    ["ws://localhost:8080/deepgram/v1", "ws:"],
+    ["wss://custom.example.com:8443/deepgram/v1", "wss:"],
+  ])("maps or preserves %s as %s", (baseUrl, expectedProtocol) => {
+    const url = buildTestRealtimeUrl(baseUrl);
+    expect(url.protocol).toBe(expectedProtocol);
+    expect(url.pathname).toBe("/deepgram/v1/listen");
+  });
+
+  it.each(["not a url", "ftp://files.example.com"])("rejects invalid endpoint %s", (baseUrl) => {
+    expect(() => testing.normalizeDeepgramRealtimeBaseUrl(baseUrl)).toThrow(
+      /^Invalid Deepgram baseUrl:/,
     );
   });
 
-  it("rejects an explicit malformed override instead of silently retargeting", () => {
-    // An operator's explicit endpoint must not be swapped for the default, and a
-    // downstream `new URL(...)` must never throw an opaque TypeError.
-    expect(() => testing.normalizeDeepgramRealtimeBaseUrl("not a url")).toThrow(
-      /Invalid Deepgram baseUrl/,
+  it("validates the environment override", () => {
+    vi.stubEnv("DEEPGRAM_BASE_URL", "not a url");
+    expect(() => testing.normalizeDeepgramRealtimeBaseUrl()).toThrow(
+      "Invalid Deepgram baseUrl: value is not a valid URL",
     );
   });
 
-  it("accepts a direct wss:// endpoint — released behavior preserved", () => {
-    // v2026.6.11 passed wss:// overrides straight through; validate must not reject them.
-    expect(testing.normalizeDeepgramRealtimeBaseUrl("wss://api.deepgram.com/v1")).toBe(
-      "wss://api.deepgram.com/v1",
-    );
-  });
-
-  it("accepts a direct ws:// endpoint but upgrades it to wss:// in the URL builder", () => {
-    // The validator accepts ws://, but the released behavior upgrades ws:// to
-    // secure wss:// — realtime audio and provider auth must not go plaintext.
-    expect(testing.normalizeDeepgramRealtimeBaseUrl("ws://internal.proxy:8080/dg")).toBe(
-      "ws://internal.proxy:8080/dg",
-    );
-    const url = testing.toDeepgramRealtimeWsUrl({
-      apiKey: "dg-key",
-      baseUrl: "ws://internal.proxy:8080/dg",
-      model: "nova-3",
-      providerConfig: {},
-      sampleRate: 8000,
-      encoding: "mulaw",
-      interimResults: true,
-      endpointingMs: 800,
-    });
-    expect(url).toMatch(/^wss:\/\/internal\.proxy:8080\/dg\/listen\?/);
-  });
-
-  it("preserves custom path on a wss:// override through the URL builder", () => {
-    const url = testing.toDeepgramRealtimeWsUrl({
-      apiKey: "dg-key",
-      baseUrl: "wss://proxy.example.com/deepgram/v1",
-      model: "nova-3",
-      providerConfig: {},
-      sampleRate: 8000,
-      encoding: "mulaw",
-      interimResults: true,
-      endpointingMs: 800,
-    });
-    // Protocol preserved; /listen appended to the custom path.
-    expect(url).toMatch(/^wss:\/\/proxy\.example\.com\/deepgram\/v1\/listen\?/);
-  });
-
-  it("preserves custom port on a wss:// override through the URL builder", () => {
-    const url = testing.toDeepgramRealtimeWsUrl({
-      apiKey: "dg-key",
-      baseUrl: "wss://proxy.example.com:9090",
-      model: "nova-3",
-      providerConfig: {},
-      sampleRate: 8000,
-      encoding: "mulaw",
-      interimResults: true,
-      endpointingMs: 800,
-    });
-    expect(url).toMatch(/^wss:\/\/proxy\.example\.com:9090\/listen\?/);
-  });
-
-  it("rejects a parseable but unsupported (non-WebSocket non-HTTP) scheme", () => {
-    expect(() => testing.normalizeDeepgramRealtimeBaseUrl("ftp://files.example.com")).toThrow(
-      /unsupported scheme/,
-    );
-  });
-
-  it("does not leak URL credentials or sensitive query values in validation errors", () => {
-    const nonHttp = "ftp://user:sup3r-secret@files.example.com/x?api_key=leak-me";
+  it("does not echo the configured URL in validation errors", () => {
+    const rawMarker = "configured-value-marker";
+    const nonHttp = `ftp://files.example.com/${rawMarker}`;
     try {
       testing.normalizeDeepgramRealtimeBaseUrl(nonHttp);
       throw new Error("expected rejection");
     } catch (error) {
       const message = (error as Error).message;
       expect(message).toMatch(/unsupported scheme/);
-      expect(message).not.toContain("sup3r-secret");
-      expect(message).not.toContain("leak-me");
-      expect(message).not.toContain("api_key");
+      expect(message).not.toContain(rawMarker);
     }
+  });
+
+  it("connects through an explicit HTTP base URL over loopback WebSocket", async () => {
+    const requests: Array<{
+      url: URL;
+      headers: Record<string, string | string[] | undefined>;
+    }> = [];
+    const server = await createDeepgramRealtimeServer({
+      onRequest: (url, headers) => requests.push({ url, headers }),
+    });
+    const provider = buildDeepgramRealtimeTranscriptionProvider();
+    const session = provider.createSession({
+      providerConfig: {
+        apiKey: "dg-test-value",
+        baseUrl: server.baseUrl,
+      },
+    });
+
+    await session.connect();
+    session.close();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.url.pathname).toBe("/deepgram/v1/listen");
+    expect(requests[0]?.url.searchParams.get("model")).toBe("nova-3");
+    expect(requests[0]?.headers.authorization).toBe("Token dg-test-value");
   });
 });
