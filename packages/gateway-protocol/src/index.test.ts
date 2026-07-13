@@ -15,10 +15,7 @@ import {
   validateDurableCoordinationGetParams,
   validateDurableCoordinationGetResult,
   validateDurableLimitParams,
-  validateDurableWakeControlParams,
   validateDurableWakeInspectResult,
-  validateDurableWakeMarkParams,
-  validateDurableWakeSupersedeParams,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePairRequestParams,
@@ -985,48 +982,15 @@ describe("validateDurableCoordinationGet", () => {
     ).toBe(false);
   });
 
-  it("validates durable wake read and control params", () => {
+  it("validates durable wake read params without public write controls", () => {
     expect(validateDurableLimitParams({ limit: 25 })).toBe(true);
     expect(validateDurableLimitParams({ limit: 0 })).toBe(false);
-    expect(
-      validateDurableWakeControlParams({
-        wakeId: "wake_1",
-        actorKind: "operator",
-        actorRef: "operator:oncall",
-        reason: "reviewed",
-        idempotencyKey: "ack:1",
-        evidence: { ticket: "T-1" },
-      }),
-    ).toBe(true);
-    expect(
-      validateDurableWakeControlParams({
-        wakeId: "wake_1",
-        actorKind: "operator",
-        actorRef: "operator:oncall",
-        reason: "reviewed",
-      }),
-    ).toBe(false);
-    expect(
-      validateDurableWakeSupersedeParams({
-        wakeId: "wake_1",
-        actorKind: "external",
-        actorRef: "ticket:T-2",
-        reason: "stale",
-        idempotencyKey: "supersede:1",
-        supersededByRef: "wake_2",
-      }),
-    ).toBe(true);
-    expect(
-      validateDurableWakeMarkParams({
-        wakeId: "wake_1",
-        actorKind: "operator",
-        actorRef: "operator:oncall",
-        reason: "needs decision",
-        idempotencyKey: "mark:1",
-        decisionKind: "requires_operator_decision",
-        retry: true,
-      }),
-    ).toBe(false);
+    expect(protocol.ProtocolSchemas).not.toHaveProperty("DurableWakeControlParams");
+    expect(protocol.ProtocolSchemas).not.toHaveProperty("DurableWakeSupersedeParams");
+    expect(protocol.ProtocolSchemas).not.toHaveProperty("DurableWakeMarkParams");
+    expect(protocol).not.toHaveProperty("validateDurableWakeControlParams");
+    expect(protocol).not.toHaveProperty("validateDurableWakeSupersedeParams");
+    expect(protocol).not.toHaveProperty("validateDurableWakeMarkParams");
   });
 
   it("accepts durable wake inspection result shape with attempts and diagnostics", () => {

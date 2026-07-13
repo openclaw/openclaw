@@ -4,23 +4,16 @@ import {
   errorShape,
   validateDurableCoordinationGetParams,
   validateDurableLimitParams,
-  validateDurableWakeControlParams,
   validateDurableWakeDeliveryAttemptsListParams,
   validateDurableWakeIdParams,
-  validateDurableWakeMarkParams,
-  validateDurableWakeSupersedeParams,
   type DurableLimitParams,
   type DurableObligationsListResult,
   type DurableCoordinationGetResult,
-  type DurableWakeControlParams,
-  type DurableWakeControlResult,
   type DurableWakeDeliveryAttemptsListParams,
   type DurableWakeDeliveryAttemptsListResult,
   type DurableWakeIdParams,
   type DurableWakeInspectResult,
   type DurableWakeListResult,
-  type DurableWakeMarkParams,
-  type DurableWakeSupersedeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isDurableRuntimesEnabled } from "../../durable/config.js";
 import { buildDurableCoordinationProjection } from "../../durable/coordination-projection.js";
@@ -202,126 +195,6 @@ export const durableHandlers: GatewayRequestHandlers = {
           limit: attemptParams.limit,
         }),
       };
-      respond(true, result);
-    } finally {
-      store.close();
-    }
-  },
-  "durable.wake.acknowledge": ({ params, respond }) => {
-    if (!validateDurableWakeControlParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "wakeId, actorKind, actorRef, reason, and idempotencyKey are required.",
-        ),
-      );
-      return;
-    }
-    const controlParams = params as DurableWakeControlParams;
-    const store = validateStoreOpen(respond);
-    if (!store) {
-      return;
-    }
-    try {
-      if (!hasWake(store, controlParams.wakeId)) {
-        respondWakeNotFound(respond, controlParams.wakeId);
-        return;
-      }
-      const wake = store.acknowledgeDurableWake(controlParams);
-      if (!wake) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "durable wake cannot be acknowledged from its current state.",
-          ),
-        );
-        return;
-      }
-      const result: DurableWakeControlResult = { wake };
-      respond(true, result);
-    } finally {
-      store.close();
-    }
-  },
-  "durable.wake.supersede": ({ params, respond }) => {
-    if (!validateDurableWakeSupersedeParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "wakeId, actorKind, actorRef, reason, and idempotencyKey are required.",
-        ),
-      );
-      return;
-    }
-    const controlParams = params as DurableWakeSupersedeParams;
-    const store = validateStoreOpen(respond);
-    if (!store) {
-      return;
-    }
-    try {
-      if (!hasWake(store, controlParams.wakeId)) {
-        respondWakeNotFound(respond, controlParams.wakeId);
-        return;
-      }
-      const wake = store.supersedeDurableWake(controlParams);
-      if (!wake) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "durable wake cannot be superseded from its current state.",
-          ),
-        );
-        return;
-      }
-      const result: DurableWakeControlResult = { wake };
-      respond(true, result);
-    } finally {
-      store.close();
-    }
-  },
-  "durable.wake.mark": ({ params, respond }) => {
-    if (!validateDurableWakeMarkParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "wakeId, actorKind, actorRef, reason, idempotencyKey, and decisionKind are required.",
-        ),
-      );
-      return;
-    }
-    const controlParams = params as DurableWakeMarkParams;
-    const store = validateStoreOpen(respond);
-    if (!store) {
-      return;
-    }
-    try {
-      if (!hasWake(store, controlParams.wakeId)) {
-        respondWakeNotFound(respond, controlParams.wakeId);
-        return;
-      }
-      const wake = store.markDurableWakeDecisionRequired(controlParams);
-      if (!wake) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "durable wake cannot be marked from its current state.",
-          ),
-        );
-        return;
-      }
-      const result: DurableWakeControlResult = { wake };
       respond(true, result);
     } finally {
       store.close();

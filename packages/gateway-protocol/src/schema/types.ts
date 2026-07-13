@@ -129,9 +129,6 @@ export type DurableLimitParams = SchemaType<"DurableLimitParams">;
 export type DurableWakeIdParams = SchemaType<"DurableWakeIdParams">;
 export type DurableWakeDeliveryAttemptsListParams =
   SchemaType<"DurableWakeDeliveryAttemptsListParams">;
-export type DurableWakeControlParams = SchemaType<"DurableWakeControlParams">;
-export type DurableWakeSupersedeParams = SchemaType<"DurableWakeSupersedeParams">;
-export type DurableWakeMarkParams = SchemaType<"DurableWakeMarkParams">;
 export type DurableWake = SchemaType<"DurableWake">;
 export type DurableWakeDeliveryAttempt = SchemaType<"DurableWakeDeliveryAttempt">;
 export type DurableWakeInspection = SchemaType<"DurableWakeInspection">;
@@ -141,7 +138,6 @@ export type DurableObligationsListResult = SchemaType<"DurableObligationsListRes
 export type DurableWakeInspectResult = SchemaType<"DurableWakeInspectResult">;
 export type DurableWakeDeliveryAttemptsListResult =
   SchemaType<"DurableWakeDeliveryAttemptsListResult">;
-export type DurableWakeControlResult = SchemaType<"DurableWakeControlResult">;
 
 /** Config read/write/schema payloads plus update status and run controls. */
 export type ConfigGetParams = SchemaType<"ConfigGetParams">;

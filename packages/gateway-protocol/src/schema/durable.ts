@@ -521,18 +521,6 @@ export const DurableWakeDeliveryAttemptStatusSchema = Type.Union([
   Type.Literal("superseded"),
 ]);
 
-export const DurableWakeControlActorKindSchema = Type.Union([
-  Type.Literal("external"),
-  Type.Literal("parent"),
-  Type.Literal("operator"),
-]);
-
-export const DurableWakeControlDecisionKindSchema = Type.Union([
-  Type.Literal("inspected"),
-  Type.Literal("requires_human_decision"),
-  Type.Literal("requires_operator_decision"),
-]);
-
 export const DurableWakeSchema = Type.Unsafe<DurableWake>(
   Type.Object(
     {
@@ -713,50 +701,6 @@ export const DurableWakeDeliveryAttemptsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const DurableWakeControlParamsSchema = Type.Object(
-  {
-    wakeId: NonEmptyString,
-    actorKind: DurableWakeControlActorKindSchema,
-    actorRef: NonEmptyString,
-    reason: NonEmptyString,
-    idempotencyKey: NonEmptyString,
-    decisionRef: Type.Optional(Type.String()),
-    evidence: Type.Optional(JsonRecordSchema),
-    metadata: Type.Optional(JsonRecordSchema),
-  },
-  { additionalProperties: false },
-);
-
-export const DurableWakeSupersedeParamsSchema = Type.Object(
-  {
-    wakeId: NonEmptyString,
-    actorKind: DurableWakeControlActorKindSchema,
-    actorRef: NonEmptyString,
-    reason: NonEmptyString,
-    idempotencyKey: NonEmptyString,
-    decisionRef: Type.Optional(Type.String()),
-    evidence: Type.Optional(JsonRecordSchema),
-    metadata: Type.Optional(JsonRecordSchema),
-    supersededByRef: Type.Optional(Type.String()),
-  },
-  { additionalProperties: false },
-);
-
-export const DurableWakeMarkParamsSchema = Type.Object(
-  {
-    wakeId: NonEmptyString,
-    actorKind: DurableWakeControlActorKindSchema,
-    actorRef: NonEmptyString,
-    reason: NonEmptyString,
-    idempotencyKey: NonEmptyString,
-    decisionKind: DurableWakeControlDecisionKindSchema,
-    decisionRef: Type.Optional(Type.String()),
-    evidence: Type.Optional(JsonRecordSchema),
-    metadata: Type.Optional(JsonRecordSchema),
-  },
-  { additionalProperties: false },
-);
-
 export const DurableWakeListResultSchema = Type.Object(
   {
     wakes: Type.Array(DurableWakeSchema),
@@ -781,13 +725,6 @@ export const DurableWakeInspectResultSchema = Type.Object(
 export const DurableWakeDeliveryAttemptsListResultSchema = Type.Object(
   {
     deliveryAttempts: Type.Array(DurableWakeDeliveryAttemptSchema),
-  },
-  { additionalProperties: false },
-);
-
-export const DurableWakeControlResultSchema = Type.Object(
-  {
-    wake: DurableWakeSchema,
   },
   { additionalProperties: false },
 );
