@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -18,11 +20,6 @@ import {
   type WorkerSessionPlacementRecord,
 } from "./placement-store.js";
 import { workerEnvironmentIdForIdempotencyKey } from "./service.js";
-import type {
-  WorkerEnvironmentBootstrapReceipt,
-  WorkerEnvironmentProfileSnapshot,
-  WorkerEnvironmentSshEndpoint,
-} from "./store.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
 
 type WorkerDispatchRequest = Parameters<
@@ -153,15 +150,15 @@ function createHarness(
   const environmentId = workerEnvironmentIdForIdempotencyKey(
     `session-dispatch:${REQUEST.sessionId}:1`,
   );
-  const profileSnapshot: WorkerEnvironmentProfileSnapshot = {
+  const profileSnapshot: WorkerProfile = {
     settings: { region: "test" },
   };
-  const bootstrapReceipt: WorkerEnvironmentBootstrapReceipt = {
+  const bootstrapReceipt: WorkerAdmissionHandshake = {
     bundleHash: BUNDLE_HASH,
     openclawVersion: "2026.7.2",
     protocolFeatures: [],
   };
-  const sshEndpoint: WorkerEnvironmentSshEndpoint = {
+  const sshEndpoint: WorkerSshEndpoint = {
     host: "worker.example.test",
     port: 22,
     user: "worker",
