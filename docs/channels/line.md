@@ -213,38 +213,6 @@ LINE supports ACP (Agent Communication Protocol) conversation bindings:
 
 See [ACP agents](/tools/acp-agents) for details.
 
-## Thread bindings
-
-Control how LINE conversations bind to agent sessions over time:
-
-```json5
-{
-  channels: {
-    line: {
-      threadBindings: {
-        enabled: true,
-        idleHours: 24,
-        maxAgeHours: 168, // 7 days
-        spawnSessions: true,
-        defaultSpawnContext: "fork",
-      },
-    },
-  },
-}
-```
-
-- `enabled` — when `true`, thread bindings are active for LINE conversations.
-- `idleHours` — hours of inactivity before the binding is considered idle.
-- `maxAgeHours` — maximum binding lifetime. After expiry, the binding is released
-  and the next interaction follows the normal (unbound) flow.
-- `spawnSessions` — when `true`, allows explicit thread-bound spawn or bind operations
-  (e.g. `sessions_spawn({ thread: true })` or ACP thread spawns). Does not automatically
-  spawn a session on an ordinary first message. Default: `true`.
-- `defaultSpawnContext`: `"fork"` (default) or `"isolated"` — session context mode
-  for spawned sessions.
-- Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by
-  `openclaw doctor --fix`.
-
 ## Outbound media
 
 The LINE plugin sends images, videos, and audio through the agent message tool:

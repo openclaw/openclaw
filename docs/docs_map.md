@@ -520,7 +520,6 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Message behavior
   - H2: Channel data (rich messages)
   - H2: ACP support
-  - H2: Thread bindings
   - H2: Outbound media
   - H2: Troubleshooting
   - H2: Related
