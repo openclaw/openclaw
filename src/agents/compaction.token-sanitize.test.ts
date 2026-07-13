@@ -101,7 +101,7 @@ describe("compaction token accounting sanitization", () => {
         isError: false,
         content: [{ type: "text", text: hugeText }],
         timestamp: 1,
-      } as AgentMessage,
+      } satisfies AgentMessage,
     ];
 
     const projected = projectCompactionMessagesForPlanning(messages);

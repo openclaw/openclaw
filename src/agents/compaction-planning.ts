@@ -3,7 +3,10 @@
  * token usage, chooses chunking strategy, and preserves active tool-use pairs
  * while splitting history for summaries.
  */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  projectCompactionPlanningMessages,
+  readCompactionPlanningOmittedChars,
+} from "./compaction-planning-projection.js";
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
@@ -17,9 +20,6 @@ export const MIN_CHUNK_RATIO = 0.15;
 /** Buffer for estimateTokens() inaccuracy. */
 export const SAFETY_MARGIN = 1.2;
 const DEFAULT_PARTS = 2;
-const COMPACTION_PLANNING_TEXT_TRUNCATE_THRESHOLD_CHARS = 32_768;
-const COMPACTION_PLANNING_TEXT_SAMPLE_CHARS = 8_192;
-const COMPACTION_PLANNING_OMITTED_CHARS_FIELD = "__openclawCompactionPlanningOmittedChars";
 
 /**
  * Overhead reserved for summary prompt, system prompt, prior summary, wrapper
@@ -84,13 +84,6 @@ function estimateCompactionMessageTokens(message: AgentMessage): number {
   return estimateMessagesTokens([message]);
 }
 
-function readCompactionPlanningOmittedChars(message: AgentMessage): number {
-  const value = (message as unknown as Record<string, unknown>)[
-    COMPACTION_PLANNING_OMITTED_CHARS_FIELD
-  ];
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
 function estimateCompactionPlanningTokens(message: AgentMessage): number {
   const omittedChars = readCompactionPlanningOmittedChars(message);
   if (omittedChars === 0) {
@@ -99,111 +92,10 @@ function estimateCompactionPlanningTokens(message: AgentMessage): number {
   return estimateTokens(message) + Math.ceil(omittedChars / 4);
 }
 
-function projectTextForCompactionPlanning(
-  text: string,
-): { text: string; omittedChars: number } | null {
-  if (text.length <= COMPACTION_PLANNING_TEXT_TRUNCATE_THRESHOLD_CHARS) {
-    return null;
-  }
-  const sample = truncateUtf16Safe(text, COMPACTION_PLANNING_TEXT_SAMPLE_CHARS);
-  const droppedChars = text.length - sample.length;
-  const projected = `${sample}\n\n[... ${droppedChars} characters omitted from compaction planning]`;
-  return {
-    text: projected,
-    omittedChars: Math.max(0, text.length - projected.length),
-  };
-}
-
-function projectContentBlockForPlanning(
-  block: unknown,
-  projectText: boolean,
-): {
-  block: unknown;
-  omittedChars: number;
-  changed: boolean;
-} {
-  if (!block || typeof block !== "object") {
-    return { block, omittedChars: 0, changed: false };
-  }
-  const record = block as Record<string, unknown>;
-  const type = typeof record.type === "string" ? record.type : "";
-  if (type === "image" && typeof record.data === "string" && record.data.length > 0) {
-    return {
-      block: { ...record, data: "" },
-      omittedChars: 0,
-      changed: true,
-    };
-  }
-  if (!projectText) {
-    return { block, omittedChars: 0, changed: false };
-  }
-  const textIsModelVisible =
-    type === "text" ||
-    ((type === "toolResult" || type === "tool_result") && typeof record.text === "string");
-  const contentIsModelVisible =
-    (type === "toolResult" || type === "tool_result") &&
-    typeof record.text !== "string" &&
-    typeof record.content === "string";
-  const projectedText =
-    typeof record.text === "string" ? projectTextForCompactionPlanning(record.text) : null;
-  const projectedContent =
-    typeof record.content === "string" ? projectTextForCompactionPlanning(record.content) : null;
-  if (!projectedText && !projectedContent) {
-    return { block, omittedChars: 0, changed: false };
-  }
-  const next = { ...record };
-  let omittedChars = 0;
-  if (projectedText) {
-    next.text = projectedText.text;
-    omittedChars += textIsModelVisible ? projectedText.omittedChars : 0;
-  }
-  if (projectedContent) {
-    next.content = projectedContent.text;
-    omittedChars += contentIsModelVisible ? projectedContent.omittedChars : 0;
-  }
-  return { block: next, omittedChars, changed: true };
-}
-
-function projectMessageForPlanning(message: AgentMessage): AgentMessage {
-  const currentOmittedChars = readCompactionPlanningOmittedChars(message);
-  const content = (message as { content?: unknown }).content;
-  if (message.role === "toolResult" && typeof content === "string") {
-    const projected = projectTextForCompactionPlanning(content);
-    if (!projected) {
-      return message;
-    }
-    return {
-      ...(message as unknown as Record<string, unknown>),
-      content: projected.text,
-      [COMPACTION_PLANNING_OMITTED_CHARS_FIELD]: currentOmittedChars + projected.omittedChars,
-    } as unknown as AgentMessage;
-  }
-  if (!Array.isArray(content)) {
-    return message;
-  }
-
-  let omittedChars = 0;
-  let changed = false;
-  const projectedContent = content.map((block) => {
-    const projected = projectContentBlockForPlanning(block, message.role === "toolResult");
-    omittedChars += projected.omittedChars;
-    changed ||= projected.changed;
-    return projected.block;
-  });
-  if (!changed) {
-    return message;
-  }
-  return {
-    ...(message as unknown as Record<string, unknown>),
-    content: projectedContent,
-    [COMPACTION_PLANNING_OMITTED_CHARS_FIELD]: currentOmittedChars + omittedChars,
-  } as unknown as AgentMessage;
-}
-
 /** Builds a bounded planning projection that preserves token pressure accounting. */
 export function projectCompactionMessagesForPlanning(messages: AgentMessage[]): AgentMessage[] {
   const safe = sanitizeCompactionMessages(messages);
-  return safe.map(projectMessageForPlanning);
+  return projectCompactionPlanningMessages(safe);
 }
 
 /** Clamps requested split parts to a usable count for the available messages. */
