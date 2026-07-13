@@ -266,7 +266,8 @@ export const ru: TranslationMap = {
     },
     inventory: {
       title: "Устройства",
-      subtitle: "Одна строка на каждый сопряжённый клиент: статус, роли, токены.",
+      summaryConnected: "Подключено: {connected} из {total}",
+      summaryPending: "Ожидают одобрения: {count}",
       cleanupStale: "Очистить устаревшие: {count}",
       pendingApproval: "Ожидает подтверждения",
       paired: "Сопряжено",

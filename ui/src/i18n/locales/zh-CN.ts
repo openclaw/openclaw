@@ -261,7 +261,8 @@ export const zh_CN: TranslationMap = {
     },
     inventory: {
       title: "设备",
-      subtitle: "每个已配对客户端一行：状态、角色、令牌。",
+      summaryConnected: "已连接 {connected}/{total}",
+      summaryPending: "{count} 个正在等待批准",
       cleanupStale: "清理 {count} 个过期项",
       pendingApproval: "待批准",
       paired: "已配对",

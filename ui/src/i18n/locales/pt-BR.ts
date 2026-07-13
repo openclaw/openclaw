@@ -264,7 +264,8 @@ export const pt_BR: TranslationMap = {
     },
     inventory: {
       title: "Dispositivos",
-      subtitle: "Uma linha por cliente pareado: status, funções, tokens.",
+      summaryConnected: "{connected} de {total} conectados",
+      summaryPending: "{count} aguardando aprovação",
       cleanupStale: "Limpar {count} obsoletos",
       pendingApproval: "Aprovação pendente",
       paired: "Pareado",

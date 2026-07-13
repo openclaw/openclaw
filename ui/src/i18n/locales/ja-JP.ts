@@ -268,7 +268,8 @@ export const ja_JP: TranslationMap = {
     },
     inventory: {
       title: "デバイス",
-      subtitle: "ペア設定済みクライアントごとに1行: ステータス、ロール、トークン。",
+      summaryConnected: "{total}台中{connected}台が接続済み",
+      summaryPending: "{count}件が承認待ち",
       cleanupStale: "{count} 件の古い項目をクリーンアップ",
       pendingApproval: "承認待ち",
       paired: "ペア設定済み",

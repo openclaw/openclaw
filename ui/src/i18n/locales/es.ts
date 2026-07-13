@@ -265,7 +265,8 @@ export const es: TranslationMap = {
     },
     inventory: {
       title: "Dispositivos",
-      subtitle: "Una fila por cliente emparejado: estado, roles, tokens.",
+      summaryConnected: "{connected} de {total} conectados",
+      summaryPending: "{count} pendientes de aprobación",
       cleanupStale: "Limpiar {count} obsoletos",
       pendingApproval: "Pendiente de aprobación",
       paired: "Emparejado",

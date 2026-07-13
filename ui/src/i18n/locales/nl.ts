@@ -266,7 +266,8 @@ export const nl: TranslationMap = {
     },
     inventory: {
       title: "Apparaten",
-      subtitle: "Eén rij per gekoppelde client: status, rollen, tokens.",
+      summaryConnected: "{connected} van {total} verbonden",
+      summaryPending: "{count} in afwachting van goedkeuring",
       cleanupStale: "{count} verouderde opschonen",
       pendingApproval: "In afwachting van goedkeuring",
       paired: "Gekoppeld",

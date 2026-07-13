@@ -266,7 +266,8 @@ export const it: TranslationMap = {
     },
     inventory: {
       title: "Dispositivi",
-      subtitle: "Una riga per ogni client accoppiato: stato, ruoli, token.",
+      summaryConnected: "{connected} di {total} connessi",
+      summaryPending: "{count} in attesa di approvazione",
       cleanupStale: "Rimuovi {count} obsoleti",
       pendingApproval: "In attesa di approvazione",
       paired: "Accoppiato",

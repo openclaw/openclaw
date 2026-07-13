@@ -264,7 +264,8 @@ export const vi: TranslationMap = {
     },
     inventory: {
       title: "Thiết bị",
-      subtitle: "Mỗi hàng là một client đã ghép nối: trạng thái, vai trò, token.",
+      summaryConnected: "{connected} trong tổng số {total} đã kết nối",
+      summaryPending: "{count} đang chờ phê duyệt",
       cleanupStale: "Dọn dẹp {count} mục cũ",
       pendingApproval: "Chờ phê duyệt",
       paired: "Đã ghép nối",

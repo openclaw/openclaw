@@ -264,7 +264,8 @@ export const id: TranslationMap = {
     },
     inventory: {
       title: "Perangkat",
-      subtitle: "Satu baris per klien yang dipasangkan: status, peran, token.",
+      summaryConnected: "{connected} dari {total} terhubung",
+      summaryPending: "{count} menunggu persetujuan",
       cleanupStale: "Bersihkan {count} usang",
       pendingApproval: "Menunggu persetujuan",
       paired: "Dipasangkan",

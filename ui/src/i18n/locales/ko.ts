@@ -263,7 +263,8 @@ export const ko: TranslationMap = {
     },
     inventory: {
       title: "장치",
-      subtitle: "페어링된 클라이언트당 한 행: 상태, 역할, 토큰.",
+      summaryConnected: "{total}개 중 {connected}개 연결됨",
+      summaryPending: "{count}개 승인 대기 중",
       cleanupStale: "오래된 항목 {count}개 정리",
       pendingApproval: "승인 대기 중",
       paired: "페어링됨",

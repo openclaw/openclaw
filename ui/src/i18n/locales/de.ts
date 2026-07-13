@@ -267,7 +267,8 @@ export const de: TranslationMap = {
     },
     inventory: {
       title: "Geräte",
-      subtitle: "Eine Zeile pro gekoppeltem Client: Status, Rollen, Tokens.",
+      summaryConnected: "{connected} von {total} verbunden",
+      summaryPending: "{count} warten auf Genehmigung",
       cleanupStale: "{count} veraltete bereinigen",
       pendingApproval: "Ausstehende Genehmigung",
       paired: "Gekoppelt",

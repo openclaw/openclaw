@@ -263,7 +263,8 @@ export const hi: TranslationMap = {
     },
     inventory: {
       title: "डिवाइस",
-      subtitle: "प्रत्येक पेयर किए गए क्लाइंट के लिए एक पंक्ति: स्थिति, भूमिकाएँ, टोकन।",
+      summaryConnected: "{total} में से {connected} कनेक्टेड",
+      summaryPending: "{count} अनुमोदन की प्रतीक्षा में",
       cleanupStale: "{count} पुराने साफ़ करें",
       pendingApproval: "स्वीकृति लंबित",
       paired: "पेयर किया गया",

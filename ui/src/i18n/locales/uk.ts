@@ -265,7 +265,8 @@ export const uk: TranslationMap = {
     },
     inventory: {
       title: "Пристрої",
-      subtitle: "Один рядок на кожен пов'язаний клієнт: статус, ролі, токени.",
+      summaryConnected: "Підключено: {connected} із {total}",
+      summaryPending: "Очікують схвалення: {count}",
       cleanupStale: "Очистити {count} застарілих",
       pendingApproval: "Очікує підтвердження",
       paired: "Пов'язано",

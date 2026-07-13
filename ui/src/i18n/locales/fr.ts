@@ -267,7 +267,8 @@ export const fr: TranslationMap = {
     },
     inventory: {
       title: "Appareils",
-      subtitle: "Une ligne par client appairé : statut, rôles, jetons.",
+      summaryConnected: "{connected} sur {total} connectés",
+      summaryPending: "{count} en attente d’approbation",
       cleanupStale: "Nettoyer {count} obsolètes",
       pendingApproval: "En attente d'approbation",
       paired: "Appairé",

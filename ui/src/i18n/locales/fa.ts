@@ -265,7 +265,8 @@ export const fa: TranslationMap = {
     },
     inventory: {
       title: "دستگاه‌ها",
-      subtitle: "یک ردیف برای هر کلاینت جفت‌شده: وضعیت، نقش‌ها، توکن‌ها.",
+      summaryConnected: "{connected} از {total} متصل",
+      summaryPending: "{count} در انتظار تأیید",
       cleanupStale: "پاک‌سازی {count} مورد قدیمی",
       pendingApproval: "در انتظار تأیید",
       paired: "جفت‌شده",

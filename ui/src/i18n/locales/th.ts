@@ -261,7 +261,8 @@ export const th: TranslationMap = {
     },
     inventory: {
       title: "อุปกรณ์",
-      subtitle: "หนึ่งแถวต่อไคลเอนต์ที่จับคู่: สถานะ บทบาท โทเค็น",
+      summaryConnected: "เชื่อมต่อแล้ว {connected} จาก {total}",
+      summaryPending: "{count} รายการกำลังรอการอนุมัติ",
       cleanupStale: "ล้างข้อมูลที่ค้าง {count} รายการ",
       pendingApproval: "รอการอนุมัติ",
       paired: "จับคู่แล้ว",

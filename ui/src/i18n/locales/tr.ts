@@ -265,7 +265,8 @@ export const tr: TranslationMap = {
     },
     inventory: {
       title: "Cihazlar",
-      subtitle: "Eşleştirilen her istemci için bir satır: durum, roller, belirteçler.",
+      summaryConnected: "{total} cihazdan {connected} tanesi bağlı",
+      summaryPending: "{count} onay bekliyor",
       cleanupStale: "{count} eski öğeyi temizle",
       pendingApproval: "Onay bekliyor",
       paired: "Eşleştirildi",

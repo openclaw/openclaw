@@ -264,7 +264,8 @@ export const pl: TranslationMap = {
     },
     inventory: {
       title: "Urządzenia",
-      subtitle: "Jeden wiersz na sparowanego klienta: status, role, tokeny.",
+      summaryConnected: "Połączono: {connected} z {total}",
+      summaryPending: "{count} oczekuje na zatwierdzenie",
       cleanupStale: "Wyczyść {count} nieaktualnych",
       pendingApproval: "Oczekuje na zatwierdzenie",
       paired: "Sparowane",

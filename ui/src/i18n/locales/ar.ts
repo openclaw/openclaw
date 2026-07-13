@@ -261,7 +261,8 @@ export const ar: TranslationMap = {
     },
     inventory: {
       title: "الأجهزة",
-      subtitle: "صف واحد لكل عميل مقترن: الحالة، والأدوار، والرموز المميزة.",
+      summaryConnected: "{connected} من أصل {total} متصلة",
+      summaryPending: "{count} بانتظار الموافقة",
       cleanupStale: "تنظيف {count} من عمليات الاقتران القديمة",
       pendingApproval: "في انتظار الموافقة",
       paired: "مقترن",

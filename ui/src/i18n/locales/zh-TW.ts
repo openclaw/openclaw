@@ -261,7 +261,8 @@ export const zh_TW: TranslationMap = {
     },
     inventory: {
       title: "裝置",
-      subtitle: "每個已配對的用戶端一列：狀態、角色、權杖。",
+      summaryConnected: "已連線 {connected}/{total}",
+      summaryPending: "{count} 個正在等待核准",
       cleanupStale: "清理 {count} 個過期項目",
       pendingApproval: "待核准",
       paired: "已配對",
