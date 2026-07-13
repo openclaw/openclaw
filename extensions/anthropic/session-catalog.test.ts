@@ -6,10 +6,10 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createClaudeSessionNodeHostCommands } from "./session-catalog-node-commands.js";
 import {
   CLAUDE_SESSIONS_LIST_COMMAND,
   CLAUDE_SESSION_READ_COMMAND,
-  createClaudeSessionNodeHostCommands,
   listClaudeSessionCatalog,
   listLocalClaudeSessionPage,
   readLocalClaudeTranscriptPage,
@@ -334,6 +334,77 @@ describe("Claude session catalog", () => {
 
     const hosts = await provider?.list({});
     expect(hosts?.[0]?.sessions[0]?.openClawSessionKey).toBe("agent:main:claude-bound");
+  });
+
+  it("continues a local Desktop-app row and lists it as continuable", async () => {
+    const home = await createHome();
+    process.env.HOME = home;
+    const sessionId = "desktop-source-session";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          summary: "Index title",
+          projectPath: "/work/desktop",
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "desktop prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "active", {
+      cliSessionId: sessionId,
+      title: "Desktop title",
+      cwd: "/desktop/cwd",
+      isArchived: false,
+    });
+    const createSessionEntry = vi.fn(async (params: Record<string, unknown>) => ({
+      key: `agent:main:${String(params.key)}`,
+      agentId: "main",
+      sessionId: "openclaw-adopted",
+      entry: { sessionId: "openclaw-adopted", updatedAt: Date.now() },
+    }));
+    let provider: SessionCatalogProvider | undefined;
+    const api = {
+      id: "anthropic",
+      config: {},
+      runtime: {
+        config: { current: () => ({}) },
+        nodes: { list: async () => ({ nodes: [] }) },
+        agent: {
+          session: {
+            listSessionEntries: () => [],
+            createSessionEntry,
+          },
+        },
+      },
+      registerSessionCatalog: (candidate: SessionCatalogProvider) => {
+        provider = candidate;
+      },
+    } as unknown as OpenClawPluginApi;
+    registerClaudeSessionCatalog(api);
+
+    const hosts = await provider?.list({});
+    expect(hosts?.[0]?.sessions).toEqual([
+      expect.objectContaining({
+        threadId: sessionId,
+        source: "claude-desktop",
+        canContinue: true,
+        canArchive: false,
+      }),
+    ]);
+    await expect(
+      provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
+    ).resolves.toEqual({
+      sessionKey: expect.stringContaining("plugin:anthropic:catalog-adopt:claude:"),
+    });
+    expect(createSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialEntry: expect.objectContaining({
+          cliSessionBinding: { sessionId, forceReuse: true, forkNextResume: true },
+        }),
+      }),
+    );
   });
 
   it("merges CLI indexes with active Desktop metadata and hides archived Desktop sessions", async () => {

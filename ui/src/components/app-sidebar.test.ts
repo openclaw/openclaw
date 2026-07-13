@@ -16,6 +16,7 @@ import {
   type ApplicationGateway,
   type ApplicationGatewaySnapshot,
 } from "../app/context.ts";
+import { CATALOG_SESSION_CONTINUED_EVENT } from "../lib/sessions/catalog-key.ts";
 import type { SessionCapability, SessionState } from "../lib/sessions/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import "./app-sidebar.ts";
@@ -1676,5 +1677,190 @@ describe("AppSidebar custom group reordering", () => {
     dispatchDragEvent(alphaSection, "drop", dataTransfer);
 
     expect(harness.groupsPut).toHaveBeenCalledWith(["Gamma", "Alpha", "Beta"]);
+  });
+});
+
+describe("AppSidebar catalog session rows", () => {
+  const catalogList = (
+    sessions: Array<Record<string, unknown>>,
+    hosts?: SessionCatalog["hosts"],
+  ): SessionsCatalogListResult => ({
+    catalogs: [
+      {
+        id: "codex",
+        label: "Codex",
+        capabilities: { continueSession: true, archive: true },
+        hosts: hosts ?? [
+          {
+            hostId: "gateway:local",
+            label: "Local Codex",
+            kind: "gateway" as const,
+            connected: true,
+            sessions: sessions.map((session) => ({
+              status: "idle",
+              archived: false,
+              canContinue: true,
+              canArchive: true,
+              ...session,
+            })) as SessionCatalog["hosts"][number]["sessions"],
+          },
+        ],
+      },
+    ],
+  });
+
+  async function mountWithCatalog(result: SessionsCatalogListResult, sessionKeys: string[]) {
+    const request = vi.fn().mockResolvedValue(result);
+    const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    gateway.publish({
+      hello: {
+        features: { methods: ["sessions.catalog.list"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const { sidebar } = await mountSidebar(gateway.gateway, createSessions("main", sessionKeys));
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+    await vi.advanceTimersByTimeAsync(0);
+    await sidebar.updateComplete;
+    return { sidebar, request };
+  }
+
+  it("shows a host subtitle only for paired-node rows", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList(
+          [],
+          [
+            {
+              hostId: "gateway:local",
+              label: "Local Codex",
+              kind: "gateway",
+              connected: true,
+              sessions: [
+                {
+                  threadId: "thread-local",
+                  name: "Local session",
+                  status: "idle",
+                  archived: false,
+                  canContinue: true,
+                  canArchive: true,
+                },
+              ],
+            },
+            {
+              hostId: "node:devbox",
+              label: "Dev Box",
+              kind: "node",
+              nodeId: "devbox",
+              connected: true,
+              sessions: [
+                {
+                  threadId: "thread-node",
+                  name: "Node session",
+                  status: "stored",
+                  archived: false,
+                  canContinue: false,
+                  canArchive: false,
+                },
+              ],
+            },
+          ],
+        ),
+        ["agent:main:main"],
+      );
+
+      const subtitles = [
+        ...sidebar.querySelectorAll(
+          '[data-session-section="catalog:codex"] .sidebar-recent-session__subtitle',
+        ),
+      ].map((node) => node.textContent?.trim());
+      expect(subtitles).toEqual(["Dev Box"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks the routed catalog session row active without a phantom chat row", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
+        ["agent:main:main"],
+      );
+      (sidebar as unknown as { activeRouteId: string }).activeRouteId = "chat";
+      sidebar.sessionKey = "catalog:codex:gateway%3Alocal:thread-1";
+      await sidebar.updateComplete;
+
+      const active = sidebar.querySelectorAll(".sidebar-recent-session--active");
+      expect(active).toHaveLength(1);
+      expect(active[0]?.getAttribute("data-session-key")).toBe(
+        "catalog:codex:gateway%3Alocal:thread-1",
+      );
+      // The raw catalog key must not surface as a synthesized chat row.
+      const chatRows = [
+        ...sidebar.querySelectorAll(
+          '.sidebar-recent-sessions__group:not([data-session-section^="catalog:"]) [data-session-key]',
+        ),
+      ].map((row) => row.getAttribute("data-session-key"));
+      expect(chatRows).not.toContain("catalog:codex:gateway%3Alocal:thread-1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("renders an adopted catalog session as its live row and hides the duplicate", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([
+          {
+            threadId: "thread-1",
+            name: "Release checklist",
+            openClawSessionKey: "agent:main:adopted-codex",
+          },
+        ]),
+        ["agent:main:main", "agent:main:adopted-codex"],
+      );
+
+      const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
+      // Live-row parity: the adopted row exposes the regular session actions.
+      expect(rows[0]?.querySelector("[data-session-menu]")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("binds the adopted session immediately on the catalog-continued event", async () => {
+    vi.useFakeTimers();
+    try {
+      const { sidebar } = await mountWithCatalog(
+        catalogList([{ threadId: "thread-1", name: "Release checklist" }]),
+        ["agent:main:main", "agent:main:adopted-codex"],
+      );
+      expect(
+        sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]'),
+      ).toHaveLength(1);
+
+      document.dispatchEvent(
+        new CustomEvent(CATALOG_SESSION_CONTINUED_EVENT, {
+          detail: {
+            catalogId: "codex",
+            hostId: "gateway:local",
+            threadId: "thread-1",
+            sessionKey: "agent:main:adopted-codex",
+          },
+        }),
+      );
+      await sidebar.updateComplete;
+
+      const rows = [...sidebar.querySelectorAll('[data-session-key="agent:main:adopted-codex"]')];
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.closest('[data-session-section="catalog:codex"]')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -45,7 +45,7 @@ import {
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
-import { drainFormattedSystemEvents } from "./session-updates.js";
+import { drainFormattedSystemEvents } from "./session-system-events.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 

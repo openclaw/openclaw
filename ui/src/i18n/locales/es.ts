@@ -218,10 +218,11 @@ export const es: TranslationMap = {
   lazyView: {
     loadingTitle: "Cargando panel",
     errorTitle: "No se pudo cargar el panel",
-    errorSubtitle:
-      "Vuelve a cargar la página para cargar el paquete más reciente de Control UI, o inténtalo de nuevo si falló la solicitud de red.",
+    genericSubtitle: "Se produjo un error al cargar este panel.",
+    staleTitle: "Hay una nueva versión disponible",
+    staleSubtitle:
+      "OpenClaw se actualizó en segundo plano. Recarga para obtener el panel más reciente.",
     retry: "Reintentar",
-    unknownError: "Error desconocido al cargar el módulo.",
   },
   nodes: {
     pairing: {
@@ -1747,8 +1748,6 @@ export const es: TranslationMap = {
     cancel: "Cancelar",
     removedRestart: "Se eliminó {name}. Es necesario reiniciar Gateway para aplicar el cambio.",
     verifiedSource: "Fuente verificada",
-    menuLabel: "Acciones de {name}",
-    menuDetails: "Ver detalles",
     enableAction: "Activar",
     disableAction: "Desactivar",
     working: "Procesando…",
@@ -1884,6 +1883,10 @@ export const es: TranslationMap = {
       useCurrentChatAria: "Usar el chat actual para las solicitudes de revisión",
       useCurrentChatTooltip:
         "Enviar las solicitudes de revisión a la sesión de chat actual en lugar de la sesión de workshop de la propuesta.",
+      selfLearning: "Autoaprendizaje",
+      selfLearningAria: "Activar o desactivar las propuestas de Skills de autoaprendizaje",
+      selfLearningTooltip:
+        "Recopila correcciones y revisa trabajos sustanciales completados para convertirlos en propuestas de Skills pendientes. Consume tokens adicionales en segundo plano; los borradores aparecen en este tablero como propuestas pendientes.",
       view: "Vista del taller",
       board: "Tablero",
       today: "Hoy",
@@ -1964,6 +1967,14 @@ export const es: TranslationMap = {
       noProposalsTitle: "Aún no hay propuestas",
       noProposalsBody: "{agent} no ha redactado ninguna propuesta de skill.",
       noProposalsFooter: "Las nuevas propuestas aparecerán aquí para su revisión.",
+    },
+    selfLearning: {
+      pitchTitle: "Activar el autoaprendizaje",
+      pitchBody:
+        "OpenClaw revisa las correcciones y las ejecuciones sustanciales completadas y, a continuación, redacta propuestas de Skills para este tablero. Consume tokens adicionales en segundo plano y los borradores aparecen como propuestas pendientes.",
+      enable: "Activar el autoaprendizaje",
+      enabling: "Activando…",
+      updateError: "No se pudo actualizar la configuración de autoaprendizaje.",
     },
     today: {
       emptyTitle: "Nada pendiente hoy",
