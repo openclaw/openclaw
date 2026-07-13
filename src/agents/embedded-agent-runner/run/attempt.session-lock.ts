@@ -112,15 +112,12 @@ type SessionWithAgentPrompt = {
   };
 };
 
-// Shared mutable carrier for the injected retry default. The wrapper reads
-// `.maxRetries` at call time, so a repeated idempotent install can refresh the
-// value in place without re-wrapping or stacking wrappers.
-type EmbeddedPromptRetryDefaultRef = { maxRetries: number };
-
+// Marks a streamFn already wrapped to pin the in-lock SDK retry default to 0.
+// The window default is a fixed 0 (not configurable), so the wrapper carries no
+// mutable state; the marker only guards against re-wrapping on repeated installs.
 type PromptReleaseStreamFn = ((...args: unknown[]) => unknown) & {
   __openclawSessionLockPromptReleaseInstalled?: boolean;
   __openclawEmbeddedPromptRetryDefaultInstalled?: boolean;
-  __openclawEmbeddedPromptRetryDefaultRef?: EmbeddedPromptRetryDefaultRef;
 };
 
 type SessionFileFingerprint =
@@ -2235,58 +2232,39 @@ export function installPromptSubmissionLockRelease(params: {
   // Both installers wrap agent.streamFn and each is idempotent via its own marker.
   // The outermost wrapper hides inner markers, so carry the retry-default marker
   // forward; otherwise a later install pass would re-wrap an already-wrapped fn.
-  // Carry the retry-default ref forward by reference too: a later retry install
-  // finds the marker here and refreshes that same ref in place, and the buried
-  // retry wrapper still reads its live value. Copying instead would strand the
-  // inner wrapper on a stale ref.
   if (currentStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] === true) {
     wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
-    wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultRef"] =
-      currentStreamFn["__openclawEmbeddedPromptRetryDefaultRef"];
   }
   agent.streamFn = wrappedStreamFn;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
-// Inject the provider retry default for SDK calls inside the embedded prompt lock
-// window. The injected default is the configured settings.retry.provider.maxRetries
-// (passed in by the caller); when unset it falls back to 0 so SDK retries stay out of
-// the prompt-lock release window where model-fallback owns retries and SDK retries
-// race with session takeover. Explicit per-call options.maxRetries still wins because
-// the caller-provided options spread last over the injected default.
-export function installEmbeddedPromptRetryDefault(
-  session: unknown,
-  options?: { maxRetries?: number },
-): void {
+// Pin SDK retries to 0 for calls made inside the embedded prompt lock window.
+// The in-window default is always 0, never the configured provider retry: the
+// lock is released across the model call, model-fallback owns the one whole-attempt
+// retry, and an in-window SDK retry would race session takeover and silently lose
+// the message (#87180). Only an explicit per-call options.maxRetries overrides it,
+// because the caller-provided options spread last over the injected default.
+export function installEmbeddedPromptRetryDefault(session: unknown): void {
   const agent = (session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
     return;
   }
   const currentStreamFn = agent.streamFn;
-  const nextMaxRetries = options?.maxRetries ?? 0;
   if (currentStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] === true) {
-    // Idempotent install must still refresh the configured default. The wrapper
-    // reads the ref live, so updating it in place propagates the new value even
-    // when the retry wrapper is buried under the lock-release wrapper.
-    const existingRef = currentStreamFn["__openclawEmbeddedPromptRetryDefaultRef"];
-    if (existingRef) {
-      existingRef.maxRetries = nextMaxRetries;
-    } else {
-      currentStreamFn["__openclawEmbeddedPromptRetryDefaultRef"] = { maxRetries: nextMaxRetries };
-    }
+    // Repeated installs are no-ops; the fixed 0 default carries no mutable state
+    // to refresh, so a second wrap would only stack redundant wrappers.
     return;
   }
-  const retryRef: EmbeddedPromptRetryDefaultRef = { maxRetries: nextMaxRetries };
   const innerStreamFn = currentStreamFn;
   const wrappedStreamFn: PromptReleaseStreamFn = (...args: unknown[]) => {
     const [model, context, callOptions] = args;
     const requestOptions = callOptions as { maxRetries?: number } | undefined;
-    // Read the ref at call time so a later idempotent install refreshes it in
-    // place; caller-provided options spread last so an explicit maxRetries wins.
-    return innerStreamFn(model, context, { maxRetries: retryRef.maxRetries, ...requestOptions });
+    // Inject maxRetries:0 as the in-window default; caller-provided options spread
+    // last so an explicit maxRetries still wins.
+    return innerStreamFn(model, context, { maxRetries: 0, ...requestOptions });
   };
   wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
-  wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultRef"] = retryRef;
   // The outermost wrapper hides inner markers, so carry the lock-release marker
   // forward; otherwise a later install pass would re-wrap an already-wrapped fn.
   if (currentStreamFn["__openclawSessionLockPromptReleaseInstalled"] === true) {
