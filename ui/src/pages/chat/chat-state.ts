@@ -57,6 +57,7 @@ import {
 import {
   chatScopedEventSessionMatches,
   loadChatHistory,
+  resetChatHistoryPagination,
   type ChatMetadataResult,
   type ChatState,
 } from "./chat-history.ts";
@@ -549,6 +550,10 @@ export function resetChatStateForRouteSession(
   state.chatAttachments = [];
   state.chatReplyTarget = null;
   state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
+  // Pagination cursors are transcript-scoped. Drop the previous session's
+  // offset/hasMore with the adopted session so a failed initial history load
+  // cannot let a top-scroll request the new session at the old session's offset.
+  resetChatHistoryPagination(state);
   state.chatToolMessages = [];
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;

@@ -7,6 +7,12 @@ import {
   resetChatSlashCommandMetadataForTest,
 } from "./chat-commands.ts";
 import {
+  loadChatHistory,
+  loadOlderChatHistory,
+  type ChatHistoryResult,
+  type ChatState,
+} from "./chat-history.ts";
+import {
   admitQueuedMessageForSession,
   removeQueuedMessage,
   subscribeChatOutboxProjection,
@@ -474,6 +480,57 @@ describe("route composer fallback", () => {
     expect(state.chatError).toContain("remains available in this tab");
     expect(resetChatInputHistoryNavigation).toHaveBeenCalledTimes(2);
     expect(resetChatScroll).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears history pagination on route switch so a failed reload cannot reuse the old offset", async () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { state } = createRouteState("");
+    // Session A established older-page cursors.
+    state.chatHistoryOffset = 0;
+    state.chatHistoryNextOffset = 100;
+    state.chatHistoryHasMore = true;
+    state.chatHistoryTotalMessages = 250;
+    state.chatHistoryLoadingOlder = false;
+
+    const request = vi
+      .fn<(method: string, params: unknown) => Promise<ChatHistoryResult>>()
+      .mockRejectedValueOnce(new Error("history unavailable"))
+      .mockResolvedValueOnce({
+        messages: [{ role: "user", content: "b-newest", __openclaw: { seq: 5 } }],
+        offset: 0,
+        nextOffset: 100,
+        hasMore: true,
+        totalMessages: 180,
+      });
+    state.client = { request } as unknown as ChatPageHost["client"];
+    state.connected = true;
+    state.connectionEpoch = 0;
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    // Adopting a new session must drop the previous session's cursors atomically.
+    expect(state.chatHistoryHasMore).toBe(false);
+    expect(state.chatHistoryNextOffset).toBeNull();
+    expect(state.chatHistoryOffset).toBeNull();
+    expect(state.chatHistoryTotalMessages).toBeNull();
+    expect(state.chatHistoryLoadingOlder).toBe(false);
+
+    // The new session's first history load fails; a generic error must not
+    // resurrect the previous session's cursors.
+    await loadChatHistory(state as unknown as ChatState);
+    expect(state.chatHistoryHasMore).toBe(false);
+    expect(state.chatHistoryNextOffset).toBeNull();
+
+    // Top-scroll must be rejected: no older-page request may fire with a stale
+    // offset for the newly selected session.
+    await loadOlderChatHistory(state as unknown as ChatState);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // A later successful load establishes the new session's own cursor.
+    await loadChatHistory(state as unknown as ChatState);
+    expect(state.chatHistoryHasMore).toBe(true);
+    expect(state.chatHistoryNextOffset).toBe(100);
+    expect(state.chatHistoryTotalMessages).toBe(180);
   });
 
   it("adopts an unresolved bare-main fallback when the default agent becomes known", () => {

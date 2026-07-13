@@ -526,7 +526,7 @@ function setChatError(state: ChatState, error: string | null) {
   state.chatError = error;
 }
 
-function resetChatHistoryPagination(state: ChatState) {
+export function resetChatHistoryPagination(state: ChatState) {
   state.chatHistoryOffset = null;
   state.chatHistoryNextOffset = null;
   state.chatHistoryHasMore = false;
