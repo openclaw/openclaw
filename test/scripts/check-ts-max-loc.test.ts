@@ -8,6 +8,7 @@ import {
   findVersionedBaselineViolations,
   isProductionTypeScriptFile,
   parseArgs,
+  scopeLocRatchetViolations,
 } from "../../scripts/check-ts-max-loc.js";
 
 function runCheckTsMaxLoc(args: string[]) {
@@ -84,6 +85,28 @@ describe("scripts/check-ts-max-loc", () => {
       },
       { filePath: "src/removed.ts", lines: 0, baselineLines: 700, reason: "baseline-stale" },
     ]);
+  });
+
+  it("scopes pre-existing ratchet debt to files changed from the comparison base", () => {
+    const violations = [
+      { filePath: "src/changed.ts", lines: 701, baselineLines: 700, reason: "grew" as const },
+      { filePath: "src/unrelated.ts", lines: 702, baselineLines: 700, reason: "grew" as const },
+    ];
+
+    expect(
+      scopeLocRatchetViolations({
+        baselinePath: "scripts/ts-max-loc-baseline.json",
+        changedPaths: ["src/changed.ts"],
+        violations,
+      }),
+    ).toEqual([violations[0]]);
+    expect(
+      scopeLocRatchetViolations({
+        baselinePath: "scripts/ts-max-loc-baseline.json",
+        changedPaths: ["scripts/ts-max-loc-baseline.json"],
+        violations,
+      }),
+    ).toEqual(violations);
   });
 
   it("counts physical lines without treating a terminal newline as another line", () => {

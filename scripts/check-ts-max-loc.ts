@@ -111,6 +111,18 @@ export type LocRatchetViolation = LocResult & {
   reason: "baseline-missing" | "baseline-stale" | "grew";
 };
 
+export function scopeLocRatchetViolations(params: {
+  baselinePath: string;
+  changedPaths: readonly string[];
+  violations: readonly LocRatchetViolation[];
+}): LocRatchetViolation[] {
+  const changedPaths = new Set(params.changedPaths);
+  if (changedPaths.has(params.baselinePath)) {
+    return [...params.violations];
+  }
+  return params.violations.filter((violation) => changedPaths.has(violation.filePath));
+}
+
 export function findLocRatchetViolations(params: {
   baseline: LocBaseline;
   maxLines: number;
@@ -218,6 +230,16 @@ function tryGitOutput(args: string[]): string | undefined {
   }
 }
 
+function readChangedPaths(baseRef: string): string[] {
+  const tracked = execFileSync("git", ["diff", "--name-only", "-z", baseRef, "--"], {
+    encoding: "utf8",
+  });
+  const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+    encoding: "utf8",
+  });
+  return [...new Set(`${tracked}${untracked}`.split("\0").filter(Boolean))];
+}
+
 function resolveComparisonBaseRef(
   baselinePath: string,
   explicitBaseRef?: string,
@@ -307,13 +329,21 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
 
   const baseline = await readBaseline(baselinePath);
-  const baseBaseline = readBaselineAtRef(
-    resolveComparisonBaseRef(baselinePath, baseRef),
-    baselinePath,
-  );
+  const comparisonBaseRef = resolveComparisonBaseRef(baselinePath, baseRef);
+  const baseBaseline = readBaselineAtRef(comparisonBaseRef, baselinePath);
+  const ratchetViolations = findLocRatchetViolations({ baseline, maxLines, results });
+  // The comparison base owns pre-existing drift. Scope normal checks to this
+  // change so an unrelated PR cannot inherit and report another merge's debt.
+  const scopedRatchetViolations = comparisonBaseRef
+    ? scopeLocRatchetViolations({
+        baselinePath,
+        changedPaths: readChangedPaths(comparisonBaseRef),
+        violations: ratchetViolations,
+      })
+    : ratchetViolations;
   const violations = [
     ...(baseBaseline ? findVersionedBaselineViolations({ baseline, baseBaseline }) : []),
-    ...findLocRatchetViolations({ baseline, maxLines, results }),
+    ...scopedRatchetViolations,
   ];
   reportViolations(violations);
   return violations.length === 0 ? 0 : 1;
