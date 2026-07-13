@@ -549,7 +549,10 @@ export async function prepareCliRunContext(
   if (effectiveAuthProfileId) {
     authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
     authCredential = authStore.profiles[effectiveAuthProfileId];
-  } else if (backendResolved.prepareExecution || backendResolved.authEpochMode === "profile-only") {
+  } else if (
+    backendResolved.authEpochMode === "profile-only" ||
+    (backendResolved.prepareExecution && backendResolved.autoSelectAuthProfile !== false)
+  ) {
     authStore = loadScopedAuthStore();
     effectiveAuthProfileId =
       resolveAuthProfileOrder({
@@ -646,16 +649,47 @@ export async function prepareCliRunContext(
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
   const modelDisplay = `${params.provider}/${modelId}`;
   const isClaudeCli = isClaudeCliProvider(params.provider);
-  const contextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
-  const modelContextTokens = resolveContextTokensForModel({
-    cfg: params.config,
-    provider: params.provider,
-    modelProvider: backendResolved.modelProvider,
-    model: contextModelId,
-    fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
-    allowAsyncLoad: false,
-  });
-  const contextWindowInfo = resolveContextWindowInfo({
+  const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
+  const normalizedContextModelId = isClaudeCli
+    ? resolveClaudeCliContextModelId(normalizedModel)
+    : normalizedModel;
+  // Aliases can map a canonical id to a CLI shorthand or a user shorthand to
+  // a canonical id. Resolve both identities and keep the safest owned limit.
+  const contextModelIds = [
+    requestedContextModelId,
+    ...(normalizedContextModelId !== requestedContextModelId ? [normalizedContextModelId] : []),
+  ];
+  const resolveContextModelTokens = (contextModelId: string, allowUnscopedModelLookup: boolean) =>
+    resolveContextTokensForModel({
+      cfg: params.config,
+      provider: params.provider,
+      modelProvider: backendResolved.modelProvider,
+      model: contextModelId,
+      allowAsyncLoad: false,
+      allowUnscopedModelLookup,
+    });
+  let modelContextTokens: number | undefined;
+  for (const contextModelId of contextModelIds) {
+    const candidateContextTokens = resolveContextModelTokens(contextModelId, false);
+    if (candidateContextTokens !== undefined) {
+      modelContextTokens =
+        modelContextTokens === undefined
+          ? candidateContextTokens
+          : Math.min(modelContextTokens, candidateContextTokens);
+    }
+  }
+  // A process-wide bare-model cache has no provider provenance. If neither id
+  // has owned metadata, prefer the actual CLI target over the requested alias.
+  if (modelContextTokens === undefined) {
+    for (const contextModelId of contextModelIds.toReversed()) {
+      modelContextTokens = resolveContextModelTokens(contextModelId, true);
+      if (modelContextTokens !== undefined) {
+        break;
+      }
+    }
+  }
+  modelContextTokens ??= DEFAULT_CONTEXT_TOKENS;
+  const resolvedContextWindowInfo = resolveContextWindowInfo({
     cfg: params.config,
     provider: params.provider,
     modelId,
@@ -663,6 +697,12 @@ export async function prepareCliRunContext(
     agentContextTokens,
     defaultTokens: DEFAULT_CONTEXT_TOKENS,
   });
+  // The generic guard rechecks the requested id in config. An alias target may
+  // have a tighter owned limit, so the alias-aware result remains an upper bound.
+  const contextWindowInfo =
+    resolvedContextWindowInfo.tokens > modelContextTokens
+      ? { tokens: modelContextTokens, source: "model" as const }
+      : resolvedContextWindowInfo;
   const autoReseedHistoryChars = isClaudeCli
     ? resolveAutoCliSessionReseedHistoryChars(contextWindowInfo.tokens)
     : undefined;

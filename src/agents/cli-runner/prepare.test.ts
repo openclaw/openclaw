@@ -182,9 +182,11 @@ function createCliBackendConfig(
 
 function setCliBackendForPrepareTest(
   params: {
+    autoSelectAuthProfile?: boolean;
     command?: string;
     id?: string;
     liveSession?: boolean;
+    modelAliases?: Record<string, string>;
     modelProvider?: string;
     pluginId?: string;
     prepareExecution?: CliBackendPlugin["prepareExecution"];
@@ -203,6 +205,9 @@ function setCliBackendForPrepareTest(
         pluginId: params.pluginId ?? "anthropic",
         modelProvider: params.modelProvider ?? "anthropic",
         bundleMcp: false,
+        ...(params.autoSelectAuthProfile !== undefined
+          ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
+          : {}),
         ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
         config: {
           command: params.command ?? "claude",
@@ -211,6 +216,7 @@ function setCliBackendForPrepareTest(
           output: "jsonl",
           input: "stdin",
           sessionMode: params.sessionMode ?? "existing",
+          ...(params.modelAliases ? { modelAliases: params.modelAliases } : {}),
           ...(params.liveSession ? { liveSession: "claude-stdio" as const } : {}),
           ...(params.reseedFromRawTranscriptWhenUncompacted
             ? { reseedFromRawTranscriptWhenUncompacted: true }
@@ -272,12 +278,32 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       provider: "claude-cli",
       agentContextTokens: 80_000,
       expectedContextTokens: 80_000,
+      model: "claude-opus-4-7",
+      modelAliases: undefined,
+    },
+    {
+      name: "a Claude CLI user alias",
+      provider: "claude-cli",
+      agentContextTokens: undefined,
+      expectedContextTokens: 100_000,
+      model: "large",
+      modelAliases: { large: "claude-opus-4-7" },
+    },
+    {
+      name: "a Claude CLI-native alias",
+      provider: "claude-cli",
+      agentContextTokens: undefined,
+      expectedContextTokens: 100_000,
+      model: "claude-opus-4-7",
+      modelAliases: { "claude-opus-4-7": "deployment-large" },
     },
     {
       name: "a generic CLI backend alias",
       provider: "fixture-cli",
       agentContextTokens: undefined,
       expectedContextTokens: 100_000,
+      model: "claude-opus-4-7",
+      modelAliases: undefined,
     },
   ])("resolves canonical model budgets for $name", async (testCase) => {
     const { dir, sessionFile } = createSessionFile();
@@ -290,6 +316,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         modelProvider: "fixture-anthropic",
         pluginId: "fixture-plugin",
         prepareExecution,
+        modelAliases: testCase.modelAliases,
       });
       const context = await prepareCliRunContext({
         sessionId: "session-test",
@@ -297,7 +324,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         workspaceDir: dir,
         prompt: "latest ask",
         provider: testCase.provider,
-        model: "claude-opus-4-7",
+        model: testCase.model,
         timeoutMs: 1_000,
         runId: "run-configured-context-budget",
         config: {
@@ -312,6 +339,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
             providers: {
               "fixture-anthropic": {
                 baseUrl: "https://api.anthropic.com",
+                contextTokens: 200_000,
                 models: [
                   {
                     id: "claude-opus-4-7",
@@ -322,6 +350,36 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
                     contextWindow: 200_000,
                     maxTokens: 8_192,
                     contextTokens: 100_000,
+                  },
+                ],
+              },
+              "collision-provider": {
+                baseUrl: "https://collision.invalid",
+                models: [
+                  {
+                    id: "large",
+                    name: "Unrelated Large",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 32_000,
+                    maxTokens: 4_096,
+                    contextTokens: 32_000,
+                  },
+                ],
+              },
+              "claude-cli": {
+                baseUrl: "https://runtime.invalid",
+                models: [
+                  {
+                    id: "large",
+                    name: "Configured Alias Source",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200_000,
+                    maxTokens: 8_192,
+                    contextTokens: 200_000,
                   },
                 ],
               },
@@ -933,6 +991,71 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         }),
       );
       expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "keeps implicit profile selection for auth bridges",
+      autoSelectAuthProfile: undefined,
+      expectedAuthProfileId: "claude-cli:stored",
+    },
+    {
+      name: "lets environment-only hooks opt out of profile selection",
+      autoSelectAuthProfile: false,
+      expectedAuthProfileId: undefined,
+    },
+  ])("$name", async (testCase) => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "claude-cli:stored";
+    const prepareExecution = vi.fn(async () => ({ env: { TEST_PREPARED_ENV: "1" } }));
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "api_key",
+            provider: "claude-cli",
+            key: "stored-key",
+          },
+        },
+      },
+      agentDir,
+    );
+
+    try {
+      setCliBackendForPrepareTest({
+        prepareExecution,
+        autoSelectAuthProfile: testCase.autoSelectAuthProfile,
+      });
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        agentDir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-test-environment-only-prepare-hook",
+        config: {
+          auth: {
+            profiles: {
+              [authProfileId]: { provider: "claude-cli", mode: "api_key" },
+            },
+          },
+        },
+      });
+
+      expect(context.effectiveAuthProfileId).toBe(testCase.expectedAuthProfileId);
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ authProfileId: testCase.expectedAuthProfileId }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

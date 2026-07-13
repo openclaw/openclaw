@@ -201,6 +201,13 @@ export type CliBackendPlugin = {
    */
   authEpochMode?: CliBackendAuthEpochMode;
   /**
+   * Whether `prepareExecution` may auto-select a configured auth profile.
+   *
+   * Defaults to true for auth bridges. Set false for environment/config-only
+   * hooks that do not consume OpenClaw auth profiles.
+   */
+  autoSelectAuthProfile?: boolean;
+  /**
    * Backend-owned execution bridge.
    *
    * Use this on async run paths when the backend needs a generated auth/config

@@ -30,6 +30,7 @@ export type ContextTokenResolutionParams = {
   modelContextWindow?: number;
   modelContextTokens?: number;
   allowAsyncLoad?: boolean;
+  allowUnscopedModelLookup?: boolean;
 };
 
 const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
@@ -306,6 +307,10 @@ export function resolveContextTokensForModelFromCache(
     if (fixedContextWindow !== undefined) {
       return capOverride(fixedContextWindow);
     }
+  }
+
+  if (params.allowUnscopedModelLookup === false) {
+    return override ?? params.fallbackContextTokens;
   }
 
   // Model-only calls use the raw discovery key. With an explicit provider,

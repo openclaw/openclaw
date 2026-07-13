@@ -307,6 +307,34 @@ describe("createSessionManagerRuntimeRegistry", () => {
 });
 
 describe("resolveContextTokensForModel", () => {
+  it("can exclude unscoped cache entries from provider-owned lookup", () => {
+    resetContextWindowCacheForTest();
+    try {
+      applyDiscoveredContextWindows({
+        cache: MODEL_CONTEXT_TOKEN_CACHE,
+        models: [{ id: "large", contextTokens: 32_000 }],
+      });
+
+      expect(
+        resolveContextTokensForModel({
+          provider: "claude-cli",
+          model: "large",
+          allowAsyncLoad: false,
+          allowUnscopedModelLookup: false,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveContextTokensForModel({
+          provider: "claude-cli",
+          model: "large",
+          allowAsyncLoad: false,
+        }),
+      ).toBe(32_000);
+    } finally {
+      resetContextWindowCacheForTest();
+    }
+  });
+
   it("uses provider-level context defaults when no model-level cap is set", () => {
     const result = resolveContextTokensForModel({
       cfg: {

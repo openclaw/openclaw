@@ -100,6 +100,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
+    autoSelectAuthProfile: false,
     prepareExecution: ({ contextTokenBudget }) => {
       const env = resolveClaudeCliAutoCompactEnv(contextTokenBudget);
       return env ? { env } : undefined;
