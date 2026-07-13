@@ -1474,6 +1474,74 @@ describe("OpenResponses HTTP API (e2e)", () => {
     expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("Hello world");
   });
 
+  it("clears accumulated text on empty replace with mediaUrls:[]", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "Hello ", delta: "Hello " } });
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "world", delta: "world" } });
+      // Empty mediaUrls array is a placeholder, not actual media content.
+      // Must clear the buffer per existing non-media replacement semantics.
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "", delta: "", replace: true, mediaUrls: [] },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "Hello world" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const completed = JSON.parse(findSseEvent(events, "response.completed").data) as {
+      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
+    };
+
+    // Buffer was cleared, so final text is empty, not "Hello world"
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("");
+  });
+
+  it("clears accumulated text on empty replace with mediaUrl:\"\"", async () => {
+    const port = enabledPort;
+    agentCommand.mockClear();
+    agentCommand.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "Hello ", delta: "Hello " } });
+      emitAgentEvent({ runId, stream: "assistant", data: { text: "world", delta: "world" } });
+      // Empty mediaUrl string is a placeholder, not actual media content.
+      // Must clear the buffer per existing non-media replacement semantics.
+      emitAgentEvent({
+        runId,
+        stream: "assistant",
+        data: { text: "", delta: "", replace: true, mediaUrl: "" },
+      });
+      emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+      return { payloads: [{ text: "Hello world" }] };
+    }) as never);
+
+    const res = await postResponses(port, {
+      stream: true,
+      model: "openclaw",
+      input: "hi",
+    });
+
+    expect(res.status).toBe(200);
+    const events = parseSseEvents(await res.text());
+    const completed = JSON.parse(findSseEvent(events, "response.completed").data) as {
+      response?: { output?: Array<{ content?: Array<{ text?: string }> }> };
+    };
+
+    // Buffer was cleared, so final text is empty, not "Hello world"
+    expect(completed.response?.output?.[0]?.content?.[0]?.text).toBe("");
+  });
+
   it("prefers final result text over buffered replaceable response drafts", async () => {
     const port = enabledPort;
     agentCommand.mockClear();
