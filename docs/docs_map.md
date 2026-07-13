@@ -9540,7 +9540,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /tools/firecrawl
 - Headings:
   - H2: Install plugin
-  - H2: Keyless webfetch and API keys
+  - H2: Keyless access and API keys
   - H2: Configure Firecrawl search
   - H2: Configure Firecrawl webfetch fallback
   - H3: Self-hosted Firecrawl
