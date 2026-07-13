@@ -210,6 +210,7 @@ describe("buildEmbeddedSystemPrompt", () => {
     const prompt = buildEmbeddedSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       reasoningTagHint: false,
+      promptMode: "minimal",
       promptSurface: "subagent",
       runtimeInfo: {
         host: "local",
@@ -231,6 +232,9 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).not.toContain("Larger work: use `sessions_spawn`");
     expect(prompt).not.toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).toContain("Subagent-only command guidance.");
+    expect(prompt).toContain("## Promised Work");
+    expect(prompt).toContain("Progress like `running` is not completion");
+    expect(prompt.match(/## Promised Work/g)).toHaveLength(1);
   });
 
   it("can omit base memory guidance for non-legacy context engines", () => {
