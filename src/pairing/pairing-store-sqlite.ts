@@ -15,20 +15,14 @@ import {
   resolveAllowFromAccountId,
   safeChannelKey,
 } from "./pairing-store-keys.js";
-import type { PairingChannel } from "./pairing-store.types.js";
+import type { PairingChannel, PairingRequestRecord } from "./pairing-store.types.js";
+
+type PairingRequest = PairingRequestRecord;
 
 type PairingDatabase = Pick<
   OpenClawStateKyselyDatabase,
   "channel_pairing_allow_entries" | "channel_pairing_requests"
 >;
-
-type PairingRequest = {
-  id: string;
-  code: string;
-  createdAt: string;
-  lastSeenAt: string;
-  meta?: Record<string, string>;
-};
 
 export type ChannelPairingState = {
   version: 1;
