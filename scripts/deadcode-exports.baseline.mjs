@@ -1214,13 +1214,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/shared/entry-status.ts: evaluateEntryMetadataRequirements",
   "src/shared/entry-status.ts: evaluateEntryMetadataRequirementsForCurrentPlatform",
   "src/shared/node-match.ts: normalizeNodeKey",
-  "src/shared/requirements.ts: buildConfigChecks",
-  "src/shared/requirements.ts: evaluateRequirements",
-  "src/shared/requirements.ts: evaluateRequirementsFromMetadata",
-  "src/shared/requirements.ts: resolveMissingAnyBins",
-  "src/shared/requirements.ts: resolveMissingBins",
-  "src/shared/requirements.ts: resolveMissingEnv",
-  "src/shared/requirements.ts: resolveMissingOs",
   "src/shared/runtime-import.ts: resolveRuntimeImportSpecifier",
   "src/shared/silent-reply-policy.ts: DEFAULT_SILENT_REPLY_POLICY",
   "src/shared/subagents-format.ts: formatTokenShort",
@@ -1297,7 +1290,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/wizard/setup.migration-import.ts: inspectSetupMigrationFreshness",
   "src/wizard/setup.official-plugins.ts: resolveOfficialPluginOnboardingInstallEntries",
   "src/wizard/setup.official-plugins.ts: testing",
-  "ui/src/pages/chat/chat-settings-patches.ts: trackPendingChatSettingsPatch",
 ];
 
 // Platform-variant findings. Allowed when present; never required.
