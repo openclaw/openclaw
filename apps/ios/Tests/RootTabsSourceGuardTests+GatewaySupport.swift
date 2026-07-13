@@ -64,6 +64,7 @@ extension RootTabsSourceGuardTests {
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
         #expect(sectionsSource.contains("This phone has limited Gateway access."))
+        #expect(sectionsSource.contains("Use a secure wss:// or Tailscale Serve Gateway"))
         #expect(sectionsSource.contains("Label(\"Scan Full-Access Code\""))
         #expect(sectionsSource.contains("self.gatewayActions"))
         #expect(sectionsSource.contains("self.manualGatewayCard"))

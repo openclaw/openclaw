@@ -1623,7 +1623,7 @@ internal fun gatewayAccessLabel(
 
 internal fun gatewayLimitedAccessUpgradeText(): String =
   nativeString(
-    "Generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below to enable settings and upgrades.",
+    "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
   )
 
 @Composable

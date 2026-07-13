@@ -36,20 +36,20 @@ const MOBILE_FULL_ACCESS_OPERATOR_SCOPES = [
 
 const MOBILE_FULL_ACCESS_OPERATOR_SCOPE_SET = new Set<string>(MOBILE_FULL_ACCESS_OPERATOR_SCOPES);
 
-/** Default setup-code/QR bootstrap profile for native onboarding handoff. */
+/** Existing least-privilege setup-code/QR profile. */
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   // QR/setup-code bootstrap must hand off both tokens for native onboarding:
   // iOS/Android suppress the operator loop while bootstrap auth is active and
   // only start it after persisting this bounded operator token.
   roles: ["node", "operator"],
-  scopes: [...MOBILE_FULL_ACCESS_OPERATOR_SCOPES],
-  purpose: "mobile-full",
+  scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
 
-/** Explicit least-privilege mobile setup profile. */
-export const LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
+/** Full native-mobile setup profile for explicitly authorized setup surfaces. */
+export const FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
   roles: ["node", "operator"],
-  scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
+  scopes: [...MOBILE_FULL_ACCESS_OPERATOR_SCOPES],
+  purpose: "mobile-full",
 };
 
 /** Node-only setup profile for companions that never act as operators. */
@@ -81,22 +81,20 @@ function matchesBootstrapProfile(
   return deviceBootstrapProfilesEqual(input, expected);
 }
 
-/** Return whether an input exactly matches the limited mobile setup profile. */
-function isLimitedPairingSetupBootstrapProfile(
-  input: DeviceBootstrapProfileInput | undefined,
-): boolean {
-  return matchesBootstrapProfile(input, LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE);
-}
-
 /** Return whether an input matches either supported native-mobile setup profile. */
 export function isMobilePairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
-  return isPairingSetupBootstrapProfile(input) || isLimitedPairingSetupBootstrapProfile(input);
+  return (
+    isPairingSetupBootstrapProfile(input) ||
+    matchesBootstrapProfile(input, FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)
+  );
 }
 
-/** Return whether an input exactly matches the current setup-code bootstrap profile. */
-function isPairingSetupBootstrapProfile(input: DeviceBootstrapProfileInput | undefined): boolean {
+/** Return whether an input exactly matches the existing limited setup profile. */
+export function isPairingSetupBootstrapProfile(
+  input: DeviceBootstrapProfileInput | undefined,
+): boolean {
   return matchesBootstrapProfile(input, PAIRING_SETUP_BOOTSTRAP_PROFILE);
 }
 

@@ -4564,9 +4564,9 @@
       "translated": "Limited"
     },
     {
-      "id": "native.android.6ed5e7c96e0ae21a",
-      "source": "Generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below to enable settings and upgrades.",
-      "translated": "Generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below to enable settings and upgrades."
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades."
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -11389,9 +11389,9 @@
       "translated": "This phone has limited Gateway access."
     },
     {
-      "id": "native.apple.6b55386e269b6dee",
-      "source": "Scan a full-access setup code from the Control UI or openclaw qr, then reconnect to enable settings and upgrades.",
-      "translated": "Scan a full-access setup code from the Control UI or openclaw qr, then reconnect to enable settings and upgrades."
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades."
     },
     {
       "id": "native.apple.666cea428e126188",

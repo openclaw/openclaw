@@ -66,14 +66,7 @@ describe("device bootstrap tokens", () => {
     expect(records[issued.token]?.issuedAtMs).toBe(Date.now());
     expect(records[issued.token]?.profile).toEqual({
       roles: ["node", "operator"],
-      scopes: [
-        "operator.admin",
-        "operator.approvals",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ],
-      purpose: "mobile-full",
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
   });
 
@@ -162,14 +155,7 @@ describe("device bootstrap tokens", () => {
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
       {
         roles: ["node", "operator"],
-        scopes: [
-          "operator.admin",
-          "operator.approvals",
-          "operator.read",
-          "operator.talk.secrets",
-          "operator.write",
-        ],
-        purpose: "mobile-full",
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       },
     );
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
@@ -301,7 +287,7 @@ describe("device bootstrap tokens", () => {
     expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toBeDefined();
   });
 
-  it("allows admin verification for the default full-mobile profile", async () => {
+  it("rejects admin verification for the least-privilege default profile", async () => {
     const baseDir = await createTempDir();
     const issued = await issueDeviceBootstrapToken({ baseDir });
 
@@ -310,7 +296,7 @@ describe("device bootstrap tokens", () => {
         role: "operator",
         scopes: ["operator.admin"],
       }),
-    ).resolves.toEqual({ ok: true });
+    ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
 
     expect(loadDeviceBootstrapTokenRecords(baseDir)[issued.token]).toBeDefined();
   });
@@ -420,6 +406,12 @@ describe("device bootstrap tokens", () => {
         purpose: "mobile-full",
       },
     );
+    await expect(
+      verifyBootstrapToken(baseDir, issued.token, {
+        role: "operator",
+        scopes: ["operator.admin"],
+      }),
+    ).resolves.toEqual({ ok: true });
   });
 
   it("logs when issued bootstrap profiles strip overbroad scopes", async () => {
@@ -533,14 +525,7 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({
       roles: ["node", "operator"],
-      scopes: [
-        "operator.admin",
-        "operator.approvals",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ],
-      purpose: "mobile-full",
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
   });
 

@@ -233,6 +233,10 @@ export const en: TranslationMap = {
       fullAccessHint: "Node plus complete Gateway controls, including settings and upgrades.",
       limitedAccess: "Limited access",
       limitedAccessHint: "Node, chat, and approvals without administrative controls.",
+      generateCode: "Create setup code",
+      transportLimitedTitle: "Limited for network safety",
+      transportLimitedHint:
+        "This Gateway URL uses plaintext ws://. Use wss:// or Tailscale Serve, then create a new code for full access.",
       failed: "Could not create a setup code.",
       qrAlt: "OpenClaw mobile pairing QR code",
       qrUnavailable: "QR unavailable. Copy the setup code instead.",

@@ -38,22 +38,27 @@ openclaw devices approve <requestId>
 - `--limited`: omit administrative Gateway access from the handed-off operator token
 - `--setup-code-only`: print only the setup code
 - `--no-ascii`: skip ASCII QR rendering
-- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, `urlSource`)
+- `--json`: emit JSON (`setupCode`, `gatewayUrl`, optional `gatewayUrls`, `auth`, `access`, optional `accessDowngraded`, `urlSource`)
 
 `--token` and `--password` are mutually exclusive.
 
 ## Setup code contents
 
-The setup code carries an opaque, short-lived `bootstrapToken`, not the shared gateway token/password. By default, the built-in bootstrap flow issues:
+The setup code carries an opaque, short-lived `bootstrapToken`, not the shared gateway token/password. For a `wss://` endpoint (or same-host loopback), the default bootstrap flow issues:
 
 - a primary `node` token with `scopes: []`
 - a full native-mobile `operator` handoff token with `operator.admin`, `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`
 
 Use `--limited` to keep the same node token while omitting `operator.admin` from the operator handoff. Pairing-mutation scope is never handed off by a setup code.
 
+Plaintext LAN `ws://` setup remains available, but OpenClaw automatically uses
+the limited profile because a network observer could capture and race the bearer
+bootstrap token. Configure `wss://` or Tailscale Serve, then generate a new code
+to get full access.
+
 ## Gateway URL resolution
 
-Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs: use Tailscale Serve/Funnel or a `wss://` gateway URL for those. Private LAN addresses and `.local` Bonjour hosts remain supported over plain `ws://`.
+Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs: use Tailscale Serve/Funnel or a `wss://` gateway URL for those. Private LAN addresses and `.local` Bonjour hosts remain supported over plain `ws://`, with limited operator access as described above.
 
 When the selected Gateway URL comes from `gateway.bind=lan`, OpenClaw also checks persistent `tailscale serve status --json` routes. Any HTTPS Serve root that proxies the active Gateway's loopback port is included as a fallback. The QR command adds this fallback only for `lan`; `custom` and `tailnet` keep their explicitly advertised routes. Current iOS clients probe the advertised routes in order and save the first reachable one; the legacy `url` field remains unchanged for older clients.
 

@@ -57,6 +57,8 @@ const okResolution = {
   },
   authLabel: "token" as const,
   urlSource: "remote",
+  access: "full" as const,
+  accessDowngraded: false,
 };
 
 describe("device.pair.setupCode", () => {
@@ -92,9 +94,30 @@ describe("device.pair.setupCode", () => {
       gatewayUrls: ["wss://gw.example:8443", "ws://192.168.1.20:18789"],
       auth: "token",
       urlSource: "remote",
+      access: "full",
     });
     // The bootstrap token only lives inside the (opaque) setup code, never as a field.
     expect(JSON.stringify(payload)).not.toContain("boot-123");
+  });
+
+  it("reports when plaintext transport limits a requested full-access code", async () => {
+    mocks.resolvePairingSetupFromConfig.mockResolvedValue({
+      ...okResolution,
+      access: "limited",
+      accessDowngraded: true,
+    });
+    mocks.encodePairingSetupCode.mockReturnValue("SETUP-CODE-XYZ");
+
+    const { options, respond } = createOptions({ includeQr: false });
+    await expectDefined(
+      devicePairSetupHandlers["device.pair.setupCode"],
+      'devicePairSetupHandlers["device.pair.setupCode"] test invariant',
+    )(options);
+
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({
+      access: "limited",
+      accessDowngraded: true,
+    });
   });
 
   it("preserves the configured device-pair public URL fallback", async () => {

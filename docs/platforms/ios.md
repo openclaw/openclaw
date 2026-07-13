@@ -45,7 +45,7 @@ creation has a token or password auth path.
 2. Open the [Control UI](/web/control-ui), select **Nodes**, and click
    **Pair mobile device** on the **Devices** page. Full access is recommended
    and selected by default; choose Limited access only when you want to omit
-   administrative Gateway controls.
+   administrative Gateway controls, then click **Create setup code**.
 
 3. In the iOS app, open **Settings** -> **Gateway**, scan the QR code (or paste
    the setup code), and connect.
@@ -57,9 +57,10 @@ creation has a token or password auth path.
    request, review its role and scopes before approving it.
 
    **Settings → Gateway** shows whether the saved operator connection has
-   **Full** or **Limited** access. If it is limited, scan a new full-access code
-   from Control UI or `openclaw qr`, then reconnect to enable settings and
-   upgrades.
+   **Full** or **Limited** access. Plaintext LAN `ws://` setup is automatically
+   limited for bearer-token safety. If it is limited, configure `wss://` or
+   Tailscale Serve, scan a new full-access code from Control UI or `openclaw qr`,
+   then reconnect to enable settings and upgrades.
 
 The Control UI button requires an already paired session with `operator.admin`.
 As a terminal fallback, pick a discovered gateway in the iOS app (or enable

@@ -2,11 +2,12 @@
 import { describe, expect, test } from "vitest";
 import {
   BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
-  LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   isMobilePairingSetupBootstrapProfile,
   isNodePairingSetupBootstrapProfile,
+  isPairingSetupBootstrapProfile,
   normalizeDeviceBootstrapHandoffProfile,
   normalizeDeviceBootstrapProfile,
   resolveBootstrapProfileScopesForRole,
@@ -100,8 +101,8 @@ describe("device bootstrap profile", () => {
     });
   });
 
-  test("default setup profile carries node plus full native operator access", () => {
-    expect(PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
+  test("full setup profile carries node plus full native operator access", () => {
+    expect(FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
       roles: ["node", "operator"],
       scopes: [
         "operator.admin",
@@ -114,14 +115,13 @@ describe("device bootstrap profile", () => {
     });
   });
 
-  test("limited setup profile preserves the bounded operator handoff", () => {
-    expect(LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
+  test("existing setup profile preserves the bounded operator handoff", () => {
+    expect(PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
       roles: ["node", "operator"],
       scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
-    expect(isMobilePairingSetupBootstrapProfile(LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(
-      true,
-    );
+    expect(isPairingSetupBootstrapProfile(PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
+    expect(isPairingSetupBootstrapProfile(FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(false);
   });
 
   test("node setup profile carries no operator access", () => {
@@ -130,8 +130,11 @@ describe("device bootstrap profile", () => {
     expect(isMobilePairingSetupBootstrapProfile(NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(false);
   });
 
-  test("recognizes only the current setup profile", () => {
+  test("recognizes only the supported mobile setup profiles", () => {
     expect(isMobilePairingSetupBootstrapProfile(PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(true);
+    expect(isMobilePairingSetupBootstrapProfile(FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE)).toBe(
+      true,
+    );
     expect(
       isMobilePairingSetupBootstrapProfile({
         roles: ["node", "operator"],

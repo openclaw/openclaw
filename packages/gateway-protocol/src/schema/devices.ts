@@ -119,6 +119,8 @@ export const DevicePairSetupCodeParamsSchema = Type.Object(
 /**
  * Setup code plus non-secret connection metadata. `auth` is a label only
  * ("token" | "password"); the gateway credential itself is never returned.
+ * `accessDowngraded` reports the plaintext-LAN safety fallback from full to
+ * limited access so the presenting client can explain how to upgrade.
  */
 export const DevicePairSetupCodeResultSchema = Type.Object(
   {
@@ -130,6 +132,10 @@ export const DevicePairSetupCodeResultSchema = Type.Object(
     ),
     auth: Type.Union([Type.Literal("token"), Type.Literal("password")]),
     urlSource: NonEmptyString,
+    access: Type.Optional(
+      Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
+    ),
+    accessDowngraded: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

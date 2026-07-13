@@ -33,14 +33,7 @@ vi.mock("./api.js", () => {
   return {
     PAIRING_SETUP_BOOTSTRAP_PROFILE: {
       roles: ["node", "operator"],
-      scopes: [
-        "operator.admin",
-        "operator.approvals",
-        "operator.read",
-        "operator.talk.secrets",
-        "operator.write",
-      ],
-      purpose: "mobile-full",
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     },
     approveDevicePairing: vi.fn(),
     clearDeviceBootstrapTokens: pluginApiMocks.clearDeviceBootstrapTokens,
@@ -300,7 +293,7 @@ describe("device-pair /pair qr", () => {
     const result = await command.handler(
       createCommandContext({
         channel: "webchat",
-        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        gatewayClientScopes: ["operator.admin"],
       }),
     );
     const payload = result as {
@@ -816,7 +809,19 @@ describe("device-pair /pair default setup code", () => {
     );
     const text = requireText(result);
 
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      profile: {
+        roles: ["node", "operator"],
+        scopes: [
+          "operator.admin",
+          "operator.approvals",
+          "operator.read",
+          "operator.talk.secrets",
+          "operator.write",
+        ],
+        purpose: "mobile-full",
+      },
+    });
     expect(text).toContain("Pairing setup code generated.");
   });
 
@@ -840,13 +845,35 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        gatewayClientScopes: ["operator.admin"],
       }),
     );
     const text = requireText(result);
 
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(text).toContain("Gateway: wss://gateway.example.test:18789");
+  });
+
+  it("keeps secure setup limited for non-admin gateway callers", async () => {
+    const command = registerPairCommand();
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      profile: {
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      },
+    });
+    const text = requireText(result);
+    expect(text).toContain("Access: limited");
+    expect(text).not.toContain("Plaintext ws:// was limited for safety");
   });
 
   it("allows loopback cleartext setup urls", async () => {
@@ -904,12 +931,20 @@ describe("device-pair /pair default setup code", () => {
         channel: "webchat",
         args: "",
         commandBody: "/pair",
-        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+        gatewayClientScopes: ["operator.admin"],
       }),
     );
 
-    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
-    expect(requireText(result)).toContain("Gateway: ws://192.168.1.20:18789");
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledWith({
+      profile: {
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      },
+    });
+    const text = requireText(result);
+    expect(text).toContain("Gateway: ws://192.168.1.20:18789");
+    expect(text).toContain("Access: limited");
+    expect(text).toContain("Plaintext ws:// was limited for safety");
   });
 
   it.each([

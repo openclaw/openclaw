@@ -2,7 +2,10 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
-import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 const mocks = vi.hoisted(() => ({
@@ -146,6 +149,8 @@ describe("registerQrCli", () => {
       gatewayUrl?: string;
       auth?: string;
       urlSource?: string;
+      access?: "full" | "limited";
+      accessDowngraded?: boolean;
     };
   }
 
@@ -159,6 +164,12 @@ describe("registerQrCli", () => {
 
   function expectLoggedLocalSetupCode() {
     expectLoggedSetupCode("ws://127.0.0.1:18789");
+  }
+
+  function expectLimitedTransportWarning() {
+    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("setup code was limited for safety");
+    expect(output).toContain("Use wss:// or Tailscale Serve");
   }
 
   function mockTailscaleStatusLookup() {
@@ -202,7 +213,7 @@ describe("registerQrCli", () => {
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
     expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
-      expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
+      expect.objectContaining({ profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
   });
 
@@ -281,6 +292,10 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only"]);
 
     expectLoggedSetupCode("ws://192.168.1.8:18789");
+    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
+    );
+    expectLimitedTransportWarning();
   });
 
   it("allows android emulator cleartext override urls", async () => {
@@ -294,6 +309,10 @@ describe("registerQrCli", () => {
     await runQr(["--setup-code-only", "--url", "ws://10.0.2.2:18789"]);
 
     expectLoggedSetupCode("ws://10.0.2.2:18789");
+    expect(issueDeviceBootstrapToken).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: PAIRING_SETUP_BOOTSTRAP_PROFILE }),
+    );
+    expectLimitedTransportWarning();
   });
 
   it("rejects invalid override urls before printing setup codes", async () => {
@@ -518,6 +537,8 @@ describe("registerQrCli", () => {
     expect(payload.gatewayUrl).toBe("wss://remote.example.com:444");
     expect(payload.auth).toBe("token");
     expect(payload.urlSource).toBe("gateway.remote.url");
+    expect(payload.access).toBe("full");
+    expect(payload.accessDowngraded).toBeUndefined();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 

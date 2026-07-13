@@ -1,6 +1,9 @@
 // Covers device pairing, token, and role lifecycle behavior.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
+import {
+  FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
+} from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
@@ -1456,7 +1459,7 @@ describe("device pairing tokens", () => {
 
     const approved = await approveBootstrapDevicePairing(
       request.request.requestId,
-      PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       baseDir,
     );
     expectRecordFields(approved, "approved result", { status: "approved" });

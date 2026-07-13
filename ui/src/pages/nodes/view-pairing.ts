@@ -52,7 +52,7 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
         </header>
 
         <div class="device-pair-setup__body">
-          <fieldset class="device-pair-setup__access">
+          <fieldset class="device-pair-setup__access" ?disabled=${props.loading || setup !== null}>
             <legend>${t("nodes.pairing.accessTitle")}</legend>
             <label>
               <input
@@ -79,6 +79,13 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
               </span>
             </label>
           </fieldset>
+          ${!setup && !props.loading && !props.error
+            ? html`
+                <button class="btn primary" type="button" @click=${props.onRefresh}>
+                  ${icons.smartphone} ${t("nodes.pairing.generateCode")}
+                </button>
+              `
+            : nothing}
           ${props.loading && !setup
             ? html`
                 <div class="device-pair-setup__loading" role="status">
@@ -130,6 +137,15 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
                     )}
                   </div>
                 </div>
+
+                ${setup.accessDowngraded
+                  ? html`
+                      <div class="callout warn device-pair-setup__access-warning" role="status">
+                        <strong>${t("nodes.pairing.transportLimitedTitle")}</strong>
+                        <span>${t("nodes.pairing.transportLimitedHint")}</span>
+                      </div>
+                    `
+                  : nothing}
 
                 <div class="device-pair-setup__actions">
                   <button

@@ -50,7 +50,6 @@ const devicePairSetupRequests = new WeakMap<DevicePairSetupState, object>();
 
 export async function openDevicePairSetup(state: DevicePairSetupState) {
   state.devicePairSetupOpen = true;
-  await refreshDevicePairSetup(state);
 }
 
 export async function refreshDevicePairSetup(state: DevicePairSetupState) {
@@ -75,6 +74,9 @@ export async function refreshDevicePairSetup(state: DevicePairSetupState) {
     ) {
       return;
     }
+    if (result.access === "full" || result.access === "limited") {
+      state.devicePairSetupAccess = result.access;
+    }
     state.devicePairSetup = result;
   } catch (err) {
     if (
@@ -97,16 +99,17 @@ export async function setDevicePairSetupAccess(
   state: DevicePairSetupState,
   access: DevicePairSetupAccess,
 ) {
-  if (state.devicePairSetupAccess === access) {
+  if (
+    state.devicePairSetupAccess === access ||
+    state.devicePairSetupLoading ||
+    state.devicePairSetup !== null
+  ) {
     return;
   }
-  // Retire the old request result before issuing one with the new access profile.
-  devicePairSetupRequests.delete(state);
+  // Choose access before minting a bearer setup credential. Once a code exists,
+  // closing the dialog starts a fresh selection instead of implying revocation.
   state.devicePairSetupAccess = access;
-  state.devicePairSetupLoading = false;
   state.devicePairSetupError = null;
-  state.devicePairSetup = null;
-  await refreshDevicePairSetup(state);
 }
 
 export function closeDevicePairSetup(state: DevicePairSetupState) {

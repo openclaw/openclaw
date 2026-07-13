@@ -7301,9 +7301,9 @@
       "kind": "ui-call",
       "line": 1625,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
-      "source": "Generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below to enable settings and upgrades.",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
       "surface": "android",
-      "id": "native.android.6ed5e7c96e0ae21a"
+      "id": "native.android.f6ab96d066bd583c"
     },
     {
       "kind": "ui-call",
@@ -18221,9 +18221,9 @@
       "kind": "ui-call",
       "line": 325,
       "path": "apps/ios/Sources/Design/SettingsProTabSections.swift",
-      "source": "Scan a full-access setup code from the Control UI or openclaw qr, then reconnect to enable settings and upgrades.",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
       "surface": "apple",
-      "id": "native.apple.6b55386e269b6dee"
+      "id": "native.apple.7793f5de6975faef"
     },
     {
       "kind": "ui-call",

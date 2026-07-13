@@ -145,6 +145,8 @@ class SettingsScreensTest {
     assertEquals("Limited", gatewayAccessLabel(isConnected = true, operatorAdminScopeAvailable = false))
     assertEquals("Full", gatewayAccessLabel(isConnected = true, operatorAdminScopeAvailable = true))
     assertTrue(gatewayLimitedAccessUpgradeText().contains("full-access setup code"))
+    assertTrue(gatewayLimitedAccessUpgradeText().contains("wss://"))
+    assertTrue(gatewayLimitedAccessUpgradeText().contains("Tailscale Serve"))
     assertTrue(gatewayLimitedAccessUpgradeText().contains("settings and upgrades"))
   }
 

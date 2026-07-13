@@ -113,15 +113,17 @@ export function registerControlUiAndPairingSuite(): void {
     limited?: boolean;
   }) => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+    const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(params.identityPrefix);
     const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
     try {
-      const issued = await issueDeviceBootstrapToken(
-        params.limited ? { profile: LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE } : {},
-      );
+      const issued = await issueDeviceBootstrapToken({
+        profile: params.limited
+          ? PAIRING_SETUP_BOOTSTRAP_PROFILE
+          : FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      });
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,
         bootstrapToken: issued.token,
@@ -1137,6 +1139,8 @@ export function registerControlUiAndPairingSuite(): void {
     const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+      await import("../shared/device-bootstrap-profile.js");
     const { getPairedDevice, listDevicePairing, verifyDeviceToken } =
       await import("../infra/device-pairing.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
@@ -1153,7 +1157,9 @@ export function registerControlUiAndPairingSuite(): void {
     };
 
     try {
-      const issued = await issueDeviceBootstrapToken();
+      const issued = await issueDeviceBootstrapToken({
+        profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      });
       const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const initial = await connectReq(wsBootstrap, {
         skipDefaultAuth: true,
@@ -1538,7 +1544,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { approveBootstrapDevicePairing, requestDevicePairing } =
       await import("../infra/device-pairing.js");
-    const { PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+    const { FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
       await import("../shared/device-bootstrap-profile.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
     const { identityPath, identity } = await createOperatorIdentityFixture(
@@ -1553,7 +1559,9 @@ export function registerControlUiAndPairingSuite(): void {
     };
 
     try {
-      const issued = await issueDeviceBootstrapToken();
+      const issued = await issueDeviceBootstrapToken({
+        profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      });
       const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
       const pending = await requestDevicePairing({
         deviceId: identity.deviceId,
@@ -1576,7 +1584,7 @@ export function registerControlUiAndPairingSuite(): void {
       });
       await approveBootstrapDevicePairing(
         pending.request.requestId,
-        PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
       );
 
       const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);

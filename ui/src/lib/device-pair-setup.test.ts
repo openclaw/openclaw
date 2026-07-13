@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   closeDevicePairSetup,
   createDevicePairSetupState,
+  openDevicePairSetup,
   refreshDevicePairSetup,
   setDevicePairSetupAccess,
   type DevicePairSetup,
@@ -17,12 +18,18 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function setupResult(setupCode: string): DevicePairSetup {
+function setupResult(
+  setupCode: string,
+  access?: "full" | "limited",
+  accessDowngraded?: boolean,
+): DevicePairSetup {
   return {
     setupCode,
     gatewayUrl: "wss://gateway.example.com",
     auth: "token",
     urlSource: "test",
+    ...(access ? { access } : {}),
+    ...(accessDowngraded ? { accessDowngraded: true } : {}),
   };
 }
 
@@ -33,6 +40,19 @@ function stateWithClient(client: DevicePairSetupState["client"]): DevicePairSetu
 }
 
 describe("device pairing setup state", () => {
+  it("opens without minting a setup credential", async () => {
+    const request = vi.fn();
+    const state = createDevicePairSetupState({
+      client: { request } as unknown as DevicePairSetupState["client"],
+      connected: true,
+    });
+
+    await openDevicePairSetup(state);
+
+    expect(state.devicePairSetupOpen).toBe(true);
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("ignores a setup response from a replaced Gateway client", async () => {
     const oldResponse = deferred<DevicePairSetup>();
     const newResponse = deferred<DevicePairSetup>();
@@ -103,7 +123,7 @@ describe("device pairing setup state", () => {
     expect(state.devicePairSetupAccess).toBe("full");
   });
 
-  it("regenerates the setup code with the selected limited profile", async () => {
+  it("selects limited access before issuing a setup code", async () => {
     const request = vi.fn().mockResolvedValue(setupResult("LIMITED"));
     const client = {
       request,
@@ -112,10 +132,25 @@ describe("device pairing setup state", () => {
 
     await setDevicePairSetupAccess(state, "limited");
 
+    expect(request).not.toHaveBeenCalled();
+    await refreshDevicePairSetup(state);
+
     expect(request).toHaveBeenCalledWith("device.pair.setupCode", {
       bootstrapProfile: "limited",
     });
     expect(state.devicePairSetupAccess).toBe("limited");
     expect(state.devicePairSetup?.setupCode).toBe("LIMITED");
+  });
+
+  it("reflects a server-side plaintext downgrade", async () => {
+    const request = vi.fn().mockResolvedValue(setupResult("LIMITED", "limited", true));
+    const state = stateWithClient({
+      request,
+    } as unknown as DevicePairSetupState["client"]);
+
+    await refreshDevicePairSetup(state);
+
+    expect(state.devicePairSetupAccess).toBe("limited");
+    expect(state.devicePairSetup?.accessDowngraded).toBe(true);
   });
 });

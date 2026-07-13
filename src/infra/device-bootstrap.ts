@@ -90,6 +90,8 @@ function resolveIssuedBootstrapProfile(params: {
     // Issued tokens can request many roles/scopes, but bootstrap handoff persists only the allowlist.
     return normalizeDeviceBootstrapHandoffProfile(input);
   }
+  // Generic bootstrap callers stay least-privilege. Official mobile setup
+  // passes the full profile explicitly after validating the advertised URL.
   return PAIRING_SETUP_BOOTSTRAP_PROFILE;
 }
 

@@ -12,8 +12,8 @@ import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { encodePairingSetupCode, resolvePairingSetupFromConfig } from "../../pairing/setup-code.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
-  LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../../shared/device-bootstrap-profile.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -58,7 +58,7 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
               bootstrapProfile:
                 params.bootstrapProfile === "node"
                   ? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
-                  : LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+                  : PAIRING_SETUP_BOOTSTRAP_PROFILE,
             }
           : {}),
         // Lets Tailscale serve/funnel URLs resolve, mirroring the `openclaw qr` CLI.
@@ -88,6 +88,8 @@ export const devicePairSetupHandlers: GatewayRequestHandlers = {
           // Label only — never the raw gateway token/password.
           auth: resolved.authLabel,
           urlSource: requestPublicUrl ? "request.publicUrl" : resolved.urlSource,
+          access: resolved.access,
+          ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
         },
         undefined,
       );
