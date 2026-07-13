@@ -12,16 +12,18 @@ import {
   validateMigrationsMemoryPlanParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { stableStringify } from "../../agents/stable-stringify.js";
 import { runMigrationApply } from "../../commands/migrate/apply.js";
 import { buildMigrationContext } from "../../commands/migrate/context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { bindMemoryMigrationPlanSources } from "../../plugin-sdk/memory-migration-source.js";
 import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
 import {
   ensureStandaloneMigrationProviderRegistryLoaded,
   resolvePluginMigrationProviders,
 } from "../../plugins/migration-provider-runtime.js";
 import type { MigrationItem, MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -58,6 +60,14 @@ function memoryOnlyPlan(plan: MigrationPlan): MigrationPlan {
       `memory import found ${items.length} items; the maximum is ${MAX_MEMORY_MIGRATION_ITEMS}. Narrow or split the source memory before importing.`,
     );
   }
+  const unsupported = items.find(
+    (item) => (item.status === "planned" || item.status === "conflict") && item.action !== "copy",
+  );
+  if (unsupported) {
+    throw new Error(
+      `memory import only supports copy actions; ${unsupported.id} uses ${unsupported.action}`,
+    );
+  }
   return { ...plan, items, summary: summarizeMigrationItems(items) };
 }
 
@@ -83,21 +93,28 @@ function fingerprintMemoryPlan(params: {
   return crypto
     .createHash("sha256")
     .update(
-      JSON.stringify({
-        version: 1,
+      stableStringify({
+        version: 2,
         agentId: params.agentId,
         workspace: params.workspace,
         providerId: params.providerId,
         overwrite: params.overwrite === true,
-        source: params.plan.source,
-        target: params.plan.target ?? null,
-        items: params.plan.items.map((item) => ({
-          id: item.id,
-          status: item.status,
-          source: item.source ?? null,
-          target: item.target ?? null,
-          reason: item.reason ?? null,
-        })),
+        plan: {
+          source: params.plan.source,
+          target: params.plan.target ?? null,
+          items: params.plan.items.map((item) => ({
+            id: item.id,
+            kind: item.kind,
+            action: item.action,
+            status: item.status,
+            source: item.source ?? null,
+            target: item.target ?? null,
+            reason: item.reason ?? null,
+            sensitive: item.sensitive === true,
+            sourceRevision: item.sourceRevision ?? null,
+            details: item.details ?? null,
+          })),
+        },
       }),
     )
     .digest("hex");
@@ -108,6 +125,10 @@ function targetAgentOrRespond(
   config: OpenClawConfig,
   respond: RespondFn,
 ): string | undefined {
+  if (!isValidAgentId(rawAgentId)) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid agent id"));
+    return undefined;
+  }
   const agentId = normalizeAgentId(rawAgentId);
   if (!new Set(listAgentIds(config)).has(agentId)) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agent id"));
@@ -148,7 +169,10 @@ async function planMemoryProvider(params: {
         items: [],
       };
     }
-    const plan = memoryOnlyPlan(await params.provider.plan(ctx));
+    const plan = await bindMemoryMigrationPlanSources(
+      memoryOnlyPlan(await params.provider.plan(ctx)),
+      { includeConflicts: params.overwrite === true },
+    );
     const found = plan.items.length > 0;
     const workspace = resolveAgentWorkspaceDir(params.config, params.agentId);
     return {
@@ -271,7 +295,9 @@ export const migrationsHandlers: GatewayRequestHandlers = {
         overwrite: params.overwrite,
         json: true,
       });
-      const plan = memoryOnlyPlan(await provider.plan(ctx));
+      const plan = await bindMemoryMigrationPlanSources(memoryOnlyPlan(await provider.plan(ctx)), {
+        includeConflicts: params.overwrite === true,
+      });
       const currentFingerprint = fingerprintMemoryPlan({
         agentId,
         workspace: resolveAgentWorkspaceDir(config, agentId),

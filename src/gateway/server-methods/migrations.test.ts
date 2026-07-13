@@ -1,8 +1,13 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 // Gateway migration tests cover agent scoping, fresh plans, and exact item selection.
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { MigrationPlan, MigrationProviderPlugin } from "../../plugins/types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
   providers: [] as MigrationProviderPlugin[],
@@ -35,11 +40,12 @@ function createConfig() {
 }
 
 let config = createConfig();
+let sourceRoot = "";
 
 function memoryPlan(): MigrationPlan {
   return {
     providerId: "codex",
-    source: "/tmp/codex",
+    source: sourceRoot,
     target: "/tmp/workspace-research",
     summary: {
       total: 2,
@@ -56,7 +62,7 @@ function memoryPlan(): MigrationPlan {
         kind: "memory",
         action: "copy",
         status: "planned",
-        source: "/tmp/codex/MEMORY.md",
+        source: path.join(sourceRoot, "MEMORY.md"),
         target: "/tmp/workspace-research/memory/imports/codex/MEMORY.md",
       },
       {
@@ -64,7 +70,7 @@ function memoryPlan(): MigrationPlan {
         kind: "workspace",
         action: "copy",
         status: "planned",
-        source: "/tmp/codex/AGENTS.md",
+        source: path.join(sourceRoot, "AGENTS.md"),
         target: "/tmp/workspace-research/AGENTS.md",
       },
     ],
@@ -78,7 +84,7 @@ function provider(plan = memoryPlan()): MigrationProviderPlugin {
     supportedItemKinds: ["memory"],
     detect: vi.fn(async () => ({
       found: true,
-      source: "/tmp/codex",
+      source: sourceRoot,
       confidence: "high" as const,
     })),
     plan: vi.fn(async (ctx) => {
@@ -117,8 +123,11 @@ function firstCall(respond: ReturnType<typeof vi.fn>): RespondCall {
   return call;
 }
 
-async function loadPlanFingerprint(): Promise<string> {
-  const request = invoke("migrations.memory.plan", { agentId: "research" });
+async function loadPlanFingerprint(overwrite = false): Promise<string> {
+  const request = invoke("migrations.memory.plan", {
+    agentId: "research",
+    ...(overwrite ? { overwrite: true } : {}),
+  });
   await request.run();
   const [ok, rawResult] = firstCall(request.respond);
   expect(ok).toBe(true);
@@ -133,7 +142,9 @@ async function loadPlanFingerprint(): Promise<string> {
 }
 
 describe("memory migration gateway handlers", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    sourceRoot = tempDirs.make("openclaw-memory-gateway-");
+    await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "reviewed memory", "utf8");
     config = createConfig();
     mocks.providers = [provider()];
     mocks.runMigrationApply.mockReset();
@@ -190,6 +201,118 @@ describe("memory migration gateway handlers", () => {
     expect(ok).toBe(false);
     expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
     expect(error?.message).toContain("unknown agent id");
+  });
+
+  it("rejects a malformed destination agent before normalization", async () => {
+    const request = invoke("migrations.memory.plan", { agentId: "research!!!" });
+
+    await request.run();
+
+    const [ok, , error] = firstCall(request.respond);
+    expect(ok).toBe(false);
+    expect(error?.code).toBe(ErrorCodes.INVALID_REQUEST);
+    expect(error?.message).toContain("invalid agent id");
+  });
+
+  it("rejects apply when source bytes changed after preview", async () => {
+    const planFingerprint = await loadPlanFingerprint();
+    await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "changed memory", "utf8");
+    const request = invoke("migrations.memory.apply", {
+      agentId: "research",
+      providerId: "codex",
+      planFingerprint,
+      itemIds: ["memory:one"],
+    });
+
+    await request.run();
+
+    const [ok, , error] = firstCall(request.respond);
+    expect(ok).toBe(false);
+    expect(error?.message).toContain("plan changed");
+    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
+  });
+
+  it("binds conflict source bytes when replacement is enabled", async () => {
+    const plan = memoryPlan();
+    plan.items[0]!.status = "conflict";
+    plan.items[0]!.reason = "target exists";
+    plan.summary = { ...plan.summary, planned: 1, conflicts: 1 };
+    mocks.providers = [provider(plan)];
+    const planFingerprint = await loadPlanFingerprint(true);
+    await fs.writeFile(path.join(sourceRoot, "MEMORY.md"), "changed memory", "utf8");
+    const request = invoke("migrations.memory.apply", {
+      agentId: "research",
+      providerId: "codex",
+      planFingerprint,
+      itemIds: ["memory:one"],
+      overwrite: true,
+    });
+
+    await request.run();
+
+    const [ok, , error] = firstCall(request.respond);
+    expect(ok).toBe(false);
+    expect(error?.message).toContain("plan changed");
+    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
+  });
+
+  it("reports unsupported actionable memory operations during planning", async () => {
+    const plan = memoryPlan();
+    plan.items[0]!.action = "append";
+    mocks.providers = [provider(plan)];
+    const request = invoke("migrations.memory.plan", { agentId: "research" });
+
+    await request.run();
+
+    const [ok, rawResult] = firstCall(request.respond);
+    expect(ok).toBe(true);
+    expect(rawResult).toMatchObject({
+      providers: [{ found: false, error: expect.stringContaining("only supports copy actions") }],
+    });
+  });
+
+  it("rejects apply when an operation changed after preview", async () => {
+    const plan = memoryPlan();
+    mocks.providers = [provider(plan)];
+    const planFingerprint = await loadPlanFingerprint();
+    plan.items[0]!.action = "append";
+    const request = invoke("migrations.memory.apply", {
+      agentId: "research",
+      providerId: "codex",
+      planFingerprint,
+      itemIds: ["memory:one"],
+    });
+
+    await request.run();
+
+    const [ok, , error] = firstCall(request.respond);
+    expect(ok).toBe(false);
+    expect(error?.message).toContain("only supports copy actions");
+    expect(mocks.runMigrationApply).not.toHaveBeenCalled();
+  });
+
+  it("allows volatile provider diagnostics to change after preview", async () => {
+    const plan = memoryPlan();
+    mocks.providers = [provider(plan)];
+    const applied = memoryPlan();
+    applied.items = [applied.items[0]!];
+    applied.summary.total = 1;
+    mocks.runMigrationApply.mockResolvedValue(applied);
+    const planFingerprint = await loadPlanFingerprint();
+    plan.warnings = ["updated diagnostic"];
+    plan.nextSteps = ["updated next step"];
+    plan.metadata = { plannedAt: Date.now() };
+    const request = invoke("migrations.memory.apply", {
+      agentId: "research",
+      providerId: "codex",
+      planFingerprint,
+      itemIds: ["memory:one"],
+    });
+
+    await request.run();
+
+    expect(firstCall(request.respond)[0]).toBe(true);
+    expect(mocks.runMigrationApply).toHaveBeenCalledOnce();
   });
 
   it("rejects stale item ids from a freshly rebuilt apply plan", async () => {

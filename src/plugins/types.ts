@@ -2585,6 +2585,8 @@ export type MigrationItem = {
   message?: string;
   reason?: string;
   sensitive?: boolean;
+  /** Core-owned source revision bound by reviewed embedded migration flows. */
+  sourceRevision?: { algorithm: "sha256"; digest: string };
   details?: Record<string, unknown>;
 };
 

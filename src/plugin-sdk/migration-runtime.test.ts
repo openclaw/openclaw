@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { bindMemoryMigrationPlanSources } from "./memory-migration-source.js";
 import {
   copyMemoryMigrationFileItem,
   copyMigrationFileItem,
@@ -161,6 +162,77 @@ describe("copyMigrationFileItem", () => {
 });
 
 describe("copyMemoryMigrationFileItem", () => {
+  it("rejects source bytes that changed after the reviewed plan", async () => {
+    const root = tempDirs.make("openclaw-memory-copy-");
+    const workspaceDir = path.join(root, "workspace");
+    const source = path.join(root, "source", "MEMORY.md");
+    const target = path.join(workspaceDir, "memory", "imports", "codex", "MEMORY.md");
+    await writeFile(source, "reviewed memory");
+    const item = createMigrationItem({
+      id: "memory:codex:MEMORY.md",
+      kind: "memory",
+      action: "copy",
+      source,
+      target,
+      details: { sourceSha256: "provider-owned" },
+    });
+    const bound = await bindMemoryMigrationPlanSources({
+      providerId: "codex",
+      source: path.dirname(source),
+      target: workspaceDir,
+      summary: {
+        total: 1,
+        planned: 1,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [item],
+    });
+    expect(bound.items[0]?.details?.sourceSha256).toBe("provider-owned");
+    expect(bound.items[0]?.sourceRevision).toMatchObject({ algorithm: "sha256" });
+    await writeFile(source, "changed memory");
+
+    const result = await copyMemoryMigrationFileItem(bound.items[0]!, path.join(root, "report"), {
+      workspaceDir,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toContain("source changed");
+    await expect(fs.access(target)).rejects.toThrow();
+  });
+
+  it("does not read source paths for non-actionable memory items", async () => {
+    const missingSource = path.join(tempDirs.make("openclaw-memory-copy-"), "missing.md");
+    const item = createMigrationItem({
+      id: "memory:missing",
+      kind: "memory",
+      action: "copy",
+      status: "skipped",
+      source: missingSource,
+      reason: "source unavailable",
+    });
+
+    const bound = await bindMemoryMigrationPlanSources({
+      providerId: "codex",
+      source: path.dirname(missingSource),
+      summary: {
+        total: 1,
+        planned: 0,
+        migrated: 0,
+        skipped: 1,
+        conflicts: 0,
+        errors: 0,
+        sensitive: 0,
+      },
+      items: [item],
+    });
+
+    expect(bound.items).toEqual([item]);
+  });
+
   it("rejects a symlinked destination parent at copy time", async () => {
     if (process.platform === "win32") {
       return;

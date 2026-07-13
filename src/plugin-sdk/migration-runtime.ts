@@ -19,6 +19,10 @@ import type {
   MigrationProviderContext,
 } from "../plugins/types.js";
 import {
+  assertMemoryMigrationSourceRevision,
+  MAX_MEMORY_MIGRATION_FILE_BYTES,
+} from "./memory-migration-source.js";
+import {
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
   MIGRATION_REASON_TARGET_EXISTS,
   markMigrationItemConflict,
@@ -27,8 +31,6 @@ import {
 } from "./migration.js";
 
 export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
-
-const MAX_MEMORY_MIGRATION_FILE_BYTES = 64 * 1024 * 1024;
 
 /** Directories a migration provider writes imported agent data into. */
 export type PlannedMigrationTargets = {
@@ -347,6 +349,7 @@ export async function copyMemoryMigrationFileItem(
       filePath: item.source,
       maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
     });
+    assertMemoryMigrationSourceRevision(item, sourceBuffer);
     const replaceExisting = opts.overwrite === true && (await safeRoot.exists(relativeTarget));
     if (replaceExisting) {
       const existing = await safeRoot.read(relativeTarget, {
@@ -384,10 +387,10 @@ export async function copyMemoryMigrationFileItem(
         });
       }
     }
-    await safeRoot.write(relativeTarget, sourceBuffer, {
+    // Exclusive create keeps a destination that races the import user-owned.
+    await safeRoot.create(relativeTarget, sourceBuffer, {
       mkdir: true,
       mode: 0o600,
-      overwrite: false,
     });
     targetCreated = true;
     if (recoveryRecordPath && backupPath && journalRecoveryPath) {
