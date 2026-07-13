@@ -274,8 +274,7 @@ async function withTimeout<T>(
 }
 
 async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime> {
-  const coreSpecifier = ["@clawdbot", "lobster", "core"].join("/");
-  return (await import(coreSpecifier)) as EmbeddedToolRuntime;
+  return (await import("@clawdbot/lobster/core")) as EmbeddedToolRuntime;
 }
 
 export function createEmbeddedLobsterRunner(options?: {
