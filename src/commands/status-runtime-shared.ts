@@ -1,10 +1,21 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
+import { isDefaultAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
+import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import {
+  buildCodexSyntheticUsageAuth,
+  mergeUsageSummaries,
+  shouldUseCodexSyntheticUsageForRuntime,
+  resolveUsageCredentialType,
+} from "../status/codex-synthetic-usage.js";
 import type { HealthSummary } from "./health.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 
@@ -31,6 +42,49 @@ function loadReadOnlyChannelPluginsModule() {
 
 function loadGatewayCallModule() {
   return gatewayCallModuleLoader.load();
+}
+
+function shouldUseConfiguredCodexSyntheticUsage(params: {
+  config: OpenClawConfig;
+  agentDir: string;
+}): boolean {
+  const configuredDefault = resolveDefaultModelForAgent({
+    cfg: params.config,
+    allowPluginNormalization: false,
+  });
+  const policy = resolveAgentHarnessPolicy({
+    config: params.config,
+    provider: configuredDefault.provider,
+    modelId: configuredDefault.model,
+  });
+  // When the resolved harness runtime is a default/auto value (shown as
+  // "OpenClaw Default" in status output), the Codex app-server may still
+  // be the active harness. Use "codex" as the runtime hint so that OAuth/
+  // Codex sessions still show synthetic usage even when the model-level
+  // harness policy has no explicit runtime configured.
+  const runtimeCodexHint = isDefaultAgentRuntimeId(policy.runtime)
+    ? "codex"
+    : policy.runtime;
+  if (
+    !shouldUseCodexSyntheticUsageForRuntime({
+      provider: configuredDefault.provider,
+      effectiveHarness: runtimeCodexHint,
+    })
+  ) {
+    return false;
+  }
+  const authLabel = resolveModelAuthLabel({
+    provider: configuredDefault.provider,
+    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider: configuredDefault.provider,
+      harnessRuntime: runtimeCodexHint,
+      config: params.config,
+    }),
+    cfg: params.config,
+    agentDir: params.agentDir,
+    includeExternalProfiles: false,
+  });
+  return resolveUsageCredentialType(authLabel) !== "api_key";
 }
 
 /** Runs the lightweight security audit used by status JSON/all output. */
@@ -69,11 +123,23 @@ type StatusUsageSummaryOptions = {
 /** Loads provider usage for status output, defaulting to the config's default agent directory. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
   const { loadProviderUsageSummary } = await loadProviderUsage();
-  return await loadProviderUsageSummary({
+  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config);
+  const usage = await loadProviderUsageSummary({
     timeoutMs: params.timeoutMs,
     config: params.config,
-    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.config),
+    agentDir,
   });
+  if (!shouldUseConfiguredCodexSyntheticUsage({ config: params.config, agentDir })) {
+    return usage;
+  }
+  const codexUsage = await loadProviderUsageSummary({
+    timeoutMs: params.timeoutMs,
+    providers: ["openai"],
+    auth: [buildCodexSyntheticUsageAuth()],
+    config: params.config,
+    agentDir,
+  });
+  return mergeUsageSummaries(usage, codexUsage);
 }
 
 /** Exposes the lazily loaded provider-usage module for callers that need its helpers. */
@@ -146,7 +212,7 @@ export async function resolveStatusGatewayDiagnosticsSafe(params: {
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
-export async function resolveStatusLastHeartbeat(params: {
+async function resolveStatusLastHeartbeat(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayReachable: boolean;
@@ -163,9 +229,17 @@ export async function resolveStatusLastHeartbeat(params: {
   }).catch(() => null);
 }
 
+// Default bound for service-manager probes when status runs without an explicit
+// --timeout, so a wedged systemd/launchd socket cannot hang `openclaw status`.
+const DEFAULT_SERVICE_PROBE_TIMEOUT_MS = 5000;
+
 /** Resolves launchd/systemd summaries for the gateway and node services together. */
-export async function resolveStatusServiceSummaries() {
-  return await Promise.all([getDaemonStatusSummary(), getNodeDaemonStatusSummary()]);
+export async function resolveStatusServiceSummaries(timeoutMs?: number) {
+  const probeTimeoutMs = timeoutMs ?? DEFAULT_SERVICE_PROBE_TIMEOUT_MS;
+  return await Promise.all([
+    getDaemonStatusSummary(probeTimeoutMs),
+    getNodeDaemonStatusSummary(probeTimeoutMs),
+  ]);
 }
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
@@ -176,7 +250,7 @@ type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSum
 type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>>;
 
 /** Resolves optional usage/deep runtime details plus service summaries for status output. */
-export async function resolveStatusRuntimeDetails(params: {
+async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   usage?: boolean;
@@ -216,7 +290,7 @@ export async function resolveStatusRuntimeDetails(params: {
         gatewayReachable: params.gatewayReachable,
       })
     : null;
-  const [gatewayService, nodeService] = await resolveStatusServiceSummaries();
+  const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.timeoutMs);
   const result = {
     usage,
     health,
