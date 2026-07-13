@@ -7,7 +7,7 @@ import type {
 } from "../../embedded-agent-messaging.types.js";
 import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../delivery-evidence.js";
 
-export type EmbeddedRunReplyItem = {
+type EmbeddedRunReplyItem = {
   text: string;
   media?: string[];
   mediaUrl?: string;
