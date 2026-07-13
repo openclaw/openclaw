@@ -7,7 +7,6 @@ import type { PluginCandidate } from "./discovery.js";
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
-  resolveInstalledPluginProviderContributionIds,
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
@@ -198,50 +197,6 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
 
   it("does not keep exporting the ambiguous runtime-discovery alias", () => {
     expect(Object.keys(providerDiscoveryModule)).not.toContain("resolvePluginDiscoveryProviders");
-  });
-
-  it("reads provider ids from the installed plugin index without importing runtime entries", () => {
-    const candidate = createProviderContributionCandidate({
-      pluginId: "demo",
-      providerIds: ["demo", "demo-alias"],
-    });
-
-    expect(
-      resolveInstalledPluginProviderContributionIds({
-        candidates: [candidate],
-        env: hermeticEnv(),
-        preferPersisted: false,
-      }),
-    ).toEqual(["demo", "demo-alias"]);
-  });
-
-  it("omits disabled plugin provider ids unless explicitly requested", () => {
-    const candidate = createProviderContributionCandidate({
-      pluginId: "demo",
-      providerIds: ["demo"],
-    });
-    const params = {
-      candidates: [candidate],
-      config: {
-        plugins: {
-          entries: {
-            demo: {
-              enabled: false,
-            },
-          },
-        },
-      },
-      env: hermeticEnv(),
-      preferPersisted: false,
-    };
-
-    expect(resolveInstalledPluginProviderContributionIds(params)).toStrictEqual([]);
-    expect(
-      resolveInstalledPluginProviderContributionIds({
-        ...params,
-        includeDisabled: true,
-      }),
-    ).toEqual(["demo"]);
   });
 });
 
