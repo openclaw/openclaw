@@ -86,7 +86,10 @@ import { resolveConversationBindingContextFromMessage } from "./conversation-bin
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
-import { resolveReplyInitConflictAction } from "./reply-session-init-conflict.js";
+import {
+  resolveReplyInitConflictAction,
+  type ReplyInitConflictRecoveryState,
+} from "./reply-session-init-conflict.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
@@ -347,15 +350,31 @@ export function resolveReplySessionPreprocessingState(
 
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await runWithSessionInitConflictRetry(
-    async () => await initSessionStateAttempt(params, false),
-    { signal: params.signal },
-  );
+  try {
+    return await runWithSessionInitConflictRetry(
+      async () => await initSessionStateAttempt(params, false),
+      { signal: params.signal },
+    );
+  } catch (error) {
+    if (!(error instanceof ReplySessionInitConflictError) || params.signal?.aborted === true) {
+      throw error;
+    }
+    // The jittered backoff retries are exhausted and the commit is STILL losing
+    // its revision CAS. That is no longer the transient race the backoff exists
+    // for (#102400) but a persistent wedge: init never commits for this
+    // sessionKey, every following turn hits the same conflict, and completed
+    // tool-results silently return empty — surviving gateway restarts (#101909).
+    // Run one fenced self-heal pass (dispose the wedged session's MCP runtime +
+    // harness reset hooks behind the rollover drain fence) and retry init once;
+    // a still-failing commit then escapes with clear context.
+    return await initSessionStateAttempt(params, false, true);
+  }
 }
 
 async function initSessionStateAttempt(
   params: InitSessionStateParams,
   staleSnapshotRetried: boolean,
+  selfHealRequested = false,
 ): Promise<SessionInitResult> {
   const attemptContext = resolveInitSessionStateAttemptContext(params);
   // Guarded revision checks only serialize correctly when the snapshot and
@@ -363,7 +382,10 @@ async function initSessionStateAttempt(
   let pending = await runExclusiveSessionStoreWrite(
     attemptContext.storePath,
     async () =>
-      await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried, undefined),
+      await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried, undefined, {
+        selfHealRequested,
+        recoveryAttempted: false,
+      }),
   );
 
   while (true) {
@@ -371,7 +393,8 @@ async function initSessionStateAttempt(
       return pending.result;
     }
     if (pending.kind === "conflict-self-heal") {
-      // The optimistic-concurrency commit lost twice. The recovery that unwedges
+      // The optimistic-concurrency commit kept losing through the exhausted
+      // backoff loop AND this pass's fresh-snapshot retry. The recovery that unwedges
       // it (dispose the session MCP runtime + run the harness reset hooks) reuses
       // the SAME primitives the rollover teardown uses, so it must reuse the SAME
       // safety fence: drain any foreign in-flight owner of this identity OUTSIDE
@@ -396,7 +419,11 @@ async function initSessionStateAttempt(
         // before interrupting, then reacquire any refreshed identity first.
         const revalidated = await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
+          async () =>
+            await initSessionStateAttemptLocked(params, attemptContext, false, undefined, {
+              selfHealRequested,
+              recoveryAttempted: false,
+            }),
         );
         if (
           revalidated.kind !== "lifecycle-mutation" ||
@@ -425,7 +452,11 @@ async function initSessionStateAttempt(
         // must match this exact fenced identity before any rollover side effect.
         return await runExclusiveSessionStoreWrite(
           attemptContext.storePath,
-          async () => await initSessionStateAttemptLocked(params, attemptContext, false, candidate),
+          async () =>
+            await initSessionStateAttemptLocked(params, attemptContext, false, candidate, {
+              selfHealRequested,
+              recoveryAttempted: false,
+            }),
         );
       },
     });
@@ -469,7 +500,11 @@ async function selfHealReplySessionInitConflict(
       // outcome back and skip teardown entirely.
       const revalidated = await runExclusiveSessionStoreWrite(
         attemptContext.storePath,
-        async () => await initSessionStateAttemptLocked(params, attemptContext, false, undefined),
+        async () =>
+          await initSessionStateAttemptLocked(params, attemptContext, false, undefined, {
+            selfHealRequested: true,
+            recoveryAttempted: false,
+          }),
       );
       if (
         revalidated.kind !== "conflict-self-heal" ||
@@ -527,7 +562,10 @@ async function selfHealReplySessionInitConflict(
       return await runExclusiveSessionStoreWrite(
         attemptContext.storePath,
         async () =>
-          await initSessionStateAttemptLocked(params, attemptContext, false, undefined, true),
+          await initSessionStateAttemptLocked(params, attemptContext, false, undefined, {
+            selfHealRequested: true,
+            recoveryAttempted: true,
+          }),
       );
     },
   });
@@ -538,7 +576,10 @@ async function initSessionStateAttemptLocked(
   attemptContext: InitSessionStateAttemptContext,
   staleSnapshotRetried: boolean,
   lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
-  conflictRecoveryAttempted = false,
+  conflictRecovery: ReplyInitConflictRecoveryState = {
+    selfHealRequested: false,
+    recoveryAttempted: false,
+  },
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
   const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
@@ -1177,7 +1218,8 @@ async function initSessionStateAttemptLocked(
   if (!committed.ok) {
     const conflictAction = resolveReplyInitConflictAction({
       staleSnapshotRetried,
-      conflictRecoveryAttempted,
+      selfHealRequested: conflictRecovery.selfHealRequested,
+      conflictRecoveryAttempted: conflictRecovery.recoveryAttempted,
     });
     if (conflictAction.kind === "stale-snapshot-retry") {
       return await initSessionStateAttemptLocked(
@@ -1185,12 +1227,17 @@ async function initSessionStateAttemptLocked(
         attemptContext,
         true,
         undefined,
-        conflictRecoveryAttempted,
+        conflictRecovery,
       );
     }
+    if (conflictAction.kind === "conflict-backoff") {
+      // Propagate a typed conflict so initSessionState can retry with backoff
+      // outside the store writer lane instead of surfacing this to the caller.
+      throw new ReplySessionInitConflictError(sessionKey);
+    }
     if (conflictAction.kind === "self-heal-retry") {
-      // The optimistic-concurrency commit keeps losing its race even after a
-      // fresh-snapshot retry. Left alone this wedges the session for ANY runtime:
+      // The backoff retries are exhausted and the commit keeps losing its race
+      // even after a fresh-snapshot retry. Left alone this wedges the session for ANY runtime:
       // init never completes for this sessionKey, the store entry is never
       // committed, and completed tool-results silently return empty. The recovery
       // is the runtime-agnostic teardown the rollover/timeout paths use (dispose
@@ -1200,11 +1247,14 @@ async function initSessionStateAttemptLocked(
       if (!wedgedSessionId) {
         // Nothing is bound to this sessionKey yet (no runtime to dispose and no
         // identity to drain), so there is no live turn to protect. Retry init once
-        // in place; a still-failing commit then throws via conflictRecoveryAttempted.
+        // in place; a still-failing commit then throws via recoveryAttempted.
         log.warn(
           `reply session initialization conflicted for ${sessionKey}; retrying init once (no bound runtime to self-heal)`,
         );
-        return await initSessionStateAttemptLocked(params, attemptContext, false, undefined, true);
+        return await initSessionStateAttemptLocked(params, attemptContext, false, undefined, {
+          selfHealRequested: true,
+          recoveryAttempted: true,
+        });
       }
       // A runtime IS bound. The teardown reuses the rollover primitives, so it must
       // reuse the rollover SAFETY FENCE: hand the wedged identity back to

@@ -6,19 +6,35 @@ describe("resolveReplyInitConflictAction", () => {
     expect(
       resolveReplyInitConflictAction({
         staleSnapshotRetried: false,
+        selfHealRequested: false,
         conflictRecoveryAttempted: false,
       }),
     ).toEqual({ kind: "stale-snapshot-retry" });
   });
 
-  it("self-heals instead of throwing once the stale-snapshot retry is exhausted", () => {
-    // Regression guard: previously this state threw immediately, wedging the
-    // session for ANY runtime (native Anthropic and Codex alike) so it silently
-    // returned empty tool-results. It must now trigger the harness self-heal +
-    // retry so init can complete instead of throwing.
+  it("defers to the unlocked jittered backoff while its retries are not exhausted", () => {
+    // While runWithSessionInitConflictRetry still owns the retry budget the
+    // conflict must surface as the typed error (conflict-backoff), never as a
+    // teardown: transient CAS races settle without side effects (#102400).
     expect(
       resolveReplyInitConflictAction({
         staleSnapshotRetried: true,
+        selfHealRequested: false,
+        conflictRecoveryAttempted: false,
+      }),
+    ).toEqual({ kind: "conflict-backoff" });
+  });
+
+  it("self-heals instead of throwing once the backoff retries are exhausted", () => {
+    // Regression guard: previously this state threw immediately, wedging the
+    // session for ANY runtime (native Anthropic and Codex alike) so it silently
+    // returned empty tool-results. Once the backoff pass is exhausted it must
+    // trigger the harness self-heal + retry so init can complete instead of
+    // throwing (#101909).
+    expect(
+      resolveReplyInitConflictAction({
+        staleSnapshotRetried: true,
+        selfHealRequested: true,
         conflictRecoveryAttempted: false,
       }),
     ).toEqual({ kind: "self-heal-retry" });
@@ -28,6 +44,7 @@ describe("resolveReplyInitConflictAction", () => {
     expect(
       resolveReplyInitConflictAction({
         staleSnapshotRetried: true,
+        selfHealRequested: true,
         conflictRecoveryAttempted: true,
       }),
     ).toEqual({ kind: "fail" });
@@ -39,6 +56,7 @@ describe("resolveReplyInitConflictAction", () => {
     expect(
       resolveReplyInitConflictAction({
         staleSnapshotRetried: false,
+        selfHealRequested: true,
         conflictRecoveryAttempted: true,
       }),
     ).toEqual({ kind: "stale-snapshot-retry" });

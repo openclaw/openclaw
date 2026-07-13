@@ -97,6 +97,34 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
   };
 });
 
+// Pass-through wrapper around the #105754 conflict-retry loop that only swaps
+// the jittered backoff sleep for an instant, recorded one. Retry semantics
+// (attempt budget, typed-error classification, abort handling) stay real; the
+// tests just avoid ~4s of wall-clock backoff per exhausted loop and can assert
+// how many backoff waits actually happened.
+const initConflictBackoffControl = vi.hoisted(() => ({
+  sleepCalls: [] as number[],
+}));
+
+vi.mock("./session-init-conflict-retry.js", async () => {
+  const actual = await vi.importActual<typeof import("./session-init-conflict-retry.js")>(
+    "./session-init-conflict-retry.js",
+  );
+  return {
+    ...actual,
+    runWithSessionInitConflictRetry: (async (
+      attempt: () => Promise<unknown>,
+      options?: Parameters<typeof actual.runWithSessionInitConflictRetry>[1],
+    ) =>
+      await actual.runWithSessionInitConflictRetry(attempt, {
+        ...options,
+        sleep: async (ms: number) => {
+          initConflictBackoffControl.sleepCalls.push(ms);
+        },
+      })) as typeof actual.runWithSessionInitConflictRetry,
+  };
+});
+
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
   storePath: string;
@@ -6773,10 +6801,12 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
   beforeEach(() => {
     commitConflictControl.forcedConflicts.clear();
     commitConflictControl.commitCalls.clear();
+    initConflictBackoffControl.sleepCalls.length = 0;
   });
   afterEach(() => {
     commitConflictControl.forcedConflicts.clear();
     commitConflictControl.commitCalls.clear();
+    initConflictBackoffControl.sleepCalls.length = 0;
   });
 
   it("disposes the wedged MCP runtime and retries exactly once when the init commit keeps conflicting", async () => {
@@ -6796,12 +6826,14 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
     });
     expect(sessionMcpTesting.getCachedSessionIds()).toContain(wedgedSessionId);
 
-    // Force a genuinely persistent wedge. The main attempt's stale-snapshot
-    // retry + self-heal request consume two commits; the fenced revalidation
-    // consumes two more and STILL conflicts, confirming the candidate is
-    // current; only the final post-teardown commit is allowed through so init
-    // can complete.
-    commitConflictControl.forcedConflicts.set(sessionKey, 4);
+    // Force a genuinely persistent wedge that survives the whole #105754
+    // backoff budget first: 5 backed-off attempts x (initial + stale-snapshot
+    // retry) = 10 conflicted commits exhaust the typed-error retry loop. The
+    // self-heal pass's own attempt consumes two more (11-12); the fenced
+    // revalidation consumes two more (13-14) and STILL conflicts, confirming
+    // the candidate is current; only the final post-teardown commit is allowed
+    // through so init can complete.
+    commitConflictControl.forcedConflicts.set(sessionKey, 14);
 
     const result = await initSessionState({
       ctx: {
@@ -6823,12 +6855,62 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
     expect(result.sessionId).toBe(wedgedSessionId);
     // The wedged runtime was disposed by the self-heal teardown.
     expect(sessionMcpTesting.getCachedSessionIds()).not.toContain(wedgedSessionId);
-    // Commit accounting: main attempt stale-retry + self-heal (2) + fenced
-    // revalidation stale-retry + self-heal (2) + one successful post-teardown
-    // commit (1) == 5 attempts. A second self-heal loop would have thrown via
-    // conflictRecoveryAttempted instead.
-    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(5);
+    // Commit accounting: exhausted backoff loop (5 attempts x 2 commits = 10)
+    // + self-heal pass attempt (2) + fenced revalidation (2) + one successful
+    // post-teardown commit (1) == 15. A second self-heal loop would have
+    // thrown via the recovery bound instead.
+    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(15);
     expect(commitConflictControl.forcedConflicts.get(sessionKey)).toBe(0);
+    // The backoff loop genuinely exhausted before self-heal: 5 attempts wait
+    // 4 times between them.
+    expect(initConflictBackoffControl.sleepCalls).toHaveLength(4);
+  });
+
+  it("resolves transient conflicts inside the backoff loop without any teardown", async () => {
+    const storePath = await createStorePath("openclaw-init-conflict-transient-");
+    const sessionKey = "agent:main:telegram:dm:init-conflict-transient-user";
+    const boundSessionId = "transient-conflict-session";
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: { sessionId: boundSessionId, updatedAt: Date.now() },
+    });
+    await getOrCreateSessionMcpRuntime({
+      sessionId: boundSessionId,
+      sessionKey,
+      workspaceDir: path.dirname(storePath),
+      cfg,
+    });
+
+    // A transient race: the first attempt loses both its commits (initial +
+    // stale-snapshot retry), then the competing writer settles. Upstream's
+    // backoff retry (#105754) must absorb this on its second attempt WITHOUT
+    // reaching the self-heal teardown.
+    commitConflictControl.forcedConflicts.set(sessionKey, 2);
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        RawBody: "hello",
+        CommandBody: "hello",
+        From: "init-conflict-transient-user",
+        To: "bot",
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionId).toBe(boundSessionId);
+    // No teardown: the bound runtime survives a transient conflict.
+    expect(sessionMcpTesting.getCachedSessionIds()).toContain(boundSessionId);
+    // Attempt 1 (2 conflicted commits) + attempt 2 first commit succeeds.
+    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(3);
+    // Exactly one backoff wait between the two attempts.
+    expect(initConflictBackoffControl.sleepCalls).toHaveLength(1);
   });
 
   it("interrupts a genuinely active concurrent turn before tearing the runtime down", async () => {
@@ -6863,10 +6945,11 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
       },
     });
 
-    // Persistent wedge (4): the fenced revalidation still conflicts on the
+    // Persistent wedge (14): the whole backoff budget (10) plus the self-heal
+    // pass attempt (2) and the fenced revalidation (2) still conflict on the
     // same identity, so the drain fence must interrupt the live turn before
     // teardown.
-    commitConflictControl.forcedConflicts.set(sessionKey, 4);
+    commitConflictControl.forcedConflicts.set(sessionKey, 14);
 
     const result = await initSessionState({
       ctx: {
@@ -6922,11 +7005,12 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
       },
     });
 
-    // Only two conflicts: the main attempt's stale-snapshot retry + self-heal
-    // request consume both, so the fenced revalidation commit succeeds and the
-    // candidate is obsolete. The self-heal must return that completed outcome
-    // without draining the foreign turn or disposing the still-valid runtime.
-    commitConflictControl.forcedConflicts.set(sessionKey, 2);
+    // Twelve conflicts: the backoff budget (10) plus the self-heal pass's own
+    // stale-snapshot retry + self-heal request (2) consume all of them, so the
+    // fenced revalidation commit succeeds and the candidate is obsolete. The
+    // self-heal must return that completed outcome without draining the
+    // foreign turn or disposing the still-valid runtime.
+    commitConflictControl.forcedConflicts.set(sessionKey, 12);
 
     const result = await initSessionState({
       ctx: {
@@ -6950,9 +7034,10 @@ describe("initSessionState reply-session-init conflict self-heal (fenced)", () =
     expect(sessionMcpTesting.getCachedSessionIds()).toContain(wedgedSessionId);
     // The live foreign admission was never interrupted.
     expect(interrupted).toBe(false);
-    // main stale-retry + self-heal request (2) + fenced revalidation success
-    // (1) == 3 commits; no post-teardown retry happened.
-    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(3);
+    // exhausted backoff (10) + self-heal pass stale-retry + self-heal request
+    // (2) + fenced revalidation success (1) == 13 commits; no post-teardown
+    // retry happened.
+    expect(commitConflictControl.commitCalls.get(sessionKey)).toBe(13);
 
     lease.release();
   });

@@ -28,6 +28,16 @@
  * `<session>.jsonl.codex-app-server.json`, rebuild). The lost Codex mirror is
  * therefore one runtime-specific casualty, not the true root cause.
  *
+ * Layering with the #105754 backoff (#102400): transient CAS races are handled
+ * FIRST by `runWithSessionInitConflictRetry`, which retries the whole unlocked
+ * init attempt with jittered exponential backoff. While that loop is still
+ * live (`selfHealRequested=false`), a repeated conflict propagates as the typed
+ * `ReplySessionInitConflictError` (`conflict-backoff`) so the backoff owns the
+ * retry. Only after the backoff EXHAUSTS does `initSessionState` re-enter the
+ * attempt with `selfHealRequested=true`, unlocking the self-heal path below —
+ * because a conflict that survives five backed-off fresh-snapshot attempts is a
+ * persistent wedge, not a race.
+ *
  * This helper lets the conflict branch reuse that same recovery once and retry
  * init before failing, so init can complete (which is what actually unwedges the
  * session on every runtime) instead of throwing and leaving it stuck forever. If
@@ -36,11 +46,23 @@
  */
 export type ReplyInitConflictAction =
   | { kind: "stale-snapshot-retry" }
+  | { kind: "conflict-backoff" }
   | { kind: "self-heal-retry" }
   | { kind: "fail" };
 
+/**
+ * Conflict-recovery progress threaded through the locked init attempts.
+ * `selfHealRequested` is true only on the post-backoff-exhaustion pass;
+ * `recoveryAttempted` is true only after the fenced teardown already ran once.
+ */
+export type ReplyInitConflictRecoveryState = {
+  selfHealRequested: boolean;
+  recoveryAttempted: boolean;
+};
+
 export function resolveReplyInitConflictAction(params: {
   staleSnapshotRetried: boolean;
+  selfHealRequested: boolean;
   conflictRecoveryAttempted: boolean;
 }): ReplyInitConflictAction {
   // First conflict: re-read the store snapshot and retry the commit once. This
@@ -49,9 +71,15 @@ export function resolveReplyInitConflictAction(params: {
   if (!params.staleSnapshotRetried) {
     return { kind: "stale-snapshot-retry" };
   }
-  // Stale-snapshot retry is exhausted. Before giving up, run the harness
-  // self-heal (release the lane / clear the stale native thread binding) exactly
-  // once and retry initialization, so a wedged Codex mirror can be rebuilt.
+  // The backoff loop has not exhausted yet: surface the typed conflict so the
+  // unlocked jittered backoff (#105754) retries with a fresh snapshot before any
+  // teardown is considered. Transient races settle here without side effects.
+  if (!params.selfHealRequested) {
+    return { kind: "conflict-backoff" };
+  }
+  // Backoff exhausted. Before giving up, run the harness self-heal (release the
+  // lane / clear the stale native thread binding) exactly once and retry
+  // initialization, so a wedged Codex mirror can be rebuilt.
   if (!params.conflictRecoveryAttempted) {
     return { kind: "self-heal-retry" };
   }
