@@ -5,9 +5,11 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   normalizeStringEntries,
   uniqueStrings,
-} from "./string-utils.js";
+} from "@openclaw/normalization-core/string-normalization";
 export { splitShellArgs } from "./openclaw-runtime-io.js";
 
 // Shared OpenClaw config helpers used by memory host, QMD, and agent context code.

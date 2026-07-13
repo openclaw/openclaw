@@ -2034,7 +2034,11 @@ importers:
         specifier: 22.0.1
         version: 22.0.1
 
-  packages/media-generation-core: {}
+  packages/media-generation-core:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/media-understanding-common: {}
 

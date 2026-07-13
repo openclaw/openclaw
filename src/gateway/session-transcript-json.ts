@@ -1,9 +1,6 @@
 // Shared bounded JSONL metadata parsing for gateway transcript readers.
+import { readNonBlankStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
-
-export function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
 
 // Transcript readers repeatedly extract a fixed set of metadata fields from
 // oversized JSONL prefixes. Keep the compiled regexes process-local instead of
@@ -38,7 +35,7 @@ export function extractJsonStringFieldPrefix(prefix: string, field: string): str
   }
   try {
     const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-    return normalizeOptionalString(decoded);
+    return readNonBlankStringPreservingWhitespace(decoded);
   } catch {
     return undefined;
   }

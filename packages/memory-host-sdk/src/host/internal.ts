@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { normalizeStringEntries, uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
@@ -32,7 +33,6 @@ import {
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
-import { normalizeStringEntries, uniqueStrings } from "./string-utils.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";

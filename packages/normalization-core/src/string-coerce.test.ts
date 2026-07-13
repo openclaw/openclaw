@@ -1,4 +1,7 @@
-import { normalizeStringifiedEntries } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringifiedEntries,
+  readNonBlankStringPreservingWhitespace,
+} from "@openclaw/normalization-core/string-coerce";
 // Normalization Core tests cover string coerce behavior.
 import { describe, expect, it } from "vitest";
 
@@ -11,5 +14,11 @@ describe("normalization-core/string-coerce", () => {
       "0",
     ]);
     expect(normalizeStringifiedEntries(undefined)).toEqual([]);
+  });
+
+  it("preserves whitespace for nonblank strings", () => {
+    expect(readNonBlankStringPreservingWhitespace("  value  ")).toBe("  value  ");
+    expect(readNonBlankStringPreservingWhitespace("   ")).toBeUndefined();
+    expect(readNonBlankStringPreservingWhitespace(null)).toBeUndefined();
   });
 });

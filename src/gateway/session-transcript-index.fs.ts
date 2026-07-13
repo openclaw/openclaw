@@ -2,6 +2,7 @@
 // Streams JSONL transcript files into byte-offset indexes for history paging.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { readNonBlankStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
@@ -10,7 +11,6 @@ import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
-  normalizeOptionalString,
 } from "./session-transcript-json.js";
 
 const TRANSCRIPT_INDEX_READ_CHUNK_BYTES = 64 * 1024;
@@ -264,9 +264,11 @@ async function buildSessionTranscriptIndex(
     if (!isIndexableTranscriptRecord(parsed)) {
       return;
     }
-    const id = normalizeOptionalString(parsed.id);
+    const id = readNonBlankStringPreservingWhitespace(parsed.id);
     const parentId =
-      parsed.parentId === null ? null : (normalizeOptionalString(parsed.parentId) ?? undefined);
+      parsed.parentId === null
+        ? null
+        : (readNonBlankStringPreservingWhitespace(parsed.parentId) ?? undefined);
     const treeEntry = parseSessionTranscriptTreeEntry(parsed);
     const rawEntry: IndexedRawEntry = {
       ...(id ? { id } : {}),
