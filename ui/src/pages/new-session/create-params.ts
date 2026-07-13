@@ -11,14 +11,17 @@ export function buildDraftSessionCreateParams(draft: {
   cwd?: string;
   workspace?: string;
   execNode?: string;
+  model?: string;
 }): Record<string, unknown> {
   const cwd = normalizeOptionalString(draft.cwd);
   const workspace = normalizeOptionalString(draft.workspace);
   const execNode = normalizeOptionalString(draft.execNode);
+  const model = normalizeOptionalString(draft.model);
   const customFolder = cwd && cwd !== workspace ? cwd : undefined;
   return {
     agentId: normalizeAgentId(draft.agentId),
     message: draft.message,
+    ...(model ? { model } : {}),
     ...(draft.worktree
       ? {
           worktree: true,

@@ -6,6 +6,10 @@
 export const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 /** Default Claude CLI model ref for agent defaults and live tests. */
 export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-4-8`;
+/** Canonical model ref routed to the Claude CLI backend by Anthropic setup. */
+export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = `anthropic/${CLAUDE_CLI_DEFAULT_MODEL_REF.slice(
+  CLAUDE_CLI_BACKEND_ID.length + 1,
+)}`;
 /** Default Claude CLI models allowed when setup seeds the model allowlist. */
 export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = [
   CLAUDE_CLI_DEFAULT_MODEL_REF,

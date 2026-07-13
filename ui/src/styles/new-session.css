@@ -94,6 +94,11 @@ openclaw-new-session-page {
   color: var(--muted);
 }
 
+.new-session-page__runtime {
+  color: var(--text);
+  cursor: default;
+}
+
 .new-session-page__trigger-label {
   max-width: min(40vw, 260px);
   overflow: hidden;

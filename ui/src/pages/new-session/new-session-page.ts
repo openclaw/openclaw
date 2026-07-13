@@ -20,8 +20,7 @@ import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
-
-type NewSessionRouteData = { agentId?: string };
+import type { NewSessionRouteData } from "./location.ts";
 
 type DraftBranches = {
   repoRoot: string;
@@ -205,7 +204,11 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   override updated() {
     const agentsReady = this.agents().length > 0;
-    const openKey = this.data?.agentId ?? "";
+    const openKey = JSON.stringify([
+      this.data?.agentId ?? "",
+      this.data?.model ?? "",
+      this.data?.catalogLabel ?? "",
+    ]);
     if (this.openedFor !== openKey) {
       this.openedFor = openKey;
       this.agentsHydrated = agentsReady;
@@ -434,6 +437,7 @@ class NewSessionPage extends OpenClawLightDomElement {
           cwd: this.folder,
           workspace: this.workspacePath(),
           execNode: this.execNode,
+          model: this.data?.model,
         }),
       );
       if (!result) {
@@ -1053,6 +1057,17 @@ class NewSessionPage extends OpenClawLightDomElement {
     const agents = this.agents();
     return html`
       <div class="new-session-page__triggers">
+        ${this.data?.catalogLabel
+          ? html`<span
+              class="new-session-page__trigger new-session-page__runtime"
+              title=${this.data.model ?? ""}
+            >
+              <span class="new-session-page__target-icon" aria-hidden="true"
+                >${icons.terminal}</span
+              >
+              <span>${this.data.catalogLabel}</span>
+            </span>`
+          : nothing}
         ${agents.length > 1 ? this.renderAgentSelect(agents) : nothing} ${this.renderFolderSelect()}
         ${this.renderWhereSelect()}
       </div>

@@ -1,4 +1,5 @@
 import type {
+  SessionCatalogCapabilities,
   SessionCatalogHost,
   SessionsCatalogArchiveParams,
   SessionsCatalogContinueParams,
@@ -19,6 +20,8 @@ export type SessionCatalogArchiveProviderParams = Omit<SessionsCatalogArchivePar
 export type SessionCatalogProvider = {
   id: string;
   label: string;
+  /** Opens the core new-session flow with this model preselected. */
+  createSession?: NonNullable<SessionCatalogCapabilities["createSession"]>;
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
   continueSession?: (

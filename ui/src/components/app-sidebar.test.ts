@@ -60,6 +60,7 @@ type SidebarLifecycleState = HTMLElement & {
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  onOpenNewSession?: (agentId: string, target?: { model: string; label: string }) => void;
   variant: "panel" | "drawer";
 };
 
@@ -515,6 +516,49 @@ describe("AppSidebar session catalog pagination", () => {
         ],
       },
     ],
+  });
+
+  it("opens a catalog-targeted draft from its new-session action", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "agent:main:main",
+        scope: "global",
+        agents: [
+          { id: "main", name: "Main" },
+          { id: "research", name: "Research" },
+        ],
+      },
+    );
+    const onOpenNewSession = vi.fn();
+    sidebar.connected = true;
+    sidebar.onOpenNewSession = onOpenNewSession;
+    sidebar.sessionCatalogs = [
+      {
+        id: "claude",
+        label: "Claude Code",
+        capabilities: {
+          continueSession: true,
+          archive: false,
+          createSession: { model: "anthropic/claude-opus-4-8" },
+        },
+        hosts: [],
+      },
+    ];
+    await sidebar.updateComplete;
+
+    const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-catalog-new");
+    expect(button?.getAttribute("aria-label")).toBe("New session — Claude Code");
+    button?.click();
+
+    expect(onOpenNewSession).toHaveBeenCalledWith("main", {
+      model: "anthropic/claude-opus-4-8",
+      label: "Claude Code",
+    });
   });
 
   it("renders catalog groups inside the shared sessions scroller", async () => {

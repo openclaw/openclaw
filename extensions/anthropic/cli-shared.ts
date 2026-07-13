@@ -11,6 +11,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 export {
   CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_MODEL_ALIASES,

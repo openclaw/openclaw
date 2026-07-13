@@ -131,6 +131,8 @@ describe("Claude session catalog", () => {
     } as unknown as OpenClawPluginApi;
     registerClaudeSessionCatalog(api);
 
+    expect(provider?.createSession).toEqual({ model: "anthropic/claude-opus-4-8" });
+
     await expect(
       provider?.continueSession?.({ hostId: "gateway:local", threadId: sessionId }),
     ).resolves.toEqual({

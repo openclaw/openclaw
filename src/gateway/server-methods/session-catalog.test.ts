@@ -58,6 +58,31 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("advertises a provider's core new-session target", async () => {
+    activeRegistry.sessionCatalogs = [
+      {
+        provider: provider("claude", {
+          createSession: { model: "anthropic/claude-opus-4-8" },
+        }),
+      },
+    ];
+
+    const respond = await call("sessions.catalog.list", {});
+
+    expect(respond).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          id: "claude",
+          capabilities: {
+            continueSession: false,
+            archive: false,
+            createSession: { model: "anthropic/claude-opus-4-8" },
+          },
+        }),
+      ],
+    });
+  });
+
   it("dispatches continue by catalog id", async () => {
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:main:adopted" }));
     activeRegistry.sessionCatalogs = [{ provider: provider("codex", { continueSession }) }];

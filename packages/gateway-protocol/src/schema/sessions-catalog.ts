@@ -9,7 +9,13 @@ const SessionCatalogErrorSchema = Type.Object(
 );
 
 export const SessionCatalogCapabilitiesSchema = Type.Object(
-  { continueSession: Type.Boolean(), archive: Type.Boolean() },
+  {
+    continueSession: Type.Boolean(),
+    archive: Type.Boolean(),
+    createSession: Type.Optional(
+      Type.Object({ model: NonEmptyString }, { additionalProperties: false }),
+    ),
+  },
   { additionalProperties: false },
 );
 

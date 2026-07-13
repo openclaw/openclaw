@@ -2,19 +2,14 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-
-function agentIdFromLocation(location: RouteLocation): string {
-  return new URLSearchParams(location.search).get("agent")?.trim() ?? "";
-}
+import { newSessionDataFromSearch } from "./location.ts";
 
 export const page = definePage({
   id: "new-session",
   path: "/new",
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
-    agentIdFromLocation(location),
-  loader: (_context: ApplicationContext, { location }) => ({
-    agentId: agentIdFromLocation(location),
-  }),
+    JSON.stringify(newSessionDataFromSearch(location.search)),
+  loader: (_context: ApplicationContext, { location }) => newSessionDataFromSearch(location.search),
   component: () =>
     import("./new-session-page.ts").then(() => ({
       render: (data: unknown) =>

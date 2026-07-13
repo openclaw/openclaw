@@ -267,6 +267,61 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("creates a catalog-targeted draft with its advertised model", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.create": { key: "agent:main:claude-draft" },
+      },
+    });
+
+    try {
+      const model = "anthropic/claude-opus-4-8";
+      await page.goto(
+        `${server.baseUrl}new?agent=main&model=${encodeURIComponent(model)}&catalog=Claude+Code`,
+      );
+
+      const runtime = page.locator(".new-session-page__runtime");
+      await expect.poll(() => runtime.textContent()).toContain("Claude Code");
+      expect(await runtime.getAttribute("title")).toBe(model);
+
+      await page.locator(".new-session-page__message").fill("use Claude Code");
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        message: "use Claude Code",
+        model,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("locks the submitted draft until creation settles and restores it after failure", async () => {
     const context = await browser.newContext({
       locale: "en-US",

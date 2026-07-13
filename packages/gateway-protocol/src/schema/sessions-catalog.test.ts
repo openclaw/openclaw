@@ -13,7 +13,11 @@ describe("SessionsCatalogListResultSchema", () => {
           {
             id: "claude",
             label: "Claude Code",
-            capabilities: { continueSession: true, archive: false },
+            capabilities: {
+              continueSession: true,
+              archive: false,
+              createSession: { model: "anthropic/claude-opus-4-8" },
+            },
             hosts: [
               {
                 hostId: "gateway:local",

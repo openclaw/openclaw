@@ -268,7 +268,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onUpdate: () => void = () => undefined;
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
-  @property({ attribute: false }) onOpenNewSession?: (agentId: string) => void;
+  @property({ attribute: false }) onOpenNewSession?: (
+    agentId: string,
+    target?: { model: string; label: string },
+  ) => void;
   /** Agent id of the in-flight new-session draft; renders the draft row. */
   @property({ attribute: false }) draftSessionAgentId = "";
   @property({ attribute: false }) onToggleMore?: () => void;
@@ -2791,6 +2794,25 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
               <span class="sidebar-session-group-count">${rows.length}</span>
             </button>
+            ${catalog.capabilities.createSession
+              ? html`<button
+                  type="button"
+                  class="sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
+                  title=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
+                  aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
+                  ?disabled=${!this.connected}
+                  @click=${() =>
+                    this.onOpenNewSession?.(
+                      this.context?.agents.state.agentsList?.defaultId ?? this.expandedAgentId(),
+                      {
+                        model: catalog.capabilities.createSession?.model ?? "",
+                        label: catalog.label,
+                      },
+                    )}
+                >
+                  ${icons.plus}
+                </button>`
+              : nothing}
           </div>
           ${collapsed
             ? nothing

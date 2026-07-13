@@ -23,7 +23,11 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
 export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
+} from "./cli-constants.js";
 
 const CLAUDE_SESSIONS_CAPABILITY = "claude-sessions";
 const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
@@ -1469,6 +1473,7 @@ export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
   const provider: SessionCatalogProvider = {
     id: "claude",
     label: "Claude Code",
+    createSession: { model: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF },
     list: async (query) => {
       const adopted = listAdoptedClaudeSessions(api);
       const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });

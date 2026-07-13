@@ -16,6 +16,21 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
+  it("preselects a catalog-provided model", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "start coding",
+        worktree: false,
+        model: "anthropic/claude-opus-4-8",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "start coding",
+      model: "anthropic/claude-opus-4-8",
+    });
+  });
+
   it("maps worktree selections onto additive create params", () => {
     expect(
       buildDraftSessionCreateParams({

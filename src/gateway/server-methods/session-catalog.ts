@@ -59,6 +59,7 @@ function catalogResult(
     capabilities: {
       continueSession: Boolean(provider.continueSession),
       archive: Boolean(provider.archive),
+      ...(provider.createSession ? { createSession: provider.createSession } : {}),
     },
     hosts,
   };
