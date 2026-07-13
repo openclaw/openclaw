@@ -52,7 +52,9 @@ describeControlUiE2e("Control UI sidebar dev branch badge E2E", () => {
 
       const badge = page.locator(".sidebar-footer-branch");
       await badge.waitFor();
-      await expect.poll(() => badge.textContent()).toBe(DEV_BRANCH);
+      await expect
+        .poll(() => badge.locator(".sidebar-footer-branch__name").textContent())
+        .toBe(DEV_BRANCH);
       await expect.poll(() => badge.getAttribute("title")).toBe(DEV_BRANCH);
 
       const colors = await badge.evaluate((element) => {
@@ -90,7 +92,7 @@ describeControlUiE2e("Control UI sidebar dev branch badge E2E", () => {
     try {
       const response = await page.goto(server.baseUrl);
       expect(response?.status()).toBe(200);
-      await page.locator(".sidebar-footer-bar").waitFor();
+      await page.locator(".sidebar-agent-chip").waitFor();
       expect(await page.locator(".sidebar-footer-branch").count()).toBe(0);
     } finally {
       await context.close();

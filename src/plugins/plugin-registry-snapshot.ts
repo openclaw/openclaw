@@ -2,6 +2,8 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
@@ -25,7 +27,6 @@ import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
   hasMissingConfigPathActivationMetadata,
   isInstalledPluginEnabled,
-  listInstalledPluginRecords,
   loadInstalledPluginIndexWithDiscovery,
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
@@ -34,6 +35,7 @@ import {
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
@@ -41,9 +43,9 @@ import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
-export type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
+type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
 export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
-export type PluginRegistrySnapshotDiagnosticCode =
+type PluginRegistrySnapshotDiagnosticCode =
   | "persisted-registry-disabled"
   | "persisted-registry-missing"
   | "persisted-registry-stale-policy"
@@ -55,14 +57,14 @@ export type PluginRegistrySnapshotDiagnostic = {
   message: string;
 };
 
-export type PluginRegistrySnapshotResult = {
+type PluginRegistrySnapshotResult = {
   snapshot: PluginRegistrySnapshot;
   source: PluginRegistrySnapshotSource;
   diagnostics: readonly PluginRegistrySnapshotDiagnostic[];
   discovery?: PluginDiscoveryResult;
 };
 
-export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
 const MAX_PLUGIN_REGISTRY_SNAPSHOT_MEMOS = 8;
 const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
   "APPDATA",
@@ -103,7 +105,7 @@ export type LoadPluginRegistryParams = LoadInstalledPluginIndexParams &
     preferPersisted?: boolean;
   };
 
-export type GetPluginRecordParams = LoadPluginRegistryParams & {
+type GetPluginRecordParams = LoadPluginRegistryParams & {
   pluginId: string;
 };
 
@@ -201,7 +203,11 @@ function directoryChildFingerprint(directoryPath: string): unknown {
     return fs
       .readdirSync(directoryPath, { withFileTypes: true })
       .map((entry) => [entry.name, entry.isDirectory() ? "dir" : entry.isFile() ? "file" : "other"])
-      .toSorted(([left], [right]) => left.localeCompare(right));
+      .toSorted(([left], [right]) =>
+        expectDefined(left, "plugin registry snapshot left").localeCompare(
+          expectDefined(right, "plugin registry snapshot right"),
+        ),
+      );
   } catch {
     return "unreadable";
   }
@@ -352,33 +358,37 @@ function hasMismatchedPersistedBundledPluginRoot(
   }
   let sourceOverlayDirs: string[] | undefined;
   return index.plugins.some((plugin) => {
-    if (plugin.origin !== "bundled" || isPathInsideOrEqual(plugin.rootDir, bundledPluginsDir)) {
+    if (plugin.origin !== "bundled") {
       return false;
     }
     sourceOverlayDirs ??= listBundledSourceOverlayDirs({
       bundledRoot: bundledPluginsDir,
       env,
     });
-    return !isAllowedPersistedBundledPluginRoot(
-      plugin.rootDir,
-      bundledPluginsDir,
-      sourceOverlayDirs,
-    );
+    return !isAllowedPersistedBundledPluginRoot(plugin, bundledPluginsDir, sourceOverlayDirs);
   });
 }
 
 function isAllowedPersistedBundledPluginRoot(
-  pluginRootDir: string,
+  plugin: InstalledPluginIndexRecord,
   bundledPluginsDir: string,
   sourceOverlayDirs: readonly string[],
 ): boolean {
+  const pluginRootDir = plugin.rootDir;
+  const legacyRoot = buildLegacyBundledRootPath(bundledPluginsDir);
   if (isPathInsideOrEqual(pluginRootDir, bundledPluginsDir)) {
-    return true;
+    if (!legacyRoot || !isSourceCheckoutBundledPluginRoot(legacyRoot)) {
+      return true;
+    }
+    const relativePluginRoot = path.relative(
+      resolveComparablePath(bundledPluginsDir),
+      resolveComparablePath(pluginRootDir),
+    );
+    return !sourcePluginOptsOutOfBundledDist(path.join(legacyRoot, relativePluginRoot));
   }
   if (sourceOverlayDirs.some((overlayDir) => isPathInsideOrEqual(pluginRootDir, overlayDir))) {
     return true;
   }
-  const legacyRoot = buildLegacyBundledRootPath(bundledPluginsDir);
   if (!legacyRoot || !isSourceCheckoutBundledPluginRoot(legacyRoot)) {
     return false;
   }
@@ -389,10 +399,23 @@ function isAllowedPersistedBundledPluginRoot(
   if (!isRelativePathInsideOrEqual(relativePluginRoot)) {
     return false;
   }
+  if (plugin.packageBuild?.bundledDist === false) {
+    return true;
+  }
+  if (sourcePluginOptsOutOfBundledDist(path.join(legacyRoot, relativePluginRoot))) {
+    // Older index records lack packageBuild. Re-derive once so runtime loading
+    // and Crestodian fingerprint the same source-only artifact.
+    return false;
+  }
   // Discovery prefers a built plugin whenever the same child exists in the
   // packaged root. Keep source-only bundled plugins, but invalidate stale
   // source records once their built peer appears.
   return !fs.existsSync(path.join(bundledPluginsDir, relativePluginRoot));
+}
+
+function sourcePluginOptsOutOfBundledDist(pluginRootDir: string): boolean {
+  const packageJson = tryReadJsonSync<PackageManifest>(path.join(pluginRootDir, "package.json"));
+  return getPackageManifestMetadata(packageJson ?? undefined)?.build?.bundledDist === false;
 }
 
 function isSourceCheckoutBundledPluginRoot(extensionsDir: string): boolean {
@@ -658,13 +681,6 @@ export function loadPluginRegistrySnapshot(
 ): PluginRegistrySnapshot {
   return resolveSnapshot(params);
 }
-
-export function listPluginRecords(
-  params: LoadPluginRegistryParams = {},
-): readonly PluginRegistryRecord[] {
-  return listInstalledPluginRecords(resolveSnapshot(params));
-}
-
 export function getPluginRecord(params: GetPluginRecordParams): PluginRegistryRecord | undefined {
   return getInstalledPluginRecord(resolveSnapshot(params), params.pluginId);
 }

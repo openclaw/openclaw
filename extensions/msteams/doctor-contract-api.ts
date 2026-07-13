@@ -3,8 +3,14 @@ import crypto from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type {
+  ChannelDoctorConfigMutation,
+  ChannelDoctorLegacyConfigRule,
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
+  defineChannelAliasMigration,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -46,6 +52,24 @@ import {
   normalizeMSTeamsSsoStoredToken,
   type MSTeamsSsoStoredToken,
 } from "./src/sso-token-store.js";
+
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "msteams",
+  // Teams previews default to partial streaming, matching the runtime default
+  // in reply-dispatcher when no mode is configured.
+  streaming: { defaultMode: "partial" },
+});
+
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] =
+  streamingAliasMigration.legacyConfigRules;
+
+export function normalizeCompatibilityConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  return streamingAliasMigration.normalizeChannelConfig({ cfg });
+}
 
 type FeedbackLearningEntry = {
   sessionKey: string;
@@ -111,7 +135,8 @@ function resolveLegacySanitizedSessionKey(
   const matches = knownSessionKeys.filter(
     (sessionKey) => legacySanitizeSessionKey(sessionKey) === fileStem,
   );
-  return matches.length === 1 ? matches[0] : null;
+  const [match] = matches;
+  return matches.length === 1 && match ? match : null;
 }
 
 function listAgentIds(config: { agents?: { list?: Array<{ id?: unknown }> } }): string[] {

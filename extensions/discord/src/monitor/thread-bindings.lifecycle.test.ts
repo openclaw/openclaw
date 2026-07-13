@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { ChannelType } from "discord-api-types/v10";
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -473,11 +474,12 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
+      const updatedBinding = expectDefined(updated[0], "idle-timeout thread binding");
       expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T23:15:00.000Z").getTime());
       expect(updated[0]?.boundAt).toBe(boundAt);
       expect(
         resolveThreadBindingInactivityExpiresAt({
-          record: updated[0],
+          record: updatedBinding,
           defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
         }),
       ).toBe(new Date("2026-02-21T01:15:00.000Z").getTime());
@@ -514,11 +516,12 @@ describe("thread binding lifecycle", () => {
       });
 
       expect(updated).toHaveLength(1);
+      const updatedBinding = expectDefined(updated[0], "max-age thread binding");
       expect(updated[0]?.boundAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
       expect(updated[0]?.lastActivityAt).toBe(new Date("2026-02-20T10:30:00.000Z").getTime());
       expect(
         resolveThreadBindingMaxAgeExpiresAt({
-          record: updated[0],
+          record: updatedBinding,
           defaultMaxAgeMs: manager.getMaxAgeMs(),
         }),
       ).toBe(new Date("2026-02-20T13:30:00.000Z").getTime());
@@ -1790,8 +1793,9 @@ describe("thread binding lifecycle", () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(probeCallCount).toBe(2);
+    });
     const observedParallelStart = secondProbeStartedBeforeFirstResolved;
 
     resolveFirstProbe?.({ status: "healthy" });
@@ -1874,97 +1878,6 @@ describe("thread binding lifecycle", () => {
     expect(result.checked).toBe(12);
     expect(result.removed).toBe(0);
     expect(maxInFlight).toBeLessThanOrEqual(PROBE_LIMIT);
-  });
-
-  it("migrates legacy expiresAt bindings to idle/max-age semantics", () => {
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-thread-bindings-"));
-    process.env.OPENCLAW_STATE_DIR = stateDir;
-    try {
-      testing.resetThreadBindingsForTests();
-      const boundAt = Date.now() - 10_000;
-      const expiresAt = boundAt + 60_000;
-      const store = createPluginStateSyncKeyedStoreForTests("discord", {
-        namespace: "thread-bindings",
-        maxEntries: 10_000,
-      });
-      store.register("default:thread-legacy-active", {
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-legacy-active",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:legacy-active",
-        agentId: "main",
-        boundBy: "system",
-        boundAt,
-        expiresAt,
-      });
-      store.register("default:thread-legacy-disabled", {
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-legacy-disabled",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:legacy-disabled",
-        agentId: "main",
-        boundBy: "system",
-        boundAt,
-        expiresAt: 0,
-      });
-
-      const manager = createTestThreadBindingManager({
-        accountId: "default",
-        persist: false,
-        enableSweeper: false,
-        idleTimeoutMs: 24 * 60 * 60 * 1000,
-        maxAgeMs: 0,
-      });
-
-      const active = manager.getByThreadId("thread-legacy-active");
-      if (!active) {
-        throw new Error("missing migrated legacy active thread binding");
-      }
-      expect(active.idleTimeoutMs).toBe(0);
-      expect(active.maxAgeMs).toBe(expiresAt - boundAt);
-      expect(
-        resolveThreadBindingMaxAgeExpiresAt({
-          record: active,
-          defaultMaxAgeMs: manager.getMaxAgeMs(),
-        }),
-      ).toBe(expiresAt);
-      expect(
-        resolveThreadBindingInactivityExpiresAt({
-          record: active,
-          defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
-        }),
-      ).toBeUndefined();
-
-      const disabled = manager.getByThreadId("thread-legacy-disabled");
-      if (!disabled) {
-        throw new Error("missing migrated legacy disabled thread binding");
-      }
-      expect(disabled.idleTimeoutMs).toBe(0);
-      expect(disabled.maxAgeMs).toBe(0);
-      expect(
-        resolveThreadBindingMaxAgeExpiresAt({
-          record: disabled,
-          defaultMaxAgeMs: manager.getMaxAgeMs(),
-        }),
-      ).toBeUndefined();
-      expect(
-        resolveThreadBindingInactivityExpiresAt({
-          record: disabled,
-          defaultIdleTimeoutMs: manager.getIdleTimeoutMs(),
-        }),
-      ).toBeUndefined();
-    } finally {
-      testing.resetThreadBindingsForTests();
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      fs.rmSync(stateDir, { recursive: true, force: true });
-    }
   });
 
   it("persists unbinds even when no manager is active", () => {

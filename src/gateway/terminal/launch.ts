@@ -36,6 +36,7 @@ type TerminalLaunchPolicy = {
   isEnabled: () => boolean;
   prepareConfig: (config: OpenClawConfig, options: { restartPending: boolean }) => void;
   commitConfig: () => void;
+  acceptConfig: (options: { retireRejectedRestart: boolean }) => void;
 };
 
 /** Picks the interactive shell: explicit config, then the host login shell. */
@@ -116,6 +117,7 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   let hasPendingRestart = false;
   let terminalDisabledUntilRestart = false;
   let preparedConfig: OpenClawConfig | null = null;
+  let appliedConfigWhileRestartPending: OpenClawConfig | null = null;
   let terminalDisabledUntilCommit = false;
   const blockedAgentsUntilRestart = new Map<string, TerminalLaunchBlock>();
   const blockedAgentsUntilCommit = new Map<string, TerminalLaunchBlock>();
@@ -189,8 +191,9 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       if (preparedBlock) {
         return { ok: false, block: preparedBlock };
       }
-      if (preparedConfig) {
-        const prepared = resolveForConfig(preparedConfig, active.plan.agentId);
+      const candidateConfig = preparedConfig ?? appliedConfigWhileRestartPending;
+      if (candidateConfig) {
+        const prepared = resolveForConfig(candidateConfig, active.plan.agentId);
         if (!prepared.ok) {
           return prepared;
         }
@@ -205,12 +208,8 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
     prepareConfig: (config, options) => {
       if (options.restartPending) {
         hasPendingRestart = true;
-        terminalDisabledUntilRestart ||= terminalDisabledUntilCommit;
-        for (const [agentId, block] of blockedAgentsUntilCommit) {
-          blockedAgentsUntilRestart.set(agentId, block);
-        }
-        terminalDisabledUntilCommit = false;
-        blockedAgentsUntilCommit.clear();
+        // Keep an older candidate fail-closed only until this transaction is
+        // accepted; do not mix its restrictions into the restart-owned bucket.
         preparedConfig = null;
         accumulateRestartRestrictions(config);
         return;
@@ -219,19 +218,55 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       // earlier reload mode ignored. Advance agent policy, but preserve the
       // terminal subtree already owned by the active or pending process.
       if (hasPendingRestart) {
-        accumulateRestartRestrictions(config);
+        preparedConfig = preserveTerminalConfig(config, activeConfig);
+        accumulateCommitRestrictions(preparedConfig);
         return;
       }
       preparedConfig = preserveTerminalConfig(config, activeConfig);
       accumulateCommitRestrictions(preparedConfig);
     },
     commitConfig: () => {
-      if (preparedConfig && !hasPendingRestart) {
+      if (hasPendingRestart) {
+        // The applied marker separates runtime truth from a later candidate
+        // that may fail before publication while this restart remains pending.
+        if (preparedConfig) {
+          appliedConfigWhileRestartPending = preparedConfig;
+        }
+        preparedConfig = null;
+        terminalDisabledUntilCommit = false;
+        blockedAgentsUntilCommit.clear();
+        if (appliedConfigWhileRestartPending) {
+          accumulateCommitRestrictions(appliedConfigWhileRestartPending);
+        }
+        return;
+      }
+      if (preparedConfig) {
         activeConfig = preparedConfig;
       }
       preparedConfig = null;
       terminalDisabledUntilCommit = false;
       blockedAgentsUntilCommit.clear();
+    },
+    acceptConfig: (options) => {
+      // Baseline acceptance retires an un-published candidate, including config
+      // intentionally skipped by reload policy. Only onConfigApplied may stage
+      // runtime truth for promotion after a rejected restart.
+      preparedConfig = null;
+      terminalDisabledUntilCommit = false;
+      blockedAgentsUntilCommit.clear();
+      if (options.retireRejectedRestart) {
+        hasPendingRestart = false;
+        terminalDisabledUntilRestart = false;
+        blockedAgentsUntilRestart.clear();
+        if (appliedConfigWhileRestartPending) {
+          activeConfig = appliedConfigWhileRestartPending;
+        }
+        appliedConfigWhileRestartPending = null;
+        return;
+      }
+      if (appliedConfigWhileRestartPending) {
+        accumulateCommitRestrictions(appliedConfigWhileRestartPending);
+      }
     },
   };
 }

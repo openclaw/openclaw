@@ -6,7 +6,6 @@ import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
-import { searchForSession } from "../../lib/sessions/navigation.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { pluginTabKey } from "./route.ts";
@@ -21,20 +20,27 @@ type BundledPluginTabView = {
     host: object;
     client: GatewayBrowserClient | null;
     connected: boolean;
+    embed?: {
+      embedSandboxMode: ApplicationContext<RouteId>["config"]["current"]["embedSandboxMode"];
+      allowExternalEmbedUrls: boolean;
+    };
     onRequestUpdate?: () => void;
-    onContinueSession?: (sessionKey: string) => void;
+    // L5: custom widgets need the gateway HTTP base (iframe src) and the session
+    // key (prompt dispatch). Bundled views that don't use them ignore these.
+    basePath?: string;
+    sessionKey?: string;
   }) => unknown;
   stop: (host: object) => void;
 };
 
 // Keyed by pluginId/tabId: tab ids are only unique within their plugin.
 const BUNDLED_TAB_VIEWS: Record<string, () => Promise<BundledPluginTabView>> = {
-  "codex/sessions": async () => {
+  "workspaces/workspaces": async () => {
     const [view, controller] = await Promise.all([
-      import("./codex-sessions-view.ts"),
-      import("./codex-sessions-controller.ts"),
+      import("./workspace-view.ts"),
+      import("./workspace-controller.ts"),
     ]);
-    return { render: view.renderCodexSessions, stop: controller.stopCodexSessionsPolling };
+    return { render: view.renderWorkspace, stop: controller.stopWorkspace };
   },
   "logbook/logbook": async () => {
     const [view, controller] = await Promise.all([
@@ -77,7 +83,8 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   }
 
   protected loadBundledView(key: string): Promise<BundledPluginTabView> {
-    return BUNDLED_TAB_VIEWS[key]();
+    const load = BUNDLED_TAB_VIEWS[key];
+    return load ? load() : Promise.reject(new Error(`Unknown bundled plugin tab: ${key}`));
   }
 
   override willUpdate() {
@@ -155,13 +162,22 @@ export class PluginPage extends OpenClawLightDomContentsElement {
         return nothing;
       }
       const snapshot = context.gateway.snapshot;
+      // Config may be absent in unit harnesses; the Workspaces view defaults the
+      // embed policy to strict when `embed` is omitted.
+      const config = context.config?.current;
       return this.bundledView.render({
         host: this.bundledViewHost,
         client: snapshot.client,
         connected: snapshot.connected,
+        embed: config
+          ? {
+              embedSandboxMode: config.embedSandboxMode,
+              allowExternalEmbedUrls: config.allowExternalEmbedUrls,
+            }
+          : undefined,
         onRequestUpdate: () => this.requestUpdate(),
-        onContinueSession: (sessionKey) =>
-          context.navigate("chat", { search: searchForSession(sessionKey) }),
+        basePath: context.basePath,
+        sessionKey: snapshot.sessionKey,
       });
     }
     if (info?.path) {

@@ -223,10 +223,10 @@ describe("nodes camera helpers", () => {
     ).rejects.toThrow(/node remoteip/i);
   });
 
-  it("writes base64 to file", async () => {
+  it("normalizes valid base64 before writing", async () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "x.bin");
-      await writeBase64ToFile(out, "aGk=");
+      await writeBase64ToFile(out, " aGk\n");
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("hi");
     });
   });
@@ -242,6 +242,22 @@ describe("nodes camera helpers", () => {
       await expectPathMissing(out);
       await expect(writeScreenSnapshotToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(
         /exceeds max/i,
+      );
+      await expectPathMissing(out);
+    });
+  });
+
+  it("rejects empty and malformed base64 payloads before writing", async () => {
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "x.bin");
+      for (const base64 of ["", " \n", "a", "a===", "not-base64!"]) {
+        await expect(writeBase64ToFile(out, base64)).rejects.toThrow(/invalid base64/i);
+        await expectPathMissing(out);
+      }
+      await expect(writeScreenRecordToFile(out, "not-base64!")).rejects.toThrow(/invalid base64/i);
+      await expectPathMissing(out);
+      await expect(writeScreenSnapshotToFile(out, "not-base64!")).rejects.toThrow(
+        /invalid base64/i,
       );
       await expectPathMissing(out);
     });
@@ -290,6 +306,15 @@ describe("nodes camera helpers", () => {
       expectedMessage: /exceeds max/i,
     },
     {
+      name: "malformed content-length",
+      url: "https://198.51.100.42/weird.bin",
+      response: new Response("tiny", {
+        status: 200,
+        headers: { "content-length": "0x3" },
+      }),
+      expectedMessage: /invalid content-length header: 0x3/i,
+    },
+    {
       name: "non-ok status",
       url: "https://198.51.100.42/down.bin",
       response: new Response("down", { status: 503, statusText: "Service Unavailable" }),
@@ -327,6 +352,15 @@ describe("nodes camera helpers", () => {
           headers: { "content-length": String(999_999_999) },
         }),
       expectedMessage: /exceeds max/i,
+    },
+    {
+      name: "malformed content-length",
+      response: () =>
+        cancelTrackedResponse({
+          status: 200,
+          headers: { "content-length": "0x3" },
+        }),
+      expectedMessage: /invalid content-length/i,
     },
   ] as const)(
     "cancels rejected url response bodies: $name",

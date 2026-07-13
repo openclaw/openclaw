@@ -58,7 +58,9 @@ function expectDeclaredDispatchInputs(command: string): void {
     on?: { workflow_dispatch?: { inputs?: Record<string, unknown> } };
   };
   const declared = new Set(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {}));
-  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].map((match) => match[1]);
+  const emitted = [...command.matchAll(/(?:^|\s)-f\s+([a-z0-9_]+)=/gu)].flatMap((match) =>
+    match[1] === undefined ? [] : [match[1]],
+  );
   expect(emitted.length).toBeGreaterThan(0);
   for (const input of emitted) {
     expect(declared.has(input), `undeclared workflow_dispatch input: ${input}`).toBe(true);
@@ -161,7 +163,7 @@ describe("Docker E2E helper CLIs", () => {
   it("rejects missing timings limits without a Node stack trace", () => {
     for (const limit of [undefined, "-h"]) {
       const args = ["scripts/docker-e2e-timings.mjs", "summary.json", "--limit"];
-      const result = runHelper(...(limit === undefined ? args : [...args, limit]));
+      const result = runHelper(args[0]!, ...args.slice(1), ...(limit === undefined ? [] : [limit]));
 
       expect(result.status).toBe(1);
       expect(result.stdout).toBe("");

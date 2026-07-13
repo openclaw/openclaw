@@ -1,27 +1,22 @@
 // Nodes page renders the unified paired-device / node inventory card.
 import { html, nothing, type TemplateResult } from "lit";
-import {
-  resolvePendingDeviceApprovalState,
-  type DevicePairingAccessSummary,
-  type PendingDeviceApprovalKind,
-} from "../../../../src/shared/device-pairing-access.js";
+import type { PresenceEntry } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { formatList, formatRelativeTimestamp } from "../../lib/format.ts";
-import type {
-  DeviceTokenSummary,
-  InventoryRemovalRequest,
-  PairedDevice,
-  PendingDevice,
-} from "../../lib/nodes/index.ts";
+import { formatList, formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
+import type { DeviceTokenSummary, InventoryRemovalRequest } from "../../lib/nodes/index.ts";
 import {
   buildNodesInventory,
+  findGatewayPresence,
   listStaleInventoryEntries,
+  listUnpairedPresence,
   resolveInventoryRemoval,
   type NodesInventoryEntry,
   type NodesInventoryGroup,
 } from "../../lib/nodes/inventory.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
+import { renderPendingDeviceRows } from "./view-pending-devices.ts";
+import { deviceIcon, renderDeviceTile, renderSectionLabel } from "./view-shared.ts";
 import type { NodesProps } from "./view.types.ts";
 
 const MAX_CAPABILITY_CHIPS = 16;
@@ -31,37 +26,52 @@ function toRemovalRequest(entry: NodesInventoryEntry): InventoryRemovalRequest {
   return { id: entry.id, name: entry.name, ...removal };
 }
 
-function shortId(id: string): string {
-  return id.length > 14 ? `${id.slice(0, 12)}…` : id;
+function inventorySummary(
+  groups: NodesInventoryGroup[],
+  pendingCount: number,
+  loading: boolean,
+): string {
+  if (loading && groups.length === 0) {
+    return t("common.loading");
+  }
+  const connected = groups.filter((group) => group.primary.connected).length;
+  const parts = [
+    t("nodes.inventory.summaryConnected", {
+      connected: String(connected),
+      total: String(groups.length),
+    }),
+  ];
+  if (pendingCount > 0) {
+    parts.push(t("nodes.inventory.summaryPending", { count: String(pendingCount) }));
+  }
+  return parts.join(" · ");
 }
 
 export function renderNodesInventory(props: NodesProps) {
   const list = props.devicesList ?? { pending: [], paired: [] };
   const pending = Array.isArray(list.pending) ? list.pending : [];
   const paired = Array.isArray(list.paired) ? list.paired : [];
-  const groups = buildNodesInventory({ paired, nodes: props.nodes });
+  const groups = buildNodesInventory({ paired, nodes: props.nodes, presence: props.presence });
+  const gatewayPresence = findGatewayPresence(props.presence);
+  const unpairedPresence = listUnpairedPresence(props.presence, groups);
   const stale = listStaleInventoryEntries(groups);
-  const pairedByDeviceId = new Map(
-    paired
-      .map((device) => [normalizeOptionalString(device.deviceId), device] as const)
-      .filter((entry): entry is [string, PairedDevice] => Boolean(entry[0])),
-  );
   const loading = props.loading || props.devicesLoading;
   return html`
     <section class="card">
-      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+      <div class="nodes-toolbar">
         <div>
-          <div class="card-title">Nodes & devices</div>
-          <div class="card-sub">One entry per paired client: roles, tokens, live links.</div>
+          <div class="card-title">${t("nodes.inventory.title")}</div>
+          <div class="card-sub">${inventorySummary(groups, pending.length, loading)}</div>
         </div>
-        <div class="row" style="gap: 8px; flex-wrap: wrap; justify-content: flex-end;">
+        <div class="nodes-toolbar__actions">
           ${stale.length > 0
             ? html`
                 <button
-                  class="btn btn--sm danger"
+                  class="btn danger"
                   @click=${() => props.onInventoryCleanup(stale.map(toRemovalRequest))}
                 >
-                  Clean up ${stale.length} stale
+                  ${icons.trash}
+                  ${t("nodes.inventory.cleanupStale", { count: String(stale.length) })}
                 </button>
               `
             : nothing}
@@ -71,10 +81,7 @@ export function renderNodesInventory(props: NodesProps) {
             ?disabled=${!props.canPairDevice}
             @click=${props.onDevicePairSetupOpen}
           >
-            ${icons.smartphone} ${t("nodes.pairing.button")}
-          </button>
-          <button class="btn" ?disabled=${loading} @click=${props.onRefresh}>
-            ${loading ? t("common.loading") : t("common.refresh")}
+            ${icons.plus} ${t("nodes.pairing.button")}
           </button>
         </div>
       </div>
@@ -87,16 +94,26 @@ export function renderNodesInventory(props: NodesProps) {
       <div class="list" style="margin-top: 16px;">
         ${pending.length > 0
           ? html`
-              <div class="muted" style="margin-bottom: 8px;">Pending approval</div>
-              ${pending.map((req) =>
-                renderPendingDevice(req, props, lookupPairedDevice(pairedByDeviceId, req)),
-              )}
-              <div class="muted" style="margin-top: 12px; margin-bottom: 8px;">Paired</div>
+              ${renderSectionLabel(t("nodes.inventory.pendingApproval"))}
+              ${renderPendingDeviceRows(pending, paired, props)}
+              ${renderSectionLabel(t("nodes.inventory.paired"))}
             `
           : nothing}
-        ${groups.length === 0 && pending.length === 0
-          ? html` <div class="muted">No paired nodes or devices.</div> `
+        ${gatewayPresence ? renderGatewayEntry(gatewayPresence) : nothing}
+        ${groups.length === 0 &&
+        pending.length === 0 &&
+        !gatewayPresence &&
+        unpairedPresence.length === 0
+          ? html`
+              <div class="muted">${loading ? t("common.loading") : t("nodes.inventory.empty")}</div>
+            `
           : groups.map((group) => renderInventoryGroup(group, props))}
+        ${unpairedPresence.length > 0
+          ? html`
+              ${renderSectionLabel(t("nodes.inventory.connectedWithoutPairing"))}
+              ${unpairedPresence.map((entry) => renderPresenceOnlyEntry(entry))}
+            `
+          : nothing}
       </div>
     </section>
   `;
@@ -111,8 +128,12 @@ function renderInventoryGroup(group: NodesInventoryGroup, props: NodesProps) {
       ${renderInventoryEntry(group.primary, props)}
       <details class="nodes-group__dups">
         <summary>
-          ${group.duplicates.length} older pairing${group.duplicates.length === 1 ? "" : "s"} of
-          ${group.name}
+          ${t(
+            group.duplicates.length === 1
+              ? "nodes.inventory.olderPairing"
+              : "nodes.inventory.olderPairings",
+            { count: String(group.duplicates.length), name: group.name },
+          )}
         </summary>
         ${group.duplicates.map((entry) => renderInventoryEntry(entry, props))}
       </details>
@@ -120,44 +141,126 @@ function renderInventoryGroup(group: NodesInventoryGroup, props: NodesProps) {
   `;
 }
 
-function entryStatusChips(entry: NodesInventoryEntry): TemplateResult[] {
-  const chips: TemplateResult[] = [];
-  // Connectivity is known for node-catalog entries and for device records with
-  // server-computed connection state; legacy node-only rows without either
-  // still report offline, which matches their live-link reality.
-  chips.push(
-    html`<span class="chip ${entry.connected ? "chip-ok" : "chip-warn"}">
-      ${entry.connected ? "connected" : "offline"}
-    </span>`,
+function isWindowsPlatform(platform: string | undefined): boolean {
+  const normalized = normalizeOptionalString(platform)?.toLowerCase();
+  return (
+    normalized === "win32" ||
+    normalized === "windows" ||
+    normalized?.startsWith("windows ") === true
   );
+}
+
+function isApprovedNodeEntry(entry: NodesInventoryEntry): boolean {
+  const node = entry.node;
+  if (!node?.paired) {
+    return false;
+  }
+  return node.approvalState === undefined || node.approvalState === "approved";
+}
+
+function resolveNodeCoreVersion(entry: NodesInventoryEntry): string | undefined {
+  const coreVersion = normalizeOptionalString(entry.node?.coreVersion);
+  if (coreVersion) {
+    return coreVersion;
+  }
+  if (normalizeOptionalString(entry.node?.uiVersion)) {
+    return undefined;
+  }
+  const platform = normalizeOptionalString(entry.node?.platform)?.toLowerCase();
+  // Legacy headless desktop nodes reported one version field as their core version.
+  const legacyHeadless =
+    platform === "darwin" || platform === "linux" || platform === "win32" || platform === "windows";
+  return legacyHeadless ? normalizeOptionalString(entry.node?.version) : undefined;
+}
+
+function entryStatusChips(
+  entry: NodesInventoryEntry,
+  gatewayVersion: string | null,
+): TemplateResult[] {
+  const chips: TemplateResult[] = [];
   for (const role of entry.roles) {
     chips.push(html`<span class="chip">${role}</span>`);
   }
   if (entry.autoApproved) {
-    chips.push(html`<span class="chip">auto-paired</span>`);
+    chips.push(html`<span class="chip">${t("nodes.inventory.autoPaired")}</span>`);
+  }
+  const isApprovedNode = isApprovedNodeEntry(entry);
+  const nodeVersion = resolveNodeCoreVersion(entry);
+  const normalizedGatewayVersion = normalizeOptionalString(gatewayVersion);
+  if (
+    isApprovedNode &&
+    nodeVersion &&
+    normalizedGatewayVersion &&
+    nodeVersion !== normalizedGatewayVersion
+  ) {
+    const title = t("nodes.inventory.versionDriftTitle", {
+      nodeVersion,
+      gatewayVersion: normalizedGatewayVersion,
+    });
+    chips.push(
+      html`<span class="chip chip-warn" title=${title}>${t("nodes.inventory.versionDrift")}</span>`,
+    );
+  }
+  if (isApprovedNode && !entry.connected && isWindowsPlatform(entry.platform)) {
+    const title = t("nodes.inventory.manualWakeTitle");
+    chips.push(
+      html`<span class="chip chip-warn" title=${title}>${t("nodes.inventory.manualWake")}</span>`,
+    );
   }
   const approvalState = entry.node?.approvalState;
   if (approvalState === "pending-approval" || approvalState === "pending-reapproval") {
-    chips.push(html`<span class="chip chip-warn">approval needed</span>`);
+    chips.push(html`<span class="chip chip-warn">${t("nodes.inventory.approvalNeeded")}</span>`);
   }
   return chips;
 }
 
+const PLATFORM_DISPLAY_NAMES: Record<string, string> = {
+  macos: "macOS",
+  darwin: "macOS",
+  win32: "Windows",
+  windows: "Windows",
+  linux: "Linux",
+  ios: "iOS",
+  ipados: "iPadOS",
+  watchos: "watchOS",
+  android: "Android",
+  web: "Web",
+};
+
+function prettifyPlatform(platform: string): string {
+  const [name = "", ...rest] = platform.trim().split(/\s+/u);
+  // Mixed-case names ("iOS") are already branded; only capitalize all-lowercase input.
+  const fallback =
+    name === name.toLowerCase() ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : name;
+  const displayName = PLATFORM_DISPLAY_NAMES[name.toLowerCase()] ?? fallback;
+  return [displayName, ...rest].join(" ");
+}
+
+function formatInputRecency(lastInputSeconds: number): string {
+  return t("nodes.inventory.inputAgo", {
+    time: formatTimeAgo(lastInputSeconds * 1000, { suffix: false }),
+  });
+}
+
 function entryMetaLine(entry: NodesInventoryEntry): string {
-  const parts: string[] = [shortId(entry.id)];
+  const parts: string[] = [];
   if (entry.platform) {
-    parts.push(entry.platform);
+    parts.push(prettifyPlatform(entry.platform));
+  }
+  if (entry.modelIdentifier) {
+    parts.push(entry.modelIdentifier);
   }
   if (entry.version) {
     parts.push(entry.version);
   }
-  if (entry.remoteIp) {
-    parts.push(entry.remoteIp);
-  }
-  if (entry.lastSeenAtMs) {
-    parts.push(`seen ${formatRelativeTimestamp(entry.lastSeenAtMs)}`);
-  } else if (entry.approvedAtMs) {
-    parts.push(`approved ${formatRelativeTimestamp(entry.approvedAtMs)}`);
+  if (entry.connected && entry.presence?.lastInputSeconds != null) {
+    parts.push(formatInputRecency(entry.presence.lastInputSeconds));
+  } else if (!entry.connected && entry.lastSeenAtMs) {
+    parts.push(t("nodes.inventory.seen", { time: formatRelativeTimestamp(entry.lastSeenAtMs) }));
+  } else if (!entry.connected && entry.approvedAtMs) {
+    parts.push(
+      t("nodes.inventory.approved", { time: formatRelativeTimestamp(entry.approvedAtMs) }),
+    );
   }
   return parts.join(" · ");
 }
@@ -172,7 +275,9 @@ function renderCapabilityChips(label: string, values: string[]) {
     <div class="muted" style="margin-top: 8px;">${label}</div>
     <div class="chip-row" style="margin-top: 4px;">
       ${visible.map((value) => html`<span class="chip">${value}</span>`)}
-      ${overflow > 0 ? html`<span class="chip">+${overflow} more</span>` : nothing}
+      ${overflow > 0
+        ? html`<span class="chip">${t("nodes.inventory.more", { count: String(overflow) })}</span>`
+        : nothing}
     </div>
   `;
 }
@@ -182,25 +287,32 @@ function renderEntryDetails(entry: NodesInventoryEntry, props: NodesProps) {
   const caps = entry.node?.caps ?? [];
   const commands = entry.node?.commands ?? [];
   const scopes = entry.scopes;
-  if (tokens.length === 0 && caps.length === 0 && commands.length === 0 && scopes.length === 0) {
-    return nothing;
-  }
   return html`
     <details class="nodes-entry__details">
-      <summary>Tokens & capabilities</summary>
-      <div class="muted" style="margin-top: 8px; word-break: break-all;">${entry.id}</div>
+      <summary>${t("nodes.inventory.details")}</summary>
+      <div class="muted" style="margin-top: 8px; word-break: break-all;">
+        ${t("nodes.inventory.deviceId", { id: entry.id })}
+      </div>
+      ${entry.remoteIp
+        ? html`<div class="muted" style="margin-top: 8px;">
+            ${t("nodes.inventory.remoteIp", { ip: entry.remoteIp })}
+          </div>`
+        : nothing}
       ${scopes.length > 0
-        ? html`<div class="muted" style="margin-top: 8px;">scopes: ${formatList(scopes)}</div>`
+        ? html`<div class="muted" style="margin-top: 8px;">
+            ${t("nodes.inventory.scopes", { scopes: formatList(scopes) })}
+          </div>`
         : nothing}
       ${tokens.length > 0
         ? html`
-            <div class="muted" style="margin-top: 8px;">Tokens</div>
+            <div class="muted" style="margin-top: 8px;">${t("nodes.inventory.tokens")}</div>
             <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;">
               ${tokens.map((token) => renderTokenRow(entry.id, token, props))}
             </div>
           `
         : nothing}
-      ${renderCapabilityChips("Capabilities", caps)} ${renderCapabilityChips("Commands", commands)}
+      ${renderCapabilityChips(t("nodes.inventory.capabilities"), caps)}
+      ${renderCapabilityChips(t("nodes.inventory.commands"), commands)}
     </details>
   `;
 }
@@ -213,10 +325,11 @@ function renderInventoryEntry(entry: NodesInventoryEntry, props: NodesProps) {
       : undefined;
   return html`
     <div class="list-item nodes-entry">
+      ${renderDeviceTile(deviceIcon(entry), entry.connected)}
       <div class="list-main">
         <div class="nodes-entry__head">
           <span class="list-title">${entry.name}</span>
-          ${entryStatusChips(entry)}
+          ${entryStatusChips(entry, props.gatewayVersion)}
         </div>
         <div class="list-sub">${entryMetaLine(entry)}</div>
         ${renderEntryDetails(entry, props)}
@@ -229,10 +342,10 @@ function renderInventoryEntry(entry: NodesInventoryEntry, props: NodesProps) {
                   class="btn btn--sm primary"
                   @click=${() => props.onNodeApprove(pendingRequestId)}
                 >
-                  Approve
+                  ${t("nodes.inventory.approve")}
                 </button>
                 <button class="btn btn--sm" @click=${() => props.onNodeReject(pendingRequestId)}>
-                  Reject
+                  ${t("nodes.inventory.reject")}
                 </button>
               `
             : nothing}
@@ -240,7 +353,7 @@ function renderInventoryEntry(entry: NodesInventoryEntry, props: NodesProps) {
             class="btn btn--sm danger"
             @click=${() => props.onInventoryRemove(toRemovalRequest(entry))}
           >
-            Remove
+            ${t("nodes.inventory.remove")}
           </button>
         </div>
       </div>
@@ -248,114 +361,90 @@ function renderInventoryEntry(entry: NodesInventoryEntry, props: NodesProps) {
   `;
 }
 
-function renderTokenRow(deviceId: string, token: DeviceTokenSummary, props: NodesProps) {
-  const status = token.revokedAtMs ? "revoked" : "active";
-  const scopes = `scopes: ${formatList(token.scopes)}`;
+function presenceMetaParts(entry: PresenceEntry): string[] {
+  const parts: string[] = [];
+  if (entry.platform) {
+    parts.push(prettifyPlatform(entry.platform));
+  }
+  if (entry.modelIdentifier) {
+    parts.push(entry.modelIdentifier);
+  }
+  if (entry.version) {
+    parts.push(entry.version);
+  }
+  if (entry.lastInputSeconds != null) {
+    parts.push(formatInputRecency(entry.lastInputSeconds));
+  }
+  return parts;
+}
+
+function renderGatewayEntry(entry: PresenceEntry) {
+  const parts = presenceMetaParts(entry);
+  return html`
+    <div class="list-item nodes-entry nodes-entry--gateway">
+      ${renderDeviceTile(icons.server, true)}
+      <div class="list-main">
+        <div class="nodes-entry__head">
+          <span class="list-title">${entry.host ?? t("nodes.execApprovals.gateway")}</span>
+          <span class="chip">${t("nodes.inventory.gateway")}</span>
+        </div>
+        ${parts.length > 0 ? html`<div class="list-sub">${parts.join(" · ")}</div>` : nothing}
+      </div>
+    </div>
+  `;
+}
+
+function renderPresenceOnlyEntry(entry: PresenceEntry) {
+  const roles = Array.isArray(entry.roles) ? entry.roles.filter(Boolean) : [];
+  const parts = presenceMetaParts(entry);
+  return html`
+    <div class="list-item nodes-entry nodes-entry--presence-only">
+      ${renderDeviceTile(
+        deviceIcon({ clientMode: entry.mode ?? undefined, platform: entry.platform ?? undefined }),
+        true,
+      )}
+      <div class="list-main">
+        <div class="nodes-entry__head">
+          <span class="list-title">
+            ${entry.host ?? entry.mode ?? t("nodes.inventory.unknownClient")}
+          </span>
+          ${roles.map((role) => html`<span class="chip">${role}</span>`)}
+          <span class="chip">${t("nodes.inventory.unpaired")}</span>
+        </div>
+        ${parts.length > 0 ? html`<div class="list-sub">${parts.join(" · ")}</div>` : nothing}
+      </div>
+    </div>
+  `;
+}
+
+function renderTokenRow(deviceId: string, tokenSummary: DeviceTokenSummary, props: NodesProps) {
+  const status = tokenSummary.revokedAtMs
+    ? t("nodes.inventory.revoked")
+    : t("nodes.inventory.active");
+  const scopes = t("nodes.inventory.scopes", { scopes: formatList(tokenSummary.scopes) });
   const when = formatRelativeTimestamp(
-    token.rotatedAtMs ?? token.createdAtMs ?? token.lastUsedAtMs ?? null,
+    tokenSummary.rotatedAtMs ?? tokenSummary.createdAtMs ?? tokenSummary.lastUsedAtMs ?? null,
   );
   return html`
     <div class="row" style="justify-content: space-between; gap: 8px;">
-      <div class="list-sub">${token.role} · ${status} · ${scopes} · ${when}</div>
+      <div class="list-sub">${tokenSummary.role} · ${status} · ${scopes} · ${when}</div>
       <div class="row" style="justify-content: flex-end; gap: 6px; flex-wrap: wrap;">
         <button
           class="btn btn--sm"
-          @click=${() => props.onDeviceRotate(deviceId, token.role, token.scopes)}
+          @click=${() => props.onDeviceRotate(deviceId, tokenSummary.role, tokenSummary.scopes)}
         >
-          Rotate
+          ${t("nodes.inventory.rotate")}
         </button>
-        ${token.revokedAtMs
+        ${tokenSummary.revokedAtMs
           ? nothing
           : html`
               <button
                 class="btn btn--sm danger"
-                @click=${() => props.onDeviceRevoke(deviceId, token.role)}
+                @click=${() => props.onDeviceRevoke(deviceId, tokenSummary.role)}
               >
-                Revoke
+                ${t("nodes.inventory.revoke")}
               </button>
             `}
-      </div>
-    </div>
-  `;
-}
-
-function lookupPairedDevice(
-  pairedByDeviceId: ReadonlyMap<string, PairedDevice>,
-  request: Pick<PendingDevice, "deviceId" | "publicKey">,
-): PairedDevice | undefined {
-  const deviceId = normalizeOptionalString(request.deviceId);
-  if (!deviceId) {
-    return undefined;
-  }
-  const paired = pairedByDeviceId.get(deviceId);
-  if (!paired) {
-    return undefined;
-  }
-  const requestPublicKey = normalizeOptionalString(request.publicKey);
-  const pairedPublicKey = normalizeOptionalString(paired.publicKey);
-  if (requestPublicKey && pairedPublicKey && requestPublicKey !== pairedPublicKey) {
-    return undefined;
-  }
-  return paired;
-}
-
-function formatAccessSummary(access: DevicePairingAccessSummary | null): string {
-  if (!access) {
-    return "none";
-  }
-  return `roles: ${formatList(access.roles)} · scopes: ${formatList(access.scopes)}`;
-}
-
-function renderPendingApprovalNote(kind: PendingDeviceApprovalKind) {
-  switch (kind) {
-    case "scope-upgrade":
-      return "scope upgrade requires approval";
-    case "role-upgrade":
-      return "role upgrade requires approval";
-    case "re-approval":
-      return "reconnect details changed; approval required";
-    case "new-pairing":
-      return "new device pairing request";
-  }
-  const exhaustiveKind: never = kind;
-  void exhaustiveKind;
-  throw new Error("unsupported pending approval kind");
-}
-
-function renderPendingDevice(req: PendingDevice, props: NodesProps, paired?: PairedDevice) {
-  const name = normalizeOptionalString(req.displayName) || req.deviceId;
-  const age = typeof req.ts === "number" ? formatRelativeTimestamp(req.ts) : t("common.na");
-  const approval = resolvePendingDeviceApprovalState(req, paired);
-  const repair = req.isRepair ? " · repair" : "";
-  const ip = req.remoteIp ? ` · ${req.remoteIp}` : "";
-  return html`
-    <div class="list-item">
-      <div class="list-main">
-        <div class="list-title">${name}</div>
-        <div class="list-sub">${req.deviceId}${ip}</div>
-        <div class="muted" style="margin-top: 6px;">
-          ${renderPendingApprovalNote(approval.kind)} · requested ${age}${repair}
-        </div>
-        <div class="muted" style="margin-top: 6px;">
-          requested: ${formatAccessSummary(approval.requested)}
-        </div>
-        ${approval.approved
-          ? html`
-              <div class="muted" style="margin-top: 6px;">
-                approved now: ${formatAccessSummary(approval.approved)}
-              </div>
-            `
-          : nothing}
-      </div>
-      <div class="list-meta">
-        <div class="row" style="justify-content: flex-end; gap: 8px; flex-wrap: wrap;">
-          <button class="btn btn--sm primary" @click=${() => props.onDeviceApprove(req.requestId)}>
-            Approve
-          </button>
-          <button class="btn btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
-            Reject
-          </button>
-        </div>
       </div>
     </div>
   `;

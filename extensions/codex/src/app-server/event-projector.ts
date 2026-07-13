@@ -57,7 +57,7 @@ import {
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
 import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
-export type CodexAppServerToolTelemetry = {
+type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
   didDeliverSourceReplyViaMessageTool?: boolean;
   messagingToolSentTexts: string[];
@@ -70,7 +70,7 @@ export type CodexAppServerToolTelemetry = {
   successfulCronAdds?: number;
 };
 
-export type CodexAppServerEventProjectorOptions = {
+type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
   readRecentRateLimits?: () => JsonValue | undefined;
@@ -784,7 +784,8 @@ export class CodexAppServerEventProjector {
       assistantTexts.some((text) => text.trim().length > 0);
     this.synthesizeMissingToolResults({
       synthesize: legacyFailClosed,
-      recordPromptError: legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn,
+      recordPromptError:
+        legacyFailClosed && !hasDeliverableAssistantOnCompletedTurn && !this.aborted,
     });
     const lastAssistant =
       assistantTexts.length > 0
@@ -1444,7 +1445,7 @@ export class CodexAppServerEventProjector {
       });
       return;
     }
-    const chunk = delta.length > remainingChars ? delta.slice(0, remainingChars) : delta;
+    const chunk = delta.length > remainingChars ? truncateUtf16Safe(delta, remainingChars) : delta;
     state.chars += chunk.length;
     state.messages += 1;
     const reachedLimit =

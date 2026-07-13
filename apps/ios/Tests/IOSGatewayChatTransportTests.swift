@@ -34,15 +34,6 @@ struct IOSGatewayChatTransportTests {
         return try #require(value as? [String: Any])
     }
 
-    @Test func `agent wait treats success as completion`() {
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("success"))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus(" ok "))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("completed"))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("succeeded"))
-        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("timeout"))
-        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("failed"))
-    }
-
     @Test func `agent wait timeout adds gateway margin`() {
         #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1) == 6)
         #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1000) == 6)
@@ -53,18 +44,41 @@ struct IOSGatewayChatTransportTests {
         #expect(IOSGatewayChatTransport.compactionRequestTimeoutSeconds == 0)
     }
 
-    @Test func `agent wait completion decodes fallback run id`() throws {
+    @Test func `agent wait distinguishes terminal and retryable timeouts`() throws {
         let data = Data(#"{"status":"completed"}"#.utf8)
-        let completion = try IOSGatewayChatTransport.decodeAgentWaitCompletion(data, fallbackRunId: "run-local")
-        #expect(completion.runId == "run-local")
-        #expect(completion.status == "completed")
-        #expect(completion.completed)
+        #expect(try OpenClawChatGatewayPayloadCodec.decodeAgentWaitObservation(data) == .terminal(.completed))
+
+        let pending = Data(#"{"status":"pending"}"#.utf8)
+        #expect(try OpenClawChatGatewayPayloadCodec.decodeAgentWaitObservation(pending) == .checkAgain)
+
+        let queued = Data(#"{"status":"timeout","timeoutPhase":"queue","providerStarted":false}"#.utf8)
+        #expect(try OpenClawChatGatewayPayloadCodec.decodeAgentWaitObservation(queued) == .checkAgain)
+
+        let providerTimeout = Data(
+            #"{"status":"timeout","timeoutPhase":"provider","providerStarted":true}"#.utf8)
+        #expect(
+            try OpenClawChatGatewayPayloadCodec.decodeAgentWaitObservation(providerTimeout) ==
+                .terminal(.failed(message: "Run timed out")))
+
+        let stopped = Data(#"{"status":"timeout","stopReason":"stop"}"#.utf8)
+        #expect(
+            try OpenClawChatGatewayPayloadCodec.decodeAgentWaitObservation(stopped) ==
+                .terminal(.failed(message: "Run cancelled")))
     }
 
     @Test func `model patch result decodes authoritative Luna thinking state`() throws {
         let data = Data(
-            #"{"entry":{"thinkingLevel":"ultra"},"resolved":{"modelProvider":"openai","model":"gpt-5.6-luna","thinkingLevel":"max","thinkingLevels":[{"id":"off","label":"off"},{"id":"max","label":"max"}]}}"#
-                .utf8)
+            #"""
+            {
+              "entry":{"thinkingLevel":"ultra"},
+              "resolved":{
+                "modelProvider":"openai",
+                "model":"gpt-5.6-luna",
+                "thinkingLevel":"max",
+                "thinkingLevels":[{"id":"off","label":"off"},{"id":"max","label":"max"}]
+              }
+            }
+            """#.utf8)
 
         let result = try IOSGatewayChatTransport.decodeModelPatchResult(data)
 
@@ -104,8 +118,22 @@ struct IOSGatewayChatTransportTests {
 
     @Test func `hello advertises guarded chat send capability`() throws {
         let data = Data(
-            #"{"type":"hello-ok","protocol":4,"server":{"version":"test","connId":"test"},"features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract"]},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"auth":{},"policy":{}}"#
-                .utf8)
+            #"""
+            {
+              "type":"hello-ok",
+              "protocol":4,
+              "server":{"version":"test","connId":"test"},
+              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract"]},
+              "snapshot":{
+                "presence":[],
+                "health":{},
+                "stateVersion":{"presence":0,"health":0},
+                "uptimeMs":0
+              },
+              "auth":{},
+              "policy":{}
+            }
+            """#.utf8)
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
         #expect(hello.supportsServerCapability(.chatSendRoutingContract))
     }
@@ -186,11 +214,17 @@ struct IOSGatewayChatTransportTests {
         let data = Data(
             #"""
             {"models":[
-              {"id":"claude-opus-4","name":"Claude Opus 4","provider":"anthropic","contextWindow":200000,"reasoning":true},
+              {
+                "id":"claude-opus-4",
+                "name":"Claude Opus 4",
+                "provider":"anthropic",
+                "contextWindow":200000,
+                "reasoning":true
+              },
               {"id":"gpt-5","name":"  ","provider":"openai","extra":"ignored"}
             ]}
             """#.utf8)
-        let choices = try IOSGatewayChatTransport.decodeModelChoices(data)
+        let choices = try OpenClawChatGatewayPayloadCodec.decodeModelChoices(data)
 
         #expect(choices.count == 2)
         #expect(choices[0].modelID == "claude-opus-4")
@@ -254,7 +288,7 @@ struct IOSGatewayChatTransportTests {
         #expect(params["message"] as? String == "hello")
         #expect(params["thinking"] as? String == "low")
         #expect(params["idempotencyKey"] as? String == "send-1")
-        #expect(params["timeoutMs"] as? Int == IOSGatewayChatTransport.defaultChatSendTimeoutMs)
+        #expect(params["timeoutMs"] == nil)
         #expect(params["attachments"] == nil)
     }
 
@@ -416,7 +450,7 @@ struct IOSGatewayChatTransportTests {
             payload: payload,
             seq: 1,
             stateversion: nil)
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
 
         switch mapped {
         case let .sessionMessage(message):
@@ -444,7 +478,7 @@ struct IOSGatewayChatTransportTests {
             seq: 1,
             stateversion: nil)
 
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
         guard case let .sessionsChanged(change) = mapped else {
             Issue.record("expected .sessionsChanged, got \(String(describing: mapped))")
             return
@@ -462,7 +496,7 @@ struct IOSGatewayChatTransportTests {
             "state": AnyCodable("final"),
         ])
         let frame = EventFrame(type: "event", event: "chat", payload: payload, seq: 1, stateversion: nil)
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
 
         switch mapped {
         case let .chat(chat):
@@ -481,7 +515,7 @@ struct IOSGatewayChatTransportTests {
             payload: AnyCodable(["a": AnyCodable(1)]),
             seq: 1,
             stateversion: nil)
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
         #expect(mapped == nil)
     }
 }

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Channel selection chooses a deliverable message channel from explicit input,
 // tool context fallback, or configured plugin accounts.
 import { listChannelPlugins } from "../../channels/plugins/index.js";
@@ -19,12 +20,9 @@ import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 
 /** Deliverable message channel id that can be selected for message actions. */
-export type MessageChannelId = DeliverableMessageChannel;
+type MessageChannelId = DeliverableMessageChannel;
 /** Source that explains how message channel selection chose its result. */
-export type MessageChannelSelectionSource =
-  | "explicit"
-  | "tool-context-fallback"
-  | "single-configured";
+type MessageChannelSelectionSource = "explicit" | "tool-context-fallback" | "single-configured";
 
 const getMessageChannels = () => listDeliverableMessageChannels();
 
@@ -279,7 +277,11 @@ export async function resolveMessageChannelSelection(params: {
 
   const configured = await listConfiguredMessageChannels(params.cfg);
   if (configured.length === 1) {
-    return { channel: configured[0], configured, source: "single-configured" };
+    return {
+      channel: expectDefined(configured[0], "configured entry at 0"),
+      configured,
+      source: "single-configured",
+    };
   }
   if (configured.length === 0) {
     const repairHints = listConfiguredOfficialExternalRepairHints(params.cfg);

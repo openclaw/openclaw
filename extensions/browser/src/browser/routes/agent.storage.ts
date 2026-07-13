@@ -18,7 +18,13 @@ import {
 } from "./agent.shared.js";
 import { readOptionalRouteFiniteNumber, readRouteFiniteNumber } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
+import {
+  asyncBrowserRoute,
+  jsonError,
+  readHttpOrigin,
+  toBoolean,
+  toStringOrEmpty,
+} from "./utils.js";
 
 type StorageKind = "local" | "session";
 
@@ -43,7 +49,7 @@ type CookieSetOptions = {
 };
 
 /** Parse the supported browser storage bucket names. */
-export function parseStorageKind(raw: string): StorageKind | null {
+function parseStorageKind(raw: string): StorageKind | null {
   if (raw === "local" || raw === "session") {
     return raw;
   }
@@ -51,7 +57,7 @@ export function parseStorageKind(raw: string): StorageKind | null {
 }
 
 /** Parse an optional storage mutation request from a route body. */
-export function parseStorageMutationRequest(
+function parseStorageMutationRequest(
   kindParam: unknown,
   body: Record<string, unknown>,
 ): { kind: StorageKind | null; targetId: string | undefined } {
@@ -62,7 +68,7 @@ export function parseStorageMutationRequest(
 }
 
 /** Parse a required storage mutation request and throw on invalid input. */
-export function parseRequiredStorageMutationRequest(
+function parseRequiredStorageMutationRequest(
   kindParam: unknown,
   body: Record<string, unknown>,
 ): { kind: StorageKind; targetId: string | undefined } | null {
@@ -113,8 +119,20 @@ function assertRange(
   return value;
 }
 
+function readOptionalHttpOrigin(raw: unknown): string | undefined {
+  const value = toStringOrEmpty(raw);
+  if (!value) {
+    return undefined;
+  }
+  const origin = readHttpOrigin(value);
+  if (!origin) {
+    throw new Error("origin must be an http(s) origin");
+  }
+  return origin;
+}
+
 /** Parse cookie options accepted by browser storage mutation routes. */
-export function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {
+function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {
   return {
     name: toStringOrEmpty(cookie.name),
     value: toStringOrEmpty(cookie.value),
@@ -132,12 +150,12 @@ export function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSe
 }
 
 /** Parse geolocation override options accepted by context mutation routes. */
-export function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
+function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
   const clear = toBoolean(body.clear) ?? false;
-  const origin = toStringOrEmpty(body.origin) || undefined;
   if (clear) {
-    return { clear, origin };
+    return { clear };
   }
+  const origin = readOptionalHttpOrigin(body.origin);
   const latitude = assertRange(
     readRouteFiniteNumber(body.latitude, "latitude"),
     "latitude",
@@ -176,11 +194,12 @@ export function registerBrowserAgentStorageRoutes(
         targetId,
         feature: "cookies",
         enforceCurrentUrlAllowed: true,
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           const result = await pw.cookiesGetViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId, ...result });
         },
       });
@@ -213,12 +232,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "cookies set",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.cookiesSetViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             cookie: parsedCookie,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -238,11 +258,12 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "cookies clear",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.cookiesClearViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -266,13 +287,14 @@ export function registerBrowserAgentStorageRoutes(
         targetId,
         feature: "storage get",
         enforceCurrentUrlAllowed: true,
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           const result = await pw.storageGetViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             kind,
             key: normalizeOptionalString(key),
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId, ...result });
         },
       });
@@ -299,7 +321,7 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId: mutation.parsed.targetId,
         feature: "storage set",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.storageSetViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
@@ -307,6 +329,7 @@ export function registerBrowserAgentStorageRoutes(
             key,
             value,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -328,12 +351,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId: mutation.parsed.targetId,
         feature: "storage clear",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.storageClearViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             kind: mutation.parsed.kind,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -357,12 +381,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "offline",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setOfflineViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             offline,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -396,12 +421,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "headers",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setExtraHTTPHeadersViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             headers: parsed,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -423,7 +449,7 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "http credentials",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setHttpCredentialsViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
@@ -431,6 +457,7 @@ export function registerBrowserAgentStorageRoutes(
             password,
             clear,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -455,12 +482,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "geolocation",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setGeolocationViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             ...geolocation,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -489,12 +517,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "media emulation",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.emulateMediaViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             colorScheme,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -517,12 +546,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "timezone",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setTimezoneViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             timezoneId,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -545,12 +575,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "locale",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setLocaleViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             locale,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });
@@ -573,12 +604,13 @@ export function registerBrowserAgentStorageRoutes(
         ctx,
         targetId,
         feature: "device emulation",
-        run: async ({ cdpUrl, tab, pw }) => {
+        run: async ({ cdpUrl, tab, pw, signal }) => {
           await pw.setDeviceViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             name,
           });
+          signal.throwIfAborted();
           res.json({ ok: true, targetId: tab.targetId });
         },
       });

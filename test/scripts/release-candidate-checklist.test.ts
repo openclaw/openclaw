@@ -12,6 +12,7 @@ import {
   parseArgs,
   parseRunIdFromDispatchOutput,
   reconcileReleaseCandidateState,
+  releaseBranchForTag,
   resolveArtifactName,
   requireRunIdFromDispatchOutput,
   run,
@@ -532,6 +533,16 @@ describe("release candidate checklist", () => {
     ).toThrow("--workflow-ref must be main");
   });
 
+  it("keeps release validation context on the canonical release branch", () => {
+    expect(releaseBranchForTag("v2026.7.1-beta.4")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-1")).toBe("release/2026.7.1");
+    expect(releaseBranchForTag("v2026.7.1-alpha.4")).toBe("");
+
+    const source = readFileSync("scripts/release-candidate-checklist.mjs", "utf8");
+    expect(source).toContain("target_context_ref: targetContextRef");
+  });
+
   it("preserves the matching Tideclaw alpha workflow source", () => {
     const workflowRef = "tideclaw/alpha/2026-07-10-1200Z";
     const options = parseArgs([
@@ -710,7 +721,9 @@ describe("release candidate checklist", () => {
     ) as {
       on: { workflow_dispatch: { inputs: Record<string, unknown> } };
     };
-    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].map((match) => match[1]);
+    const emittedInputs = [...command.matchAll(/'-f' '([^=']+)=/gu)].flatMap((match) =>
+      match[1] === undefined ? [] : [match[1]],
+    );
     for (const input of emittedInputs) {
       expect(workflow.on.workflow_dispatch.inputs).toHaveProperty(input);
     }

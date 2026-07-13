@@ -3,6 +3,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -15,6 +16,7 @@ const VERIFIER_SHA = "c".repeat(40);
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
+  targetContextRef: "",
   liveSuiteFilter: "",
   crossOsSuiteFilter: "",
   releasePackageSpec: "",
@@ -413,6 +415,10 @@ function setUpFixtures(runs: RunFixture[]): {
 
 function runResolver(args: {
   binDir: string;
+  compareBaseSha?: string;
+  compareFiles?: string[];
+  compareRenamed?: boolean;
+  compareStatus?: string;
   fixtures: string;
   inputs?: unknown;
   releaseProfile?: string;
@@ -432,6 +438,23 @@ function runResolver(args: {
       status: args.verifierOnMain === false ? "diverged" : "ahead",
     }),
   );
+  if (args.compareBaseSha) {
+    writeFileSync(
+      fixtureName(
+        args.fixtures,
+        `repos/${REPOSITORY}/compare/${args.compareBaseSha}...${args.targetSha}`,
+      ),
+      JSON.stringify({
+        files: (args.compareFiles ?? ["CHANGELOG.md"]).map((filename, index) => ({
+          filename,
+          status: args.compareRenamed && index === 0 ? "renamed" : "modified",
+          ...(args.compareRenamed && index === 0 ? { previous_filename: "src/index.ts" } : {}),
+        })),
+        merge_base_commit: { sha: args.compareBaseSha },
+        status: args.compareStatus ?? "ahead",
+      }),
+    );
+  }
   return spawnSync(
     "bash",
     [
@@ -707,20 +730,22 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     {
       label: "duplicate child run id",
       mutate(record: NormalizedEvidence) {
-        record.children[1].runId = record.children[0].runId;
+        const firstChild = expectDefined(record.children[0], "first reusable release child");
+        const secondChild = expectDefined(record.children[1], "second reusable release child");
+        secondChild.runId = firstChild.runId;
       },
     },
     {
       label: "failed child",
       mutate(record: NormalizedEvidence) {
-        record.children[0].conclusion = "failure";
+        expectDefined(record.children[0], "failed reusable release child").conclusion = "failure";
       },
     },
     {
       label: "extra child role",
       mutate(record: NormalizedEvidence) {
         record.children.push({
-          ...record.children[0],
+          ...expectDefined(record.children[0], "base reusable release child"),
           role: "npmTelegram",
           runId: "205",
         });
@@ -825,7 +850,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     },
   );
 
-  it("rejects cross-SHA reuse even for a changelog-only delta", () => {
+  it("reuses product validation for a changelog-only release delta", () => {
     const { origin, priorSha } = createRepo();
     const targetSha = commitFile(
       origin,
@@ -839,6 +864,34 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     const result = runResolver({
       binDir,
+      compareBaseSha: priorSha,
+      fixtures,
+      repoDir: clone,
+      targetSha,
+      validatorPath,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({
+      changed_path_count: "1",
+      changed_paths: '["CHANGELOG.md"]',
+      evidence_policy: "changelog-only-release-v1",
+      evidence_sha: priorSha,
+      reuse: "true",
+    });
+  });
+
+  it("rejects cross-SHA reuse when the release delta includes code", () => {
+    const { origin, priorSha } = createRepo();
+    const targetSha = commitFile(origin, "index.ts", "export const value = 2;\n", "fix: code");
+    const clone = cloneHead(origin);
+    const record = normalizedEvidence({ targetSha: priorSha });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      compareBaseSha: priorSha,
+      compareFiles: ["index.ts"],
       fixtures,
       repoDir: clone,
       targetSha,
@@ -847,7 +900,29 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-    expect(result.stderr).toContain("cross-SHA reuse requires granular artifact evidence");
+    expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
+  });
+
+  it("rejects a source-file rename to CHANGELOG.md", () => {
+    const { origin, priorSha } = createRepo();
+    const targetSha = commitFile(origin, "CHANGELOG.md", "renamed source\n", "docs: rename");
+    const clone = cloneHead(origin);
+    const record = normalizedEvidence({ targetSha: priorSha });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      compareBaseSha: priorSha,
+      compareRenamed: true,
+      fixtures,
+      repoDir: clone,
+      targetSha,
+      validatorPath,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+    expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
   });
 
   it("rejects target version metadata that is internally inconsistent", () => {

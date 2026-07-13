@@ -5,6 +5,7 @@ import {
   WorktreesBranchesResultSchema,
   WorktreesRemoveResultSchema,
   validateSessionsCreateParams,
+  validateFsListDirParams,
   validateWorktreesBranchesParams,
   validateWorktreesCreateParams,
   validateWorktreesGcParams,
@@ -23,6 +24,8 @@ describe("managed worktree protocol schemas", () => {
       Value.Check(SessionsCreateResultSchema, {
         ok: true,
         key: "agent:main:dashboard:test",
+        runStarted: false,
+        runError: { code: "INVALID_REQUEST", message: "send blocked by session policy" },
         worktree: { id: "id", path: "/worktree", branch: "openclaw/wt-test" },
       }),
     ).toBe(true);
@@ -60,6 +63,12 @@ describe("managed worktree protocol schemas", () => {
         snapshotError: "snapshot failed: nested gitlink",
       }),
     ).toBe(true);
+  });
+
+  it("accepts Gateway and node directory-listing targets", () => {
+    expect(validateFsListDirParams({ path: "/repo" })).toBe(true);
+    expect(validateFsListDirParams({ nodeId: "macbook", path: "/Users/peter" })).toBe(true);
+    expect(validateFsListDirParams({ nodeId: "" })).toBe(false);
   });
 
   it("rejects invalid names and unknown fields", () => {

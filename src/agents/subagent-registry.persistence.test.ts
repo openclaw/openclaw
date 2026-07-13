@@ -4,12 +4,15 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   clearSessionStoreCacheForTest,
   drainSessionStoreWriterQueuesForTest,
 } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
@@ -323,15 +326,14 @@ describe("subagent registry persistence", () => {
       updatedAt: completedAt,
     });
     const store = await readSubagentSessionStore(storePath);
-    store["agent:main:subagent:kill-race"] = {
+    await replaceSessionEntry({ storePath, sessionKey: "agent:main:subagent:kill-race" }, {
       ...store["agent:main:subagent:kill-race"],
       status: "done",
       startedAt,
       endedAt: completedAt,
       runtimeMs: 500,
       abortedLastRun: true,
-    };
-    await fs.writeFile(storePath, `${JSON.stringify(store)}\n`, "utf8");
+    } as SessionEntry);
 
     await persistSubagentSessionTiming({
       runId: "run-kill-race",
@@ -661,7 +663,10 @@ describe("subagent registry persistence", () => {
     const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
       runs: Record<string, { cleanupCompletedAt?: number }>;
     };
-    expect(afterSecond.runs["run-3"].cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
+    expect(
+      expectDefined(afterSecond.runs["run-3"], 'afterSecond.runs["run-3"] test invariant')
+        .cleanupCompletedAt,
+    ).toBeGreaterThanOrEqual(beforeRetry);
   });
 
   it("retries cleanup announce after announce flow rejects", async () => {
@@ -691,8 +696,14 @@ describe("subagent registry persistence", () => {
     const afterFirst = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
       runs: Record<string, { cleanupHandled?: boolean; cleanupCompletedAt?: number }>;
     };
-    expect(afterFirst.runs["run-reject"].cleanupHandled).toBe(false);
-    expect(afterFirst.runs["run-reject"].cleanupCompletedAt).toBeUndefined();
+    expect(
+      expectDefined(afterFirst.runs["run-reject"], 'afterFirst.runs["run-reject"] test invariant')
+        .cleanupHandled,
+    ).toBe(false);
+    expect(
+      expectDefined(afterFirst.runs["run-reject"], 'afterFirst.runs["run-reject"] test invariant')
+        .cleanupCompletedAt,
+    ).toBeUndefined();
 
     announceSpy.mockResolvedValueOnce(true);
     const beforeRetry = Date.now();
@@ -708,7 +719,10 @@ describe("subagent registry persistence", () => {
     const afterSecond = JSON.parse(await fs.readFile(registryPath, "utf8")) as {
       runs: Record<string, { cleanupCompletedAt?: number }>;
     };
-    expect(afterSecond.runs["run-reject"].cleanupCompletedAt).toBeGreaterThanOrEqual(beforeRetry);
+    expect(
+      expectDefined(afterSecond.runs["run-reject"], 'afterSecond.runs["run-reject"] test invariant')
+        .cleanupCompletedAt,
+    ).toBeGreaterThanOrEqual(beforeRetry);
   });
 
   it("keeps delete-mode runs retryable when announce is deferred", async () => {

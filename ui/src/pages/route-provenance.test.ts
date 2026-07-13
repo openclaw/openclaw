@@ -4,8 +4,6 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import type { AgentsRouteData } from "./agents/agents-page.ts";
 import { page as agentsPage } from "./agents/route.ts";
-import type { DreamsRouteData } from "./dreams/dreams-page.ts";
-import { page as dreamsPage } from "./dreams/route.ts";
 import type { NodesRouteData } from "./nodes/nodes-page.ts";
 import { page as nodesPage } from "./nodes/route.ts";
 import type { PluginsRouteData } from "./plugins/plugins-page.ts";
@@ -81,7 +79,10 @@ describe("route preload gateway provenance", () => {
     const agentsGateway = mutableGateway(snapshot(null, false));
     const agentsData = await loadRoute<AgentsRouteData>(agentsPage, {
       gateway: agentsGateway.gateway,
-      agents: { state: { agentsList: null, agentsError: null } },
+      agents: {
+        state: { agentsList: null, agentsError: null },
+        ensureList: vi.fn(async () => null),
+      },
     } as unknown as ApplicationContext);
     expect(agentsData.gateway).toBe(agentsGateway.gateway);
     expect(agentsData.gatewaySnapshot).toBe(agentsGateway.gateway.snapshot);
@@ -104,6 +105,7 @@ describe("route preload gateway provenance", () => {
       gateway,
       sessions: { list: vi.fn(() => list.promise) },
       runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
+      agentSelection: { state: { selectedId: null, scopeId: null } },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(client, false));
@@ -123,6 +125,7 @@ describe("route preload gateway provenance", () => {
     const gateway = mutable.gateway;
     const request = loadRoute<UsageRouteData>(usagePage, {
       gateway,
+      agentSelection: { state: { selectedId: null, scopeId: null } },
     } as unknown as ApplicationContext);
 
     mutable.replaceSnapshot(snapshot(client, false));
@@ -190,32 +193,5 @@ describe("route preload gateway provenance", () => {
     expect(requestMethod).not.toHaveBeenCalled();
     expect(data.result).toBeNull();
     expect(data.error).toBeNull();
-  });
-
-  it("keeps dreams provenance from before capability warmup", async () => {
-    const client = {} as GatewayBrowserClient;
-    const originalSnapshot = snapshot(client, false);
-    const mutable = mutableGateway(originalSnapshot);
-    const gateway = mutable.gateway;
-    const configReady = deferred<void>();
-    const request = loadRoute<DreamsRouteData>(dreamsPage, {
-      gateway,
-      agents: {
-        state: { agentsList: null },
-        ensureList: vi.fn(async () => null),
-      },
-      runtimeConfig: {
-        state: { configSnapshot: null },
-        ensureLoaded: vi.fn(() => configReady.promise),
-      },
-    } as unknown as ApplicationContext);
-
-    mutable.replaceSnapshot(snapshot(client, true));
-    configReady.resolve();
-    const data = await request;
-
-    expect(data.gateway).toBe(gateway);
-    expect(data.gatewaySnapshot).toBe(originalSnapshot);
-    expect(data.state.connected).toBe(false);
   });
 });

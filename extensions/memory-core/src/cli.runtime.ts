@@ -52,6 +52,10 @@ import {
 } from "./dreaming-repair.js";
 import { asRecord } from "./dreaming-shared.js";
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
+import type {
+  MemoryCoreAcquireLocalService,
+  MemoryCoreLocalServiceHost,
+} from "./memory/embedding-local-service.js";
 import { formatMemoryVectorDegradedWriteReason } from "./memory/manager-vector-warning.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
 import { previewRemHarness } from "./rem-harness.js";
@@ -74,6 +78,36 @@ type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpos
 
 type MemorySourceName = "memory" | "sessions";
 
+type LlamaCppRuntimeStatus = {
+  state?: string;
+  backend?: string;
+  buildType?: string;
+  deviceNames?: string[];
+  memory?: {
+    totalBytes: number;
+    usedBytes: number;
+    freeBytes: number;
+    unifiedBytes: number;
+    observedAtMs: number;
+  };
+  offload?: {
+    supported: boolean;
+    offloadedLayers?: number;
+    totalLayers?: number;
+  };
+  context?: {
+    requestedSize: number | "auto";
+  };
+  loadError?: string;
+};
+
+function readLlamaCppRuntimeStatus(
+  status: ReturnType<MemoryManager["status"]>,
+): LlamaCppRuntimeStatus | null {
+  const runtime = asRecord(asRecord(status.custom)?.llamaCppRuntime);
+  return runtime?.engine === "llama.cpp" ? (runtime as LlamaCppRuntimeStatus) : null;
+}
+
 function formatMemoryIndexIdentityWarning(
   status: ReturnType<MemoryManager["status"]>,
   agentId: string,
@@ -94,6 +128,20 @@ function formatMemoryIndexIdentityWarning(
     reason,
     fix: `Run: openclaw memory status --index --agent ${agentId}`,
   };
+}
+
+function formatRuntimeBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; index < units.length && value >= 1024; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${unit}`;
 }
 
 type SourceScan = {
@@ -496,6 +544,7 @@ async function withMemoryManagerForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose?: MemoryManagerPurpose;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
   run: (manager: MemoryManager) => Promise<void>;
 }): Promise<void> {
   const managerParams: Parameters<typeof getMemorySearchManager>[0] = {
@@ -504,6 +553,9 @@ async function withMemoryManagerForAgent(params: {
   };
   if (params.purpose) {
     managerParams.purpose = params.purpose;
+  }
+  if (params.acquireLocalService) {
+    managerParams.acquireLocalService = params.acquireLocalService;
   }
   await withManager<MemoryManager>({
     getManager: () => getMemorySearchManager(managerParams),
@@ -696,7 +748,10 @@ async function scanMemorySources(params: {
   return { sources: scans, totalFiles, issues };
 }
 
-export async function runMemoryStatus(opts: MemoryCommandOptions) {
+export async function runMemoryStatus(
+  opts: MemoryCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   setVerbose(Boolean(opts.verbose));
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory status");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
@@ -719,6 +774,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       cfg,
       agentId,
       purpose: managerPurpose,
+      acquireLocalService: hostOptions?.acquireLocalService,
       run: async (manager) => {
         const deep = Boolean(opts.deep || opts.index);
         let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
@@ -910,6 +966,43 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
     }
+    const llamaCppRuntime = opts.deep ? readLlamaCppRuntimeStatus(status) : null;
+    if (llamaCppRuntime) {
+      const runtime = llamaCppRuntime;
+      const backend = runtime.backend ?? "unknown";
+      const build = runtime.buildType ? ` (${runtime.buildType})` : "";
+      lines.push(`${label("llama.cpp")} ${info(backend)}${muted(build)}`);
+      if (runtime.deviceNames?.length) {
+        lines.push(`${label("Devices")} ${info(runtime.deviceNames.join(", "))}`);
+      }
+      if (runtime.memory) {
+        const unified =
+          runtime.memory.unifiedBytes > 0
+            ? ` · ${formatRuntimeBytes(runtime.memory.unifiedBytes)} unified`
+            : "";
+        lines.push(
+          `${label("VRAM snapshot")} ${info(`${formatRuntimeBytes(runtime.memory.usedBytes)} used · ${formatRuntimeBytes(runtime.memory.freeBytes)} free · ${formatRuntimeBytes(runtime.memory.totalBytes)} total${unified}`)} ${muted(`(${new Date(runtime.memory.observedAtMs).toISOString()})`)}`,
+        );
+      }
+      if (runtime.offload) {
+        const layers =
+          typeof runtime.offload.offloadedLayers === "number" &&
+          typeof runtime.offload.totalLayers === "number"
+            ? `${runtime.offload.offloadedLayers}/${runtime.offload.totalLayers} layers`
+            : runtime.offload.supported
+              ? "supported"
+              : "unsupported";
+        lines.push(`${label("GPU offload")} ${info(layers)}`);
+      }
+      if (runtime.context) {
+        lines.push(
+          `${label("Requested context")} ${info(`${runtime.context.requestedSize} tokens`)}`,
+        );
+      }
+      if (runtime.loadError) {
+        lines.push(`${label("llama.cpp error")} ${warn(runtime.loadError)}`);
+      }
+    }
     const identityWarning = formatMemoryIndexIdentityWarning(status, agentId);
     if (identityWarning) {
       lines.push(`${label("Index identity")} ${warn(identityWarning.reason)}`);
@@ -1085,7 +1178,10 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
   }
 }
 
-export async function runMemoryIndex(opts: MemoryCommandOptions) {
+export async function runMemoryIndex(
+  opts: MemoryCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   setVerbose(Boolean(opts.verbose));
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory index");
   emitMemorySecretResolveDiagnostics(diagnostics);
@@ -1095,6 +1191,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
       cfg,
       agentId,
       purpose: "cli",
+      acquireLocalService: hostOptions?.acquireLocalService,
       run: async (manager) => {
         try {
           const syncFn = manager.sync ? manager.sync.bind(manager) : undefined;
@@ -1248,6 +1345,7 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
 export async function runMemorySearch(
   queryArg: string | undefined,
   opts: MemorySearchCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
 ) {
   const query = opts.query ?? queryArg;
   if (!query) {
@@ -1271,6 +1369,7 @@ export async function runMemorySearch(
     cfg,
     agentId,
     purpose: "cli",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const sessionKey = buildCliMemorySearchSessionKey(agentId);
       let results: Awaited<ReturnType<typeof manager.search>>;
@@ -1335,7 +1434,10 @@ export async function runMemorySearch(
   });
 }
 
-export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
+export async function runMemoryPromote(
+  opts: MemoryPromoteCommandOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory promote");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
@@ -1344,6 +1446,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
@@ -1513,6 +1616,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
 export async function runMemoryPromoteExplain(
   selectorArg: string | undefined,
   opts: MemoryPromoteExplainOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
 ) {
   const selector = selectorArg?.trim();
   if (!selector) {
@@ -1529,6 +1633,7 @@ export async function runMemoryPromoteExplain(
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();
@@ -1628,7 +1733,10 @@ export async function runMemoryPromoteExplain(
   });
 }
 
-export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
+export async function runMemoryRemHarness(
+  opts: MemoryRemHarnessOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-harness");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
@@ -1637,6 +1745,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const managerWorkspaceDir = status.workspaceDir?.trim();
@@ -1808,7 +1917,10 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
   });
 }
 
-export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
+export async function runMemoryRemBackfill(
+  opts: MemoryRemBackfillOptions,
+  hostOptions?: MemoryCoreLocalServiceHost,
+) {
   const { config: cfg, diagnostics } = await loadMemoryCommandConfig("memory rem-backfill");
   emitMemorySecretResolveDiagnostics(diagnostics, { json: Boolean(opts.json) });
   const agentId = resolveAgent(cfg, opts.agent);
@@ -1817,6 +1929,7 @@ export async function runMemoryRemBackfill(opts: MemoryRemBackfillOptions) {
     cfg,
     agentId,
     purpose: "status",
+    acquireLocalService: hostOptions?.acquireLocalService,
     run: async (manager) => {
       const status = manager.status();
       const workspaceDir = status.workspaceDir?.trim();

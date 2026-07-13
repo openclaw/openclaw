@@ -58,7 +58,7 @@ import {
   planPluginUninstall,
 } from "./uninstall.js";
 
-export type ManagedPluginCatalogEntry = {
+type ManagedPluginCatalogEntry = {
   id: string;
   name: string;
   packageName?: string;
@@ -77,13 +77,13 @@ export type ManagedPluginCatalogEntry = {
   removable?: boolean;
 };
 
-export type ManagedPluginCatalog = {
+type ManagedPluginCatalog = {
   plugins: ManagedPluginCatalogEntry[];
   diagnostics: unknown[];
   mutationAllowed: boolean;
 };
 
-export type ManagedPluginInstallRequest =
+type ManagedPluginInstallRequest =
   | {
       source: "clawhub";
       packageName: string;
@@ -189,7 +189,7 @@ function matchesBundledCatalogIdentity(params: {
 }
 
 /** Overlay local runtime identity and editorial hints after an exact package/source match. */
-export function overlayBundledOfficialPluginCatalogMetadata(
+function overlayBundledOfficialPluginCatalogMetadata(
   entries: readonly OfficialExternalPluginCatalogEntry[],
   bundledEntries: readonly OfficialExternalPluginCatalogEntry[] = listOfficialExternalPluginCatalogEntries(),
 ): OfficialExternalPluginCatalogEntry[] {
@@ -258,9 +258,7 @@ function resolveCatalogInstallAction(params: {
 }
 
 /** Coarse manifest-derived grouping so catalog UIs can shelve a large inventory. */
-export function derivePluginCategory(
-  manifest: PluginManifestRecord | undefined,
-): string | undefined {
+function derivePluginCategory(manifest: PluginManifestRecord | undefined): string | undefined {
   if (!manifest) {
     return undefined;
   }

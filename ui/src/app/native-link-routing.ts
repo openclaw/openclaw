@@ -1,3 +1,4 @@
+import { promoteToPopoverTopLayer } from "../components/menu-surface.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "../components/native-link-menu.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 
@@ -20,6 +21,8 @@ type NativeUpdateMessage = {
 type WebKitUpdateMessageHandler = {
   postMessage(message: NativeUpdateMessage): void;
 };
+
+export const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 
 export type NativeLinkRouting = {
   dispose(): void;
@@ -158,17 +161,8 @@ export function startNativeLinkRouting(): NativeLinkRouting {
       postNativeLink(postMessage, url, action);
     };
     menu = nextMenu;
-    nextMenu.setAttribute("popover", "manual");
     container.append(nextMenu);
-    if (typeof nextMenu.showPopover === "function") {
-      try {
-        nextMenu.showPopover();
-        return;
-      } catch {
-        // Fall through to an in-dialog element when the top-layer API is unavailable.
-      }
-    }
-    nextMenu.removeAttribute("popover");
+    promoteToPopoverTopLayer(nextMenu);
   };
 
   const handleClick = (event: MouseEvent) => {

@@ -20,6 +20,7 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { buildSessionUsageDateParams, requestSessionsUsage } from "../../lib/sessions/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import "../../styles/profile.css";
 import {
   buildHeatmap,
   buildInsights,

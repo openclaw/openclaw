@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing as replyRunTesting,
@@ -143,9 +144,12 @@ function buildPreparedCliRunContext(params: {
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   executionMode?: PreparedCliRunContext["params"]["executionMode"];
+  cliToolAvailability?: PreparedCliRunContext["params"]["cliToolAvailability"];
   emitCommentaryText?: boolean;
   workspaceDir?: string;
   timeoutMs?: number;
+  onSuccessfulAuthBinding?: PreparedCliRunContext["params"]["onSuccessfulAuthBinding"];
+  runtimeArtifact?: PreparedCliRunContext["backendResolved"]["runtimeArtifact"];
 }): PreparedCliRunContext {
   // Produces a prepared context without invoking prepare.runtime, keeping spawn
   // assertions focused on execute/runtime behavior.
@@ -214,7 +218,9 @@ function buildPreparedCliRunContext(params: {
       model: params.model,
       thinkLevel: params.thinkLevel,
       executionMode: params.executionMode,
+      cliToolAvailability: params.cliToolAvailability,
       emitCommentaryText: params.emitCommentaryText,
+      onSuccessfulAuthBinding: params.onSuccessfulAuthBinding,
       timeoutMs: params.timeoutMs ?? 1_000,
       runId: params.runId,
       skillsSnapshot: params.skillsSnapshot,
@@ -232,6 +238,7 @@ function buildPreparedCliRunContext(params: {
             ? "google"
             : "openai",
       resolveExecutionArgs: params.resolveExecutionArgs,
+      runtimeArtifact: params.runtimeArtifact,
     },
     preparedBackend: {
       backend,
@@ -655,6 +662,49 @@ describe("runCliAgent spawn path", () => {
     expect(requireArgAfter(input.argv, "--effort")).toBe("high");
   });
 
+  it("preserves exact tool availability through execution-time argument resolution", async () => {
+    mockSuccessfulClaudeJsonlRun();
+    const toolAvailability: NonNullable<PreparedCliRunContext["params"]["cliToolAvailability"]> = {
+      native: [],
+      mcp: ["mcp__openclaw__crestodian"],
+    };
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-tool-policy",
+        cliToolAvailability: toolAvailability,
+        resolveExecutionArgs,
+      }),
+    );
+
+    expect(resolveExecutionArgs).toHaveBeenCalledWith(
+      expect.objectContaining({ toolAvailability }),
+    );
+  });
+
+  it("fails closed when a selectable backend does not enforce exact tool availability", async () => {
+    const resolveExecutionArgs = vi.fn(() => undefined);
+
+    await expect(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-claude-tool-policy-refused",
+          cliToolAvailability: {
+            native: [],
+            mcp: ["mcp__openclaw__crestodian"],
+          },
+          resolveExecutionArgs,
+        }),
+      ),
+    ).rejects.toThrow("did not enforce exact per-run tool availability");
+    expect(supervisorSpawnMock).not.toHaveBeenCalled();
+  });
+
   it("maps Ultra to the strongest generic CLI backend level", async () => {
     mockSuccessfulClaudeJsonlRun();
     const resolveExecutionArgs = vi.fn(({ baseArgs }) => baseArgs);
@@ -700,6 +750,39 @@ describe("runCliAgent spawn path", () => {
     expect(input.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH).toBe(
       "/tmp/openclaw-gemini-system-settings.json",
     );
+  });
+
+  it("captures a runtime artifact for a strict CLI credential", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-strict-artifact-"));
+    const executable = path.join(dir, "claude-fixture");
+    try {
+      await fs.copyFile(process.execPath, executable);
+      await fs.chmod(executable, 0o755);
+      mockSuccessfulClaudeJsonlRun();
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-strict-runtime-artifact",
+        backend: { command: executable },
+        onSuccessfulAuthBinding: () => {},
+        runtimeArtifact: {
+          kind: "bundled-package-tree",
+          packageName: "@fixture/native-cli",
+          entrypoint: "command",
+          nativeExecutableNames: ["claude-fixture"],
+        },
+      });
+      context.authBindingFingerprint = "strict-credential-owner";
+
+      await executePreparedCliRun(context);
+
+      expect(context.runtimeArtifactFingerprint).toMatch(/^[a-f0-9]{64}$/u);
+      expect(context.runtimeOwnerFingerprint).toBeUndefined();
+      const input = mockCallArg(supervisorSpawnMock) as { argv?: string[] };
+      expect(input.argv?.[0]).toBe(await fs.realpath(executable));
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
@@ -981,7 +1064,10 @@ describe("runCliAgent spawn path", () => {
       const input = (args[0] ?? {}) as { argv?: string[] };
       const configArg = requireArgAfter(input.argv, "-c");
       const match = requireRegexMatch(configArg, /^model_instructions_file="(.+)"$/);
-      promptFileText = await fs.readFile(match[1], "utf-8");
+      promptFileText = await fs.readFile(
+        expectDefined(match[1], "match[1] test invariant"),
+        "utf-8",
+      );
       return createManagedRun({
         reason: "exit",
         exitCode: 0,
@@ -4022,6 +4108,71 @@ ${JSON.stringify({
     );
   });
 
+  it("surfaces Claude live max-turn results with run and session recovery context", async () => {
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          [
+            JSON.stringify({
+              type: "system",
+              subtype: "init",
+              session_id: "live-max-turns",
+            }),
+            JSON.stringify({
+              type: "result",
+              subtype: "error_max_turns",
+              session_id: "live-max-turns",
+              num_turns: 2,
+              stop_reason: "tool_use",
+              terminal_reason: "max_turns",
+              errors: ["Reached maximum number of turns (1)"],
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-max-turns",
+          backend: {
+            liveSession: "claude-stdio",
+          },
+        }),
+      ),
+      {
+        name: "FailoverError",
+        message:
+          "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+          "OpenClaw run: run-live-max-turns. OpenClaw session: s1. " +
+          "Claude session: live-max-turns. Tool actions may already have run; verify their effects before retrying. " +
+          "Retry with a higher --max-turns value or a narrower task.",
+        sessionId: "s1",
+        reason: "unknown",
+        code: "cli_max_turns",
+        rawError: "Reached maximum number of turns (1)",
+      },
+    );
+  });
+
   it("marks Claude live stderr context overflows as retryable", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let resolveExit: ((exit: RunExit) => void) | undefined;
@@ -4818,7 +4969,7 @@ ${JSON.stringify({
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
   });
 
-  it("clears claude-cli provider-routing, auth, telemetry, and host-managed env", async () => {
+  it("clears claude-cli provider-routing, auth, telemetry, compaction, and host-managed env", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example.com/v1");
     vi.stubEnv("ANTHROPIC_API_TOKEN", "env-api-token");
     vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "x-test-header: env");
@@ -4826,6 +4977,7 @@ ${JSON.stringify({
     vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", "1");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "env-auth-token");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "env-oauth-token");
+    vi.stubEnv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "1048576");
     vi.stubEnv("CLAUDE_CODE_REMOTE", "1");
     vi.stubEnv("ANTHROPIC_UNIX_SOCKET", "/tmp/anthropic.sock");
     vi.stubEnv("OTEL_LOGS_EXPORTER", "none");
@@ -4841,6 +4993,9 @@ ${JSON.stringify({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
         runId: "run-claude-env-hardened",
+        preparedEnv: {
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000",
+        },
         backend: {
           env: {
             SAFE_KEEP: "ok",
@@ -4856,6 +5011,7 @@ ${JSON.stringify({
             "CLAUDE_CODE_USE_BEDROCK",
             "ANTHROPIC_AUTH_TOKEN",
             "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
             "CLAUDE_CODE_REMOTE",
             "ANTHROPIC_UNIX_SOCKET",
             "OTEL_LOGS_EXPORTER",
@@ -4880,6 +5036,7 @@ ${JSON.stringify({
     expect(input.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(input.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("override-oauth-token");
+    expect(input.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("100000");
     expect(input.env?.CLAUDE_CODE_REMOTE).toBeUndefined();
     expect(input.env?.ANTHROPIC_UNIX_SOCKET).toBeUndefined();
     expect(input.env?.OTEL_LOGS_EXPORTER).toBeUndefined();

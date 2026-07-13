@@ -1,5 +1,98 @@
 /* Nodes page: unified paired-device / node inventory. */
 
+.nodes-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.nodes-toolbar__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.nodes-section-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 14px 2px 2px;
+}
+
+.nodes-section-label:first-child {
+  margin-top: 0;
+}
+
+/* Icon tile column widens the shared two-column list-item grid. */
+.nodes-entry {
+  grid-template-columns: auto minmax(0, 1fr) minmax(200px, 260px);
+}
+
+.nodes-entry--gateway,
+.nodes-entry--presence-only {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+/* Mirror the shared narrow-container list-item collapse; this later rule
+   would otherwise override it and overflow phone-width rows. */
+@container (max-width: 560px) {
+  .nodes-entry {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .nodes-entry .list-meta {
+    grid-column: 1 / -1;
+  }
+}
+
+.nodes-entry__tile {
+  position: relative;
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--muted);
+}
+
+.nodes-entry__tile-icon {
+  display: flex;
+}
+
+.nodes-entry__tile-icon svg {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.nodes-entry__tile .status-dot {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border: 2px solid var(--card);
+  box-sizing: content-box;
+}
+
+/* Pending rows show the raw device id; break it instead of overflowing. */
+.nodes-entry--pending .list-sub {
+  word-break: break-all;
+}
+
 .nodes-entry__head {
   display: flex;
   align-items: center;
@@ -9,6 +102,25 @@
 
 .nodes-entry__head .chip {
   padding: 2px 10px;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 50%;
+}
+
+.status-dot--connected {
+  background: var(--ok);
+}
+
+.status-dot--offline {
+  background: var(--muted);
+}
+
+.nodes-entry--gateway {
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 
 .nodes-entry__details {

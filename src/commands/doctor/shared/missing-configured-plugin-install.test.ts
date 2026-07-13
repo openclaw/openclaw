@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
@@ -123,7 +124,6 @@ function writeLegacyNpmDeclarationStub(params: {
 }
 
 vi.mock("../../../channels/plugins/catalog.js", () => ({
-  listChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: mocks.listChannelPluginCatalogEntries,
 }));
 
@@ -173,6 +173,16 @@ vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOrigin
   loadManifestMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
+vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/doctor-contract-registry.js")>()),
+  // Plugin-owned compatibility is outside this install-repair suite. Avoid scanning
+  // the real plugin registry when the legacy-config fixture reaches that follow-up pass.
+  applyPluginDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
+}));
+
 vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
   getOfficialExternalPluginCatalogManifest: mocks.getOfficialExternalPluginCatalogManifest,
   listOfficialExternalChannelEnvVars: mocks.listOfficialExternalChannelEnvVars,
@@ -192,6 +202,20 @@ vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
 vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries: mocks.resolveProviderInstallCatalogEntries,
 }));
+
+vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../plugins/doctor-contract-registry.js")>();
+  return {
+    ...actual,
+    // Plugin-owned compatibility discovery has its own coverage. Keep this
+    // install-repair suite focused and avoid scanning every source plugin.
+    applyPluginDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
+      config: cfg,
+      changes: [],
+    }),
+  };
+});
 
 vi.mock("../../../plugins/update.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../plugins/update.js")>();
@@ -373,13 +397,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       pluginId: "matrix",
       installSpec: "@openclaw/plugin-matrix@1.2.3",
     });
-    expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
+    expect(
+      configuredPluginInstallIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
+    ).toMatchObject({
       checkId: "core/doctor/configured-plugin-installs",
       severity: "warning",
       target: "matrix",
       fixHint: "Run `openclaw doctor --fix` to install @openclaw/plugin-matrix@1.2.3.",
     });
-    expect(configuredPluginInstallIssueToRepairEffect(issue)).toEqual({
+    expect(
+      configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
+    ).toEqual({
       kind: "package",
       action: "would-install-configured-plugin",
       target: "matrix",
@@ -437,13 +465,17 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       pluginId: "discord",
       installPath: missingDiscordPath,
     });
-    expect(configuredPluginInstallIssueToHealthFinding(issue)).toMatchObject({
+    expect(
+      configuredPluginInstallIssueToHealthFinding(expectDefined(issue, "issue test invariant")),
+    ).toMatchObject({
       checkId: "core/doctor/configured-plugin-installs",
       severity: "warning",
       path: missingDiscordPath,
       target: "discord",
     });
-    expect(configuredPluginInstallIssueToRepairEffect(issue)).toEqual({
+    expect(
+      configuredPluginInstallIssueToRepairEffect(expectDefined(issue, "issue test invariant")),
+    ).toEqual({
       kind: "package",
       action: "would-defer-configured-plugin-install-repair",
       target: "discord",

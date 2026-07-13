@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { spawnCommand } from "../../../process/exec.js";
 /**
  * Built-in find session tool.
  *
@@ -27,7 +28,7 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "./truncate.js";
 
 function isInsideGitRepository(searchPath: string): boolean {
-  for (let current = searchPath; ; ) {
+  for (let current = searchPath; ;) {
     if (existsSync(path.join(current, ".git"))) {
       return true;
     }
@@ -41,12 +42,10 @@ function isInsideGitRepository(searchPath: string): boolean {
 
 const findSchema = Type.Object({
   pattern: Type.String({
-    description: "Glob pattern to match files, e.g. '*.ts', '**/*.json', or 'src/**/*.spec.ts'",
+    description: "File glob, e.g. **/*.ts.",
   }),
-  path: Type.Optional(
-    Type.String({ description: "Directory to search in (default: current directory)" }),
-  ),
-  limit: Type.Optional(Type.Number({ description: "Maximum number of results (default: 1000)" })),
+  path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
+  limit: Type.Optional(Type.Number({ description: "Max results; default 1000." })),
 });
 export type { FindToolDetails, FindToolInput } from "./tool-contracts.js";
 
@@ -157,7 +156,7 @@ export function createFindToolDefinition(
   return {
     name: "find",
     label: "find",
-    description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Respects .gitignore. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
+    description: `Find by glob; paths relative to search dir. Respects .gitignore. Caps ${DEFAULT_LIMIT} results/${DEFAULT_MAX_BYTES / 1024}KB.`,
     promptSnippet: "Find files by glob pattern (respects .gitignore)",
     parameters: findSchema,
     async execute(
@@ -277,7 +276,12 @@ export function createFindToolDefinition(
             }
             args.push("--", effectivePattern, searchPath);
 
-            const child = spawn(fdPath, args, { stdio: ["ignore", "pipe", "pipe"] });
+            const child = spawnCommand([fdPath, ...args], {
+              buffer: false,
+              reject: false,
+              stdio: ["ignore", "pipe", "pipe"],
+            });
+            releaseChildProcessOutputAfterExit(child);
             const rl = createInterface({ input: child.stdout });
             let stderr = "";
             const lines: string[] = [];

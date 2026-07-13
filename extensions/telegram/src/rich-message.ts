@@ -1,4 +1,3 @@
-// Telegram rich message helpers isolate Bot API 10.1 calls until grammY types catch up.
 import type { Bot } from "grammy";
 import type {
   ForceReply,
@@ -9,6 +8,8 @@ import type {
   ReplyParameters,
 } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+// Telegram rich message helpers isolate Bot API 10.1 calls until grammY types catch up.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   escapeTelegramHtml,
@@ -65,7 +66,7 @@ type TelegramRichMessagePlan = {
   degradationReasons: readonly TelegramRichHtmlDegradationReason[];
 };
 
-export type TelegramSendRichMessageParams = {
+type TelegramSendRichMessageParams = {
   business_connection_id?: string;
   chat_id: number | string;
   message_thread_id?: number;
@@ -255,30 +256,6 @@ function splitPreparedTelegramRichHtml(params: {
   return splitTelegramHtmlChunks(escapeTelegramHtml(params.sourceFallback), params.textLimit);
 }
 
-export function isTelegramRichMessageWithinStructuralLimits(
-  message: TelegramInputRichMessage,
-): boolean {
-  if (message.markdown !== undefined) {
-    if (splitTelegramRichMarkdownBlocks(message.markdown, TELEGRAM_RICH_BLOCK_LIMIT).length > 1) {
-      return false;
-    }
-    return (
-      splitTelegramHtmlChunks(
-        prepareTelegramRichHtml(markdownToTelegramRichHtml(message.markdown)).html,
-        TELEGRAM_RICH_TEXT_LIMIT,
-        TELEGRAM_RICH_HTML_CHUNK_LIMITS,
-      ).length <= 1
-    );
-  }
-  return (
-    splitTelegramHtmlChunks(
-      prepareTelegramRichHtml(message.html).html,
-      TELEGRAM_RICH_TEXT_LIMIT,
-      TELEGRAM_RICH_HTML_CHUNK_LIMITS,
-    ).length <= 1
-  );
-}
-
 type RichMarkdownFenceSpan = {
   start: number;
   end: number;
@@ -300,8 +277,8 @@ function parseRichMarkdownFenceSpans(markdown: string): RichMarkdownFenceSpan[] 
     const line = markdown.slice(offset, lineEnd);
     const match = line.match(/^( {0,3})(`{3,}|~{3,})/);
     if (match) {
-      const marker = match[2];
-      const markerChar = marker[0];
+      const marker = expectDefined(match[2], "Markdown fence marker capture");
+      const markerChar = marker.charAt(0);
       if (!open) {
         open = { start: offset, markerChar, markerLength: marker.length };
       } else if (open.markerChar === markerChar && marker.length >= open.markerLength) {
