@@ -454,4 +454,82 @@ describe("startGmailWatcher", () => {
 
     await expect(startGmailWatcher(createGmailConfig())).resolves.toEqual({ started: true });
   });
+
+  it("stops restarts when address-in-use marker is split across stderr chunks", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const spawnedChildren: Array<
+        EventEmitter & { kill: ReturnType<typeof vi.fn>; stderr?: EventEmitter }
+      > = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const stderr = new EventEmitter();
+        const mockedChild = Object.assign(child, {
+          stderr,
+          kill: vi.fn(() => {
+            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+            return true;
+          }),
+        });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      expect(spawnedChildren).toHaveLength(1);
+
+      // Emit the "address already in use" marker split across two chunks
+      const stderr = spawnedChildren[0]?.stderr as EventEmitter | undefined;
+      stderr?.emit("data", Buffer.from("address alre"));
+      stderr?.emit("data", Buffer.from("ady in use\n"));
+
+      // Exit should detect addressInUse and stop restarts, not schedule a 5 s
+      // respawn on line ~126.
+      spawnedChildren[0]?.emit("exit", 1, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spawnedChildren).toHaveLength(1); // No respawn
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still respawns on non-bind stderr split across chunks", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.runCommandWithTimeout.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+      const spawnedChildren: Array<
+        EventEmitter & { kill: ReturnType<typeof vi.fn>; stderr?: EventEmitter }
+      > = [];
+      mocks.spawn.mockImplementation(() => {
+        const child = new EventEmitter();
+        const stderr = new EventEmitter();
+        const mockedChild = Object.assign(child, {
+          stderr,
+          kill: vi.fn(() => {
+            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+            return true;
+          }),
+        });
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
+      });
+
+      await startGmailWatcher(createGmailConfig());
+      expect(spawnedChildren).toHaveLength(1);
+
+      // Emit a non-bind error split across chunks
+      const stderr = spawnedChildren[0]?.stderr as EventEmitter | undefined;
+      stderr?.emit("data", Buffer.from("some erro"));
+      stderr?.emit("data", Buffer.from("r message\n"));
+
+      spawnedChildren[0]?.emit("exit", 1, null);
+
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(spawnedChildren).toHaveLength(2); // Respawn happened
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

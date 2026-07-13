@@ -72,6 +72,10 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
   log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
   let addressInUse = false;
+  // Carry a bounded tail across stderr chunks so split patterns such as
+  // "address alre" + "ady in use" are classified before the exit handler
+  // decides whether to stop restarts or to schedule a 5 s respawn.
+  let stderrTail = "";
   const invocation = resolveGogServeInvocation(args);
 
   const child = spawn(invocation.command, invocation.args, {
@@ -95,12 +99,14 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     log.error(`gog stderr error: ${String(err)}`);
   });
   child.stderr?.on("data", (data: Buffer) => {
-    const line = data.toString().trim();
+    const chunk = data.toString();
+    stderrTail = (stderrTail + chunk).slice(-512);
+    if (!addressInUse && isAddressInUseError(stderrTail)) {
+      addressInUse = true;
+    }
+    const line = chunk.trim();
     if (!line) {
       return;
-    }
-    if (isAddressInUseError(line)) {
-      addressInUse = true;
     }
     log.warn(`[gog] ${line}`);
   });
