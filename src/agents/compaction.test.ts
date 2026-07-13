@@ -5,14 +5,14 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import "./test-helpers/agent-session-token-mock.js";
 
-let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
-let pruneHistoryForContextShare: typeof import("./compaction.js").pruneHistoryForContextShare;
-let splitMessagesByTokenShare: typeof import("./compaction.js").splitMessagesByTokenShare;
+let estimateMessagesTokens: typeof import("./compaction-planning.js").estimateMessagesTokens;
+let pruneHistoryForContextShare: typeof import("./compaction-planning.js").pruneHistoryForContextShare;
+let splitMessagesByTokenShare: typeof import("./compaction-planning.js").splitMessagesByTokenShare;
 
 beforeAll(async () => {
   vi.resetModules();
   ({ estimateMessagesTokens, pruneHistoryForContextShare, splitMessagesByTokenShare } =
-    await import("./compaction.js"));
+    await import("./compaction-planning.js"));
 });
 
 function makeMessage(id: number, size: number): AgentMessage {

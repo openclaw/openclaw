@@ -18,8 +18,11 @@ vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
   };
 });
 
-import { sanitizeCompactionMessages } from "./compaction-planning.js";
-import { chunkMessagesByMaxTokens, splitMessagesByTokenShare } from "./compaction.js";
+import {
+  chunkMessagesByMaxTokens,
+  sanitizeCompactionMessages,
+  splitMessagesByTokenShare,
+} from "./compaction-planning.js";
 
 describe("compaction token accounting sanitization", () => {
   it("does not pass toolResult.details into per-message token estimates", () => {
