@@ -685,6 +685,43 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
+  it("downloads unmentioned requireMention group media when ingest is enabled (#92067)", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true, ingest: true } },
+        },
+      },
+    });
+    const getFile = vi.fn(async () => ({ file_path: "photos/p1.jpg" }));
+    const fetchSpy = createImageFetchSpy();
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
+          message_id: 92067,
+          date: 1736380800,
+          photo: [{ file_id: "p1" }],
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { id: 999, username: "openclaw_bot" },
+        getFile,
+      });
+
+      await waitForMockCalls(getFile, 1);
+
+      expect(getFile).toHaveBeenCalledTimes(1);
+      expect(sendMessageSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("notifies mentioned requireMention groups when media download fails", async () => {
     loadConfig.mockReturnValue({
       channels: {
