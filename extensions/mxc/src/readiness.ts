@@ -7,7 +7,7 @@ type ReadinessDeps = {
 
 const DEFAULT_DEPS: ReadinessDeps = { execFileSync };
 
-export function resolveWindowsSystemExecutable(name: string): string {
+function resolveWindowsSystemExecutable(name: string): string {
   const systemRoot = process.env.SystemRoot || process.env.WINDIR;
   return path.win32.join(systemRoot || "C:\\Windows", "System32", name);
 }
@@ -70,36 +70,6 @@ function systemDrivePrepWarning(systemDrive: string): string {
     `workloads still run.\n` +
     `Fix (one-time, elevated): wxc-host-prep prepare-system-drive (ships with @microsoft/mxc-sdk).`
   );
-}
-
-export type HostPrepStatus = {
-  systemDrivePrepared: boolean;
-  isoEnvBrokerInstalled: boolean;
-};
-
-/**
- * Non-throwing readiness probe that returns structured status instead of
- * throwing. Used by doctor/diagnostic flows that need to report multiple
- * issues at once.
- */
-export function probeMxcHostPrep(
-  params: {
-    platform?: NodeJS.Platform;
-    deps?: Partial<ReadinessDeps>;
-  } = {},
-): HostPrepStatus {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32") {
-    return { systemDrivePrepared: true, isoEnvBrokerInstalled: true };
-  }
-  const deps = { ...DEFAULT_DEPS, ...params.deps };
-  let isoEnvBrokerInstalled = true;
-  try {
-    assertWindowsIsoEnvBrokerInstalled(deps);
-  } catch {
-    isoEnvBrokerInstalled = false;
-  }
-  return { systemDrivePrepared: isSystemDrivePrepared(deps), isoEnvBrokerInstalled };
 }
 
 /**

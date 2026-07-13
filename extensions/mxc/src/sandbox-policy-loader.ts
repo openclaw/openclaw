@@ -9,11 +9,11 @@ import {
   type SandboxBaselinePolicyInput,
 } from "./sandbox-baseline.js";
 
-export type SandboxPolicyLoaderOptions = {
+type SandboxPolicyLoaderOptions = {
   policyPaths?: readonly string[];
 };
 
-export type SandboxPolicyPathField =
+type SandboxPolicyPathField =
   | "filesystem.additionalReadonlyPaths"
   | "filesystem.additionalReadwritePaths";
 
@@ -22,12 +22,12 @@ export type SandboxConfiguredPathEntry = {
   sources: readonly string[];
 };
 
-export type SandboxConfiguredPaths = {
+type SandboxConfiguredPaths = {
   readonlyPaths: readonly SandboxConfiguredPathEntry[];
   readwritePaths: readonly SandboxConfiguredPathEntry[];
 };
 
-export type SandboxPolicyLayer = SandboxBaselinePolicyInput & {
+type SandboxPolicyLayer = SandboxBaselinePolicyInput & {
   configuredPaths: SandboxConfiguredPaths;
 };
 
@@ -35,7 +35,7 @@ export type LoadedSandboxBaselinePolicy = SandboxBaselinePolicy & {
   configuredPaths: SandboxConfiguredPaths;
 };
 
-export type SandboxPolicySource = {
+type SandboxPolicySource = {
   label: string;
   policy: SandboxPolicyLayer;
 };
@@ -60,7 +60,7 @@ const processPolicySchema = z
   })
   .strict();
 
-export const SandboxPolicyLayerSchema = z
+const SandboxPolicyLayerSchema = z
   .object({
     filesystem: filesystemPolicySchema.optional(),
     process: processPolicySchema.optional(),
@@ -90,7 +90,7 @@ export function loadSandboxBaselinePolicy(
   };
 }
 
-export function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
+function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(policyPath, "utf-8"));
@@ -105,7 +105,7 @@ export function readSandboxPolicyFile(policyPath: string): SandboxPolicyLayer {
   }
 }
 
-export function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPolicyLayer {
+function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): SandboxPolicyLayer {
   const parsed = SandboxPolicyLayerSchema.safeParse(value);
   if (!parsed.success) {
     throw new TypeError(formatSandboxPolicyIssue(sourceLabel, parsed.error.issues[0]));
@@ -147,9 +147,7 @@ export function parseSandboxPolicyLayer(value: unknown, sourceLabel: string): Sa
   };
 }
 
-export function mergeSandboxPolicyLayers(
-  sources: readonly SandboxPolicySource[],
-): SandboxPolicyLayer {
+function mergeSandboxPolicyLayers(sources: readonly SandboxPolicySource[]): SandboxPolicyLayer {
   const timeoutCandidates = [DEFAULT_SANDBOX_BASELINE.process.timeoutSeconds];
   const filesystem: BaselineFilesystemPolicyInput = {
     restrictToProjectDir: DEFAULT_SANDBOX_BASELINE.filesystem.restrictToProjectDir,

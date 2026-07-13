@@ -33,7 +33,7 @@ export function buildCommandLine(commandScript: string, args: readonly string[])
 // that would otherwise break out of the quoted token or trigger expansion:
 // `"` -> `""` (cmd's in-quote quote escape), `%` -> `%%` (suppress env
 // expansion), `^` -> `^^` (caret escape) so the token survives cmd parsing.
-export function cmdArgumentEscape(value: string): string {
+function cmdArgumentEscape(value: string): string {
   return `"${value.replaceAll("^", "^^").replaceAll("%", "%%").replaceAll(`"`, `""`)}"`;
 }
 

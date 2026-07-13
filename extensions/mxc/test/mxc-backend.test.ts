@@ -15,11 +15,8 @@ import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { resolveConfig, type MxcConfig } from "../src/config.js";
-import {
-  createMxcSandboxBackendFactory,
-  createMxcSandboxBackendHandle,
-  mxcSandboxBackendManager,
-} from "../src/mxc-backend.js";
+import { createMxcSandboxBackendFactory } from "../src/mxc-backend-factory.js";
+import { createMxcSandboxBackendHandle, mxcSandboxBackendManager } from "../src/mxc-backend.js";
 
 const { execFileMock, execFileSyncMock, mockedHomeDir, stdinEndMock } = vi.hoisted(() => ({
   execFileMock: vi.fn(),
@@ -82,8 +79,8 @@ function decodePayload(
   options: Record<string, unknown>;
 } {
   const payloadFileIndex = argv.indexOf("--payload-file");
-  if (payloadFileIndex >= 0 && argv[payloadFileIndex + 1]) {
-    const payloadFile = argv[payloadFileIndex + 1];
+  const payloadFile = argv[payloadFileIndex + 1];
+  if (payloadFileIndex >= 0 && payloadFile !== undefined) {
     const decoded = JSON.parse(readFileSync(payloadFile, "utf-8")) as {
       config: Record<string, unknown>;
       options: Record<string, unknown>;
@@ -94,10 +91,11 @@ function decodePayload(
     return decoded;
   }
   const payloadIndex = argv.indexOf("--payload");
-  if (payloadIndex < 0 || !argv[payloadIndex + 1]) {
+  const payload = argv[payloadIndex + 1];
+  if (payloadIndex < 0 || payload === undefined) {
     throw new Error(`expected --payload in argv: ${JSON.stringify(argv)}`);
   }
-  return JSON.parse(Buffer.from(argv[payloadIndex + 1], "base64").toString("utf-8")) as {
+  return JSON.parse(Buffer.from(payload, "base64").toString("utf-8")) as {
     config: Record<string, unknown>;
     options: Record<string, unknown>;
   };
@@ -304,6 +302,10 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       expect(spec.argv[2]).toBe("--payload-file");
 
       const payloadFile = spec.argv[3];
+      expect(payloadFile).toEqual(expect.any(String));
+      if (payloadFile === undefined) {
+        throw new Error("expected launcher payload file");
+      }
       expect(readFileSync(payloadFile, "utf-8")).toContain("secret-env-value");
       if (process.platform !== "win32") {
         expect(statSync(payloadFile).mode & 0o777).toBe(0o600);

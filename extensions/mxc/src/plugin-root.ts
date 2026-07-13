@@ -9,7 +9,7 @@ function isMxcPluginRoot(dir: string): boolean {
   );
 }
 
-export function resolveMxcPluginRoot(moduleUrl: string = import.meta.url): string {
+function resolveMxcPluginRoot(moduleUrl: string = import.meta.url): string {
   let cursor = path.dirname(fileURLToPath(moduleUrl));
   for (let i = 0; i < 6; i += 1) {
     if (isMxcPluginRoot(cursor)) {

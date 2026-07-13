@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { loadSandboxBaselinePolicy, readSandboxPolicyFile } from "../src/sandbox-policy-loader.js";
+import { loadSandboxBaselinePolicy } from "../src/sandbox-policy-loader.js";
 
 const describeOnWindows = describe.runIf(process.platform === "win32");
 
@@ -139,7 +139,7 @@ describeOnWindows("loadSandboxBaselinePolicy", () => {
   });
 });
 
-describeOnWindows("readSandboxPolicyFile", () => {
+describeOnWindows("loadSandboxBaselinePolicy validation", () => {
   test("fails closed for blank read-only paths", () => {
     const dir = makeTestDir();
     const policyPath = join(dir, "blank-path.json");
@@ -151,7 +151,7 @@ describeOnWindows("readSandboxPolicyFile", () => {
 
     expectPolicyFileFailure(
       policyPath,
-      () => readSandboxPolicyFile(policyPath),
+      () => loadSandboxBaselinePolicy({ policyPaths: [policyPath] }),
       "must not be blank",
     );
   });
@@ -167,7 +167,7 @@ describeOnWindows("readSandboxPolicyFile", () => {
 
     expectPolicyFileFailure(
       policyPath,
-      () => readSandboxPolicyFile(policyPath),
+      () => loadSandboxBaselinePolicy({ policyPaths: [policyPath] }),
       "absolute Windows path",
     );
   });
@@ -183,7 +183,7 @@ describeOnWindows("readSandboxPolicyFile", () => {
 
     expectPolicyFileFailure(
       policyPath,
-      () => readSandboxPolicyFile(policyPath),
+      () => loadSandboxBaselinePolicy({ policyPaths: [policyPath] }),
       "does not exist on the host",
     );
   });
@@ -216,7 +216,11 @@ describeOnWindows("readSandboxPolicyFile", () => {
       const policyPath = join(dir, item.name);
       writeFileSync(policyPath, item.content, "utf-8");
 
-      expectPolicyFileFailure(policyPath, () => readSandboxPolicyFile(policyPath), item.detail);
+      expectPolicyFileFailure(
+        policyPath,
+        () => loadSandboxBaselinePolicy({ policyPaths: [policyPath] }),
+        item.detail,
+      );
     }
   });
 });

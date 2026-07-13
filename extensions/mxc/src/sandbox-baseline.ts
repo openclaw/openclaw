@@ -7,9 +7,9 @@
 
 import { win32 } from "node:path";
 
-export const BASELINE_TIMEOUT_SECONDS = 300;
+const BASELINE_TIMEOUT_SECONDS = 300;
 
-export type BaselineFilesystemPolicy = {
+type BaselineFilesystemPolicy = {
   restrictToProjectDir: boolean;
   additionalReadonlyPaths: readonly string[];
   additionalReadwritePaths: readonly string[];
@@ -36,19 +36,12 @@ export type SandboxBaselinePolicyInput = {
   };
 };
 
-export type EffectiveReadwritePathsInput = {
-  projectDir: string;
-  sandboxTempDir?: string;
-  tempEnv?: BaselineTempEnv;
-  additionalReadwritePaths?: readonly string[];
-};
-
-export type BaselineTempEnv = {
+type BaselineTempEnv = {
   TEMP?: string;
   TMP?: string;
 };
 
-export type BaselineReadonlyEnv = {
+type BaselineReadonlyEnv = {
   SystemRoot?: string;
   WINDIR?: string;
   ProgramFiles?: string;
@@ -57,8 +50,6 @@ export type BaselineReadonlyEnv = {
 };
 
 export type BaselineHostEnv = BaselineTempEnv & BaselineReadonlyEnv;
-
-export const BASELINE_READONLY_PATHS_WINDOWS: readonly string[] = resolveBaselineReadonlyPaths({});
 
 export const DEFAULT_SANDBOX_BASELINE: SandboxBaselinePolicy = {
   filesystem: {
@@ -92,18 +83,6 @@ export function resolveSandboxBaseline(
       timeoutSecondsConfigured,
     },
   };
-}
-
-export function computeEffectiveReadonlyPaths(
-  baseline: BaselineFilesystemPolicy,
-  env: BaselineReadonlyEnv = process.env,
-): string[] {
-  return dedupeStable([...resolveBaselineReadonlyPaths(env), ...baseline.additionalReadonlyPaths]);
-}
-
-export function computeEffectiveReadwritePaths(input: EffectiveReadwritePathsInput): string[] {
-  const tempDir = input.sandboxTempDir ?? resolveSandboxTempDir(input.tempEnv);
-  return dedupeStable([input.projectDir, tempDir, ...(input.additionalReadwritePaths ?? [])]);
 }
 
 export function resolveSandboxTempDir(env: BaselineTempEnv = {}): string {

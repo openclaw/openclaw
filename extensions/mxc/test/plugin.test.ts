@@ -37,8 +37,11 @@ vi.mock("../src/binary-resolver.js", () => ({
   resolveMxcBinaryPath: resolveMxcBinaryPathMock,
 }));
 
-vi.mock("../src/mxc-backend.js", () => ({
+vi.mock("../src/mxc-backend-factory.js", () => ({
   createMxcSandboxBackendFactory: createMxcSandboxBackendFactoryMock,
+}));
+
+vi.mock("../src/mxc-backend.js", () => ({
   mxcSandboxBackendManager: mxcSandboxBackendManagerMock,
 }));
 

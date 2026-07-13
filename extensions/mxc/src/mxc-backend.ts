@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
@@ -9,7 +9,6 @@ import type {
   SandboxBackendExecSpec,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
-  CreateSandboxBackendParams,
   SandboxBackendManager,
 } from "openclaw/plugin-sdk/sandbox";
 import { resolveMxcBinaryPath } from "./binary-resolver.js";
@@ -38,16 +37,6 @@ type MxcExecFinalizeToken = {
   payloadDir: string;
   sandboxTempDir?: string;
 };
-
-function sanitizeRuntimeId(value: string): string {
-  const slug = value
-    .toLowerCase()
-    .replace(/[^a-z0-9_.-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 48);
-  const hash = createHash("sha256").update(value).digest("hex").slice(0, 8);
-  return `openclaw-mxc-${slug || "sandbox"}-${hash}`;
-}
 
 // MXC containers are ephemeral (lifecycle.destroyOnExit=true) and named per invocation.
 // Keep the runtimeId as the stable handle identifier (used for logs + SDK tracking) and
@@ -183,7 +172,7 @@ function createMxcLauncherPayload(
   return token;
 }
 
-function buildMxcLauncherArgv(payloadFile: string): string[] {
+function buildMxcLauncherArgv(payloadFile: string): [string, string, string, string] {
   return [process.execPath, resolveMxcLauncherPath(), "--payload-file", payloadFile];
 }
 
@@ -414,26 +403,6 @@ function toBuffer(value: Buffer | string): Buffer {
     return value;
   }
   return Buffer.from(value, "utf-8");
-}
-
-/** Factory function called by OpenClaw when sandbox.backend=mxc. */
-export function createMxcSandboxBackendFactory(config: MxcConfig) {
-  return async function createMxcSandboxBackend(
-    params: CreateSandboxBackendParams,
-  ): Promise<SandboxBackendHandle> {
-    if ((params.cfg.docker.binds?.length ?? 0) > 0) {
-      throw new Error("MXC sandbox backend does not support sandbox.docker.binds.");
-    }
-    const runtimeId = sanitizeRuntimeId(params.scopeKey);
-    return createMxcSandboxBackendHandle({
-      config,
-      runtimeId,
-      workdir: params.workspaceDir,
-      agentWorkspaceDir: params.agentWorkspaceDir,
-      ...(params.skillsWorkspaceDir ? { skillsWorkspaceDir: params.skillsWorkspaceDir } : {}),
-      workspaceAccess: params.cfg.workspaceAccess,
-    });
-  };
 }
 
 /** Manager for `openclaw sandbox list` and `openclaw sandbox remove`. */

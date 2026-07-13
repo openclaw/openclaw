@@ -10,9 +10,9 @@ import { z } from "zod";
 const MXC_CONTAINMENTS = ["process", "processcontainer"] as const;
 const MXC_NETWORK_MODES = ["none", "default"] as const;
 
-export type MxcContainment = (typeof MXC_CONTAINMENTS)[number];
+type MxcContainment = (typeof MXC_CONTAINMENTS)[number];
 
-export type MxcNetworkMode = (typeof MXC_NETWORK_MODES)[number];
+type MxcNetworkMode = (typeof MXC_NETWORK_MODES)[number];
 
 type MxcPluginConfig = {
   mxcBinaryPath?: string;
@@ -32,8 +32,6 @@ export type MxcConfig = {
   debug: boolean;
   mxcPolicyPaths?: string[];
 };
-
-export type ResolvedMxcPluginConfig = MxcConfig;
 
 const DEFAULT_CONTAINMENT: MxcContainment = "process";
 const DEFAULT_NETWORK: MxcNetworkMode = "none";
@@ -92,7 +90,7 @@ export function createMxcPluginConfigSchema(): OpenClawPluginConfigSchema {
   });
 }
 
-export function resolveMxcPluginConfig(value: unknown): ResolvedMxcPluginConfig {
+export function resolveConfig(value: unknown): MxcConfig {
   if (value === undefined) {
     return {
       mxcBinaryPath: undefined,
@@ -110,7 +108,7 @@ export function resolveMxcPluginConfig(value: unknown): ResolvedMxcPluginConfig 
   }
 
   const config = parsed.data as MxcPluginConfig;
-  const resolved: ResolvedMxcPluginConfig = {
+  const resolved: MxcConfig = {
     mxcBinaryPath: config.mxcBinaryPath,
     containment: config.containment ?? DEFAULT_CONTAINMENT,
     network: config.network ?? DEFAULT_NETWORK,
@@ -125,8 +123,6 @@ export function resolveMxcPluginConfig(value: unknown): ResolvedMxcPluginConfig 
 
   return resolved;
 }
-
-export const resolveConfig = resolveMxcPluginConfig;
 
 function resolveMxcPolicyPaths(value: string[] | undefined): string[] | undefined {
   if (value === undefined) {

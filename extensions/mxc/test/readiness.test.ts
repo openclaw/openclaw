@@ -1,14 +1,14 @@
 import { execFileSync } from "node:child_process";
+import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
-import {
-  assertMxcReadiness,
-  probeMxcHostPrep,
-  resolveWindowsSystemExecutable,
-  warnMxcHostPrepIfNeeded,
-} from "../src/readiness.js";
+import { assertMxcReadiness, warnMxcHostPrepIfNeeded } from "../src/readiness.js";
 
-const ICACLS = resolveWindowsSystemExecutable("icacls.exe");
-const SC_EXE = resolveWindowsSystemExecutable("sc.exe");
+const SYSTEM32 = path.win32.join(
+  process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
+  "System32",
+);
+const ICACLS = path.win32.join(SYSTEM32, "icacls.exe");
+const SC_EXE = path.win32.join(SYSTEM32, "sc.exe");
 
 function depsFor(params: {
   isoEnvBroker: "missing" | "running" | "stopped";
@@ -114,55 +114,5 @@ describe("warnMxcHostPrepIfNeeded", () => {
 
     warnMxcHostPrepIfNeeded({ platform: "win32", deps, warn });
     expect(warn).not.toHaveBeenCalled();
-  });
-});
-
-describe("probeMxcHostPrep", () => {
-  test("returns all-true on non-Windows", () => {
-    const status = probeMxcHostPrep({ platform: "linux" });
-    expect(status).toEqual({ systemDrivePrepared: true, isoEnvBrokerInstalled: true });
-  });
-
-  describe("resolveWindowsSystemExecutable", () => {
-    test("falls back to an absolute System32 path when environment roots are missing", () => {
-      const originalSystemRoot = process.env.SystemRoot;
-      const originalWinDir = process.env.WINDIR;
-      try {
-        delete process.env.SystemRoot;
-        delete process.env.WINDIR;
-
-        expect(resolveWindowsSystemExecutable("sc.exe")).toBe("C:\\Windows\\System32\\sc.exe");
-      } finally {
-        if (originalSystemRoot === undefined) {
-          delete process.env.SystemRoot;
-        } else {
-          process.env.SystemRoot = originalSystemRoot;
-        }
-        if (originalWinDir === undefined) {
-          delete process.env.WINDIR;
-        } else {
-          process.env.WINDIR = originalWinDir;
-        }
-      }
-    });
-  });
-
-  test("detects missing system-drive prep", () => {
-    const deps = depsFor({
-      isoEnvBroker: "running",
-      systemDriveAcl: "C:\\ BUILTIN\\Administrators:(OI)(CI)(F)\n",
-    });
-
-    const status = probeMxcHostPrep({ platform: "win32", deps });
-    expect(status.isoEnvBrokerInstalled).toBe(true);
-    expect(status.systemDrivePrepared).toBe(false);
-  });
-
-  test("detects missing IsoEnvBroker", () => {
-    const deps = depsFor({ isoEnvBroker: "missing" });
-
-    const status = probeMxcHostPrep({ platform: "win32", deps });
-    expect(status.isoEnvBrokerInstalled).toBe(false);
-    expect(status.systemDrivePrepared).toBe(true);
   });
 });

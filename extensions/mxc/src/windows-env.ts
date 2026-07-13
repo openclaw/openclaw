@@ -64,10 +64,7 @@ const LAUNCHER_ENV_KEYS = [
   "ProgramW6432",
 ] as const;
 
-export function getEnvValueCaseInsensitive(
-  env: NodeJS.ProcessEnv,
-  key: string,
-): string | undefined {
+function getEnvValueCaseInsensitive(env: NodeJS.ProcessEnv, key: string): string | undefined {
   const exact = env[key];
   if (exact !== undefined) {
     return exact;

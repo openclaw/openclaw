@@ -28,12 +28,12 @@ type FilesystemPathSpec = {
   sources?: readonly string[];
 };
 
-export type BaselineApplicationContext = {
+type BaselineApplicationContext = {
   projectDir: string;
   hostEnv: BaselineHostEnv;
 };
 
-export type MxcWorkspaceContext = {
+type MxcWorkspaceContext = {
   workspaceDir: string;
   agentWorkspaceDir: string;
   activeWorkspaceDir: string;

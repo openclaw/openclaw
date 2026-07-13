@@ -1,23 +1,16 @@
 import { describe, expect, test } from "vitest";
 import {
-  BASELINE_READONLY_PATHS_WINDOWS,
-  BASELINE_TIMEOUT_SECONDS,
-  computeEffectiveReadonlyPaths,
-  computeEffectiveReadwritePaths,
   DEFAULT_SANDBOX_BASELINE,
   resolveBaselineReadonlyPaths,
   resolveSandboxBaseline,
+  resolveSandboxTempDir,
 } from "../src/sandbox-baseline.js";
-
-function occurrenceCount(values: readonly string[], expected: string): number {
-  return values.filter((value) => value === expected).length;
-}
 
 describe("resolveSandboxBaseline", () => {
   test("returns enforceable defaults", () => {
     expect(resolveSandboxBaseline()).toEqual(DEFAULT_SANDBOX_BASELINE);
     expect(resolveSandboxBaseline().filesystem.restrictToProjectDir).toBe(true);
-    expect(resolveSandboxBaseline().process.timeoutSeconds).toBe(BASELINE_TIMEOUT_SECONDS);
+    expect(resolveSandboxBaseline().process.timeoutSeconds).toBe(300);
     expect(resolveSandboxBaseline().process.timeoutSecondsConfigured).toBe(false);
   });
 
@@ -51,63 +44,35 @@ describe("resolveSandboxBaseline", () => {
 });
 
 describe("effective filesystem policy", () => {
-  test("adds baseline readonly directories and policy additions", () => {
-    const paths = computeEffectiveReadonlyPaths(
-      {
-        restrictToProjectDir: true,
-        additionalReadonlyPaths: ["C:\\tools", "C:\\tools"],
-        additionalReadwritePaths: [],
-      },
-      {},
-    );
-
-    expect(paths).toEqual([...BASELINE_READONLY_PATHS_WINDOWS, "C:\\tools"]);
-    expect(occurrenceCount(paths, "C:\\tools")).toBe(1);
-  });
-
   test("derives baseline readonly directories from the host Windows env", () => {
-    const paths = computeEffectiveReadonlyPaths(
-      {
-        restrictToProjectDir: true,
-        additionalReadonlyPaths: ["D:\\tools"],
-        additionalReadwritePaths: [],
-      },
-      {
-        SystemRoot: "D:\\Windows",
-        ProgramFiles: "D:\\Program Files",
-        "ProgramFiles(x86)": "D:\\Program Files (x86)",
-      },
-    );
+    const paths = resolveBaselineReadonlyPaths({
+      SystemRoot: "D:\\Windows",
+      ProgramFiles: "D:\\Program Files",
+      "ProgramFiles(x86)": "D:\\Program Files (x86)",
+    });
 
     expect(paths).toEqual([
       "D:\\Program Files",
       "D:\\Program Files (x86)",
       "D:\\Windows\\System32",
       "D:\\Windows\\SysWOW64",
-      "D:\\tools",
     ]);
   });
 
   test("uses deterministic fallback readonly directories when env values are absent", () => {
-    expect(resolveBaselineReadonlyPaths({})).toEqual(BASELINE_READONLY_PATHS_WINDOWS);
+    expect(resolveBaselineReadonlyPaths({})).toEqual([
+      "C:\\Program Files",
+      "C:\\Program Files (x86)",
+      "C:\\Windows\\System32",
+      "C:\\Windows\\SysWOW64",
+    ]);
   });
 
-  test("readwrite paths include project, temp, and additions", () => {
-    const paths = computeEffectiveReadwritePaths({
-      projectDir: "C:\\repo\\project",
-      tempEnv: { TEMP: "C:\\Temp" },
-      additionalReadwritePaths: ["C:\\scratch", "C:\\scratch"],
-    });
-
-    expect(paths).toEqual(["C:\\repo\\project", "C:\\Temp", "C:\\scratch"]);
+  test("prefers the configured Windows temp directory", () => {
+    expect(resolveSandboxTempDir({ TEMP: "C:\\Temp" })).toBe("C:\\Temp");
   });
 
-  test("readwrite temp fallback is Windows temp when TEMP and TMP are absent", () => {
-    const paths = computeEffectiveReadwritePaths({
-      projectDir: "C:\\repo\\project",
-      tempEnv: {},
-    });
-
-    expect(paths).toEqual(["C:\\repo\\project", "C:\\Windows\\Temp"]);
+  test("uses Windows temp when TEMP and TMP are absent", () => {
+    expect(resolveSandboxTempDir({})).toBe("C:\\Windows\\Temp");
   });
 });
