@@ -62,6 +62,7 @@ const rawSqliteAllowPathGroups = {
     "src/commands/doctor-session-sqlite-readers.ts",
     "src/commands/doctor-session-sqlite-recover-report.ts",
     "src/commands/doctor-state-sqlite-compact.ts",
+    "src/infra/state-migrations.task-sidecar-rows.ts",
     "src/infra/state-migrations.storage.ts",
     "src/infra/state-migrations.cron-run-logs.ts",
     "src/infra/state-migrations.debug-proxy.ts",
