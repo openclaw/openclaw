@@ -3416,7 +3416,7 @@ extension NodeAppModel {
             !$0.isEmpty && !GatewayStableIdentifier.matches($0, effectiveStableID)
         } ?? false
         if targetChanged {
-            self.clearGatewayProblemWhenSwitching(to: effectiveStableID)
+            self.clearGatewayProblemForCommittedTargetSwitch(to: effectiveStableID)
         }
         let hasForeignCachedApproval = self.watchExecApprovalPromptsByID.values.contains {
             !GatewayStableIdentifier.matches($0.gatewayStableID, effectiveStableID)
@@ -3699,10 +3699,12 @@ extension NodeAppModel {
         self.gatewayAutoReconnectEnabled = true
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
+        // A retained error is presentation history, not live operator control. Explicit retries
+        // must retire the old pairing state so the replacement session can clear the snapshot.
+        self.operatorGatewayProblem = nil
         if !preservingGatewayProblem {
             // Same-target reconnects keep the prior failure readable until success or a new failure.
             // Initial connects and target changes must not inherit another gateway's problem state.
-            self.operatorGatewayProblem = nil
             self.clearGatewayConnectionProblem()
         }
         self.credentialHandoffFailureGeneration = nil
@@ -3752,7 +3754,8 @@ extension NodeAppModel {
     }
 
     func beginGatewayPreconnectVerification(statusText: String) {
-        self.lastGatewayProblem = nil
+        // Preflight has not committed the replacement target yet. Keep the readable snapshot
+        // while retiring live pairing control; the committed route switch clears the snapshot.
         self.operatorGatewayProblem = nil
         self.gatewayPairingPaused = false
         self.gatewayPairingRequestId = nil
@@ -10696,13 +10699,13 @@ extension NodeAppModel {
 #endif
 
 extension NodeAppModel {
-    func clearGatewayProblemWhenSwitching(to stableID: String) {
+    private func clearGatewayProblemForCommittedTargetSwitch(to stableID: String) {
         guard let currentStableID = self.activeGatewayConnectConfig?.effectiveStableID
             ?? self.connectedGatewayID,
             !GatewayStableIdentifier.matches(currentStableID, stableID)
         else { return }
-        // A retained problem and status belong to their gateway. Replace both as soon as another
-        // target is chosen, or the replacement connection can present the previous gateway's error.
+        // This runs only when the replacement config commits, without a suspension before the
+        // route generation advances. Preflight retains the prior snapshot until this boundary.
         self.operatorGatewayProblem = nil
         self.clearGatewayConnectionProblem()
         self.setGatewayConnectionProgress(reconnecting: false)

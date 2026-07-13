@@ -262,7 +262,6 @@ final class GatewayConnectionController {
         guard availability.canConnect else { return availability.guidanceText }
 
         let connectAttempt = self.beginConnectAttempt()
-        self.appModel?.clearGatewayProblemWhenSwitching(to: gateway.stableID)
         self.pendingConnectionStableID = gateway.stableID
         defer { self.finishConnectAttempt(connectAttempt.suppressionLease) }
         await self.waitForPendingForgetCleanup(stableID: gateway.stableID)
@@ -381,7 +380,6 @@ final class GatewayConnectionController {
         guard let resolvedPort = Self.resolvedManualPort(host: host, port: port)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
-        self.appModel?.clearGatewayProblemWhenSwitching(to: stableID)
         self.pendingConnectionStableID = stableID
         await self.waitForPendingForgetCleanup(stableID: stableID)
         guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return }

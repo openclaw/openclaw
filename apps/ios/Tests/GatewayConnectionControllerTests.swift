@@ -414,7 +414,6 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
             pauseReconnect: false)
         appModel._test_applyOperatorGatewayConnectionProblem(problem)
 
-        appModel.clearGatewayProblemWhenSwitching(to: currentConfig.effectiveStableID)
         #expect(appModel.lastGatewayProblem == problem)
 
         appModel.applyGatewayConnectConfig(currentConfig, forceReconnect: true)
@@ -425,6 +424,10 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         let replacementConfig = Self.makeGatewayConnectConfig(
             url: replacementURL,
             stableID: "manual|replacement.example.com|443")
+        appModel.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+
         appModel.applyGatewayConnectConfig(replacementConfig, forceReconnect: true)
         #expect(appModel.lastGatewayProblem == nil)
         #expect(appModel.gatewayStatusText == "Connecting…")
@@ -477,6 +480,39 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
         #expect(!appModel.gatewayPairingPaused)
         #expect(appModel.gatewayPairingRequestId == nil)
+
+        appModel._test_clearGatewayConnectionProblem()
+
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+    }
+
+    @Test @MainActor func `gateway preflight retains only the readable problem snapshot`() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let config = Self.makeGatewayConnectConfig()
+        appModel.applyGatewayConnectConfig(config)
+        let problem = GatewayConnectionProblem(
+            kind: .pairingScopeUpgradeRequired,
+            owner: .gateway,
+            title: "Additional permissions required",
+            message: "Approve the requested permissions on the gateway.",
+            requestId: "req-admin",
+            retryable: false,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(problem)
+
+        appModel.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+
+        #expect(appModel.lastGatewayProblem == problem)
+        #expect(appModel.gatewayDisplayStatusText == problem.localizedStatusText)
+        #expect(appModel.gatewayStatusText == "Verifying gateway TLS fingerprint…")
+        #expect(!appModel.gatewayPairingPaused)
+        #expect(appModel.gatewayPairingRequestId == nil)
+
+        appModel._test_clearGatewayConnectionProblem()
+        #expect(appModel.lastGatewayProblem == nil)
     }
 
     @Test func `gateway connect config keeps stable owner bytes exact`() {
