@@ -27,6 +27,7 @@ import {
   type SessionCreateOutcome,
   type SessionCreateParams,
 } from "./create.ts";
+import { readSessionCustomGroupNames } from "./custom-groups.ts";
 import { scopedAgentListParamsForSession } from "./navigation.ts";
 import {
   readSessionChangedEvent,
@@ -240,8 +241,8 @@ export type SessionCapability = {
   ) => Promise<SessionsCompactionRestoreResult>;
   /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
   groupsLoad: () => Promise<void>;
-  /** Replaces the gateway-owned group catalog (order included). */
-  groupsPut: (names: readonly string[]) => Promise<void>;
+  /** Replaces the group catalog; stale means the initiating connection retired. */
+  groupsPut: (names: readonly string[]) => Promise<SessionGroupMutationResult>;
   /** Renames a group; stale means the initiating connection retired before reconciliation. */
   groupsRename: (from: string, to: string) => Promise<SessionGroupMutationResult>;
   /** Deletes a group; stale means the initiating connection retired before reconciliation. */
@@ -879,21 +880,22 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return Math.min(Math.max(requested, GROUPS_RETRY_MIN_MS), GROUPS_RETRY_MAX_MS);
   };
 
-  const readGroupNames = (payload: unknown): string[] => {
-    const groups = (payload as { groups?: Array<{ name?: unknown }> } | null)?.groups;
-    if (!Array.isArray(groups)) {
-      return [];
-    }
-    return groups.flatMap((group) =>
-      typeof group?.name === "string" && group.name.trim() ? [group.name.trim()] : [],
-    );
-  };
-
   const publishGroups = (groups: readonly string[]) => {
     if (groups.length === state.groups.length && groups.every((g, i) => g === state.groups[i])) {
       return;
     }
     publish({ ...state, groups: [...groups] });
+  };
+
+  const finishGroupMutationFailure = (
+    current: boolean,
+    error: unknown,
+  ): SessionGroupMutationResult => {
+    if (!current) {
+      return "stale";
+    }
+    publish({ ...state, error: String(error) });
+    throw error;
   };
 
   const readLegacyStoredGroups = (): string[] => {
@@ -925,7 +927,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope) || generation !== groupsLoadGeneration) {
         return;
       }
-      let names = readGroupNames(listed);
+      let names = readSessionCustomGroupNames(listed);
       // One-time migration: browser-local catalogs predate the gateway store.
       const legacy = readLegacyStoredGroups();
       if (names.length === 0 && legacy.length > 0) {
@@ -933,7 +935,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         if (!isCurrentConnection(scope) || generation !== groupsLoadGeneration) {
           return;
         }
-        names = readGroupNames(put);
+        names = readSessionCustomGroupNames(put);
       }
       if (legacy.length > 0) {
         try {
@@ -985,14 +987,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     await loadGroups(scope, generation, advertised);
   };
 
-  const groupsPut = async (names: readonly string[]) => {
+  const groupsPut = async (names: readonly string[]): Promise<SessionGroupMutationResult> => {
     const scope = captureConnection();
     if (!scope) {
-      return;
+      return "stale";
     }
-    const result = await scope.client.request("sessions.groups.put", { names: [...names] });
-    if (isCurrentConnection(scope)) {
-      publishGroups(readGroupNames(result));
+    try {
+      const result = await scope.client.request("sessions.groups.put", { names: [...names] });
+      if (!isCurrentConnection(scope)) {
+        return "stale";
+      }
+      publishGroups(readSessionCustomGroupNames(result));
+      return "completed";
+    } catch (error) {
+      return finishGroupMutationFailure(isCurrentConnection(scope), error);
     }
   };
 
@@ -1006,17 +1014,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
-      publishGroups(readGroupNames(result));
+      publishGroups(readSessionCustomGroupNames(result));
       // The mutation response is the commit point. Reconcile member rows in
       // the background so a later disconnect cannot downgrade confirmed work.
       void refresh({ ...lastListOptions, force: true });
       return "completed";
     } catch (error) {
-      if (!isCurrentConnection(scope)) {
-        return "stale";
-      }
-      publish({ ...state, error: String(error) });
-      throw error;
+      return finishGroupMutationFailure(isCurrentConnection(scope), error);
     }
   };
 
@@ -1030,17 +1034,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return "stale";
       }
-      publishGroups(readGroupNames(result));
+      publishGroups(readSessionCustomGroupNames(result));
       // See groupsRename: collapsed-state consumers must observe confirmed
       // completion before an unrelated refresh can outlive the connection.
       void refresh({ ...lastListOptions, force: true });
       return "completed";
     } catch (error) {
-      if (!isCurrentConnection(scope)) {
-        return "stale";
-      }
-      publish({ ...state, error: String(error) });
-      throw error;
+      return finishGroupMutationFailure(isCurrentConnection(scope), error);
     }
   };
 
