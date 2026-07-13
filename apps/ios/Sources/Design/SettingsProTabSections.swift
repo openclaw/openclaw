@@ -312,7 +312,10 @@ extension SettingsProTab {
                         Text("This phone has limited Gateway access.")
                             .font(OpenClawType.subheadSemiBold)
                         Text(
-                            "Scan a full-access setup code from the Control UI or openclaw qr, then reconnect to enable settings and upgrades.")
+                            """
+                            Scan a full-access setup code from the Control UI or openclaw qr, then \
+                            reconnect to enable settings and upgrades.
+                            """)
                             .font(OpenClawType.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
