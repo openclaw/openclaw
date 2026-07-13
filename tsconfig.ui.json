@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2023"],
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "tsBuildInfoFile": ".artifacts/tsgo-cache/ui.tsbuildinfo"
+  },
+  "include": ["ui/**/*"],
+  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]
+}
