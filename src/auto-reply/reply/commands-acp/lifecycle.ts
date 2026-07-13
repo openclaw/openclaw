@@ -18,6 +18,7 @@ import {
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
+import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import {
   resolveAcpSpawnRuntimePolicyError,
   resolveRuntimeCwdForAcpSpawn,
@@ -462,7 +463,17 @@ async function persistSpawnedSessionLabel(params: {
   }
 
   const now = Date.now();
-  if (params.commandParams.sessionStore) {
+  // Resolve the target store from the spawned session key instead of the
+  // requester's store. Cross-agent ACP spawns (e.g. from main into cursor)
+  // have different store partitions, so using commandParams.storePath would
+  // silently lose the label (#106136).
+  const { storePath } = resolveSessionStorePathForAcp({
+    cfg: params.commandParams.cfg,
+    sessionKey: params.sessionKey,
+  });
+
+  // Only mutate the in-memory session store when both stores are the same.
+  if (params.commandParams.sessionStore && params.commandParams.storePath === storePath) {
     const existing = params.commandParams.sessionStore[params.sessionKey];
     if (existing) {
       params.commandParams.sessionStore[params.sessionKey] = {
@@ -472,12 +483,9 @@ async function persistSpawnedSessionLabel(params: {
       };
     }
   }
-  if (!params.commandParams.storePath) {
-    return;
-  }
   await updateSessionEntry(
     {
-      storePath: params.commandParams.storePath,
+      storePath,
       sessionKey: params.sessionKey,
     },
     () => ({
