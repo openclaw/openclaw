@@ -384,3 +384,8 @@ export async function admitChatSend(params: {
     },
   };
 }
+
+export type AdmittedChatSend = Extract<
+  Awaited<ReturnType<typeof admitChatSend>>,
+  { ok: true }
+>["value"];

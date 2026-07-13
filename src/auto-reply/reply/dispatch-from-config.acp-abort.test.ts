@@ -32,7 +32,7 @@ let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
-let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+let replyRunTesting: typeof import("./reply-run-registry.js").testing;
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
@@ -160,7 +160,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       replyRunRegistry,
       getActiveReplyRunCount,
       createReplyOperation,
-      __testing: replyRunTesting,
+      testing: replyRunTesting,
     } = await import("./reply-run-registry.js"));
   });
 

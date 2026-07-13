@@ -25411,7 +25411,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 749,
+      "line": 761,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host)",
       "surface": "apple",
@@ -25419,7 +25419,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 749,
+      "line": 761,
       "path": "apps/macos/Sources/OpenClaw/AppState.swift",
       "source": "\\(user)@\\(host):\\(port)",
       "surface": "apple",
@@ -28027,7 +28027,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 68,
+      "line": 72,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "General",
       "surface": "apple",
@@ -28035,7 +28035,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 69,
+      "line": 73,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Everyday OpenClaw app behavior.",
       "surface": "apple",
@@ -28043,7 +28043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 73,
+      "line": 77,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "App",
       "surface": "apple",
@@ -28051,7 +28051,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 75,
+      "line": 79,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Launch at login",
       "surface": "apple",
@@ -28059,7 +28059,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 77,
+      "line": 81,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Automatically start OpenClaw after you sign in.",
       "surface": "apple",
@@ -28067,7 +28067,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 78,
+      "line": 82,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Move OpenClaw to Applications before enabling launch at login.",
       "surface": "apple",
@@ -28075,7 +28075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 83,
+      "line": 87,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Show Dock icon",
       "surface": "apple",
@@ -28083,7 +28083,7 @@
     },
     {
       "kind": "ui-named-argument-multiline",
-      "line": 84,
+      "line": 88,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
       "surface": "apple",
@@ -28091,7 +28091,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 90,
+      "line": 94,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Play menu bar icon animations",
       "surface": "apple",
@@ -28099,7 +28099,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 91,
+      "line": 95,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Enable idle blinks and wiggles on the status icon.",
       "surface": "apple",
@@ -28107,7 +28107,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 96,
+      "line": 100,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Capabilities",
       "surface": "apple",
@@ -28115,7 +28115,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 98,
+      "line": 102,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow Canvas",
       "surface": "apple",
@@ -28123,7 +28123,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 99,
+      "line": 103,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow the agent to show and control the Canvas panel.",
       "surface": "apple",
@@ -28131,7 +28131,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 103,
+      "line": 107,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow Camera",
       "surface": "apple",
@@ -28139,7 +28139,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 104,
+      "line": 108,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow the agent to capture a photo or short video via the built-in camera.",
       "surface": "apple",
@@ -28147,7 +28147,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 108,
+      "line": 112,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Allow Computer Control",
       "surface": "apple",
@@ -28155,7 +28155,7 @@
     },
     {
       "kind": "ui-named-argument-multiline",
-      "line": 109,
+      "line": 113,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Let an authorized agent move the pointer, click, and type on this Mac. Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.",
       "surface": "apple",
@@ -28163,23 +28163,23 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 116,
+      "line": 120,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Enable Peekaboo Bridge",
       "surface": "apple",
       "id": "native.apple.35cdb39a1214e0d8"
     },
     {
-      "kind": "ui-named-argument",
-      "line": 117,
+      "kind": "ui-named-argument-multiline",
+      "line": 121,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
       "surface": "apple",
-      "id": "native.apple.82e287000e34b51e"
+      "id": "native.apple.9465b8cd1bc4a5ec"
     },
     {
       "kind": "ui-call",
-      "line": 122,
+      "line": 130,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Browser",
       "surface": "apple",
@@ -28187,7 +28187,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 124,
+      "line": 132,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Browser login",
       "surface": "apple",
@@ -28195,7 +28195,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 125,
+      "line": 133,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Copy cookies from a Chrome-family profile into an isolated managed profile.",
       "surface": "apple",
@@ -28203,7 +28203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 128,
+      "line": 136,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Import…",
       "surface": "apple",
@@ -28211,7 +28211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 150,
+      "line": 158,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Developer",
       "surface": "apple",
@@ -28219,7 +28219,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 152,
+      "line": 160,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Enable debug tools",
       "surface": "apple",
@@ -28227,7 +28227,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 153,
+      "line": 161,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Show the Debug page with development utilities.",
       "surface": "apple",
@@ -28235,7 +28235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 160,
+      "line": 168,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "App session",
       "surface": "apple",
@@ -28243,7 +28243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 162,
+      "line": 170,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Quit only when you want to stop the menu bar app completely.",
       "surface": "apple",
@@ -28251,7 +28251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 167,
+      "line": 175,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Quit",
       "surface": "apple",
@@ -28259,7 +28259,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 187,
+      "line": 195,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "OpenClaw paused",
       "surface": "apple",
@@ -28267,7 +28267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 197,
+      "line": 205,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "OpenClaw active",
       "surface": "apple",
@@ -28275,7 +28275,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 216,
+      "line": 224,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Processing messages through the local Gateway on this Mac.",
       "surface": "apple",
@@ -28283,7 +28283,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 218,
+      "line": 226,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Connected to a remote Gateway configuration.",
       "surface": "apple",
@@ -28291,7 +28291,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 220,
+      "line": 228,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Ready to run after you choose a Gateway connection.",
       "surface": "apple",
@@ -28299,7 +28299,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 227,
+      "line": 235,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Connection",
       "surface": "apple",
@@ -28307,7 +28307,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 228,
+      "line": 236,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Choose where the Gateway runs and how this Mac app reaches it.",
       "surface": "apple",
@@ -28315,7 +28315,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 285,
+      "line": 301,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "\\(Int(ping)) ms",
       "surface": "apple",
@@ -28323,7 +28323,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 319,
+      "line": 335,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Local Gateway",
       "surface": "apple",
@@ -28331,7 +28331,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 320,
+      "line": 336,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote Gateway direct",
       "surface": "apple",
@@ -28339,7 +28339,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 320,
+      "line": 336,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote Gateway via SSH",
       "surface": "apple",
@@ -28347,7 +28347,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 321,
+      "line": 337,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway not configured",
       "surface": "apple",
@@ -28355,7 +28355,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 328,
+      "line": 344,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "OpenClaw starts and monitors the Gateway on this Mac.",
       "surface": "apple",
@@ -28363,7 +28363,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 337,
+      "line": 353,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Choose local or remote before the app can attach to a Gateway.",
       "surface": "apple",
@@ -28371,7 +28371,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 342,
+      "line": 358,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway",
       "surface": "apple",
@@ -28379,7 +28379,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 344,
+      "line": 360,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "OpenClaw runs",
       "surface": "apple",
@@ -28387,7 +28387,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 345,
+      "line": 361,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Pick whether this app owns a local Gateway or attaches to another host.",
       "surface": "apple",
@@ -28395,7 +28395,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 348,
+      "line": 364,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway location",
       "surface": "apple",
@@ -28403,7 +28403,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 349,
+      "line": 365,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Not configured",
       "surface": "apple",
@@ -28411,7 +28411,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 350,
+      "line": 366,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Local (this Mac)",
       "surface": "apple",
@@ -28419,7 +28419,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 351,
+      "line": 367,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote (another host)",
       "surface": "apple",
@@ -28427,7 +28427,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 360,
+      "line": 376,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Setup needed",
       "surface": "apple",
@@ -28435,7 +28435,7 @@
     },
     {
       "kind": "ui-named-argument-multiline",
-      "line": 361,
+      "line": 377,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.",
       "surface": "apple",
@@ -28443,7 +28443,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 392,
+      "line": 408,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote Access",
       "surface": "apple",
@@ -28451,7 +28451,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 403,
+      "line": 419,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Discovery & Status",
       "surface": "apple",
@@ -28459,7 +28459,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 419,
+      "line": 435,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Nearby gateways",
       "surface": "apple",
@@ -28467,7 +28467,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 442,
+      "line": 458,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Remote test",
       "surface": "apple",
@@ -28475,7 +28475,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 449,
+      "line": 465,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Control channel",
       "surface": "apple",
@@ -28483,7 +28483,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 476,
+      "line": 492,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Recommended setup",
       "surface": "apple",
@@ -28491,7 +28491,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 478,
+      "line": 494,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Use Tailscale plus an SSH tunnel for stable private access.",
       "surface": "apple",
@@ -28499,7 +28499,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 479,
+      "line": 495,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Use Tailscale Serve so the gateway has a valid HTTPS certificate.",
       "surface": "apple",
@@ -28507,7 +28507,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 488,
+      "line": 504,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Advanced",
       "surface": "apple",
@@ -28515,7 +28515,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 491,
+      "line": 507,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Identity file",
       "surface": "apple",
@@ -28523,7 +28523,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 493,
+      "line": 509,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "/Users/you/.ssh/id_ed25519",
       "surface": "apple",
@@ -28531,7 +28531,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 495,
+      "line": 511,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Project root",
       "surface": "apple",
@@ -28539,7 +28539,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 497,
+      "line": 513,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "/home/you/Projects/openclaw",
       "surface": "apple",
@@ -28547,7 +28547,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 499,
+      "line": 515,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "CLI path",
       "surface": "apple",
@@ -28555,7 +28555,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 501,
+      "line": 517,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "/Applications/OpenClaw.app/.../openclaw",
       "surface": "apple",
@@ -28563,7 +28563,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 506,
+      "line": 522,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "SSH command details",
       "surface": "apple",
@@ -28571,7 +28571,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 526,
+      "line": 542,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Transport",
       "surface": "apple",
@@ -28579,7 +28579,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 527,
+      "line": 543,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "SSH keeps the Gateway private; direct is best for HTTPS or Tailscale Serve.",
       "surface": "apple",
@@ -28587,7 +28587,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 530,
+      "line": 546,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "SSH tunnel",
       "surface": "apple",
@@ -28595,7 +28595,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 531,
+      "line": 547,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Direct (ws/wss)",
       "surface": "apple",
@@ -28603,7 +28603,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 544,
+      "line": 560,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "SSH target",
       "surface": "apple",
@@ -28611,7 +28611,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 544,
+      "line": 560,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "User and host for the remote Gateway machine.",
       "surface": "apple",
@@ -28619,7 +28619,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 561,
+      "line": 577,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway URL",
       "surface": "apple",
@@ -28627,7 +28627,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 561,
+      "line": 577,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "The WebSocket URL exposed by the remote Gateway.",
       "surface": "apple",
@@ -28635,7 +28635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 564,
+      "line": 580,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "wss://gateway.example.ts.net",
       "surface": "apple",
@@ -28643,7 +28643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 570,
+      "line": 586,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Use wss:// for public hosts. ws:// is allowed for localhost, LAN, .local, and Tailnet hosts.",
       "surface": "apple",
@@ -28651,7 +28651,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 581,
+      "line": 597,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway token",
       "surface": "apple",
@@ -28659,7 +28659,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 582,
+      "line": 598,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Used when the remote gateway requires token auth.",
       "surface": "apple",
@@ -28667,7 +28667,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 585,
+      "line": 601,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "remote gateway auth token (gateway.remote.token)",
       "surface": "apple",
@@ -28675,7 +28675,7 @@
     },
     {
       "kind": "ui-call-concatenated",
-      "line": 590,
+      "line": 606,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
       "surface": "apple",
@@ -28683,7 +28683,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 609,
+      "line": 625,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Test remote",
       "surface": "apple",
@@ -28691,7 +28691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 632,
+      "line": 648,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Testing…",
       "surface": "apple",
@@ -28699,7 +28699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 670,
+      "line": 686,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Installed: \\(gatewayVersion) · Required: \\(required)",
       "surface": "apple",
@@ -28707,7 +28707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 674,
+      "line": 690,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway \\(gatewayVersion) detected",
       "surface": "apple",
@@ -28715,7 +28715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 680,
+      "line": 696,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Node \\(node)",
       "surface": "apple",
@@ -28723,7 +28723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 692,
+      "line": 708,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Last failure: \\(failure)",
       "surface": "apple",
@@ -28731,7 +28731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 697,
+      "line": 713,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Recheck",
       "surface": "apple",
@@ -28739,7 +28739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 700,
+      "line": 716,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Gateway auto-starts in local mode via launchd (\\(gatewayLaunchdLabel)).",
       "surface": "apple",
@@ -28747,7 +28747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 755,
+      "line": 771,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Retry now",
       "surface": "apple",
@@ -28755,7 +28755,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 760,
+      "line": 776,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Open logs",
       "surface": "apple",
