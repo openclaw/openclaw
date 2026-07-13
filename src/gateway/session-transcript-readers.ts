@@ -612,34 +612,6 @@ export async function readSessionMessagesWithSourceAsync(
   );
 }
 
-/** Reads recent display messages asynchronously through the reader seam. */
-export async function readRecentSessionMessagesAsync(
-  scope: SessionTranscriptReadScope,
-  opts?: ReadRecentSessionMessagesOptions,
-): Promise<unknown[]> {
-  const target = resolveTranscriptReadTarget(scope);
-  if (isSqliteReadTarget(target)) {
-    const records = await readRecentSqliteMessageRecords(target, opts);
-    if (records.length === 0 && opts?.allowResetArchiveFallback === true) {
-      return await readRecentSessionMessagesAsyncFile(
-        target.sessionId,
-        target.storePath,
-        undefined,
-        { ...opts, resetArchiveOnly: true },
-        target.agentId,
-      );
-    }
-    return records.map(sqliteRecordMessageWithSeq);
-  }
-  return await readRecentSessionMessagesAsyncFile(
-    target.sessionId,
-    target.storePath,
-    target.sessionFile,
-    opts,
-    target.agentId,
-  );
-}
-
 /** Finds one display message by transcript id through the reader seam. */
 export async function readSessionMessageByIdAsync(
   scope: SessionTranscriptReadScope,

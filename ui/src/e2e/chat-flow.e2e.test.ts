@@ -427,6 +427,30 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("sends idle stop aliases as ordinary chat messages", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.waitFor({ state: "visible", timeout: 10_000 });
+      await composer.fill("wait");
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      expect(requireRecord(sendRequest.params).message).toBe("wait");
+      expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("persists the chat send shortcut and keeps multiline and IME input safe", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
@@ -1771,6 +1795,46 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
       await page.getByText(response).waitFor({ timeout: 10_000 });
       await page.locator(".chat-reading-indicator").waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("keeps a steerable queued message above the composer while a run is active", async () => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const activePrompt = "keep this run active";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(activePrompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      await gateway.waitForRequest("chat.send");
+      await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
+
+      const queuedPrompt = "show this only above the composer";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
+      await page.getByRole("button", { name: "Queue message" }).click();
+
+      const queue = page.locator(".chat-queue");
+      await queue.getByText("Waiting for current run").waitFor({ timeout: 10_000 });
+      await queue.getByText(queuedPrompt).waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-thread").getByText(queuedPrompt).count()).toBe(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      if (artifactDir) {
+        await page.screenshot({
+          path: `${artifactDir}/steer-queue-composer-only.png`,
+          fullPage: true,
+        });
+      }
     } finally {
       await closeBrowserContext(context);
     }

@@ -1017,6 +1017,13 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       }
     }
     const selectedDeliveryMode = form.deliveryMode;
+    const normalizedDeliveryAccountId = form.deliveryAccountId.trim();
+    // Update patches need null to clear stored routing; create payloads must
+    // omit blanks because the Gateway accountId schema rejects empty strings.
+    const deliveryAccountId =
+      selectedDeliveryMode === "announce"
+        ? normalizedDeliveryAccountId || (editingJob?.delivery?.accountId ? null : undefined)
+        : undefined;
     const delivery =
       selectedDeliveryMode && selectedDeliveryMode !== "none"
         ? {
@@ -1028,8 +1035,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                   })
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
-            accountId:
-              selectedDeliveryMode === "announce" ? form.deliveryAccountId.trim() : undefined,
+            accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
           }
         : selectedDeliveryMode === "none"

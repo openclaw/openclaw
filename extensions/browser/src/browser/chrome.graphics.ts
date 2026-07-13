@@ -17,7 +17,7 @@ import type {
 
 type UnknownRecord = Record<string, unknown>;
 
-export type ChromeGraphicsProbeOptions = {
+type ChromeGraphicsProbeOptions = {
   httpTimeoutMs?: number;
   handshakeTimeoutMs?: number;
   commandTimeoutMs?: number;

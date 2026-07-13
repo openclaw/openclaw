@@ -18,7 +18,8 @@ import {
 } from "./zod-schema.channels.js";
 import {
   BlockStreamingChunkSchema,
-  BlockStreamingCoalesceSchema,
+  ChannelDeliveryStreamingConfigSchema,
+  ChannelStreamingBlockSchema,
   ContextVisibilityModeSchema,
   DmConfigSchema,
   DmPolicySchema,
@@ -32,6 +33,7 @@ import {
   SecretInputSchema,
   ReplyToModeSchema,
   RetryConfigSchema,
+  TextChunkModeSchema,
   TtsConfigSchema,
   requireAllowlistAllowFrom,
   requireOpenAllowFrom,
@@ -76,14 +78,7 @@ const TelegramCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
-const TextChunkModeSchema = z.enum(["length", "newline"]);
 const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
-const ChannelStreamingBlockSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    coalesce: BlockStreamingCoalesceSchema.optional(),
-  })
-  .strict();
 const ChannelStreamingPreviewSchema = z
   .object({
     chunk: BlockStreamingChunkSchema.optional(),
@@ -108,12 +103,6 @@ const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema;
 const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
   nativeTaskCards: z.boolean().optional(),
 }).strict();
-const ChannelDeliveryStreamingConfigSchema = z
-  .object({
-    chunkMode: TextChunkModeSchema.optional(),
-    block: ChannelStreamingBlockSchema.optional(),
-  })
-  .strict();
 
 const ChannelPreviewStreamingConfigSchema = z
   .object({
@@ -1215,9 +1204,7 @@ export const SignalAccountSchemaBase = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
     replyToModeByChatType: DirectGroupReplyToModeByChatTypeSchema.optional(),
@@ -1339,9 +1326,7 @@ export const IrcAccountSchemaBase = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    blockStreaming: z.boolean().optional(),
-    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    streaming: ChannelDeliveryStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     heartbeat: ChannelHeartbeatVisibilitySchema,
     healthMonitor: ChannelHealthMonitorSchema,

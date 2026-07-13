@@ -182,11 +182,16 @@ async function tryRunGatewayRunFastPath(
   });
   const beforeRun = async (opts: { force?: boolean; reset?: boolean }) => {
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
+    let skipPristineStartupStateMigrations = false;
     const shouldBootstrap = await startupTrace.measure("gateway-run-pre-bootstrap", async () => {
-      const { prepareGatewayRunBootstrap, recheckGatewayRunBootstrap } =
-        await import("./gateway-cli/pre-bootstrap.js");
+      const {
+        prepareGatewayRunBootstrap,
+        recheckGatewayRunBootstrap,
+        wasPreparedGatewayRunStatePristine,
+      } = await import("./gateway-cli/pre-bootstrap.js");
       const prepared = await prepareGatewayRunBootstrap({ opts, runtime: defaultRuntime });
       if (prepared) {
+        skipPristineStartupStateMigrations = wasPreparedGatewayRunStatePristine();
         beforeStateMigrations = (snapshot) =>
           recheckGatewayRunBootstrap({
             opts,
@@ -206,6 +211,7 @@ async function tryRunGatewayRunFastPath(
         startupPolicy,
         loadPlugins: false,
         ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
+        ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       });
       const { reloadTrustedGatewayRunEnvironment } = await import("./gateway-cli/pre-bootstrap.js");
       await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });
