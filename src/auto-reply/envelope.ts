@@ -114,7 +114,7 @@ export function formatEnvelopeTimestamp(
   ts: number | Date | undefined,
   options?: EnvelopeFormatOptions,
 ): string | undefined {
-  if (!ts) {
+  if (ts === undefined || ts === null) {
     return undefined;
   }
   const resolved = normalizeEnvelopeOptions(options);

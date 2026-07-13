@@ -217,3 +217,17 @@ describe("formatInboundEnvelope", () => {
     });
   });
 });
+
+describe("formatEnvelopeTimestamp", () => {
+  it("formats timestamp 0 (Unix epoch) instead of rejecting it as falsy", () => {
+    withEnv({ TZ: "UTC" }, () => {
+      const result = formatEnvelopeTimestamp(0, { timezone: "utc" });
+      expect(result).toBeDefined();
+      expect(result).toContain("1970");
+    });
+  });
+
+  it("returns undefined for undefined timestamp", () => {
+    expect(formatEnvelopeTimestamp(undefined)).toBeUndefined();
+  });
+});
