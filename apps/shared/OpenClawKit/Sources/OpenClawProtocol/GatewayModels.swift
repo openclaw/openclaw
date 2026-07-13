@@ -8548,8 +8548,8 @@ public struct ModelChoice: Codable, Sendable {
     public let available: Bool?
     public let contextwindow: Int?
     public let reasoning: Bool?
-    public let input: [AnyCodable]?
     public let apikeysupported: Bool?
+    public let input: [AnyCodable]?
 
     public init(
         id: String,
@@ -8559,8 +8559,8 @@ public struct ModelChoice: Codable, Sendable {
         available: Bool? = nil,
         contextwindow: Int? = nil,
         reasoning: Bool? = nil,
-        input: [AnyCodable]? = nil,
-        apikeysupported: Bool? = nil)
+        apikeysupported: Bool? = nil,
+        input: [AnyCodable]? = nil)
     {
         self.id = id
         self.name = name
@@ -8569,8 +8569,8 @@ public struct ModelChoice: Codable, Sendable {
         self.available = available
         self.contextwindow = contextwindow
         self.reasoning = reasoning
-        self.input = input
         self.apikeysupported = apikeysupported
+        self.input = input
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -8581,8 +8581,8 @@ public struct ModelChoice: Codable, Sendable {
         case available
         case contextwindow = "contextWindow"
         case reasoning
-        case input
         case apikeysupported = "apiKeySupported"
+        case input
     }
 }
 
