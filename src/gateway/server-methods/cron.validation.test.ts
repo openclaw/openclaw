@@ -537,7 +537,7 @@ describe("cron method validation", () => {
         payload: {
           kind: "command",
           argv: ["deploy"],
-          env: { DEPLOY_TOKEN: "synthetic-secret" },
+          env: { MARKER_ENV: "fixture-marker" },
         },
       }),
     );
@@ -611,7 +611,7 @@ describe("cron method validation", () => {
       payload: {
         kind: "command",
         argv: ["deploy"],
-        env: { DEPLOY_TOKEN: "synthetic-secret" },
+        env: { MARKER_ENV: "fixture-marker" },
       },
     });
 
@@ -623,7 +623,7 @@ describe("cron method validation", () => {
       code: "INVALID_REQUEST",
       messageIncludes: "cron job not found: cron-42",
     });
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("synthetic-secret");
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
   });
 
   it("hides same-agent on-exit cron jobs from caller-scoped cron.get", async () => {
@@ -680,7 +680,7 @@ describe("cron method validation", () => {
         payload: {
           kind: "command",
           argv: ["deploy"],
-          env: { DEPLOY_TOKEN: "synthetic-secret" },
+          env: { MARKER_ENV: "fixture-marker" },
         },
       }),
       createCronJob({ id: "agent-job", agentId: "ops", name: "agent job" }),
@@ -700,7 +700,7 @@ describe("cron method validation", () => {
       }),
       undefined,
     );
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("synthetic-secret");
+    expect(JSON.stringify(respond.mock.calls)).not.toContain("fixture-marker");
   });
 
   it("rejects caller-scoped cron.list for a foreign explicit agentId", async () => {
@@ -2062,7 +2062,7 @@ describe("cron method validation", () => {
         payload: {
           kind: "command",
           argv: ["deploy"],
-          env: { DEPLOY_TOKEN: "synthetic-secret" },
+          env: { MARKER_ENV: "fixture-marker" },
         },
       }),
     );
@@ -2134,7 +2134,7 @@ describe("cron method validation", () => {
         payload: {
           kind: "command",
           argv: ["deploy"],
-          env: { DEPLOY_TOKEN: "synthetic-secret" },
+          env: { MARKER_ENV: "fixture-marker" },
         },
       }),
     );
@@ -2191,7 +2191,7 @@ describe("cron method validation", () => {
         payload: {
           kind: "command",
           argv: ["deploy"],
-          env: { DEPLOY_TOKEN: "synthetic-secret" },
+          env: { MARKER_ENV: "fixture-marker" },
         },
       }),
     );
