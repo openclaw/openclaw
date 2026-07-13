@@ -370,12 +370,12 @@ function renderFieldRow(params: {
     : html`<div class=${controlClass}>${params.control}</div>`;
   return html`
     <div class=${params.stacked ? "settings-row settings-row--stacked" : "settings-row"}>
-      <div class="settings-row__text">
-        <label class="settings-row__title" for=${params.controlId}>
+      <label class="settings-row__text" for=${params.controlId}>
+        <span class="settings-row__title">
           ${params.required ? renderRequiredTitle(params.label) : params.label}
-        </label>
+        </span>
         ${params.help ? html`<span class="settings-row__desc">${params.help}</span>` : nothing}
-      </div>
+      </label>
       <div class="settings-row__control">${control}</div>
     </div>
   `;

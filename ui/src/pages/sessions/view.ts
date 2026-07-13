@@ -1113,6 +1113,8 @@ export function renderSessions(props: SessionsProps) {
   const children = [
     props.error ? html`<div class="sessions-error">${props.error}</div>` : nothing,
     props.result ? renderSettingsSection({}, renderSessionsOverview(rawRows, liveCount)) : nothing,
+    // When the gateway lacks sessions.search the section still renders: the
+    // form disables itself and shows the unavailable notice (shipped behavior).
     renderSettingsSection(
       {
         title: t("sessionsView.transcriptSearchTitle"),

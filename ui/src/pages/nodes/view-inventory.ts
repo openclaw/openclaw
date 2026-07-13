@@ -264,11 +264,18 @@ function entryMetaLine(entry: NodesInventoryEntry): string {
   return parts.join(" · ");
 }
 
+// Node-controlled lists are unbounded input; cap the rendered items so a
+// hostile or chatty node cannot bloat the inventory render.
+const CAPABILITY_LINE_LIMIT = 16;
+
 function renderCapabilityLine(label: string, values: string[]) {
   if (values.length === 0) {
     return nothing;
   }
-  return html`<div class="muted">${label}: ${formatList(values)}</div>`;
+  const visible = values.slice(0, CAPABILITY_LINE_LIMIT);
+  const overflow = values.length - visible.length;
+  const suffix = overflow > 0 ? ` +${overflow}` : "";
+  return html`<div class="muted">${label}: ${formatList(visible)}${suffix}</div>`;
 }
 
 function renderEntryDetails(entry: NodesInventoryEntry, props: NodesProps) {

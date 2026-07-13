@@ -2,8 +2,16 @@
    design language; only the stream (entries, previews) keeps bespoke styles
    as the in-group escape hatch. */
 
-/* Fill-height chain: the group and the stream absorb the remaining viewport
-   height inside .settings-workspace--fill-height (settings.css). */
+/* Fill-height chain: the section, group, and stream absorb the remaining
+   viewport height inside .settings-workspace--fill-height (settings.css). */
+.settings-workspace--fill-height .activity-page {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .settings-workspace--fill-height .activity-group {
   flex: 1 1 auto;
   min-height: 0;

@@ -567,10 +567,30 @@ function renderNumberInput(params: {
   const { label, help, tags } = resolveFieldMeta(path, schema, hints);
   const displayValue = value ?? schema.default ?? "";
 
+  // Touch devices and some browsers hide native number spinners; keep explicit
+  // one-step adjust buttons so single-step edits stay possible without typing.
+  const step = (value: number) => {
+    if (disabled) {
+      return;
+    }
+    const current = Number(displayValue);
+    const base = Number.isFinite(current) ? current : 0;
+    onPatch(path, base + value);
+  };
   const control = html`
+    <button
+      type="button"
+      class="btn btn--sm btn--icon"
+      aria-label=${`${label}: -1`}
+      ?disabled=${disabled}
+      @click=${() => step(-1)}
+    >
+      −
+    </button>
     <input
       type="number"
       class="settings-input"
+      aria-label=${label}
       .value=${formatUnknownText(displayValue)}
       ?disabled=${disabled}
       @input=${(e: Event) => {
@@ -579,6 +599,15 @@ function renderNumberInput(params: {
         onPatch(path, parsed);
       }}
     />
+    <button
+      type="button"
+      class="btn btn--sm btn--icon"
+      aria-label=${`${label}: +1`}
+      ?disabled=${disabled}
+      @click=${() => step(1)}
+    >
+      +
+    </button>
   `;
 
   return renderFieldRow({ label, help, tags, showLabel, control });

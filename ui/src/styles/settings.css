@@ -166,10 +166,11 @@
 
 .settings-row__control {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-  flex: 0 0 auto;
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 60%;
 }
@@ -230,9 +231,10 @@
   background: var(--bg-hover);
 }
 
+/* Fully-inset ring: the group clips overflow, so an outer ring would vanish. */
 .settings-row--nav:focus-visible {
   outline: none;
-  box-shadow: inset var(--focus-ring);
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--ring) 80%, transparent);
 }
 
 .settings-row__chevron {
