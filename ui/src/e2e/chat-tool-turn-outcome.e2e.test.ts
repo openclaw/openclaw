@@ -233,7 +233,9 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
     await row.click();
     await page.getByText("action:", { exact: true }).waitFor();
     expect(await page.getByText("send", { exact: true }).count()).toBe(1);
-    expect(await page.getByText("Hidden second line.", { exact: false }).count()).toBeGreaterThan(0);
+    expect(await page.getByText("Hidden second line.", { exact: false }).count()).toBeGreaterThan(
+      0,
+    );
     await context.close();
   });
 
