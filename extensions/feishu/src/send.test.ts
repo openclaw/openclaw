@@ -82,6 +82,14 @@ function buildFeishuPostMessagePayload(
   return payload;
 }
 
+function parseCreatedPostContent(create: { mock: { calls: unknown[][] } }, callIndex: number) {
+  const request = create.mock.calls[callIndex]?.[0] as { data?: { content?: unknown } } | undefined;
+  if (typeof request?.data?.content !== "string") {
+    throw new Error(`expected Feishu create call ${callIndex} to include post content`);
+  }
+  return JSON.parse(request.data.content);
+}
+
 describe("buildFeishuPostMessagePayload", () => {
   it("prepends structured mention targets as native post at elements", () => {
     const payload = buildFeishuPostMessagePayload({
@@ -497,7 +505,7 @@ describe("getMessageFeishu", () => {
 
     expect(mockResolveMarkdownTableMode).not.toHaveBeenCalled();
     expect(mockConvertMarkdownTables).not.toHaveBeenCalled();
-    expect(JSON.parse(create.mock.calls[0][0].data.content)).toEqual({
+    expect(parseCreatedPostContent(create, 0)).toEqual({
       zh_cn: {
         content: [[{ tag: "md", text: "line\nnext" }]],
       },
@@ -611,7 +619,7 @@ describe("getMessageFeishu", () => {
     });
 
     expect(create).toHaveBeenCalledTimes(2);
-    expect(JSON.parse(create.mock.calls[0][0].data.content)).toEqual({
+    expect(parseCreatedPostContent(create, 0)).toEqual({
       zh_cn: {
         content: [
           [
@@ -621,7 +629,7 @@ describe("getMessageFeishu", () => {
         ],
       },
     });
-    expect(JSON.parse(create.mock.calls[1][0].data.content)).toEqual({
+    expect(parseCreatedPostContent(create, 1)).toEqual({
       zh_cn: {
         content: [[{ tag: "md", text: "efgh" }]],
       },
@@ -660,7 +668,7 @@ describe("getMessageFeishu", () => {
     });
 
     expect(create).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(create.mock.calls[0][0].data.content)).toEqual({
+    expect(parseCreatedPostContent(create, 0)).toEqual({
       zh_cn: {
         content: [[{ tag: "md", text: quotedFence }]],
       },
