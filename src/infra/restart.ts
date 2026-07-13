@@ -616,6 +616,16 @@ async function rejectPreparedRestartHook(hooks: RestartEmitHooks | undefined): P
   } catch {}
 }
 
+async function rejectPreparedRestartHooks(hooksList: readonly RestartEmitHooks[]): Promise<void> {
+  for (const hooks of hooksList) {
+    await rejectPreparedRestartHook(hooks);
+  }
+}
+
+// Single-flight: only emitPreparedGatewayRestart calls this, after synchronously
+// taking the restart-signal admission fence. A concurrent emission attempt blocks
+// in tryBeginGatewayIndependentRootWorkAdmission (restartSignalPending), so two
+// bodies never interleave and a detached parked hook cannot be bypassed mid-await.
 async function emitPreparedGatewayRestartUnderAdmission(
   hooks?: RestartEmitHooks,
   reasonOverride?: string,
@@ -627,46 +637,91 @@ async function emitPreparedGatewayRestartUnderAdmission(
   if (!isCurrent()) {
     return null;
   }
-  let nextHooks = hooks ?? pendingRestartEmitHooks;
-  // Keep pendingRestartSessionKey alive across the await beforeEmit() window:
-  // a different-session caller that coalesces while preparation runs would
-  // otherwise slip past the updatePendingRestartEmitHooks session guard and
-  // chain its own hooks (#86742, the CWE-200 in-flight preparation race).
-  if (!hooks) {
-    pendingRestartEmitHooks = undefined;
-  }
-  let preparedHooks: RestartEmitHooks | undefined;
-  while (nextHooks) {
-    if (preparedHooks) {
-      await rejectPreparedRestartHook(preparedHooks);
-      preparedHooks = undefined;
-      if (!isCurrent()) {
-        return null;
-      }
-    }
+
+  // Caller preflight runs before the parked drain: the drain loop's tail
+  // re-read then also captures hooks accepted (emitHooksQueued: true) while
+  // this await was in flight, leaving no async window before emission where
+  // parked continuations could be silently dropped.
+  let callerPrepared = false;
+  if (hooks) {
     try {
-      await nextHooks.beforeEmit?.();
-      preparedHooks = nextHooks;
+      await hooks.beforeEmit?.();
+      callerPrepared = true;
     } catch (err) {
       restartLog.warn(
         `restart preparation failed; restart will continue without it: ${String(err)}`,
       );
     }
     if (!isCurrent()) {
-      await rejectPreparedRestartHook(preparedHooks);
+      if (callerPrepared) {
+        await rejectPreparedRestartHook(hooks);
+      }
       return null;
     }
-    if (hooks) {
-      break;
+  }
+
+  // Drain parked emit hooks even when the caller supplies its own. Reload
+  // deferral can win the emission race; without this drain the gateway-tool
+  // sentinel/continuation is never written and session ownership goes stale.
+  // Keep pendingRestartSessionKey until the slot is fully consumed so
+  // different-session coalesces during preparation still hit the #86742 guard.
+  // Timing note: with an empty slot this stays await-free; mid-flight intent
+  // and deferral consumers observe hookless emission at original latency.
+  let nextParked = pendingRestartEmitHooks;
+  pendingRestartEmitHooks = undefined;
+  let preparedParked: RestartEmitHooks | undefined;
+  const rejectCallerOnBail = async () => {
+    if (hooks && callerPrepared) {
+      await rejectPreparedRestartHook(hooks);
     }
-    nextHooks = pendingRestartEmitHooks;
+  };
+  while (nextParked) {
+    if (preparedParked) {
+      await rejectPreparedRestartHook(preparedParked);
+      preparedParked = undefined;
+      if (!isCurrent()) {
+        await rejectCallerOnBail();
+        return null;
+      }
+    }
+    try {
+      await nextParked.beforeEmit?.();
+      preparedParked = nextParked;
+    } catch (err) {
+      restartLog.warn(
+        `restart preparation failed; restart will continue without it: ${String(err)}`,
+      );
+    }
+    if (!isCurrent()) {
+      await rejectPreparedRestartHook(preparedParked);
+      await rejectCallerOnBail();
+      return null;
+    }
+    nextParked = pendingRestartEmitHooks;
     pendingRestartEmitHooks = undefined;
   }
-  if (!hooks) {
-    pendingRestartSessionKey = undefined;
+
+  // Slot settled and no awaits remain before emission — release ownership for
+  // every emission attempt, not only hookless ones, so a later session can
+  // claim continuation hooks for the next restart cycle.
+  pendingRestartSessionKey = undefined;
+
+  // Track every successfully prepared hook set (parked + caller) so non-emitted
+  // outcomes can roll back both the gateway-tool sentinel and reload preflight.
+  const preparedHooksList: RestartEmitHooks[] = [];
+  if (preparedParked) {
+    preparedHooksList.push(preparedParked);
   }
+  if (hooks && callerPrepared) {
+    preparedHooksList.push(hooks);
+  }
+  // With caller hooks, emission stays the caller's (or falls back to the core
+  // signal path if its preparation failed); parked hooks never own emission
+  // when a caller is present.
+  const emitOwner = hooks ? (callerPrepared ? hooks : undefined) : preparedParked;
+
   if (!isCurrent()) {
-    await rejectPreparedRestartHook(preparedHooks);
+    await rejectPreparedRestartHooks(preparedHooksList);
     return null;
   }
 
@@ -678,14 +733,20 @@ async function emitPreparedGatewayRestartUnderAdmission(
   const resolvedReason = preferredReason ?? reasonOverride;
   const resolvedIntent =
     preferredReason && intent ? { ...intent, reason: preferredReason } : intent;
-  const emitResult = preparedHooks?.emitRestart
-    ? preparedHooks.emitRestart(resolvedReason, resolvedIntent)
+  const emitResult = emitOwner?.emitRestart
+    ? emitOwner.emitRestart(resolvedReason, resolvedIntent)
     : requestGatewayRestartWithSignalAdmission(resolvedReason, resolvedIntent);
   if (emitResult.status !== "emitted") {
-    await rejectPreparedRestartHook(preparedHooks);
+    await rejectPreparedRestartHooks(preparedHooksList);
   }
   if (emitResult.status === "failed") {
-    await preparedHooks?.afterEmitFailed?.();
+    // Isolate each failure callback: one throwing hook set must not skip the
+    // other's cleanup or reject this fire-and-forget emission promise.
+    for (const prepared of preparedHooksList) {
+      try {
+        await prepared.afterEmitFailed?.();
+      } catch {}
+    }
   }
   return emitResult;
 }

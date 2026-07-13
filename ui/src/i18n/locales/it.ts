@@ -232,6 +232,16 @@ export const it: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Scansiona questo codice QR nell'app mobile per connettere un nuovo telefono.",
       generating: "Creazione di un codice di configurazione sicuro…",
+      accessTitle: "Accesso da dispositivo mobile",
+      fullAccess: "Accesso completo (consigliato)",
+      fullAccessHint:
+        "Nodo e controlli completi del Gateway, incluse impostazioni e aggiornamenti.",
+      limitedAccess: "Accesso limitato",
+      limitedAccessHint: "Nodo, chat e approvazioni senza controlli amministrativi.",
+      generateCode: "Crea codice di configurazione",
+      transportLimitedTitle: "Limitato per la sicurezza della rete",
+      transportLimitedHint:
+        "Questo URL del Gateway usa ws:// in chiaro. Usa wss:// o Tailscale Serve, quindi crea un nuovo codice per ottenere l'accesso completo.",
       failed: "Impossibile creare un codice di configurazione.",
       qrAlt: "Codice QR di associazione di OpenClaw mobile",
       qrUnavailable: "QR non disponibile. Copia invece il codice di configurazione.",
@@ -266,7 +276,8 @@ export const it: TranslationMap = {
     },
     inventory: {
       title: "Dispositivi",
-      subtitle: "Una riga per ogni client accoppiato: stato, ruoli, token.",
+      summaryConnected: "{connected} di {total} connessi",
+      summaryPending: "{count} in attesa di approvazione",
       cleanupStale: "Rimuovi {count} obsoleti",
       pendingApproval: "In attesa di approvazione",
       paired: "Accoppiato",
@@ -403,6 +414,13 @@ export const it: TranslationMap = {
     getHelp: "Ottieni assistenza",
     discord: "Community Discord",
     viewChangelog: "Visualizza il registro delle modifiche",
+    agentSettings: "Impostazioni dell'agente",
+    filterAgents: "Trova agente…",
+    noAgentMatches: "Nessun agente corrispondente",
+  },
+  agentScope: {
+    label: "Ambito dell'agente",
+    allAgents: "Tutti gli agenti",
   },
   newSession: {
     title: "Nuova sessione",
@@ -614,6 +632,8 @@ export const it: TranslationMap = {
     setDefault: "Imposta come predefinito",
     alreadyDefaultTitle: "Già l'agente predefinito",
     setDefaultTitle: "Imposta come agente predefinito",
+    pinToSwitcher: "Fissa nel selettore",
+    unpinFromSwitcher: "Rimuovi dal selettore",
     selectTitle: "Seleziona un agente",
     selectSubtitle: "Scegli un agente per esaminarne lo spazio di lavoro e gli strumenti.",
     tabs: {
@@ -638,6 +658,19 @@ export const it: TranslationMap = {
       default: "Predefinito",
       configurationSubtitle: "Configurazione di spazio di lavoro, identità e modello.",
       schedulingSubtitle: "Spazio di lavoro e destinazioni di pianificazione.",
+    },
+    identity: {
+      title: "Identità",
+      subtitle: "Nome, emoji e avatar mostrati nelle chat e nella barra laterale.",
+      name: "Nome visualizzato",
+      namePlaceholder: "Nome dell'agente",
+      emoji: "Emoji",
+      chooseImage: "Scegli immagine…",
+      replaceImage: "Sostituisci immagine…",
+      imageUnusable:
+        "Questa immagine non può essere utilizzata. Scegli un file immagine di massimo 2 MB.",
+      fileHint:
+        "Gli agenti possono impostare questi dati autonomamente modificando IDENTITY.md nel proprio workspace.",
     },
     overview: {
       title: "Panoramica",

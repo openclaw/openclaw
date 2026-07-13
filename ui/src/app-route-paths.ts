@@ -5,7 +5,7 @@ const APP_ROUTE_DEFINITIONS = {
   chat: { path: "/chat" },
   "new-session": { path: "/new" },
   activity: { path: "/activity" },
-  agents: { path: "/agents" },
+  agents: { path: "/settings/agents", aliases: ["/agents"] },
   channels: { path: "/settings/channels", aliases: ["/channels"] },
   connection: { path: "/settings/connection" },
   config: { path: "/settings/general", aliases: ["/config"] },
@@ -29,7 +29,7 @@ const APP_ROUTE_DEFINITIONS = {
   plugins: { path: "/settings/plugins" },
   cron: { path: "/cron" },
   tasks: { path: "/tasks" },
-  nodes: { path: "/nodes" },
+  nodes: { path: "/settings/devices", aliases: ["/nodes"] },
   plugin: { path: "/plugin" },
 } as const;
 
