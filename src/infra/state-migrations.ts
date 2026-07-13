@@ -22,8 +22,7 @@ import {
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/paths.js";
-import type { SessionEntry } from "../config/sessions.js";
-import { saveSessionStore } from "../config/sessions.js";
+import { type SessionEntry, saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";

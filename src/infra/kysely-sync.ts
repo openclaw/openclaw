@@ -1,7 +1,12 @@
 // Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
-import type { CompiledQuery, Kysely, QueryResult } from "kysely";
-import { InsertQueryNode, Kysely as KyselyInstance } from "kysely";
+import {
+  type CompiledQuery,
+  InsertQueryNode,
+  type Kysely,
+  Kysely as KyselyInstance,
+  type QueryResult,
+} from "kysely";
 import { NodeSqliteKyselyDialect } from "./kysely-node-sqlite.js";
 
 // Sync query helpers execute compiled Kysely SQL against node:sqlite without

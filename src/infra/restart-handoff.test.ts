@@ -16,10 +16,10 @@ import {
 import {
   formatGatewayRestartHandoffDiagnostic,
   GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
+  type GatewayRestartHandoff,
   readGatewayRestartHandoffSync,
   writeGatewayRestartHandoffSync,
 } from "./restart-handoff.js";
-import type { GatewayRestartHandoff } from "./restart-handoff.js";
 
 const tempDirs: string[] = [];
 type GatewayRestartHandoffDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_handoff">;

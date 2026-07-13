@@ -6,8 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
-import { normalizeUsage } from "../agents/usage.js";
+import { type NormalizedUsage, normalizeUsage, type UsageLike } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import {
   materializeSessionArchiveForRead,

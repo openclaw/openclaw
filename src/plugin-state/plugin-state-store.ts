@@ -13,15 +13,15 @@ import {
   pluginStateRegisterIfAbsent,
   pluginStateUpdate,
 } from "./plugin-state-store.sqlite.js";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateEntry,
-  PluginStateKeyedStore,
-  PluginStateSyncKeyedStore,
-  PluginStateOverflowPolicy,
-  PluginStateStoreOperation,
+import {
+  type OpenKeyedStoreOptions,
+  type PluginStateEntry,
+  type PluginStateKeyedStore,
+  type PluginStateSyncKeyedStore,
+  type PluginStateOverflowPolicy,
+  type PluginStateStoreOperation,
+  PluginStateStoreError,
 } from "./plugin-state-store.types.js";
-import { PluginStateStoreError } from "./plugin-state-store.types.js";
 
 // Public plugin-state facade over the sqlite-backed store. It validates plugin
 // ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
