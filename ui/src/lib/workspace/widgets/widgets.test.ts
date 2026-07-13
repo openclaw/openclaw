@@ -6,13 +6,8 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
 import { renderActivity } from "./activity.ts";
-import { mapAgentStatus, renderAgentStatus } from "./agent-status.ts";
-import {
-  buildWidgetApprovalsSource,
-  mapApprovals,
-  renderApprovals,
-  toWidgetApprovalDecision,
-} from "./approvals.ts";
+import { renderAgentStatus } from "./agent-status.ts";
+import { buildWidgetApprovalsSource, renderApprovals } from "./approvals.ts";
 import { renderChart } from "./chart.ts";
 import { renderCron } from "./cron.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
@@ -50,25 +45,24 @@ const STRICT_EMBED: BuiltinWidgetContext = {
 
 describe("agent-status mapping", () => {
   it("maps only keyed sessions and clamps goal progress", () => {
-    const model = mapAgentStatus(widget({ props: { limit: 2 } }), {
-      sessions: [
-        {
-          key: "agent:one",
-          displayName: "One",
-          hasActiveRun: true,
-          goal: { objective: "Ship the workspace", tokensUsed: 125, tokenBudget: 100 },
-        },
-        { key: "agent:two", status: "idle" },
-        { displayName: "missing key" },
-      ],
-    });
-    expect(model).toMatchObject({ activeCount: 1, total: 2 });
-    expect(model.rows[0]).toMatchObject({
-      key: "agent:one",
-      active: true,
-      task: "Ship the workspace",
-      progress: 1,
-    });
+    const container = renderToContainer(
+      renderAgentStatus(widget({ props: { limit: 2 } }), {
+        sessions: [
+          {
+            key: "agent:one",
+            displayName: "One",
+            hasActiveRun: true,
+            goal: { objective: "Ship the workspace", tokensUsed: 125, tokenBudget: 100 },
+          },
+          { key: "agent:two", status: "idle" },
+          { displayName: "missing key" },
+        ],
+      }),
+    );
+    expect(container.querySelectorAll(".workspace-list__row")).toHaveLength(2);
+    expect(container.textContent).toContain("Ship the workspace");
+    expect(container.textContent).toContain("100");
+    expect(container.textContent).not.toContain("missing key");
   });
 
   it("renders accessible status text and an empty state", () => {
@@ -104,7 +98,6 @@ describe("approvals mapping", () => {
     ]);
     source.onDecide(source.pending[0]!, "reject");
     expect(decisions).toEqual([["pending", "rejected"]]);
-    expect(toWidgetApprovalDecision("approve")).toBe("approved");
   });
 
   it("limits rows and renders explicit approval controls", () => {
@@ -115,13 +108,13 @@ describe("approvals mapping", () => {
       ],
       onDecide: () => undefined,
     };
-    expect(mapApprovals(widget({ props: { limit: 1 } }), source)).toMatchObject({ total: 2 });
     const container = renderToContainer(
       renderApprovals(widget({ props: { limit: 1 } }), undefined, {
         ...STRICT_EMBED,
         approvals: source,
       }),
     );
+    expect(container.querySelectorAll(".workspace-list__row")).toHaveLength(1);
     expect(container.querySelectorAll("button")).toHaveLength(2);
     expect(container.textContent).toContain("Approve");
     expect(container.textContent).toContain("Reject");

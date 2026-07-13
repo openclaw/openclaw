@@ -16,9 +16,9 @@ import {
 
 const DEFAULT_LIMIT = 8;
 
-export type ApprovalsModel = { items: PendingApprovalItem[]; total: number };
+type ApprovalsModel = { items: PendingApprovalItem[]; total: number };
 
-export function toWidgetApprovalDecision(decision: ApprovalDecision): "approved" | "rejected" {
+function toWidgetApprovalDecision(decision: ApprovalDecision): "approved" | "rejected" {
   return decision === "approve" ? "approved" : "rejected";
 }
 
@@ -40,7 +40,7 @@ export function buildWidgetApprovalsSource(
   };
 }
 
-export function mapApprovals(
+function mapApprovals(
   widget: WorkspaceWidget,
   source: ApprovalsWidgetSource | undefined,
 ): ApprovalsModel {

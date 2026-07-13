@@ -19,7 +19,7 @@ type AgentStatusRowModel = {
   progress: number | null;
 };
 
-export type AgentStatusModel = {
+type AgentStatusModel = {
   rows: AgentStatusRowModel[];
   activeCount: number;
   total: number;
@@ -49,7 +49,7 @@ function rowProgress(row: Record<string, unknown>): number | null {
   return Math.min(1, Math.max(0, used / budget));
 }
 
-export function mapAgentStatus(widget: WorkspaceWidget, value: unknown): AgentStatusModel {
+function mapAgentStatus(widget: WorkspaceWidget, value: unknown): AgentStatusModel {
   const raw = Array.isArray(value)
     ? value
     : isRecord(value) && Array.isArray(value.sessions)
