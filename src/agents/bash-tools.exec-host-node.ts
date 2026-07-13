@@ -363,6 +363,10 @@ export async function executeNodeHostCommand(
       const decision = await reviewer({
         command: prepared.rawCommand,
         argv: autoReviewArgv,
+        // system.run.prepare pins argv[0] to the executable identity that the
+        // node will execute; both it and the target node must scope memo reuse.
+        executableIdentity: prepared.argv[0] ?? null,
+        nodeId: target.nodeId,
         cwd: prepared.cwd,
         envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
         host: "node",

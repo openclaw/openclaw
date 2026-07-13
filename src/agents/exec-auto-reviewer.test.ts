@@ -197,7 +197,7 @@ describe("createModelExecAutoReviewer", () => {
       },
     });
 
-    await expect(reviewer(input)).resolves.toEqual({
+    await expect(reviewer({ ...input, host: "node", nodeId: "node-1" })).resolves.toEqual({
       decision: "ask",
       risk: "high",
       rationale: "network side effect",
@@ -224,6 +224,7 @@ describe("createModelExecAutoReviewer", () => {
       }),
     );
     expect(capturedPrompt).toContain('"resolvedPath": "/usr/bin/git"');
+    expect(capturedPrompt).toContain('"nodeId"');
     expect(capturedPrompt).not.toContain("sessionKey");
   });
 
@@ -311,9 +312,11 @@ describe("createModelExecAutoReviewer", () => {
     await reviewer(input);
     await reviewer({ ...input, argv: ["git", "status", "--short"] });
     await reviewer({ ...input, resolvedPath: "/opt/homebrew/bin/git" });
+    await reviewer({ ...input, host: "node", executableIdentity: "/usr/bin/git" });
+    await reviewer({ ...input, host: "node", nodeId: "node-2" });
 
-    expect(prepare).toHaveBeenCalledTimes(3);
-    expect(complete).toHaveBeenCalledTimes(3);
+    expect(prepare).toHaveBeenCalledTimes(5);
+    expect(complete).toHaveBeenCalledTimes(5);
   });
 
   it("does not memoize human-review fallback decisions", async () => {
