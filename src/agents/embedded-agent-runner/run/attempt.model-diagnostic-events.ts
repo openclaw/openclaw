@@ -168,19 +168,22 @@ function utf8JsonPlainDataObjectByteLengthWithoutOwnKey(
   object: Record<string, unknown>,
   excludedKey: string,
 ): number | undefined {
-  // Keep the fast path limited to plain data values; anything with JSON hooks,
-  // accessors, or nested object semantics falls back to JSON.stringify below.
-  if ("toJSON" in object) {
-    return undefined;
-  }
+  // Keep the fast path limited to plain data values; accessors, nested values,
+  // and own enumerable JSON hooks fall back to object-rest-equivalent copying.
   let bytes = 2;
   let hasEntry = false;
-  for (const key of Object.keys(object)) {
+  for (const key of Reflect.ownKeys(object)) {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key);
+    if (!descriptor?.enumerable) {
+      continue;
+    }
+    if (typeof key === "symbol") {
+      return undefined;
+    }
     if (key === excludedKey) {
       continue;
     }
-    const descriptor = Object.getOwnPropertyDescriptor(object, key);
-    if (!descriptor || !("value" in descriptor)) {
+    if (!("value" in descriptor)) {
       return undefined;
     }
     const propertyValue = plainJsonPropertyValue(descriptor.value);
@@ -200,59 +203,25 @@ function utf8JsonPlainDataObjectByteLengthWithoutOwnKey(
   return bytes;
 }
 
-function canHideOwnPropertyWithProxy(object: Record<string, unknown>, key: string): boolean {
-  const descriptor = Object.getOwnPropertyDescriptor(object, key);
-  return (
-    descriptor === undefined || (descriptor.configurable === true && Object.isExtensible(object))
-  );
-}
-
-function utf8JsonObjectByteLengthWithoutOwnKeyViaProxy(
+function utf8JsonObjectRestByteLengthWithoutOwnKey(
   object: Record<string, unknown>,
   excludedKey: string,
 ): number | undefined {
-  const snapshotlessObject = new Proxy(object, {
-    get(target, property, receiver) {
-      if (property === excludedKey) {
-        return undefined;
-      }
-      return Reflect.get(target, property, receiver);
-    },
-    getOwnPropertyDescriptor(target, property) {
-      if (property === excludedKey) {
-        return undefined;
-      }
-      return Reflect.getOwnPropertyDescriptor(target, property);
-    },
-    has(target, property) {
-      if (property === excludedKey) {
-        return false;
-      }
-      return Reflect.has(target, property);
-    },
-    ownKeys(target) {
-      return Reflect.ownKeys(target).filter((property) => property !== excludedKey);
-    },
-  });
-  return utf8JsonByteLength(snapshotlessObject);
-}
-
-function utf8JsonObjectByteLengthWithoutOwnKeyViaSnapshot(
-  object: Record<string, unknown>,
-  excludedKey: string,
-): number | undefined {
-  const snapshotlessObject = Object.create(Object.getPrototypeOf(object)) as Record<
-    string,
-    unknown
-  >;
+  const snapshotlessObject: Record<PropertyKey, unknown> = {};
   for (const key of Reflect.ownKeys(object)) {
     if (key === excludedKey) {
       continue;
     }
     const descriptor = Object.getOwnPropertyDescriptor(object, key);
-    if (descriptor) {
-      Object.defineProperty(snapshotlessObject, key, descriptor);
+    if (!descriptor?.enumerable) {
+      continue;
     }
+    Object.defineProperty(snapshotlessObject, key, {
+      configurable: true,
+      enumerable: true,
+      value: Reflect.get(object, key),
+      writable: true,
+    });
   }
   return utf8JsonByteLength(snapshotlessObject);
 }
@@ -265,10 +234,7 @@ function utf8JsonObjectByteLengthWithoutOwnKey(
   if (plainDataBytes !== undefined) {
     return plainDataBytes;
   }
-  if (canHideOwnPropertyWithProxy(object, excludedKey)) {
-    return utf8JsonObjectByteLengthWithoutOwnKeyViaProxy(object, excludedKey);
-  }
-  return utf8JsonObjectByteLengthWithoutOwnKeyViaSnapshot(object, excludedKey);
+  return utf8JsonObjectRestByteLengthWithoutOwnKey(object, excludedKey);
 }
 
 function responseStreamChunkByteLengthUnchecked(chunk: unknown): number | undefined {

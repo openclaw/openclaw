@@ -705,7 +705,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     }
   });
 
-  it("preserves callable toJSON lookup while excluding partial snapshots", async () => {
+  it("ignores inherited and non-enumerable toJSON like object rest", async () => {
     const cases = [
       {
         name: "own-nonenumerable",
@@ -730,26 +730,10 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
 
     for (const testCase of cases) {
       let partialReads = 0;
-      let ignoredReads = 0;
       let toJsonCalled = false;
-      let toJsonThisWasOriginal = false;
-      let toJsonThisHadPartial = false;
-      const chunk = testCase.create(function (this: Record<string, unknown>) {
+      const chunk = testCase.create(function () {
         toJsonCalled = true;
-        toJsonThisWasOriginal = this === chunk;
-        toJsonThisHadPartial = "partial" in this;
-        return {
-          hasPartial: toJsonThisHadPartial,
-          ownPartial: Object.hasOwn(this, "partial"),
-          value: this.value,
-        };
-      });
-      Object.defineProperty(chunk, "ignoredThrowing", {
-        enumerable: true,
-        get() {
-          ignoredReads += 1;
-          throw new Error(`${testCase.name} eager getter read`);
-        },
+        return { changed: true };
       });
       Object.defineProperty(chunk, "partial", {
         configurable: true,
@@ -780,47 +764,29 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
       const completedEvent = getEvent(events, 1);
       expect(completedEvent.type).toBe("model.call.completed");
       expect(completedEvent.responseStreamBytes).toBe(
-        Buffer.byteLength(
-          JSON.stringify({ hasPartial: false, ownPartial: false, value: "kept" }),
-          "utf8",
-        ),
+        Buffer.byteLength(JSON.stringify({ type: "metadata", value: "kept" }), "utf8"),
       );
       expect(partialReads).toBe(0);
-      expect(ignoredReads).toBe(0);
-      expect(toJsonCalled).toBe(true);
-      expect(toJsonThisWasOriginal).toBe(false);
-      expect(toJsonThisHadPartial).toBe(false);
+      expect(toJsonCalled).toBe(false);
     }
   });
 
-  it("preserves own __proto__ data keys on toJSON snapshot fallback", async () => {
-    let ignoredReads = 0;
-    const chunk = Object.assign(Object.create(null), {
+  it("copies own enumerable toJSON onto the snapshotless object", async () => {
+    let toJsonThisWasOriginal = false;
+    let toJsonThisHadPartial = true;
+    const chunk = {
       type: "metadata",
       value: "kept",
-    }) as Record<string, unknown>;
-    Object.defineProperty(chunk, "__proto__", {
-      enumerable: true,
-      value: { marker: "data-key" },
-    });
-    Object.defineProperty(chunk, "ignoredThrowing", {
+      toJSON(this: Record<string, unknown>) {
+        toJsonThisWasOriginal = this === chunk;
+        toJsonThisHadPartial = Object.hasOwn(this, "partial");
+        return { value: this.value, hasPartial: toJsonThisHadPartial };
+      },
+    } as Record<string, unknown>;
+    Object.defineProperty(chunk, "partial", {
       enumerable: true,
       get() {
-        ignoredReads += 1;
-        throw new Error("snapshot fallback should preserve lazy getters");
-      },
-    });
-    Object.defineProperty(chunk, "partial", {
-      configurable: false,
-      enumerable: true,
-      value: { role: "assistant", content: [{ type: "text", text: "ignored" }] },
-    });
-    Object.defineProperty(chunk, "toJSON", {
-      value() {
-        return {
-          dataProto: Reflect.get(this, "__proto__"),
-          hasPartial: Object.hasOwn(this, "partial"),
-        };
+        throw new Error("partial snapshot should not be read before own toJSON");
       },
     });
     async function* stream() {
@@ -833,7 +799,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
         provider: "openai",
         model: "gpt-5.4",
         trace: createDiagnosticTraceContext(),
-        nextCallId: () => "call-tojson-snapshot-proto-key",
+        nextCallId: () => "call-own-enumerable-tojson",
       },
     );
 
@@ -844,13 +810,91 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     const completedEvent = getEvent(events, 1);
     expect(completedEvent.type).toBe("model.call.completed");
     expect(completedEvent.responseStreamBytes).toBe(
-      Buffer.byteLength(
-        JSON.stringify({ dataProto: { marker: "data-key" }, hasPartial: false }),
-        "utf8",
-      ),
+      Buffer.byteLength(JSON.stringify({ value: "kept", hasPartial: false }), "utf8"),
     );
-    expect(ignoredReads).toBe(0);
-    expect((Object.prototype as Record<string, unknown>).marker).toBeUndefined();
+    expect(toJsonThisWasOriginal).toBe(false);
+    expect(toJsonThisHadPartial).toBe(false);
+  });
+
+  it("reads accessor-backed fields with the original chunk as receiver", async () => {
+    let accessorUsedOriginalReceiver = false;
+    const chunk = { type: "metadata" } as Record<string, unknown>;
+    Object.defineProperty(chunk, "value", {
+      enumerable: true,
+      get(this: Record<string, unknown>) {
+        accessorUsedOriginalReceiver = this === chunk;
+        return "kept";
+      },
+    });
+    Object.defineProperty(chunk, "partial", {
+      enumerable: true,
+      value: { role: "assistant", content: [{ type: "text", text: "ignored" }] },
+    });
+    async function* stream() {
+      yield chunk;
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-accessor-receiver",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.responseStreamBytes).toBe(
+      Buffer.byteLength(JSON.stringify({ type: "metadata", value: "kept" }), "utf8"),
+    );
+    expect(accessorUsedOriginalReceiver).toBe(true);
+  });
+
+  it("preserves enumerable symbol getter effects from object rest", async () => {
+    const symbol = Symbol("metadata");
+    let symbolGetterUsedOriginalReceiver = false;
+    const chunk = {
+      type: "metadata",
+      value: "kept",
+      partial: { role: "assistant", content: [{ type: "text", text: "ignored" }] },
+    } as Record<PropertyKey, unknown>;
+    Object.defineProperty(chunk, symbol, {
+      enumerable: true,
+      get(this: Record<PropertyKey, unknown>) {
+        symbolGetterUsedOriginalReceiver = this === chunk;
+        return "symbol-value";
+      },
+    });
+    async function* stream() {
+      yield chunk;
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-symbol-accessor-receiver",
+      },
+    );
+
+    const events = await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+
+    const completedEvent = getEvent(events, 1);
+    expect(completedEvent.type).toBe("model.call.completed");
+    expect(completedEvent.responseStreamBytes).toBe(
+      Buffer.byteLength(JSON.stringify({ type: "metadata", value: "kept" }), "utf8"),
+    );
+    expect(symbolGetterUsedOriginalReceiver).toBe(true);
   });
 
   it("preserves own __proto__ data keys when excluding partial snapshots", async () => {
