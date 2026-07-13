@@ -20,6 +20,7 @@ function noopCallbacks(): WorkspaceWidgetCellCallbacks {
   return {
     onToggleCollapse: vi.fn(),
     onToggleMenu: vi.fn(),
+    onCloseMenu: vi.fn(),
     onHide: vi.fn(),
     onRemove: vi.fn(),
     onEditTitle: vi.fn(),
