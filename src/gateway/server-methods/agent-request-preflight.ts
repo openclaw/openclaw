@@ -66,7 +66,7 @@ export function prepareAgentRequestPreflight(
         `invalid agent params: ${formatValidationErrors(validateAgentParams.errors)}`,
       ),
     );
-    return;
+    return undefined;
   }
   const request = params.params as AgentRunRequest;
   if (request.cwd && !path.isAbsolute(request.cwd)) {
@@ -75,7 +75,7 @@ export function prepareAgentRequestPreflight(
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, "cwd must be absolute"),
     );
-    return;
+    return undefined;
   }
   if (request.cwd && !normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId)) {
     params.respond(
@@ -83,7 +83,7 @@ export function prepareAgentRequestPreflight(
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, "cwd is reserved for plugin-owned subagent runs"),
     );
-    return;
+    return undefined;
   }
   const allowModelOverride = resolveAllowModelOverrideFromClient(params.client);
   const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(params.client);
@@ -99,7 +99,7 @@ export function prepareAgentRequestPreflight(
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, expectedSessionResult.error),
     );
-    return;
+    return undefined;
   }
   const requestedPromptPersistenceSuppression = request.suppressPromptPersistence === true;
   const requestedInternalSessionEffects = request.sessionEffects === "internal";
@@ -115,7 +115,7 @@ export function prepareAgentRequestPreflight(
         'promptMode="none" requires modelRun=true so the run cannot mutate a durable session.',
       ),
     );
-    return;
+    return undefined;
   }
   if (requestedModelOverride && !allowModelOverride) {
     params.respond(
@@ -126,7 +126,7 @@ export function prepareAgentRequestPreflight(
         "provider/model overrides are not authorized for this caller.",
       ),
     );
-    return;
+    return undefined;
   }
   if (
     (requestedInternalSessionEffects || requestedPromptPersistenceSuppression) &&
@@ -140,7 +140,7 @@ export function prepareAgentRequestPreflight(
         "internal session-effect controls are reserved for backend callers.",
       ),
     );
-    return;
+    return undefined;
   }
   const cfg = params.context.getRuntimeConfig();
   const runId = request.idempotencyKey;
@@ -154,7 +154,7 @@ export function prepareAgentRequestPreflight(
         "exec approval followup idempotency keys are reserved for backend callers.",
       ),
     );
-    return;
+    return undefined;
   }
   const inputProvenance = normalizeInputProvenance(request.inputProvenance);
   const sessionEffects =
@@ -194,7 +194,7 @@ export function prepareAgentRequestPreflight(
     } else {
       params.respond(cached.ok, cached.payload, cached.error, { cached: true });
     }
-    return;
+    return undefined;
   }
   return {
     request,

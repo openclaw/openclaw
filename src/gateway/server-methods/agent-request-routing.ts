@@ -79,7 +79,7 @@ export async function prepareAgentRequestRouting(params: {
         `invalid agent params: unknown agent id "${params.request.agentId}"`,
       ),
     );
-    return;
+    return undefined;
   }
   const requestedSessionKeyParam = normalizeOptionalString(params.request.sessionKey);
   const requestedSessionId = normalizeOptionalString(params.request.sessionId);
@@ -103,7 +103,7 @@ export async function prepareAgentRequestRouting(params: {
         `invalid agent params: malformed session key "${requestedSessionKeyRaw}"`,
       ),
     );
-    return;
+    return undefined;
   }
   if (!agentId && requestedSessionKeyRaw) {
     const parsed = parseAgentSessionKey(requestedSessionKeyRaw);
@@ -121,7 +121,7 @@ export async function prepareAgentRequestRouting(params: {
           `invalid agent params: unknown agent id "${parsed?.agentId}"`,
         ),
       );
-      return;
+      return undefined;
     }
     agentId = inferredAgentId;
   }
@@ -151,7 +151,7 @@ export async function prepareAgentRequestRouting(params: {
     } catch (error) {
       params.clearDedupe();
       params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
-      return;
+      return undefined;
     }
   }
   if (explicitRecipientSession?.error) {
@@ -161,7 +161,7 @@ export async function prepareAgentRequestRouting(params: {
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, explicitRecipientSession.error.message),
     );
-    return;
+    return undefined;
   }
   const requestedSessionKey =
     requestedSessionKeyRaw ??
@@ -180,7 +180,7 @@ export async function prepareAgentRequestRouting(params: {
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, expectedSessionTargetError),
     );
-    return;
+    return undefined;
   }
   if (agentId && requestedSessionKeyRaw) {
     const parsed = parseAgentSessionKey(requestedSessionKeyRaw);
@@ -202,7 +202,7 @@ export async function prepareAgentRequestRouting(params: {
           `invalid agent params: agent "${params.request.agentId}" does not match session key agent "${sessionAgentId}"`,
         ),
       );
-      return;
+      return undefined;
     }
   }
   if (
@@ -216,7 +216,7 @@ export async function prepareAgentRequestRouting(params: {
     })
   ) {
     params.clearDedupe();
-    return;
+    return undefined;
   }
   if (
     dropReboundExecApprovalFollowup({
@@ -224,7 +224,7 @@ export async function prepareAgentRequestRouting(params: {
       requestedSessionKeyRaw,
     })
   ) {
-    return;
+    return undefined;
   }
   const preAcceptedReservedSessionKey =
     requestedSessionKey &&
