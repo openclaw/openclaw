@@ -219,6 +219,10 @@ export function pluginFallbackGradient(id: string): readonly [string, string] {
   );
 }
 
+function firstInitial(word: string): string {
+  return String.fromCodePoint(word.codePointAt(0) ?? 0);
+}
+
 export function pluginMonogram(name: string): string {
   const words = name.trim().split(/\s+/u).filter(Boolean);
   if (words.length === 0) {
@@ -226,7 +230,9 @@ export function pluginMonogram(name: string): string {
   }
   const first = expectDefined(words[0], "plugin monogram first word");
   const second = words[1];
-  const initials = second ? `${first.charAt(0)}${second.charAt(0)}` : sliceUtf16Safe(first, 0, 2);
+  const initials = second
+    ? `${firstInitial(first)}${firstInitial(second)}`
+    : sliceUtf16Safe(first, 0, 2);
   return initials.toLocaleUpperCase();
 }
 
