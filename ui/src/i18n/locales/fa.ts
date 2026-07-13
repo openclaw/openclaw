@@ -397,6 +397,9 @@ export const fa: TranslationMap = {
     working: "در حال کار…",
     ready: "آماده گفت‌وگو",
     whatCanAgentDo: "{name} چه کاری می‌تواند انجام دهد؟",
+    getHelp: "دریافت راهنمایی",
+    discord: "انجمن Discord",
+    viewChangelog: "مشاهده فهرست تغییرات",
   },
   newSession: {
     title: "جلسه جدید",

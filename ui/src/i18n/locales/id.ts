@@ -396,6 +396,9 @@ export const id: TranslationMap = {
     working: "Sedang bekerja…",
     ready: "Siap mengobrol",
     whatCanAgentDo: "Apa yang dapat dilakukan {name}?",
+    getHelp: "Dapatkan bantuan",
+    discord: "Komunitas Discord",
+    viewChangelog: "Lihat log perubahan",
   },
   newSession: {
     title: "Sesi baru",

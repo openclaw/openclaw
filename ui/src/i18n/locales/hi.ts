@@ -396,6 +396,9 @@ export const hi: TranslationMap = {
     working: "काम हो रहा है…",
     ready: "चैट के लिए तैयार",
     whatCanAgentDo: "{name} क्या कर सकता है?",
+    getHelp: "सहायता प्राप्त करें",
+    discord: "Discord समुदाय",
+    viewChangelog: "परिवर्तन सूची देखें",
   },
   newSession: {
     title: "नया सेशन",

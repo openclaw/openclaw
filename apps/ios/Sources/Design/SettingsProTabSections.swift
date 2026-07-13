@@ -157,6 +157,11 @@ extension SettingsProTab {
                 title: "Channels",
                 route: .channels)
             self.settingsListRow(
+                icon: "sparkles",
+                iconColor: OpenClawBrand.accent,
+                title: "Skills",
+                route: .skills)
+            self.settingsListRow(
                 icon: "waveform",
                 iconColor: .pink,
                 title: "Voice & Talk",
@@ -226,6 +231,10 @@ extension SettingsProTab {
             SettingsChannelsDestination()
                 .navigationTitle(title(for: route))
                 .navigationBarTitleDisplayMode(.inline)
+        case .skills:
+            SettingsSkillsDestination()
+                .navigationTitle(title(for: route))
+                .navigationBarTitleDisplayMode(.inline)
         default:
             List {
                 switch route {
@@ -237,6 +246,8 @@ extension SettingsProTab {
                     self.approvalsDestination
                 case .permissions:
                     self.permissionsDestination
+                case .skills:
+                    EmptyView()
                 case .voice:
                     self.voiceDestination
                 case .diagnostics:

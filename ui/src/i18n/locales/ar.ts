@@ -394,6 +394,9 @@ export const ar: TranslationMap = {
     working: "جارٍ العمل…",
     ready: "جاهز للدردشة",
     whatCanAgentDo: "ما الذي يمكن لـ {name} فعله؟",
+    getHelp: "الحصول على المساعدة",
+    discord: "مجتمع Discord",
+    viewChangelog: "عرض سجل التغييرات",
   },
   newSession: {
     title: "جلسة جديدة",
