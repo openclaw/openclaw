@@ -51,7 +51,7 @@ function createOpenGatewayClient(requestTimeoutMs: number): {
 }
 
 function getPendingCount(client: GatewayClient): number {
-  return protocolHarness(client).requests.pending.size;
+  return protocolHarness(client).pending.size;
 }
 
 type ProtocolHarness = {
@@ -59,7 +59,7 @@ type ProtocolHarness = {
   stopped: boolean;
   generation: number;
   reconnectSupervisor: { reset(initialMs?: number): void };
-  requests: { pending: Map<string, unknown> };
+  pending: Map<string, unknown>;
   handleMessage: (socket: GatewayProtocolSocket, generation: number, raw: string) => void;
 };
 
