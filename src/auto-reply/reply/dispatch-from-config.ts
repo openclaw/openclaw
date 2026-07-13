@@ -267,38 +267,6 @@ function isDispatchReplyOperationAbortedError(
   return error instanceof DispatchReplyOperationAbortedError;
 }
 
-function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
-  const activeSignals: AbortSignal[] = [];
-  for (const signal of signals) {
-    if (signal && !activeSignals.includes(signal)) {
-      activeSignals.push(signal);
-    }
-  }
-  if (activeSignals.length === 0) {
-    return undefined;
-  }
-  if (activeSignals.length === 1) {
-    return activeSignals[0];
-  }
-  if (typeof AbortSignal.any === "function") {
-    return AbortSignal.any(activeSignals);
-  }
-  const controller = new AbortController();
-  const abort = (signal: AbortSignal) => {
-    if (!controller.signal.aborted) {
-      controller.abort(signal.reason);
-    }
-  };
-  for (const signal of activeSignals) {
-    if (signal.aborted) {
-      abort(signal);
-      return controller.signal;
-    }
-    signal.addEventListener("abort", () => abort(signal), { once: true });
-  }
-  return controller.signal;
-}
-
 function routeThreadIdsDiffer(
   left: string | number | undefined,
   right: string | number | undefined,
@@ -1629,10 +1597,7 @@ function createReplyHotPathTimingTracker(options: { profilerEnabled?: boolean } 
   };
 }
 
-export type {
-  DispatchFromConfigParams,
-  DispatchFromConfigResult,
-} from "./dispatch-from-config.types.js";
+export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
 /** Dispatches a reply from config, context, command handling, agent run, and delivery policy. */
 export async function dispatchReplyFromConfig(
@@ -2174,7 +2139,10 @@ async function dispatchReplyFromConfigInner(
     ) {
       return cachedPreDispatchAbortSignal.signal;
     }
-    const signal = composeAbortSignals(operationSignal, lifecycleSignal, upstreamSignal);
+    const abortSignals = [operationSignal, lifecycleSignal, upstreamSignal].filter(
+      (signal): signal is AbortSignal => Boolean(signal),
+    );
+    const signal = abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0];
     cachedPreDispatchAbortSignal = { operationSignal, lifecycleSignal, upstreamSignal, signal };
     return signal;
   };

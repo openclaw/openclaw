@@ -85,15 +85,41 @@ function hasOnlyMigrationSafePluginEntries(
   });
 }
 
-function configIsPristineStateSafe(configPath: string, env: NodeJS.ProcessEnv): boolean {
-  const config = tryReadJsonSync(configPath);
-  if (!isRecord(config) || Object.hasOwn(config, "$include")) {
-    return false;
-  }
+function configIsPristineCoreStateSafe(config: Record<string, unknown>): boolean {
   if ([...STATEFUL_CONFIG_KEYS].some((key) => Object.hasOwn(config, key))) {
     return false;
   }
   if (containsObjectKey(config.agents, "memorySearch")) {
+    return false;
+  }
+  return true;
+}
+
+export type PristineStartupMigrationPlan = {
+  skipAllStateMigrations: boolean;
+  skipCoreStateMigrations: boolean;
+};
+
+/** Revalidates the authored config after startup recovery without rereading physical state. */
+export function planPristineStartupConfigMigrations(
+  config: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): PristineStartupMigrationPlan {
+  if (!isRecord(config) || Object.hasOwn(config, "$include")) {
+    return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
+  }
+  const skipCoreStateMigrations = configIsPristineCoreStateSafe(config);
+  return {
+    skipAllStateMigrations: skipCoreStateMigrations && configIsPristineStateSafe(config, env),
+    skipCoreStateMigrations,
+  };
+}
+
+function configIsPristineStateSafe(
+  config: Record<string, unknown>,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (!configIsPristineCoreStateSafe(config)) {
     return false;
   }
   if (!hasOnlyMigrationSafePluginEntries(config, env)) {
@@ -123,19 +149,34 @@ function stateDirHasOnlyConfig(stateDir: string, configPath: string): boolean {
 export function canSkipPristineStartupStateMigrations(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
+  return planPristineStartupStateMigrations(env).skipAllStateMigrations;
+}
+
+/** Separates provably absent core state from plugin-owned migration work. */
+export function planPristineStartupStateMigrations(
+  env: NodeJS.ProcessEnv = process.env,
+): PristineStartupMigrationPlan {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  if (!configIsPristineStateSafe(configPath, env) || !stateDirHasOnlyConfig(stateDir, configPath)) {
-    return false;
+  if (!stateDirHasOnlyConfig(stateDir, configPath)) {
+    return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
   const homeDir = resolveEffectiveHomeDir(env);
   if (!homeDir) {
-    return false;
+    return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
-  return resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
+  const legacyStateAbsent = resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
     if (path.resolve(legacyDir) === path.resolve(stateDir)) {
       return false;
     }
     return !fs.existsSync(legacyDir);
   });
+  if (!legacyStateAbsent) {
+    return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
+  }
+  const configPlan = planPristineStartupConfigMigrations(tryReadJsonSync(configPath), env);
+  return {
+    skipAllStateMigrations: configPlan.skipAllStateMigrations,
+    skipCoreStateMigrations: configPlan.skipCoreStateMigrations,
+  };
 }

@@ -94,6 +94,12 @@ const runPostCorePluginConvergence = vi.hoisted(() =>
 const planStartupPluginConvergence = vi.hoisted(() =>
   vi.fn(async () => ({ required: true, installRecords: {} })),
 );
+const planPristineStartupStateMigrations = vi.hoisted(() =>
+  vi.fn(() => ({
+    skipAllStateMigrations: false,
+    skipCoreStateMigrations: false,
+  })),
+);
 const makeStartupConvergenceResult = vi.hoisted(
   () =>
     (overrides: Partial<StartupConvergenceResult> = {}): StartupConvergenceResult => ({
@@ -145,6 +151,10 @@ vi.mock("./doctor/shared/startup-plugin-convergence-plan.js", () => ({
   planStartupPluginConvergence,
 }));
 
+vi.mock("./doctor/shared/pristine-startup-state.js", () => ({
+  planPristineStartupStateMigrations,
+}));
+
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot,
   recoverConfigFromJsonRootSuffix: vi.fn(),
@@ -161,6 +171,10 @@ describe("runDoctorConfigPreflight state migration", () => {
     needsStartupMigrationCheckpoint.mockReturnValue(false);
     runPostCorePluginConvergence.mockResolvedValue(makeStartupConvergenceResult());
     planStartupPluginConvergence.mockResolvedValue({ required: true, installRecords: {} });
+    planPristineStartupStateMigrations.mockReturnValue({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
     autoMigrateLegacyStateDir.mockResolvedValue({
       migrated: false,
       skipped: false,
@@ -460,6 +474,43 @@ describe("runDoctorConfigPreflight state migration", () => {
       expect.objectContaining({ valid: true }),
     );
     expect(recordSuccessfulStartupMigrations).toHaveBeenCalledOnce();
+  });
+
+  it("runs only plugin-owned migrations for a pristine core state root", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+    planPristineStartupStateMigrations.mockReturnValueOnce({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: true,
+    });
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+    });
+
+    expect(autoMigrateLegacyStateDir).toHaveBeenCalledOnce();
+    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyTaskStateSidecars).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledWith({
+      config: { gateway: { mode: "local", port: 19091 } },
+      env: process.env,
+    });
+  });
+
+  it("retains the prepared core-state fact after runtime files appear", async () => {
+    needsStartupMigrationCheckpoint.mockReturnValue(true);
+
+    await runDoctorConfigPreflight({
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+      requireStartupMigrationCheckpoint: true,
+      skipPristineCoreStateMigrations: true,
+    });
+
+    expect(autoMigrateLegacyState).not.toHaveBeenCalled();
+    expect(autoMigrateLegacyPluginDoctorState).toHaveBeenCalledOnce();
   });
 
   it("blocks gateway readiness when startup migrations leave warnings", async () => {

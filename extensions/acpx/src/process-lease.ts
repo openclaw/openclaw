@@ -19,7 +19,7 @@ export const OPENCLAW_ACPX_LEASE_ID_ARG = "--openclaw-acpx-lease-id";
 export const OPENCLAW_GATEWAY_INSTANCE_ID_ARG = "--openclaw-gateway-instance-id";
 
 /** Lifecycle state for a tracked ACPX wrapper process. */
-export type AcpxProcessLeaseState = "open" | "closing" | "closed" | "lost";
+type AcpxProcessLeaseState = "open" | "closing" | "closed" | "lost";
 
 /** Persisted identity and command metadata for one ACPX wrapper process. */
 export type AcpxProcessLease = {

@@ -206,17 +206,30 @@ describe("cron view list pane", () => {
     expect(onSelectJob).toHaveBeenCalledWith(paused);
   });
 
-  it("keeps row menu actions from selecting the row", () => {
+  it("keeps inline row actions from selecting the row", () => {
     const onSelectJob = vi.fn();
     const onRun = vi.fn();
+    const onToggle = vi.fn();
     const job = createJob("job-1");
-    const container = renderView({ jobs: [job], onSelectJob, onRun });
+    const container = renderView({ jobs: [job], onSelectJob, onRun, onToggle });
 
-    const runNow = Array.from(
-      container.querySelectorAll(".cron-table__row .cron-job-menu__item"),
-    ).find((item) => item.textContent?.trim() === "Run now") as HTMLButtonElement;
-    runNow.click();
+    getElement(container, '[data-test-id="cron-row-run-job-1"]', HTMLButtonElement).click();
     expect(onRun).toHaveBeenCalledWith(job, "force");
+
+    const toggle = getElement(
+      container,
+      '[data-test-id="cron-row-toggle-job-1"]',
+      HTMLButtonElement,
+    );
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    toggle.click();
+    expect(onToggle).toHaveBeenCalledWith(job, false);
+
+    const runIfDue = Array.from(
+      container.querySelectorAll(".cron-table__row .cron-job-menu__item"),
+    ).find((item) => item.textContent?.trim() === "Run if due") as HTMLButtonElement;
+    runIfDue.click();
+    expect(onRun).toHaveBeenCalledWith(job, "due");
     expect(onSelectJob).not.toHaveBeenCalled();
   });
 
@@ -260,23 +273,31 @@ describe("cron view list pane", () => {
     expect(renderView().querySelector(".cron-suggestions")).not.toBeNull();
   });
 
-  it("shows scheduler status in the stats and counts in the table footer", () => {
-    const container = renderView({
+  it("shows a scheduler banner only while the scheduler is off", () => {
+    const off = renderView({
       status: { enabled: false, jobs: 2 },
       jobs: [createJob("job-1")],
       jobsTotal: 2,
     });
-    const stats = getElement(container, ".cron-stats", HTMLDivElement);
-    expect(stats.textContent).toContain("Scheduler disabled");
-    expect(stats.textContent).toContain("2");
-    const footer = getElement(container, ".cron-table__footer", HTMLDivElement);
+    const banner = getElement(off, '[data-test-id="cron-scheduler-banner"]', HTMLDivElement);
+    expect(banner.textContent).toContain("Scheduler disabled");
+    expect(getElement(off, ".cron-stats", HTMLDivElement).textContent).not.toContain("Scheduler");
+    const footer = getElement(off, ".cron-table__footer", HTMLDivElement);
     expect(footer.textContent).toContain("1 of 2");
+
+    const on = renderView({ status: { enabled: true, jobs: 2 } });
+    expect(on.querySelector('[data-test-id="cron-scheduler-banner"]')).toBeNull();
   });
 
-  it("shows the global failing count and degrades to n/a when unknown", () => {
-    const container = renderView({ failingCount: 3 });
+  it("shows the global failing count and drills into failing run history", () => {
+    const onListTabChange = vi.fn();
+    const onRunsFiltersChange = vi.fn();
+    const container = renderView({ failingCount: 3, onListTabChange, onRunsFiltersChange });
     const value = getElement(container, ".cron-stat__value--danger", HTMLSpanElement);
     expect(value.textContent?.trim()).toBe("3");
+    getElement(container, '[data-test-id="cron-stat-failing"]', HTMLButtonElement).click();
+    expect(onListTabChange).toHaveBeenCalledWith("activity");
+    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] });
 
     const unknown = renderView({ failingCount: null });
     expect(unknown.querySelector(".cron-stat__value--danger")).toBeNull();

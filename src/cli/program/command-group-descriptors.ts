@@ -16,7 +16,7 @@ export type CommandGroupDescriptorSpec<TRegister> = {
 };
 
 /** Resolved group entry after descriptor lookup. */
-export type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
+type ResolvedCommandGroupEntry<TDescriptor extends NamedCommandDescriptor, TRegister> = {
   placeholders: TDescriptor[];
   register: TRegister;
 };

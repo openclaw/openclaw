@@ -1828,6 +1828,11 @@ function renderQuotaGroup(
         ${icons.externalLink}
       </a>
     </div>
+    ${group.accountEmail
+      ? html`<div class="context-usage__account" data-chat-usage-account="true">
+          ${group.accountEmail}
+        </div>`
+      : nothing}
     <div class="context-usage__limits">
       ${group.windows.map((limit) => renderQuotaLimitRow(limit))}
       ${group.budgets.map((budget) => renderQuotaBudgetRow(budget))}
@@ -2129,7 +2134,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                       ?disabled=${!props.canSend || props.sending}
                       aria-label=${t("chat.runControls.queueMessage")}
                     >
-                      ${icons.send}
+                      ${icons.arrowUp}
                       <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
                     </button>
                   </openclaw-tooltip>
@@ -2159,7 +2164,7 @@ function renderChatPrimaryActions(props: ChatRunControlsProps) {
                     ? t("chat.runControls.queueMessage")
                     : t("chat.runControls.sendMessage")}
                 >
-                  ${icons.send}
+                  ${icons.arrowUp}
                   <span class="agent-chat__control-label"
                     >${props.isBusy
                       ? t("chat.runControls.queue")
