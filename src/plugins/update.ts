@@ -109,7 +109,6 @@ type PluginUpdateSummary = {
   changed: boolean;
   outcomes: PluginUpdateOutcome[];
 };
-
 export type PluginUpdateIntegrityDriftParams = {
   pluginId: string;
   spec: string;
@@ -119,7 +118,6 @@ export type PluginUpdateIntegrityDriftParams = {
   resolvedVersion?: string;
   dryRun: boolean;
 };
-
 type PluginChannelSyncSummary = {
   switchedToBundled: string[];
   switchedToClawHub: string[];
@@ -127,13 +125,11 @@ type PluginChannelSyncSummary = {
   warnings: string[];
   errors: string[];
 };
-
 type PluginChannelSyncResult = {
   config: OpenClawConfig;
   changed: boolean;
   summary: PluginChannelSyncSummary;
 };
-
 /** Return whether a tracked plugin install source can be updated in place. */
 export function isPluginInstallRecordUpdateSource(
   record: PluginInstallRecord | undefined,
@@ -145,7 +141,6 @@ export function isPluginInstallRecordUpdateSource(
     record?.source === "git"
   );
 }
-
 /** Return whether update identity compatibility can migrate an unscoped install key. */
 export function pluginInstallRecordMayMigrateConfigId(params: {
   pluginId: string;
@@ -170,7 +165,6 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     unscopedPackageName(packageName) === params.pluginId,
   );
 }
-
 function formatNpmInstallFailure(params: {
   pluginId: string;
   spec: string;
