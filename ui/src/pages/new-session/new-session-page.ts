@@ -125,9 +125,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.branchesLoading = false;
     this.agentsHydrated = false;
     this.closeBrowser();
-    // A transport loss makes an in-flight create outcome unknowable even when
-    // the reconnect reuses the same client. Never offer an automatic retry.
-    this.invalidateSubmission(true);
+    this.invalidateSubmission(true); // Transport loss makes an in-flight create outcome unknowable.
     if (!resetHostSelection) {
       return;
     }
