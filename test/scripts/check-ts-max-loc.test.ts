@@ -15,7 +15,11 @@ import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 const tempDirs: string[] = [];
 
 function nestedGitEnv(): NodeJS.ProcessEnv {
-  const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_TERMINAL_PROMPT: "0" };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
   for (const key of [
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     "GIT_DIR",
@@ -103,6 +107,9 @@ describe("scripts/check-ts-max-loc", () => {
     expect(isProductionTypeScriptFile("test-harness/runtime.ts")).toBe(false);
     expect(isProductionTypeScriptFile("src/acme-test-support/runner.ts")).toBe(false);
     expect(isProductionTypeScriptFile("src/test-helper-runtime.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/state/openclaw-state-schema.generated.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/generated/runtime.ts")).toBe(false);
+    expect(isProductionTypeScriptFile("src/regenerated-runtime.ts")).toBe(true);
     expect(isProductionTypeScriptFile("extensions/voice-call/src/providers/mock.ts")).toBe(true);
     expect(isProductionTypeScriptFile("scripts/control-ui-mock-dev.ts")).toBe(true);
     expect(isProductionTypeScriptFile("src/fixture-loader.ts")).toBe(true);

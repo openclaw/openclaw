@@ -68,6 +68,8 @@ function runCiManifestFixture(options: {
   nodeFastOnly?: boolean;
   nodeFastPluginContracts?: boolean;
   nodeFastCiRouting?: boolean;
+  runNode?: boolean;
+  runTsLoc?: boolean;
 }) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
@@ -186,13 +188,14 @@ function runCiManifestFixture(options: {
         OPENCLAW_CI_RUN_IOS_BUILD: "true",
         OPENCLAW_CI_RUN_MACOS: "true",
         OPENCLAW_CI_RUN_NATIVE_I18N: "true",
-        OPENCLAW_CI_RUN_NODE: "true",
+        OPENCLAW_CI_RUN_NODE: String(options.runNode ?? true),
         OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: String(options.nodeFastCiRouting ?? false),
         OPENCLAW_CI_RUN_NODE_FAST_ONLY: String(options.nodeFastOnly ?? false),
         OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: String(
           options.nodeFastPluginContracts ?? false,
         ),
         OPENCLAW_CI_RUN_SKILLS_PYTHON: "true",
+        OPENCLAW_CI_RUN_TS_LOC: String(options.runTsLoc ?? true),
         OPENCLAW_CI_RUN_WINDOWS: "true",
         OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40),
       },
@@ -2016,6 +2019,22 @@ describe("ci workflow guards", () => {
     expect(
       JSON.parse(expectDefined(fastOnly.outputs.checks_fast_core_matrix, "fast-only checks matrix"))
         .include,
+    ).toEqual([{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]);
+
+    const nativeTypeScript = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      historicalCompatibility: false,
+      runNode: false,
+      runTsLoc: true,
+    });
+    expect(nativeTypeScript.status, nativeTypeScript.output).toBe(0);
+    expect(nativeTypeScript.outputs.run_node).toBe("false");
+    expect(nativeTypeScript.outputs.run_checks_fast_core).toBe("true");
+    expect(
+      JSON.parse(
+        expectDefined(nativeTypeScript.outputs.checks_fast_core_matrix, "native TS checks matrix"),
+      ).include,
     ).toEqual([{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]);
   });
 

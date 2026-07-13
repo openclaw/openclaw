@@ -406,6 +406,7 @@ jobs:
           OPENCLAW_CI_RUN_CONTROL_UI_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}
           OPENCLAW_CI_RUN_UI_TESTS: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ui_tests || 'false' }}
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
+          OPENCLAW_CI_RUN_TS_LOC: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ts_loc || 'false' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
@@ -532,6 +533,7 @@ jobs:
             parseBoolean(process.env.OPENCLAW_CI_RUN_NATIVE_I18N) &&
             !docsOnly &&
             (!frozenTarget || supportsNativeI18n);
+          const runTsLoc = parseBoolean(process.env.OPENCLAW_CI_RUN_TS_LOC) && !docsOnly;
           const targetWorkflow = existsSync(".github/workflows/ci.yml")
             ? readFileSync(".github/workflows/ci.yml", "utf8")
             : "";
@@ -540,7 +542,7 @@ jobs:
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
-          const checksFastCoreTasks = runNode
+          const checksFastCoreTasks = runTsLoc
             ? [{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]
             : [];
           if (runNodeFull) {
