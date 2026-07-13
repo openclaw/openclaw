@@ -38,7 +38,7 @@ function createRuntimeConfigStub(options?: {
         ? { hash: "hash-1", sourceConfig: options.sourceConfig }
         : null,
       configLoading: false,
-      lastError: null,
+      lastError: null as string | null,
     },
     ensureLoaded: vi.fn(async () => undefined),
     refresh: vi.fn(async () => undefined),
@@ -414,6 +414,44 @@ describe("SkillWorkshopPage self-learning toggle", () => {
       }),
     );
     await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(1));
+  });
+
+  it("refreshes a stale config snapshot and retries the self-learning toggle", async () => {
+    const runtimeConfig = createRuntimeConfigStub({ sourceConfig: {} });
+    runtimeConfig.patch = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        runtimeConfig.state.lastError =
+          "GatewayRequestError: config changed since last load; re-run config.get and retry";
+        return false;
+      })
+      .mockImplementationOnce(async () => {
+        runtimeConfig.state.lastError = null;
+        return true;
+      });
+    runtimeConfig.refresh = vi.fn(async () => {
+      runtimeConfig.state.lastError = null;
+      if (runtimeConfig.patch.mock.calls.length === 2) {
+        runtimeConfig.state.configSnapshot = {
+          hash: "hash-3",
+          sourceConfig: { skills: { workshop: { autonomous: { enabled: true } } } },
+        };
+      }
+    });
+    const page = createLoadedPage(runtimeConfig);
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>(".sw-empty-state__selflearn button")?.click();
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(runtimeConfig.refresh).toHaveBeenCalledTimes(2));
+    await page.updateComplete;
+    expect(page.querySelector(".sw-error")).toBeNull();
+    expect(
+      page.querySelector<HTMLInputElement>(
+        ".sw-header-controls input[aria-label='Toggle self-learning skill proposals']",
+      )?.checked,
+    ).toBe(true);
   });
 
   it("surfaces a patch failure and keeps the toggle off", async () => {

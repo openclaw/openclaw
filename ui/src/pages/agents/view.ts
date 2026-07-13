@@ -1,7 +1,7 @@
 // Control UI view renders agents screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
-import "../../components/agent-select.ts";
+import "../../components/agent-select-registration.ts";
 import type {
   AgentIdentityResult,
   AgentsFilesListResult,

@@ -3086,6 +3086,29 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(subscriptionParams.messageChannel).toBe("telegram");
   });
 
+  it("preserves source delivery reported by bridged tool lifecycle events", async () => {
+    const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
+    if (!baseSubscribe) {
+      throw new Error("missing embedded subscription mock");
+    }
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation((params) => {
+      const subscription = baseSubscribe(params);
+      params.onDeliveredMessageToolOnlySourceReply?.();
+      return subscription;
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    });
+
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+  });
+
   it("skips maintenance when afterTurn fails", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async () => {

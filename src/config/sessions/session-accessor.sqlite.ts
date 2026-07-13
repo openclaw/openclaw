@@ -1718,37 +1718,6 @@ function parseLatestAssistantMessageEvent(
   };
 }
 
-/** Checks whether the additive SQLite transcript store has rows for a transcript. */
-export function sqliteTranscriptExists(scope: SessionTranscriptReadScope): boolean {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("seq")
-      .where("session_id", "=", resolved.sessionId)
-      .limit(1),
-  );
-  return row !== undefined;
-}
-
-/** Deletes rows for one transcript from the additive SQLite transcript store. */
-export async function deleteSqliteTranscript(scope: SessionTranscriptReadScope): Promise<boolean> {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    let deleted = false;
-    runOpenClawAgentWriteTransaction((database) => {
-      deleted = deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
-      if (deleted) {
-        touchTranscriptMutationInTransaction(database, resolved.sessionId);
-      }
-    }, toDatabaseOptions(resolved));
-    return deleted;
-  });
-}
-
 /** Fully replaces rows for one transcript in the additive SQLite transcript store. */
 export async function replaceSqliteTranscriptEvents(
   scope: SessionTranscriptAccessScope,
@@ -1881,22 +1850,6 @@ export function appendSqliteTranscriptEventSync(
     }
     appendTranscriptEventInTransaction(database, resolved, event);
   }, toDatabaseOptions(resolved));
-}
-
-/** Appends raw transcript events to the additive SQLite transcript store in one transaction. */
-export async function appendSqliteTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
-  events: TranscriptEvent[],
-): Promise<void> {
-  if (events.length === 0) {
-    return;
-  }
-  const resolved = resolveSqliteTranscriptScope(scope);
-  await runExclusiveSqliteSessionWrite(resolved, async () => {
-    runOpenClawAgentWriteTransaction((database) => {
-      appendTranscriptEventsInTransaction(database, resolved, events);
-    }, toDatabaseOptions(resolved));
-  });
 }
 
 /** Appends a guarded transcript turn and touches its session row in one queued write. */

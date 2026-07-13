@@ -82,6 +82,29 @@ describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
         .poll(() => gatewayRow.textContent())
         .toContain("separate from this Control UI build");
 
+      const hero = page.locator(".about-hero");
+      await expect.poll(() => hero.locator(".about-hero__name").textContent()).toBe("OpenClaw");
+      await expect
+        .poll(() => hero.locator(".about-hero__version").textContent())
+        .toBe("v2026.7.10");
+
+      const githubLink = hero.getByRole("link", { name: "GitHub", exact: true });
+      await expect
+        .poll(() => githubLink.getAttribute("href"))
+        .toBe("https://github.com/openclaw/openclaw");
+      await expect.poll(() => githubLink.getAttribute("target")).toBe("_blank");
+      await expect.poll(() => githubLink.getAttribute("rel")).toContain("noopener");
+      const discordLink = hero.getByRole("link", { name: "Discord", exact: true });
+      await expect.poll(() => discordLink.getAttribute("href")).toBe("https://discord.gg/clawd");
+
+      const clawd = page.getByRole("button", { name: "Wave hello to Clawd" });
+      await clawd.click();
+      await expect
+        .poll(() => clawd.evaluate((el) => el.classList.contains("about-hero__clawd--wave")))
+        .toBe(true);
+
+      await expect.poll(() => page.locator(".about-footer").textContent()).toContain("MIT License");
+
       const copyButton = strip.locator(".about-commit button");
       await expect.poll(() => copyButton.getAttribute("aria-label")).toBe("Copy full commit hash");
       await copyButton.click();

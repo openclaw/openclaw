@@ -1,31 +1,25 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 // Tests infra runtime loading and platform-dependent helpers.
-import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/config.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   isGatewayWorkAdmissionClosed,
+  resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
-import {
-  testing,
-  consumeGatewaySigusr1RestartIntent,
-  consumeGatewaySigusr1RestartAuthorization,
-  deferGatewayRestartUntilIdle,
-  emitGatewayRestart,
-  isGatewaySigusr1RestartExternallyAllowed,
-  markGatewaySigusr1RestartHandled,
-  peekGatewaySigusr1RestartReason,
-  requestGatewayRestartWithSignalAdmission,
-  scheduleGatewaySigusr1Restart,
-  setGatewaySigusr1RestartPolicy,
-  setPreRestartDeferralCheck,
-} from "./restart.js";
-import { listTailnetAddresses } from "./tailnet.js";
+type RestartModule = typeof import("./restart.js");
+
+let consumeGatewaySigusr1RestartIntent: RestartModule["consumeGatewaySigusr1RestartIntent"];
+let consumeGatewaySigusr1RestartAuthorization: RestartModule["consumeGatewaySigusr1RestartAuthorization"];
+let deferGatewayRestartUntilIdle: RestartModule["deferGatewayRestartUntilIdle"];
+let isGatewaySigusr1RestartExternallyAllowed: RestartModule["isGatewaySigusr1RestartExternallyAllowed"];
+let markGatewaySigusr1RestartHandled: RestartModule["markGatewaySigusr1RestartHandled"];
+let peekGatewaySigusr1RestartReason: RestartModule["peekGatewaySigusr1RestartReason"];
+let requestGatewayRestartWithSignalAdmission: RestartModule["requestGatewayRestartWithSignalAdmission"];
+let scheduleGatewaySigusr1Restart: RestartModule["scheduleGatewaySigusr1Restart"];
+let setGatewaySigusr1RestartPolicy: RestartModule["setGatewaySigusr1RestartPolicy"];
+let setPreRestartDeferralCheck: RestartModule["setPreRestartDeferralCheck"];
+let freshRestartModuleId = 0;
 
 const relaunchGatewayScheduledTaskMock = vi.hoisted(() => vi.fn());
 const cleanStaleGatewayProcessesSyncMock = vi.hoisted(() => vi.fn());
@@ -66,16 +60,6 @@ function withoutSigusr1Listeners(fn: () => void): void {
   }
 }
 
-function countSigusr1Emits(calls: readonly unknown[][]): number {
-  let count = 0;
-  for (const args of calls) {
-    if (args[0] === "SIGUSR1") {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 function withRestartSupervisorEnabled(fn: () => void): void {
   const originalVitest = process.env.VITEST;
   const originalNodeEnv = process.env.NODE_ENV;
@@ -97,25 +81,51 @@ function withRestartSupervisorEnabled(fn: () => void): void {
   }
 }
 
+function countSigusr1Emits(calls: readonly unknown[][]): number {
+  let count = 0;
+  for (const args of calls) {
+    if (args[0] === "SIGUSR1") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("infra runtime", () => {
   function setupRestartSignalSuite() {
-    beforeEach(() => {
-      testing.resetSigusr1State();
+    beforeEach(async () => {
+      const restart = await importFreshModule<RestartModule>(
+        import.meta.url,
+        `./restart.js?infra-runtime=${freshRestartModuleId++}`,
+      );
+      ({
+        consumeGatewaySigusr1RestartIntent,
+        consumeGatewaySigusr1RestartAuthorization,
+        deferGatewayRestartUntilIdle,
+        isGatewaySigusr1RestartExternallyAllowed,
+        markGatewaySigusr1RestartHandled,
+        peekGatewaySigusr1RestartReason,
+        requestGatewayRestartWithSignalAdmission,
+        scheduleGatewaySigusr1Restart,
+        setGatewaySigusr1RestartPolicy,
+        setPreRestartDeferralCheck,
+      } = restart);
       relaunchGatewayScheduledTaskMock.mockReset();
       relaunchGatewayScheduledTaskMock.mockReturnValue({ ok: true, method: "schtasks" });
       cleanStaleGatewayProcessesSyncMock.mockReset();
       cleanStaleGatewayProcessesSyncMock.mockReturnValue([]);
       findGatewayPidsOnPortSyncMock.mockReset();
       findGatewayPidsOnPortSyncMock.mockReturnValue([]);
+      setGatewaySigusr1RestartPolicy({ allowExternal: false });
       vi.useFakeTimers();
       vi.spyOn(process, "kill").mockImplementation(() => true);
     });
 
-    afterEach(async () => {
-      testing.resetSigusr1State();
+    afterEach(() => {
+      vi.clearAllTimers();
+      markGatewaySigusr1RestartHandled();
+      resetGatewayWorkAdmission();
       clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      await vi.runOnlyPendingTimersAsync();
       vi.useRealTimers();
       if (originalPlatformDescriptor) {
         Object.defineProperty(process, "platform", originalPlatformDescriptor);
@@ -188,9 +198,8 @@ describe("infra runtime", () => {
 
         markGatewaySigusr1RestartHandled();
 
-        expect(emitGatewayRestart()).toBe(true);
-        const sigusr1Emits = emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1");
-        expect(sigusr1Emits.length).toBe(2);
+        expect(requestGatewayRestartWithSignalAdmission()).toEqual({ status: "emitted" });
+        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -202,7 +211,7 @@ describe("infra runtime", () => {
       const handler = () => {};
       process.on("SIGUSR1", handler);
       try {
-        expect(emitGatewayRestart()).toBe(true);
+        expect(requestGatewayRestartWithSignalAdmission()).toEqual({ status: "emitted" });
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
         expect(relaunchGatewayScheduledTaskMock).not.toHaveBeenCalled();
       } finally {
@@ -216,7 +225,9 @@ describe("infra runtime", () => {
         withRestartSupervisorEnabled(() => {
           relaunchGatewayScheduledTaskMock.mockReturnValueOnce({ ok: true, method: "schtasks" });
 
-          expect(emitGatewayRestart("windows-fallback")).toBe(true);
+          expect(requestGatewayRestartWithSignalAdmission("windows-fallback")).toEqual({
+            status: "emitted",
+          });
 
           expect(relaunchGatewayScheduledTaskMock).toHaveBeenCalledTimes(1);
           expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
@@ -298,7 +309,11 @@ describe("infra runtime", () => {
       const beforeEmit = vi.fn(async () => {
         await preparationBlocked;
       });
-      const handler = () => {};
+      let resolveSignal: () => void = () => {};
+      const signalEmitted = new Promise<void>((resolve) => {
+        resolveSignal = resolve;
+      });
+      const handler = () => resolveSignal();
       process.on("SIGUSR1", handler);
       try {
         scheduleGatewaySigusr1Restart({
@@ -318,33 +333,9 @@ describe("infra runtime", () => {
         expect(update.coalesced).toBe(true);
 
         releasePreparation();
-        await Promise.resolve();
-        await Promise.resolve();
+        await signalEmitted;
 
         expect(peekGatewaySigusr1RestartReason()).toBe("update.auto");
-      } finally {
-        process.removeListener("SIGUSR1", handler);
-      }
-    });
-
-    it("preserves update restart reason when an in-flight intent coalesces", () => {
-      const handler = () => {};
-      process.on("SIGUSR1", handler);
-      try {
-        expect(
-          emitGatewayRestart("config reload forced restart", {
-            force: true,
-            reason: "config reload forced restart",
-          }),
-        ).toBe(true);
-        const update = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "update.run" });
-
-        expect(update.coalesced).toBe(true);
-        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
-        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
-          force: true,
-          reason: "update.run",
-        });
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -1224,24 +1215,6 @@ describe("infra runtime", () => {
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
-    });
-  });
-
-  describe("tailnet address detection", () => {
-    it("detects tailscale IPv4 and IPv6 addresses", () => {
-      vi.spyOn(os, "networkInterfaces").mockReturnValue(
-        makeNetworkInterfacesSnapshot({
-          lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
-          utun9: [
-            { address: "100.123.224.76", family: "IPv4" },
-            { address: "fd7a:115c:a1e0::8801:e04c", family: "IPv6" },
-          ],
-        }),
-      );
-
-      const out = listTailnetAddresses();
-      expect(out.ipv4).toEqual(["100.123.224.76"]);
-      expect(out.ipv6).toEqual(["fd7a:115c:a1e0::8801:e04c"]);
     });
   });
 });

@@ -1074,6 +1074,11 @@
       "translated": "Tidak dapat memperbarui model."
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "Tidak dapat memperbarui tingkat pemikiran."
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "Obrolan gagal sebelum proses dimulai; coba lagi."

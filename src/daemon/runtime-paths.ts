@@ -1,13 +1,12 @@
 /** Selects stable Node runtime paths for daemon installs across platforms. */
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import { isSqliteWalResetSafeVersion } from "../infra/sqlite-runtime-version.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
+import { runExec } from "../process/exec.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -79,7 +78,8 @@ type ExecFileAsync = (
   options: { encoding: "utf8" },
 ) => Promise<{ stdout: string; stderr: string }>;
 
-const execFileAsync = promisify(execFile) as unknown as ExecFileAsync;
+const execFileAsync: ExecFileAsync = async (file, args) =>
+  await runExec(file, [...args], { logOutput: false });
 
 const NODE_RUNTIME_PROBE = String.raw`
 let sqliteVersion = null;

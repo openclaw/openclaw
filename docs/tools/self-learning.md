@@ -18,6 +18,11 @@ background model run and transcript review are appropriate for your workspace.
 
 ## Enable self-learning
 
+In Control UI, open **Plugins → Workshop** and switch on **Self-learning**. The
+change takes effect immediately; when another config writer has updated the
+file, Control UI refreshes the config snapshot and retries the toggle without a
+page or Gateway reload.
+
 Use the CLI:
 
 ```bash

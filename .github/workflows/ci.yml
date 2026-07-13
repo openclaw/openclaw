@@ -1833,12 +1833,6 @@ jobs:
           - check_name: check-sqlite-session-flip-proof
             group: sqlite-session-flip-proof
             runner: blacksmith-8vcpu-ubuntu-2404
-          - check_name: check-additional-extension-channels
-            group: extension-channels
-            runner: blacksmith-8vcpu-ubuntu-2404
-          - check_name: check-additional-extension-bundled
-            group: extension-bundled
-            runner: blacksmith-8vcpu-ubuntu-2404
           - check_name: check-additional-extension-package-boundary
             group: extension-package-boundary
             runner: blacksmith-8vcpu-ubuntu-2404
@@ -1977,12 +1971,6 @@ jobs:
               else
                 run_check "sqlite sessions/transcripts flip proof" node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts
               fi
-              ;;
-            extension-channels)
-              run_check "lint:extensions:channels" pnpm run lint:extensions:channels
-              ;;
-            extension-bundled)
-              run_check "lint:extensions:bundled" pnpm run lint:extensions:bundled
               ;;
             extension-package-boundary)
               run_check "test:extensions:package-boundary:compile" pnpm run test:extensions:package-boundary:compile

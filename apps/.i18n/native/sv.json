@@ -1074,6 +1074,11 @@
       "translated": "Det gick inte att uppdatera modellen."
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "Det gick inte att uppdatera tankenivån."
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "Chatten misslyckades innan körningen startade. Försök igen."

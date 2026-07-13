@@ -278,11 +278,11 @@ already hold a lower operator scope.
 method scope (`operator.pairing`), based on the pending request's declared
 `commands` (`src/infra/node-pairing-authz.ts`):
 
-| Declared commands                                              | Required scopes                       |
-| -------------------------------------------------------------- | ------------------------------------- |
-| none                                                           | `operator.pairing`                    |
-| non-exec commands                                              | `operator.pairing` + `operator.write` |
-| includes `system.run`, `system.run.prepare`, or `system.which` | `operator.pairing` + `operator.admin` |
+| Declared commands                                                                                                             | Required scopes                       |
+| ----------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| none                                                                                                                          | `operator.pairing`                    |
+| ordinary commands                                                                                                             | `operator.pairing` + `operator.write` |
+| includes `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
 ### Caps/commands/permissions (node)
 

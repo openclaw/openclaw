@@ -268,6 +268,9 @@ function listMigrationRelevantPluginRecords(params: {
     if ((manifest?.commandAliases ?? []).some((alias) => alias.cliCommand)) {
       return true;
     }
+    if ((manifest?.contracts?.migrationProviders?.length ?? 0) > 0) {
+      return true;
+    }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {
       return true;
     }

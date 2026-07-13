@@ -23,11 +23,6 @@ import {
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
-import {
-  isInvalidCronRunLogJobIdError,
-  readCronRunLogEntriesPage,
-  readCronRunLogEntriesPageAll,
-} from "../../cron/run-log.js";
 import { applyJobPatch } from "../../cron/service/jobs.js";
 import type {
   CronListPageOptions,
@@ -37,6 +32,11 @@ import {
   isInvalidCronSessionTargetIdError,
   resolveCronSessionTargetSessionKey,
 } from "../../cron/session-target.js";
+import { cronStoreKey } from "../../cron/store/key.js";
+import {
+  isInvalidCronTaskRunJobIdError,
+  readCronTaskRunHistoryPage,
+} from "../../cron/task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -940,8 +940,8 @@ export const cronHandlers: GatewayRequestHandlers = {
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")
           .map((job) => [job.id, job.name]),
       );
-      const page = await readCronRunLogEntriesPageAll({
-        storePath: context.cronStorePath,
+      const page = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(context.cronStorePath),
         ...cronRunLogPageFilters(p),
         ...(p.agentId ? { jobIds: jobs.map((job) => job.id) } : {}),
         jobNameById,
@@ -972,15 +972,15 @@ export const cronHandlers: GatewayRequestHandlers = {
         matchedJob && typeof matchedJob.name === "string"
           ? { [jobId as string]: matchedJob.name }
           : undefined;
-      const page = await readCronRunLogEntriesPage({
-        storePath: context.cronStorePath,
+      const page = readCronTaskRunHistoryPage({
+        storeKey: cronStoreKey(context.cronStorePath),
         jobId: jobId as string,
         ...cronRunLogPageFilters(p),
         jobNameById,
       });
       respond(true, page, undefined);
     } catch (err) {
-      if (!isInvalidCronRunLogJobIdError(err)) {
+      if (!isInvalidCronTaskRunJobIdError(err)) {
         throw err;
       }
       respond(

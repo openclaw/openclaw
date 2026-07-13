@@ -358,6 +358,7 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Could not start the camera. Choose a QR image from gallery or enter the setup code manually." to R.string.native_abd1b2fa48abb83a,
     "Could not test connection" to R.string.native_27d3187bb72ef714,
     "Could not update model." to R.string.native_9ca009adf23586a3,
+    "Could not update thinking level." to R.string.native_f24f2f3f09ce256d,
     "Create" to R.string.native_4759498ac2a719c6,
     "Create Goal" to R.string.native_1d5e35075a1017e0,
     "Created" to R.string.native_d70b9e24bca26b40,

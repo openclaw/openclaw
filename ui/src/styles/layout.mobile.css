@@ -550,7 +550,13 @@
 
   .chat-thread {
     margin-top: 0;
-    padding: 0 8px 12px;
+    /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
+       on the scroll container floats macOS overlay scrollbars off the edge. */
+    padding: 0 0 12px;
+  }
+
+  .chat-thread-inner {
+    width: calc(100% - 36px - 16px);
   }
 
   .chat-msg {

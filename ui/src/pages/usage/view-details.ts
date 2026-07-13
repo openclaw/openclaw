@@ -1234,13 +1234,4 @@ function renderSessionLogsCompact(
   `;
 }
 
-export {
-  computeFilteredUsage,
-  renderContextPanel,
-  renderSessionDetailPanel,
-  renderSessionLogsCompact,
-  renderSessionSummary,
-  renderTimeSeriesCompact,
-  CHART_BAR_WIDTH_RATIO,
-  CHART_MAX_BAR_WIDTH,
-};
+export { renderSessionDetailPanel };

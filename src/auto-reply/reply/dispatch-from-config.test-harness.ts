@@ -3,7 +3,6 @@ import { vi, type Mock } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { clearApprovalNativeRouteStateForTest } from "../../infra/approval-native-route-coordinator.js";
 import type {
   AcpRuntime,
   AcpRuntimeEnsureInput,
@@ -82,7 +81,7 @@ export let createReplyOperation: typeof import("./reply-run-registry.js").create
 
 export let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 
-export let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+export let replyRunTesting: typeof import("./reply-run-registry.js").testing;
 
 export let admitReplyTurn: typeof import("./reply-turn-admission.js").admitReplyTurn;
 
@@ -361,7 +360,7 @@ export const globalBeforeAll0 = async () => {
   ({
     createReplyOperation,
     replyRunRegistry,
-    __testing: replyRunTesting,
+    testing: replyRunTesting,
   } = await import("./reply-run-registry.js"));
   ({ admitReplyTurn, runWithReplyOperationLifecycleAdmission } =
     await import("./reply-turn-admission.js"));
@@ -459,7 +458,6 @@ export const describe0BeforeEach0 = () => {
       ...passiveThreadingTestPlugins,
     ]),
   );
-  clearApprovalNativeRouteStateForTest();
   acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
   acpManagerRuntimeMocks.getAcpSessionManager.mockReturnValue(createMockAcpSessionManager());
   replyRunTesting.resetReplyRunRegistry();
