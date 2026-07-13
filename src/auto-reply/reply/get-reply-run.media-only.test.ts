@@ -2465,10 +2465,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.abortSignal).toBe(sourceAbortController.signal);
   });
 
-  it("detaches queued user requests from superseded source abort signals", async () => {
+  it("detaches queued user requests while deferring cleanup until completion", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const abortController = new AbortController();
+    const cleanup = vi.fn(async () => undefined);
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "collect",
       debounceMs: 500,
@@ -2484,6 +2485,7 @@ describe("runPreparedReply media-only handling", () => {
 
     await runPreparedReply(
       baseParams({
+        queuedFollowupCleanup: cleanup,
         opts: { abortSignal: abortController.signal },
         ctx: {
           Body: "@bot keep this",
@@ -2511,6 +2513,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.isActive).toBe(true);
     expect(call.followupRun.currentInboundEventKind).toBe("user_request");
     expect(call.followupRun.abortSignal).toBeUndefined();
+    expect(cleanup).not.toHaveBeenCalled();
+
+    call.followupRun.queuedLifecycle?.onComplete?.();
+
+    expect(cleanup).toHaveBeenCalledOnce();
   });
 
   it("queues active room events instead of interrupting active user requests", async () => {

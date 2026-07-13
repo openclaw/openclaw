@@ -1069,10 +1069,7 @@ export async function getReplyFromConfig(
     }
   }
 
-  // ctx.MediaStaged=true means the caller (e.g. chat.send RPC) already staged
-  // synchronously so it could surface 5xx before respond(). Skipping here keeps
-  // staging a single-call contract instead of relying on relative-path no-op
-  // semantics in stageSandboxMedia.
+  // chat.send prestages media before responding; MediaStaged prevents a duplicate pass.
   let cleanupStagedMedia: (() => Promise<void>) | undefined;
   if (!useFastTestBootstrap && sessionKey && !ctx.MediaStaged && hasInboundMedia(ctx)) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
@@ -1088,62 +1085,59 @@ export async function getReplyFromConfig(
     cleanupStagedMedia = stageResult.cleanup;
   }
 
-  try {
-    logResolverTiming("milestone", "before_run_prepared_reply");
-    const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
-      runPreparedReply({
-        ctx,
-        sessionCtx,
-        cfg,
-        agentId,
-        agentDir,
-        agentCfg,
-        sessionCfg,
-        commandAuthorized,
-        command,
-        commandSource,
-        allowTextCommands,
-        directives,
-        defaultActivation,
-        resolvedThinkLevel,
-        resolvedFastMode,
-        resolvedFastModeAutoOnSeconds,
-        resolvedFastModeOverride,
-        resolvedFastModeAutoOnSecondsOverride,
-        resolvedVerboseLevel,
-        resolvedReasoningLevel,
-        resolvedElevatedLevel,
-        execOverrides,
-        elevatedEnabled,
-        elevatedAllowed,
-        blockStreamingEnabled,
-        blockReplyChunking,
-        resolvedBlockStreamingBreak,
-        modelState: runModelState,
-        provider: runProvider,
-        model: runModel,
-        perMessageQueueMode,
-        perMessageQueueOptions,
-        typing,
-        opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
-        defaultModel,
-        timeoutMs,
-        isNewSession,
-        resetTriggered,
-        systemSent,
-        sessionEntry,
-        sessionStore,
-        sessionKey,
-        sessionId,
-        storePath,
-        workspaceDir,
-        abortedLastRun,
-        autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
-      }),
-    );
-    logResolverTiming("completed", "prepared_reply");
-    return replyResult;
-  } finally {
-    await cleanupStagedMedia?.();
-  }
+  logResolverTiming("milestone", "before_run_prepared_reply");
+  const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
+    runPreparedReply({
+      ctx,
+      sessionCtx,
+      cfg,
+      agentId,
+      agentDir,
+      agentCfg,
+      sessionCfg,
+      commandAuthorized,
+      command,
+      commandSource,
+      allowTextCommands,
+      directives,
+      defaultActivation,
+      resolvedThinkLevel,
+      resolvedFastMode,
+      resolvedFastModeAutoOnSeconds,
+      resolvedFastModeOverride,
+      resolvedFastModeAutoOnSecondsOverride,
+      resolvedVerboseLevel,
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      execOverrides,
+      elevatedEnabled,
+      elevatedAllowed,
+      blockStreamingEnabled,
+      blockReplyChunking,
+      resolvedBlockStreamingBreak,
+      modelState: runModelState,
+      provider: runProvider,
+      model: runModel,
+      perMessageQueueMode,
+      perMessageQueueOptions,
+      typing,
+      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+      defaultModel,
+      timeoutMs,
+      isNewSession,
+      resetTriggered,
+      systemSent,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionId,
+      storePath,
+      workspaceDir,
+      abortedLastRun,
+      autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
+      queuedFollowupCleanup: cleanupStagedMedia,
+    }),
+  ).finally(() => cleanupStagedMedia?.());
+  logResolverTiming("completed", "prepared_reply");
+  return replyResult;
 }

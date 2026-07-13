@@ -564,7 +564,10 @@ export const describe0BeforeEach0 = () => {
   transcriptMocks.persistAcpDispatchTranscript.mockClear();
   transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
   stageSandboxMediaMocks.stageSandboxMedia.mockReset();
-  stageSandboxMediaMocks.stageSandboxMedia.mockResolvedValue({ staged: new Map() });
+  stageSandboxMediaMocks.stageSandboxMedia.mockResolvedValue({
+    staged: new Map(),
+    cleanup: async () => {},
+  });
   runtimePluginMocks.ensureRuntimePluginsLoaded.mockClear();
 };
 

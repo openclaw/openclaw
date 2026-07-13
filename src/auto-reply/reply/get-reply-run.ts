@@ -106,6 +106,7 @@ import {
 } from "./prompt-session-context.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { withQueuedReplyCleanup } from "./queued-followup-cleanup.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   abortReplyRunBySessionId,
@@ -491,6 +492,7 @@ type RunPreparedReplyParams = {
   workspaceDir: string;
   abortedLastRun: boolean;
   autoFallbackPrimaryProbe?: AutoFallbackPrimaryProbe;
+  queuedFollowupCleanup?: () => Promise<void>;
 };
 
 /** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */
@@ -1414,13 +1416,8 @@ export async function runPreparedReply(
       extractedFileImages: opts?.extractedFileImages,
     }),
   );
-  // Abort-signal attachment for queued followups:
-  // - room_event: always inherit (source admission fence / ambient cancel).
-  // - Gateway-owned lifecycle (chat.send): always inherit so Esc can cancel a
-  //   turn after chat.send terminalizes while still queued.
-  // - plain user_request without lifecycle: deliberately detach from the
-  //   source/active-lane signal so a superseded parent abort does not cancel a
-  //   still-valid queued user turn.
+  // Room events and Gateway-owned lifecycles inherit cancellation. Plain queued
+  // user requests detach so an obsolete source abort cannot cancel valid work.
   const queuedFollowupAbortSignal =
     opts?.queuedFollowupLifecycle || inboundEventKind === "room_event"
       ? (opts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
@@ -1518,7 +1515,10 @@ export async function runPreparedReply(
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,
-    queuedLifecycle: opts?.queuedFollowupLifecycle,
+    queuedLifecycle: withQueuedReplyCleanup(
+      opts?.queuedFollowupLifecycle,
+      params.queuedFollowupCleanup,
+    ),
     onFollowupAdmissionWaitChange: opts?.onFollowupAdmissionWaitChange,
     messageId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
     summaryLine: baseBodyTrimmedRaw,
