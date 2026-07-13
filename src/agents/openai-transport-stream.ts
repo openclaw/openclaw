@@ -8,21 +8,25 @@ import type { Context } from "../llm/types.js";
 import {
   buildOpenAICompletionsParams as buildOpenAICompletionsParamsImpl,
   completionsTesting,
+  parseTransportChunkUsage as parseTransportChunkUsageImpl,
 } from "./openai-completions-transport.js";
-import { responsesTesting } from "./openai-responses-transport.js";
+import {
+  buildOpenAIResponsesParams as buildOpenAIResponsesParamsImpl,
+  resolveAzureOpenAIApiVersion as resolveAzureOpenAIApiVersionImpl,
+  responsesTesting,
+} from "./openai-responses-transport.js";
 import type { OpenAICompletionsOptions, OpenAIModeModel } from "./openai-transport-shared.js";
 
+export { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 export {
-  createOpenAICompletionsTransportStreamFn,
-  parseTransportChunkUsage,
-} from "./openai-completions-transport.js";
-export {
-  buildOpenAIResponsesParams,
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
-  resolveAzureOpenAIApiVersion,
 } from "./openai-responses-transport.js";
 export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
+
+export const buildOpenAIResponsesParams = buildOpenAIResponsesParamsImpl;
+export const parseTransportChunkUsage = parseTransportChunkUsageImpl;
+export const resolveAzureOpenAIApiVersion = resolveAzureOpenAIApiVersionImpl;
 
 // Keep this SDK-exported declaration anchored to the long-lived facade while the
 // completions implementation remains independently owned.
