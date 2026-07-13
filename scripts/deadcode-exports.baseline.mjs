@@ -1203,8 +1203,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/shared/config-eval.ts: resolveConfigPath",
   "src/shared/config-eval.ts: resolveRuntimePlatform",
   "src/shared/device-auth-store.ts: DeviceAuthStoreAdapter",
-  "src/shared/entry-status.ts: evaluateEntryMetadataRequirements",
-  "src/shared/entry-status.ts: evaluateEntryMetadataRequirementsForCurrentPlatform",
   "src/shared/node-match.ts: normalizeNodeKey",
   "src/shared/runtime-import.ts: resolveRuntimeImportSpecifier",
   "src/shared/silent-reply-policy.ts: DEFAULT_SILENT_REPLY_POLICY",
