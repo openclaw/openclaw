@@ -47,11 +47,15 @@ export function renderSettingsSection(props: SettingsSectionProps, rows: unknown
     props.title || props.actions
       ? html`
           <div class="settings-section__header">
-            <h2 class="settings-section__heading">
-              ${props.title}${props.count !== undefined
-                ? html` <span class="settings-count">${props.count}</span>`
-                : nothing}
-            </h2>
+            ${props.title
+              ? html`
+                  <h2 class="settings-section__heading">
+                    ${props.title}${props.count !== undefined
+                      ? html` <span class="settings-count">${props.count}</span>`
+                      : nothing}
+                  </h2>
+                `
+              : nothing}
             ${props.actions
               ? html`<div class="settings-section__actions">${props.actions}</div>`
               : nothing}

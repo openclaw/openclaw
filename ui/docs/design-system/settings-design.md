@@ -45,10 +45,11 @@ import {
 
 renderSettingsPage([
   renderSettingsSection({ title: t("settings.notifications") }, [
-    renderSettingsRow({
+    renderSettingsToggleRow({
       title: t("settings.systemNotifications"),
       description: t("settings.systemNotificationsDesc"),
-      control: renderSettingsToggle({ checked, onChange }),
+      checked,
+      onChange,
     }),
   ]),
 ]);
