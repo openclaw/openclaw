@@ -146,6 +146,10 @@ const CONTEXT_TOKENS_BUCKETS = [
 ];
 const MAX_RETAINED_TRUSTED_SPAN_CONTEXTS = 1024;
 const RETAINED_TRUSTED_SPAN_CONTEXT_TIMEOUT_MS = 5_000;
+// Backstop bound on the per-run root-run-span map used to project model-call I/O onto the run's
+// root span (see rootRunSpanByRunId). Entries are normally removed on run completion; this evicts
+// the oldest only if a run never finalizes, so a leak can't grow the map unbounded.
+const MAX_TRACKED_ROOT_RUN_SPANS = 20_000;
 
 type OtelContentCapturePolicy = {
   inputMessages: boolean;
@@ -1782,6 +1786,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         { spanContext: SpanContext; token: symbol; owner?: TrustedSpanAliasOwner }
       >();
       const retainedTrustedSpanContextCleanupTimers = new Set<ReturnType<typeof setTimeout>>();
+      // Root openclaw.run span per RUN id, so a completed model call can stamp the conversation onto
+      // its own run's root span (see recordModelCallCompleted). Keyed by runId, NOT OTel trace id:
+      // sibling runs can share one OTel trace, and trace-id keying would cross-stamp one run's
+      // prompt/response onto another. traceIoInputStampedByRunId keeps the FIRST input per run.
+      const rootRunSpanByRunId = new Map<string, ReturnType<typeof tracer.startSpan>>();
+      const traceIoInputStampedByRunId = new Set<string>();
       stopActiveTrustedSpans = () => {
         const stopAt = Date.now();
         for (const handle of retainedTrustedSpanContextCleanupTimers) {
@@ -1797,6 +1807,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         activeTrustedSpans.clear();
         activeTrustedSpanAliases.clear();
+        rootRunSpanByRunId.clear();
+        traceIoInputStampedByRunId.clear();
       };
 
       const tokensCounter = meter.createCounter("openclaw.tokens", {
@@ -2937,6 +2949,19 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             startTimeMs: evt.ts,
           }),
         );
+        // Remember this run span keyed by its run id, so model-call completions can project their
+        // I/O onto their OWN run's root span (langfuse.trace.input/output + input.value/output.value).
+        const runOwner = trustedSpanAliasOwner(evt);
+        if (runOwner && !rootRunSpanByRunId.has(runOwner.id)) {
+          rootRunSpanByRunId.set(runOwner.id, span);
+          if (rootRunSpanByRunId.size > MAX_TRACKED_ROOT_RUN_SPANS) {
+            const oldest = rootRunSpanByRunId.keys().next().value;
+            if (oldest !== undefined) {
+              rootRunSpanByRunId.delete(oldest);
+              traceIoInputStampedByRunId.delete(oldest);
+            }
+          }
+        }
         const parentSpanId = trustedTraceContext(evt, metadata)?.parentSpanId;
         if (parentSpanId && !activeTrustedSpans.has(parentSpanId)) {
           const owner: TrustedSpanAliasOwner = { kind: "run", id: evt.runId };
@@ -3230,6 +3255,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             code: SpanStatusCode.ERROR,
             ...(message ? { message } : {}),
           });
+        }
+        // Run finished — drop its root-span tracking entry (all its model calls have completed).
+        const completedRunOwner = trustedSpanAliasOwner(evt);
+        if (completedRunOwner) {
+          rootRunSpanByRunId.delete(completedRunOwner.id);
+          traceIoInputStampedByRunId.delete(completedRunOwner.id);
         }
         if (trackedSpan && trustedTrace?.spanId) {
           completeTrackedLifecycleSpan(trustedTrace.spanId, trackedSpan, evt.ts);
@@ -3540,6 +3571,33 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           });
         setSpanAttrs(span, spanAttrs);
         addUpstreamRequestIdSpanEvent(span, evt.upstreamRequestIdHash);
+        // Mirror this model call's I/O onto its OWN run's root openclaw.run span so the conversation
+        // shows at the trace level — first call's input (kept), latest call's output. Look the root
+        // span up by RUN id (not OTel trace id): sibling runs can share a trace, and trace-id keying
+        // would stamp one run's captured content onto another. We set BOTH levels:
+        //   - langfuse.trace.input/output: drives the Langfuse Traces list + the synthetic trace node.
+        //   - input.value/output.value: the OpenInference observation attrs, so the openclaw.run node
+        //     itself renders the conversation (Langfuse's IOPreview reads trace.input only for the
+        //     trace node; the root observation would otherwise be blank until you drill into a child).
+        const runOwner = trustedSpanAliasOwner(evt);
+        const rootRunSpan = runOwner ? rootRunSpanByRunId.get(runOwner.id) : undefined;
+        if (runOwner && rootRunSpan && rootRunSpan !== span) {
+          const inputValue = spanAttrs["input.value"];
+          const outputValue = spanAttrs["output.value"];
+          const rootAttrs: Record<string, string> = {};
+          if (typeof inputValue === "string" && !traceIoInputStampedByRunId.has(runOwner.id)) {
+            rootAttrs["langfuse.trace.input"] = inputValue;
+            rootAttrs["input.value"] = inputValue;
+            traceIoInputStampedByRunId.add(runOwner.id);
+          }
+          if (typeof outputValue === "string") {
+            rootAttrs["langfuse.trace.output"] = outputValue;
+            rootAttrs["output.value"] = outputValue;
+          }
+          if (Object.keys(rootAttrs).length > 0) {
+            rootRunSpan.setAttributes(rootAttrs);
+          }
+        }
         span.end(evt.ts);
       };
 
