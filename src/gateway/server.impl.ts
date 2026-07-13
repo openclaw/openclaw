@@ -761,7 +761,7 @@ export async function startGatewayServer(
       getActiveEmbeddedRunCount() +
       getActiveCronJobCount() +
       getActiveBackgroundExecSessionCount() +
-      getActiveGatewayRootWorkCount() +
+      getActiveGatewayRootWorkCount({ excludeCurrent: true }) +
       getActiveTaskCount(),
   );
   const seededControlUiAllowedOrigins = controlUiSeed.seededAllowedOrigins
