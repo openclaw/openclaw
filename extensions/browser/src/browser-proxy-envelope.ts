@@ -77,7 +77,7 @@ export function visitBrowserProxyFilePaths(
   }
 }
 
-export type BrowserProxyErrorBody =
+type BrowserProxyErrorBody =
   | { error: string }
   | ({ error: string } & BrowserNoDisplayErrorMetadata);
 

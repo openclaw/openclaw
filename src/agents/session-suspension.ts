@@ -7,7 +7,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
 import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
-import { applySessionStoreEntryPatch } from "../config/sessions.js";
+import { patchSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
@@ -127,12 +127,9 @@ export async function suspendSession(params: SessionSuspensionParams) {
   const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
 
   try {
-    await applySessionStoreEntryPatch({
-      storePath,
-      sessionKey,
-      skipMaintenance: true,
-      takeCacheOwnership: true,
-      patch: {
+    await patchSessionEntry(
+      { storePath, sessionKey },
+      () => ({
         quotaSuspension: {
           schemaVersion: 1,
           suspendedAt: now,
@@ -144,8 +141,9 @@ export async function suspendSession(params: SessionSuspensionParams) {
           expectedResumeBy,
           state: "suspended",
         },
-      },
-    });
+      }),
+      { skipMaintenance: true, takeCacheOwnership: true },
+    );
   } catch (err) {
     log.warn("failed to persist quota suspension; not throttling lane", {
       sessionId: params.sessionId,

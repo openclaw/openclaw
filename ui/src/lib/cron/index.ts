@@ -5,6 +5,7 @@ import type {
   CronJobsEnabledFilter,
   CronJobsListResult,
   CronJobsSortBy,
+  CronRunResult,
   CronRunStatus,
   CronRunScope,
   CronRunLogEntry,
@@ -1017,6 +1018,13 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       }
     }
     const selectedDeliveryMode = form.deliveryMode;
+    const normalizedDeliveryAccountId = form.deliveryAccountId.trim();
+    // Update patches need null to clear stored routing; create payloads must
+    // omit blanks because the Gateway accountId schema rejects empty strings.
+    const deliveryAccountId =
+      selectedDeliveryMode === "announce"
+        ? normalizedDeliveryAccountId || (editingJob?.delivery?.accountId ? null : undefined)
+        : undefined;
     const delivery =
       selectedDeliveryMode && selectedDeliveryMode !== "none"
         ? {
@@ -1028,8 +1036,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                   })
                 : undefined,
             to: form.deliveryTo.trim() || undefined,
-            accountId:
-              selectedDeliveryMode === "announce" ? form.deliveryAccountId.trim() : undefined,
+            accountId: deliveryAccountId,
             bestEffort: form.deliveryBestEffort,
           }
         : selectedDeliveryMode === "none"
@@ -1107,9 +1114,37 @@ export async function toggleCronJob(
   return updated;
 }
 
+function cronRunNotStartedMessage(result: CronRunResult): string {
+  if (!("reason" in result)) {
+    return t("cron.runNotStarted.unknown");
+  }
+  switch (result.reason) {
+    case "not-due":
+      return t("cron.runNotStarted.notDue");
+    case "already-running":
+      return t("cron.runNotStarted.alreadyRunning");
+    case "restart-recovery-pending":
+      return t("cron.runNotStarted.recoveryPending");
+    case "invalid-spec":
+      return t("cron.runNotStarted.invalidSpec");
+    case "stopped":
+      return t("cron.runNotStarted.stopped");
+  }
+  return t("cron.runNotStarted.unknown");
+}
+
 export async function runCronJob(state: CronState, jobId: string, mode: "force" | "due" = "force") {
   await withCronBusy(state, async (client) => {
-    await client.request("cron.run", { id: jobId, mode });
+    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
+    if (!result.ok || ("ran" in result && !result.ran)) {
+      state.cronError = cronRunNotStartedMessage(result);
+      // Invalid persisted specs create a skipped history entry with diagnostics;
+      // true no-op outcomes have no new history to fetch.
+      if ("reason" in result && result.reason === "invalid-spec") {
+        await loadCronRuns(state, state.cronRunsScope === "all" ? null : jobId);
+      }
+      return;
+    }
     await loadCronRuns(state, state.cronRunsScope === "all" ? null : jobId);
   });
 }

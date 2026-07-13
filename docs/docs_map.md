@@ -784,6 +784,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Install
   - H2: Setup
   - H2: Configure
+  - H3: Streaming
   - H3: Access policy
   - H3: Multi-account setup
   - H3: Group chats
@@ -1264,6 +1265,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw backup
   - H2: Notes
+  - H2: SQLite snapshots
+  - H3: Verify and restore
   - H2: What gets backed up
   - H2: Invalid config behavior
   - H2: Size and performance
@@ -2867,6 +2870,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Visibility and output
   - H2: Index lifecycle
   - H2: Session search vs. memory search
+
+## concepts/session-state.md
+
+- Route: /concepts/session-state
+- Headings:
+  - H2: The signal log
+  - H2: Watchers
+  - H2: Notices: one, not many
+  - H2: Reconciling
+  - H2: Storage and limits
+  - H2: Related
 
 ## concepts/session-tool.md
 
@@ -5056,6 +5070,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: What it does
   - H2: Requirements
   - H2: Quick start (pair + connect)
+  - H2: Health summaries
   - H2: Review command approvals
   - H2: Optional direct Apple Watch node
   - H2: Relay-backed push for official builds

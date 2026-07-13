@@ -595,7 +595,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it(
     "reveals message context on timestamp hover and keeps click-to-open",
-    { timeout: 20_000 },
+    // This full-app case shares Chromium with concurrent layout pages; match
+    // the UI runner's cold-browser budget instead of imposing a flaky 20s cap.
+    { timeout: 60_000 },
     async () => {
       if (!realChatServer) {
         throw new Error("Expected the Control UI server to be ready");
@@ -860,7 +862,10 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(geometry.textarea?.paddingLeft).toBe(composerInset - 4);
       expect(geometry.footer?.paddingLeft).toBe(composerInset);
       expect(geometry.footer?.paddingRight).toBe(composerInset);
-      expect(geometry.footer?.paddingBottom).toBe(composerInset);
+      // #105866 splits the block inset evenly around the footer so the
+      // settings chip centers between the divider and the card edge.
+      expect(geometry.footer?.paddingTop).toBe(composerInset / 2);
+      expect(geometry.footer?.paddingBottom).toBe(composerInset / 2);
     } finally {
       await closeBrowserPage(page);
     }
