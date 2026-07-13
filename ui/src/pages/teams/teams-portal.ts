@@ -1324,12 +1324,14 @@ export function renderTeamsPortal(
         ? html`<section>
             <h2>${snapshot.tab.title}</h2>
             ${(snapshot.presence ?? []).some((participant) => !participant.self)
-              ? html`<ul aria-label="Viewing this tab">
+              ? html`<ul aria-label=${t("workspaces.teams.viewingThisTab")}>
                   ${(snapshot.presence ?? [])
                     .filter((participant) => !participant.self)
                     .map(
                       (participant) => html`<li data-teams-presence=${participant.id}>
-                        ${participant.id} is viewing
+                        ${t("workspaces.teams.participantViewing", {
+                          participant: participant.id,
+                        })}
                       </li>`,
                     )}
                 </ul>`

@@ -2109,6 +2109,8 @@ export const en: TranslationMap = {
       domain: "Domain",
       acceptInvite: "Accept invite",
       login: "Log in",
+      viewingThisTab: "Viewing this tab",
+      participantViewing: "{participant} is viewing",
       restrictedContent: "Restricted content",
       untitledWidget: "Untitled widget",
       editTitle: "Title",
