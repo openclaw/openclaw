@@ -1102,7 +1102,7 @@
   "src/plugins/uninstall.ts": 780,
   "src/plugins/update.ts": 2745,
   "src/process/command-queue.ts": 700,
-  "src/process/exec.ts": 773,
+  "src/process/exec.ts": 713,
   "src/proxy-capture/runtime.ts": 668,
   "src/proxy-capture/store.sqlite.ts": 943,
   "src/realtime-transcription/websocket-session.ts": 512,
