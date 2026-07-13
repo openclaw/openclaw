@@ -5,7 +5,9 @@ import {
   createFakeRestClient,
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";
+import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
+import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
 const TEST_TIMESTAMP = "2026-01-01T00:00:00.000Z";
 
@@ -147,6 +149,24 @@ describe("hydrateDiscordMessageIfNeeded", () => {
       "/channels/c1/messages/m0",
     ]);
     expect(hydrated.referencedMessage?.content).toBe("the directly fetched message");
+
+    const ctx = await createBaseDiscordMessageContext({
+      message: hydrated,
+      author: hydrated.author,
+      baseText: hydrated.content,
+      messageText: hydrated.content,
+    });
+    const result = await buildDiscordMessageProcessContext({
+      ctx,
+      text: hydrated.content,
+      mediaList: [],
+    });
+    if (!result) {
+      throw new Error("expected a built Discord message context");
+    }
+
+    expect(result.ctxPayload.ReplyToId).toBe("m0");
+    expect(result.ctxPayload.ReplyToBody).toBe("the directly fetched message");
   });
 
   it("uses the referenced channel when directly hydrating a cross-channel reply", async () => {
