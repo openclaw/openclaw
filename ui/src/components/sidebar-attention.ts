@@ -10,14 +10,19 @@ import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
-import { normalizeGatewayTokenScope } from "../app/gateway-scope.ts";
 import { isCronJobActiveFailure } from "../lib/cron-status.ts";
 import { createInitialCronState, loadCronJobsPage } from "../lib/cron/index.ts";
 import { isMonitoredAuthProvider, loadModelAuthStatus } from "../lib/model-auth.ts";
-import { getSafeLocalStorage } from "../local-storage.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons, type IconName } from "./icons.ts";
+import {
+  loadDismissals,
+  pruneDismissals,
+  saveDismissals,
+  type SidebarAttentionDismissals,
+  type SidebarAttentionKind,
+} from "./sidebar-attention-dismissals.ts";
 
 // A cron job counts as overdue when its next planned run is this far in the
 // past; mirrors the threshold the Overview attention list used.
@@ -28,14 +33,6 @@ const VISIBILITY_REFRESH_MIN_AGE_MS = 60_000;
 // Always-visible windows (the macOS app) never fire visibilitychange, so a
 // slow lifecycle-owned interval keeps the chips from going permanently stale.
 const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
-
-const SIDEBAR_ATTENTION_KINDS = [
-  "cronFailed",
-  "cronOverdue",
-  "modelAuthExpired",
-  "modelAuthExpiring",
-] as const;
-export type SidebarAttentionKind = (typeof SIDEBAR_ATTENTION_KINDS)[number];
 
 export type SidebarAttentionItem = {
   kind: SidebarAttentionKind;
@@ -48,81 +45,6 @@ export type SidebarAttentionItem = {
   // any change (new job/provider) resurfaces it.
   signature: string;
 };
-
-// Per-gateway, per-browser snooze state for the chips. Deliberately client-side
-// chrome (like nav width / dock layout), not gateway state: dismissing a nag on
-// one device should not acknowledge it everywhere.
-const DISMISSED_STORE_PREFIX = "openclaw.control.sidebarAttention.v1:";
-
-export type SidebarAttentionDismissals = Partial<Record<SidebarAttentionKind, string>>;
-
-function dismissedStoreKey(gatewayUrl: string): string {
-  return `${DISMISSED_STORE_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
-}
-
-function loadDismissals(gatewayUrl: string): SidebarAttentionDismissals {
-  const storage = getSafeLocalStorage();
-  if (!storage) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(storage.getItem(dismissedStoreKey(gatewayUrl)) ?? "null");
-    if (!parsed || typeof parsed !== "object") {
-      return {};
-    }
-    const result: SidebarAttentionDismissals = {};
-    for (const kind of SIDEBAR_ATTENTION_KINDS) {
-      const value = (parsed as Record<string, unknown>)[kind];
-      if (typeof value === "string") {
-        result[kind] = value;
-      }
-    }
-    return result;
-  } catch {
-    return {};
-  }
-}
-
-function saveDismissals(gatewayUrl: string, dismissals: SidebarAttentionDismissals) {
-  const storage = getSafeLocalStorage();
-  if (!storage) {
-    return;
-  }
-  try {
-    if (Object.keys(dismissals).length === 0) {
-      storage.removeItem(dismissedStoreKey(gatewayUrl));
-    } else {
-      storage.setItem(dismissedStoreKey(gatewayUrl), JSON.stringify(dismissals));
-    }
-  } catch {
-    // Quota/privacy-mode failures just lose the snooze; chips reappear.
-  }
-}
-
-/**
- * Drop dismissals whose chip is gone or whose entity set changed, so a state
- * that clears and later recurs surfaces again instead of staying hidden by a
- * stale snooze. Returns the input object when nothing changed.
- */
-export function pruneDismissals(
-  dismissals: SidebarAttentionDismissals,
-  items: readonly SidebarAttentionItem[],
-): SidebarAttentionDismissals {
-  const next: SidebarAttentionDismissals = {};
-  let changed = false;
-  for (const kind of SIDEBAR_ATTENTION_KINDS) {
-    const stored = dismissals[kind];
-    if (stored === undefined) {
-      continue;
-    }
-    if (items.some((item) => item.kind === kind && item.signature === stored)) {
-      next[kind] = stored;
-    } else {
-      changed = true;
-    }
-  }
-  return changed ? next : dismissals;
-}
 
 export function buildSidebarAttentionItems(params: {
   cronJobs: readonly CronJob[];

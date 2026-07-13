@@ -2,11 +2,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
-import {
-  buildSidebarAttentionItems,
-  pruneDismissals,
-  type SidebarAttentionItem,
-} from "./sidebar-attention.ts";
+import { pruneDismissals, type SidebarAttentionKind } from "./sidebar-attention-dismissals.ts";
+import { buildSidebarAttentionItems } from "./sidebar-attention.ts";
 
 const NOW = 1_750_000_000_000;
 
@@ -136,17 +133,7 @@ describe("buildSidebarAttentionItems", () => {
 });
 
 describe("pruneDismissals", () => {
-  const chip = (
-    kind: SidebarAttentionItem["kind"],
-    signature: string,
-  ): SidebarAttentionItem => ({
-    kind,
-    severity: "error",
-    icon: "clock",
-    label: kind,
-    routeId: "cron",
-    signature,
-  });
+  const chip = (kind: SidebarAttentionKind, signature: string) => ({ kind, signature });
 
   it("keeps a dismissal while the same entity set is still affected", () => {
     const dismissals = { cronFailed: "alpha\nbeta" };
@@ -155,10 +142,10 @@ describe("pruneDismissals", () => {
 
   it("drops a dismissal when the affected set changes so the chip resurfaces", () => {
     expect(
-      pruneDismissals(
-        { cronFailed: "alpha", modelAuthExpired: "openai" },
-        [chip("cronFailed", "alpha\nbeta"), chip("modelAuthExpired", "openai")],
-      ),
+      pruneDismissals({ cronFailed: "alpha", modelAuthExpired: "openai" }, [
+        chip("cronFailed", "alpha\nbeta"),
+        chip("modelAuthExpired", "openai"),
+      ]),
     ).toEqual({ modelAuthExpired: "openai" });
   });
 
