@@ -4,18 +4,15 @@
  * Sends messages to visible sessions, starts embedded runs, and optionally announces replies.
  */
 import crypto from "node:crypto";
-import { isRequesterParentOfBackgroundAcpSession } from "@openclaw/acp-core/session-interaction-mode";
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  isSubagentSessionKey,
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
@@ -59,6 +56,10 @@ import {
   resolveVisibleSessionReference,
 } from "./sessions-helpers.js";
 import { buildAgentToAgentMessageContext, resolvePingPongTurns } from "./sessions-send-helpers.js";
+import {
+  isRequesterParentOfNativeSubagentSession,
+  resolveAcpSessionsSendRoute,
+} from "./sessions-send-route.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 
 const SessionsSendToolSchema = Type.Object({
@@ -166,31 +167,6 @@ async function ensureConfiguredAgentMainSession(params: {
       return { ok: false, error: formatErrorMessage(err) };
     }
   }
-}
-
-type SessionsSendRouteEntry = Pick<SessionEntry, "acp" | "parentSessionKey" | "spawnedBy">;
-
-function isRequesterParentOfNativeSubagentSession(params: {
-  entry: SessionsSendRouteEntry | null | undefined;
-  acpMeta?: unknown;
-  requesterSessionKey: string | null | undefined;
-  targetSessionKey: string;
-}): boolean {
-  if (
-    !params.entry ||
-    params.acpMeta ||
-    params.entry.acp ||
-    !isSubagentSessionKey(params.targetSessionKey)
-  ) {
-    return false;
-  }
-  const requester = normalizeOptionalString(params.requesterSessionKey);
-  if (!requester) {
-    return false;
-  }
-  const spawnedBy = normalizeOptionalString(params.entry.spawnedBy);
-  const parentSessionKey = normalizeOptionalString(params.entry.parentSessionKey);
-  return requester === spawnedBy || requester === parentSessionKey;
 }
 
 function isTerminalAgentWaitTimeout(result: AgentWaitResult): boolean {
@@ -589,6 +565,22 @@ export function createSessionsSendTool(opts?: {
         timeoutSeconds === 0 && isIsolatedCronRequester
           ? resolveCronRunScopedFallbackSessionKey(displayKey)
           : undefined;
+      const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
+      const targetAcpMeta = readAcpSessionMeta({ sessionKey: resolvedKey });
+      const acpRoute = resolveAcpSessionsSendRoute({
+        entry: targetSessionEntry,
+        acpMeta: targetAcpMeta,
+        requesterSessionKey: effectiveRequesterKey,
+      });
+      if (acpRoute.rejection) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: acpRoute.rejection,
+          sessionKey: displayKey,
+        });
+      }
+      const skipAcpA2AFlow = acpRoute.skipA2AFlow;
 
       // Capture the pre-run assistant snapshot before starting the nested run.
       // Fast in-process test doubles and short-circuit agent paths can finish
@@ -662,16 +654,6 @@ export function createSessionsSendTool(opts?: {
       // unrelated sender that can see the same target (e.g. under
       // `tools.sessions.visibility=all`) must still go through the normal A2A
       // path so it actually receives a follow-up delivery.
-      const targetSessionEntry = loadSessionEntryByKey(resolvedKey);
-      const targetAcpMeta = readAcpSessionMeta({ sessionKey: resolvedKey });
-      const targetSessionEntryWithAcp =
-        targetAcpMeta && targetSessionEntry
-          ? { ...targetSessionEntry, acp: targetAcpMeta }
-          : targetSessionEntry;
-      const skipAcpA2AFlow = isRequesterParentOfBackgroundAcpSession(
-        targetSessionEntryWithAcp,
-        effectiveRequesterKey,
-      );
       const skipNativeParentA2AFlow =
         timeoutSeconds !== 0 &&
         isRequesterParentOfNativeSubagentSession({
