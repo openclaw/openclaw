@@ -416,13 +416,6 @@ export function normalizeReplyPayloadsForDelivery(
   return projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan(payloads));
 }
 
-/** Normalizes reply payloads into runtime outbound transport payloads. */
-export function normalizeOutboundPayloads(
-  payloads: readonly ReplyPayload[],
-): NormalizedOutboundPayload[] {
-  return projectOutboundPayloadPlanForOutbound(createOutboundPayloadPlan(payloads));
-}
-
 /** Normalizes reply payloads into JSON-safe outbound envelope payloads. */
 export function normalizeOutboundPayloadsForJson(
   payloads: readonly ReplyPayload[],

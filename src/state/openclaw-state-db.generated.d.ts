@@ -375,31 +375,6 @@ export interface CronJobs {
   wake_mode: string;
 }
 
-export interface CronRunLogs {
-  created_at: number;
-  delivered: number | null;
-  delivery_error: string | null;
-  delivery_status: string | null;
-  diagnostics_summary: string | null;
-  duration_ms: number | null;
-  entry_json: string;
-  error: string | null;
-  job_id: string;
-  model: string | null;
-  next_run_at_ms: number | null;
-  provider: string | null;
-  run_at_ms: number | null;
-  run_id: string | null;
-  seq: number;
-  session_id: string | null;
-  session_key: string | null;
-  status: string | null;
-  store_key: string;
-  summary: string | null;
-  total_tokens: number | null;
-  ts: number;
-}
-
 export interface CurrentConversationBindings {
   account_id: string;
   binding_id: string;
@@ -1005,6 +980,7 @@ export interface TaskRuns {
   cleanup_after: number | null;
   created_at: number;
   delivery_status: string;
+  detail_json: string | null;
   ended_at: number | null;
   error: string | null;
   label: string | null;
@@ -1242,7 +1218,6 @@ export interface DB {
   commitments: Commitments;
   config_health_entries: ConfigHealthEntries;
   cron_jobs: CronJobs;
-  cron_run_logs: CronRunLogs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
   device_auth_tokens: DeviceAuthTokens;

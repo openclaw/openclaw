@@ -1074,6 +1074,11 @@
       "translated": "Das Modell konnte nicht aktualisiert werden."
     },
     {
+      "id": "native.android.e4ab8aaa795ba79f",
+      "source": "Could not update thinking level.",
+      "translated": "Die Denkstufe konnte nicht aktualisiert werden."
+    },
+    {
       "id": "native.android.956a394937480f8a",
       "source": "Chat failed before the run started; try again.",
       "translated": "Der Chat ist vor Beginn der Ausführung fehlgeschlagen. Versuchen Sie es erneut."
@@ -17609,9 +17614,9 @@
       "translated": "Peekaboo Bridge aktivieren"
     },
     {
-      "id": "native.apple.82e287000e34b51e",
-      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-      "translated": "Signierten Tools (z. B. `peekaboo`) erlauben, die UI-Automatisierung über PeekabooBridge zu steuern."
+      "id": "native.apple.9465b8cd1bc4a5ec",
+      "source": "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. Requires Computer Control; otherwise run Peekaboo's own Mac app.",
+      "translated": "Signierten Tools (z. B. `peekaboo`) erlauben, die UI-Automatisierung über PeekabooBridge zu steuern. Erfordert Computer Control; führen Sie andernfalls Peekaboos eigene Mac-App aus."
     },
     {
       "id": "native.apple.72b24ed86295d6fa",

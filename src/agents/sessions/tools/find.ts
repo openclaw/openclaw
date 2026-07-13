@@ -47,8 +47,6 @@ const findSchema = Type.Object({
   path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
   limit: Type.Optional(Type.Number({ description: "Max results; default 1000." })),
 });
-export type { FindToolDetails, FindToolInput } from "./tool-contracts.js";
-
 const DEFAULT_LIMIT = 1000;
 
 /**

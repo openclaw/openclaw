@@ -143,6 +143,7 @@ describe("Crabbox worker provider", () => {
       "--id",
       LEASE_ID,
       "--keep=true",
+      "--no-sync",
       "--",
       "bash",
       "-lc",

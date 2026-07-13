@@ -41,13 +41,10 @@ export type StreamingCompatEntry = {
   draftChunk?: unknown;
 };
 
-// Nested streaming config wins. Every bundled channel now uses a nested-only
-// streaming schema with doctor migrating the flat spellings, so in-tree the
-// flat delivery keys (chunkMode, blockStreaming, blockStreamingCoalesce,
-// draftChunk) are legacy config. The fallback reads below serve external SDK
-// plugin configs only and emit a once-per-key deprecation warning; remove
-// them (and the flat StreamingCompatEntry fields) when the next release train
-// closes the SDK deprecation window.
+// Bundled schemas are nested-only; doctor migrates flat delivery keys
+// (chunkMode, blockStreaming, blockStreamingCoalesce, draftChunk) and scalar
+// `streaming`. External SDK fallbacks warn once; remove them, the flat
+// StreamingCompatEntry fields, and scalar support after the next release train.
 // Mode-family aliases (streamMode) are doctor-only and stay unread here.
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
@@ -922,13 +919,16 @@ export function resolveChannelPreviewStreamMode(
   // Scalar `streaming` (mode string or boolean) is rejected by every bundled
   // channel schema and doctor-migrated to streaming.mode; the read here stays
   // only for external SDK plugin configs that predate the nested shape.
-  const parsedStreaming = parsePreviewStreamingMode(
-    getChannelStreamingConfigObject(entry)?.mode ?? entry?.streaming,
-  );
+  const streamingConfig = getChannelStreamingConfigObject(entry);
+  const parsedStreaming = parsePreviewStreamingMode(streamingConfig?.mode ?? entry?.streaming);
   if (parsedStreaming) {
+    if (!streamingConfig) {
+      warnFlatStreamingKeyFallback("streaming", "mode");
+    }
     return parsedStreaming;
   }
   if (typeof entry?.streaming === "boolean") {
+    warnFlatStreamingKeyFallback("streaming", "mode");
     return entry.streaming ? "partial" : "off";
   }
   return defaultMode;

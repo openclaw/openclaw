@@ -191,6 +191,31 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     // MARK: - WKUIDelegate
 
+    /// Bridges JavaScript `window.confirm` calls in the embedded Control UI to a
+    /// native confirmation sheet; without this callback, WebKit treats every
+    /// confirm as Cancel and destructive dashboard actions silently stop.
+    func webView(
+        _ webView: WKWebView,
+        runJavaScriptConfirmPanelWithMessage message: String,
+        initiatedByFrame frame: WKFrameInfo,
+        completionHandler: @escaping @MainActor @Sendable (Bool) -> Void)
+    {
+        guard webView === self.webView || self.linkBrowser.owns(webView) else {
+            completionHandler(false)
+            return
+        }
+        let alert = Self.makeJavaScriptConfirmAlert(
+            message: message,
+            host: frame.request.url?.host)
+        if let window {
+            alert.beginSheetModal(for: window) { response in
+                completionHandler(Self.javaScriptConfirmResult(for: response))
+            }
+            return
+        }
+        completionHandler(Self.javaScriptConfirmResult(for: alert.runModal()))
+    }
+
     /// Bridges `<input type="file">` clicks in the embedded Control UI to a native
     /// `NSOpenPanel`; without a `WKUIDelegate`, WebKit silently drops the request
     /// and "Choose image" / file-picker buttons do nothing.
@@ -247,6 +272,26 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             break
         }
         return nil
+    }
+
+    private static func makeJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = "OpenClaw Dashboard"
+        if let host, !host.isEmpty {
+            alert.informativeText = "\(host) is asking:\n\n\(message)"
+        } else {
+            alert.informativeText = message
+        }
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        return alert
+    }
+
+    private static func javaScriptConfirmResult(
+        for response: NSApplication.ModalResponse)
+        -> Bool
+    {
+        response == .alertFirstButtonReturn
     }
 
     @available(*, unavailable)
@@ -1092,6 +1137,14 @@ extension DashboardWindowController {
     func _testFocusLinkBrowser() -> Bool {
         guard let webView = self.linkBrowser.activeWebView else { return false }
         return self.window?.makeFirstResponder(webView) == true
+    }
+
+    static func _testJavaScriptConfirmAlert(message: String, host: String?) -> NSAlert {
+        self.makeJavaScriptConfirmAlert(message: message, host: host)
+    }
+
+    static func _testJavaScriptConfirmResult(for response: NSApplication.ModalResponse) -> Bool {
+        self.javaScriptConfirmResult(for: response)
     }
 }
 #endif

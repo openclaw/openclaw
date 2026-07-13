@@ -1103,42 +1103,6 @@ CREATE INDEX IF NOT EXISTS idx_commitments_status_due
 CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
   ON commitments(agent_id, session_key, channel, dedupe_key, status);
 
-CREATE TABLE IF NOT EXISTS cron_run_logs (
-  store_key TEXT NOT NULL,
-  job_id TEXT NOT NULL,
-  seq INTEGER NOT NULL,
-  ts INTEGER NOT NULL,
-  status TEXT,
-  error TEXT,
-  summary TEXT,
-  diagnostics_summary TEXT,
-  delivery_status TEXT,
-  delivery_error TEXT,
-  delivered INTEGER,
-  session_id TEXT,
-  session_key TEXT,
-  run_id TEXT,
-  run_at_ms INTEGER,
-  duration_ms INTEGER,
-  next_run_at_ms INTEGER,
-  model TEXT,
-  provider TEXT,
-  total_tokens INTEGER,
-  entry_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  PRIMARY KEY (store_key, job_id, seq)
-);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_store_ts
-  ON cron_run_logs(store_key, ts DESC, seq DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_job_status
-  ON cron_run_logs(store_key, job_id, status, ts DESC, seq DESC);
-
-CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
-  ON cron_run_logs(store_key, delivery_status, ts DESC, seq DESC)
-  WHERE delivery_status IS NOT NULL;
-
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
@@ -1312,7 +1276,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
   error TEXT,
   progress_summary TEXT,
   terminal_summary TEXT,
-  terminal_outcome TEXT
+  terminal_outcome TEXT,
+  detail_json TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_runs_run_id ON task_runs(run_id);
@@ -1323,6 +1288,10 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_last_event_at ON task_runs(last_event_a
 CREATE INDEX IF NOT EXISTS idx_task_runs_owner_key ON task_runs(owner_key);
 CREATE INDEX IF NOT EXISTS idx_task_runs_parent_flow_id ON task_runs(parent_flow_id);
 CREATE INDEX IF NOT EXISTS idx_task_runs_child_session_key ON task_runs(child_session_key);
+CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_source_ended
+  ON task_runs(runtime, source_id, ended_at, created_at, task_id);
+CREATE INDEX IF NOT EXISTS idx_task_runs_runtime_ended
+  ON task_runs(runtime, ended_at, created_at, task_id);
 
 CREATE TABLE IF NOT EXISTS subagent_runs (
   run_id TEXT NOT NULL PRIMARY KEY,

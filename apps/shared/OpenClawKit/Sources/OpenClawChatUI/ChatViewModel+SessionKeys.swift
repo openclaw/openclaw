@@ -120,7 +120,7 @@ extension OpenClawChatViewModel {
         session: OpenClawChatSessionEntry?) -> OpenClawChatModelPatchResult?
     {
         guard let session,
-              let result = self.lastSuccessfulModelPatchResultsByTarget[target]
+              let result = self.lastSuccessfulSettingsPatchResultsByTarget[target]
         else { return nil }
         let sessionModel = Self.normalizedModelIdentityComponent(session.model ?? self.sessionDefaults?.model)
         let sessionProvider = Self.normalizedProvider(session.modelProvider ?? self.sessionDefaults?.modelProvider)

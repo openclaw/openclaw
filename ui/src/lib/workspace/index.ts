@@ -51,7 +51,7 @@ const workspacePollActive = new WeakMap<WorkspaceHost, boolean>();
 const workspaceMutationQueues = new WeakMap<WorkspaceUiState, Promise<void>>();
 
 /** Default data-refresh interval (ms); the L4 spec's 30–60s window, floored at 10s. */
-export const WORKSPACE_POLL_INTERVAL_MS = 45_000;
+const WORKSPACE_POLL_INTERVAL_MS = 45_000;
 // Per-host teardown for an in-flight hand-rolled drag: the view registers window
 // pointermove/pointerup listeners while dragging, so a tab-switch/disconnect that
 // calls stopWorkspace must cancel the drag (remove listeners, neutralize the
@@ -75,7 +75,7 @@ export function clearActiveDrag(host: WorkspaceHost): void {
 }
 
 /** Cancel any in-flight drag on `host` (used by stopWorkspace and re-registration). */
-export function cancelActiveDrag(host: WorkspaceHost): void {
+function cancelActiveDrag(host: WorkspaceHost): void {
   const cancel = workspaceActiveDragCancel.get(host);
   if (cancel) {
     workspaceActiveDragCancel.delete(host);
@@ -236,7 +236,7 @@ function normalizeWidgetsRegistry(value: unknown): Record<string, WorkspaceWidge
   return registry;
 }
 
-export function normalizeWorkspace(payload: unknown): WorkspaceDocument {
+function normalizeWorkspace(payload: unknown): WorkspaceDocument {
   const record = isRecord(payload) ? payload : {};
   const tabs = Array.isArray(record.tabs)
     ? record.tabs.map(normalizeTab).filter((tab): tab is WorkspaceTab => tab !== null)
@@ -411,7 +411,7 @@ export function subscribeToWorkspaceEvents(
   workspaceEventClients.set(host, client);
 }
 
-export function stopWorkspaceEvents(host: WorkspaceHost): void {
+function stopWorkspaceEvents(host: WorkspaceHost): void {
   workspaceEventUnsubscribers.get(host)?.();
   workspaceEventUnsubscribers.delete(host);
   workspaceEventClients.delete(host);
@@ -451,7 +451,7 @@ export function startBindingPolling(
 }
 
 /** Stop the per-host data-refresh timer (tab-leave/disconnect). */
-export function stopBindingPolling(host: WorkspaceHost): void {
+function stopBindingPolling(host: WorkspaceHost): void {
   const timer = workspacePollTimers.get(host);
   if (timer !== undefined) {
     clearInterval(timer);
@@ -751,7 +751,7 @@ export async function resolveBinding(
 }
 
 /** Apply a JSON pointer (RFC 6901 subset) to a value; returns the value if empty. */
-export function applyPointer(value: unknown, pointer: string | undefined): unknown {
+function applyPointer(value: unknown, pointer: string | undefined): unknown {
   if (!pointer) {
     return value;
   }
