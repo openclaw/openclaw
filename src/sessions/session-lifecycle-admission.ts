@@ -25,7 +25,7 @@ type SessionLifecycleAdmissionState = {
   currentAdmissions: AsyncLocalStorage<ReadonlySet<SessionWorkAdmission>>;
 };
 
-export type SessionLifecycleMutationKind = "compaction";
+type SessionLifecycleMutationKind = "compaction";
 
 // Runtime chunks can load separate module instances while still coordinating
 // the same sessions. One shared state keeps every lock and admission visible.

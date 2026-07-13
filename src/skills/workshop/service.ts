@@ -309,7 +309,7 @@ export async function proposeCreateSkill(
 }
 
 /** Summary of a workspace skill the workshop is allowed to write. */
-export type WritableWorkspaceSkillSummary = {
+type WritableWorkspaceSkillSummary = {
   name: string;
   description?: string;
   filePath: string;
