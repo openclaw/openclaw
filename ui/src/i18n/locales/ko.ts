@@ -1745,7 +1745,6 @@ export const ko: TranslationMap = {
     filterAll: "전체",
     filterIssues: "문제",
     filterLabel: "설치된 플러그인 필터링",
-    pulseLabel: "활성화 {enabled}개, 비활성화 {disabled}개, 문제 있음 {issues}개",
     categoryChannels: "채널",
     categoryProviders: "모델 제공업체",
     categoryMemory: "메모리",

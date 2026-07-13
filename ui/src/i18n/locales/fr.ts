@@ -1780,7 +1780,6 @@ export const fr: TranslationMap = {
     filterAll: "Tous",
     filterIssues: "Problèmes",
     filterLabel: "Filtrer les plugins installés",
-    pulseLabel: "{enabled} activés, {disabled} désactivés, {issues} avec des problèmes",
     categoryChannels: "Canaux",
     categoryProviders: "Fournisseurs de modèles",
     categoryMemory: "Mémoire",

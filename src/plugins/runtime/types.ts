@@ -76,6 +76,8 @@ type RuntimeNodeListResult = {
     connected?: boolean;
     caps?: string[];
     commands?: string[];
+    /** Advertised commands currently permitted by Gateway node-command policy. */
+    invocableCommands?: string[];
     nodePluginTools?: NodePluginToolDescriptor[];
   }>;
 };

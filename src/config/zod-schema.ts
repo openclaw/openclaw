@@ -27,6 +27,7 @@ import {
   SecretsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
+import { BrowserSnapshotDefaultsSchema, NodeHostAgentRunsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import {
@@ -46,22 +47,19 @@ export function installZodDefaultLocale(): void {
 }
 installZodDefaultLocale();
 
-const BrowserSnapshotDefaultsSchema = z
-  .object({
-    mode: z.literal("efficient").optional(),
-  })
-  .strict()
-  .optional();
-
 type ConfigSchemaShape<T extends object> = {
   [Key in keyof T]-?: z.ZodType<T[Key]>;
 };
 
 const GatewayRemoteSchemaShape = {
   url: z.string().optional(),
+
   transport: z.union([z.literal("ssh"), z.literal("direct")]).optional(),
+
   remotePort: z.number().int().min(1).max(65_535).optional(),
+
   token: SecretInputSchema.optional().register(sensitive),
+
   password: SecretInputSchema.optional().register(sensitive),
   tlsFingerprint: z.string().optional(),
   sshTarget: z.string().optional(),
@@ -507,6 +505,7 @@ const NodeHostMcpServerNameSchema = z
 
 const NodeHostSchema = z
   .object({
+    agentRuns: NodeHostAgentRunsSchema,
     browserProxy: z
       .object({
         enabled: z.boolean().optional(),

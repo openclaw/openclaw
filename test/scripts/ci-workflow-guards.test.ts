@@ -65,6 +65,11 @@ function runCiManifestFixture(options: {
   qaSmokePlan?: boolean;
   formatCheck?: boolean;
   releaseCandidateCompatibility?: boolean;
+  nodeFastOnly?: boolean;
+  nodeFastPluginContracts?: boolean;
+  nodeFastCiRouting?: boolean;
+  runNode?: boolean;
+  runTsLoc?: boolean;
 }) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
@@ -183,11 +188,14 @@ function runCiManifestFixture(options: {
         OPENCLAW_CI_RUN_IOS_BUILD: "true",
         OPENCLAW_CI_RUN_MACOS: "true",
         OPENCLAW_CI_RUN_NATIVE_I18N: "true",
-        OPENCLAW_CI_RUN_NODE: "true",
-        OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: "false",
-        OPENCLAW_CI_RUN_NODE_FAST_ONLY: "false",
-        OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: "false",
+        OPENCLAW_CI_RUN_NODE: String(options.runNode ?? true),
+        OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: String(options.nodeFastCiRouting ?? false),
+        OPENCLAW_CI_RUN_NODE_FAST_ONLY: String(options.nodeFastOnly ?? false),
+        OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: String(
+          options.nodeFastPluginContracts ?? false,
+        ),
         OPENCLAW_CI_RUN_SKILLS_PYTHON: "true",
+        OPENCLAW_CI_RUN_TS_LOC: String(options.runTsLoc ?? true),
         OPENCLAW_CI_RUN_WINDOWS: "true",
         OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40),
       },
@@ -632,6 +640,18 @@ describe("ci workflow guards", () => {
       default: "",
       type: "string",
     });
+    expect(workflow.on.workflow_dispatch.inputs.loc_base_ref).toEqual({
+      description: "Optional exact LOC comparison-base SHA for standalone manual runs",
+      required: false,
+      default: "",
+      type: "string",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.pr_number).toEqual({
+      description: "Pull request number required by the exact-SHA release gate",
+      required: false,
+      default: "",
+      type: "string",
+    });
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "run-name: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_id != '' && format('CI {0}', inputs.dispatch_id) || (github.event_name == 'workflow_dispatch' && inputs.release_gate && format('CI release gate {0}', inputs.target_ref) || 'CI') }}",
     );
@@ -642,10 +662,60 @@ describe("ci workflow guards", () => {
     expect(validationStep.if).toBe(
       "github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
+    expect(validationStep.env.PR_NUMBER).toBe("${{ inputs.pr_number }}");
     expect(validationStep.run).toContain(
       "release_gate requires target_ref to be a full commit SHA",
     );
+    expect(validationStep.run).toContain(
+      "release_gate requires pr_number to identify an open pull request",
+    );
     expect(validationStep.run).toContain("release_gate must run from the branch at target_ref");
+    const manualLocBaseStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Validate manual LOC base input",
+    );
+    expect(manualLocBaseStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.loc_base_ref != ''",
+    );
+    expect(manualLocBaseStep.run).toContain("loc_base_ref must be a full commit SHA");
+    const mergeTreeStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Validate release-gate PR merge tree",
+    );
+    expect(mergeTreeStep.id).toBe("release_gate_loc_tree");
+    expect(mergeTreeStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && inputs.release_gate",
+    );
+    expect(mergeTreeStep.env.PR_NUMBER).toBe("${{ inputs.pr_number }}");
+    expect(mergeTreeStep.env.TARGET_REF).toBe("${{ inputs.target_ref }}");
+    expect(mergeTreeStep.run).toContain(
+      'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"',
+    );
+    expect(mergeTreeStep.run).toContain(".head.sha");
+    expect(mergeTreeStep.run).toContain(".base.sha");
+    expect(mergeTreeStep.run).toContain('[[ "$pr_head_sha" != "$TARGET_REF" ]]');
+    expect(mergeTreeStep.run).toContain("for attempt in {1..12}");
+    expect(mergeTreeStep.run).toContain(".mergeable == null");
+    expect(mergeTreeStep.run).toContain(".merge_commit_sha");
+    expect(mergeTreeStep.run).toContain('[[ "$mergeable" == "false" ]]');
+    expect(mergeTreeStep.run).toContain("sleep 2");
+    expect(mergeTreeStep.run).toContain('"+refs/pull/${PR_NUMBER}/merge:${merge_ref}"');
+    expect(mergeTreeStep.run).toContain('[[ "$resolved_merge_sha" != "$merge_sha"');
+    expect(mergeTreeStep.run).toContain('git rev-parse "${merge_ref}^1"');
+    expect(mergeTreeStep.run).toContain('git rev-parse "${merge_ref}^2"');
+    expect(mergeTreeStep.run).toContain('echo "base_sha=${pr_base_sha}" >> "$GITHUB_OUTPUT"');
+    expect(mergeTreeStep.run).toContain('echo "head_sha=${merge_sha}" >> "$GITHUB_OUTPUT"');
+    expect(workflow.jobs.preflight.permissions["pull-requests"]).toBe("read");
+    expect(workflow.jobs.preflight.outputs.loc_base_sha).toContain(
+      "steps.release_gate_loc_tree.outputs.base_sha",
+    );
+    expect(workflow.jobs.preflight.outputs.loc_base_sha).toContain("inputs.loc_base_ref");
+    expect(workflow.jobs.preflight.outputs.loc_head_sha).toContain(
+      "steps.release_gate_loc_tree.outputs.head_sha",
+    );
+    const ciDocs = readFileSync("docs/ci.md", "utf8");
+    expect(ciDocs).toContain("`pr_number`");
+    expect(ciDocs).toContain("synthetic pull-request merge ref");
+    expect(ciDocs).toContain("matches automatic PR CI's merged tree and policy implementation");
+    expect(ciDocs).toContain("cannot provide equivalent merge-tree evidence");
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     );
@@ -1900,6 +1970,80 @@ describe("ci workflow guards", () => {
     expect(coverageStep.run).toBe("node scripts/check-protocol-event-coverage.mjs");
     expect(coverageStep.if).toBe("steps.manifest.outputs.run_protocol_event_coverage == 'true'");
     expect(checkShardRun).not.toContain("check:protocol-coverage");
+  });
+
+  it("runs the changed-file TypeScript LOC ratchet against the exact tested tree", () => {
+    const workflow = readCiWorkflow();
+    const checksFastSteps = workflow.jobs["checks-fast-core"].steps;
+    const mergeCheckout = checksFastSteps.find(
+      (step: WorkflowStep) => step.name === "Checkout verified release-gate LOC merge tree",
+    );
+    const checksFastRun = checksFastSteps.find(
+      (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
+    );
+
+    expect(checksFastRun.env.LOC_BASE_SHA).toContain("github.event.before");
+    expect(checksFastRun.env.LOC_BASE_SHA).toContain("github.event.pull_request.base.sha");
+    expect(checksFastRun.env.LOC_BASE_SHA).toContain("needs.preflight.outputs.loc_base_sha");
+    expect(checksFastRun.env.LOC_BASE_SHA).not.toContain("github.event.repository.default_branch");
+    expect(checksFastRun.env.LOC_EXPECTED_PR_HEAD).toContain("github.event.pull_request.head.sha");
+    expect(checksFastRun.env.LOC_EXPECTED_PR_HEAD).toContain("inputs.target_ref");
+    expect(mergeCheckout.if).toContain("matrix.task == 'loc-ratchet'");
+    expect(mergeCheckout.if).toContain("needs.preflight.outputs.loc_head_sha != ''");
+    expect(mergeCheckout.env.LOC_HEAD_SHA).toBe("${{ needs.preflight.outputs.loc_head_sha }}");
+    expect(mergeCheckout.env.LOC_PR_NUMBER).toBe("${{ inputs.pr_number }}");
+    expect(mergeCheckout.run).toContain(
+      '"+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"',
+    );
+    expect(mergeCheckout.run).toContain('[[ "$resolved_loc_head" != "$LOC_HEAD_SHA" ]]');
+    expect(mergeCheckout.run).toContain("git checkout --detach refs/remotes/origin/ci-head");
+    expect(checksFastSteps.indexOf(mergeCheckout)).toBeLessThan(
+      checksFastSteps.findIndex((step: WorkflowStep) => step.name === "Setup Node environment"),
+    );
+    expect(checksFastRun.run).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(checksFastRun.run).toContain("git rev-parse --verify HEAD^1");
+    expect(checksFastRun.run).toContain("git rev-parse --verify HEAD^2");
+    expect(checksFastRun.run).toContain(
+      'git fetch --no-tags --depth=2 origin "+${loc_merge_sha}:refs/remotes/origin/ci-loc-merge"',
+    );
+    expect(checksFastRun.run).toContain('merge_head="$(git rev-parse HEAD^2)"');
+    expect(checksFastRun.run).toContain('[[ "$merge_head" != "$LOC_EXPECTED_PR_HEAD" ]]');
+    expect(checksFastRun.run).toContain('loc_base_ref="$(git rev-parse HEAD^1)"');
+    expect(checksFastRun.run).toContain(
+      'git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:${loc_base_ref}"',
+    );
+    expect(checksFastRun.run).toContain('pnpm check:loc --base "$loc_base_ref" --head HEAD');
+
+    const fastOnly = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      historicalCompatibility: false,
+      nodeFastOnly: true,
+      nodeFastPluginContracts: true,
+    });
+    expect(fastOnly.status, fastOnly.output).toBe(0);
+    expect(fastOnly.outputs.run_check).toBe("false");
+    expect(fastOnly.outputs.run_checks_fast_core).toBe("true");
+    expect(
+      JSON.parse(expectDefined(fastOnly.outputs.checks_fast_core_matrix, "fast-only checks matrix"))
+        .include,
+    ).toEqual([{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]);
+
+    const nativeTypeScript = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      historicalCompatibility: false,
+      runNode: false,
+      runTsLoc: true,
+    });
+    expect(nativeTypeScript.status, nativeTypeScript.output).toBe(0);
+    expect(nativeTypeScript.outputs.run_node).toBe("false");
+    expect(nativeTypeScript.outputs.run_checks_fast_core).toBe("true");
+    expect(
+      JSON.parse(
+        expectDefined(nativeTypeScript.outputs.checks_fast_core_matrix, "native TS checks matrix"),
+      ).include,
+    ).toEqual([{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]);
   });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {

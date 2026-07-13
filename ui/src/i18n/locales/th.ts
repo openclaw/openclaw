@@ -1730,7 +1730,6 @@ export const th: TranslationMap = {
     filterAll: "ทั้งหมด",
     filterIssues: "ปัญหา",
     filterLabel: "กรองปลั๊กอินที่ติดตั้ง",
-    pulseLabel: "เปิดใช้งาน {enabled} รายการ, ปิดใช้งาน {disabled} รายการ, มีปัญหา {issues} รายการ",
     categoryChannels: "ช่องทาง",
     categoryProviders: "ผู้ให้บริการโมเดล",
     categoryMemory: "หน่วยความจำ",

@@ -287,6 +287,7 @@ enum class GatewayMethod(
   NodeInvoke("node.invoke"),
   NodePendingPull("node.pending.pull"),
   NodePendingAck("node.pending.ack"),
+  NodeInvokeProgress("node.invoke.progress"),
   NodeInvokeResult("node.invoke.result"),
   NodeEvent("node.event"),
   CronGet("cron.get"),
@@ -367,6 +368,7 @@ enum class GatewayMethod(
   ApprovalGet("approval.get"),
   ApprovalResolve("approval.resolve"),
   SessionsSearch("sessions.search"),
+  SessionsDispatch("sessions.dispatch"),
 }
 
 enum class GatewayEvent(
@@ -393,6 +395,7 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeInvokeCancel("node.invoke.cancel"),
   NodeInvokeRequest("node.invoke.request"),
   DevicePairRequested("device.pair.requested"),
   DevicePairResolved("device.pair.resolved"),

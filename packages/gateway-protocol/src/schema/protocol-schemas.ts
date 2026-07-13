@@ -309,9 +309,8 @@ import {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   NodePresenceAlivePayloadSchema,
-  NodePresenceAliveReasonSchema,
-  NodePresenceActivityPayloadSchema,
   NodeInvokeParamsSchema,
+  NodeInvokeProgressParamsSchema,
   NodeInvokeResultParamsSchema,
   NodeInvokeRequestEventSchema,
   NodeListParamsSchema,
@@ -355,6 +354,7 @@ import {
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
 } from "./plugins.js";
+import { NodePresenceProtocolSchemas } from "./protocol-schemas-node-presence.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
   SecretsReloadParamsSchema,
@@ -362,6 +362,7 @@ import {
   SecretsResolveParamsSchema,
   SecretsResolveResultSchema,
 } from "./secrets.js";
+import { SessionPlacementProtocolSchemas } from "./session-placement.js";
 import {
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
@@ -584,12 +585,12 @@ export const ProtocolSchemas = {
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
   NodeInvokeParams: NodeInvokeParamsSchema,
+  NodeInvokeProgressParams: NodeInvokeProgressParamsSchema,
   NodeInvokeResultParams: NodeInvokeResultParamsSchema,
   NodeEventParams: NodeEventParamsSchema,
   NodeEventResult: NodeEventResultSchema,
   NodePresenceAlivePayload: NodePresenceAlivePayloadSchema,
-  NodePresenceAliveReason: NodePresenceAliveReasonSchema,
-  NodePresenceActivityPayload: NodePresenceActivityPayloadSchema,
+  ...NodePresenceProtocolSchemas,
   NodePendingDrainParams: NodePendingDrainParamsSchema,
   NodePendingDrainResult: NodePendingDrainResultSchema,
   NodePendingEnqueueParams: NodePendingEnqueueParamsSchema,
@@ -629,6 +630,7 @@ export const ProtocolSchemas = {
   SessionsSearchResult: SessionsSearchResultSchema,
   SessionCompactionCheckpoint: SessionCompactionCheckpointSchema,
   SessionOperationEvent: SessionOperationEventSchema,
+  ...SessionPlacementProtocolSchemas,
   SessionsCompactionListParams: SessionsCompactionListParamsSchema,
   SessionsCompactionGetParams: SessionsCompactionGetParamsSchema,
   SessionsCompactionBranchParams: SessionsCompactionBranchParamsSchema,
