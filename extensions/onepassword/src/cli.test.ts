@@ -160,4 +160,12 @@ describe("1Password CLI output", () => {
       `${"x".repeat(76)}...`,
     ]);
   });
+
+  it.each(["0x10", "1e3"])("rejects non-decimal audit limits: %s", async (limit) => {
+    const { onepassword } = setupCommands();
+
+    await expect(onepassword.child("audit").run({ limit })).rejects.toThrow(
+      "--limit must be an integer from 1 to 1000",
+    );
+  });
 });
