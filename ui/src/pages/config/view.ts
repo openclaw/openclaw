@@ -30,6 +30,7 @@ import {
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { handleTabListKeydown } from "../../lib/tab-list.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
@@ -43,6 +44,10 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   125: "configView.textSizes.xl",
   140: "configView.textSizes.xxl",
 };
+
+function configSectionTabId(key: string | null): string {
+  return `config-section-tab-${encodeURIComponent(key ?? "root").replaceAll("%", "-")}`;
+}
 
 type WebPushUiState = {
   supported: boolean;
@@ -1762,11 +1767,16 @@ export function renderConfig(props: ConfigProps) {
                   ${topTabs.map(
                     (tab) => html`
                       <button
+                        type="button"
+                        id=${configSectionTabId(tab.key)}
                         class="config-top-tabs__tab ${props.activeSection === tab.key
                           ? "active"
                           : ""}"
                         role="tab"
                         aria-selected=${props.activeSection === tab.key}
+                        aria-controls="config-section-panel"
+                        .tabIndex=${props.activeSection === tab.key ? 0 : -1}
+                        @keydown=${handleTabListKeydown}
                         @click=${(e: Event) => {
                           props.onSectionChange(tab.key);
                           resetContentScroll(e.currentTarget);
@@ -1973,7 +1983,12 @@ export function renderConfig(props: ConfigProps) {
             `
           : nothing}
         <!-- Form content -->
-        <div class="config-content">
+        <div
+          id="config-section-panel"
+          class="config-content"
+          role="tabpanel"
+          aria-labelledby=${configSectionTabId(props.activeSection)}
+        >
           ${props.activeSection === "__appearance__"
             ? includeVirtualSections
               ? renderAppearanceSection(props)

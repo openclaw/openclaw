@@ -27,6 +27,25 @@
   overflow: hidden;
 }
 
+.shell-skip-link {
+  position: fixed;
+  top: 8px;
+  left: 50%;
+  z-index: 250;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-md), var(--focus-ring);
+  text-decoration: none;
+  transform: translate(-50%, -160%);
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.shell-skip-link:focus {
+  transform: translate(-50%, 0);
+}
+
 @supports (height: 100dvh) {
   .shell {
     height: 100dvh;

@@ -15,10 +15,7 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import {
-  buildPairingQrReplyChannelData,
-  setReplyPayloadMetadata,
-} from "../../auto-reply/reply-payload.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   appendTranscriptMessage,
@@ -2651,10 +2648,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         kind: "final",
         payload: {
           text: "Scan this QR code with the OpenClaw iOS app:",
-          channelData: buildPairingQrReplyChannelData({
-            setupCode,
-            expiresAtMs: Date.now() + 10 * 60_000,
-          }),
+          channelData: {
+            openclawPairingQr: {
+              setupCode,
+              expiresAtMs: Date.now() + 10 * 60_000,
+            },
+          },
           sensitiveMedia: true,
         },
       },
