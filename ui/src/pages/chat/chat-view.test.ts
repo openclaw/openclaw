@@ -3634,6 +3634,36 @@ describe("chat attachment picker", () => {
     );
   });
 
+  it("keeps large paste previews UTF-16 well-formed at the display boundary", () => {
+    let attachments: ChatAttachment[] = [];
+    let container = renderChatView({
+      attachments,
+      getAttachments: () => attachments,
+      onAttachmentsChange: (next) => {
+        attachments = next;
+      },
+    });
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    );
+    const text = `${"a".repeat(19)}🦞${"x".repeat(1100)}`;
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", {
+      value: {
+        items: { 0: { type: "text/plain" }, length: 1 },
+        getData: (type: string) => (type === "text/plain" ? text : ""),
+      },
+    });
+    textarea.dispatchEvent(event);
+    container = renderChatView({ attachments });
+
+    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toBe(
+      `${"a".repeat(19)}...`,
+    );
+  });
+
   it("keeps normal short plain-text paste in the textarea", () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });

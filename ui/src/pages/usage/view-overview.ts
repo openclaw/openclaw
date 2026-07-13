@@ -1053,6 +1053,7 @@ function renderSessionsCard(
           <label class="sessions-sort">
             <span>${t("usage.sessions.sort")}</span>
             <select
+              class="settings-select"
               @change=${(e: Event) =>
                 onSessionSortChange((e.target as HTMLSelectElement).value as typeof sessionSort)}
             >

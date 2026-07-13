@@ -300,6 +300,13 @@ Skills own workflows; root owns hard policy and routing.
 - Lockfiles/shrinkwrap are security surface: review `pnpm-lock.yaml`, `npm-shrinkwrap.json`, `package-lock.json`; root/plugin npm packages ship shrinkwrap, not package-lock.
 - Carbon pins owner-only: do not change `@buape/carbon` unless Shadow (`@thewilloftheshadow`, verified by `gh`) asks.
 - Releases/publish/version bumps need explicit approval. Use `$release-openclaw-maintainer`.
+- Active release scope lock: freeze the operator-selected cut SHA and release
+  identity through publish and verification. Moving `main`, unrelated CI,
+  optional backports, refactors, cleanup, and normal forward-ports are not part
+  of the release work queue.
+- Touch `main` during a release only when the operator requests it or the
+  smallest critical main-owned blocker prevents that release. Return to the
+  release branch immediately; defer broader main work until closeout.
 - Release versions use `YYYY.M.PATCH`, where `PATCH` is a sequential monthly release-train number, never the calendar day. Stable and beta tags determine the current train; alpha-only tags do not consume or advance the beta/stable patch number. After `2026.6.5`, the next beta train is `2026.6.6-beta.1` even if higher alpha-only tags exist.
 - Alpha/nightly versions use the next unreleased train plus an incrementing prerelease number. Repeated nightlies for the same train increment only `alpha.N`; they must not mint a new patch number from the date.
 - Backports are optional. Apply only the operator-selected set; when requested without a target, use the newest open `release/` branch.
