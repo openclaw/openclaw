@@ -11,6 +11,14 @@ import {
   type WorkerTranscriptCommitResult,
   WORKER_RPC_SET_VERSION,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type {
+  WorkerInferenceCancelParams,
+  WorkerInferenceCancelResult,
+  WorkerInferenceErrorReason,
+  WorkerInferenceStartParams,
+  WorkerInferenceStartResult,
+} from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { SecretRef } from "../../config/types.secrets.js";
 import { validateCloudWorkerProfileSettings } from "../../config/zod-schema.cloud-workers.js";
@@ -45,6 +53,12 @@ import {
   type WorkerCredentialBinding,
   type WorkerCredentialDeliveryClaim,
 } from "./credential.js";
+import type { WorkerInferenceStore } from "./inference-store.js";
+import {
+  createWorkerInferenceManager,
+  type WorkerInferenceExecutor,
+  type WorkerInferenceSink,
+} from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import {
@@ -115,6 +129,8 @@ export type WorkerEnvironmentServiceOptions = {
     WorkerLiveEventReceiver,
     "apply" | "bindSession" | "clear" | "clearEnvironment" | "rotateCredential" | "start"
   >;
+  executeInference: WorkerInferenceExecutor;
+  inferenceStore?: WorkerInferenceStore;
 };
 
 export type WorkerTranscriptCommitApplicationResult =
@@ -127,6 +143,20 @@ export type WorkerTranscriptCommitServiceResult =
 
 export type WorkerLiveEventServiceResult =
   | WorkerLiveEventApplicationResult
+  | { ok: false; closeReason: WorkerProtocolCloseReason };
+
+type WorkerInferenceStartServiceResult =
+  | {
+      ok: true;
+      result: WorkerInferenceStartResult;
+      launch: () => void;
+    }
+  | { ok: false; reason: WorkerInferenceErrorReason }
+  | { ok: false; closeReason: WorkerProtocolCloseReason };
+
+type WorkerInferenceCancelServiceResult =
+  | { ok: true; result: WorkerInferenceCancelResult }
+  | { ok: false; reason: WorkerInferenceErrorReason }
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -182,8 +212,15 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const activeOperations = new Set<Promise<unknown>>();
   const pendingCredentials = new Map<string, MintedWorkerCredential>();
   const now = options.now ?? Date.now;
+  const inference = createWorkerInferenceManager({
+    execute: options.executeInference,
+    getConfig: options.getConfig,
+    now,
+    ...(options.inferenceStore ? { store: options.inferenceStore } : {}),
+  });
   let reconcileInFlight: Promise<void> | undefined;
   let interval: ReturnType<typeof setInterval> | undefined;
+  let unsubscribeSessionIdentityMutation: (() => void) | undefined;
   let stopping = false;
 
   const project = (record: WorkerEnvironmentRecord) => ({
@@ -201,6 +238,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       pendingCredentials.delete(r.environmentId);
     }
     if (to !== "attached") {
+      inference.cancelEnvironment(r.environmentId);
       options.liveEvents?.clearEnvironment(r.environmentId);
     }
     return next;
@@ -334,6 +372,10 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   const mintCredentialLocked = (
     request: WorkerCredentialBinding,
   ): { credentialHash: string; grant: MintedWorkerCredential } => {
+    const previous = store.getCredential(request.environmentId);
+    if (previous) {
+      inference.cancelEnvironment(request.environmentId);
+    }
     const material = credentialMaterial();
     const credential = {
       environmentId: request.environmentId,
@@ -963,6 +1005,12 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (interval || stopping) {
       return;
     }
+    unsubscribeSessionIdentityMutation = onSessionIdentityMutation((mutation) => {
+      const currentSessionId = "current" in mutation ? mutation.current.sessionId : undefined;
+      if (mutation.previous.sessionId && mutation.previous.sessionId !== currentSessionId) {
+        inference.cancelSession(mutation.previous.sessionId);
+      }
+    });
     options.liveEvents?.start();
     interval = setInterval(
       () => void reconcileOnce().catch(() => warn("Worker environment reconcile sweep failed")),
@@ -974,10 +1022,13 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const stop = async () => {
     stopping = true;
-    pendingCredentials.clear();
-    options.liveEvents?.clear();
     clearInterval(interval);
     interval = undefined;
+    unsubscribeSessionIdentityMutation?.();
+    unsubscribeSessionIdentityMutation = undefined;
+    await inference.stop();
+    pendingCredentials.clear();
+    options.liveEvents?.clear();
     await tunnels?.stopAll();
     const reconciliation = reconcileInFlight;
     if (reconciliation) {
@@ -1096,6 +1147,55 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     return Promise.resolve(options.liveEvents.apply({ identity, request }));
   };
 
+  const revalidateInference = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceStartParams | WorkerInferenceCancelParams,
+  ): "epoch-mismatch" | "session-not-attached" | null => {
+    if (request.sessionId !== identity.sessionId) {
+      return "session-not-attached";
+    }
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    return binding.ok ? null : "reason" in binding ? binding.reason : "session-not-attached";
+  };
+
+  const startInference = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceStartParams,
+    sink: WorkerInferenceSink,
+  ): WorkerInferenceStartServiceResult => {
+    if (request.sessionId !== identity.sessionId) {
+      return { ok: false, reason: "session-not-attached" };
+    }
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    if (!binding.ok) {
+      return binding;
+    }
+    return inference.start({
+      identity,
+      request,
+      sink,
+      revalidate: () => revalidateInference(identity, request),
+    });
+  };
+
+  const cancelInference = (
+    identity: WorkerConnectionIdentity,
+    request: WorkerInferenceCancelParams,
+  ): WorkerInferenceCancelServiceResult => {
+    if (request.sessionId !== identity.sessionId) {
+      return { ok: false, reason: "session-not-attached" };
+    }
+    const binding = validateAttachedWorkerRequest(identity, request.runEpoch);
+    if (!binding.ok) {
+      return binding;
+    }
+    return inference.cancel({
+      identity,
+      request,
+      revalidate: () => revalidateInference(identity, request),
+    });
+  };
+
   return {
     list: () => store.list().map(project),
     get: (environmentId: string) => {
@@ -1135,6 +1235,14 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         : validateWorkerConnectionIdentity({ store, identity, nowMs: now() }),
     commitTranscript,
     pushLiveEvent,
+    startInference,
+    cancelInference,
+    cancelInferenceForSession: (params: { sessionId: string; runId?: string }): string[] =>
+      inference.cancelSession(params.sessionId, params.runId),
+    hasInferenceForSession: (sessionId: string, runId?: string): boolean =>
+      inference.hasSession(sessionId, runId),
+    resolveInferenceSessionForRunId: (runId: string): string | undefined =>
+      inference.resolveSessionIdForRunId(runId),
     attachSession,
     takeMintedCredential: (binding: WorkerCredentialBinding) =>
       readPendingCredential(binding)?.grant,

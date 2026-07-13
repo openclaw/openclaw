@@ -314,11 +314,127 @@ describe("runtime parity", () => {
     });
 
     expect(resolved).toEqual([
-      {
+      expect.objectContaining({
         tool: "image_generate",
         argsHash: "same-args",
-        resultHash: "async-started",
-      },
+      }),
+    ]);
+    expect(resolved[0]?.errorClass).toBeUndefined();
+  });
+
+  it("accepts a fresh scenario MEDIA result for terminal image tools", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "same-args",
+          resultHash: "missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [],
+      terminalImageResultProven: true,
+    });
+    const codexResult = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "same-args",
+          resultHash: "runtime-specific-path",
+        },
+      ],
+      transcriptToolCalls: [],
+      terminalImageResultProven: true,
+    });
+
+    expect(resolved).toEqual(codexResult);
+    expect(resolved[0]?.errorClass).toBeUndefined();
+  });
+
+  it("requires call-linked passed step evidence for terminal image results", () => {
+    expect(
+      __testing.hasProvenTerminalImageResult({
+        status: "pass",
+        steps: [
+          {
+            status: "pass",
+            details: "QA-CAPABILITY-1234\nimage_generate=true\nMEDIA:/tmp/qa-image.png",
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      __testing.hasProvenTerminalImageResult({
+        status: "pass",
+        steps: [{ status: "pass", details: "MEDIA:/tmp/unrelated-screenshot.png" }],
+      }),
+    ).toBe(false);
+    expect(
+      __testing.hasProvenTerminalImageResult({
+        status: "pass",
+        steps: [
+          {
+            status: "fail",
+            details: "image_generate=true\nMEDIA:/tmp/failed-image.png",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("preserves a missing image result when MEDIA may belong to another call", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "first-args",
+          resultHash: "first-success",
+        },
+        {
+          tool: "image_generate",
+          argsHash: "second-args",
+          resultHash: "second-missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [],
+      terminalImageResultProven: true,
+    });
+
+    expect(resolved.map((toolCall) => toolCall.errorClass)).toEqual([
+      undefined,
+      "tool-result-missing",
+    ]);
+  });
+
+  it("preserves missing image results when capture sources disagree on call count", () => {
+    const resolved = __testing.resolveRuntimeParityToolCalls({
+      mockToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "first-args",
+          resultHash: "mock-missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      transcriptToolCalls: [
+        {
+          tool: "image_generate",
+          argsHash: "first-args",
+          resultHash: "first-success",
+        },
+        {
+          tool: "image_generate",
+          argsHash: "second-args",
+          resultHash: "second-missing",
+          errorClass: "tool-result-missing",
+        },
+      ],
+      terminalImageResultProven: true,
+    });
+
+    expect(resolved).toEqual([
+      expect.objectContaining({ errorClass: "tool-result-missing", resultHash: "mock-missing" }),
     ]);
   });
 

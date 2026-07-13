@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import type { Insertable } from "kysely";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   executeSqliteQuerySync,
@@ -609,7 +610,7 @@ describe("channel ingress queue", () => {
           claim_owner: overrides.claim_owner ?? null,
           claimed_at: overrides.claimed_at ?? null,
           completed_at: overrides.completed_at ?? null,
-        } as any),
+        } as Insertable<OpenClawStateKyselyDatabase["channel_ingress_events"]>),
       );
     }
 

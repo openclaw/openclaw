@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
+import type { ensureNodeHostConfig } from "./config.js";
 import { startNodeHostMcpManager, type NodeHostMcpManager } from "./mcp.js";
 import {
   resolveNodeHostGatewayDeviceFamily,
@@ -490,7 +491,7 @@ describe("runNodeHost", () => {
       version: 1,
       nodeId: "node-test",
       gateway: { contextPath: "/old-path" },
-    } as any);
+    } as Awaited<ReturnType<typeof ensureNodeHostConfig>>);
 
     await expect(
       runNodeHost({
@@ -510,7 +511,7 @@ describe("runNodeHost", () => {
       version: 1,
       nodeId: "node-test",
       gateway: { contextPath: "/old-path" },
-    } as any);
+    } as Awaited<ReturnType<typeof ensureNodeHostConfig>>);
 
     await expect(
       runNodeHost({

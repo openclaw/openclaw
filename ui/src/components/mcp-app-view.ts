@@ -29,6 +29,25 @@ type HostContext = NonNullable<
 type HostCapabilities = ConstructorParameters<typeof AppBridge>[2];
 type HostSandboxCsp = NonNullable<NonNullable<HostCapabilities["sandbox"]>["csp"]>;
 
+type ScheduleFrame = (callback: FrameRequestCallback) => number;
+type ScheduleFallback = (callback: () => void, delayMs: number) => number;
+
+async function waitForMcpAppHandlerRegistration(
+  scheduleFrame: ScheduleFrame = window.requestAnimationFrame.bind(window),
+  scheduleFallback: ScheduleFallback = window.setTimeout.bind(window),
+): Promise<void> {
+  await Promise.race([
+    new Promise<void>((resolve) => {
+      scheduleFrame(() => {
+        scheduleFrame(() => resolve());
+      });
+    }),
+    new Promise<void>((resolve) => {
+      scheduleFallback(resolve, 1_000);
+    }),
+  ]);
+}
+
 function hostContext(element: Element | undefined, height: number): HostContext {
   const rect = element?.getBoundingClientRect();
   const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;
@@ -224,7 +243,9 @@ export class McpAppView extends LitElement {
       }
       const iframe = document.createElement("iframe");
       iframe.title = this.title || t("mcpApp.title");
-      iframe.referrerPolicy = "no-referrer";
+      // The isolated proxy binds its parent before accepting messages. Only the
+      // Control UI origin is disclosed; path/query data remains suppressed.
+      iframe.referrerPolicy = "origin";
       iframe.style.height = `${this.height}px`;
       // The proxy listener is a dedicated origin that never serves host data,
       // so Apps retain their required origin capabilities without reaching Control UI.
@@ -315,6 +336,10 @@ export class McpAppView extends LitElement {
           window.setTimeout(() => reject(new Error("MCP App initialization timed out")), 15_000);
         }),
       ]);
+      await waitForMcpAppHandlerRegistration();
+      if (generation !== this.setupGeneration) {
+        return;
+      }
       await bridge.sendToolInput({
         arguments:
           payload.toolInput &&

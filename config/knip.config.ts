@@ -195,11 +195,21 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/gateway-client": {
-      entry: ["src/index.ts!"],
+      // Mirror package.json exports; these subpaths are published surfaces.
+      entry: ["src/index.ts!", "src/readiness.ts!", "src/timeouts.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/gateway-protocol": {
-      entry: ["src/index.ts!", "src/schema.ts!"],
+      // Mirror package.json exports; these subpaths are published surfaces.
+      entry: [
+        "src/index.ts!",
+        "src/client-info.ts!",
+        "src/connect-error-details.ts!",
+        "src/frame-guards.ts!",
+        "src/schema.ts!",
+        "src/startup-unavailable.ts!",
+        "src/version.ts!",
+      ],
       project: ["src/**/*.ts!"],
     },
     "packages/net-policy": {

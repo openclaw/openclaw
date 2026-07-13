@@ -86,6 +86,7 @@ export type ChatProps = {
     manualFallback: boolean;
     onLoadOlder: () => void;
   };
+  renderAllLoadedHistory?: boolean;
   sideChatTurns?: ChatSideResult[];
   sideChatPending?: ChatSideResultPending | null;
   sideChatHidden?: boolean;
@@ -263,6 +264,7 @@ export function renderChat(props: ChatProps) {
     sessionKey: props.sessionKey,
     loading: props.loading,
     historyPagination: props.historyPagination,
+    renderAllLoadedHistory: props.renderAllLoadedHistory,
     messages: props.messages,
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,

@@ -719,6 +719,25 @@ describe("registerPreActionHooks", () => {
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
+  it("bypasses config guard for SQLite snapshot recovery commands", async () => {
+    await runPreAction({
+      parseArgv: ["backup", "sqlite", "restore"],
+      processArgv: [
+        "node",
+        "openclaw",
+        "backup",
+        "sqlite",
+        "restore",
+        "/tmp/snapshot",
+        "--target",
+        "/tmp/restore.sqlite",
+      ],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
   it("routes logs to stderr during plugin loading in --json mode and restores after", async () => {
     let stderrDuringPluginLoad = false;
     ensurePluginRegistryLoadedMock.mockImplementation(() => {

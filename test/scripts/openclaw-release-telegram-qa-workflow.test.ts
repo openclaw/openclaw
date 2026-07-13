@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -565,6 +565,16 @@ describe("release Telegram QA workflow", () => {
     expect(captureStep?.if).toContain("steps.terminate_sut.outputs.quiescent == 'true'");
     expect(captureStep?.env?.OUTPUT_DIR).toBe("${{ steps.run_lane.outputs.output_dir }}");
     expect(captureStep?.env?.RUNTIME_ROOT).toBe("${{ steps.create_sut.outputs.runtime_root }}");
+    expect(captureStep?.env?.RUN_LANE_OUTCOME).toBe("${{ steps.run_lane.outcome }}");
+    expect(captureStep?.run).toContain('[[ "$RUN_LANE_OUTCOME" != "success" ]]');
+    expect(captureStep?.run).toContain("((${#gateway_logs[@]} > 0))");
+    expect(captureStep?.run).toContain("mapfile -d '' -t gateway_logs");
+    expect(captureStep?.run).toContain("-printf '%T@\\t%p\\0'");
+    expect(captureStep?.run).toContain("sort -z -nr");
+    expect(captureStep?.run).toContain("sed -z -n '1,8p'");
+    expect(captureStep?.run).toContain("cut -z -f2-");
+    expect(captureStep?.run).toContain("((${#gateway_logs[@]} <= 8))");
+    expect(captureStep?.run).toContain("((${#model_config_proofs[@]} > 0))");
     expect(captureStep?.run).toContain("-name 'openclaw-*.log'");
     expect(captureStep?.run).toContain(
       'trusted_temp_root="$(mktemp -d "${RUNNER_TEMP}/openclaw-telegram-diagnostics.XXXXXX")"',
@@ -615,6 +625,43 @@ describe("release Telegram QA workflow", () => {
       /run_qa_attempt\(\) \(\n\s+set -euo pipefail\n\s+exec 2>&1\n\s+output_name=/u,
     );
     expect(runStep?.run).toContain("::stop-commands::%s");
+  });
+
+  it.runIf(process.platform === "linux")("keeps only the newest eight gateway logs", () => {
+    const captureStep = workflowStep(
+      workflowJob("run_telegram"),
+      "Capture isolated Telegram runtime diagnostics",
+    );
+    const selectorSource = captureStep.run?.match(
+      /mapfile -d '' -t gateway_logs < <\([\s\S]*?^\)$/mu,
+    )?.[0];
+    expect(selectorSource).toBeTruthy();
+
+    const workdir = tempDirs.make("openclaw-telegram-log-selector-");
+    const runtimeRoot = join(workdir, "runtime");
+    const fakeBin = join(workdir, "bin");
+    mkdirSync(join(runtimeRoot, "tmp"), { recursive: true });
+    mkdirSync(fakeBin);
+    writeFileSync(join(fakeBin, "sudo"), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+
+    const logPaths = Array.from({ length: 12 }, (_, index) => {
+      const logDir = join(runtimeRoot, "tmp", `gateway-${index}`);
+      const logPath = join(logDir, `openclaw-${index}.log`);
+      mkdirSync(logDir);
+      writeFileSync(logPath, `${index}\n`);
+      utimesSync(logPath, index + 1, index + 1);
+      return logPath;
+    });
+    const result = spawnSync(
+      "bash",
+      ["-c", `set -euo pipefail\n${selectorSource}\nprintf '%s\\0' "\${gateway_logs[@]}"`],
+      {
+        env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH}`, RUNTIME_ROOT: runtimeRoot },
+      },
+    );
+    expect(result.status, result.stderr.toString()).toBe(0);
+    const selected = result.stdout.toString().split("\0").filter(Boolean);
+    expect(selected).toEqual(logPaths.slice(4).reverse());
   });
 
   it("retains only allowlisted verbose runtime diagnostics", () => {
@@ -788,6 +835,7 @@ describe("release Telegram QA workflow", () => {
       const runtimeRoot = join(workdir, "runtime");
       const evidenceRoot = join(workdir, "evidence");
       const configPath = join(workdir, "openclaw.json");
+      const duplicateConfigPath = join(workdir, "openclaw-duplicate.json");
       mkdirSync(runtimeRoot);
       mkdirSync(evidenceRoot);
       writeFileSync(
@@ -811,17 +859,22 @@ describe("release Telegram QA workflow", () => {
           },
         }),
       );
+      writeFileSync(
+        duplicateConfigPath,
+        readFileSync(configPath, "utf8").replace("not-exported", "different-ignored-value"),
+      );
       const result = spawnSync(
         "bash",
         [
           "-c",
-          `set -euo pipefail\n${captureSource}\ncapture_live_model_config "$CONFIG_PATH"\nfind "$EVIDENCE_ROOT/trusted-runtime-diagnostics" -type f -name 'gateway-model-config-*.json' -print`,
+          `set -euo pipefail\n${captureSource}\ncapture_live_model_config "$CONFIG_PATH"\ncapture_live_model_config "$DUPLICATE_CONFIG_PATH"\nfind "$EVIDENCE_ROOT/trusted-runtime-diagnostics" -type f -name 'gateway-model-config-*.json' -print`,
         ],
         {
           encoding: "utf8",
           env: {
             ...process.env,
             CONFIG_PATH: configPath,
+            DUPLICATE_CONFIG_PATH: duplicateConfigPath,
             EVIDENCE_ROOT: evidenceRoot,
             RUNTIME_ROOT: runtimeRoot,
             RUNNER_GID: String(process.getgid?.() ?? 0),
@@ -830,7 +883,9 @@ describe("release Telegram QA workflow", () => {
         },
       );
       expect(result.status, result.stderr).toBe(0);
-      const proofPath = result.stdout.trim();
+      const proofPaths = result.stdout.trim().split("\n");
+      expect(proofPaths).toHaveLength(1);
+      const proofPath = proofPaths[0]!;
       const proofText = readFileSync(proofPath, "utf8");
       expect(JSON.parse(proofText)).toEqual({
         agentDefaultModel: {
