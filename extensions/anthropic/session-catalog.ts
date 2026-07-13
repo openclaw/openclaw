@@ -1208,7 +1208,7 @@ function adoptedSessionKey(threadId: string): string {
 }
 
 function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return api.runtime.config?.current?.() ?? api.config ?? {};
+  return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
 }
 
 function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
