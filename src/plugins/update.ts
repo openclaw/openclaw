@@ -176,7 +176,6 @@ function formatNpmInstallFailure(params: {
   }
   return `Failed to ${params.phase} ${params.pluginId}: ${params.result.error}`;
 }
-
 function formatMarketplaceInstallFailure(params: {
   pluginId: string;
   marketplaceSource: string;
