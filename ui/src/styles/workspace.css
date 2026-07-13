@@ -573,6 +573,61 @@ button.workspace-tab:hover {
   color: var(--text-muted, var(--text));
 }
 
+/* Chart widget: dependency-free responsive SVG visuals. */
+.workspace-chart {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 40px;
+}
+
+.workspace-chart__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.workspace-chart__line {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.workspace-chart__point {
+  fill: var(--accent);
+}
+
+.workspace-chart__area {
+  fill: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.workspace-chart__bars rect {
+  fill: var(--accent);
+}
+
+.workspace-chart__gauge-track,
+.workspace-chart__gauge-fill {
+  stroke-width: 3;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.workspace-chart__gauge-track {
+  stroke: var(--bg-muted);
+}
+
+.workspace-chart__gauge-fill {
+  stroke: var(--accent);
+}
+
+.workspace-chart__gauge-needle {
+  stroke: var(--text);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
 /* Usage mini-summary. */
 .workspace-usage {
   display: flex;
