@@ -22,7 +22,7 @@ type MockGoogleLiveConnectParams = {
   };
 };
 
-const { connectMock, createTokenMock, session } = vi.hoisted(() => {
+const { connectMock, createGoogleGenAIMock, createTokenMock, session } = vi.hoisted(() => {
   const sessionValue: MockGoogleLiveSession = {
     close: vi.fn(),
     sendClientContent: vi.fn(),
@@ -33,22 +33,24 @@ const { connectMock, createTokenMock, session } = vi.hoisted(() => {
   const createTokenMockLocal = vi.fn(async (_params: unknown) => ({
     name: "auth_tokens/browser-session",
   }));
+  const createGoogleGenAIMockLocal = vi.fn(() => ({
+    authTokens: {
+      create: createTokenMockLocal,
+    },
+    live: {
+      connect: connectMockLocal,
+    },
+  }));
   return {
     connectMock: connectMockLocal,
+    createGoogleGenAIMock: createGoogleGenAIMockLocal,
     createTokenMock: createTokenMockLocal,
     session: sessionValue,
   };
 });
 
 vi.mock("./google-genai-runtime.js", () => ({
-  createGoogleGenAI: vi.fn(() => ({
-    authTokens: {
-      create: createTokenMock,
-    },
-    live: {
-      connect: connectMock,
-    },
-  })),
+  createGoogleGenAI: createGoogleGenAIMock,
 }));
 
 const ENV_KEYS = ["GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
@@ -124,6 +126,7 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
   beforeEach(() => {
     envSnapshot = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
     connectMock.mockClear();
+    createGoogleGenAIMock.mockClear();
     createTokenMock.mockClear();
     session.close.mockClear();
     session.sendClientContent.mockClear();
@@ -632,6 +635,29 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
       "behavior",
     );
     expect(sessionLocal?.model).toBe("gemini-3.1-flash-live-preview");
+  });
+
+  it("creates browser-token clients with a finite request timeout", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const providerConfig = Object.fromEntries([["api" + "Key", "gemini-key"]]);
+
+    await provider.createBrowserSession?.({
+      providerConfig,
+    });
+
+    const clientConfig = requireFirstMockArg(createGoogleGenAIMock, "GoogleGenAI config") as {
+      httpOptions?: {
+        apiVersion?: string;
+        timeout?: number;
+      };
+    };
+    const timeout = clientConfig.httpOptions?.timeout;
+    if (typeof timeout !== "number") {
+      throw new Error("expected Google realtime browser-token timeout");
+    }
+    expect(clientConfig.httpOptions?.apiVersion).toBe("v1alpha");
+    expect(Number.isFinite(timeout)).toBe(true);
+    expect(timeout).toBeGreaterThan(0);
   });
 
   it("rejects browser session expiry outside Date range", async () => {
