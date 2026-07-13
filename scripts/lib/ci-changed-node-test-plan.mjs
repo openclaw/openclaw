@@ -4,13 +4,18 @@ import { detectChangedLanes } from "../changed-lanes.mjs";
 import {
   buildVitestRunPlans,
   findUnmatchedExplicitTestTargets,
+  hasReexportGraphImpactOnTargets,
   resolveChangedTestTargetPlan,
 } from "../test-projects.test-support.mjs";
 import { createNodeTestShards } from "./ci-node-test-plan.mjs";
+import { buildPluginSdkEntrySources, publicPluginSdkEntrypoints } from "./plugin-sdk-entries.mjs";
 
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const DIST_DEPENDENT_CONFIGS = new Set(["test/vitest/vitest.boundary.config.ts"]);
 const MAX_CHANGED_NODE_TEST_TARGETS = 20;
+const publicPluginSdkEntrySources = Object.values(
+  buildPluginSdkEntrySources(publicPluginSdkEntrypoints),
+);
 
 const fullNodeTestShards = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
 const configsRequiringFullSuiteMetadata = new Set(
@@ -43,8 +48,13 @@ export function createChangedNodeTestShards(changedPaths, options = {}) {
     return null;
   }
 
-  // Package-specifier imports are invisible to the relative import graph.
-  if (detectChangedLanes(changedPaths).extensionImpactFromCore) {
+  // Package-specifier consumers are invisible to the relative import graph.
+  // Fail safe when a core change reaches a public SDK entrypoint indirectly.
+  if (
+    detectChangedLanes(changedPaths).extensionImpactFromCore ||
+    (changedPaths.some((changedPath) => changedPath.startsWith("src/")) &&
+      hasReexportGraphImpactOnTargets(changedPaths, publicPluginSdkEntrySources, cwd))
+  ) {
     return null;
   }
 

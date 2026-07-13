@@ -2316,6 +2316,8 @@ const IMPORT_GRAPH_GREP_PATHS = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) =>
 );
 const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
+const REEXPORT_SPECIFIER_PATTERN =
+  /\bexport\s+(?:type\s+)?(?:\*\s+(?:as\s+\w+\s+)?from\s+|[^"']+?\s+from\s+)["']([^"']+)["']/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
@@ -3165,6 +3167,7 @@ function getImportGraph(cwd) {
   const files = listImportGraphFilesForCwd(cwd);
   const fileSet = new Set(files);
   const reverseImports = new Map();
+  const reverseReexports = new Map();
   const testFiles = new Set(
     files.filter((file) => isTestFileTarget(file) && !file.endsWith(".live.test.ts")),
   );
@@ -3185,11 +3188,46 @@ function getImportGraph(cwd) {
       importers.push(file);
       reverseImports.set(imported, importers);
     }
+    for (const match of source.matchAll(REEXPORT_SPECIFIER_PATTERN)) {
+      const imported = resolveImportSpecifier(file, match[1] ?? "", fileSet);
+      if (!imported) {
+        continue;
+      }
+      const importers = reverseReexports.get(imported) ?? [];
+      importers.push(file);
+      reverseReexports.set(imported, importers);
+    }
   }
 
-  cachedImportGraph = { reverseImports, testFiles };
+  cachedImportGraph = { reverseImports, reverseReexports, testFiles };
   cachedImportGraphCwd = cwd;
   return cachedImportGraph;
+}
+
+/** Returns whether any changed path is re-exported through one of the requested targets. */
+export function hasReexportGraphImpactOnTargets(changedPaths, targetPaths, cwd = process.cwd()) {
+  const targets = new Set(targetPaths.map(normalizePathPattern));
+  if (targets.size === 0) {
+    return false;
+  }
+
+  const { reverseReexports } = getImportGraph(cwd);
+  for (const changedPath of changedPaths) {
+    const queue = [normalizePathPattern(changedPath)];
+    const seen = new Set(queue);
+    for (const current of queue) {
+      if (targets.has(current)) {
+        return true;
+      }
+      for (const importer of reverseReexports.get(current) ?? []) {
+        if (!seen.has(importer)) {
+          seen.add(importer);
+          queue.push(importer);
+        }
+      }
+    }
+  }
+  return false;
 }
 
 function resolveAffectedTestsFromImportGraph(changedPath, cwd, options = {}) {

@@ -6,7 +6,7 @@ import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-t
 
 describe("CI changed Node test plan", () => {
   it("routes a focused source change into one targeted job", () => {
-    expect(createChangedNodeTestShards(["src/utils/chunk-items.ts"])).toEqual([
+    expect(createChangedNodeTestShards(["src/agents/live-model-filter.ts"])).toEqual([
       {
         checkName: "checks-node-changed",
         configs: [],
@@ -14,9 +14,9 @@ describe("CI changed Node test plan", () => {
         runner: "blacksmith-8vcpu-ubuntu-2404",
         shardName: "changed",
         targets: [
-          "src/utils/chunk-items.test.ts",
-          "src/plugin-sdk/text-chunking.test.ts",
-          "src/utils/utils-misc.test.ts",
+          "src/agents/live-model-filter.test.ts",
+          "src/agents/live-model-dynamic-candidates.test.ts",
+          "src/agents/model-compat.test.ts",
         ],
       },
     ]);
@@ -42,6 +42,10 @@ describe("CI changed Node test plan", () => {
 
   it("fails safe when public SDK changes affect extension imports", () => {
     expect(createChangedNodeTestShards(["src/plugin-sdk/index.ts"])).toBeNull();
+  });
+
+  it("fails safe when a core change reaches package consumers through the public SDK", () => {
+    expect(createChangedNodeTestShards(["src/shared/text/strip-markdown.ts"])).toBeNull();
   });
 
   it("fails safe when workspace package consumers use package imports", () => {

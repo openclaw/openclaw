@@ -96,6 +96,12 @@ export function resolveChangedTestTargetPlan(
   options?: ChangedTestTargetOptions,
 ): ChangedTestTargetPlan;
 
+export function hasReexportGraphImpactOnTargets(
+  changedPaths: string[],
+  targetPaths: string[],
+  cwd?: string,
+): boolean;
+
 export function resolveChangedTestTargetPlanForArgs(
   args: string[],
   cwd?: string,
