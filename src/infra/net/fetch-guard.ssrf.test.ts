@@ -1400,6 +1400,36 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
   });
 
+  it("runs a synchronous redirect validator before following each hop", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://unapproved.example/next"))
+      .mockResolvedValueOnce(okResponse());
+    const validateRedirect = vi.fn(({ toUrl }: { toUrl: URL }) => {
+      if (toUrl.origin !== "https://public.example") {
+        throw new Error(`redirect origin is not approved: ${toUrl.origin}`);
+      }
+    });
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/start",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        maxRedirects: 3,
+        validateRedirect,
+      }),
+    ).rejects.toThrow(/redirect origin is not approved/);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(validateRedirect).toHaveBeenCalledWith({
+      fromUrl: new URL("https://public.example/start"),
+      toUrl: new URL("https://unapproved.example/next"),
+      status: 302,
+      redirectCount: 1,
+    });
+  });
+
   it("blocks URLs that use credentials to obscure a private host", async () => {
     const fetchImpl = vi.fn();
     // http://attacker.com@127.0.0.1:8080/ — URL parser extracts hostname as 127.0.0.1

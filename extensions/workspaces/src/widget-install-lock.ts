@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
+import path from "node:path";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
-import { resolveWidgetDir } from "./manifest.js";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 
 const WIDGET_INSTALL_LOCK_OPTIONS = {
   retries: {
@@ -13,6 +15,7 @@ const WIDGET_INSTALL_LOCK_OPTIONS = {
 } as const;
 
 const localInstallTails = new Map<string, Promise<void>>();
+const LOCK_ROOT = path.posix.join("workspaces", ".widget-install-locks");
 
 async function withLocalWidgetInstallLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const previous = localInstallTails.get(key) ?? Promise.resolve();
@@ -39,8 +42,12 @@ export async function withWidgetInstallLock<T>(
   stateDir: string,
   fn: () => Promise<T>,
 ): Promise<T> {
-  const widgetDir = resolveWidgetDir(name, stateDir);
-  return await withLocalWidgetInstallLock(widgetDir, async () =>
-    withFileLock(widgetDir, WIDGET_INSTALL_LOCK_OPTIONS, fn),
+  const root = await fsRoot(stateDir, { mkdir: true, symlinks: "reject" });
+  await root.mkdir(LOCK_ROOT);
+  const lockRoot = await root.resolve(LOCK_ROOT);
+  const lockName = createHash("sha256").update(name).digest("hex");
+  const lockTarget = path.join(lockRoot, lockName);
+  return await withLocalWidgetInstallLock(lockTarget, async () =>
+    withFileLock(lockTarget, WIDGET_INSTALL_LOCK_OPTIONS, fn),
   );
 }

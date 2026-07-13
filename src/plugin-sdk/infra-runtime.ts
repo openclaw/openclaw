@@ -232,6 +232,7 @@ export {
   withTrustedExplicitProxyGuardedFetchMode,
   type GuardedFetchMode,
   type GuardedFetchOptions,
+  type GuardedFetchRedirect,
   type GuardedFetchResult,
 } from "../infra/net/fetch-guard.js";
 export * from "../infra/net/proxy-env.js";

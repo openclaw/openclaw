@@ -29,4 +29,15 @@ describe("scaffoldWorkspaceWidget", () => {
     expect(html).toContain("<h1>Team&#39;s &lt;status&gt;</h1>");
     expect(html).toContain("<footer>Built by agent&#39;s helper</footer>");
   });
+
+  it("keeps widget install locks outside the valid widget-name namespace", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-scaffold-"));
+    stateDirs.push(stateDir);
+
+    const dotted = await scaffoldWorkspaceWidget({ name: "foo.lock", stateDir });
+    const plain = await scaffoldWorkspaceWidget({ name: "foo", stateDir });
+
+    expect((await fs.stat(dotted.dir)).isDirectory()).toBe(true);
+    expect((await fs.stat(plain.dir)).isDirectory()).toBe(true);
+  }, 15_000);
 });

@@ -128,23 +128,54 @@ describe("fetchWorkspaceGallery", () => {
       expect.objectContaining({
         url: "https://gallery.example/index.json",
         requireHttps: true,
-        maxRedirects: 0,
+        maxRedirects: 3,
         timeoutMs: 5_000,
         init: { method: "GET", headers: { Accept: "application/json" }, redirect: "manual" },
       }),
     );
   });
 
-  it("rejects an unapproved redirect before making a second request", async () => {
-    const fetchGuard = vi.fn<WorkspaceGalleryFetch>(async (options) =>
-      guardedResponse(
-        new Response(null, {
+  it("validates an approved three-hop redirect chain inside one guarded request", async () => {
+    const hops = [
+      "https://gallery.example/one",
+      "https://gallery.example/two",
+      "https://gallery.example/final",
+    ];
+    const fetchGuard = vi.fn<WorkspaceGalleryFetch>(async (options) => {
+      let fromUrl = new URL(options.url);
+      for (const [index, hop] of hops.entries()) {
+        const toUrl = new URL(hop);
+        options.validateRedirect?.({
+          fromUrl,
+          toUrl,
           status: 302,
-          headers: { location: "https://evil.example/registry.json" },
-        }),
-        options.url,
-      ),
-    );
+          redirectCount: index + 1,
+        });
+        fromUrl = toUrl;
+      }
+      return guardedResponse(jsonResponse(registry()), hops.at(-1)!);
+    });
+
+    await expect(
+      fetchWorkspaceGallery("https://gallery.example/index.json", {
+        allowedOrigins: ["https://gallery.example"],
+        fetchGuard,
+      }),
+    ).resolves.toEqual(registry());
+    expect(fetchGuard).toHaveBeenCalledTimes(1);
+    expect(fetchGuard).toHaveBeenCalledWith(expect.objectContaining({ maxRedirects: 3 }));
+  });
+
+  it("rejects an unapproved redirect inside the guarded request", async () => {
+    const fetchGuard = vi.fn<WorkspaceGalleryFetch>(async (options) => {
+      options.validateRedirect?.({
+        fromUrl: new URL(options.url),
+        toUrl: new URL("https://evil.example/registry.json"),
+        status: 302,
+        redirectCount: 1,
+      });
+      return guardedResponse(jsonResponse(registry()), options.url);
+    });
     await expect(
       fetchWorkspaceGallery("https://gallery.example/index.json", {
         allowedOrigins: ["https://gallery.example"],
@@ -250,7 +281,7 @@ describe("installWorkspaceGalleryWidget", () => {
     }
   });
 
-  it("never exposes a partially written final widget directory", async () => {
+  it("reserves the final directory exclusively before exposing the complete tree", async () => {
     await withTempStateDir(async (stateDir) => {
       const store = new WorkspaceStore({ stateDir });
       const files = Object.fromEntries(
@@ -265,6 +296,7 @@ describe("installWorkspaceGalleryWidget", () => {
       );
       const widgetDir = resolveWidgetDir("weather", stateDir);
       let settled = false;
+      let observedReservation = false;
       let observedPartial = false;
 
       const install = installWorkspaceGalleryWidget(
@@ -285,7 +317,10 @@ describe("installWorkspaceGalleryWidget", () => {
         }
         try {
           const observed = await fs.readdir(widgetDir, { recursive: true });
-          if (!expectedFiles.every((file) => observed.includes(file))) {
+          if (observed.length === 0) {
+            observedReservation = true;
+            await expect(fs.mkdir(widgetDir)).rejects.toMatchObject({ code: "EEXIST" });
+          } else if (!expectedFiles.every((file) => observed.includes(file))) {
             observedPartial = true;
             break;
           }
@@ -300,6 +335,7 @@ describe("installWorkspaceGalleryWidget", () => {
       }
       await install;
 
+      expect(observedReservation).toBe(true);
       expect(observedPartial).toBe(false);
       await expect(fs.readdir(widgetDir)).resolves.toEqual(expect.arrayContaining(expectedFiles));
     });

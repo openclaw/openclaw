@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -181,45 +182,36 @@ async function fetchGalleryJson(
   maxBytes: number,
   options: GalleryNetworkOptions,
 ): Promise<unknown> {
-  let url = validateAllowedUrl(rawUrl, options.allowedOrigins, "gallery URL");
+  const url = validateAllowedUrl(rawUrl, options.allowedOrigins, "gallery URL");
   const fetchGuard = options.fetchGuard ?? fetchWithSsrFGuard;
-  for (let redirects = 0; ; redirects += 1) {
-    const result = await fetchGuard({
-      url: url.href,
-      requireHttps: true,
-      maxRedirects: 0,
-      timeoutMs: FETCH_TIMEOUT_MS,
-      auditContext: "workspaces-gallery",
-      init: { method: "GET", headers: { Accept: "application/json" }, redirect: "manual" },
-    });
-    try {
-      if ([301, 302, 303, 307, 308].includes(result.response.status)) {
-        if (redirects >= MAX_REDIRECTS) {
-          throw new Error(`gallery request exceeded ${MAX_REDIRECTS} redirects`);
-        }
-        const location = result.response.headers.get("location");
-        if (!location) {
-          throw new Error("gallery redirect is missing a location");
-        }
-        url = validateAllowedUrl(new URL(location, url).href, options.allowedOrigins, "redirect");
-        continue;
-      }
-      if (!result.response.ok) {
-        throw new Error(`gallery request failed with HTTP ${result.response.status}`);
-      }
-      const contentType = result.response.headers.get("content-type")?.split(";", 1)[0]?.trim();
-      if (contentType !== "application/json") {
-        throw new Error("gallery response content type must be application/json");
-      }
-      const body = await readBoundedBody(result.response, maxBytes, "gallery response");
-      try {
-        return JSON.parse(body) as unknown;
-      } catch (error) {
-        throw new Error("gallery response is not valid JSON", { cause: error });
-      }
-    } finally {
-      await result.release();
+  const result = await fetchGuard({
+    url: url.href,
+    requireHttps: true,
+    maxRedirects: MAX_REDIRECTS,
+    timeoutMs: FETCH_TIMEOUT_MS,
+    validateRedirect: ({ toUrl }) => {
+      validateAllowedUrl(toUrl.href, options.allowedOrigins, "redirect");
+    },
+    auditContext: "workspaces-gallery",
+    init: { method: "GET", headers: { Accept: "application/json" }, redirect: "manual" },
+  });
+  try {
+    validateAllowedUrl(result.finalUrl, options.allowedOrigins, "gallery response URL");
+    if (!result.response.ok) {
+      throw new Error(`gallery request failed with HTTP ${result.response.status}`);
     }
+    const contentType = result.response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+    if (contentType !== "application/json") {
+      throw new Error("gallery response content type must be application/json");
+    }
+    const body = await readBoundedBody(result.response, maxBytes, "gallery response");
+    try {
+      return JSON.parse(body) as unknown;
+    } catch (error) {
+      throw new Error("gallery response is not valid JSON", { cause: error });
+    }
+  } finally {
+    await result.release();
   }
 }
 
@@ -363,40 +355,39 @@ async function installBundle(
   const targetDir = path.posix.join(widgetsRoot, bundle.name);
   const stagedDir = path.posix.join(widgetsRoot, `.gallery-install-${randomUUID()}`);
   await root.mkdir(widgetsRoot);
-  await root.mkdir(stagedDir);
+  const widgetDir = await root.resolve(targetDir);
   const files = new Map(bundle.files);
   files.set("widget.json", `${JSON.stringify(bundle.manifest, null, 2)}\n`);
   const installedPaths = [...files.keys()].map((logicalPath) =>
     path.posix.join(stagedDir, logicalPath),
   );
-  let cleanupDir = stagedDir;
-  try {
-    for (const [logicalPath, content] of files) {
-      const relativePath = path.posix.join(stagedDir, logicalPath);
-      await root.create(relativePath, content, { mkdir: true, mode: 0o600 });
-    }
-    const result = await withWidgetInstallLock(bundle.name, stateDir, async () => {
+  const result = await withWidgetInstallLock(bundle.name, stateDir, async () => {
+    let cleanupDir: string | null = null;
+    let reservationOwned = false;
+    try {
       try {
-        if (await root.exists(targetDir)) {
-          throw new Error(`workspace widget already exists: ${bundle.name}`);
-        }
-        // The per-widget reservation covers every creator. The completed staged
-        // tree therefore becomes visible in one rename without replacing a peer.
-        await root.move(stagedDir, targetDir, { overwrite: true });
+        await fs.mkdir(widgetDir, { mode: 0o700 });
+        reservationOwned = true;
       } catch (error) {
-        if (
-          error instanceof Error &&
-          "code" in error &&
-          ["already-exists", "EEXIST", "ENOTEMPTY"].includes(
-            (error as NodeJS.ErrnoException).code ?? "",
-          )
-        ) {
+        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
           throw new Error(`workspace widget already exists: ${bundle.name}`, { cause: error });
         }
         throw error;
       }
+
+      // Reserve the final name before staging. Peers see EEXIST while the
+      // completed tree remains hidden under its random staging name.
+      await root.mkdir(stagedDir);
+      cleanupDir = stagedDir;
+      for (const [logicalPath, content] of files) {
+        const relativePath = path.posix.join(stagedDir, logicalPath);
+        await root.create(relativePath, content, { mkdir: true, mode: 0o600 });
+      }
+      await root.move(stagedDir, targetDir, { overwrite: true });
+      reservationOwned = false;
       cleanupDir = targetDir;
-      return options.store.mutate(
+
+      const mutation = options.store.mutate(
         (draft) => {
           if (draft.widgetsRegistry[bundle.name]) {
             throw new Error(`workspace widget already exists: ${bundle.name}`);
@@ -405,12 +396,18 @@ async function installBundle(
         },
         { actor: options.actor },
       );
-    });
-    return result.doc.widgetsRegistry[bundle.name]!;
-  } catch (error) {
-    await removeInstalledTree(root, cleanupDir, installedPaths, stagedDir).catch(() => {});
-    throw error;
-  }
+      return mutation.doc.widgetsRegistry[bundle.name]!;
+    } catch (error) {
+      if (cleanupDir) {
+        await removeInstalledTree(root, cleanupDir, installedPaths, stagedDir).catch(() => {});
+      }
+      if (reservationOwned) {
+        await root.remove(targetDir).catch(() => {});
+      }
+      throw error;
+    }
+  });
+  return result;
 }
 
 async function removeInstalledTree(

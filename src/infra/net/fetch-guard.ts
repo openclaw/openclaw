@@ -62,6 +62,13 @@ export const GUARDED_FETCH_MODE = {
 
 export type GuardedFetchMode = (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
 
+export type GuardedFetchRedirect = {
+  fromUrl: URL;
+  toUrl: URL;
+  status: number;
+  redirectCount: number;
+};
+
 export type GuardedFetchOptions = {
   url: string;
   fetchImpl?: FetchLike;
@@ -86,6 +93,8 @@ export type GuardedFetchOptions = {
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   retainAuthorizationRedirectHostnameAllowlist?: string[];
+  /** Synchronously validate each resolved redirect target before it is followed. */
+  validateRedirect?: (redirect: GuardedFetchRedirect) => void;
   mode?: GuardedFetchMode;
   pinDns?: boolean;
   /** @deprecated use `mode: "trusted_env_proxy"` for trusted/operator-controlled URLs. */
@@ -674,6 +683,12 @@ async function fetchWithSsrFGuardInternal(
           throw new Error(`Too many redirects (limit: ${maxRedirects})`);
         }
         const nextParsedUrl = new URL(location, parsedUrl);
+        params.validateRedirect?.({
+          fromUrl: parsedUrl,
+          toUrl: nextParsedUrl,
+          status: response.status,
+          redirectCount,
+        });
         const nextUrl = nextParsedUrl.toString();
         const retainedAuthorization = resolveRetainedAuthorizationForRedirect({
           init: currentInit,
