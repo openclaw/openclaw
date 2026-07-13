@@ -105,11 +105,29 @@ export const resolveResponseUsageLine = (params: {
       ? renderUsageBar(usageTemplate, buildUsageContract(params.replyUsageState, params.channel))
       : undefined;
 
-  if (rendered) {
-    return rendered;
+  const line = rendered ?? formatted ?? undefined;
+  if (line === undefined) {
+    return undefined;
   }
-  return formatted ?? undefined;
+  return stripUsageLineGlyphsForChannel(line, params.channel);
 };
+
+// Braille codepoints (U+2800–U+28FF) render fine in TUI/Discord/Telegram, but
+// the WebChat message pipeline treats any run of U+2800–U+28FF as a binary /
+// image marker (markdown-it's downstream renderer interprets the first braille
+// code unit as an image sentinel), turning every tool-output payload the usage
+// footer is appended to into an inline image attachment (issue #105481). The
+// default `braille` meter scale in the usage-bar template is the only source
+// of these glyphs in outbound WebChat text, so scrub them from the resolved
+// usage line whenever the target channel is `webchat`. Other surfaces keep the
+// braille bar unchanged.
+const BRAILLE_CODEPOINT_RE = /[\u2800-\u28FF]/gu;
+function stripUsageLineGlyphsForChannel(line: string, channel: string | undefined): string {
+  if (channel !== "webchat") {
+    return line;
+  }
+  return line.replace(BRAILLE_CODEPOINT_RE, "");
+}
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
   let index = -1;
