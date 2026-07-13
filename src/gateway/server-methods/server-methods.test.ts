@@ -28,6 +28,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { normalizeApprovalSlug } from "../../shared/approval-slug.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   augmentChatHistoryWithCanvasBlocks,
@@ -2958,6 +2959,30 @@ describe("exec approval handlers", () => {
     expectRecordFields(mockCallArg(respond, 0, 2), {
       message: "nodeId is required for host=node",
     });
+  });
+
+  it("accepts an astral-boundary explicit id and broadcasts a well-formed slug", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    const surrogateBoundaryId = "1234567😀890";
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        id: surrogateBoundaryId,
+        command: "echo hi",
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+      },
+    });
+
+    expect(mockCallArg(respond)).toBe(true);
+    const payload = getRequestedExecApprovalPayload(broadcasts);
+    expect(payload.id).toBe(surrogateBoundaryId);
+    const slug = normalizeApprovalSlug(payload.id);
+    expect(slug).toBe("1234567");
+    expect(() => encodeURIComponent(slug)).not.toThrow();
   });
 
   it("rejects host=node approval requests without systemRunPlan", async () => {
