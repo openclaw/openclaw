@@ -95,6 +95,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   private activeRetryRuns = 0;
   private readonly retryIdleResolvers = new Set<() => void>();
   private cryptoRetrySignalsBound = false;
+  private stopped = false;
 
   constructor(
     private readonly deps: {
@@ -120,6 +121,9 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   }
 
   attachEncryptedEvent(event: MatrixEvent, roomId: string): void {
+    if (this.stopped) {
+      return;
+    }
     if (this.trackedEncryptedEvents.has(event)) {
       return;
     }
@@ -140,6 +144,9 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   }
 
   retryPendingNow(reason: string, options?: { includeExhausted?: boolean }): void {
+    if (this.stopped) {
+      return;
+    }
     if (options?.includeExhausted) {
       this.pruneExhaustedDecryptRetries(Date.now());
       for (const [retryKey, state] of this.exhaustedDecryptRetries) {
@@ -198,6 +205,7 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
   }
 
   stop(): void {
+    this.stopped = true;
     for (const retryKey of this.decryptRetries.keys()) {
       this.clearDecryptRetry(retryKey);
     }
@@ -226,6 +234,9 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     decryptedEvent: MatrixEvent;
     err?: Error;
   }): void {
+    if (this.stopped) {
+      return;
+    }
     const decryptedRoomId = params.decryptedEvent.getRoomId() || params.roomId;
     const decryptedRaw = this.deps.toRaw(params.decryptedEvent);
     const retryEventId = decryptedRaw.event_id || params.encryptedEvent.getId() || "";
@@ -292,6 +303,9 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     roomId: string;
     eventId: string;
   }): void {
+    if (this.stopped) {
+      return;
+    }
     const retryKey = resolveDecryptRetryKey(params.roomId, params.eventId);
     if (!retryKey) {
       return;
@@ -388,6 +402,9 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
 
     if (this.decryptRetries.get(retryKey) !== state) {
+      return;
+    }
+    if (this.stopped) {
       return;
     }
     if (isDecryptionFailure(state.event)) {
