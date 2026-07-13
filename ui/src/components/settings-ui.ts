@@ -7,9 +7,9 @@ import { icons } from "./icons.ts";
 
 type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
-export type SettingsRowControl = TemplateResult | typeof nothing;
+type SettingsRowControl = TemplateResult | typeof nothing;
 
-export type SettingsRowProps = {
+type SettingsRowProps = {
   title: unknown;
   description?: unknown;
   control?: SettingsRowControl;
