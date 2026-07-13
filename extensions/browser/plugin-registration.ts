@@ -21,6 +21,10 @@ import {
 import { describeBrowserTool } from "./src/browser-tool-description.js";
 import { BrowserToolSchema } from "./src/browser-tool.schema.js";
 import {
+  acquireBrowserSessionAccess,
+  claimBrowserSessionOwner,
+} from "./src/browser/session-tab-gate.js";
+import {
   configureSystemProfileImportStateStore,
   type SystemProfileImportState,
 } from "./src/browser/system-profile-import-state.js";
@@ -74,6 +78,9 @@ function createLazyBrowserTool(opts?: {
     chatType?: string;
   };
 }): AnyAgentTool {
+  const sessionKey = opts?.agentSessionKey?.trim();
+  const ownerClaim =
+    sessionKey && opts?.runId ? claimBrowserSessionOwner(sessionKey, opts.runId) : undefined;
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -83,9 +90,16 @@ function createLazyBrowserTool(opts?: {
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
-      const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
-      const tool = createBrowserTool(opts);
-      return await tool.execute(toolCallId, args, signal, onUpdate);
+      const releaseSessionAccess = sessionKey
+        ? await acquireBrowserSessionAccess(sessionKey, () => true)
+        : () => {};
+      try {
+        const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
+        const tool = createBrowserTool({ ...opts, ownerClaim });
+        return await tool.execute(toolCallId, args, signal, onUpdate);
+      } finally {
+        releaseSessionAccess();
+      }
     },
   };
 }

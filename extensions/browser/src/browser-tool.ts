@@ -456,6 +456,7 @@ export function createBrowserTool(opts?: {
   allowHostControl?: boolean;
   agentSessionKey?: string;
   runId?: string;
+  ownerClaim?: number;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -468,7 +469,8 @@ export function createBrowserTool(opts?: {
     chatType?: string;
   };
 }): AnyAgentTool {
-  const ownerClaim = browserToolSession.resolveBrowserSessionOwnerClaim(opts ?? {});
+  const ownerClaim =
+    opts?.ownerClaim ?? browserToolSession.resolveBrowserSessionOwnerClaim(opts ?? {});
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
     opts?.allowHostControl === false ? "Host target blocked by policy." : "Host target allowed.";
@@ -477,7 +479,7 @@ export function createBrowserTool(opts?: {
     name: "browser",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
-    execute: browserToolSession.withBrowserSessionAccess(opts ?? {}, async (_toolCallId, args) => {
+    execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
@@ -1080,6 +1082,6 @@ export function createBrowserTool(opts?: {
         default:
           throw new Error(`Unknown action: ${action}`);
       }
-    }),
+    },
   };
 }
