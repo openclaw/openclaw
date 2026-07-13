@@ -164,6 +164,8 @@ export type RootMemoryMigrationResult = {
   copiedBytes?: number;
   /** True when the repair was skipped because a file exceeded the safe read limit. */
   readLimitExceeded?: boolean;
+  /** True when the repair was skipped because a file could not be read. */
+  readError?: boolean;
 };
 
 async function moveLegacyRootMemoryFileToArchive(params: {
@@ -233,16 +235,23 @@ export async function migrateLegacyRootMemoryFile(
         maxBytes: ROOT_MEMORY_FILE_MAX_BYTES,
       }).then(({ buffer }) => buffer.toString("utf-8")),
     ]);
-  } catch {
+  } catch (err) {
     // One of the files is unreadable or exceeds the safe read cap. Leave both
     // files in place and do not attempt a memory merge.
+    const isTooLarge =
+      typeof err === "object" &&
+      err !== null &&
+      "message" in err &&
+      typeof (err as Error).message === "string" &&
+      (err as Error).message.startsWith("File exceeds");
     return {
       changed: false,
       canonicalPath: detection.canonicalPath,
       legacyPath: detection.legacyPath,
       removedLegacy: false,
       mergedLegacy: false,
-      readLimitExceeded: true,
+      readLimitExceeded: isTooLarge,
+      readError: !isTooLarge,
     };
   }
   const archivedLegacyPath = await moveLegacyRootMemoryFileToArchive({
@@ -307,6 +316,17 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       note(
         [
           "Workspace memory root repair skipped (a file exceeded the safe read limit):",
+          `- canonical: ${migration.canonicalPath}`,
+          `- legacy: ${migration.legacyPath}`,
+        ].join("\n"),
+        "Doctor changes",
+      );
+      return;
+    }
+    if (migration.readError) {
+      note(
+        [
+          "Workspace memory root repair skipped (a file could not be read):",
           `- canonical: ${migration.canonicalPath}`,
           `- legacy: ${migration.legacyPath}`,
         ].join("\n"),
