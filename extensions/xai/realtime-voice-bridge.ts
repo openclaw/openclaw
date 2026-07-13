@@ -315,7 +315,9 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       type: "session.reconnect.scheduled",
       detail: `reason=${reason} attempt=${attempt} delayMs=${delay}`,
     });
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await new Promise((resolve) => {
+      setTimeout(resolve, delay);
+    });
     if (this.intentionallyClosed) {
       return;
     }

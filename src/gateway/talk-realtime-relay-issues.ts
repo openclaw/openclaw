@@ -1,4 +1,4 @@
-export type TalkRealtimeRelayIssue = {
+type TalkRealtimeRelayIssue = {
   code: "realtime_unavailable";
   message: string;
   provider: string;

@@ -4,7 +4,6 @@ import {
   XAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
   readXaiRealtimeErrorDetail,
   type XaiRealtimeEvent,
-  type XaiRealtimeVoiceBridgeConfig,
 } from "./realtime-voice-config.js";
 import { XaiRealtimeVoiceProtocol } from "./realtime-voice-protocol.js";
 
@@ -12,10 +11,6 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
   private assistantTranscriptBuffer = "";
   private assistantTranscriptFinalized = false;
   private inputTranscriptReplacements = new Map<string, string>();
-
-  constructor(config: XaiRealtimeVoiceBridgeConfig) {
-    super(config);
-  }
 
   protected abstract onSessionUpdated(): void;
 
@@ -149,7 +144,6 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
       }
       case "error":
         this.handleErrorEvent(event.error);
-        return;
       default:
     }
   }

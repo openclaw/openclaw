@@ -152,7 +152,9 @@ async function waitForXaiLive(
       const state = describeState?.();
       throw new Error(`xAI live timeout waiting for ${label}${state ? ` (${state})` : ""}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
   }
 }
 
@@ -480,8 +482,7 @@ describeLive("xai plugin live", () => {
     let outputAudioBytes = 0;
     let holdPlaybackMarks = false;
     let holdNextResponseMarks = false;
-    let bridge: RealtimeVoiceBridge;
-    bridge = realtimeProvider.createBridge({
+    const bridge: RealtimeVoiceBridge = realtimeProvider.createBridge({
       cfg,
       providerConfig: {
         apiKey: XAI_API_KEY,
@@ -572,19 +573,23 @@ describeLive("xai plugin live", () => {
       // speech-started barge-in path used by real microphone input.
       for (let offset = 0; offset < input.audioBuffer.length; offset += chunkBytes) {
         bridge.sendAudio(input.audioBuffer.subarray(offset, offset + chunkBytes));
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
       }
       for (let index = 0; index < 20; index += 1) {
         bridge.sendAudio(Buffer.alloc(chunkBytes));
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
+        });
       }
       await waitForXaiLive(
         "server-VAD audio barge-in",
         () => {
-          const serverBargeInEvents = serverEvents.slice(bargeInServerEventStart);
+          const serverBargeInEvents = new Set(serverEvents.slice(bargeInServerEventStart));
           return (
-            serverBargeInEvents.includes("input_audio_buffer.speech_started") &&
-            serverBargeInEvents.includes("conversation.item.truncated") &&
+            serverBargeInEvents.has("input_audio_buffer.speech_started") &&
+            serverBargeInEvents.has("conversation.item.truncated") &&
             clientEvents.slice(bargeInClientEventStart).includes("conversation.item.truncate") &&
             clearAudioReasons.includes("barge-in")
           );
@@ -654,7 +659,7 @@ describeLive("xai plugin live", () => {
       bridge.sendUserMessage?.("Call openclaw_live_probe now with token bluebird.");
       await waitForXaiLive("realtime tool call", () => toolCalls.length > 0);
       expect(toolCalls[0]?.name).toBe("openclaw_live_probe");
-      bridge.submitToolResult(toolCalls[0]?.callId ?? "", { marker });
+      await bridge.submitToolResult(toolCalls[0]?.callId ?? "", { marker });
       await waitForXaiLive("tool-result audio", () =>
         finalAssistantTranscripts.some((text) => text.includes(marker)),
       );
