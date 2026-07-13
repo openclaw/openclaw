@@ -3245,6 +3245,10 @@ export const zh_TW: TranslationMap = {
     catalog: {
       remoteViewOnly: "此工作階段位於已配對節點上，僅供檢視。",
       unsupportedViewOnly: "此外部工作階段來源僅供檢視。",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "建議的後續任務",
@@ -3287,6 +3291,9 @@ export const zh_TW: TranslationMap = {
     sendShortcut: "傳送快捷鍵",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "引導期間禁用",
     gatewayStatus: "Gateway 狀態：{status}",
     commandPaletteTitle: "搜尋或跳至… (⌘K)",

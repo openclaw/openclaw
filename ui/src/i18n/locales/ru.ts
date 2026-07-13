@@ -3343,6 +3343,10 @@ export const ru: TranslationMap = {
     catalog: {
       remoteViewOnly: "Этот сеанс находится на сопряжённом узле и доступен только для просмотра.",
       unsupportedViewOnly: "Этот внешний источник сеансов доступен только для просмотра.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "Предлагаемая следующая задача",
@@ -3387,6 +3391,9 @@ export const ru: TranslationMap = {
     sendShortcut: "Сочетание клавиш для отправки",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Терминал",
     onboardingDisabled: "Отключено во время настройки",
     gatewayStatus: "Статус Gateway: {status}",
     commandPaletteTitle: "Поиск или переход к… (⌘K)",

@@ -22,6 +22,17 @@ export type SessionCatalogContinueProviderParams = Omit<
 };
 export type SessionCatalogArchiveProviderParams = Omit<SessionsCatalogArchiveParams, "catalogId">;
 
+export type SessionCatalogTerminalPlan =
+  | { kind: "local"; argv: string[]; cwd?: string; title?: string }
+  | {
+      kind: "node";
+      nodeId: string;
+      command: string;
+      paramsJSON: string;
+      cwd?: string;
+      title?: string;
+    };
+
 export type SessionCatalogCreateTarget = {
   model: string;
   /** Concrete runtime pinned onto the created session so config reloads cannot retarget it. */
@@ -58,4 +69,8 @@ export type SessionCatalogProvider = {
     params: SessionCatalogContinueProviderParams,
   ) => Promise<SessionCatalogContinueProviderResult>;
   archive?: (params: SessionCatalogArchiveProviderParams) => Promise<{ ok: true }>;
+  openTerminal?: (request: {
+    hostId: string;
+    threadId: string;
+  }) => Promise<SessionCatalogTerminalPlan>;
 };

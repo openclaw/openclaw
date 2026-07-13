@@ -3312,6 +3312,10 @@ export const vi: TranslationMap = {
     catalog: {
       remoteViewOnly: "Phiên này nằm trên một nút đã ghép nối và chỉ có thể xem.",
       unsupportedViewOnly: "Nguồn phiên bên ngoài này chỉ có thể xem.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "Tác vụ tiếp theo được đề xuất",
@@ -3355,6 +3359,9 @@ export const vi: TranslationMap = {
     sendShortcut: "Phím tắt gửi",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "Đã tắt trong quá trình thiết lập",
     gatewayStatus: "Trạng thái Gateway: {status}",
     commandPaletteTitle: "Tìm kiếm hoặc chuyển đến… (⌘K)",

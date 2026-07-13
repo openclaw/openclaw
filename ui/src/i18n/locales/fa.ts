@@ -3312,6 +3312,10 @@ export const fa: TranslationMap = {
     catalog: {
       remoteViewOnly: "این نشست روی یک گره جفت‌شده قرار دارد و فقط قابل مشاهده است.",
       unsupportedViewOnly: "این منبع نشست خارجی فقط قابل مشاهده است.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "کار پیگیری پیشنهادی",
@@ -3355,6 +3359,9 @@ export const fa: TranslationMap = {
     sendShortcut: "میان‌بر ارسال",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "در طول راه‌اندازی غیرفعال است",
     gatewayStatus: "وضعیت Gateway: {status}",
     commandPaletteTitle: "جست‌وجو یا رفتن به… (⌘K)",

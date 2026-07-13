@@ -3257,6 +3257,10 @@ export const th: TranslationMap = {
     catalog: {
       remoteViewOnly: "เซสชันนี้อยู่บนโหนดที่จับคู่และดูได้อย่างเดียว",
       unsupportedViewOnly: "แหล่งที่มาของเซสชันภายนอกนี้ดูได้อย่างเดียว",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "งานติดตามผลที่แนะนำ",
@@ -3300,6 +3304,9 @@ export const th: TranslationMap = {
     sendShortcut: "ปุ่มลัดสำหรับส่ง",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "ปิดใช้งานระหว่างการตั้งค่า",
     gatewayStatus: "สถานะ Gateway: {status}",
     commandPaletteTitle: "ค้นหาหรือข้ามไปที่… (⌘K)",

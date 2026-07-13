@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   mcpConfiguredServerCount: 0,
   mcpDescriptors: [] as Array<Record<string, unknown>>,
   nodeSkillDescriptors: [] as Array<Record<string, unknown>>,
+  runtimeSteps: [] as string[],
+  normalizedPath: null as string | null,
   resolvedExecutables: new Map<string, string>(),
   closeMcpManager: vi.fn(async () => undefined),
   ensureNodeHostConfig: vi.fn(async () => ({
@@ -85,7 +87,12 @@ vi.mock("../infra/executable-path.js", () => ({
 }));
 
 vi.mock("../infra/path-env.js", () => ({
-  ensureOpenClawCliOnPath: vi.fn(),
+  ensureOpenClawCliOnPath: vi.fn(() => {
+    mocks.runtimeSteps.push("path");
+    if (mocks.normalizedPath) {
+      process.env.PATH = mocks.normalizedPath;
+    }
+  }),
 }));
 
 vi.mock("./config.js", () => ({
@@ -95,19 +102,22 @@ vi.mock("./config.js", () => ({
 
 vi.mock("./plugin-node-host.js", () => ({
   ensureNodeHostPluginRegistry: vi.fn(async () => undefined),
-  listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
-    caps: [],
-    commands: [],
-    nodePluginTools: [
-      {
-        pluginId: "test-plugin",
-        name: "remote_echo",
-        description: "Echo from node host",
-        command: "test.echo",
-        parameters: { type: "object", properties: {} },
-      },
-    ],
-  })),
+  listRegisteredNodeHostCapsAndCommands: vi.fn((context: { env: NodeJS.ProcessEnv }) => {
+    mocks.runtimeSteps.push(`commands:${context.env.PATH ?? ""}`);
+    return {
+      caps: [],
+      commands: [],
+      nodePluginTools: [
+        {
+          pluginId: "test-plugin",
+          name: "remote_echo",
+          description: "Echo from node host",
+          command: "test.echo",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    };
+  }),
 }));
 
 vi.mock("./mcp.js", () => ({
@@ -136,6 +146,8 @@ describe("runNodeHost", () => {
     mocks.mcpConfiguredServerCount = 0;
     mocks.mcpDescriptors = [];
     mocks.nodeSkillDescriptors = [];
+    mocks.runtimeSteps = [];
+    mocks.normalizedPath = null;
     mocks.resolvedExecutables.clear();
     vi.clearAllMocks();
     mocks.getRuntimeConfig.mockReturnValue({
@@ -171,6 +183,23 @@ describe("runNodeHost", () => {
       resolveNodeHostGatewayDeviceFamily(process.platform),
     );
     expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
+  });
+
+  it("bootstraps PATH before probing plugin command availability", async () => {
+    const originalPath = process.env.PATH;
+    mocks.normalizedPath = "/normalized/node/path";
+    try {
+      await expect(
+        runNodeHost({
+          gatewayHost: "127.0.0.1",
+          gatewayPort: 18789,
+        }),
+      ).rejects.toThrow("event loop readiness timeout");
+    } finally {
+      process.env.PATH = originalPath;
+    }
+
+    expect(mocks.runtimeSteps).toEqual(["path", "commands:/normalized/node/path"]);
   });
 
   it("keeps a ref'd lifetime handle until a ready foreground host stops", async () => {

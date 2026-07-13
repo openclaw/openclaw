@@ -3284,6 +3284,10 @@ export const ar: TranslationMap = {
     catalog: {
       remoteViewOnly: "هذه الجلسة موجودة على عقدة مقترنة وهي للعرض فقط.",
       unsupportedViewOnly: "مصدر الجلسة الخارجية هذا للعرض فقط.",
+      sessionMenu: "External session actions",
+      openInOpenClaw: "Open in OpenClaw",
+      openInTerminal: "Open in terminal",
+      terminalUnavailable: "Terminal opening is unavailable for this session.",
     },
     taskSuggestions: {
       eyebrow: "متابعة مقترحة",
@@ -3327,6 +3331,9 @@ export const ar: TranslationMap = {
     sendShortcut: "اختصار الإرسال",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
+    catalogOpenTarget: "Open Codex/Claude sessions in",
+    catalogOpenTargetViewer: "OpenClaw viewer",
+    catalogOpenTargetTerminal: "Terminal",
     onboardingDisabled: "معطل أثناء الإعداد",
     gatewayStatus: "حالة Gateway: {status}",
     commandPaletteTitle: "ابحث أو انتقل إلى… (⌘K)",
