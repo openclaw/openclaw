@@ -806,6 +806,13 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES: WorkspacePackageAliasEntry[] = [
   {
     packageName: "@openclaw/normalization-core",
     packageDir: "normalization-core",
+    subpath: "result",
+    srcFile: "result.ts",
+    distFile: "result.mjs",
+  },
+  {
+    packageName: "@openclaw/normalization-core",
+    packageDir: "normalization-core",
     subpath: "string-coerce",
     srcFile: "string-coerce.ts",
     distFile: "string-coerce.mjs",
