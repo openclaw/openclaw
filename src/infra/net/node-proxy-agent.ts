@@ -201,7 +201,7 @@ function createFixedNodeProxyAgent(
   // addRequest) all inherit the limits. Mutating the returned wrapper's fields
   // after construction does not propagate to proxyline's internal agents.
   // Callers may override through agentOptions — applyNodeAgentOptions sets
-  // maxSockets / maxTotalSockets from explicit callers values after this.
+  // maxSockets / maxTotalScores from explicit callers values after this.
   const agent = loadCreateAmbientNodeProxyAgent()({
     env: fixedProxyEnv(parsedProxyUrl),
     protocol: options.protocol ?? "https",
@@ -210,7 +210,7 @@ function createFixedNodeProxyAgent(
       maxTotalSockets: DEFAULT_NODE_PROXY_MAX_TOTAL_SOCKETS,
     },
     ...(options.proxyTls !== undefined ? { proxyTls: options.proxyTls } : {}),
-  });
+  } as Parameters<ProxylineCreateAmbientNodeProxyAgent>[0]);
   if (agent === undefined) {
     throw new Error(`${UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got ${parsedProxyUrl.protocol}`);
   }
