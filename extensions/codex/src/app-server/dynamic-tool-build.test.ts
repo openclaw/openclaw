@@ -1544,6 +1544,7 @@ describe("Codex app-server dynamic tool build", () => {
       }),
     ).toBe(false);
   });
+
   it("exposes the final delivery control only on Codex message-tool-only schemas", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
