@@ -404,6 +404,84 @@ describe("plugin management service", () => {
     });
   });
 
+  it("adds an admin-selected plugin to an existing restrictive allowlist", async () => {
+    const config = {
+      plugins: {
+        allow: ["memory-core"],
+        entries: { workboard: { enabled: false } },
+      },
+    };
+    mocks.readConfig.mockResolvedValue(configSnapshot(config));
+    mocks.replaceConfig.mockResolvedValue({});
+    mocks.refreshRegistry.mockResolvedValue(undefined);
+    mocks.metadata
+      .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
+      .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
+
+    const result = await setManagedPluginEnabled({
+      pluginId: "workboard",
+      enabled: true,
+      env: {},
+    });
+
+    expect(mocks.replaceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: {
+          plugins: {
+            allow: ["memory-core", "workboard"],
+            entries: { workboard: { enabled: true } },
+          },
+        },
+      }),
+    );
+    expect(result.changedPaths).toEqual(["plugins.allow[1]", "plugins.entries.workboard.enabled"]);
+  });
+
+  it("keeps an explicit deny authoritative for admin enablement", async () => {
+    const config = {
+      plugins: {
+        allow: ["memory-core"],
+        deny: ["workboard"],
+        entries: { workboard: { enabled: false } },
+      },
+    };
+    mocks.readConfig.mockResolvedValue(configSnapshot(config));
+    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
+
+    await expect(
+      setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} }),
+    ).rejects.toThrow('plugin "workboard" could not be enabled (blocked by denylist)');
+    expect(mocks.replaceConfig).not.toHaveBeenCalled();
+  });
+
+  it("does not turn an empty allowlist into a restrictive one", async () => {
+    const config = {
+      plugins: {
+        allow: [],
+        entries: { workboard: { enabled: false } },
+      },
+    };
+    mocks.readConfig.mockResolvedValue(configSnapshot(config));
+    mocks.replaceConfig.mockResolvedValue({});
+    mocks.refreshRegistry.mockResolvedValue(undefined);
+    mocks.metadata
+      .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
+      .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
+
+    await setManagedPluginEnabled({ pluginId: "workboard", enabled: true, env: {} });
+
+    expect(mocks.replaceConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: {
+          plugins: {
+            allow: [],
+            entries: { workboard: { enabled: true } },
+          },
+        },
+      }),
+    );
+  });
+
   it("reports exclusive-slot side effects in established plugin config", async () => {
     const config = {
       plugins: {

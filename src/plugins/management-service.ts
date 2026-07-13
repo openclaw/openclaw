@@ -9,6 +9,7 @@ import {
 } from "../config/config.js";
 import { collectChangedPaths } from "../config/io.write-prepare.js";
 import { resolveIsNixMode } from "../config/paths.js";
+import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -862,6 +863,11 @@ export async function setManagedPluginEnabled(params: {
     const warnings: string[] = [];
     let policyPluginId = pluginId;
     if (params.enabled) {
+      // The admin-scoped enable RPC is an explicit trust action. Preserve the
+      // existing inventory while admitting only the selected installed plugin.
+      if ((next.plugins?.allow?.length ?? 0) > 0) {
+        next = ensurePluginAllowlisted(next, pluginId);
+      }
       const enableResult = enableExplicitlySelectedPluginInConfig(next, pluginId, {
         updateChannelConfig: false,
       });
