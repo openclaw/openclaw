@@ -423,7 +423,9 @@ describe("bot-native-command-menu", () => {
       accountId,
       botIdentity: "bot-a",
     });
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(deleteMyCommands).toHaveBeenCalledTimes(2);
     expect(setMyCommands).toHaveBeenCalledTimes(2);
   });
