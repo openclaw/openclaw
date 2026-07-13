@@ -144,7 +144,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                     role="img"
                     aria-label=${t("sessionsView.unread")}
                   ></span>`
-                  : nothing}
+                : nothing}
             <span
               class="sidebar-session-group-count ${hasError
                 ? "sidebar-session-group-count--error"
