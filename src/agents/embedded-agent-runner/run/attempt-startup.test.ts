@@ -52,7 +52,7 @@ describe("prepareEmbeddedAttemptSkills", () => {
       prepareEmbeddedAttemptSkills({
         attempt: { config: {} } as EmbeddedRunAttemptParams,
         effectiveWorkspace: "/tmp/workspace",
-        sandbox: undefined,
+        sandbox: null,
         sessionAgentId: "main",
       }),
     ).toThrow("skill prompt mapping failed");
