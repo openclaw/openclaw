@@ -232,6 +232,16 @@ export const de: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Scannen Sie diesen QR-Code in der mobilen App, um ein neues Telefon zu verbinden.",
       generating: "Sicherer Einrichtungscode wird erstellt…",
+      accessTitle: "Mobiler Zugriff",
+      fullAccess: "Vollzugriff (empfohlen)",
+      fullAccessHint:
+        "Node sowie vollständige Gateway-Steuerung, einschließlich Einstellungen und Upgrades.",
+      limitedAccess: "Eingeschränkter Zugriff",
+      limitedAccessHint: "Node, Chat und Genehmigungen ohne administrative Steuerung.",
+      generateCode: "Einrichtungscode erstellen",
+      transportLimitedTitle: "Zur Netzwerksicherheit eingeschränkt",
+      transportLimitedHint:
+        "Diese Gateway-URL verwendet unverschlüsseltes ws://. Verwenden Sie wss:// oder Tailscale Serve und erstellen Sie anschließend einen neuen Code für den Vollzugriff.",
       failed: "Einrichtungscode konnte nicht erstellt werden.",
       qrAlt: "QR-Code für die Kopplung mit OpenClaw mobile",
       qrUnavailable: "QR-Code nicht verfügbar. Kopieren Sie stattdessen den Einrichtungscode.",
@@ -267,7 +277,8 @@ export const de: TranslationMap = {
     },
     inventory: {
       title: "Geräte",
-      subtitle: "Eine Zeile pro gekoppeltem Client: Status, Rollen, Tokens.",
+      summaryConnected: "{connected} von {total} verbunden",
+      summaryPending: "{count} warten auf Genehmigung",
       cleanupStale: "{count} veraltete bereinigen",
       pendingApproval: "Ausstehende Genehmigung",
       paired: "Gekoppelt",
@@ -403,6 +414,13 @@ export const de: TranslationMap = {
     getHelp: "Hilfe erhalten",
     discord: "Discord-Community",
     viewChangelog: "Änderungsprotokoll anzeigen",
+    agentSettings: "Agent-Einstellungen",
+    filterAgents: "Agent suchen…",
+    noAgentMatches: "Keine passenden Agenten",
+  },
+  agentScope: {
+    label: "Agentenbereich",
+    allAgents: "Alle Agenten",
   },
   newSession: {
     title: "Neue Sitzung",
@@ -612,6 +630,8 @@ export const de: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Im Umschalter anheften",
+    unpinFromSwitcher: "Vom Umschalter lösen",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -636,6 +656,19 @@ export const de: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identität",
+      subtitle: "Name, Emoji und Avatar, die in Chats und in der Seitenleiste angezeigt werden.",
+      name: "Anzeigename",
+      namePlaceholder: "Agentenname",
+      emoji: "Emoji",
+      chooseImage: "Bild auswählen…",
+      replaceImage: "Bild ersetzen…",
+      imageUnusable:
+        "Dieses Bild kann nicht verwendet werden. Wähle eine Bilddatei mit einer Größe von bis zu 2 MB aus.",
+      fileHint:
+        "Agenten können dies selbst festlegen, indem sie IDENTITY.md in ihrem Arbeitsbereich bearbeiten.",
     },
     overview: {
       title: "Übersicht",
@@ -3609,15 +3642,6 @@ export const de: TranslationMap = {
       clone: "Klonen",
       remove: "Entfernen",
       more: "Weitere Aktionen",
-    },
-    runNotStarted: {
-      notDue: "Diese Automatisierung ist noch nicht fällig.",
-      alreadyRunning: "Diese Automatisierung wird bereits ausgeführt.",
-      recoveryPending: "Die Wiederherstellung des Zeitplaners läuft noch.",
-      invalidSpec:
-        "Diese Automatisierung hat einen ungültigen Zeitplan oder eine ungültige Nutzlast.",
-      stopped: "Der Zeitplaner wurde angehalten.",
-      unknown: "Diese Automatisierung konnte nicht gestartet werden.",
     },
     runNotStarted: {
       notDue: "Diese Automatisierung ist noch nicht fällig.",

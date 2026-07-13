@@ -8,6 +8,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import pMap from "p-map";
 import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 export { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
@@ -300,33 +301,6 @@ function resolveForwardedAttachmentImageUrl(attachment: SlackAttachment): string
   }
 }
 
-async function mapLimit<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  if (items.length === 0) {
-    return [];
-  }
-  const results: R[] = [];
-  results.length = items.length;
-  const pendingItems = items.entries();
-  const workerCount = Math.max(1, Math.min(limit, items.length));
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (true) {
-        const next = pendingItems.next();
-        if (next.done) {
-          return;
-        }
-        const [idx, item] = next.value;
-        results[idx] = await fn(item);
-      }
-    }),
-  );
-  return results;
-}
-
 /**
  * Downloads all files attached to a Slack message and returns them as an array.
  * Returns `null` when no files could be downloaded.
@@ -345,9 +319,8 @@ export async function resolveSlackMedia(params: {
   const limitedFiles =
     files.length > MAX_SLACK_MEDIA_FILES ? files.slice(0, MAX_SLACK_MEDIA_FILES) : files;
 
-  const resolved = await mapLimit<SlackFile, SlackMediaResult | null>(
+  const resolved = await pMap(
     limitedFiles,
-    MAX_SLACK_MEDIA_CONCURRENCY,
     async (file) => {
       // Audio preflight keys the original event file object so admission can
       // reuse that exact download without turning this into a persistent cache.
@@ -387,6 +360,7 @@ export async function resolveSlackMedia(params: {
         abortSignal: params.abortSignal,
       }).catch(() => null);
     },
+    { concurrency: MAX_SLACK_MEDIA_CONCURRENCY, stopOnError: true },
   );
 
   const results = resolved.filter((entry): entry is SlackMediaResult => Boolean(entry));

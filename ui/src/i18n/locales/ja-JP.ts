@@ -233,6 +233,15 @@ export const ja_JP: TranslationMap = {
       subtitle:
         "新しいスマートフォンを接続するには、モバイルアプリでこのQRコードをスキャンしてください。",
       generating: "安全なセットアップコードを作成しています…",
+      accessTitle: "モバイルアクセス",
+      fullAccess: "フルアクセス（推奨）",
+      fullAccessHint: "ノードに加え、設定やアップグレードを含むGatewayのすべての操作が可能です。",
+      limitedAccess: "制限付きアクセス",
+      limitedAccessHint: "管理操作を除き、ノード、チャット、承認を利用できます。",
+      generateCode: "セットアップコードを作成",
+      transportLimitedTitle: "ネットワークの安全性のため制限されています",
+      transportLimitedHint:
+        "このGateway URLは平文のws://を使用しています。wss://またはTailscale Serveを使用してから、フルアクセス用の新しいコードを作成してください。",
       failed: "セットアップコードを作成できませんでした。",
       qrAlt: "OpenClaw mobile ペアリングQRコード",
       qrUnavailable: "QRを利用できません。代わりにセットアップコードをコピーしてください。",
@@ -268,7 +277,8 @@ export const ja_JP: TranslationMap = {
     },
     inventory: {
       title: "デバイス",
-      subtitle: "ペア設定済みクライアントごとに1行: ステータス、ロール、トークン。",
+      summaryConnected: "{total}台中{connected}台が接続済み",
+      summaryPending: "{count}件が承認待ち",
       cleanupStale: "{count} 件の古い項目をクリーンアップ",
       pendingApproval: "承認待ち",
       paired: "ペア設定済み",
@@ -406,6 +416,13 @@ export const ja_JP: TranslationMap = {
     getHelp: "ヘルプを表示",
     discord: "Discord コミュニティ",
     viewChangelog: "変更履歴を表示",
+    agentSettings: "エージェント設定",
+    filterAgents: "エージェントを検索…",
+    noAgentMatches: "一致するエージェントはありません",
+  },
+  agentScope: {
+    label: "エージェントの範囲",
+    allAgents: "すべてのエージェント",
   },
   newSession: {
     title: "新しいセッション",
@@ -615,6 +632,8 @@ export const ja_JP: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "切り替えメニューにピン留め",
+    unpinFromSwitcher: "切り替えメニューからピン留めを解除",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -639,6 +658,17 @@ export const ja_JP: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "アイデンティティ",
+      subtitle: "チャットとサイドバーに表示される名前、絵文字、アバター。",
+      name: "表示名",
+      namePlaceholder: "エージェント名",
+      emoji: "絵文字",
+      chooseImage: "画像を選択…",
+      replaceImage: "画像を置き換え…",
+      imageUnusable: "この画像は使用できません。2 MB以下の画像ファイルを選択してください。",
+      fileHint: "エージェントは、ワークスペース内のIDENTITY.mdを編集して自身で設定できます。",
     },
     overview: {
       title: "概要",
@@ -3588,14 +3618,6 @@ export const ja_JP: TranslationMap = {
       clone: "複製",
       remove: "削除",
       more: "その他の操作",
-    },
-    runNotStarted: {
-      notDue: "この自動化はまだ実行予定時刻に達していません。",
-      alreadyRunning: "この自動化はすでに実行中です。",
-      recoveryPending: "スケジューラーの復旧はまだ進行中です。",
-      invalidSpec: "この自動化のスケジュールまたはペイロードが無効です。",
-      stopped: "スケジューラーは停止しています。",
-      unknown: "この自動化を開始できませんでした。",
     },
     runNotStarted: {
       notDue: "この自動化はまだ実行時刻になっていません。",

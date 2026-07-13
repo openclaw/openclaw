@@ -231,6 +231,15 @@ export const tr: TranslationMap = {
       title: "OpenClaw mobil",
       subtitle: "Yeni bir telefonu bağlamak için mobil uygulamada bu QR kodunu tarayın.",
       generating: "Güvenli bir kurulum kodu oluşturuluyor…",
+      accessTitle: "Mobil erişim",
+      fullAccess: "Tam erişim (önerilen)",
+      fullAccessHint: "Ayarlar ve yükseltmeler dâhil olmak üzere düğüm ve tüm Gateway kontrolleri.",
+      limitedAccess: "Sınırlı erişim",
+      limitedAccessHint: "Yönetim kontrolleri olmadan düğüm, sohbet ve onaylar.",
+      generateCode: "Kurulum kodu oluştur",
+      transportLimitedTitle: "Ağ güvenliği için sınırlandırıldı",
+      transportLimitedHint:
+        "Bu Gateway URL'si düz metin ws:// kullanıyor. Tam erişim için wss:// veya Tailscale Serve kullanın, ardından yeni bir kod oluşturun.",
       failed: "Kurulum kodu oluşturulamadı.",
       qrAlt: "OpenClaw mobil eşleştirme QR kodu",
       qrUnavailable: "QR kullanılamıyor. Bunun yerine kurulum kodunu kopyalayın.",
@@ -265,7 +274,8 @@ export const tr: TranslationMap = {
     },
     inventory: {
       title: "Cihazlar",
-      subtitle: "Eşleştirilen her istemci için bir satır: durum, roller, belirteçler.",
+      summaryConnected: "{total} cihazdan {connected} tanesi bağlı",
+      summaryPending: "{count} onay bekliyor",
       cleanupStale: "{count} eski öğeyi temizle",
       pendingApproval: "Onay bekliyor",
       paired: "Eşleştirildi",
@@ -403,6 +413,13 @@ export const tr: TranslationMap = {
     getHelp: "Yardım alın",
     discord: "Discord topluluğu",
     viewChangelog: "Değişiklik günlüğünü görüntüleyin",
+    agentSettings: "Agent ayarları",
+    filterAgents: "Agent bul…",
+    noAgentMatches: "Eşleşen agent yok",
+  },
+  agentScope: {
+    label: "Ajan kapsamı",
+    allAgents: "Tüm ajanlar",
   },
   newSession: {
     title: "Yeni oturum",
@@ -612,6 +629,8 @@ export const tr: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Değiştiriciye sabitle",
+    unpinFromSwitcher: "Değiştiriciden kaldır",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -636,6 +655,18 @@ export const tr: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Kimlik",
+      subtitle: "Sohbetlerde ve kenar çubuğunda gösterilen ad, emoji ve avatar.",
+      name: "Görünen ad",
+      namePlaceholder: "Agent adı",
+      emoji: "Emoji",
+      chooseImage: "Görsel seç…",
+      replaceImage: "Görseli değiştir…",
+      imageUnusable: "Bu görsel kullanılamıyor. En fazla 2 MB boyutunda bir görsel dosyası seçin.",
+      fileHint:
+        "Agent'lar, çalışma alanlarındaki IDENTITY.md dosyasını düzenleyerek bunu kendileri ayarlayabilir.",
     },
     overview: {
       title: "Genel Bakış",
@@ -3599,14 +3630,6 @@ export const tr: TranslationMap = {
       clone: "Çoğalt",
       remove: "Kaldır",
       more: "Diğer işlemler",
-    },
-    runNotStarted: {
-      notDue: "Bu otomasyonun zamanı henüz gelmedi.",
-      alreadyRunning: "Bu otomasyon zaten çalışıyor.",
-      recoveryPending: "Zamanlayıcı kurtarma işlemi hâlâ devam ediyor.",
-      invalidSpec: "Bu otomasyonun zamanlaması veya yükü geçersiz.",
-      stopped: "Zamanlayıcı durduruldu.",
-      unknown: "Bu otomasyon başlatılamadı.",
     },
     runNotStarted: {
       notDue: "Bu otomasyonun çalışma zamanı henüz gelmedi.",

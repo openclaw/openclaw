@@ -26,6 +26,8 @@ export type CliBackendPrepareExecutionContext = {
   agentDir?: string;
   provider: string;
   modelId: string;
+  /** Effective OpenClaw context budget selected for this run. */
+  contextTokenBudget?: number;
   authProfileId?: string;
   executionMode?: CliBackendExecutionMode;
 };
@@ -198,6 +200,13 @@ export type CliBackendPlugin = {
    * owner for session invalidation when one is present.
    */
   authEpochMode?: CliBackendAuthEpochMode;
+  /**
+   * Whether `prepareExecution` may auto-select a configured auth profile.
+   *
+   * Defaults to true for auth bridges. Set false for environment/config-only
+   * hooks that do not consume OpenClaw auth profiles.
+   */
+  autoSelectAuthProfile?: boolean;
   /**
    * Backend-owned execution bridge.
    *

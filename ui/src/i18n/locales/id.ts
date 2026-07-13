@@ -231,6 +231,15 @@ export const id: TranslationMap = {
       title: "OpenClaw seluler",
       subtitle: "Pindai kode QR ini di aplikasi seluler untuk menghubungkan ponsel baru.",
       generating: "Membuat kode penyiapan yang aman…",
+      accessTitle: "Akses seluler",
+      fullAccess: "Akses penuh (disarankan)",
+      fullAccessHint: "Node beserta kontrol Gateway lengkap, termasuk pengaturan dan peningkatan.",
+      limitedAccess: "Akses terbatas",
+      limitedAccessHint: "Node, chat, dan persetujuan tanpa kontrol administratif.",
+      generateCode: "Buat kode penyiapan",
+      transportLimitedTitle: "Dibatasi demi keamanan jaringan",
+      transportLimitedHint:
+        "URL Gateway ini menggunakan ws:// tanpa enkripsi. Gunakan wss:// atau Tailscale Serve, lalu buat kode baru untuk akses penuh.",
       failed: "Tidak dapat membuat kode penyiapan.",
       qrAlt: "Kode QR pemasangan OpenClaw seluler",
       qrUnavailable: "QR tidak tersedia. Salin kode penyiapan sebagai gantinya.",
@@ -264,7 +273,8 @@ export const id: TranslationMap = {
     },
     inventory: {
       title: "Perangkat",
-      subtitle: "Satu baris per klien yang dipasangkan: status, peran, token.",
+      summaryConnected: "{connected} dari {total} terhubung",
+      summaryPending: "{count} menunggu persetujuan",
       cleanupStale: "Bersihkan {count} usang",
       pendingApproval: "Menunggu persetujuan",
       paired: "Dipasangkan",
@@ -400,6 +410,13 @@ export const id: TranslationMap = {
     getHelp: "Dapatkan bantuan",
     discord: "Komunitas Discord",
     viewChangelog: "Lihat log perubahan",
+    agentSettings: "Pengaturan agen",
+    filterAgents: "Cari agen…",
+    noAgentMatches: "Tidak ada agen yang cocok",
+  },
+  agentScope: {
+    label: "Cakupan agen",
+    allAgents: "Semua agen",
   },
   newSession: {
     title: "Sesi baru",
@@ -609,6 +626,8 @@ export const id: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Sematkan ke pengalih",
+    unpinFromSwitcher: "Lepaskan sematan dari pengalih",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -633,6 +652,18 @@ export const id: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identitas",
+      subtitle: "Nama, emoji, dan avatar yang ditampilkan di obrolan dan bilah samping.",
+      name: "Nama tampilan",
+      namePlaceholder: "Nama agen",
+      emoji: "Emoji",
+      chooseImage: "Pilih gambar…",
+      replaceImage: "Ganti gambar…",
+      imageUnusable:
+        "Gambar tersebut tidak dapat digunakan. Pilih file gambar berukuran hingga 2 MB.",
+      fileHint: "Agen dapat mengaturnya sendiri dengan mengedit IDENTITY.md di ruang kerja mereka.",
     },
     overview: {
       title: "Ikhtisar",
@@ -3581,14 +3612,6 @@ export const id: TranslationMap = {
       clone: "Klon",
       remove: "Hapus",
       more: "Tindakan lainnya",
-    },
-    runNotStarted: {
-      notDue: "Otomatisasi ini belum waktunya dijalankan.",
-      alreadyRunning: "Otomatisasi ini sudah berjalan.",
-      recoveryPending: "Pemulihan penjadwal masih berlangsung.",
-      invalidSpec: "Otomatisasi ini memiliki jadwal atau payload yang tidak valid.",
-      stopped: "Penjadwal dihentikan.",
-      unknown: "Otomatisasi ini tidak dapat dimulai.",
     },
     runNotStarted: {
       notDue: "Otomatisasi ini belum waktunya dijalankan.",

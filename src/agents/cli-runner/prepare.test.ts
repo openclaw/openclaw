@@ -21,6 +21,7 @@ import type {
   McpLoopbackClientGrant,
   McpLoopbackRequestContext,
 } from "../../gateway/mcp-grant-store.js";
+import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   clearMemoryPluginState,
@@ -182,29 +183,43 @@ function createCliBackendConfig(
   } satisfies OpenClawConfig;
 }
 
-function setClaudeCliBackendForPrepareTest(
+function setCliBackendForPrepareTest(
   params: {
+    autoSelectAuthProfile?: boolean;
+    command?: string;
+    id?: string;
     liveSession?: boolean;
+    modelAliases?: Record<string, string>;
+    modelProvider?: string;
+    pluginId?: string;
+    prepareExecution?: CliBackendPlugin["prepareExecution"];
     sessionMode?: "always" | "existing" | "none";
     reseedFromRawTranscriptWhenUncompacted?: boolean;
   } = {},
 ) {
-  // Keep Claude-specific preparation behind the same runtime resolver seam that
-  // production uses; direct backend constants would bypass provider ownership.
+  const id = params.id ?? "claude-cli";
+  // Keep preparation behind the same runtime resolver seam that production
+  // uses; direct backend constants would bypass provider ownership.
   cliBackendsTesting.setDepsForTest({
     resolvePluginSetupCliBackend: () => undefined,
     resolveRuntimeCliBackends: () => [
       {
-        id: "claude-cli",
-        pluginId: "anthropic",
+        id,
+        pluginId: params.pluginId ?? "anthropic",
+        modelProvider: params.modelProvider ?? "anthropic",
         bundleMcp: false,
+        ...(params.autoSelectAuthProfile !== undefined
+          ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
+          : {}),
+        ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
         config: {
-          command: "claude",
+          command: params.command ?? "claude",
           args: ["--print"],
           resumeArgs: ["--resume", "{sessionId}"],
           output: "jsonl",
           input: "stdin",
           sessionMode: params.sessionMode ?? "existing",
+          ...(params.modelAliases ? { modelAliases: params.modelAliases } : {}),
           ...(params.liveSession ? { liveSession: "claude-stdio" as const } : {}),
           ...(params.reseedFromRawTranscriptWhenUncompacted
             ? { reseedFromRawTranscriptWhenUncompacted: true }
@@ -259,7 +274,140 @@ function appendTranscriptEntry(
   );
 }
 
+type CliContextBudgetTestCase = {
+  name: string;
+  provider: string;
+  agentContextTokens?: number;
+  expectedContextTokens: number;
+  model: string;
+  modelAliases?: Record<string, string>;
+};
+
 describe("shouldSkipLocalCliCredentialEpoch", () => {
+  it.each<CliContextBudgetTestCase>([
+    {
+      name: "Claude CLI with a selected-agent cap",
+      provider: "claude-cli",
+      agentContextTokens: 80_000,
+      expectedContextTokens: 80_000,
+      model: "claude-opus-4-7",
+    },
+    {
+      name: "a Claude CLI user alias",
+      provider: "claude-cli",
+      agentContextTokens: undefined,
+      expectedContextTokens: 100_000,
+      model: "large",
+      modelAliases: { large: "claude-opus-4-7" },
+    },
+    {
+      name: "a Claude CLI-native alias",
+      provider: "claude-cli",
+      agentContextTokens: undefined,
+      expectedContextTokens: 100_000,
+      model: "claude-opus-4-7",
+      modelAliases: { "claude-opus-4-7": "deployment-large" },
+    },
+    {
+      name: "a generic CLI backend alias",
+      provider: "fixture-cli",
+      agentContextTokens: undefined,
+      expectedContextTokens: 100_000,
+      model: "claude-opus-4-7",
+    },
+  ])("resolves canonical model budgets for $name", async (testCase) => {
+    const { dir, sessionFile } = createSessionFile();
+    const prepareExecution = vi.fn(async () => undefined);
+    const baseConfig = createCliBackendConfig();
+    try {
+      setCliBackendForPrepareTest({
+        id: testCase.provider,
+        command: testCase.provider === "claude-cli" ? "claude" : testCase.provider,
+        modelProvider: "fixture-anthropic",
+        pluginId: "fixture-plugin",
+        prepareExecution,
+        modelAliases: testCase.modelAliases,
+      });
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: testCase.provider,
+        model: testCase.model,
+        timeoutMs: 1_000,
+        runId: "run-configured-context-budget",
+        config: {
+          ...baseConfig,
+          agents: {
+            ...baseConfig.agents,
+            ...(testCase.agentContextTokens
+              ? { list: [{ id: "main", contextTokens: testCase.agentContextTokens }] }
+              : {}),
+          },
+          models: {
+            providers: {
+              "fixture-anthropic": {
+                baseUrl: "https://api.anthropic.com",
+                contextTokens: 200_000,
+                models: [
+                  {
+                    id: "claude-opus-4-7",
+                    name: "Claude Opus 4.7",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200_000,
+                    maxTokens: 8_192,
+                    contextTokens: 100_000,
+                  },
+                ],
+              },
+              "collision-provider": {
+                baseUrl: "https://collision.invalid",
+                models: [
+                  {
+                    id: "large",
+                    name: "Unrelated Large",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 32_000,
+                    maxTokens: 4_096,
+                    contextTokens: 32_000,
+                  },
+                ],
+              },
+              "claude-cli": {
+                baseUrl: "https://runtime.invalid",
+                models: [
+                  {
+                    id: "large",
+                    name: "Configured Alias Source",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200_000,
+                    maxTokens: 8_192,
+                    contextTokens: 200_000,
+                  },
+                ],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+      });
+
+      expect(context.backendResolved.modelProvider).toBe("fixture-anthropic");
+      expect(context.contextWindowInfo?.tokens).toBe(testCase.expectedContextTokens);
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ contextTokenBudget: testCase.expectedContextTokens }),
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(() => {
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
@@ -853,6 +1001,71 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         }),
       );
       expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "keeps implicit profile selection for auth bridges",
+      autoSelectAuthProfile: undefined,
+      expectedAuthProfileId: "claude-cli:stored",
+    },
+    {
+      name: "lets environment-only hooks opt out of profile selection",
+      autoSelectAuthProfile: false,
+      expectedAuthProfileId: undefined,
+    },
+  ])("$name", async (testCase) => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "claude-cli:stored";
+    const prepareExecution = vi.fn(async () => ({ env: { TEST_PREPARED_ENV: "1" } }));
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "api_key",
+            provider: "claude-cli",
+            key: "stored-key",
+          },
+        },
+      },
+      agentDir,
+    );
+
+    try {
+      setCliBackendForPrepareTest({
+        prepareExecution,
+        autoSelectAuthProfile: testCase.autoSelectAuthProfile,
+      });
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        agentDir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-test-environment-only-prepare-hook",
+        config: {
+          auth: {
+            profiles: {
+              [authProfileId]: { provider: "claude-cli", mode: "api_key" },
+            },
+          },
+        },
+      });
+
+      expect(context.effectiveAuthProfileId).toBe(testCase.expectedAuthProfileId);
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ authProfileId: testCase.expectedAuthProfileId }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -3495,7 +3708,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("drops the claude-cli sessionId when the on-disk transcript is missing (#77011)", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      setClaudeCliBackendForPrepareTest();
+      setCliBackendForPrepareTest();
       const transcriptCheck = vi.fn(async () => false);
       const orphanCheck = vi.fn(async () => true);
       setCliRunnerPrepareTestDeps({
@@ -3545,7 +3758,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       },
     });
     try {
-      setClaudeCliBackendForPrepareTest({
+      setCliBackendForPrepareTest({
         reseedFromRawTranscriptWhenUncompacted: true,
       });
       const transcriptCheck = vi.fn(async () => false);
@@ -3596,7 +3809,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       },
     });
     try {
-      setClaudeCliBackendForPrepareTest({
+      setCliBackendForPrepareTest({
         liveSession: true,
         reseedFromRawTranscriptWhenUncompacted: true,
       });
@@ -3652,7 +3865,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("disables Claude live transport while preserving native transcript resume", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      setClaudeCliBackendForPrepareTest({ liveSession: true });
+      setCliBackendForPrepareTest({ liveSession: true });
       const transcriptCheck = vi.fn(async () => true);
       setCliRunnerPrepareTestDeps({
         claudeCliSessionTranscriptHasContent: transcriptCheck,
@@ -3688,7 +3901,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("ignores stored CLI session candidates when the backend disables sessions", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      setClaudeCliBackendForPrepareTest({
+      setCliBackendForPrepareTest({
         sessionMode: "none",
         reseedFromRawTranscriptWhenUncompacted: true,
       });
@@ -3726,7 +3939,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const { dir, sessionFile } = createSessionFile();
 
     try {
-      setClaudeCliBackendForPrepareTest();
+      setCliBackendForPrepareTest();
       const transcriptCheck = vi.fn(async () => true);
       const orphanCheck = vi.fn(async () => true);
       setCliRunnerPrepareTestDeps({
@@ -3773,7 +3986,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     const { dir, sessionFile } = createSessionFile();
 
     try {
-      setClaudeCliBackendForPrepareTest();
+      setCliBackendForPrepareTest();
       const transcriptCheck = vi.fn(async () => true);
       const orphanCheck = vi.fn(async () => true);
       setCliRunnerPrepareTestDeps({
@@ -3814,7 +4027,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("keeps the claude-cli sessionId when the on-disk transcript is present", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
-      setClaudeCliBackendForPrepareTest();
+      setCliBackendForPrepareTest();
       const transcriptCheck = vi.fn(async () => true);
       const orphanCheck = vi.fn(async () => false);
       setCliRunnerPrepareTestDeps({

@@ -19,6 +19,7 @@ const rootEntries = [
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
   "src/mcp/codex-supervision-tools-serve.ts!",
+  "scripts/qa/render-maturity-docs.ts!",
   bundledPluginFile("telegram", "src/audit.ts", "!"),
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
@@ -238,6 +239,10 @@ const config = {
     },
     "packages/terminal-core": {
       entry: ["src/*.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/memory-host-sdk": {
+      entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/speech-core": {

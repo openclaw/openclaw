@@ -1320,6 +1320,35 @@ func TestValidateDocBodyFencedLiteralsRejectsFenceBalanceChange(t *testing.T) {
 	}
 }
 
+func TestValidateDocBodyFencedLiteralsRejectsBalancedFenceCountChange(t *testing.T) {
+	t.Parallel()
+
+	source := "```json5\n{ session: { enabled: true } }\n```\n"
+	translated := "```json5\n{ session: {\n```\n```json5\nenabled: true } }\n```\n"
+
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil {
+		t.Fatal("expected recombined fence count change to be rejected")
+	}
+	if !strings.Contains(err.Error(), "code fence mismatch: source=2 translated=4") {
+		t.Fatalf("expected code fence mismatch, got %v", err)
+	}
+}
+
+func TestMergeSplitPureFencedDocTranslationsRejectsAdjacentFences(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\nFirst block.\n```\n```text\nSecond block.\n```\n"
+	translatedGroups := []string{
+		"```text\nПервый блок.\n```\n",
+		"```text\nВторой блок.\n```\n",
+	}
+
+	if merged, ok := mergeSplitPureFencedDocTranslations(source, translatedGroups); ok {
+		t.Fatalf("expected adjacent source fences not to merge, got:\n%s", merged)
+	}
+}
+
 func TestValidateDocChunkTranslationAllowsFencedBracketLabelsToTranslate(t *testing.T) {
 	t.Parallel()
 
@@ -2096,6 +2125,9 @@ func TestTranslateDocBodyChunkedRetriesSingletonFenceAfterValidationFailure(t *t
 	if !strings.Contains(translated, "Translated line 01") || !strings.Contains(translated, "Translated line 04") {
 		t.Fatalf("expected singleton fence retry to reassemble translated output:\n%s", translated)
 	}
+	if sourceCount, translatedCount := summarizeDocChunkStructure(body).fenceCount, summarizeDocChunkStructure(translated).fenceCount; sourceCount != translatedCount {
+		t.Fatalf("expected singleton fence retry to preserve one fenced block, source=%d translated=%d:\n%s", sourceCount, translatedCount, translated)
+	}
 }
 
 func TestTranslateDocBodyChunkedUnwrapsTaggedLeafProtocolLeakage(t *testing.T) {
@@ -2191,8 +2223,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 20") {
-		t.Fatalf("expected prompt version 20 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 21") {
+		t.Fatalf("expected prompt version 21 in output metadata:\n%s", text)
 	}
 }
 

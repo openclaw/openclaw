@@ -231,6 +231,15 @@ export const nl: TranslationMap = {
       title: "OpenClaw mobiel",
       subtitle: "Scan deze QR-code in de mobiele app om een nieuwe telefoon te verbinden.",
       generating: "Een veilige installatiecode maken…",
+      accessTitle: "Mobiele toegang",
+      fullAccess: "Volledige toegang (aanbevolen)",
+      fullAccessHint: "Node plus volledige Gateway-bediening, inclusief instellingen en upgrades.",
+      limitedAccess: "Beperkte toegang",
+      limitedAccessHint: "Node, chat en goedkeuringen zonder beheerdersfuncties.",
+      generateCode: "Installatiecode maken",
+      transportLimitedTitle: "Beperkt voor netwerkveiligheid",
+      transportLimitedHint:
+        "Deze Gateway-URL gebruikt ws:// zonder versleuteling. Gebruik wss:// of Tailscale Serve en maak vervolgens een nieuwe code voor volledige toegang.",
       failed: "Kan geen installatiecode maken.",
       qrAlt: "QR-code voor koppeling met OpenClaw mobiel",
       qrUnavailable: "QR niet beschikbaar. Kopieer in plaats daarvan de installatiecode.",
@@ -266,7 +275,8 @@ export const nl: TranslationMap = {
     },
     inventory: {
       title: "Apparaten",
-      subtitle: "Eén rij per gekoppelde client: status, rollen, tokens.",
+      summaryConnected: "{connected} van {total} verbonden",
+      summaryPending: "{count} in afwachting van goedkeuring",
       cleanupStale: "{count} verouderde opschonen",
       pendingApproval: "In afwachting van goedkeuring",
       paired: "Gekoppeld",
@@ -402,6 +412,13 @@ export const nl: TranslationMap = {
     getHelp: "Hulp krijgen",
     discord: "Discord-community",
     viewChangelog: "Wijzigingslogboek bekijken",
+    agentSettings: "Agentinstellingen",
+    filterAgents: "Agent zoeken…",
+    noAgentMatches: "Geen overeenkomende agents",
+  },
+  agentScope: {
+    label: "Agentbereik",
+    allAgents: "Alle agents",
   },
   newSession: {
     title: "Nieuwe sessie",
@@ -613,6 +630,8 @@ export const nl: TranslationMap = {
     setDefault: "Als standaard instellen",
     alreadyDefaultTitle: "Al de standaardagent",
     setDefaultTitle: "Als standaardagent instellen",
+    pinToSwitcher: "Vastmaken aan wisselaar",
+    unpinFromSwitcher: "Losmaken van wisselaar",
     selectTitle: "Selecteer een agent",
     selectSubtitle: "Kies een agent om de workspace en tools te bekijken.",
     tabs: {
@@ -637,6 +656,18 @@ export const nl: TranslationMap = {
       default: "Standaard",
       configurationSubtitle: "Workspace-, identiteit- en modelconfiguratie.",
       schedulingSubtitle: "Workspace- en planningsdoelen.",
+    },
+    identity: {
+      title: "Identiteit",
+      subtitle: "Naam, emoji en avatar die worden weergegeven in chats en de zijbalk.",
+      name: "Weergavenaam",
+      namePlaceholder: "Agentnaam",
+      emoji: "Emoji",
+      chooseImage: "Afbeelding kiezen…",
+      replaceImage: "Afbeelding vervangen…",
+      imageUnusable:
+        "Die afbeelding kan niet worden gebruikt. Kies een afbeeldingsbestand van maximaal 2 MB.",
+      fileHint: "Agents kunnen dit zelf instellen door IDENTITY.md in hun werkruimte te bewerken.",
     },
     overview: {
       title: "Overzicht",
@@ -3592,14 +3623,6 @@ export const nl: TranslationMap = {
       clone: "Klonen",
       remove: "Verwijderen",
       more: "Meer acties",
-    },
-    runNotStarted: {
-      notDue: "Deze automatisering hoeft nog niet te worden uitgevoerd.",
-      alreadyRunning: "Deze automatisering wordt al uitgevoerd.",
-      recoveryPending: "Het herstel van de planner is nog bezig.",
-      invalidSpec: "Deze automatisering heeft een ongeldig schema of een ongeldige payload.",
-      stopped: "De planner is gestopt.",
-      unknown: "Deze automatisering kon niet worden gestart.",
     },
     runNotStarted: {
       notDue: "Deze automatisering hoeft nog niet te worden uitgevoerd.",

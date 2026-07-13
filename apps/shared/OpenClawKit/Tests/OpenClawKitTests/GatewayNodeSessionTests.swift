@@ -2569,6 +2569,7 @@ struct GatewayNodeSessionTests {
         #expect(nodeEntry.scopes == [])
         #expect(operatorEntry.token == "operator-device-token")
         #expect(operatorEntry.scopes == [
+            "operator.admin",
             "operator.approvals",
             "operator.read",
             "operator.talk.secrets",

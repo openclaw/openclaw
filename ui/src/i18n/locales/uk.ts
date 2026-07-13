@@ -231,6 +231,15 @@ export const uk: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Відскануйте цей QR-код у мобільному застосунку, щоб підключити новий телефон.",
       generating: "Створення безпечного коду налаштування…",
+      accessTitle: "Мобільний доступ",
+      fullAccess: "Повний доступ (рекомендовано)",
+      fullAccessHint: "Вузол і повне керування Gateway, включно з налаштуваннями та оновленнями.",
+      limitedAccess: "Обмежений доступ",
+      limitedAccessHint: "Вузол, чат і схвалення без адміністративного керування.",
+      generateCode: "Створити код налаштування",
+      transportLimitedTitle: "Обмежено задля безпеки мережі",
+      transportLimitedHint:
+        "Ця URL-адреса Gateway використовує незашифрований протокол ws://. Використовуйте wss:// або Tailscale Serve, а потім створіть новий код для повного доступу.",
       failed: "Не вдалося створити код налаштування.",
       qrAlt: "QR-код сполучення OpenClaw mobile",
       qrUnavailable: "QR-код недоступний. Натомість скопіюйте код налаштування.",
@@ -265,7 +274,8 @@ export const uk: TranslationMap = {
     },
     inventory: {
       title: "Пристрої",
-      subtitle: "Один рядок на кожен пов'язаний клієнт: статус, ролі, токени.",
+      summaryConnected: "Підключено: {connected} із {total}",
+      summaryPending: "Очікують схвалення: {count}",
       cleanupStale: "Очистити {count} застарілих",
       pendingApproval: "Очікує підтвердження",
       paired: "Пов'язано",
@@ -401,6 +411,13 @@ export const uk: TranslationMap = {
     getHelp: "Отримати допомогу",
     discord: "Спільнота Discord",
     viewChangelog: "Переглянути журнал змін",
+    agentSettings: "Налаштування агента",
+    filterAgents: "Знайти агента…",
+    noAgentMatches: "Відповідних агентів не знайдено",
+  },
+  agentScope: {
+    label: "Область дії агента",
+    allAgents: "Усі агенти",
   },
   newSession: {
     title: "Новий сеанс",
@@ -609,6 +626,8 @@ export const uk: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Закріпити в перемикачі",
+    unpinFromSwitcher: "Відкріпити від перемикача",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -633,6 +652,19 @@ export const uk: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Ідентичність",
+      subtitle: "Ім’я, емодзі й аватар, які відображаються в чатах і на бічній панелі.",
+      name: "Відображуване ім’я",
+      namePlaceholder: "Ім’я агента",
+      emoji: "Емодзі",
+      chooseImage: "Вибрати зображення…",
+      replaceImage: "Замінити зображення…",
+      imageUnusable:
+        "Це зображення не можна використати. Виберіть файл зображення розміром до 2 МБ.",
+      fileHint:
+        "Агенти можуть налаштувати це самостійно, відредагувавши IDENTITY.md у своєму робочому просторі.",
     },
     overview: {
       title: "Огляд",
@@ -3585,14 +3617,6 @@ export const uk: TranslationMap = {
       clone: "Клонувати",
       remove: "Видалити",
       more: "Більше дій",
-    },
-    runNotStarted: {
-      notDue: "Час запуску цієї автоматизації ще не настав.",
-      alreadyRunning: "Ця автоматизація вже виконується.",
-      recoveryPending: "Відновлення планувальника ще триває.",
-      invalidSpec: "Ця автоматизація має некоректний розклад або корисне навантаження.",
-      stopped: "Планувальник зупинено.",
-      unknown: "Не вдалося запустити цю автоматизацію.",
     },
     runNotStarted: {
       notDue: "Час запуску цієї автоматизації ще не настав.",

@@ -231,6 +231,16 @@ export const ru: TranslationMap = {
       title: "OpenClaw для мобильных устройств",
       subtitle: "Отсканируйте этот QR-код в мобильном приложении, чтобы подключить новый телефон.",
       generating: "Создаём безопасный код настройки…",
+      accessTitle: "Мобильный доступ",
+      fullAccess: "Полный доступ (рекомендуется)",
+      fullAccessHint:
+        "Узел и полный набор элементов управления Gateway, включая настройки и обновления.",
+      limitedAccess: "Ограниченный доступ",
+      limitedAccessHint: "Узел, чат и подтверждения без административных элементов управления.",
+      generateCode: "Создать код настройки",
+      transportLimitedTitle: "Ограничено для безопасности сети",
+      transportLimitedHint:
+        "Этот URL-адрес Gateway использует незашифрованный протокол ws://. Используйте wss:// или Tailscale Serve, затем создайте новый код для полного доступа.",
       failed: "Не удалось создать код настройки.",
       qrAlt: "QR-код сопряжения OpenClaw для мобильных устройств",
       qrUnavailable: "QR-код недоступен. Скопируйте код настройки.",
@@ -266,7 +276,8 @@ export const ru: TranslationMap = {
     },
     inventory: {
       title: "Устройства",
-      subtitle: "Одна строка на каждый сопряжённый клиент: статус, роли, токены.",
+      summaryConnected: "Подключено: {connected} из {total}",
+      summaryPending: "Ожидают одобрения: {count}",
       cleanupStale: "Очистить устаревшие: {count}",
       pendingApproval: "Ожидает подтверждения",
       paired: "Сопряжено",
@@ -402,6 +413,13 @@ export const ru: TranslationMap = {
     getHelp: "Получить помощь",
     discord: "Сообщество Discord",
     viewChangelog: "Посмотреть журнал изменений",
+    agentSettings: "Настройки агента",
+    filterAgents: "Найти агента…",
+    noAgentMatches: "Подходящие агенты не найдены",
+  },
+  agentScope: {
+    label: "Область действия агента",
+    allAgents: "Все агенты",
   },
   newSession: {
     title: "Новый сеанс",
@@ -612,6 +630,8 @@ export const ru: TranslationMap = {
     setDefault: "Сделать по умолчанию",
     alreadyDefaultTitle: "Уже агент по умолчанию",
     setDefaultTitle: "Сделать агентом по умолчанию",
+    pinToSwitcher: "Закрепить в переключателе",
+    unpinFromSwitcher: "Открепить от переключателя",
     selectTitle: "Выберите агента",
     selectSubtitle: "Выберите агента, чтобы просмотреть его рабочую область и инструменты.",
     tabs: {
@@ -636,6 +656,19 @@ export const ru: TranslationMap = {
       default: "По умолчанию",
       configurationSubtitle: "Настройка рабочей области, удостоверения и модели.",
       schedulingSubtitle: "Рабочая область и целевые объекты расписания.",
+    },
+    identity: {
+      title: "Профиль",
+      subtitle: "Имя, эмодзи и аватар, отображаемые в чатах и на боковой панели.",
+      name: "Отображаемое имя",
+      namePlaceholder: "Имя агента",
+      emoji: "Эмодзи",
+      chooseImage: "Выбрать изображение…",
+      replaceImage: "Заменить изображение…",
+      imageUnusable:
+        "Это изображение нельзя использовать. Выберите файл изображения размером до 2 МБ.",
+      fileHint:
+        "Агенты могут настроить это самостоятельно, отредактировав файл IDENTITY.md в своей рабочей области.",
     },
     overview: {
       title: "Обзор",
@@ -3602,14 +3635,6 @@ export const ru: TranslationMap = {
       clone: "Клонировать",
       remove: "Удалить",
       more: "Другие действия",
-    },
-    runNotStarted: {
-      notDue: "Время запуска этой автоматизации ещё не наступило.",
-      alreadyRunning: "Эта автоматизация уже выполняется.",
-      recoveryPending: "Восстановление планировщика ещё не завершено.",
-      invalidSpec: "У этой автоматизации недопустимое расписание или содержимое.",
-      stopped: "Планировщик остановлен.",
-      unknown: "Не удалось запустить эту автоматизацию.",
     },
     runNotStarted: {
       notDue: "Время запуска этой автоматизации ещё не наступило.",

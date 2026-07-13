@@ -1,5 +1,6 @@
 // Control UI English locale strings are the i18n source bundle.
 import type { TranslationMap } from "../lib/types.ts";
+import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap = {
   common: {
@@ -228,6 +229,15 @@ export const en: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Scan this QR code in the mobile app to connect a new phone.",
       generating: "Creating a secure setup code…",
+      accessTitle: "Mobile access",
+      fullAccess: "Full access (recommended)",
+      fullAccessHint: "Node plus complete Gateway controls, including settings and upgrades.",
+      limitedAccess: "Limited access",
+      limitedAccessHint: "Node, chat, and approvals without administrative controls.",
+      generateCode: "Create setup code",
+      transportLimitedTitle: "Limited for network safety",
+      transportLimitedHint:
+        "This Gateway URL uses plaintext ws://. Use wss:// or Tailscale Serve, then create a new code for full access.",
       failed: "Could not create a setup code.",
       qrAlt: "OpenClaw mobile pairing QR code",
       qrUnavailable: "QR unavailable. Copy the setup code instead.",
@@ -260,8 +270,9 @@ export const en: TranslationMap = {
       any: "any",
     },
     inventory: {
-      title: "Devices",
-      subtitle: "One row per paired client: status, roles, tokens.",
+      title: "Paired devices",
+      summaryConnected: "{connected} of {total} connected",
+      summaryPending: "{count} awaiting approval",
       cleanupStale: "Clean up {count} stale",
       pendingApproval: "Pending approval",
       paired: "Paired",
@@ -388,16 +399,8 @@ export const en: TranslationMap = {
     confirmDelete: "Snapshot and delete {name}?",
     confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
   },
-  agentChip: {
-    menuLabel: "Agent menu",
-    agents: "Agents",
-    working: "Working…",
-    ready: "Ready to chat",
-    whatCanAgentDo: "What can {name} do?",
-    getHelp: "Get help",
-    discord: "Discord community",
-    viewChangelog: "View changelog",
-  },
+  agentChip: agentEn.agentChip,
+  agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
@@ -605,6 +608,7 @@ export const en: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    ...agentEn.pinning,
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -630,6 +634,7 @@ export const en: TranslationMap = {
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
     },
+    identity: agentEn.identity,
     overview: {
       title: "Overview",
       subtitle: "Workspace paths and identity metadata.",
@@ -1588,7 +1593,7 @@ export const en: TranslationMap = {
     skills: "Skills and API keys.",
     plugins: "Install and manage optional capabilities.",
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
-    nodes: "Paired devices, live connections, and commands.",
+    nodes: "Paired devices, pairing approvals, and exec bindings.",
     chat: "Gateway chat for quick interventions.",
     config: "Edit openclaw.json.",
     profile: "Your agent's stats, streaks, and life in the reef.",
