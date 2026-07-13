@@ -322,6 +322,35 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("clears pending provider mark timers when stopped", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "audio",
+        audioBase64: zeroPcmBase64(24000),
+      },
+    });
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: { relaySessionId: "relay-1", type: "mark", markName: "mark-1" },
+    });
+
+    expect(vi.getTimerCount()).toBe(1);
+    transport.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(requestCallsFor(client, "talk.session.acknowledgeMark")).toHaveLength(0);
+  });
+
   it("reports microphone activity and resets it when stopped", async () => {
     const onInputLevel = vi.fn();
     const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {

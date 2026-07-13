@@ -37,6 +37,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private readonly completedToolCalls = new Set<string>();
   private readonly submittingToolCalls = new Set<string>();
   private readonly delayedToolResults = new Set<DelayedToolResult>();
+  private readonly markAckTimers = new Set<number>();
   private cancelRequestedForPlayback = false;
   private pendingOutputCancellations = 0;
   private speechFramesDuringPlayback = 0;
@@ -113,6 +114,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.inputSource = null;
     this.inputMeter?.stop();
     this.inputMeter = null;
+    this.clearMarkAckTimers();
     this.discardDelayedToolResults();
     this.abortConsults();
     this.media?.getTracks().forEach((track) => track.stop());
@@ -238,16 +240,13 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private scheduleMarkAck(markName: string): void {
-    const delayMs = Math.max(
-      0,
-      Math.ceil(
-        ((this.outputQueue.queuedUntil || this.outputContext?.currentTime || 0) -
-          (this.outputContext?.currentTime ?? 0)) *
-          1000,
-      ),
-    );
+    const delayMs = this.outputPlaybackDelayMs();
     if (delayMs > 0) {
-      window.setTimeout(() => this.scheduleMarkAck(markName), delayMs);
+      const timer = window.setTimeout(() => {
+        this.markAckTimers.delete(timer);
+        this.scheduleMarkAck(markName);
+      }, delayMs);
+      this.markAckTimers.add(timer);
       return;
     }
     if (this.closed) {
@@ -259,6 +258,13 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         markName,
       })
       .catch((error: unknown) => this.reportToolResultSubmissionError(error));
+  }
+
+  private clearMarkAckTimers(): void {
+    for (const timer of this.markAckTimers) {
+      window.clearTimeout(timer);
+    }
+    this.markAckTimers.clear();
   }
 
   private async handleToolCall(event: Extract<GatewayRelayEvent, { type?: "toolCall" }>) {
