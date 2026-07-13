@@ -6,20 +6,25 @@ describe("runCommandWithTimeout no-output timer", () => {
   it("resets no-output timeout while the child emits stdout", async () => {
     const script = [
       "let count = 0",
-      "const timer = setInterval(() => {",
+      "let timer",
+      "const emit = () => {",
       "  process.stdout.write('.')",
-      "  if (++count === 4) { clearInterval(timer); process.exit(0) }",
-      "}, 30)",
+      "  if (++count === 6) { clearInterval(timer); process.exit(0) }",
+      "}",
+      "emit()",
+      "timer = setInterval(emit, 500)",
     ].join(";");
     const result = await runCommandWithTimeout([process.execPath, "-e", script], {
-      timeoutMs: 2_000,
-      noOutputTimeoutMs: 100,
+      timeoutMs: 10_000,
+      // Leave ample process-startup margin while keeping total runtime above
+      // this threshold, so only output-driven resets let the child finish.
+      noOutputTimeoutMs: 2_000,
     });
 
     expect(result).toMatchObject({
       code: 0,
       noOutputTimedOut: false,
-      stdout: "....",
+      stdout: "......",
       termination: "exit",
     });
   });

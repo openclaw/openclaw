@@ -13,6 +13,9 @@ import { withTempDir } from "../test-utils/temp-dir.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const execaMock = vi.fn();
+const isRegularFileMock = vi.fn();
+const resolveExecutableFromPathEnvMock = vi.fn();
+const resolveExecutablePathCandidateMock = vi.fn();
 const spawnSyncMock = vi.fn();
 
 type MockResult = {
@@ -135,6 +138,17 @@ describe("Windows command execution", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("execa", () => ({ execa: execaMock }));
+    vi.doMock("../infra/executable-path.js", async () => {
+      const actual = await vi.importActual<typeof import("../infra/executable-path.js")>(
+        "../infra/executable-path.js",
+      );
+      return {
+        ...actual,
+        isRegularFile: isRegularFileMock,
+        resolveExecutableFromPathEnv: resolveExecutableFromPathEnvMock,
+        resolveExecutablePathCandidate: resolveExecutablePathCandidateMock,
+      };
+    });
     vi.doMock("node:child_process", async () => {
       const actual =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
@@ -145,6 +159,7 @@ describe("Windows command execution", () => {
 
   afterAll(() => {
     vi.doUnmock("execa");
+    vi.doUnmock("../infra/executable-path.js");
     vi.doUnmock("node:child_process");
     vi.resetModules();
   });
@@ -153,6 +168,25 @@ describe("Windows command execution", () => {
     resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     execaMock.mockReset();
     execaMock.mockImplementation(() => createMockSubprocess());
+    isRegularFileMock.mockReset();
+    isRegularFileMock.mockReturnValue(true);
+    resolveExecutableFromPathEnvMock.mockReset();
+    resolveExecutableFromPathEnvMock.mockImplementation((command: string) => {
+      const basename = path.win32.basename(command).toLowerCase();
+      if (["corepack", "pnpm", "yarn"].includes(basename)) {
+        return undefined;
+      }
+      if (command.includes("\\")) {
+        return command;
+      }
+      const extension = path.extname(command) || path.win32.extname(command);
+      return path.win32.join(
+        "C:\\openclaw-test-bin",
+        extension ? command : `${path.win32.basename(command)}.exe`,
+      );
+    });
+    resolveExecutablePathCandidateMock.mockReset();
+    resolveExecutablePathCandidateMock.mockImplementation((command: string) => command);
     spawnSyncMock.mockReset();
     spawnSyncMock.mockReturnValue({ stdout: "Active code page: 936", stderr: "" });
   });
@@ -197,6 +231,7 @@ describe("Windows command execution", () => {
     await withTempDir("openclaw-execa-windows-shim-", async (binDir) => {
       const shimPath = path.join(binDir, "custom-shim.cmd");
       fs.writeFileSync(shimPath, "@echo off\r\n", "utf8");
+      resolveExecutableFromPathEnvMock.mockReturnValueOnce(shimPath);
 
       await withMockedWindowsPlatform(async () => {
         void spawnCommand(["custom-shim", "--version"], {
@@ -213,6 +248,32 @@ describe("Windows command execution", () => {
     });
   });
 
+  it("rejects unresolved commands before Execa can consult ambient ComSpec", async () => {
+    resolveExecutableFromPathEnvMock.mockReturnValueOnce(undefined);
+
+    await withMockedWindowsPlatform(async () => {
+      expect(() =>
+        spawnCommand(["missing\r\ncalc.exe"], {
+          baseEnv: {
+            ComSpec: "C:\\workspace\\evil\\cmd.exe",
+            PATH: "C:\\openclaw-test-bin",
+            PATHEXT: ".EXE;.CMD;.BAT;.COM",
+          },
+        }),
+      ).toThrow("ENOENT");
+      expect(execaMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects unsupported Windows command types before Execa", async () => {
+    resolveExecutableFromPathEnvMock.mockReturnValueOnce("C:\\tools\\script.ps1");
+
+    await withMockedWindowsPlatform(async () => {
+      expect(() => spawnCommand(["script.ps1"])).toThrow("Unsupported Windows command extension");
+      expect(execaMock).not.toHaveBeenCalled();
+    });
+  });
+
   it("escapes command arguments inside the trusted cmd.exe wrapper", async () => {
     await withMockedWindowsPlatform(async () => {
       await runCommandWithTimeout(["pnpm", "run", "value^with^carets"], { timeoutMs: 1_000 });
@@ -226,7 +287,7 @@ describe("Windows command execution", () => {
     await withMockedWindowsPlatform(async () => {
       void spawnCommand(["npm", "--version"]);
       const [command, args, options] = requireExecaCall(0);
-      expect(command).toBe(process.execPath);
+      expect(path.win32.basename(command).toLowerCase()).toBe("node.exe");
       expect(args[0]).toContain(path.join("node_modules", "npm", "bin", "npm-cli.js"));
       expect(args[1]).toBe("--version");
       expect(options.shell).toBe(false);
@@ -251,6 +312,7 @@ describe("Windows command execution", () => {
   });
 
   it("infers success when a spawned Windows shim has no exit state", async () => {
+    vi.useFakeTimers();
     const command = createMockSubprocess({ autoFinish: false });
     execaMock.mockReturnValueOnce(command);
 
@@ -259,8 +321,28 @@ describe("Windows command execution", () => {
         timeoutMs: 1_000,
       });
       command.finish({ exitCode: undefined, failed: true });
+      await vi.advanceTimersByTimeAsync(251);
 
       await expect(resultPromise).resolves.toMatchObject({ code: 0, termination: "exit" });
+    });
+  });
+
+  it("preserves a delayed nonzero exit code from a Windows shim", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    execaMock.mockReturnValueOnce(command);
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["pnpm", "--version"], {
+        timeoutMs: 1_000,
+      });
+      command.finish({ exitCode: undefined, failed: true });
+      setTimeout(() => {
+        command.exitCode = 7;
+      }, 20);
+      await vi.advanceTimersByTimeAsync(30);
+
+      await expect(resultPromise).resolves.toMatchObject({ code: 7, termination: "exit" });
     });
   });
 

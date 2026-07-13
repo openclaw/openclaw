@@ -1,13 +1,10 @@
 // Exec helpers run subprocesses with normalized output, timeout, and abort handling.
-import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { StringDecoder } from "node:string_decoder";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { execa, type Options as ExecaOptions, type ResultPromise } from "execa";
 import { danger, shouldLogVerbose } from "../globals.js";
-import { resolveExecutablePath } from "../infra/executable-path.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import {
   decodeWindowsOutputBuffer,
@@ -20,12 +17,7 @@ import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import { releaseChildProcessOutputAfterExit } from "./child-process.js";
 import { killProcessTree as terminateProcessTree } from "./kill-tree.js";
 import { resolveCommandStdio } from "./spawn-utils.js";
-import {
-  buildWindowsCmdExeCommandLine,
-  isWindowsBatchCommand,
-  resolveTrustedWindowsCmdExe,
-  resolveWindowsCommandShim,
-} from "./windows-command.js";
+import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 function assignChildEnvValue(params: {
   env: NodeJS.ProcessEnv;
@@ -62,93 +54,6 @@ function mergeChildEnv(params: {
   return resolvedEnv;
 }
 
-/**
- * On Windows, Node 18.20.2+ (CVE-2024-27980) rejects spawning .cmd/.bat directly
- * without shell, causing EINVAL. Resolve npm/npx to node + cli script so we
- * spawn node.exe instead of npm.cmd.
- */
-function resolveNpmArgvForWindows(argv: string[]): string[] | null {
-  if (process.platform !== "win32" || argv.length === 0) {
-    return null;
-  }
-  const basename = normalizeLowercaseStringOrEmpty(
-    path.basename(expectDefined(argv[0], "argv entry at 0")),
-  ).replace(/\.(cmd|exe|bat)$/, "");
-  const cliName = basename === "npx" ? "npx-cli.js" : basename === "npm" ? "npm-cli.js" : null;
-  if (!cliName) {
-    return null;
-  }
-  const nodeDir = path.dirname(process.execPath);
-  const cliPath = path.join(nodeDir, "node_modules", "npm", "bin", cliName);
-  if (!fs.existsSync(cliPath)) {
-    // Bun-based runs don't ship npm-cli.js next to process.execPath.
-    // Fall back to npm.cmd/npx.cmd so we still route through cmd wrapper
-    // (avoids direct .cmd spawn EINVAL on patched Node).
-    const command = argv[0] ?? "";
-    const ext = normalizeLowercaseStringOrEmpty(path.extname(command));
-    const shimmedCommand = ext ? command : `${command}.cmd`;
-    return [shimmedCommand, ...argv.slice(1)];
-  }
-  return [process.execPath, cliPath, ...argv.slice(1)];
-}
-
-/**
- * Resolves a command for Windows compatibility.
- * On Windows, non-.exe commands (like pnpm, yarn) are resolved to .cmd; npm/npx
- * are handled by resolveNpmArgvForWindows to avoid spawn EINVAL (no direct .cmd).
- */
-function resolveCommand(command: string, env: NodeJS.ProcessEnv): string {
-  const resolvedCommand =
-    process.platform === "win32" ? (resolveExecutablePath(command, { env }) ?? command) : command;
-  const shimmedCommand = resolveWindowsCommandShim({
-    command: resolvedCommand,
-    cmdCommands: ["corepack", "pnpm", "yarn"],
-  });
-  if (process.platform !== "win32") {
-    return shimmedCommand;
-  }
-  const ext = normalizeLowercaseStringOrEmpty(path.extname(shimmedCommand));
-  if (ext === ".exe" || ext === ".com" || ext === ".cmd" || ext === ".bat") {
-    return shimmedCommand;
-  }
-  // Cross-spawn routes every other Windows command through process.env.ComSpec.
-  // Force unsupported or unresolved commands down the direct-spawn error path.
-  return `${shimmedCommand}.exe`;
-}
-
-function resolveChildProcessInvocation(params: {
-  argv: string[];
-  env: NodeJS.ProcessEnv;
-  windowsVerbatimArguments?: boolean;
-}): {
-  args: string[];
-  command: string;
-  usesWindowsExitCodeShim: boolean;
-  windowsHide: true;
-  windowsVerbatimArguments?: boolean;
-} {
-  const finalArgv =
-    process.platform === "win32"
-      ? (resolveNpmArgvForWindows(params.argv) ?? params.argv)
-      : params.argv;
-  const resolvedCommand =
-    finalArgv !== params.argv
-      ? (finalArgv[0] ?? "")
-      : resolveCommand(params.argv[0] ?? "", params.env);
-  const useCmdWrapper = isWindowsBatchCommand(resolvedCommand);
-
-  return {
-    command: useCmdWrapper ? resolveTrustedWindowsCmdExe() : resolvedCommand,
-    args: useCmdWrapper
-      ? ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(resolvedCommand, finalArgv.slice(1))]
-      : finalArgv.slice(1),
-    usesWindowsExitCodeShim:
-      process.platform === "win32" && (useCmdWrapper || finalArgv !== params.argv),
-    windowsHide: true,
-    windowsVerbatimArguments: useCmdWrapper ? true : params.windowsVerbatimArguments,
-  };
-}
-
 export function shouldSpawnWithShell(params: {
   resolvedCommand: string;
   platform: NodeJS.Platform;
@@ -171,19 +76,22 @@ export type SpawnCommandOptions = Omit<
   windowsVerbatimArguments?: boolean;
 };
 
-/** Spawn through the canonical argv, environment, and Windows safety boundary. */
-export function spawnCommand<OptionsType extends SpawnCommandOptions = SpawnCommandOptions>(
+function spawnCommandWithInvocation<OptionsType extends SpawnCommandOptions = SpawnCommandOptions>(
   argv: string[],
   options: OptionsType = {} as OptionsType,
-): ResultPromise<OptionsType> {
+): {
+  child: ResultPromise<OptionsType>;
+  invocation: ReturnType<typeof resolveSafeChildProcessInvocation>;
+} {
   const { baseEnv, env, windowsVerbatimArguments, ...execaOptions } = options;
   const commandEnv = resolveCommandEnv({ argv, baseEnv, env });
-  const invocation = resolveChildProcessInvocation({
+  const invocation = resolveSafeChildProcessInvocation({
     argv,
+    cwd: execaOptions.cwd,
     env: commandEnv,
     windowsVerbatimArguments,
   });
-  return execa(invocation.command, invocation.args, {
+  const child = execa(invocation.command, invocation.args, {
     ...execaOptions,
     env: commandEnv,
     extendEnv: false,
@@ -191,6 +99,15 @@ export function spawnCommand<OptionsType extends SpawnCommandOptions = SpawnComm
     windowsHide: invocation.windowsHide,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   }) as unknown as ResultPromise<OptionsType>;
+  return { child, invocation };
+}
+
+/** Spawn through the canonical argv, environment, and Windows safety boundary. */
+export function spawnCommand<OptionsType extends SpawnCommandOptions = SpawnCommandOptions>(
+  argv: string[],
+  options: OptionsType = {} as OptionsType,
+): ResultPromise<OptionsType> {
+  return spawnCommandWithInvocation(argv, options).child;
 }
 
 // Simple promise-wrapped execFile with optional verbosity logging.
@@ -304,6 +221,8 @@ export type CommandOptions = {
 };
 
 const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
+const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const WINDOWS_CLOSE_STATE_POLL_MS = 10;
 const DEFAULT_EXEC_MAX_BUFFER_BYTES = 1024 * 1024;
 const TIMEOUT_EXIT_CODE = 124;
 const DEFAULT_COMMAND_OUTPUT_MAX_BYTES = 16 * 1024 * 1024;
@@ -482,11 +401,6 @@ export async function runCommandWithTimeout(
   const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const hasInput = input !== undefined;
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
-  const invocation = resolveChildProcessInvocation({
-    argv,
-    env: resolveCommandEnv({ argv, baseEnv, env }),
-    windowsVerbatimArguments: options.windowsVerbatimArguments,
-  });
 
   if (signal?.aborted) {
     return {
@@ -522,11 +436,12 @@ export async function runCommandWithTimeout(
   const windowsEncoding = resolveWindowsConsoleEncoding();
   const cancelController = new AbortController();
   let termination: SpawnResult["termination"] | undefined;
+  let childExitState: { code: number | null; signal: NodeJS.Signals | null } | undefined;
   let childExited = false;
   let noOutputTimer: NodeJS.Timeout | undefined;
   let processTreeForceKillTimer: NodeJS.Timeout | undefined;
 
-  const child = spawnCommand(argv, {
+  const { child, invocation } = spawnCommandWithInvocation(argv, {
     buffer: false,
     cancelSignal: cancelController.signal,
     cwd,
@@ -542,8 +457,9 @@ export async function runCommandWithTimeout(
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
   const releaseOutput = releaseChildProcessOutputAfterExit(child);
-  child.once("exit", () => {
+  child.once("exit", (code, signalValue) => {
     childExited = true;
+    childExitState = { code, signal: signalValue };
   });
 
   const clearNoOutputTimer = () => {
@@ -565,10 +481,11 @@ export async function runCommandWithTimeout(
   };
   const spawnTaskkillOrFallback = (args: string[], onSpawnError: () => void): boolean => {
     try {
-      const taskkillChild = execa(getWindowsSystem32ExePath("taskkill.exe"), args, {
+      const taskkillChild = spawnCommand([getWindowsSystem32ExePath("taskkill.exe"), ...args], {
+        baseEnv,
+        env,
         reject: false,
         stdio: "ignore",
-        windowsHide: true,
       });
       void taskkillChild.then((result) => {
         if (result.failed && result.exitCode === undefined) {
@@ -674,7 +591,8 @@ export async function runCommandWithTimeout(
   });
   // Patched Node can report null/null after a cmd.exe shim exits. Execa turns
   // that into a cause-less failure; preserve the shim fallback only post-spawn.
-  const isCleanWindowsShimExit =
+  const isCauseLessWindowsShimResult =
+    !termination &&
     invocation.usesWindowsExitCodeShim &&
     typeof child.pid === "number" &&
     result.code === undefined &&
@@ -683,12 +601,33 @@ export async function runCommandWithTimeout(
     !result.isCanceled &&
     !result.isMaxBuffer &&
     !result.isTerminated;
+  if (isCauseLessWindowsShimResult) {
+    // A patched Windows runtime can populate exitCode shortly after close.
+    // Settle that state before the shim fallback can infer a clean exit.
+    for (
+      let elapsedMs = 0;
+      elapsedMs < WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS;
+      elapsedMs += WINDOWS_CLOSE_STATE_POLL_MS
+    ) {
+      if (
+        childExitState?.code != null ||
+        childExitState?.signal != null ||
+        child.exitCode != null ||
+        child.signalCode != null
+      ) {
+        break;
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, WINDOWS_CLOSE_STATE_POLL_MS);
+      });
+    }
+  }
   if (
     result.failed &&
     !termination &&
     result.exitCode === undefined &&
     result.signal === undefined &&
-    !isCleanWindowsShimExit
+    !isCauseLessWindowsShimResult
   ) {
     if (result instanceof Error) {
       throw result;
@@ -696,9 +635,9 @@ export async function runCommandWithTimeout(
     throw new Error(`Failed to launch command: ${argv[0] ?? "<empty>"}`, { cause: result });
   }
 
-  const resolvedSignal = result.signal ?? child.signalCode ?? null;
+  const resolvedSignal = result.signal ?? childExitState?.signal ?? child.signalCode ?? null;
   const resolvedCode = resolveProcessExitCode({
-    explicitCode: result.exitCode,
+    explicitCode: result.exitCode ?? childExitState?.code,
     childExitCode: child.exitCode,
     resolvedSignal,
     usesWindowsExitCodeShim: invocation.usesWindowsExitCodeShim,

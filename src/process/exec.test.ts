@@ -151,6 +151,28 @@ describe("runCommandWithTimeout", () => {
     });
   });
 
+  it.runIf(process.platform === "win32")(
+    "rejects unresolved commands before Execa can fall through to ambient ComSpec",
+    async () => {
+      const command = `openclaw-missing-${process.pid}\r\ncalc.exe`;
+      const previousComspec = process.env.comspec;
+      process.env.comspec = process.execPath;
+      try {
+        await expect(runCommandWithTimeout([command], { timeoutMs: 2_000 })).rejects.toMatchObject({
+          code: "ENOENT",
+          path: command,
+          syscall: `spawn ${command}`,
+        });
+      } finally {
+        if (previousComspec === undefined) {
+          delete process.env.comspec;
+        } else {
+          process.env.comspec = previousComspec;
+        }
+      }
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "swallows stdin EPIPE when the child exits before input is consumed (#75438)",
     { timeout: 5_000 },

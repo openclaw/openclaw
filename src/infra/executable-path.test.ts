@@ -6,6 +6,7 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   isExecutableFile,
+  isRegularFile,
   resolveExecutable,
   resolveExecutableFromPathEnv,
   resolveExecutablePath,
@@ -32,8 +33,11 @@ describe("executable path helpers", () => {
       await fs.mkdir(dirPath);
 
       expect(isExecutableFile(execPath)).toBe(true);
+      expect(isRegularFile(execPath)).toBe(true);
       expect(isExecutableFile(filePath)).toBe(false);
+      expect(isRegularFile(filePath)).toBe(true);
       expect(isExecutableFile(dirPath)).toBe(false);
+      expect(isRegularFile(dirPath)).toBe(false);
       expect(isExecutableFile(path.join(base, "missing"))).toBe(false);
     });
   });

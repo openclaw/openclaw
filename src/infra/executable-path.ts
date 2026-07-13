@@ -8,6 +8,24 @@ function isDriveLessWindowsRootedPath(value: string): boolean {
   return process.platform === "win32" && /^:[\\/]/.test(value);
 }
 
+function resolveEnvironmentValue(
+  env: NodeJS.ProcessEnv | undefined,
+  name: string,
+): string | undefined {
+  if (!env) {
+    return undefined;
+  }
+  const exactValue = env[name] ?? (name === "PATH" ? env.Path : undefined);
+  if (exactValue !== undefined) {
+    return exactValue;
+  }
+  if (process.platform !== "win32") {
+    return undefined;
+  }
+  const normalizedName = name.toLowerCase();
+  return Object.entries(env).find(([key]) => key.toLowerCase() === normalizedName)?.[1];
+}
+
 export function resolveExecutablePathCandidate(
   rawExecutable: string,
   options?: { cwd?: string; env?: NodeJS.ProcessEnv; requirePathSeparator?: boolean },
@@ -35,6 +53,7 @@ export function resolveExecutablePathCandidate(
 function resolveWindowsExecutableExtensions(
   executable: string,
   env: NodeJS.ProcessEnv | undefined,
+  includeExtensionless = true,
 ): string[] {
   if (process.platform !== "win32") {
     return [""];
@@ -42,31 +61,21 @@ function resolveWindowsExecutableExtensions(
   if (path.extname(executable).length > 0) {
     return [""];
   }
-  return [
-    "",
-    ...(
-      env?.PATHEXT ??
-      env?.PathExt ??
-      env?.Pathext ??
-      process.env.PATHEXT ??
-      process.env.PathExt ??
-      process.env.Pathext ??
-      ".EXE;.CMD;.BAT;.COM"
-    )
-      .split(";")
-      .map((ext) => normalizeLowercaseStringOrEmpty(ext)),
-  ];
+  const extensions = (
+    resolveEnvironmentValue(env, "PATHEXT") ??
+    resolveEnvironmentValue(process.env, "PATHEXT") ??
+    ".EXE;.CMD;.BAT;.COM"
+  )
+    .split(";")
+    .map((ext) => normalizeLowercaseStringOrEmpty(ext));
+  return includeExtensionless ? ["", ...extensions] : extensions;
 }
 
 function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set<string> {
   return new Set(
     (
-      env?.PATHEXT ??
-      env?.PathExt ??
-      env?.Pathext ??
-      process.env.PATHEXT ??
-      process.env.PathExt ??
-      process.env.Pathext ??
+      resolveEnvironmentValue(env, "PATHEXT") ??
+      resolveEnvironmentValue(process.env, "PATHEXT") ??
       ".EXE;.CMD;.BAT;.COM"
     )
       .split(";")
@@ -75,12 +84,19 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
   );
 }
 
-export function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
+export function isRegularFile(filePath: string): boolean {
   try {
-    const stat = fs.statSync(filePath);
-    if (!stat.isFile()) {
-      return false;
-    }
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
+  if (!isRegularFile(filePath)) {
+    return false;
+  }
+  try {
     if (process.platform === "win32") {
       const ext = normalizeLowercaseStringOrEmpty(path.extname(filePath));
       if (!ext) {
@@ -99,14 +115,25 @@ export function resolveExecutableFromPathEnv(
   executable: string,
   pathEnv: string,
   env?: NodeJS.ProcessEnv,
+  options?: { includeExtensionless?: boolean },
 ): string | undefined {
   const delimiter = process.platform === "win32" ? ";" : path.delimiter;
   const entries = pathEnv.split(delimiter).filter(Boolean);
-  const extensions = resolveWindowsExecutableExtensions(executable, env);
+  const extensions = resolveWindowsExecutableExtensions(
+    executable,
+    env,
+    options?.includeExtensionless,
+  );
+  const hasExplicitWindowsExtension =
+    process.platform === "win32" && path.extname(executable).length > 0;
   for (const entry of entries) {
     for (const ext of extensions) {
       const candidate = path.join(entry, executable + ext);
-      if (isExecutableFile(candidate, { env })) {
+      if (
+        hasExplicitWindowsExtension
+          ? isRegularFile(candidate)
+          : isExecutableFile(candidate, { env })
+      ) {
         return candidate;
       }
     }
@@ -126,7 +153,9 @@ export function resolveExecutablePath(
     return isExecutableFile(candidate, options) ? candidate : undefined;
   }
   const envPath =
-    options?.env?.PATH ?? options?.env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
+    resolveEnvironmentValue(options?.env, "PATH") ??
+    resolveEnvironmentValue(process.env, "PATH") ??
+    "";
   return resolveExecutableFromPathEnv(candidate, envPath, options?.env);
 }
 
@@ -145,7 +174,7 @@ export function resolveExecutable(cmd: string): string {
     return cmd;
   }
 
-  const envPath = process.env.PATH ?? process.env.Path ?? "";
+  const envPath = resolveEnvironmentValue(process.env, "PATH") ?? "";
   const entries = envPath.split(";").filter(Boolean);
   const extensions = resolveWindowsExecutableExtensions(cmd, process.env);
   const matches: string[] = [];
