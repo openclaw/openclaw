@@ -529,7 +529,10 @@ describe("crabline transport", () => {
 
       try {
         expect(transport.requiredPluginIds).toEqual(["mattermost"]);
-        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+        const mattermostGatewayConfig = transport.createGatewayConfig({
+          baseUrl: "http://127.0.0.1:1",
+        }) as { channels?: { mattermost?: Record<string, unknown> } };
+        expect(mattermostGatewayConfig).toMatchObject({
           channels: {
             mattermost: {
               baseUrl: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
@@ -549,6 +552,9 @@ describe("crabline transport", () => {
           replyTo: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
           to: expect.stringMatching(/^channel:[a-z0-9]{26}$/u),
         });
+        // crabline@0.1.9 emits a scalar `streaming`; the adapter seam must
+        // rewrite it into the nested-only Mattermost streaming shape.
+        expect(mattermostGatewayConfig.channels?.mattermost?.streaming).toEqual({ mode: "off" });
 
         await expect(
           transport.state.addInboundMessage({
@@ -633,7 +639,10 @@ describe("crabline transport", () => {
 
       try {
         expect(transport.requiredPluginIds).toEqual(["matrix"]);
-        expect(transport.createGatewayConfig({ baseUrl: "http://127.0.0.1:1" })).toMatchObject({
+        const matrixGatewayConfig = transport.createGatewayConfig({
+          baseUrl: "http://127.0.0.1:1",
+        }) as { channels?: { matrix?: Record<string, unknown> } };
+        expect(matrixGatewayConfig).toMatchObject({
           channels: {
             matrix: {
               accessToken: expect.any(String),
@@ -645,6 +654,14 @@ describe("crabline transport", () => {
             },
           },
         });
+        // crabline@0.1.9 emits the retired flat spellings; the adapter seam
+        // must rewrite them or the nested-only Matrix schema rejects the
+        // gateway config at startup.
+        expect(matrixGatewayConfig.channels?.matrix?.streaming).toEqual({
+          mode: "off",
+          block: { enabled: false },
+        });
+        expect(matrixGatewayConfig.channels?.matrix?.blockStreaming).toBeUndefined();
         expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
           MATRIX_ACCESS_TOKEN: expect.any(String),
           MATRIX_BASE_URL: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/u),
