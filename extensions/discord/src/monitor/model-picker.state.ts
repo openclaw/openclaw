@@ -73,7 +73,7 @@ export type DiscordModelPickerState = {
  * select cap. Below this threshold the user gets the existing flat list +
  * prev/next behavior unchanged.
  */
-export const DISCORD_MODEL_PICKER_BUCKET_THRESHOLD = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
+const DISCORD_MODEL_PICKER_BUCKET_THRESHOLD = DISCORD_COMPONENT_MAX_SELECT_OPTIONS;
 
 /** Target items per alpha bucket. Discord caps selects at 25 options. */
 export const DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE = 20;

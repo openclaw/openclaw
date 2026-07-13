@@ -396,6 +396,9 @@ export const vi: TranslationMap = {
     working: "Đang làm việc…",
     ready: "Sẵn sàng trò chuyện",
     whatCanAgentDo: "{name} có thể làm gì?",
+    getHelp: "Nhận trợ giúp",
+    discord: "Cộng đồng Discord",
+    viewChangelog: "Xem nhật ký thay đổi",
   },
   newSession: {
     title: "Phiên mới",

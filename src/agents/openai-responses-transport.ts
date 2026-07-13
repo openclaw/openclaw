@@ -1,8 +1,5 @@
 /**
- * OpenAI Responses streaming transport.
- *
- * Handles Responses, Azure variants, tool-call replay, reasoning events, and provider-specific
- * payload policy before converting SDK streams into OpenClaw assistant events.
+ * OpenAI Responses transport for Azure variants, replay, reasoning, and payload policy.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -858,7 +855,7 @@ async function createResponsesStreamWithEncryptedContentRetry(params: {
   }
 }
 
-export function resolveAzureOpenAIApiVersion(env = process.env): string {
+function resolveAzureOpenAIApiVersion(env = process.env): string {
   return env.AZURE_OPENAI_API_VERSION?.trim() || DEFAULT_AZURE_OPENAI_API_VERSION;
 }
 
@@ -2250,7 +2247,7 @@ function resolveOpenAIResponsesTextFormat(
   return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
-export function buildOpenAIResponsesParams(
+function buildOpenAIResponsesParams(
   model: Model,
   context: Context,
   options: OpenAIResponsesOptions | undefined,
@@ -2577,6 +2574,7 @@ type OpenAIResponsesRequestParams = {
 export const responsesTesting = {
   getCompat,
   assertCodeModeResponsesToolSurface,
+  buildOpenAIResponsesParams,
   buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
@@ -2592,6 +2590,7 @@ export const responsesTesting = {
   normalizeResponsesFailedEvent,
   prepareOpenAIResponsesReasoningItemForReplay,
   createResponsesStreamWithEncryptedContentRetry,
+  resolveAzureOpenAIApiVersion,
   stripResponsesRequestEncryptedContent,
   tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,

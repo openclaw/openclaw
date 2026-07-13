@@ -487,12 +487,12 @@ describe("qa suite", () => {
       if (typeof capabilityMatrixPath !== "string" || typeof smokeArtifactPath !== "string") {
         throw new Error("Crabline generation artifact paths missing from QA summary.");
       }
-      expect(capabilityMatrixPath).toMatch(
-        /^\.crabline-smoke-artifacts\/generation-[^/]+\/crabline-fake-provider-capabilities\.json$/u,
-      );
-      expect(smokeArtifactPath).toMatch(
-        /^\.crabline-smoke-artifacts\/generation-[^/]+\/crabline-fake-provider-smoke\.json$/u,
-      );
+      const artifactGenerationDirectory = path.dirname(capabilityMatrixPath);
+      expect(path.dirname(artifactGenerationDirectory)).toBe(".crabline-smoke-artifacts");
+      expect(path.basename(artifactGenerationDirectory)).toMatch(/^generation-[^/\\]+$/u);
+      expect(path.basename(capabilityMatrixPath)).toBe("crabline-fake-provider-capabilities.json");
+      expect(path.dirname(smokeArtifactPath)).toBe(artifactGenerationDirectory);
+      expect(path.basename(smokeArtifactPath)).toBe("crabline-fake-provider-smoke.json");
       const matrix = JSON.parse(
         await fs.readFile(path.resolve(outputDir, capabilityMatrixPath), "utf8"),
       ) as {
@@ -564,6 +564,7 @@ describe("qa suite", () => {
         capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
         channel: "telegram",
         channelDriver: "crabline",
+        providerReadinessArtifactPath: "crabline-fake-provider-smoke.json",
         smokeArtifactPath: "crabline-fake-provider-smoke.json",
       },
       runCrablineChannelDriverSmoke: vi.fn(async () => ({

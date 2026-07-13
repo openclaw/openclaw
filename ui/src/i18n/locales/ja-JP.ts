@@ -402,6 +402,9 @@ export const ja_JP: TranslationMap = {
     working: "作業中…",
     ready: "チャットできます",
     whatCanAgentDo: "{name}には何ができますか？",
+    getHelp: "ヘルプを表示",
+    discord: "Discord コミュニティ",
+    viewChangelog: "変更履歴を表示",
   },
   newSession: {
     title: "新しいセッション",

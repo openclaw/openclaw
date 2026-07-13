@@ -398,6 +398,9 @@ export const nl: TranslationMap = {
     working: "Bezig…",
     ready: "Klaar om te chatten",
     whatCanAgentDo: "Wat kan {name} doen?",
+    getHelp: "Hulp krijgen",
+    discord: "Discord-community",
+    viewChangelog: "Wijzigingslogboek bekijken",
   },
   newSession: {
     title: "Nieuwe sessie",

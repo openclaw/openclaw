@@ -23,7 +23,6 @@ import {
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
-import { mergeAbortSignals } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -311,7 +310,9 @@ export async function compactEmbeddedAgentSession(
   }
 
   const controller = new AbortController();
-  const mergedAbort = mergeAbortSignals([params.abortSignal, controller.signal]);
+  const abortSignal = params.abortSignal
+    ? AbortSignal.any([params.abortSignal, controller.signal])
+    : controller.signal;
   const handle: EmbeddedAgentQueueHandle = {
     kind: "embedded",
     queueMessage: async () => {},
@@ -324,10 +325,9 @@ export async function compactEmbeddedAgentSession(
   try {
     return await compactEmbeddedAgentSessionImpl({
       ...params,
-      abortSignal: mergedAbort.signal,
+      abortSignal,
     });
   } finally {
-    mergedAbort.dispose();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
   }
 }

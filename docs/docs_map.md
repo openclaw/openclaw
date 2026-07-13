@@ -3060,6 +3060,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## gateway/1password.md
+
+- Route: /gateway/1password
+- Headings:
+  - H2: Requirements
+  - H2: Resolve config secrets with op
+  - H2: Service account setup for headless Gateways
+  - H2: The 1password skill for agents
+  - H2: Security notes
+  - H2: Troubleshooting
+
 ## gateway/audit.md
 
 - Route: /gateway/audit
@@ -5064,6 +5075,25 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway service install (CLI)
   - H2: Related
 
+## platforms/ios-healthkit.md
+
+- Route: /platforms/ios-healthkit
+- Headings:
+  - H1: HealthKit summaries
+  - H2: Requirements
+  - H2: Enable access
+  - H3: 1. Authorize the Gateway command
+  - H3: 2. Enable sharing on the iPhone
+  - H2: Request today's summary
+  - H2: Privacy behavior
+  - H2: Troubleshooting
+  - H3: Command is not declared by the node
+  - H3: Command requires explicit opt-in
+  - H3: HEALTHACCESSDISABLED
+  - H3: Summary succeeds but metrics are missing
+  - H3: Older ranges fail
+  - H2: Related
+
 ## platforms/ios.md
 
 - Route: /platforms/ios
@@ -6610,6 +6640,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
+
+## plugins/reference/mxc.md
+
+- Route: /plugins/reference/mxc
+- Headings:
+  - H1: Mxc plugin
+  - H2: Distribution
+  - H2: Surface
 
 ## plugins/reference/nextcloud-talk.md
 

@@ -17,6 +17,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import "./memory/memory-panel.ts";
 import { renderAgentOverview } from "./panels-overview.ts";
 import { renderAgentFiles, renderAgentChannels, renderAgentCron } from "./panels-status-files.ts";
@@ -165,7 +166,7 @@ export function renderAgents(props: AgentsProps) {
                   <button
                     type="button"
                     class="btn btn--sm btn--ghost"
-                    @click=${() => void navigator.clipboard.writeText(selectedAgent.id)}
+                    @click=${() => void copyToClipboard(selectedAgent.id)}
                   >
                     ${t("agents.copyId")}
                   </button>

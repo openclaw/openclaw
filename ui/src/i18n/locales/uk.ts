@@ -397,6 +397,9 @@ export const uk: TranslationMap = {
     working: "Працює…",
     ready: "Готовий до спілкування",
     whatCanAgentDo: "Що може робити {name}?",
+    getHelp: "Отримати допомогу",
+    discord: "Спільнота Discord",
+    viewChangelog: "Переглянути журнал змін",
   },
   newSession: {
     title: "Новий сеанс",
