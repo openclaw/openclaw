@@ -513,6 +513,9 @@ describe("external cli oauth resolution", () => {
         access: "usable-local-access",
         refresh: "usable-local-refresh",
         expires: Date.now() + 10 * 60_000,
+        // Identity-complete steady state; profiles missing the email get one
+        // bounded backfill read (external-cli-sync.email-backfill.test.ts).
+        email: "stored@example.com",
       }),
     );
 
