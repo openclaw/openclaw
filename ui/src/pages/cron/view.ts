@@ -36,7 +36,7 @@ type CronPanelMode = "overview" | "create" | "job";
 export type CronListTab = "tasks" | "activity";
 export type CronDetailTab = "settings" | "history";
 
-export type CronProps = {
+type CronProps = {
   basePath: string;
   loading: boolean;
   jobsLoadingMore: boolean;

@@ -11,7 +11,28 @@ import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
-import type { CronProps } from "./view.ts";
+
+// Leaf contract: the slice of the cron view props this module needs. Keeping
+// it local (instead of importing CronProps from view.ts) avoids a module
+// cycle between view.ts and view-runs.ts.
+type CronRunsSectionProps = {
+  basePath: string;
+  runs: CronRunLogEntry[];
+  runsHasMore: boolean;
+  runsLoadingMore: boolean;
+  runsStatuses: CronRunsStatusValue[];
+  runsDeliveryStatuses: CronDeliveryStatus[];
+  runsQuery: string;
+  runsSortDir: CronSortDir;
+  onLoadMoreRuns: () => void;
+  onRunsFiltersChange: (patch: {
+    cronRunsStatuses?: CronRunsStatusValue[];
+    cronRunsDeliveryStatuses?: CronDeliveryStatus[];
+    cronRunsQuery?: string;
+    cronRunsSortDir?: CronSortDir;
+  }) => void | Promise<void>;
+  onNavigateToChat?: (sessionKey: string) => void;
+};
 
 function getRunStatusOptions(): Array<{ value: CronRunsStatusValue; label: string }> {
   return [
@@ -102,7 +123,7 @@ function renderFilterDropdown(params: {
   `;
 }
 
-export function renderRunsSection(props: CronProps) {
+export function renderRunsSection(props: CronRunsSectionProps) {
   const runs = props.runs.toSorted((a, b) =>
     props.runsSortDir === "asc" ? a.ts - b.ts : b.ts - a.ts,
   );
