@@ -2954,7 +2954,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "ui/src/app/overlays.ts: ApplicationOverlaySnapshot",
   "ui/src/app/settings.ts: isViteDevPage",
   "ui/src/app/settings.ts: NAV_WIDTH_DEFAULT",
-  "ui/src/app/settings.ts: resetUnpersistedSettingsForTest",
   "ui/src/app/stale-chunk-reload.ts: resetStaleChunkReloadStateForTest",
   "ui/src/build-info.ts: deriveControlUiBuildId",
   "ui/src/build-info.ts: normalizeControlUiBranch",

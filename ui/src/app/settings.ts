@@ -494,10 +494,6 @@ export function persistSessionToken(gatewayUrl: string, token: string) {
 // another page re-reads storage in the same tab.
 let unpersistedSettings: UiSettings | null = null;
 
-export function resetUnpersistedSettingsForTest() {
-  unpersistedSettings = null;
-}
-
 export function loadSettings(): UiSettings {
   const cached = unpersistedSettings;
   if (cached) {

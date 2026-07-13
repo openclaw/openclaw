@@ -8,6 +8,7 @@ import {
   getActiveEmbeddedRunCount,
   resolveActiveEmbeddedRunSessionId,
 } from "../agents/embedded-agent-runner/run-state.js";
+import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import {
   getLoadedChannelPluginEntryById,
@@ -1214,7 +1215,7 @@ export async function startGatewayServer(
       (cfgAtStart.gateway?.terminal?.detachedSessionTimeoutSeconds ??
         DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
   });
-  applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(cfgAtStart));
+  applyGatewayLaneConcurrency(resolveGatewayLaneConcurrency(cfgAtStart), { gatewayStart: true });
 
   runtimeState = createGatewayServerLiveState({
     hooksConfig: initialHooksConfig,
@@ -1271,6 +1272,7 @@ export async function startGatewayServer(
     return configReloaderStopPromise;
   };
   const beginClosePrelude = async () => {
+    clearSessionSuspensionTimers();
     markClosePreludeStarted();
     // Join the last reload before any owner it can publish into is torn down.
     // The close handler re-awaits this same promise to retain warning reporting.
