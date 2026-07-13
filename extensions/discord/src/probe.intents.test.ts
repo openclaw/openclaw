@@ -210,7 +210,9 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     try {
       let abortCount = 0;
       const fetcher = withFetchPreconnect(async (input, init) => {
-        if (String(input).endsWith("/users/@me")) {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.endsWith("/users/@me")) {
           return jsonResponse({ id: "bot-1", username: "openclaw" });
         }
         return abortableStalledDiscordJsonResponse(init?.signal, () => {
@@ -222,10 +224,16 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
         fetcher,
         includeApplication: true,
       });
+      const outerStatusResult = Promise.race([
+        probe,
+        new Promise<{ ok: false; timedOut: true }>((resolve) => {
+          setTimeout(() => resolve({ ok: false, timedOut: true }), 50);
+        }),
+      ]);
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(50);
 
-      await expect(probe).resolves.toMatchObject({
+      await expect(outerStatusResult).resolves.toMatchObject({
         ok: true,
         bot: { id: "bot-1", username: "openclaw" },
       });

@@ -562,10 +562,35 @@ describe("discordPlugin outbound", () => {
       cfg,
     });
 
-    expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", 5000, {
+    expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", expect.any(Number), {
       includeApplication: true,
     });
+    const forwardedTimeoutMs = Number(argAt(probeDiscordMock, 0, 1));
+    expect(forwardedTimeoutMs).toBeGreaterThan(0);
+    expect(forwardedTimeoutMs).toBeLessThanOrEqual(5_000);
     expect(runtimeProbeDiscord).not.toHaveBeenCalled();
+  });
+
+  it("subtracts lazy probe loading from the status budget", async () => {
+    const nowSpy = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_200);
+    probeDiscordMock.mockResolvedValue({ ok: true, elapsedMs: 1 });
+    try {
+      const cfg = createCfg();
+      await discordPlugin.status!.probeAccount!({
+        account: resolveAccount(cfg),
+        timeoutMs: 5_000,
+        cfg,
+      });
+
+      expect(probeDiscordMock).toHaveBeenCalledWith("discord-token", 4_800, {
+        includeApplication: true,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("reports missing voice permissions in targeted capabilities diagnostics", async () => {

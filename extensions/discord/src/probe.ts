@@ -10,6 +10,7 @@ import { normalizeDiscordToken } from "./token.js";
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_PROBE_GET_ME_LABEL = "discord.probe.getMe";
 const DISCORD_PROBE_JSON_MAX_BYTES = 16 * 1024 * 1024;
+const DISCORD_PROBE_COMPLETION_RESERVE_MAX_MS = 25;
 
 export type DiscordProbe = BaseProbeResult & {
   status?: number | null;
@@ -172,8 +173,19 @@ export async function probeDiscord(
       username: json.username ?? null,
     };
     if (includeApplication) {
-      result.application =
-        (await fetchDiscordApplicationSummary(normalized, timeoutMs, fetcher)) ?? undefined;
+      // Application metadata is optional. Keep its deadline inside the outer status budget so a
+      // stalled secondary response cannot discard the already-resolved bot identity.
+      const elapsedMs = Math.max(0, Date.now() - started);
+      const completionReserveMs = Math.min(
+        DISCORD_PROBE_COMPLETION_RESERVE_MAX_MS,
+        Math.max(1, Math.floor(timeoutMs / 10)),
+      );
+      const applicationTimeoutMs = Math.floor(timeoutMs - elapsedMs - completionReserveMs);
+      if (applicationTimeoutMs > 0) {
+        result.application =
+          (await fetchDiscordApplicationSummary(normalized, applicationTimeoutMs, fetcher)) ??
+          undefined;
+      }
     }
     return { ...result, elapsedMs: Date.now() - started };
   } catch (err) {
