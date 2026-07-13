@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import nodePath from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BROWSER_PROXY_MAX_FILE_BYTES } from "../browser-proxy-envelope.js";
 
 const BROWSER_PROXY_MAX_FILES = 256;
@@ -154,10 +154,6 @@ vi.mock("../control-service.js", () => ({
 
 let runBrowserProxyCommand: typeof import("./invoke-browser.js").runBrowserProxyCommand;
 
-beforeAll(async () => {
-  ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
-});
-
 type BrowserDispatchRequest = {
   path?: string;
   query?: unknown;
@@ -173,7 +169,7 @@ function firstBrowserDispatchRequest(): BrowserDispatchRequest {
 }
 
 describe("runBrowserProxyCommand", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
     dispatcherMocks.dispatch.mockReset();
     dispatcherMocks.createBrowserRouteDispatcher.mockReset().mockImplementation(() => ({
@@ -199,6 +195,8 @@ describe("runBrowserProxyCommand", () => {
       defaultProfile: "openclaw",
     });
     controlServiceMocks.startBrowserControlServiceFromConfig.mockResolvedValue(true);
+    vi.resetModules();
+    ({ runBrowserProxyCommand } = await import("./invoke-browser.js"));
   });
 
   it("serializes plural action downloads without reading nested page paths", async () => {
