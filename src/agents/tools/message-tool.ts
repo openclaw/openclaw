@@ -88,10 +88,13 @@ import {
   resolveMessageActionAgentRuntimeIdentityToken,
   type GatewayCallOptions,
 } from "./gateway.js";
+import {
+  appendMessageToolReadHint,
+  appendMessageToolVisibleReplyHint,
+} from "./message-tool-description.js";
 import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
-const MESSAGE_TOOL_THREAD_READ_HINT = ' Missing thread context: action="read" + threadId.';
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return action === "broadcast" || shouldApplyCrossContextMarker(action);
 }
@@ -1333,32 +1336,6 @@ function buildMessageToolDescription(options?: {
     resolvedOptions.sourceReplyDeliveryMode,
     resolvedOptions.requireExplicitTarget,
   );
-}
-
-function appendMessageToolVisibleReplyHint(
-  description: string,
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
-  requireExplicitTarget?: boolean,
-): string {
-  if (sourceReplyDeliveryMode !== "message_tool_only") {
-    return description;
-  }
-  const targetGuidance = requireExplicitTarget
-    ? "send needs target."
-    : "target defaults current source; set only elsewhere.";
-  return `${description} This turn visible reply: action="send" + message; ${targetGuidance} Final answer private.`;
-}
-
-function appendMessageToolReadHint(
-  description: string,
-  actions: Iterable<ChannelMessageActionName | "send">,
-): string {
-  for (const action of actions) {
-    if (action === "read") {
-      return `${description}${MESSAGE_TOOL_THREAD_READ_HINT}`;
-    }
-  }
-  return description;
 }
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {

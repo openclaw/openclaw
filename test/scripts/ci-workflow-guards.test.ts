@@ -2172,7 +2172,7 @@ describe("ci workflow guards", () => {
     );
 
     expect(startupMemoryStep.env.OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB).toBe(
-      "${{ runner.environment == 'github-hosted' && '425' || '350' }}",
+      "${{ runner.environment == 'github-hosted' && '425' || '400' }}",
     );
   });
 

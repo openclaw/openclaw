@@ -846,7 +846,6 @@ describe("gateway.remote.transport", () => {
     const res = validateConfigObject({
       gateway: {
         remote: {
-          enabled: true,
           transport: "direct",
           url: "wss://gateway.example.ts.net",
         },

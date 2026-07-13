@@ -27,7 +27,7 @@ import {
   syncWorkboardLifecycle,
   type WorkboardCard,
   type WorkboardTaskSummary,
-} from "../../lib/workboard/index.ts";
+} from "./index.ts";
 
 function createClient(
   responses: Record<string, unknown> | ((method: string, params: unknown) => unknown),
