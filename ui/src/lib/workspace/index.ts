@@ -302,6 +302,40 @@ export function visibleTabs(workspace: WorkspaceDocument): WorkspaceTab[] {
   return orderedTabs(workspace).filter((tab) => !tab.hidden);
 }
 
+type WorkspaceTabGroup = {
+  key: string;
+  kind: "user" | "system" | "agent";
+  agentId: string | null;
+  tabs: WorkspaceTab[];
+};
+
+/**
+ * Groups tabs using only canonical server-authored provenance. The UI never
+ * infers access or membership from these buckets; authorization remains the
+ * exact-tab Teams resource contract.
+ */
+export function groupTabsByActor(tabs: WorkspaceTab[]): WorkspaceTabGroup[] {
+  const groups: WorkspaceTabGroup[] = [];
+  const byKey = new Map<string, WorkspaceTabGroup>();
+  for (const tab of tabs) {
+    const agentId = workspaceAgentProvenance(tab.createdBy);
+    const kind: WorkspaceTabGroup["kind"] = agentId
+      ? "agent"
+      : tab.createdBy === "system"
+        ? "system"
+        : "user";
+    const key = kind === "agent" ? `agent:${agentId}` : kind;
+    let group = byKey.get(key);
+    if (!group) {
+      group = { key, kind, agentId: kind === "agent" ? agentId : null, tabs: [] };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    group.tabs.push(tab);
+  }
+  return groups;
+}
+
 export function hiddenTabs(workspace: WorkspaceDocument): WorkspaceTab[] {
   return orderedTabs(workspace).filter((tab) => tab.hidden);
 }

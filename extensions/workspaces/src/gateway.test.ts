@@ -300,6 +300,7 @@ describe("workspace gateway methods", () => {
           workspaceId: "default",
           workspaceVersion: 1,
           capabilityMode: "read",
+          presence: [{ id: "principal-member", kind: "human", self: true }],
           tab: expect.objectContaining({ id: "main", revision: 1, slug: "main" }),
         },
       ]);
@@ -381,6 +382,74 @@ describe("workspace gateway methods", () => {
         tab: { id: "main", revision: 3, title: "Requested edit" },
       });
       expect(decided.response?.[1]).not.toHaveProperty("doc");
+      store.close();
+    });
+  });
+
+  it("reports only fresh participants authorized for the exact tab", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const identity = {
+        teamsDomainId: "domain-1",
+        principalId: "alice",
+      };
+      const { api, methods } = createApi(identity);
+      const store = new WorkspaceStore({ stateDir, isolationDomainId: "domain-1" });
+      store.mutate(
+        (draft) => {
+          draft.tabs.push({
+            id: "private-review",
+            revision: 1,
+            slug: "private-review",
+            title: "Private review",
+            hidden: false,
+            createdBy: "agent:reviewer",
+            widgets: [],
+          });
+          draft.prefs.tabOrder.push("private-review");
+        },
+        { actor: "user" },
+      );
+      let now = 1_000;
+      registerWorkspaceGatewayMethods({
+        api,
+        store,
+        storeForDomain: () => store,
+        presenceNow: () => now,
+      });
+      const method = methods.get("workspaces.tab.get")!;
+
+      await callMethod(method, { workspaceId: "default", id: "main" });
+      identity.principalId = "bob";
+      now = 2_000;
+      const together = await callMethod(method, { workspaceId: "default", id: "main" });
+      expect(together.response?.[1]?.presence).toEqual([
+        { id: "bob", kind: "human", self: true },
+        { id: "alice", kind: "human", self: false },
+      ]);
+
+      identity.principalId = "charlie";
+      now = 3_000;
+      const otherTab = await callMethod(method, {
+        workspaceId: "default",
+        id: "private-review",
+      });
+      expect(otherTab.response?.[1]?.presence).toEqual([
+        { id: "charlie", kind: "human", self: true },
+      ]);
+
+      identity.teamsDomainId = "domain-2";
+      identity.principalId = "domain-two-member";
+      now = 4_000;
+      const otherDomain = await callMethod(method, { workspaceId: "default", id: "main" });
+      expect(otherDomain.response?.[1]?.presence).toEqual([
+        { id: "domain-two-member", kind: "human", self: true },
+      ]);
+
+      identity.teamsDomainId = "domain-1";
+      identity.principalId = "bob";
+      now = 33_001;
+      const expired = await callMethod(method, { workspaceId: "default", id: "main" });
+      expect(expired.response?.[1]?.presence).toEqual([{ id: "bob", kind: "human", self: true }]);
       store.close();
     });
   });

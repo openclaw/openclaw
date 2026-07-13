@@ -2149,6 +2149,11 @@ export const en: TranslationMap = {
     tabs: {
       label: "Workspaces",
       hidden: "Hidden ({count})",
+      groupUser: "Your tabs",
+      groupSystem: "System",
+      groupAgent: "Agent {agent}",
+      expandGroup: "Expand {group}",
+      collapseGroup: "Collapse {group}",
     },
     error: {
       title: "Couldn't load your workspaces",

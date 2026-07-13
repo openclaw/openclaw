@@ -7,6 +7,7 @@ import {
   clearActiveDrag,
   WORKSPACE_POLL_INTERVAL_MS,
   getWorkspaceState,
+  groupTabsByActor,
   hiddenTabs,
   hideWidget,
   loadWorkspace,
@@ -113,6 +114,29 @@ describe("tab ordering + resolution", () => {
     const ws = normalizeWorkspace(sampleDoc);
     expect(visibleTabs(ws).map((t) => t.slug)).toEqual(["main"]);
     expect(hiddenTabs(ws).map((t) => t.slug)).toEqual(["archive"]);
+  });
+
+  it("groups canonical tabs by their server-authored provenance", () => {
+    const workspace = normalizeWorkspace({
+      tabs: [
+        { slug: "mine", title: "Mine", createdBy: "user", widgets: [] },
+        { slug: "finance", title: "Finance", createdBy: "agent:finance", widgets: [] },
+        { slug: "system", title: "System", createdBy: "system", widgets: [] },
+        { slug: "finance-2", title: "Finance 2", createdBy: "agent:finance", widgets: [] },
+      ],
+      prefs: { tabOrder: ["mine", "finance", "system", "finance-2"] },
+    });
+
+    expect(groupTabsByActor(visibleTabs(workspace))).toEqual([
+      { key: "user", kind: "user", agentId: null, tabs: [workspace.tabs[0]] },
+      {
+        key: "agent:finance",
+        kind: "agent",
+        agentId: "finance",
+        tabs: [workspace.tabs[1], workspace.tabs[3]],
+      },
+      { key: "system", kind: "system", agentId: null, tabs: [workspace.tabs[2]] },
+    ]);
   });
 
   it("resolves requested slug, falling back to first visible tab", () => {

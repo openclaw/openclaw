@@ -73,6 +73,36 @@
   white-space: nowrap;
 }
 
+.workspace-tab-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.workspace-tab-group__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted, var(--text));
+  font: inherit;
+  cursor: pointer;
+}
+
+.workspace-tab-group__toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.workspace-tab-group__toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
 .workspace-tabs__hidden {
   position: relative;
   margin-inline-start: auto;

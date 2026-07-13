@@ -47,7 +47,91 @@ type WorkspaceGatewayMethodOptions = {
   store?: WorkspaceStore;
   storeForDomain?: (isolationDomainId: string) => WorkspaceStore;
   dataRead?: ResolveBindingOptions;
+  /** Injectable clock for exact-tab presence tests. */
+  presenceNow?: () => number;
 };
+
+type WorkspacePresenceParticipant = {
+  id: string;
+  kind: "human" | "agent";
+  self: boolean;
+};
+
+const WORKSPACE_PRESENCE_TTL_MS = 30_000;
+const MAX_WORKSPACE_PRESENCE_ENTRIES = 1_024;
+
+type WorkspacePresenceEntry = {
+  domainId: string;
+  workspaceId: string;
+  tabId: string;
+  principalId: string;
+  kind: "human" | "agent";
+  seenAt: number;
+};
+
+function presenceKey(entry: Omit<WorkspacePresenceEntry, "seenAt">): string {
+  return JSON.stringify([
+    entry.domainId,
+    entry.workspaceId,
+    entry.tabId,
+    entry.kind,
+    entry.principalId,
+  ]);
+}
+
+function createWorkspacePresenceRegistry(now: () => number) {
+  const entries = new Map<string, WorkspacePresenceEntry>();
+
+  const prune = (at: number) => {
+    for (const [key, entry] of entries) {
+      if (entry.seenAt + WORKSPACE_PRESENCE_TTL_MS <= at) {
+        entries.delete(key);
+      }
+    }
+    while (entries.size >= MAX_WORKSPACE_PRESENCE_ENTRIES) {
+      const oldest = entries.keys().next().value as string | undefined;
+      if (!oldest) {
+        break;
+      }
+      entries.delete(oldest);
+    }
+  };
+
+  return {
+    touch(params: {
+      context: TeamsRequestContext;
+      workspaceId: string;
+      tabId: string;
+    }): WorkspacePresenceParticipant[] {
+      const seenAt = now();
+      prune(seenAt);
+      const current = {
+        domainId: params.context.isolationDomainId,
+        workspaceId: params.workspaceId,
+        tabId: params.tabId,
+        principalId: params.context.principal.id,
+        kind: params.context.principal.kind,
+      } as const;
+      const key = presenceKey(current);
+      // Delete before set so insertion order also tracks recency for bounded eviction.
+      entries.delete(key);
+      entries.set(key, { ...current, seenAt });
+      return [...entries.values()]
+        .filter(
+          (entry) =>
+            entry.domainId === current.domainId &&
+            entry.workspaceId === current.workspaceId &&
+            entry.tabId === current.tabId,
+        )
+        .toSorted((left, right) => right.seenAt - left.seenAt)
+        .map((entry) => ({
+          id: entry.principalId,
+          kind: entry.kind,
+          self: entry.kind === current.kind && entry.principalId === current.principalId,
+        }));
+    },
+  };
+}
 
 function respondError(respond: GatewayRespond, error: unknown) {
   const code =
@@ -467,6 +551,7 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
   const { api } = options;
   const store = options.store ?? new WorkspaceStore();
   const storeForDomain = options.storeForDomain ?? (() => store);
+  const presence = createWorkspacePresenceRegistry(options.presenceNow ?? Date.now);
 
   api.registerGatewayMethod(
     "workspaces.get",
@@ -548,6 +633,13 @@ export function registerWorkspaceGatewayMethods(options: WorkspaceGatewayMethodO
           workspaceId: doc.workspaceId,
           workspaceVersion: doc.workspaceVersion,
           capabilityMode,
+          // Presence is derived only after exact-tab authorization and is keyed
+          // by tenant + workspace + tab. No other tab membership is serialized.
+          presence: presence.touch({
+            context: teamsContext,
+            workspaceId: doc.workspaceId,
+            tabId: tab.id,
+          }),
           tab: projectSharedTab(tab),
         });
       } catch (error) {

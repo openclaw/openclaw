@@ -107,6 +107,32 @@ describe("renderWorkspace", () => {
     expect(container.querySelector('[data-test-id="workspace-grid"]')).not.toBeNull();
   });
 
+  it("nests tabs by server-provided agent provenance and collapses a group", async () => {
+    const host = {};
+    const state = getWorkspaceState(host);
+    state.loaded = true;
+    state.workspace = {
+      ...doc,
+      tabs: [
+        { ...doc.tabs[0], createdBy: "user" },
+        { ...doc.tabs[2], createdBy: "agent:finance" },
+      ],
+      prefs: { tabOrder: ["main", "empty"] },
+    };
+    state.activeSlug = "main";
+    const container = renderView(host);
+
+    expect(container.querySelectorAll('[data-test-id="workspace-tab-group"]')).toHaveLength(2);
+    const finance = container.querySelector<HTMLElement>('[data-group="agent:finance"]');
+    const toggle = finance?.querySelector<HTMLButtonElement>(
+      '[data-test-id="workspace-tab-group-toggle"]',
+    );
+    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    toggle?.click();
+    render(renderWorkspace({ host, client: null, connected: false }), container);
+    expect(finance?.querySelector('[data-test-id="workspace-tab"]')).toBeNull();
+  });
+
   it("renders the empty-tab hint for a tab with no widgets", () => {
     const host = {};
     const state = getWorkspaceState(host);

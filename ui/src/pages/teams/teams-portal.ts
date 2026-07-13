@@ -60,9 +60,16 @@ export type TeamsPortalTab = {
   widgets: TeamsPortalWidget[];
 };
 
+type TeamsPortalPresenceParticipant = {
+  id: string;
+  kind: "human" | "agent";
+  self: boolean;
+};
+
 type TeamsPortalTabResult = {
   workspaceId: string;
   capabilityMode: TeamsPortalMode;
+  presence: TeamsPortalPresenceParticipant[];
   tab: TeamsPortalTab;
 };
 
@@ -89,6 +96,7 @@ export type TeamsPortalSnapshot = {
   workspaceId: string | null;
   tabId: string | null;
   mode: TeamsPortalMode | null;
+  presence?: TeamsPortalPresenceParticipant[];
   draftTitle: string;
   error: string | null;
   invitePending?: boolean;
@@ -246,6 +254,27 @@ function readPortalTab(value: unknown): TeamsPortalTab | undefined {
   };
 }
 
+function readPortalPresence(value: unknown): TeamsPortalPresenceParticipant[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return [];
+    }
+    const participant = entry as Partial<TeamsPortalPresenceParticipant>;
+    if (
+      typeof participant.id !== "string" ||
+      !participant.id.trim() ||
+      (participant.kind !== "human" && participant.kind !== "agent") ||
+      typeof participant.self !== "boolean"
+    ) {
+      return [];
+    }
+    return [{ id: participant.id, kind: participant.kind, self: participant.self }];
+  });
+}
+
 function readPortalTabResult(
   payload: unknown,
   expected: { workspaceId: string; tabId: string },
@@ -261,7 +290,12 @@ function readPortalTabResult(
   ) {
     throw new Error(t("workspaces.teams.errors.tabUnavailable"));
   }
-  return { workspaceId: expected.workspaceId, capabilityMode: result.capabilityMode, tab };
+  return {
+    workspaceId: expected.workspaceId,
+    capabilityMode: result.capabilityMode,
+    presence: readPortalPresence(result.presence),
+    tab,
+  };
 }
 
 function readPortalTabUpdateResult(
@@ -478,6 +512,7 @@ export class TeamsPortalStore {
   private readonly portalLocation: Pick<Location, "origin" | "pathname">;
   private gateway: TeamsPortalGateway | null = null;
   private expiryTimer: number | null = null;
+  private presenceTimer: number | null = null;
   private listeners = new Set<(snapshot: TeamsPortalSnapshot) => void>();
   private inviteCode: string | null = null;
   private lifecycleGeneration = 0;
@@ -489,6 +524,7 @@ export class TeamsPortalStore {
     workspaceId: null,
     tabId: null,
     mode: null,
+    presence: [],
     draftTitle: "",
     error: null,
     invitePending: false,
@@ -1020,11 +1056,13 @@ export class TeamsPortalStore {
       status: "ready",
       tab: result.tab,
       mode: result.capabilityMode,
+      presence: result.presence,
       draftTitle: result.tab.title,
       error: null,
       shareTabs: readShareTabs(sharingSync),
       selectedShareTabId: tabId,
     });
+    this.armPresenceRefresh({ gateway, workspaceId, tabId, generation });
     await this.refreshOwnerSharing(generation);
     if (sharingSync !== null) {
       await this.refreshPendingChangeRequests(tabId, generation);
@@ -1042,8 +1080,43 @@ export class TeamsPortalStore {
     );
   }
 
+  private armPresenceRefresh(params: {
+    gateway: TeamsPortalGateway;
+    workspaceId: string;
+    tabId: string;
+    generation: number;
+  }): void {
+    this.clearPresenceTimer();
+    this.presenceTimer = window.setInterval(() => {
+      void params.gateway
+        .request("workspaces.tab.get", {
+          workspaceId: params.workspaceId,
+          id: params.tabId,
+        })
+        .then((payload) =>
+          readPortalTabResult(payload, {
+            workspaceId: params.workspaceId,
+            tabId: params.tabId,
+          }),
+        )
+        .then((result) => {
+          if (this.isCurrent(params.generation) && this.gateway === params.gateway) {
+            this.update({ presence: result.presence });
+          }
+        })
+        .catch(() => {
+          // Presence is a best-effort exact-tab projection. Content and editing
+          // remain available if a heartbeat fails, but stale viewers disappear.
+          if (this.isCurrent(params.generation) && this.gateway === params.gateway) {
+            this.update({ presence: [] });
+          }
+        });
+    }, 10_000);
+  }
+
   private clearPortalState(): void {
     this.clearExpiryTimer();
+    this.clearPresenceTimer();
     const gateway = this.gateway;
     this.gateway = null;
     if (typeof gateway?.stop === "function") {
@@ -1055,6 +1128,7 @@ export class TeamsPortalStore {
       session: null,
       tab: null,
       mode: null,
+      presence: [],
       draftTitle: "",
       error: null,
       invitePending: false,
@@ -1089,6 +1163,13 @@ export class TeamsPortalStore {
     if (this.expiryTimer !== null) {
       window.clearTimeout(this.expiryTimer);
       this.expiryTimer = null;
+    }
+  }
+
+  private clearPresenceTimer(): void {
+    if (this.presenceTimer !== null) {
+      window.clearInterval(this.presenceTimer);
+      this.presenceTimer = null;
     }
   }
 
@@ -1227,6 +1308,17 @@ export function renderTeamsPortal(
       ${snapshot.tab
         ? html`<section>
             <h2>${snapshot.tab.title}</h2>
+            ${(snapshot.presence ?? []).some((participant) => !participant.self)
+              ? html`<ul aria-label="Viewing this tab">
+                  ${(snapshot.presence ?? [])
+                    .filter((participant) => !participant.self)
+                    .map(
+                      (participant) => html`<li data-teams-presence=${participant.id}>
+                        ${participant.id} is viewing
+                      </li>`,
+                    )}
+                </ul>`
+              : ""}
             <ul>
               ${snapshot.tab.widgets.map(renderWidget)}
             </ul>

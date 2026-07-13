@@ -28,6 +28,10 @@ function tabResult(mode: "read" | "request" | "write" = "read") {
     workspaceId: "workspace-1",
     workspaceVersion: 8,
     capabilityMode: mode,
+    presence: [
+      { id: "ada", kind: "human", self: true },
+      { id: "review-agent", kind: "agent", self: false },
+    ],
     tab: {
       id: "tab-1",
       revision: 4,
@@ -204,6 +208,35 @@ describe("Teams portal store", () => {
       id: "tab-1",
     });
     expect(gateway.request.mock.calls.some(([method]) => method === "workspaces.get")).toBe(false);
+    expect(store.snapshot.presence).toEqual(tabResult().presence);
+  });
+
+  it("refreshes presence by polling only the same exact tab", async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, gateway } = createStore({});
+      await store.start({ route: "login", workspaceId: "workspace-1", tabId: "tab-1" });
+      const before = gateway.request.mock.calls.filter(
+        ([method]) => method === "workspaces.tab.get",
+      ).length;
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      const exactReads = gateway.request.mock.calls.filter(
+        ([method]) => method === "workspaces.tab.get",
+      );
+      expect(exactReads).toHaveLength(before + 1);
+      expect(exactReads.at(-1)).toEqual([
+        "workspaces.tab.get",
+        { workspaceId: "workspace-1", id: "tab-1" },
+      ]);
+      expect(gateway.request.mock.calls.some(([method]) => method === "workspaces.get")).toBe(
+        false,
+      );
+      store.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("syncs owner sharing before loading the exact tab and selects that tab by default", async () => {
@@ -922,6 +955,58 @@ describe("Teams portal store", () => {
 });
 
 describe("restricted Teams shell", () => {
+  it("labels owner grants as cumulative read capabilities", () => {
+    const host = document.createElement("div");
+    render(
+      renderTeamsPortal({
+        status: "ready",
+        route: "login",
+        session: authenticatedSession(),
+        tab: tabResult("write").tab,
+        workspaceId: "workspace-1",
+        tabId: "tab-1",
+        mode: "write",
+        draftTitle: "Planning",
+        error: null,
+        ownerSharing: true,
+        invitePresets: ["read", "request", "write"],
+        shareTabs: [{ id: "tab-1", revision: 4, slug: "planning", title: "Planning" }],
+        selectedShareTabId: "tab-1",
+      }),
+      host,
+    );
+
+    expect([...host.querySelectorAll("option")].map((option) => option.textContent)).toEqual([
+      "Read",
+      "Read + request changes",
+      "Read + write",
+      "Planning",
+    ]);
+  });
+
+  it("shows only participants returned by the exact-tab server projection", () => {
+    const host = document.createElement("div");
+    render(
+      renderTeamsPortal({
+        status: "ready",
+        route: "login",
+        session: authenticatedSession(),
+        tab: tabResult("read").tab,
+        workspaceId: "workspace-1",
+        tabId: "tab-1",
+        mode: "read",
+        presence: tabResult("read").presence,
+        draftTitle: "Planning",
+        error: null,
+      }),
+      host,
+    );
+
+    expect(host.querySelector('[data-teams-presence="review-agent"]')).not.toBeNull();
+    expect(host.textContent).toContain("review-agent");
+    expect(host.textContent).not.toContain("ada is viewing");
+  });
+
   it("renders no dashboard navigation and hides all edit controls in read mode", () => {
     const host = document.createElement("div");
     render(
