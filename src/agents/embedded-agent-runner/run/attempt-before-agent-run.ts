@@ -20,7 +20,7 @@ type BeforeAgentRunSession = {
   agent: { state: { messages: AgentMessage[] } };
 };
 
-export type BeforeAgentRunBlockOutcome = {
+type BeforeAgentRunBlockOutcome = {
   blockedBy: string;
   promptError: Error;
 };
