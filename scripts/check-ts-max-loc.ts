@@ -187,13 +187,18 @@ function listChangedEntries(params: {
     return entries;
   }
 
-  const trackedPaths = new Set(entries.map((entry) => entry.path));
+  const trackedEntryIndices = new Map(entries.map((entry, index) => [entry.path, index]));
   for (const filePath of runGit(["ls-files", "--others", "--exclude-standard", "-z"], params.cwd)
     .split("\0")
     .filter(Boolean)
     .map(normalizePath)) {
-    if (!trackedPaths.has(filePath)) {
+    const trackedIndex = trackedEntryIndices.get(filePath);
+    if (trackedIndex === undefined) {
       entries.push({ path: filePath, status: "A" });
+    } else if (entries[trackedIndex]?.status === "D") {
+      // A staged deletion can hide a recreated untracked file at the same path.
+      // Treat the worktree content as a modification against the base blob.
+      entries[trackedIndex] = { path: filePath, status: "M" };
     }
   }
   return entries;
@@ -245,9 +250,12 @@ export async function collectChangedFileLocs(params: {
   const cwd = params.cwd ?? process.cwd();
   const mode: ComparisonMode = params.staged ? "staged" : params.head ? "head" : "worktree";
   const head = params.head ?? "HEAD";
+  const requestedBase = params.base ?? "origin/main";
   const base = params.staged
     ? resolveCommit("HEAD", cwd)
-    : resolveComparisonBase({ base: params.base ?? "origin/main", cwd, head });
+    : mode === "head"
+      ? resolveCommit(requestedBase, cwd)
+      : resolveComparisonBase({ base: requestedBase, cwd, head });
   const scopes = (params.paths ?? []).map(normalizePath).filter(Boolean);
   const entries = listChangedEntries({ base, cwd, head, mode });
   const results: ChangedFileLoc[] = [];

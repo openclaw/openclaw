@@ -711,7 +711,7 @@ describe("ci workflow guards", () => {
     const ciDocs = readFileSync("docs/ci.md", "utf8");
     expect(ciDocs).toContain("`pr_number`");
     expect(ciDocs).toContain("synthetic pull-request merge ref");
-    expect(ciDocs).toContain("same merged tree as automatic PR CI");
+    expect(ciDocs).toContain("matches automatic PR CI's merged tree and policy implementation");
     expect(ciDocs).toContain("cannot provide equivalent merge-tree evidence");
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
@@ -1971,7 +1971,11 @@ describe("ci workflow guards", () => {
 
   it("runs the changed-file TypeScript LOC ratchet against the exact CI base", () => {
     const workflow = readCiWorkflow();
-    const checksFastRun = workflow.jobs["checks-fast-core"].steps.find(
+    const checksFastSteps = workflow.jobs["checks-fast-core"].steps;
+    const mergeCheckout = checksFastSteps.find(
+      (step: WorkflowStep) => step.name === "Checkout verified release-gate LOC merge tree",
+    );
+    const checksFastRun = checksFastSteps.find(
       (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
 
@@ -1979,20 +1983,24 @@ describe("ci workflow guards", () => {
     expect(checksFastRun.env.LOC_BASE_SHA).toContain("github.event.pull_request.base.sha");
     expect(checksFastRun.env.LOC_BASE_SHA).toContain("needs.preflight.outputs.loc_base_sha");
     expect(checksFastRun.env.LOC_BASE_SHA).not.toContain("github.event.repository.default_branch");
-    expect(checksFastRun.env.LOC_HEAD_SHA).toBe("${{ needs.preflight.outputs.loc_head_sha }}");
-    expect(checksFastRun.env.LOC_PR_NUMBER).toContain("inputs.pr_number");
+    expect(mergeCheckout.if).toContain("matrix.task == 'loc-ratchet'");
+    expect(mergeCheckout.if).toContain("needs.preflight.outputs.loc_head_sha != ''");
+    expect(mergeCheckout.env.LOC_HEAD_SHA).toBe("${{ needs.preflight.outputs.loc_head_sha }}");
+    expect(mergeCheckout.env.LOC_PR_NUMBER).toBe("${{ inputs.pr_number }}");
+    expect(mergeCheckout.run).toContain(
+      '"+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"',
+    );
+    expect(mergeCheckout.run).toContain('[[ "$resolved_loc_head" != "$LOC_HEAD_SHA" ]]');
+    expect(mergeCheckout.run).toContain("git checkout --detach refs/remotes/origin/ci-head");
+    expect(checksFastSteps.indexOf(mergeCheckout)).toBeLessThan(
+      checksFastSteps.findIndex((step: WorkflowStep) => step.name === "Setup Node environment"),
+    );
     expect(checksFastRun.run).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
     expect(checksFastRun.run).toContain(
       'git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/ci-base"',
     );
     expect(checksFastRun.run).toContain(
-      '"+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"',
-    );
-    expect(checksFastRun.run).toContain(
-      "Pull request ${LOC_PR_NUMBER} merge ref moved before the LOC check.",
-    );
-    expect(checksFastRun.run).toContain(
-      'pnpm check:loc --base refs/remotes/origin/ci-base --head "$loc_head_ref"',
+      "pnpm check:loc --base refs/remotes/origin/ci-base --head HEAD",
     );
 
     const fastOnly = runCiManifestFixture({

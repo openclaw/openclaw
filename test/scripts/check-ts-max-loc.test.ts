@@ -188,6 +188,24 @@ describe("scripts/check-ts-max-loc", () => {
     ]);
   });
 
+  it("checks recreated untracked content after a staged deletion", async () => {
+    const cwd = createRepo({ "src/recreated.ts": 10 });
+    git(cwd, ["rm", "src/recreated.ts"]);
+    writeLines(cwd, "src/recreated.ts", 501);
+
+    const results = await collectChangedFileLocs({ base: "HEAD", cwd });
+    expect(results).toEqual([{ baseLines: 10, lines: 501, path: "src/recreated.ts", status: "M" }]);
+    expect(findLocRatchetViolations(results)).toEqual([
+      {
+        baseLines: 10,
+        lines: 501,
+        path: "src/recreated.ts",
+        reason: "crossed-limit",
+        status: "M",
+      },
+    ]);
+  });
+
   it("reads staged content instead of later unstaged edits", async () => {
     const cwd = createRepo({ "src/existing.ts": 10 });
     writeLines(cwd, "src/staged.ts", 501);
@@ -220,5 +238,34 @@ describe("scripts/check-ts-max-loc", () => {
 
     const results = await collectChangedFileLocs({ base, cwd, head: "HEAD" });
     expect(results).toEqual([{ path: "src/new.ts", status: "A", lines: 501 }]);
+  });
+
+  it("uses the exact requested base for divergent explicit head comparisons", async () => {
+    const cwd = createRepo({ "src/legacy.ts": 600 });
+    git(cwd, ["branch", "feature"]);
+    writeLines(cwd, "src/legacy.ts", 400);
+    git(cwd, ["add", "src/legacy.ts"]);
+    git(cwd, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "commit",
+      "-q",
+      "-m",
+      "shrink on base",
+    ]);
+
+    const results = await collectChangedFileLocs({ base: "main", cwd, head: "feature" });
+    expect(results).toEqual([{ baseLines: 400, lines: 600, path: "src/legacy.ts", status: "M" }]);
+    expect(findLocRatchetViolations(results)).toEqual([
+      {
+        baseLines: 400,
+        lines: 600,
+        path: "src/legacy.ts",
+        reason: "crossed-limit",
+        status: "M",
+      },
+    ]);
   });
 });

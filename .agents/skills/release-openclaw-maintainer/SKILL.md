@@ -130,9 +130,9 @@ GHSA-specific advisory work outside this skill.
   `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
 target_ref=<full-pr-sha> -f pr_number=<pr-number> -f include_android=true -f
 release_gate=true`.
-  The workflow authenticates that PR's head/base and validates GitHub's current
-  synthetic merge tree. Older workflow schemas cannot provide equivalent LOC
-  evidence; update the head to contain the current `pr_number` workflow, then
+  The workflow authenticates that PR's head/base, validates GitHub's current
+  synthetic merge tree, and runs the LOC task from that tree. Older workflow
+  schemas cannot provide equivalent LOC evidence; update the head to contain the current `pr_number` workflow, then
   restart exact-head proof on the new SHA instead of dispatching them.
   Use it only for an observed provider queue stall, never for failed CI or as a
   routine shortcut. The run must be named `CI release gate <full-pr-sha>` and
