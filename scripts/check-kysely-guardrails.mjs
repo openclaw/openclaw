@@ -19,15 +19,9 @@ const ts = require("typescript");
 const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = [path.join(repoRoot, "src")];
 
-const kyselyRawAllowPaths = new Set([
-  "src/infra/kysely-node-sqlite.test.ts",
-  "src/infra/kysely-sync.ts",
-]);
+const kyselyRawAllowPaths = new Set(["src/infra/kysely-sync.ts"]);
 
-const compiledRawAllowPaths = new Set([
-  "src/infra/kysely-node-sqlite.ts",
-  "src/infra/kysely-node-sqlite.test.ts",
-]);
+const compiledRawAllowPaths = new Set(["src/infra/kysely-node-sqlite.ts"]);
 
 const rawSqliteAllowPathGroups = {
   "native Kysely adapter and sync execution": [
