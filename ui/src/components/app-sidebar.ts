@@ -2796,8 +2796,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       collapsedSections: this.collapsedSessionSections,
       loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
       connected: this.connected,
-      defaultAgentId:
-        this.context?.agents.state.agentsList?.defaultId ?? this.expandedAgentId(),
+      defaultAgentId: this.context?.agents.state.agentsList?.defaultId ?? this.expandedAgentId(),
       liveRows: [
         ...(this.sessionsResult?.sessions ?? []),
         ...Object.values(this.sessionRowsByAgent).flat(),
