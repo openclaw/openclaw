@@ -343,6 +343,7 @@ class ComposedGatewayHarness {
         workspaceDir: this.root,
         modelRef: MODEL_REF,
         inferenceOptions: {},
+        suppressPromptTranscript: false,
         initialMessages: [],
         transcript: { baseLeafId: params.baseLeafId ?? null, nextSeq: params.initialSeq ?? 1 },
         liveEvents: {
