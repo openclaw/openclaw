@@ -130,7 +130,7 @@ export function normalizeBoardMetadata(
   };
 }
 
-export function normalizeOrchestration(
+function normalizeOrchestration(
   value: unknown,
   fallback?: WorkboardOrchestrationSettings,
 ): WorkboardOrchestrationSettings | undefined {
@@ -166,9 +166,7 @@ export function normalizeOrchestration(
   return Object.keys(next).length ? next : undefined;
 }
 
-export function normalizeNotificationKinds(
-  value: unknown,
-): WorkboardNotificationKind[] | undefined {
+function normalizeNotificationKinds(value: unknown): WorkboardNotificationKind[] | undefined {
   if (value == null) {
     return undefined;
   }
@@ -353,7 +351,7 @@ export function normalizePosition(value: unknown, fallback: number): number {
   return Math.max(0, Math.trunc(value));
 }
 
-export function normalizePositiveInteger(value: unknown, fieldName: string): number | undefined {
+function normalizePositiveInteger(value: unknown, fieldName: string): number | undefined {
   if (value == null || value === "") {
     return undefined;
   }
@@ -363,13 +361,13 @@ export function normalizePositiveInteger(value: unknown, fieldName: string): num
   return Math.max(1, Math.trunc(value));
 }
 
-export function isAbsoluteWorkspacePath(value: string): boolean {
+function isAbsoluteWorkspacePath(value: string): boolean {
   return (
     value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value)
   );
 }
 
-export function normalizeWorkspace(
+function normalizeWorkspace(
   value: unknown,
   fallback?: WorkboardWorkspace,
 ): WorkboardWorkspace | undefined {
@@ -491,7 +489,7 @@ export function deriveChildIdempotencyKey(
   return key.length <= 160 ? key : undefined;
 }
 
-export function normalizeExecutionEngine(
+function normalizeExecutionEngine(
   value: unknown,
   fallback: WorkboardExecutionEngine,
 ): WorkboardExecutionEngine {
@@ -504,7 +502,7 @@ export function normalizeExecutionEngine(
   return fallback;
 }
 
-export function normalizeExecutionMode(
+function normalizeExecutionMode(
   value: unknown,
   fallback: WorkboardExecutionMode,
 ): WorkboardExecutionMode {
@@ -517,7 +515,7 @@ export function normalizeExecutionMode(
   return fallback;
 }
 
-export function normalizeExecutionStatus(
+function normalizeExecutionStatus(
   value: unknown,
   fallback: WorkboardExecutionStatus,
 ): WorkboardExecutionStatus {
@@ -530,7 +528,7 @@ export function normalizeExecutionStatus(
   return fallback;
 }
 
-export function normalizeAttemptStatus(
+function normalizeAttemptStatus(
   value: unknown,
   fallback: WorkboardAttemptStatus,
 ): WorkboardAttemptStatus {
@@ -550,7 +548,7 @@ export function normalizeLinkType(value: unknown, fallback: WorkboardLinkType): 
   return fallback;
 }
 
-export function normalizeProofStatus(
+function normalizeProofStatus(
   value: unknown,
   fallback: WorkboardProofStatus,
 ): WorkboardProofStatus {
@@ -575,7 +573,7 @@ export function normalizeTimestamp(value: unknown, fallback: number): number {
     : fallback;
 }
 
-export function normalizeEvent(value: unknown): WorkboardEvent | null {
+function normalizeEvent(value: unknown): WorkboardEvent | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -621,7 +619,7 @@ export function normalizeEvents(value: unknown): WorkboardEvent[] {
     .slice(-MAX_CARD_EVENTS);
 }
 
-export function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
+function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -656,7 +654,7 @@ export function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
   };
 }
 
-export function normalizeComment(value: unknown): WorkboardComment | null {
+function normalizeComment(value: unknown): WorkboardComment | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -671,7 +669,7 @@ export function normalizeComment(value: unknown): WorkboardComment | null {
   return { id, body, createdAt, ...(updatedAt ? { updatedAt } : {}) };
 }
 
-export function normalizeLink(value: unknown): WorkboardLink | null {
+function normalizeLink(value: unknown): WorkboardLink | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -697,11 +695,11 @@ export function normalizeLink(value: unknown): WorkboardLink | null {
   };
 }
 
-export function isDependencyLink(link: WorkboardLink): boolean {
+function isDependencyLink(link: WorkboardLink): boolean {
   return link.type === "parent" || link.type === "child";
 }
 
-export function normalizeProof(value: unknown): WorkboardProof | null {
+function normalizeProof(value: unknown): WorkboardProof | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -750,7 +748,7 @@ export function normalizeArtifact(value: unknown): WorkboardArtifact | null {
   };
 }
 
-export function normalizeAttachment(value: unknown): WorkboardAttachment | null {
+function normalizeAttachment(value: unknown): WorkboardAttachment | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -779,7 +777,7 @@ export function normalizeAttachment(value: unknown): WorkboardAttachment | null 
   };
 }
 
-export function normalizeWorkerLog(value: unknown): WorkboardWorkerLog | null {
+function normalizeWorkerLog(value: unknown): WorkboardWorkerLog | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -806,7 +804,7 @@ export function normalizeWorkerLog(value: unknown): WorkboardWorkerLog | null {
   };
 }
 
-export function normalizeWorkerProtocol(
+function normalizeWorkerProtocol(
   value: unknown,
   fallback?: WorkboardWorkerProtocol,
 ): WorkboardWorkerProtocol | undefined {
@@ -879,10 +877,7 @@ export function normalizeAttachmentInput(
   return { attachment, contentBase64 };
 }
 
-export function normalizeClaim(
-  value: unknown,
-  fallback?: WorkboardClaim,
-): WorkboardClaim | undefined {
+function normalizeClaim(value: unknown, fallback?: WorkboardClaim): WorkboardClaim | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return fallback;
   }
@@ -907,7 +902,7 @@ export function normalizeClaim(
   };
 }
 
-export function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAction | null {
+function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAction | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -924,7 +919,7 @@ export function normalizeDiagnosticAction(value: unknown): WorkboardDiagnosticAc
   return kind && label ? { kind, label } : null;
 }
 
-export function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
+function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -964,7 +959,7 @@ export function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null 
   };
 }
 
-export function normalizeNotification(value: unknown): WorkboardNotification | null {
+function normalizeNotification(value: unknown): WorkboardNotification | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -1173,7 +1168,7 @@ export function syncExecutionSessionKey(
   });
 }
 
-export function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
+function removeUndefinedExecutionFields(execution: WorkboardExecution): WorkboardExecution {
   const next = { ...execution };
   if (next.sessionKey === undefined) {
     delete next.sessionKey;
@@ -1184,9 +1179,7 @@ export function removeUndefinedExecutionFields(execution: WorkboardExecution): W
   return next;
 }
 
-export function removeUndefinedAutomationFields(
-  automation: WorkboardAutomation,
-): WorkboardAutomation {
+function removeUndefinedAutomationFields(automation: WorkboardAutomation): WorkboardAutomation {
   const next = { ...automation };
   for (const key of [
     "tenant",
@@ -1265,11 +1258,11 @@ export function metadataIsEmpty(metadata: WorkboardMetadata | undefined): boolea
   return !metadata || Object.keys(metadata).length === 0;
 }
 
-export function metadataByteSize(metadata: WorkboardMetadata): number {
+function metadataByteSize(metadata: WorkboardMetadata): number {
   return Buffer.byteLength(JSON.stringify(metadata), "utf8");
 }
 
-export function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
+function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
   if (!items?.length) {
     return undefined;
   }
@@ -1277,7 +1270,7 @@ export function dropFirst<T>(items: readonly T[] | undefined): T[] | undefined {
   return next.length ? next : undefined;
 }
 
-export function dropFirstNonDependencyLink(
+function dropFirstNonDependencyLink(
   items: readonly WorkboardLink[] | undefined,
 ): WorkboardLink[] | undefined {
   if (!items?.length) {

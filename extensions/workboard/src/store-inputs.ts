@@ -6,7 +6,7 @@ import type {
   WorkboardWorkspace,
 } from "./types.js";
 
-export type WorkboardCardInput = {
+type WorkboardCardInput = {
   title?: unknown;
   notes?: unknown;
   status?: unknown;

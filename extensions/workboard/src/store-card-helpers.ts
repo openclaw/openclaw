@@ -49,7 +49,7 @@ export function cardRunId(card: WorkboardCard): string | undefined {
   return card.runId ?? card.execution?.runId;
 }
 
-export function executionAttemptStatus(execution: WorkboardExecution): WorkboardAttemptStatus {
+function executionAttemptStatus(execution: WorkboardExecution): WorkboardAttemptStatus {
   if (execution.status === "running") {
     return "running";
   }
@@ -130,7 +130,7 @@ export function appendEvent(
   ].slice(-MAX_CARD_EVENTS);
 }
 
-export function latestMetadataIdChanged(
+function latestMetadataIdChanged(
   existing: readonly { id: string }[] | undefined,
   next: readonly { id: string }[] | undefined,
 ): boolean {
@@ -152,7 +152,7 @@ export function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): numb
   return sourceUpdatedAt;
 }
 
-export function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
+function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
   for (let index = (card.events?.length ?? 0) - 1; index >= 0; index -= 1) {
     const event = card.events?.[index];
     if (
@@ -358,7 +358,7 @@ export function retryBudgetExhausted(card: WorkboardCard): boolean {
   return Boolean(maxRetries && (card.metadata?.failureCount ?? 0) > maxRetries);
 }
 
-export function diagnostic(
+function diagnostic(
   params: {
     kind: WorkboardDiagnosticKind;
     severity: WorkboardDiagnosticSeverity;
@@ -509,7 +509,7 @@ export function cardBoardId(card: WorkboardCard): string {
   return card.metadata?.automation?.boardId ?? "default";
 }
 
-export function cardResultSummary(card: WorkboardCard): string | undefined {
+function cardResultSummary(card: WorkboardCard): string | undefined {
   return (
     card.metadata?.automation?.summary ??
     card.metadata?.comments?.findLast((comment) => comment.body.trim())?.body ??
