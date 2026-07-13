@@ -63,11 +63,20 @@ extension RootTabsSourceGuardTests {
         #expect(scannerLifecycle.contains("self.stopScannerCapture()"))
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
+        #expect(sectionsSource.contains("This phone has limited Gateway access."))
+        #expect(sectionsSource.contains("Use a secure wss:// or Tailscale Serve Gateway"))
+        #expect(sectionsSource.contains("Label(\"Scan Full-Access Code\""))
         #expect(sectionsSource.contains("self.gatewayActions"))
         #expect(sectionsSource.contains("self.manualGatewayCard"))
         #expect(sectionsSource.contains("self.gatewaySetupCard"))
-        #expect(sectionsSource.contains("self.discoveredGatewaysCard"))
         #expect(sectionsSource.contains("self.gatewayAdvancedCard"))
+        // Pairing stays reachable without scrolling: nav-bar scanner button on the
+        // gateway route plus a status-card hero while nothing is paired. The hero
+        // honors the same connect lock as the other scanner entry points.
+        #expect(sectionsSource.contains("if route == .gateway {"))
+        #expect(sectionsSource.contains(
+            "let showScanHero = self.gatewayNeedsPairing && self.connectingGateway == nil"))
+        #expect(sectionsSource.contains("actionTitle: showScanHero ? \"Scan QR to Pair\" : nil"))
         #expect(sectionsSource.contains("title: \"Reconnect\""))
         #expect(sectionsSource.contains("Task { await self.reconnectGateway() }"))
         #expect(sectionsSource.contains("title: \"Diagnose\""))

@@ -702,6 +702,21 @@ export type CronStatus = {
   nextWakeAtMs?: number | null;
 };
 
+export type CronRunResult =
+  | { ok: true; ran: true }
+  | { ok: true; enqueued: true; runId: string }
+  | {
+      ok: true;
+      ran: false;
+      reason:
+        | "not-due"
+        | "already-running"
+        | "restart-recovery-pending"
+        | "invalid-spec"
+        | "stopped";
+    }
+  | { ok: false };
+
 export type CronRunLogEntry = {
   ts: number;
   jobId: string;

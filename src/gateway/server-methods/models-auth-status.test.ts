@@ -491,6 +491,7 @@ describe("models.authStatus", () => {
           provider: "anthropic",
           displayName: "Claude",
           plan: "Max (20x)",
+          accountEmail: "clawd@example.com",
           windows: [{ label: "5h", usedPercent: 22 }],
           billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
         },
@@ -513,6 +514,7 @@ describe("models.authStatus", () => {
       windows: [{ label: "5h", usedPercent: 22 }],
       plan: "Max (20x)",
       billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD", period: "month" }],
+      accountEmail: "clawd@example.com",
     });
   });
 
