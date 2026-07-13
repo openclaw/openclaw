@@ -240,17 +240,19 @@ describe("startGmailWatcher", () => {
         startGmailWatcher(createGmailConfig("old@example.com", { renewEveryMinutes: 1 })),
       ).resolves.toEqual({ started: true });
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(spawnedChildren[0].kill).toHaveBeenCalledWith("SIGTERM");
+      expect(
+        expectDefined(spawnedChildren[0], "spawnedChildren[0] test invariant").kill,
+      ).toHaveBeenCalledWith("SIGTERM");
 
       await expect(
         startGmailWatcher(createGmailConfig("newer@example.com", { renewEveryMinutes: 1 })),
       ).resolves.toEqual({ started: true });
       expect(spawnedChildren).toHaveLength(2);
 
-      spawnedChildren[0].emit("exit", null, "SIGTERM");
+      spawnedChildren[0]?.emit("exit", null, "SIGTERM");
       await vi.advanceTimersByTimeAsync(0);
 
-      spawnedChildren[1].emit("exit", 1, null);
+      spawnedChildren[1]?.emit("exit", 1, null);
       await vi.advanceTimersByTimeAsync(5000);
 
       expect(spawnedChildren).toHaveLength(3);
