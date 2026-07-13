@@ -80,7 +80,8 @@ function pumpBrowserSessionGate(
     !gate.cleanupActive &&
     gate.accessWaiters.length === 0 &&
     gate.cleanupWaiters.length === 0 &&
-    (!gate.latestOwnerClaim || !hasTrackedTabs(sessionKey))
+    !gate.latestOwnerClaim &&
+    !hasTrackedTabs(sessionKey)
   ) {
     browserSessionGates.delete(sessionKey);
   }
@@ -107,6 +108,18 @@ export function claimBrowserSessionOwner(sessionKey: string, ownerId: string): n
   const sequence = ++gate.ownerClaimSequence;
   gate.latestOwnerClaim = { ownerId, sequence };
   return sequence;
+}
+
+export function releaseBrowserSessionOwner(sessionKey: string, ownerId?: string): void {
+  const gate = browserSessionGates.get(sessionKey);
+  if (!gate?.latestOwnerClaim) {
+    return;
+  }
+  if (ownerId !== undefined && gate.latestOwnerClaim.ownerId !== ownerId) {
+    return;
+  }
+  gate.latestOwnerClaim = undefined;
+  pumpBrowserSessionGate(sessionKey, gate, () => false);
 }
 
 export function isCurrentBrowserSessionOwnerClaim(params: {

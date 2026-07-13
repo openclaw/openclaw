@@ -12,6 +12,7 @@ import {
   acquireBrowserSessionCleanup,
   claimBrowserSessionOwner,
   isCurrentBrowserSessionOwnerClaim,
+  releaseBrowserSessionOwner,
   resetBrowserSessionGatesForTests,
 } from "./session-tab-gate.js";
 
@@ -393,6 +394,9 @@ export async function closeTrackedBrowserTabsForSessions(params: {
       onWarn: params.onWarn,
     });
   } finally {
+    for (const sessionKey of sessionKeys) {
+      releaseBrowserSessionOwner(sessionKey, ownerId);
+    }
     releaseCleanup();
   }
 }

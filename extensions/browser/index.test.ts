@@ -189,9 +189,6 @@ describe("browser plugin", () => {
     expect(tool.description).not.toContain('profile="user"');
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
-    expect(runtimeApiMocks.hasTrackedBrowserSessionTabs).toHaveBeenCalledWith(
-      "agent:main:webchat:direct:123",
-    );
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       sandboxBridgeUrl: "http://127.0.0.1:9999",
       allowHostControl: true,
