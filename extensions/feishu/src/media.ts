@@ -32,9 +32,72 @@ import {
 import { resolveFeishuSendTarget } from "./send-target.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
+/**
+ * Default per-chunk idle timeout for Feishu inbound media streams.
+ * Matches Telegram `TELEGRAM_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000` so a stalled
+ * Lark SDK body cannot block inbound dispatch indefinitely after headers/start.
+ */
+export const FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30_000;
 const FEISHU_VOICE_FILE_NAME = "voice.ogg";
 const FEISHU_VOICE_SAMPLE_RATE_HZ = 48_000;
 const FEISHU_VOICE_BITRATE = "64k";
+
+export class FeishuInboundMediaTimeoutError extends Error {
+  readonly chunkTimeoutMs: number;
+  constructor(chunkTimeoutMs: number) {
+    super(`Feishu media download stalled: no data received for ${chunkTimeoutMs}ms`);
+    this.name = "FeishuInboundMediaTimeoutError";
+    this.chunkTimeoutMs = chunkTimeoutMs;
+  }
+}
+
+// Bound each AsyncIterable `next()` so a stalled Lark download cannot hang
+// inbound dispatch. On timeout, call `return()` so Node Readable streams are
+// destroyed; silence the losing `nextPromise` to avoid unhandledRejection.
+function withChunkIdleTimeout<T>(
+  source: AsyncIterable<T>,
+  chunkTimeoutMs: number,
+): AsyncIterable<T> {
+  return {
+    async *[Symbol.asyncIterator]() {
+      const iterator = source[Symbol.asyncIterator]();
+      try {
+        while (true) {
+          const nextPromise = iterator.next();
+          let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(
+              () => reject(new FeishuInboundMediaTimeoutError(chunkTimeoutMs)),
+              chunkTimeoutMs,
+            );
+          });
+          let result: IteratorResult<T>;
+          try {
+            result = await Promise.race([nextPromise, timeoutPromise]);
+          } catch (err) {
+            nextPromise.then(
+              () => undefined,
+              () => undefined,
+            );
+            throw err;
+          } finally {
+            if (timeoutHandle !== undefined) {
+              clearTimeout(timeoutHandle);
+            }
+          }
+          if (result.done) {
+            return;
+          }
+          yield result.value;
+        }
+      } finally {
+        if (typeof iterator.return === "function") {
+          await iterator.return().catch(() => undefined);
+        }
+      }
+    },
+  };
+}
 
 const FEISHU_TRANSCODABLE_AUDIO_EXTS = new Set([
   ".aac",
@@ -251,8 +314,10 @@ async function saveFeishuResponseMedia(params: {
   maxBytes: number;
   contentType?: string;
   fileName?: string;
+  chunkTimeoutMs?: number;
 }): Promise<SavedMedia> {
   const { response, maxBytes, contentType, fileName } = params;
+  const chunkTimeoutMs = params.chunkTimeoutMs ?? FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS;
   if (Buffer.isBuffer(response)) {
     return saveMediaBuffer(response, contentType, "inbound", maxBytes, fileName);
   }
@@ -291,7 +356,7 @@ async function saveFeishuResponseMedia(params: {
   }
   if (typeof response.getReadableStream === "function") {
     return saveMediaStream(
-      response.getReadableStream(),
+      withChunkIdleTimeout(response.getReadableStream(), chunkTimeoutMs),
       contentType,
       "inbound",
       maxBytes,
@@ -306,7 +371,7 @@ async function saveFeishuResponseMedia(params: {
         throw mediaLimitError(maxBytes);
       }
       return await saveMediaStream(
-        fs.createReadStream(tmpPath),
+        withChunkIdleTimeout(fs.createReadStream(tmpPath), chunkTimeoutMs),
         contentType,
         "inbound",
         maxBytes,
@@ -316,10 +381,22 @@ async function saveFeishuResponseMedia(params: {
   }
   if (responseWithOptionalFields[Symbol.asyncIterator]) {
     const asyncIterable = responseWithOptionalFields as AsyncIterable<Buffer | Uint8Array | string>;
-    return saveMediaStream(asyncIterable, contentType, "inbound", maxBytes, fileName);
+    return saveMediaStream(
+      withChunkIdleTimeout(asyncIterable, chunkTimeoutMs),
+      contentType,
+      "inbound",
+      maxBytes,
+      fileName,
+    );
   }
   if (response instanceof Readable) {
-    return saveMediaStream(response, contentType, "inbound", maxBytes, fileName);
+    return saveMediaStream(
+      withChunkIdleTimeout(response, chunkTimeoutMs),
+      contentType,
+      "inbound",
+      maxBytes,
+      fileName,
+    );
   }
 
   const keys = Object.keys(response as object);
@@ -333,6 +410,7 @@ async function saveMessageResourceWithType(params: {
   type: FeishuMessageResourceDownloadType;
   maxBytes: number;
   originalFilename?: string;
+  chunkTimeoutMs?: number;
 }): Promise<SaveMessageResourceResult> {
   const response = await params.client.im.messageResource.get({
     path: { message_id: params.messageId, file_key: params.fileKey },
@@ -350,6 +428,7 @@ async function saveMessageResourceWithType(params: {
       (params.originalFilename
         ? recoverUtf8FileNameFromLatin1Header(params.originalFilename)
         : undefined),
+    chunkTimeoutMs: params.chunkTimeoutMs,
   });
   return { saved, ...meta };
 }
@@ -362,8 +441,11 @@ export async function saveMessageResourceFeishu(params: {
   accountId?: string;
   maxBytes: number;
   originalFilename?: string;
+  /** Test-only override; production omits and uses FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS. */
+  chunkTimeoutMs?: number;
 }): Promise<SaveMessageResourceResult> {
-  const { cfg, messageId, fileKey, type, accountId, maxBytes, originalFilename } = params;
+  const { cfg, messageId, fileKey, type, accountId, maxBytes, originalFilename, chunkTimeoutMs } =
+    params;
   const normalizedFileKey = normalizeFeishuExternalKey(fileKey);
   if (!normalizedFileKey) {
     throw new Error("Feishu message resource download failed: invalid file_key");
@@ -378,6 +460,7 @@ export async function saveMessageResourceFeishu(params: {
       type,
       maxBytes,
       originalFilename,
+      chunkTimeoutMs,
     });
   } catch (err) {
     if (type !== "file" || !isHttpStatusError(err, 502)) {
@@ -391,6 +474,7 @@ export async function saveMessageResourceFeishu(params: {
         type: "media",
         maxBytes,
         originalFilename,
+        chunkTimeoutMs,
       });
     } catch {
       throw err;

@@ -57,6 +57,8 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
 let saveMessageResourceFeishu: typeof import("./media.js").saveMessageResourceFeishu;
 let sendMediaFeishu: typeof import("./media.js").sendMediaFeishu;
 let shouldSuppressFeishuTextForVoiceMedia: typeof import("./media.js").shouldSuppressFeishuTextForVoiceMedia;
+let FeishuInboundMediaTimeoutError: typeof import("./media.js").FeishuInboundMediaTimeoutError;
+let FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS: typeof import("./media.js").FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS;
 
 function expectMediaTimeoutClientConfigured(): void {
   const options = mockCallArg<{ httpTimeoutMs?: number }>(createFeishuClientMock, 0, 0);
@@ -117,8 +119,14 @@ async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
 
 describe("sendMediaFeishu msg_type routing", () => {
   beforeAll(async () => {
-    ({ saveMessageResourceFeishu, sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } =
-      await import("./media.js"));
+    ({
+      saveMessageResourceFeishu,
+      sanitizeFileNameForUpload,
+      sendMediaFeishu,
+      shouldSuppressFeishuTextForVoiceMedia,
+      FeishuInboundMediaTimeoutError,
+      FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS,
+    } = await import("./media.js"));
   });
 
   afterAll(() => {
@@ -948,6 +956,125 @@ describe("saveMessageResourceFeishu", () => {
       });
 
       expect(result.saved.id).toMatch(/^武汉15座山登山信息汇总---[a-f0-9-]{36}\.csv$/);
+    });
+  });
+
+  describe("inbound media chunk-idle timeout", () => {
+    function neverYieldingStream(): AsyncIterable<Buffer> {
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            next(): Promise<IteratorResult<Buffer>> {
+              return new Promise<IteratorResult<Buffer>>(() => {});
+            },
+          };
+        },
+      };
+    }
+
+    function delayedStream(payload: Buffer, delayMs: number): AsyncIterable<Buffer> {
+      let yielded = false;
+      return {
+        [Symbol.asyncIterator]() {
+          return {
+            async next(): Promise<IteratorResult<Buffer>> {
+              if (yielded) {
+                return { value: undefined as unknown as Buffer, done: true };
+              }
+              await new Promise((r) => setTimeout(r, delayMs));
+              yielded = true;
+              return { value: payload, done: false };
+            },
+          };
+        },
+      };
+    }
+
+    it("rejects when a getReadableStream body stalls past chunkTimeoutMs", async () => {
+      await withIsolatedHome(async () => {
+        messageResourceGetMock.mockResolvedValueOnce({
+          getReadableStream: () => neverYieldingStream(),
+          headers: { "content-type": "image/jpeg" },
+        });
+        const startedAt = Date.now();
+        const promise = saveMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: "om_stall_msg",
+          fileKey: "img_key_stall",
+          type: "image",
+          maxBytes: 1024,
+          chunkTimeoutMs: 50,
+        });
+        await expect(promise).rejects.toBeInstanceOf(FeishuInboundMediaTimeoutError);
+        const elapsedMs = Date.now() - startedAt;
+        expect(elapsedMs).toBeLessThan(1_000);
+        await expect(
+          promise.catch(
+            (e: InstanceType<typeof FeishuInboundMediaTimeoutError>) => e.chunkTimeoutMs,
+          ),
+        ).resolves.toBe(50);
+        console.log(
+          `[feishu media idle proof] timed_out=true elapsed_ms=${elapsedMs} chunkTimeoutMs=50 production_ms=${FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS}`,
+        );
+      });
+    });
+
+    it("does not reject when chunks arrive within chunkTimeoutMs", async () => {
+      await withIsolatedHome(async () => {
+        const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+        messageResourceGetMock.mockResolvedValueOnce({
+          getReadableStream: () => delayedStream(jpeg, 10),
+          headers: { "content-type": "image/jpeg" },
+        });
+        const result = await saveMessageResourceFeishu({
+          cfg: emptyConfig,
+          messageId: "om_delayed_msg",
+          fileKey: "img_key_delayed",
+          type: "image",
+          maxBytes: 1024,
+          chunkTimeoutMs: 500,
+        });
+        expect(result.saved.size).toBe(jpeg.byteLength);
+        expect(result.contentType).toBe("image/jpeg");
+      });
+    });
+
+    it("exposes FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS = 30s aligned with Telegram", () => {
+      expect(FEISHU_INBOUND_MEDIA_IDLE_TIMEOUT_MS).toBe(30_000);
+    });
+
+    it("calls iterator.return() exactly once on timeout so the upstream Readable is destroyed", async () => {
+      await withIsolatedHome(async () => {
+        const returnSpy = vi.fn(async () => ({
+          value: undefined as unknown as Buffer,
+          done: true,
+        }));
+        const stream: AsyncIterable<Buffer> = {
+          [Symbol.asyncIterator]() {
+            return {
+              next(): Promise<IteratorResult<Buffer>> {
+                return new Promise<IteratorResult<Buffer>>(() => {});
+              },
+              return: returnSpy as () => Promise<IteratorResult<Buffer>>,
+            };
+          },
+        };
+        messageResourceGetMock.mockResolvedValueOnce({
+          getReadableStream: () => stream,
+          headers: { "content-type": "image/jpeg" },
+        });
+        await expect(
+          saveMessageResourceFeishu({
+            cfg: emptyConfig,
+            messageId: "om_return_msg",
+            fileKey: "img_key_return",
+            type: "image",
+            maxBytes: 1024,
+            chunkTimeoutMs: 50,
+          }),
+        ).rejects.toBeInstanceOf(FeishuInboundMediaTimeoutError);
+        expect(returnSpy).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });
