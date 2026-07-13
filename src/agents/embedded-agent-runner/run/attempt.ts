@@ -1027,6 +1027,7 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
         runId: params.runId,
+        onToolOutcome: params.onToolOutcome,
       });
       const resourceLoader = createEmbeddedAgentResourceLoader({
         cwd: effectiveCwd,

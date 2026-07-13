@@ -182,6 +182,94 @@ describe("buildEmbeddedExtensionFactories", () => {
     ).toEqual({ url: "https://approved.example" });
   });
 
+  it("clears live terminal presentation when the pending entry is missing", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const onToolOutcome = vi.fn();
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+      runId: "run-terminal-missing-pending",
+      onToolOutcome,
+    });
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+
+    const result = await handlers.get("tool_result")?.(
+      {
+        toolName: "web_fetch",
+        toolCallId: "call-terminal-missing-pending",
+        input: { url: "https://example.com" },
+        content: [{ type: "text", text: "raw output" }],
+        details: { status: 200 },
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "raw output" }],
+      details: { status: 200 },
+    });
+    expect(onToolOutcome).toHaveBeenLastCalledWith({
+      toolName: "web_fetch",
+      argsHash: "",
+      resultHash: "",
+      terminalPresentation: undefined,
+      presentationOnly: true,
+    });
+  });
+
+  it("clears live terminal presentation on errored results with no pending entry", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const onToolOutcome = vi.fn();
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+      runId: "run-terminal-missing-pending-error",
+      onToolOutcome,
+    });
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+
+    const result = await handlers.get("tool_result")?.(
+      {
+        toolName: "web_fetch",
+        toolCallId: "call-terminal-missing-pending-error",
+        input: { url: "https://example.com" },
+        content: [{ type: "text", text: "boom" }],
+        details: { status: 500 },
+        isError: true,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "boom" }],
+      details: { status: 500 },
+      isError: true,
+    });
+    expect(onToolOutcome).toHaveBeenLastCalledWith({
+      toolName: "web_fetch",
+      argsHash: "",
+      resultHash: "",
+      terminalPresentation: undefined,
+      presentationOnly: true,
+    });
+  });
+
   it("clears terminal presentation when middleware blocks the result", async () => {
     const registry = createEmptyPluginRegistry();
     registry.agentToolResultMiddlewares.push({
