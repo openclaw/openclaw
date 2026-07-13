@@ -1098,9 +1098,7 @@ async function writeQaSuiteArtifacts(params: {
             crablineChannelDriverSelection.providerReadinessArtifactPath ??
             crablineChannelDriverSelection.smokeArtifactPath,
           smokeArtifactPath:
-            authoritativeSmokeArtifactPath ??
-            authoritativeProviderReadinessArtifactPath ??
-            crablineChannelDriverSelection.smokeArtifactPath,
+            authoritativeSmokeArtifactPath ?? crablineChannelDriverSelection.smokeArtifactPath,
         }
       : crablineChannelDriverSelection;
   const report = renderQaMarkdownReport({
