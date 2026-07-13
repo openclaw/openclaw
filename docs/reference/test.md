@@ -24,6 +24,14 @@ stop it before handoff:
 node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json
 ```
 
+After the first successful reuse, the wrapper records the lease's base,
+dependency, and Testbox workflow fingerprint under `.crabbox/testbox-leases/`.
+Source-only edits keep reusing the warmed box. A changed merge base, lockfile,
+package-manager input, wrapper, or Testbox workflow fails closed and requires a
+fresh lease. Every run still syncs the current checkout.
+`OPENCLAW_TESTBOX_ALLOW_STALE=1` is only for intentional diagnostics, not
+release proof.
+
 Local test commands below are for human workflows or an explicit agent fallback
 requested by the user. Remote-provider unavailability must be reported; it is
 not permission to silently run a broad local gate.
@@ -75,10 +83,10 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm test:changed`                               | Cheap smart changed-test run: precise targets from direct test edits, sibling `*.test.ts` files, explicit source mappings, and the local import graph. Broad/config/package changes are skipped unless they map to precise tests.                                                                                                                     |
 | `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` | Explicit broad changed-test run; use when a test harness/config/package edit should fall back to Vitest's broader changed-test behavior.                                                                                                                                                                                                              |
 | `pnpm test:force`                                 | Frees the configured OpenClaw gateway port (default `18789`), then runs the full suite with an isolated gateway port so server tests do not collide with a running instance.                                                                                                                                                                          |
-| `pnpm test:coverage`                              | Unit suite with V8 coverage (`vitest.unit.config.ts`). Default-unit-lane gate, not whole-repo coverage: `coverage.all` is `false` and thresholds are lines/functions/statements 70%, branches 55%, scoped to non-fast unit tests with sibling source files.                                                                                           |
+| `pnpm test:coverage`                              | Emits an informational V8 coverage report for the default unit lane (`vitest.unit.config.ts`); no coverage thresholds are enforced.                                                                                                                                                                                                                   |
 | `pnpm test:coverage:changed`                      | Unit coverage only for files changed since `origin/main`.                                                                                                                                                                                                                                                                                             |
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
-| `pnpm check:changed`                              | Delegates to Crabbox/Testbox by default outside CI, then runs the smart changed check gate inside the remote child: typecheck, lint, and guard commands for affected lanes. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof.                                                                                      |
+| `pnpm check:changed`                              | Delegates to Crabbox/Testbox by default outside CI, then runs the smart changed check gate inside the remote child: formatting plus typecheck, lint, and guard commands for affected lanes. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof.                                                                      |
 
 ## Shared test state and process helpers
 
@@ -93,6 +101,7 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 - **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. Assert stable visible text or fixture calls, not raw ANSI snapshots.
 - `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel plugins, the browser plugin, and OpenAI run as dedicated shards; other plugin groups stay batched. `pnpm test extensions/<id>` runs one bundled plugin lane.
 - Source files with sibling tests map to that sibling before falling back to wider directory globs. Helper edits under `src/channels/plugins/contracts/test-helpers`, `src/plugin-sdk/test-helpers`, and `src/plugins/contracts` use a local import graph to run importing tests instead of broad-running every shard when the dependency path is precise.
+- Contract directory targets fan out to their contract lanes: `pnpm test src/channels/plugins/contracts` runs the four channel contract configs and `pnpm test src/plugins/contracts` runs the plugin contracts config, since the generic `channels`/`plugins` projects exclude `contracts/**`.
 - `auto-reply` splits into three dedicated configs (`core`, `top-level`, `reply`) so the reply harness does not dominate the lighter top-level status/token/helper tests.
 - Selected `plugin-sdk` and `commands` test files route through dedicated light lanes that keep only `test/setup.ts`, leaving runtime-heavy cases on their existing lanes.
 - Base Vitest config defaults to `pool: "threads"` and `isolate: false`, with the shared non-isolated runner enabled across repo configs.

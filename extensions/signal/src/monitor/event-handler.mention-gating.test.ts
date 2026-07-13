@@ -347,7 +347,7 @@ describe("signal mention gating", () => {
       }),
     );
 
-    expect(getCapturedCtx()?.Body).toBe("Hi X!");
+    expect(getCapturedCtx()?.Body).toContain("Hi X!");
     expect(getCapturedCtx().WasMentioned).toBe(true);
   });
 

@@ -1,3 +1,4 @@
+import { promoteToPopoverTopLayer } from "../components/menu-surface.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "../components/native-link-menu.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 
@@ -13,7 +14,17 @@ type WebKitMessageHandler = {
   postMessage(message: NativeLinkMessage): void;
 };
 
-export type NativeLinkRouting = {
+type NativeUpdateMessage = {
+  type: "start-update";
+};
+
+type WebKitUpdateMessageHandler = {
+  postMessage(message: NativeUpdateMessage): void;
+};
+
+export const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
+
+type NativeLinkRouting = {
   dispose(): void;
 };
 
@@ -25,6 +36,22 @@ function getNativeLinkPoster(): WebKitMessageHandler["postMessage"] | undefined 
     }
   ).webkit?.messageHandlers?.openclawLink;
   return handler?.postMessage.bind(handler);
+}
+
+export function postNativeUpdate(): boolean {
+  const handler = (
+    window as unknown as {
+      webkit?: { messageHandlers?: { openclawUpdate?: WebKitUpdateMessageHandler } };
+    }
+  ).webkit?.messageHandlers?.openclawUpdate;
+  if (!handler) {
+    return false;
+  }
+  // Bound single-argument WebKit handler call, not window.postMessage;
+  // binding also keeps oxlint's targetOrigin rule out of the wrong context.
+  const poster = handler.postMessage.bind(handler);
+  poster({ type: "start-update" });
+  return true;
 }
 
 function anchorFromEvent(event: Event): HTMLAnchorElement | null {
@@ -134,17 +161,8 @@ export function startNativeLinkRouting(): NativeLinkRouting {
       postNativeLink(postMessage, url, action);
     };
     menu = nextMenu;
-    nextMenu.setAttribute("popover", "manual");
     container.append(nextMenu);
-    if (typeof nextMenu.showPopover === "function") {
-      try {
-        nextMenu.showPopover();
-        return;
-      } catch {
-        // Fall through to an in-dialog element when the top-layer API is unavailable.
-      }
-    }
-    nextMenu.removeAttribute("popover");
+    promoteToPopoverTopLayer(nextMenu);
   };
 
   const handleClick = (event: MouseEvent) => {

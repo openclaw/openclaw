@@ -7,7 +7,7 @@ import {
   commandsLightTestFiles,
 } from "./vitest.commands-light-paths.mjs";
 import { pluginSdkLightSourceFiles, pluginSdkLightTestFiles } from "./vitest.plugin-sdk-paths.mjs";
-import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
+import { boundaryTestFiles, bundledPluginDependentUnitTestFiles } from "./vitest.unit-paths.mjs";
 
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
@@ -222,12 +222,23 @@ const broadUnitFastCandidateGlobs = [
   "packages/**/*.test.ts",
   "test/**/*.test.ts",
 ];
+export const ownerRoutedUnitTestFiles = [
+  "src/agents/openai-transport-stream.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.test.ts",
+];
 const broadUnitFastCandidateSkipGlobs = [
   "**/*.e2e.test.ts",
   "**/*.live.test.ts",
   "test/fixtures/**/*.test.ts",
   "test/setup-home-isolation.test.ts",
+  // Explicit bundled ownership outranks content-based discovery. Otherwise extracting
+  // a test body can silently move its entry to a config with the wrong mocked setup.
+  ...bundledPluginDependentUnitTestFiles,
+  // These entries register tests from imported utility modules. Their tiny entry files
+  // cannot carry the stateful-content signals that keep them in their owner configs.
+  ...ownerRoutedUnitTestFiles,
   "src/agents/sandbox.resolveSandboxContext.test.ts",
+  "src/acp/runtime/session-meta.test.ts",
   "src/channels/plugins/contracts/**/*.test.ts",
   "src/config/**/*.test.ts",
   "src/gateway/**/*.test.ts",
@@ -300,13 +311,21 @@ function matchesAnyGlob(file, patterns) {
   return patterns.some((pattern) => path.matchesGlob(file, pattern));
 }
 
+const unitFastCandidateFileByPath = new Map();
+
 function isUnitFastCandidateFile(file) {
-  return (
+  const cached = unitFastCandidateFileByPath.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const candidate =
     forcedUnitFastTestFileSet.has(file) ||
     unitFastCandidateExactFileSet.has(file) ||
     (matchesAnyGlob(file, unitFastCandidateGlobs) &&
-      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs))
-  );
+      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs));
+  // Candidate rules are static for the process lifetime; scoped configs overlap heavily.
+  unitFastCandidateFileByPath.set(file, candidate);
+  return candidate;
 }
 
 function walkFiles(directory, files = []) {
@@ -365,6 +384,68 @@ function collectRepoTestFiles(cwd) {
   return files;
 }
 
+const unitFastCandidateInventoryByCwd = new Map();
+
+function collectUnitFastCandidateInventory(cwd) {
+  const cacheKey = normalizeRepoPath(cwd);
+  const cached = unitFastCandidateInventoryByCwd.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const inventory = [
+    ...new Set([
+      ...collectRepoTestFiles(cwd),
+      ...unitFastCandidateExactFiles,
+      ...forcedUnitFastTestFiles,
+    ]),
+  ];
+  // Git inventory and routing constants are stable for the lifetime of a config process.
+  unitFastCandidateInventoryByCwd.set(cacheKey, inventory);
+  return inventory;
+}
+
+function normalizeScopedDir(dir) {
+  const normalized = normalizeRepoPath(dir ?? "").replace(/^\.\/+|\/+$/gu, "");
+  return normalized === "." ? "" : normalized;
+}
+
+function hasRepoRootPrefix(value) {
+  return /^(?:apps|extensions|packages|src|test|ui)(?:\/|$)/u.test(value);
+}
+
+function cannotSafelyNarrowIncludePattern(value, dir) {
+  return (
+    value.startsWith("!") ||
+    value.startsWith("./") ||
+    /^(?:[A-Za-z]:\/|\/)/u.test(value) ||
+    /(?:^|\/)\.\.(?:\/|$)/u.test(value) ||
+    (Boolean(dir) && /^[{[(]/u.test(value))
+  );
+}
+
+function anchorScopedIncludePattern(value, dir) {
+  const normalized = normalizeRepoPath(value);
+  if (!dir || hasRepoRootPrefix(normalized)) {
+    return normalized;
+  }
+  return `${dir}/${normalized}`;
+}
+
+function isFileWithinScope(file, dir) {
+  return !dir || file.startsWith(`${dir}/`);
+}
+
+function literalGlobPrefix(pattern) {
+  const dynamicIndex = pattern.search(/[!?*[{(@+]/u);
+  return dynamicIndex < 0 ? pattern : pattern.slice(0, dynamicIndex);
+}
+
+function matchesCompiledInclude(file, compiledPatterns) {
+  return compiledPatterns.some(
+    ({ pattern, prefix }) => file.startsWith(prefix) && path.matchesGlob(file, pattern),
+  );
+}
+
 export function classifyUnitFastTestFileContent(source) {
   const reasons = [];
   for (const { code, pattern } of disqualifyingPatterns) {
@@ -384,14 +465,19 @@ function collectUnitFastCandidates(cwd, scope) {
     return cached;
   }
   const broad = scope === "broad";
-  const discovered = collectRepoTestFiles(cwd).filter(
-    (file) =>
-      matchesAnyGlob(file, broad ? broadUnitFastCandidateGlobs : unitFastCandidateGlobs) &&
-      !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs),
-  );
-  const candidates = [
-    ...new Set([...discovered, ...unitFastCandidateExactFiles, ...forcedUnitFastTestFiles]),
-  ].toSorted((a, b) => a.localeCompare(b));
+  const candidates = collectUnitFastCandidateInventory(cwd)
+    .filter((file) => {
+      if (!broad) {
+        return isUnitFastCandidateFile(file);
+      }
+      return (
+        forcedUnitFastTestFileSet.has(file) ||
+        unitFastCandidateExactFileSet.has(file) ||
+        (matchesAnyGlob(file, broadUnitFastCandidateGlobs) &&
+          !matchesAnyGlob(file, broadUnitFastCandidateSkipGlobs))
+      );
+    })
+    .toSorted((a, b) => a.localeCompare(b));
   // Candidate discovery is immutable for the lifetime of a Vitest/audit process.
   unitFastCandidatesByKey.set(cacheKey, candidates);
   return candidates;
@@ -458,6 +544,49 @@ let cachedUnitFastTestFiles = null;
 let cachedUnitFastTestFileSet = null;
 let cachedUnitFastTimerTestFiles = null;
 let cachedUnitFastTimerTestFileSet = null;
+const scopedUnitFastTestFilesByKey = new Map();
+
+export function getUnitFastTestFilesForIncludePatterns(includePatterns, options = {}) {
+  const cwd = process.cwd();
+  const normalizedCwd = normalizeRepoPath(cwd);
+  const dir = normalizeScopedDir(options.dir);
+  const normalizedPatterns = includePatterns.map(normalizeRepoPath);
+  if (normalizedPatterns.some((pattern) => cannotSafelyNarrowIncludePattern(pattern, dir))) {
+    // Keep the former full exclusion list when Vitest syntax cannot be safely mapped to repo paths.
+    return getUnitFastTestFiles();
+  }
+  const patterns = [
+    ...new Set(normalizedPatterns.map((pattern) => anchorScopedIncludePattern(pattern, dir))),
+  ].toSorted();
+  const cacheKey = JSON.stringify([normalizedCwd, dir, patterns]);
+  const cached = scopedUnitFastTestFilesByKey.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  if (patterns.length === 0) {
+    scopedUnitFastTestFilesByKey.set(cacheKey, []);
+    return [];
+  }
+  const compiledPatterns = patterns.map((pattern) => ({
+    pattern,
+    prefix: literalGlobPrefix(pattern),
+  }));
+
+  const files = collectUnitFastCandidateInventory(cwd)
+    .filter((file) => {
+      return (
+        isFileWithinScope(file, dir) &&
+        matchesCompiledInclude(file, compiledPatterns) &&
+        isUnitFastCandidateFile(file)
+      );
+    })
+    .toSorted((a, b) => a.localeCompare(b))
+    .filter((file) => analyzeUnitFastTestFile(cwd, file).unitFast);
+
+  // Scoped discovery is a process-start snapshot, matching the full unit-fast inventory cache.
+  scopedUnitFastTestFilesByKey.set(cacheKey, files);
+  return files;
+}
 
 export function getUnitFastTestFiles() {
   if (cachedUnitFastTestFiles !== null) {

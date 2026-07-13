@@ -63,7 +63,7 @@ function isGemini31LiveModel(model: string | undefined): boolean {
   return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
 }
 
-export function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult): string {
+function buildGoogleLiveUrl(session: RealtimeTalkJsonPcmWebSocketSessionResult): string {
   let url: URL;
   try {
     url = new URL(session.websocketUrl);
@@ -213,10 +213,12 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.inputProcessor.connect(this.inputContext.destination);
   }
 
-  private send(message: unknown): void {
+  private send(message: unknown): boolean {
     if (!this.closed && this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
+      return true;
     }
+    return false;
   }
 
   private async handleMessage(data: unknown): Promise<void> {
@@ -310,7 +312,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       this.emitTalkEvent({ type: "turn.ended", final: true });
     }
     for (const call of message.toolCall?.functionCalls ?? []) {
-      void this.handleToolCall(call);
+      void this.handleToolCall(call).catch((error: unknown) => {
+        this.reportToolResultSubmissionError(error);
+      });
     }
   }
 
@@ -393,10 +397,9 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private submitToolResult(callId: string, result: unknown): void {
     const pending = this.pendingCalls.get(callId);
     if (!pending) {
-      return;
+      throw new Error(`Google Live has no pending tool call for ${callId}`);
     }
-    this.pendingCalls.delete(callId);
-    this.send({
+    const sent = this.send({
       toolResponse: {
         functionResponses: [
           {
@@ -411,6 +414,18 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         ],
       },
     });
+    if (!sent) {
+      throw new Error("Google Live socket is not open");
+    }
+    this.pendingCalls.delete(callId);
+  }
+
+  private reportToolResultSubmissionError(error: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    this.ctx.callbacks.onStatus?.("error", message);
   }
 
   private sendControlSpeechMessage(message: string): void {

@@ -3,8 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
-import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import * as taskExecutor from "../../tasks/task-executor.js";
+import {
+  findTaskByRunId,
+  listTaskRecordsUnsorted,
+  resetTaskRegistryForTests,
+} from "../../tasks/task-registry.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import * as cronSchedule from "../schedule.js";
@@ -13,7 +17,8 @@ import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { add, list, remove, run, start, stop, update } from "./ops.js";
-import { createCronServiceState } from "./state.js";
+import { createCronServiceState, type CronEvent } from "./state.js";
+import { tryCreateCronTaskRun, tryFinishCronTaskRun } from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -47,7 +52,12 @@ function createTimedOutIsolatedCronState(params: { storePath: string; now: numbe
   });
 }
 
-function createOkIsolatedCronState(params: { storePath: string; now: number; summary?: string }) {
+function createOkIsolatedCronState(params: {
+  storePath: string;
+  now: number;
+  summary?: string;
+  onEvent?: (event: CronEvent) => void;
+}) {
   return createCronServiceState({
     storePath: params.storePath,
     cronEnabled: true,
@@ -59,7 +69,23 @@ function createOkIsolatedCronState(params: { storePath: string; now: number; sum
       status: "ok" as const,
       ...(params.summary === undefined ? {} : { summary: params.summary }),
     })),
+    ...(params.onEvent ? { onEvent: params.onEvent } : {}),
   });
+}
+
+function createFutureEveryJob(params: { id: string; now: number; nextRunAtMs?: number }): CronJob {
+  return {
+    id: params.id,
+    name: params.id,
+    enabled: true,
+    createdAtMs: params.now - 60_000,
+    updatedAtMs: params.now - 60_000,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now },
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text: params.id },
+    state: params.nextRunAtMs === undefined ? {} : { nextRunAtMs: params.nextRunAtMs },
+  };
 }
 
 function createInterruptedMainJob(now: number): CronJob {
@@ -174,13 +200,20 @@ function expectTaskRun(params: {
   sourceId: string;
   progressSummary?: string;
 }) {
-  const task = findTaskByRunId(params.runId);
+  const task = findCronTaskByBaseRunId(params.runId);
   expect(task?.runtime).toBe(params.runtime);
   expect(task?.status).toBe(params.status);
   expect(task?.sourceId).toBe(params.sourceId);
   if (params.progressSummary !== undefined) {
     expect(task?.progressSummary).toBe(params.progressSummary);
   }
+}
+
+function findCronTaskByBaseRunId(baseRunId: string) {
+  return (
+    findTaskByRunId(baseRunId) ??
+    listTaskRecordsUnsorted().find((task) => task.runId?.startsWith(`${baseRunId}:`))
+  );
 }
 
 function createMissedIsolatedJob(now: number): CronJob {
@@ -367,6 +400,136 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
+  it("preserves a finalized canonical task run when startup finds its stale marker", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const reservedAt = now - 30 * 60_000;
+    const startedAt = reservedAt + 250;
+    const endedAt = startedAt + 4_000;
+
+    await withStateDirForStorePath(storePath, async () => {
+      const job = createInterruptedMainJob(now);
+      job.trigger = { script: "json({ fire: true })", once: true };
+      job.state.triggerState = { cursor: "old" };
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const events: CronEvent[] = [];
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        onEvent: (event) => events.push(structuredClone(event)),
+      });
+      const taskRunId = tryCreateCronTaskRun({
+        state,
+        job,
+        startedAt,
+        runIdStartedAt: reservedAt,
+      });
+      if (!taskRunId) {
+        throw new Error("expected reserved cron task run");
+      }
+
+      tryFinishCronTaskRun(state, {
+        taskRunId,
+        job,
+        triggerEval: { fired: true, stateChanged: true, state: { cursor: "new" } },
+        event: {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: "ok",
+          summary: "completed before crash",
+          delivered: true,
+          deliveryStatus: "delivered",
+          failureNotificationDelivery: { status: "not-requested" },
+          runAtMs: startedAt,
+          durationMs: endedAt - startedAt,
+          triggerFired: true,
+        },
+      });
+
+      await start(state);
+
+      expect(findTaskByRunId(taskRunId)).toMatchObject({
+        status: "succeeded",
+        startedAt,
+        terminalSummary: "completed before crash",
+        endedAt,
+        detail: { kind: "cron-run", status: "ok", triggerFired: true },
+      });
+      const persisted = await loadCronStore(storePath);
+      expect(persisted.jobs[0]).toMatchObject({
+        enabled: false,
+        state: {
+          lastRunAtMs: startedAt,
+          lastRunStatus: "ok",
+          lastStatus: "ok",
+          lastDurationMs: endedAt - startedAt,
+          lastDelivered: true,
+          lastDeliveryStatus: "delivered",
+          lastTriggerEvalAtMs: endedAt,
+          lastTriggerFireAtMs: endedAt,
+          triggerState: { cursor: "new" },
+        },
+      });
+      expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
+      expect(persisted.jobs[0]?.state.lastError).toBeUndefined();
+      expect(persisted.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+      expect(events.filter((event) => event.action === "finished")).toEqual([]);
+      stop(state);
+    });
+  });
+
+  it("restores finalized failure-alert cooldown without redelivery", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const startedAt = now - 30 * 60_000;
+    const endedAt = startedAt + 4_000;
+
+    await withStateDirForStorePath(storePath, async () => {
+      const job = createInterruptedMainJob(now);
+      await writeCronStoreSnapshot({ storePath, jobs: [job] });
+      const sendCronFailureAlert = vi.fn(async () => undefined);
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        cronConfig: { failureAlert: { enabled: true, after: 1, cooldownMs: 60_000 } },
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        sendCronFailureAlert,
+        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      });
+
+      tryFinishCronTaskRun(state, {
+        job,
+        event: {
+          jobId: job.id,
+          action: "finished",
+          job,
+          status: "error",
+          error: "provider unavailable",
+          runAtMs: startedAt,
+          durationMs: endedAt - startedAt,
+          nextRunAtMs: now + 30 * 60_000,
+        },
+      });
+
+      await start(state);
+
+      const persisted = await loadCronStore(storePath);
+      expect(persisted.jobs[0]?.state.lastFailureAlertAtMs).toBe(endedAt);
+      expect(persisted.jobs[0]?.state.consecutiveErrors).toBe(1);
+      expect(sendCronFailureAlert).not.toHaveBeenCalled();
+      stop(state);
+    });
+  });
+
   it("start persists load-time updatedAtMs repairs to the state sidecar only", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-04-09T08:00:00.000Z");
@@ -432,7 +595,7 @@ describe("cron service ops seam coverage", () => {
       });
 
       expectTaskRun({
-        runId: `cron:isolated-timeout:${now}`,
+        runId: `cron:isolated-timeout:${now}:${manualRunId}`,
         runtime: "cron",
         status: "succeeded",
         sourceId: "isolated-timeout",
@@ -462,6 +625,51 @@ describe("cron service ops seam coverage", () => {
         status: "timed_out",
         sourceId: "isolated-timeout",
       });
+      expect(findCronTaskByBaseRunId(`cron:isolated-timeout:${now}`)?.detail).toMatchObject({
+        kind: "cron-run",
+        status: "error",
+        runAtMs: now,
+        durationMs: 0,
+      });
+    });
+  });
+
+  it("records failed manual runs with cron outcome detail", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await withStateDirForStorePath(storePath, async () => {
+      await writeDueIsolatedJobSnapshot(storePath, now);
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => ({
+          status: "error" as const,
+          error: "provider failed",
+          provider: "openai",
+          model: "gpt-test",
+        })),
+      });
+
+      await run(state, "isolated-timeout");
+
+      const task = findCronTaskByBaseRunId(`cron:isolated-timeout:${now}`);
+      expect(task).toMatchObject({
+        status: "failed",
+        error: "provider failed",
+        detail: {
+          kind: "cron-run",
+          status: "error",
+          provider: "openai",
+          model: "gpt-test",
+          runAtMs: now,
+          durationMs: 0,
+        },
+      });
     });
   });
 
@@ -475,7 +683,7 @@ describe("cron service ops seam coverage", () => {
     });
 
     const createTaskRecordSpy = vi
-      .spyOn(detachedTaskRuntime, "createRunningTaskRun")
+      .spyOn(taskExecutor, "createRunningTaskRun")
       .mockImplementation(() => {
         throw new Error("disk full");
       });
@@ -498,7 +706,7 @@ describe("cron service ops seam coverage", () => {
       await writeDueIsolatedJobSnapshot(storePath, now);
 
       const updateTaskRecordSpy = vi
-        .spyOn(detachedTaskRuntime, "completeTaskRunByRunId")
+        .spyOn(taskExecutor, "finalizeTaskRunByRunId")
         .mockImplementation(() => {
           throw new Error("disk full");
         });
@@ -632,7 +840,7 @@ describe("cron service ops seam coverage", () => {
         expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
       });
 
-      const task = findTaskByRunId(`cron:isolated-timeout:${now}`);
+      const task = findCronTaskByBaseRunId(`cron:isolated-timeout:${now}`);
       if (!task) {
         throw new Error("expected active manual cron task ledger record");
       }
@@ -827,6 +1035,100 @@ describe("cron service ops seam coverage", () => {
     }
 
     expect(job.state.nextRunAtMs).toBeGreaterThan(finalBaseRunAtMs);
+  });
+
+  it("uses explicit lifecycle events instead of scheduled duplicates for the target job", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const events: CronEvent[] = [];
+    const state = createOkIsolatedCronState({
+      storePath,
+      now,
+      onEvent: (event) => events.push(structuredClone(event)),
+    });
+
+    const job = await add(state, {
+      id: "lifecycle-target",
+      name: "lifecycle target",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "tick" },
+    });
+    expect(events.map((event) => event.action)).toEqual(["added"]);
+
+    events.length = 0;
+    await update(state, job.id, {
+      schedule: { kind: "every", everyMs: 120_000, anchorMs: now },
+    });
+    expect(events.map((event) => event.action)).toEqual(["updated"]);
+
+    events.length = 0;
+    await remove(state, job.id);
+    expect(events.map((event) => event.action)).toEqual(["removed"]);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("emits repaired sibling schedules during add before the target lifecycle event", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const sibling = createFutureEveryJob({ id: "repair-during-add", now });
+    await writeCronStoreSnapshot({ storePath, jobs: [sibling] });
+    const events: CronEvent[] = [];
+    const state = createOkIsolatedCronState({
+      storePath,
+      now,
+      onEvent: (event) => events.push(structuredClone(event)),
+    });
+
+    const added = await add(state, {
+      id: "added-target",
+      name: "added target",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "added" },
+    });
+
+    expect(events.map(({ jobId, action }) => ({ jobId, action }))).toEqual([
+      { jobId: sibling.id, action: "scheduled" },
+      { jobId: added.id, action: "added" },
+    ]);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
+  });
+
+  it("emits repaired sibling schedules during remove before the target lifecycle event", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-06-09T00:00:00.000Z");
+    const sibling = createFutureEveryJob({ id: "repair-during-remove", now });
+    const target = createFutureEveryJob({
+      id: "removed-target",
+      now,
+      nextRunAtMs: now + 60_000,
+    });
+    await writeCronStoreSnapshot({ storePath, jobs: [sibling, target] });
+    const events: CronEvent[] = [];
+    const state = createOkIsolatedCronState({
+      storePath,
+      now,
+      onEvent: (event) => events.push(structuredClone(event)),
+    });
+
+    await remove(state, target.id);
+
+    expect(events.map(({ jobId, action }) => ({ jobId, action }))).toEqual([
+      { jobId: sibling.id, action: "scheduled" },
+      { jobId: target.id, action: "removed" },
+    ]);
+    if (state.timer) {
+      clearTimeout(state.timer);
+    }
   });
 });
 

@@ -1,24 +1,39 @@
-// Qa Lab tests cover bounded CI smoke shard planning.
+// Qa Lab tests cover bounded CI smoke profile planning.
+import { OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { createQaSmokeCiMatrix } from "./ci-smoke-plan.js";
+import { createQaSmokeCiPart } from "./ci-smoke-plan.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
-import { scenarioRequiresIsolatedQaSuiteWorker } from "./suite-planning.js";
+import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
-describe("createQaSmokeCiMatrix", () => {
-  it("partitions every smoke scenario into bounded channel-compatible shards", () => {
-    const first = createQaSmokeCiMatrix();
-    const second = createQaSmokeCiMatrix();
+type QaScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
 
-    expect(second).toEqual(first);
-    expect(first.include.map((shard) => shard.name)).toEqual([
-      "matrix",
-      "telegram 1/2",
-      "telegram 2/2",
-    ]);
-    expect(first.include).toHaveLength(3);
+function estimateScenarioCost(scenario: QaScenario | undefined): number {
+  if (!scenario) {
+    throw new Error("QA smoke plan selected an unknown scenario.");
+  }
+  if (scenario.execution.kind === "script") {
+    return 8;
+  }
+  if (scenario.execution.kind === "playwright") {
+    return 6;
+  }
+  return scenario.execution.kind === "flow" && scenario.execution.isolationReason ? 4 : 1;
+}
 
-    const scenarioIds = first.include.flatMap((shard) => shard.scenario_ids);
-    expect(scenarioIds).toHaveLength(98);
+describe("createQaSmokeCiPart", () => {
+  it("balances the bounded automatic smoke set across two profile parts", () => {
+    const first = createQaSmokeCiPart("profile-1");
+    const second = createQaSmokeCiPart("profile-2");
+    const repeatedSecond = createQaSmokeCiPart("profile-2");
+
+    expect(repeatedSecond).toEqual(second);
+    expect(first.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
+    expect(second.runs[0]?.channel).toBe(OPENCLAW_CRABLINE_DEFAULT_CHANNEL);
+    expect(first.runs.some((run) => run.channel === "matrix")).toBe(false);
+    expect(second.runs.some((run) => run.channel === "matrix")).toBe(true);
+
+    const scenarioIds = [...first.runs, ...second.runs].flatMap((run) => run.scenario_ids);
     expect(new Set(scenarioIds).size).toBe(scenarioIds.length);
     const scenarioById = new Map(
       readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario] as const),
@@ -26,30 +41,43 @@ describe("createQaSmokeCiMatrix", () => {
     expect(
       new Set(scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)?.execution.kind)),
     ).toEqual(new Set(["flow", "playwright", "script"]));
-    expect(scenarioIds).not.toContain("slack-restart-resume");
-    expect(scenarioIds).not.toContain("whatsapp-restart-resume");
-    expect(first.include.every((shard) => shard.scenario_ids.length > 0)).toBe(true);
+    expect(scenarioIds).toHaveLength(12);
+    expect(scenarioIds).toContain("control-ui-chat-flow-playwright");
+    expect(scenarioIds).toContain("gateway-smoke");
+    expect(scenarioIds).toContain("matrix-restart-resume");
 
-    const telegramShards = first.include.filter((shard) => shard.channel === "telegram");
-    expect(telegramShards).toHaveLength(2);
-    const telegramWeights = telegramShards.map((shard) =>
-      shard.scenario_ids.reduce((weight, scenarioId) => {
-        const scenario = scenarioById.get(scenarioId);
-        if (!scenario) {
-          throw new Error(`missing QA scenario ${scenarioId}`);
-        }
-        if (scenario.execution.kind === "script") {
-          return weight + 8;
-        }
-        if (scenario.execution.kind === "playwright") {
-          return weight + 6;
-        }
-        if (scenario.execution.kind === "vitest") {
-          return weight + 4;
-        }
-        return weight + (scenarioRequiresIsolatedQaSuiteWorker(scenario) ? 3 : 1);
-      }, 0),
+    const selectedScenarioPaths = new Set(
+      scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)?.sourcePath),
     );
-    expect(Math.abs(telegramWeights[0] - telegramWeights[1])).toBeLessThanOrEqual(1);
+    const scorecardReport = readQaScorecardTaxonomyReport([...scenarioById.values()]);
+    const uncoveredCategoryIds = scorecardReport.categories
+      .filter((category) => category.profiles.includes("smoke-ci"))
+      .filter((category) => !category.scenarioRefs.some((ref) => selectedScenarioPaths.has(ref)))
+      .map((category) => category.id);
+    expect(uncoveredCategoryIds).toEqual([]);
+
+    const primaryScenarioIds = [first, second].map(
+      (part) => part.runs.find((run) => run.slug === "primary")?.scenario_ids ?? [],
+    );
+    const primaryRunCosts = primaryScenarioIds.map((ids) =>
+      ids.reduce(
+        (cost, scenarioId) => cost + estimateScenarioCost(scenarioById.get(scenarioId)),
+        0,
+      ),
+    );
+    const largestScenarioCost = Math.max(
+      ...primaryScenarioIds.flatMap((ids) =>
+        ids.map((scenarioId) => estimateScenarioCost(scenarioById.get(scenarioId))),
+      ),
+    );
+    const firstRunCost = expectDefined(primaryRunCosts[0], "first QA smoke run cost");
+    const secondRunCost = expectDefined(primaryRunCosts[1], "second QA smoke run cost");
+    expect(Math.abs(firstRunCost - secondRunCost)).toBeLessThanOrEqual(largestScenarioCost);
+  });
+
+  it("rejects undeclared profile parts", () => {
+    expect(() => createQaSmokeCiPart("profile-3")).toThrow(
+      "unknown QA smoke CI profile part: profile-3",
+    );
   });
 });

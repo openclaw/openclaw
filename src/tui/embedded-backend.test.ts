@@ -10,6 +10,7 @@ import {
   getEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
 import { defaultRuntime } from "../runtime.js";
+import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { notifyListeners } from "../shared/listeners.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -216,7 +217,12 @@ vi.mock("../gateway/session-create-service.js", () => ({
 }));
 
 vi.mock("../gateway/session-reset-service.js", () => ({
-  performGatewaySessionReset: () => ({ ok: true, key: "agent:main:main", entry: {} }),
+  performGatewaySessionReset: () => ({
+    ok: true,
+    key: "agent:main:main",
+    entry: {},
+    resolved: { modelProvider: "openai", model: "gpt-5.4" },
+  }),
 }));
 
 vi.mock("../gateway/session-transcript-readers.js", () => ({
@@ -301,6 +307,7 @@ describe("EmbeddedTuiBackend", () => {
       ok: true,
       key: "agent:main:tui-created",
       entry: { sessionId: "created-session" },
+      resolved: { modelProvider: "openai", model: "gpt-5.4" },
       resetExisting: false,
     });
     listSessionsFromStoreAsyncMock.mockReset();
@@ -385,6 +392,19 @@ describe("EmbeddedTuiBackend", () => {
       ok: true,
       key: "agent:main:tui-created",
       entry: { sessionId: "created-session" },
+      resolved: { modelProvider: "openai", model: "gpt-5.4" },
+    });
+  });
+
+  it("returns the resolved model from the shared reset lifecycle", async () => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.resetSession("main", "new")).resolves.toEqual({
+      ok: true,
+      key: "agent:main:main",
+      entry: {},
+      resolved: { modelProvider: "openai", model: "gpt-5.4" },
     });
   });
 
@@ -692,6 +712,68 @@ describe("EmbeddedTuiBackend", () => {
     expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
   });
 
+  it("rejects a missing harness-owned session before a local patch can create it", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:missing-patch";
+    projectSessionsPatchEntryMock.mockResolvedValueOnce({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+      },
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.patchSession({ key: sessionKey, label: "squat" })).rejects.toThrow(
+      AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
+    );
+
+    expect(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ storeKey: sessionKey, existingEntry: undefined }),
+    );
+  });
+
+  it("allows local patches to an existing harness-owned session", async () => {
+    const sessionKey = "agent:main:harness:codex:supervision:existing-patch";
+    const existingEntry = {
+      sessionId: "existing-harness-session",
+      updatedAt: embeddedEventTimestamp,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    };
+    applySessionPatchProjectionMock.mockImplementationOnce(
+      async (params: {
+        project: (context: {
+          entries: Array<{ sessionKey: string; entry: typeof existingEntry }>;
+          existingEntry?: typeof existingEntry;
+          primaryKey: string;
+        }) => Promise<unknown>;
+        resolveTarget: (snapshot: {
+          entries: Array<{ sessionKey: string; entry: typeof existingEntry }>;
+        }) => { primaryKey: string };
+      }) => {
+        const entries = [{ sessionKey, entry: existingEntry }];
+        const target = params.resolveTarget({ entries });
+        return await params.project({ ...target, entries, existingEntry });
+      },
+    );
+    projectSessionsPatchEntryMock.mockResolvedValueOnce({
+      ok: true,
+      entry: { ...existingEntry, label: "kept" },
+    });
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.patchSession({ key: sessionKey, label: "kept" })).resolves.toMatchObject({
+      ok: true,
+      key: sessionKey,
+      entry: { sessionId: "existing-harness-session", label: "kept" },
+    });
+    expect(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ storeKey: sessionKey, existingEntry }),
+    );
+  });
+
   it("scopes local session lists to the selected agent store", async () => {
     const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
     const backend = new EmbeddedTuiBackend();
@@ -755,6 +837,7 @@ describe("EmbeddedTuiBackend", () => {
       sessionKey: "agent:main:main",
       storePath: "/tmp/openclaw-sessions.json",
       objective: "Ship Goal",
+      actor: { type: "human" },
       fallbackEntry: {
         sessionId: expect.any(String),
         updatedAt: expect.any(Number),

@@ -143,65 +143,71 @@ function isRecentRun(run, nowMs) {
   );
 }
 
-function preferredCiRun(runs) {
+function isSuccessfulRecentRun(run, nowMs) {
+  return run?.status === "completed" && run.conclusion === "success" && isRecentRun(run, nowMs);
+}
+
+function preferredCiRun(runs, nowMs) {
   const scheduledRuns = runs.filter((run) => run.event === "pull_request");
   const latestScheduledRun = latestRun(scheduledRuns);
-  const failedScheduledRun = latestRun(
-    scheduledRuns.filter(
-      (run) =>
-        run.status === "completed" && !["success", "cancelled", "skipped"].includes(run.conclusion),
-    ),
+  const latestCompletedScheduledRun = latestRun(
+    scheduledRuns.filter((run) => run.status === "completed"),
   );
-  if (failedScheduledRun && latestScheduledRun?.status !== "completed") {
-    return failedScheduledRun;
+  const latestManualRun = latestRun(runs.filter((run) => run.event === "workflow_dispatch"));
+
+  // Manual proof may replace stale scheduled success or a pending run,
+  // never an unresolved terminal non-success.
+  if (latestCompletedScheduledRun && latestCompletedScheduledRun.conclusion !== "success") {
+    return latestCompletedScheduledRun;
   }
-  if (latestScheduledRun?.status === "completed") {
+  if (latestScheduledRun?.status === "completed" && isRecentRun(latestScheduledRun, nowMs)) {
     return latestScheduledRun;
   }
-  return latestRun(runs.filter((run) => run.event === "workflow_dispatch")) ?? latestScheduledRun;
+  return latestManualRun ?? latestScheduledRun;
 }
 
 function successfulRunOrThrow(
   runs,
   workflowName,
   sha,
-  { allowManual = true, requireRecent = false, nowMs = Date.now() } = {},
+  { allowManual = true, nowMs = Date.now() } = {},
 ) {
-  const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual).filter(
-    (run) => !requireRecent || (run?.event === "pull_request" && isRecentRun(run, nowMs)),
-  );
-  const run = workflowName === "CI" ? preferredCiRun(matchingRuns) : latestRun(matchingRuns);
-  if (!run || run.status !== "completed" || run.conclusion !== "success") {
+  const matchingRuns = matchingAuthoritativeRuns(runs, workflowName, sha, allowManual);
+  const run = workflowName === "CI" ? preferredCiRun(matchingRuns, nowMs) : latestRun(matchingRuns);
+  if (!isSuccessfulRecentRun(run, nowMs)) {
     throw new Error(
-      `Missing successful ${requireRecent ? "recent " : ""}${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
+      `Missing successful recent ${workflowName} workflow for ${sha}. Observed: ${formatObservedRuns(matchingRuns)}`,
     );
   }
   return run;
 }
 
-function successfulReleaseGateFallback(workflowRuns, sha) {
-  const fallback = latestRun(workflowRuns.filter((run) => isReleaseGateCiRun(run, sha)));
-  if (fallback?.status !== "completed" || fallback.conclusion !== "success") {
-    return null;
-  }
-  return fallback;
+function hasSuccessfulRecentReleaseGate(workflowRuns, sha, nowMs) {
+  const releaseGate = latestRun(workflowRuns.filter((run) => isReleaseGateCiRun(run, sha)));
+  return isSuccessfulRecentRun(releaseGate, nowMs);
 }
 
-function canCoverQueuedBuildArtifacts(workflowRuns, sha) {
-  if (!successfulReleaseGateFallback(workflowRuns, sha)) {
+function canCoverQueuedBuildArtifacts(workflowRuns, sha, nowMs) {
+  if (!hasSuccessfulRecentReleaseGate(workflowRuns, sha, nowMs)) {
     return false;
   }
   const supportingGatesPassed = ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS.every((workflowName) => {
-    const run = latestRun(matchingAuthoritativeRuns(workflowRuns, workflowName, sha));
-    return run?.status === "completed" && run.conclusion === "success";
+    const run = latestRun(matchingAuthoritativeRuns(workflowRuns, workflowName, sha, false));
+    return isSuccessfulRecentRun(run, nowMs);
   });
   if (!supportingGatesPassed) {
     return false;
   }
-  const buildArtifactRuns = matchingAuthoritativeRuns(workflowRuns, BUILD_ARTIFACTS_WORKFLOW, sha);
+  const buildArtifactRuns = matchingAuthoritativeRuns(
+    workflowRuns,
+    BUILD_ARTIFACTS_WORKFLOW,
+    sha,
+    false,
+  );
   const latestBuildArtifactRun = latestRun(buildArtifactRuns);
   return (
     latestBuildArtifactRun?.status === "queued" &&
+    isRecentRun(latestBuildArtifactRun, nowMs) &&
     buildArtifactRuns.every(
       (run) =>
         run.status === "queued" || (run.status === "completed" && run.conclusion === "success"),
@@ -231,6 +237,7 @@ export function workflowRunPageCount(totalCount) {
 
 export function collectHostedGateEvidence({
   sha,
+  pr,
   recentSha,
   workflowRuns,
   changelogOnly = false,
@@ -240,15 +247,13 @@ export function collectHostedGateEvidence({
     throw new Error("workflowRuns must be an array.");
   }
 
-  const collectForSha = (evidenceSha, requireRecent, requiredScheduledWorkflows = new Set()) => {
-    const allowManual = !requireRecent;
+  const collectForSha = (evidenceSha, { allowManual, requiredScheduledWorkflows = new Set() }) => {
     const workflows = [];
     const fallbackCoveredWorkflows = [];
     if (!changelogOnly) {
       workflows.push(
         successfulRunOrThrow(workflowRuns, "CI", evidenceSha, {
           allowManual,
-          requireRecent,
           nowMs,
         }),
       );
@@ -266,7 +271,7 @@ export function collectHostedGateEvidence({
       if (
         allowManual &&
         workflowName === BUILD_ARTIFACTS_WORKFLOW &&
-        canCoverQueuedBuildArtifacts(workflowRuns, evidenceSha)
+        canCoverQueuedBuildArtifacts(workflowRuns, evidenceSha, nowMs)
       ) {
         fallbackCoveredWorkflows.push({
           name: workflowName,
@@ -278,7 +283,6 @@ export function collectHostedGateEvidence({
       workflows.push(
         successfulRunOrThrow(workflowRuns, workflowName, evidenceSha, {
           allowManual,
-          requireRecent,
           nowMs,
         }),
       );
@@ -289,7 +293,7 @@ export function collectHostedGateEvidence({
   let evidenceSha = sha;
   let selected;
   try {
-    selected = collectForSha(sha, false);
+    selected = collectForSha(sha, { allowManual: true });
   } catch (exactError) {
     const currentWorkflowNames = ["CI", ...SCHEDULED_HOSTED_WORKFLOWS];
     const currentHeadHasTerminalNonSuccess = currentWorkflowNames.some((workflowName) => {
@@ -309,19 +313,46 @@ export function collectHostedGateEvidence({
       );
       return latestManual && latestManual.conclusion !== "success";
     });
-    if (!recentSha || currentHeadHasTerminalNonSuccess) {
+    if (currentHeadHasTerminalNonSuccess) {
       throw exactError;
     }
-    // Only prepare-sync-head supplies recentSha, after its controlled rebase preserved the PR patch.
-    // Arbitrary branch history is never eligible, so new untested pushes cannot borrow old green runs.
     const targetScheduledWorkflows = new Set(
       SCHEDULED_HOSTED_WORKFLOWS.filter(
         (workflowName) =>
           matchingAuthoritativeRuns(workflowRuns, workflowName, sha, false).length > 0,
       ),
     );
-    evidenceSha = recentSha;
-    selected = collectForSha(recentSha, true, targetScheduledWorkflows);
+    const fallbackShas = [
+      recentSha,
+      ...workflowRuns
+        .filter(
+          (run) =>
+            run?.event === "pull_request" &&
+            run?.head_sha !== sha &&
+            run?.pull_requests?.some((pullRequest) => pullRequest?.number === pr) &&
+            isRecentRun(run, nowMs),
+        )
+        .toSorted((left, right) =>
+          String(right.updated_at ?? "").localeCompare(String(left.updated_at ?? "")),
+        )
+        .map((run) => run.head_sha),
+    ].filter(Boolean);
+    let fallbackError;
+    for (const fallbackSha of new Set(fallbackShas)) {
+      try {
+        selected = collectForSha(fallbackSha, {
+          allowManual: false,
+          requiredScheduledWorkflows: targetScheduledWorkflows,
+        });
+        evidenceSha = fallbackSha;
+        break;
+      } catch (error) {
+        fallbackError ??= error;
+      }
+    }
+    if (!selected) {
+      throw fallbackError ?? exactError;
+    }
   }
 
   const evidence = {
@@ -348,12 +379,18 @@ export function collectHostedGateEvidence({
   return evidence;
 }
 
-export function workflowRunQueryPaths(repo, { sha, recentSha }, page = 1) {
+export function workflowRunQueryPaths(repo, { sha, recentSha, headBranch }, page = 1) {
   const pageSuffix = `per_page=${WORKFLOW_RUNS_PAGE_SIZE}&page=${page}`;
   const shas = [...new Set([sha, recentSha].filter(Boolean))];
-  return shas.map(
+  const queries = shas.map(
     (headSha) => `repos/${repo}/actions/runs?head_sha=${encodeURIComponent(headSha)}&${pageSuffix}`,
   );
+  if (headBranch) {
+    queries.push(
+      `repos/${repo}/actions/runs?branch=${encodeURIComponent(headBranch)}&event=pull_request&${pageSuffix}`,
+    );
+  }
+  return queries;
 }
 
 function loadWorkflowRunsForQuery(queryForPage) {
@@ -374,8 +411,8 @@ function loadWorkflowRunsForQuery(queryForPage) {
   return workflowRuns;
 }
 
-function loadWorkflowRuns(repo, sha, recentSha) {
-  const queries = workflowRunQueryPaths(repo, { sha, recentSha });
+function loadWorkflowRuns(repo, sha, recentSha, headBranch) {
+  const queries = workflowRunQueryPaths(repo, { sha, recentSha, headBranch });
   const withPage = (query, page) => query.replace(/page=1$/u, `page=${page}`);
   const workflowRuns = queries.flatMap((query) =>
     loadWorkflowRunsForQuery((page) => withPage(query, page)),
@@ -385,10 +422,18 @@ function loadWorkflowRuns(repo, sha, recentSha) {
 
 export function main(argv = process.argv.slice(2)) {
   const args = parseArgs(argv);
+  const headBranch = execPlainGh(
+    ["api", `repos/${args.repo}/pulls/${args.pr}`, "--jq", ".head.ref"],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
   const evidence = collectHostedGateEvidence({
     sha: args.sha,
+    pr: args.pr,
     recentSha: args.recentSha,
-    workflowRuns: loadWorkflowRuns(args.repo, args.sha, args.recentSha),
+    workflowRuns: loadWorkflowRuns(args.repo, args.sha, args.recentSha, headBranch),
     changelogOnly: args.changelogOnly,
   });
   const evidenceHeadSha = evidence.evidenceHeadSha ?? args.sha;
@@ -398,7 +443,7 @@ export function main(argv = process.argv.slice(2)) {
     repo: args.repo,
     pullRequestNumber: args.pr,
     selection: {
-      mode: evidenceHeadSha === args.sha ? "exact-head" : "recent-rebase-head",
+      mode: evidenceHeadSha === args.sha ? "exact-head" : "recent-pr-head",
       maxAgeHours: HOSTED_GATE_MAX_AGE_HOURS,
     },
     ...evidence,

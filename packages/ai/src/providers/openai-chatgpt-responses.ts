@@ -32,6 +32,8 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
+import { parseRetryAfterHttpDateMs } from "../internal/retry-after.js";
+import { sleepWithAbort } from "../internal/retry-sleep.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import type {
   Api,
@@ -59,6 +61,7 @@ import {
 import { createSseByteGuard } from "../utils/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import { supportsOpenAITemperature } from "./openai-reasoning-effort.js";
 import {
   convertResponsesMessages,
   convertResponsesToolPayload,
@@ -75,8 +78,6 @@ const DEFAULT_CODEX_BASE_URL = "https://chatgpt.com/backend-api";
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
-const RETRY_AFTER_HTTP_DATE_RE =
-  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
@@ -141,20 +142,6 @@ function isRetryableError(status: number, errorText: string): boolean {
   return /rate.?limit|overloaded|service.?unavailable|upstream.?connect|connection.?refused/i.test(
     errorText,
   );
-}
-
-function sleep(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(new Error("Request was aborted"));
-      return;
-    }
-    const timeout = setTimeout(resolve, ms);
-    signal?.addEventListener("abort", () => {
-      clearTimeout(timeout);
-      reject(new Error("Request was aborted"));
-    });
-  });
 }
 
 function resolveRequestTimeoutMs(options?: OpenAICodexResponsesOptions): number | undefined {
@@ -428,16 +415,16 @@ export const streamOpenAICodexResponses: StreamFunction<
                 const seconds = Number(trimmedRetryAfter);
                 if (/^\d+$/.test(trimmedRetryAfter) && Number.isFinite(seconds)) {
                   delayMs = clampTimerTimeoutMs(seconds * 1000, 0) ?? delayMs;
-                } else if (RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
-                  const date = Date.parse(trimmedRetryAfter);
-                  if (!Number.isNaN(date)) {
-                    delayMs = clampTimerTimeoutMs(date - Date.now(), 0) ?? delayMs;
+                } else {
+                  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfter);
+                  if (retryAt !== undefined) {
+                    delayMs = clampTimerTimeoutMs(retryAt - Date.now(), 0) ?? delayMs;
                   }
                 }
               }
             }
 
-            await sleep(delayMs, activeSignal);
+            await sleepWithAbort(delayMs, activeSignal);
             continue;
           }
 
@@ -472,7 +459,7 @@ export const streamOpenAICodexResponses: StreamFunction<
           // Network errors are retryable
           if (attempt < MAX_RETRIES && !lastError.message.includes("usage limit")) {
             const delayMs = BASE_DELAY_MS * 2 ** attempt;
-            await sleep(delayMs, activeSignal);
+            await sleepWithAbort(delayMs, activeSignal);
             continue;
           }
           throw lastError;
@@ -570,7 +557,7 @@ function buildRequestBody(
     parallel_tool_calls: true,
   };
 
-  if (options?.temperature !== undefined) {
+  if (options?.temperature !== undefined && supportsOpenAITemperature(model)) {
     body.temperature = options.temperature;
   }
 
@@ -1438,8 +1425,9 @@ async function* parseWebSocket(
       if (signal?.aborted) {
         throw new Error("Request was aborted");
       }
-      if (queue.length > 0) {
-        yield queue.shift()!;
+      const next = queue.shift();
+      if (next !== undefined) {
+        yield next;
         continue;
       }
       if (done) {
@@ -1682,7 +1670,11 @@ async function readChatGptResponsesErrorTextLimited(response: Response): Promise
         break;
       }
     }
-    text += decoder.decode();
+    // A capped prefix may end mid-sequence. Flushing only after EOF avoids
+    // inventing a replacement character while preserving malformed full bodies.
+    if (!reachedLimit) {
+      text += decoder.decode();
+    }
   } finally {
     if (reachedLimit) {
       // This provider module is browser-safe, so keep error-body capping on Web APIs.

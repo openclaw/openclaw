@@ -494,6 +494,7 @@ function formatGoogleLiveCloseEvent(
 
 class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
   readonly supportsToolResultContinuation: boolean;
+  readonly supportsToolResultSuppression = false;
 
   private session: GoogleLiveSession | null = null;
   private connected = false;
@@ -721,7 +722,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
-  acknowledgeMark(): void {}
+  acknowledgeMark(_markName?: string): void {}
 
   close(): void {
     this.intentionallyClosed = true;
@@ -975,7 +976,6 @@ async function createGoogleRealtimeBrowserSession(
   if (!apiKey) {
     throw new Error("Google Gemini API key missing");
   }
-
   const model = req.model ?? config.model ?? GOOGLE_REALTIME_DEFAULT_MODEL;
   const voice = req.voice ?? config.voice ?? GOOGLE_REALTIME_DEFAULT_VOICE;
   const nowMs = Date.now();
@@ -995,6 +995,7 @@ async function createGoogleRealtimeBrowserSession(
     apiKey,
     httpOptions: {
       apiVersion: GOOGLE_REALTIME_BROWSER_API_VERSION,
+      timeout: 30_000,
     },
   });
   const token = await ai.authTokens.create({

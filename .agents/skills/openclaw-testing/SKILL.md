@@ -150,7 +150,7 @@ commands.
   tools to require an IMDSv2 token, prove the IAM credentials endpoint returns
   404, and compare remote `git rev-parse HEAD` with the full reviewed head SHA.
   Unset all `CRABBOX_TAILSCALE*` overrides, pass `--network public
-  --tailscale=false`, clear exit-node/LAN flags, then require `crabbox inspect`
+--tailscale=false`, clear exit-node/LAN flags, then require `crabbox inspect`
   to report `network=public` and no Tailscale state before uploading any script.
   Upload trusted `scripts/crabbox-untrusted-bootstrap.sh` with `--fresh-pr`; it
   bootstraps Node 24 and repository-pinned pnpm before executing PR code and
@@ -288,7 +288,8 @@ rerun after a focused patch.
 ### Full Release Validation
 
 `Full Release Validation` (`.github/workflows/full-release-validation.yml`) is
-the manual "everything before release" umbrella. It resolves a target ref, then
+the manual product-validation umbrella. Run the full child matrix on the
+product-complete pre-changelog **Code SHA**. It resolves a target ref, then
 dispatches:
 
 - manual `CI` for the full normal CI graph, with Android enabled via
@@ -300,30 +301,23 @@ dispatches:
   Telegram release lanes
 - optional post-publish Telegram E2E when a package spec is supplied
 
-Run it only when validating an actual release candidate, after broad shared CI
-or release orchestration changes, or when explicitly asked:
+Run the full matrix only when validating an actual Code SHA, after broad shared
+CI or release orchestration changes, or when explicitly asked:
 
 ```bash
-gh workflow run full-release-validation.yml \
-  --repo openclaw/openclaw \
-  --ref main \
-  -f ref=<branch-or-sha> \
-  -f provider=openai \
-  -f mode=both \
-  -f release_profile=stable
+node scripts/full-release-validation-at-sha.mjs \
+  --sha <code-sha> \
+  --target-ref release/YYYY.M.PATCH
 ```
 
-Run the workflow itself from the trusted current ref, normally `--ref main`;
-child workflows are dispatched from that same ref even when `ref` points at an
-older release branch or tag. Full Release Validation has no separate child
-workflow ref input; choose the trusted harness by choosing the workflow run ref.
-Use `release_profile=minimum|stable|full` to control live/provider breadth:
-`minimum` keeps the fastest OpenAI/core release-critical set, `stable` adds the
-stable provider/backend set, and `full` adds the broad advisory provider/media
-matrix. Do not make `full` faster by silently dropping suites; optimize setup,
-artifact reuse, and sharding instead. The parent verifier job appends a child
-overview plus slowest-job tables for child runs; rerun only that verifier after
-a child rerun turns green.
+The helper pins the trusted workflow revision on current `main` while targeting
+the historical release SHA and recording the canonical release branch as
+context. It infers `beta` for alpha/beta package versions and `stable` for
+stable/correction versions. Pass `-f release_profile=full` only for the broad
+advisory provider/media sweep. Do not make `full` faster by silently dropping
+suites; optimize setup, artifact reuse, and sharding instead. The parent
+verifier job appends a child overview plus slowest-job tables for child runs;
+rerun only that verifier after a child rerun turns green.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
 extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
@@ -340,6 +334,15 @@ The child-dispatch jobs record the child run ids. The final
 parent gate. If a child workflow failed but was later rerun successfully, rerun
 only the failed parent verifier job; do not dispatch a new full umbrella unless
 the release evidence is stale.
+
+Once the Code SHA is green, generate and commit only `CHANGELOG.md`. The new
+**Release SHA** is eligible for product-evidence reuse only when GitHub proves
+that it is a descendant of the Code SHA and the complete changed path set is
+exactly `CHANGELOG.md`. Dispatch the same SHA-pinned helper for the Release SHA;
+the resulting parent records `changelog-only-release-v1` and reuses the Code
+SHA children. Package, install/update, and release-note proof still runs on the
+Release SHA because its tarball bytes changed. Any non-changelog path
+invalidates reuse and requires a new Code SHA full matrix.
 
 For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
 Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
@@ -573,13 +576,14 @@ Multiple lanes are allowed:
 docker_lanes: install-e2e bundled-channel-update-acpx
 ```
 
-That skips the release chunk matrix and runs one targeted Docker job against the
-prepared GHCR images and the selected package artifact. Rerun commands
-generated inside GitHub artifacts include `package_artifact_run_id`,
-`package_artifact_name`, `docker_e2e_bare_image`, and
-`docker_e2e_functional_image` when available, so failed lanes can reuse the
-exact tarball and prepared images from the failed run. When the fix changes
-package contents, omit those reuse inputs so the workflow packs a new tarball.
+That skips the release chunk matrix and runs one targeted Docker job against
+the selected package. The default no-push path builds the required images for
+that run and moves them through immutable workflow artifacts. The rerun helper
+reads the exact selected target SHA from the failure artifact and repacks that
+ref; manual dispatch does not accept the reusable workflow's internal package
+artifact tuple. Generated commands add `docker_e2e_bare_image`,
+`docker_e2e_functional_image`, and `shared_image_policy=existing-only` only for
+GHCR-backed images; runner-local artifact images are rebuilt on a fresh rerun.
 Live-only targeted reruns skip the E2E images and build only the live-test
 image. Release-path normal mode fans out into smaller Docker chunk jobs:
 
@@ -765,11 +769,19 @@ gh workflow run openclaw-live-and-e2e-checks-reusable.yml \
   -f live_models_only=false
 ```
 
-That path still runs the prepare job, so it creates a new tarball for `<sha>`.
-If the SHA-tagged GHCR bare/functional image already exists, CI skips rebuilding
-that image and only uploads the fresh package artifact before the targeted lane
-job. Do not rerun the full release path unless the failed lane list
-or touched surface really requires it.
+That path still runs the prepare job, so it creates a new tarball for `<sha>`
+and, by default, rebuilds the required image into an immutable workflow
+artifact for the targeted lane job. A generated command skips the image rebuild
+only when it carries explicit GHCR image refs plus
+`shared_image_policy=existing-only`. Do not rerun the full release path unless
+the failed lane list or touched surface really requires it.
+
+The helper never recovers the workflow-definition `--ref` from an artifact
+command because full-release temporary branches are deleted. It uses the
+repository default branch unless the operator sets
+`OPENCLAW_DOCKER_E2E_WORKFLOW_REF`; this is separate from the artifact target
+SHA passed as the workflow's `ref` input. An explicit target SHA override drops
+recovered GHCR image refs unless the artifact proves they belong to that SHA.
 
 ## Docker Expected Timings
 

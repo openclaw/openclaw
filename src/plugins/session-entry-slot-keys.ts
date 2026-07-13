@@ -10,6 +10,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "heartbeatIsolatedBaseSessionKey",
   "heartbeatTaskState",
   "pluginExtensions",
+  "initializationPending",
   "pluginExtensionSlotKeys",
   "pluginNextTurnInjections",
   "sessionId",
@@ -24,6 +25,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "spawnedBy",
   "spawnedWorkspaceDir",
   "spawnedCwd",
+  "worktree",
   "parentSessionKey",
   "forkedFromParent",
   "spawnDepth",
@@ -36,6 +38,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "systemSent",
   "abortedLastRun",
   "restartRecoveryRuns",
+  "restartRecoveryForceSafeTools",
   "goal",
   "pendingSkillSuggestion",
   "skillCaptureSignalHashes",
@@ -50,6 +53,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "abortCutoffTimestamp",
   "chatType",
   "thinkingLevel",
+  "cronRunContinuation",
   "fastMode",
   "verboseLevel",
   "traceLevel",
@@ -62,6 +66,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "execSecurity",
   "execAsk",
   "execNode",
+  "execCwd",
   "responseUsage",
   "usageFamilyKey",
   "usageFamilySessionIds",
@@ -94,13 +99,17 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "pendingFinalDeliveryContext",
   "pendingFinalDeliveryIntentId",
   "restartRecoveryDeliveryContext",
+  "restartRecoveryDeliveryRequestFingerprint",
   "restartRecoveryDeliveryRunId",
+  "restartRecoveryDeliverySourceRunId",
+  "restartRecoveryTerminalRunIds",
   "totalTokensFresh",
   "estimatedCostUsd",
   "cacheRead",
   "cacheWrite",
   "modelProvider",
   "model",
+  "modelSelectionLocked",
   "agentHarnessId",
   "fallbackNoticeSelectedModel",
   "fallbackNoticeActiveModel",
@@ -144,13 +153,15 @@ type ReservedSessionEntrySlotKey = Extract<
   (typeof SESSION_ENTRY_RESERVED_SLOT_KEY_LIST)[number],
   keyof SessionEntry
 >;
-type MissingSessionEntryReservedSlotKeys = Exclude<keyof SessionEntry, ReservedSessionEntrySlotKey>;
-type AssertNever<T extends never> = T;
-/** Compile-time guard that every SessionEntry key is excluded from plugin extension slot names. */
-export type _AssertAllSessionEntryKeysAreReserved =
-  AssertNever<MissingSessionEntryReservedSlotKeys>;
+type MissingSessionEntryReservedSlotKey = Exclude<keyof SessionEntry, ReservedSessionEntrySlotKey>;
+type SessionEntryReservedSlotSetValue = [MissingSessionEntryReservedSlotKey] extends [never]
+  ? string
+  : never;
 
-const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<string>(SESSION_ENTRY_RESERVED_SLOT_KEY_LIST);
+// Keep the value type impossible if a new SessionEntry field is missing from the reserved list.
+const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValue>(
+  SESSION_ENTRY_RESERVED_SLOT_KEY_LIST,
+);
 const OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS = new Set<string>([
   "prototype",
   ...Object.getOwnPropertyNames(Object.prototype),

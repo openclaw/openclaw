@@ -21,7 +21,9 @@ type TestAttachment = {
 
 const runtimeApiMockState = getRuntimeApiMockState();
 const graphThreadMockState = vi.hoisted(() => ({
-  resolveTeamGroupId: vi.fn(async () => "group-1"),
+  resolveTeamGroupId: vi.fn(
+    async (params: { aadGroupId?: string }) => params.aadGroupId?.trim() || "group-1",
+  ),
   fetchChannelMessage: vi.fn<
     (
       token: string,
@@ -78,12 +80,15 @@ vi.mock("../graph-thread.js", () => {
   return {
     stripHtmlFromTeamsMessage,
     formatThreadContext,
-    resolveTeamGroupId: graphThreadMockState.resolveTeamGroupId,
     fetchChannelMessage: graphThreadMockState.fetchChannelMessage,
     fetchThreadReplies: graphThreadMockState.fetchThreadReplies,
     fetchChatMessageText: graphThreadMockState.fetchChatMessageText,
   };
 });
+
+vi.mock("../team-identity.js", () => ({
+  resolveTeamGroupId: graphThreadMockState.resolveTeamGroupId,
+}));
 
 describe("msteams monitor handler authz", () => {
   function createDeps(
@@ -264,8 +269,8 @@ describe("msteams monitor handler authz", () => {
         conversationType: "channel",
       },
       channelData: {
-        team: { id: "team123", name: "Team 123" },
-        channel: { name: "General" },
+        team: { id: "team123", name: "Team 123", aadGroupId: "graph-team-123" },
+        channel: { id: "19:graph-channel@thread.tacv2", name: "General" },
       },
       extraActivity: { replyToId: "parent-msg" },
       attachments: params?.attachments ?? [],
@@ -432,10 +437,6 @@ describe("msteams monitor handler authz", () => {
         name: "New User",
       },
       agent: {
-        id: "bot-id",
-        name: "Bot",
-      },
-      bot: {
         id: "bot-id",
         name: "Bot",
       },
@@ -925,6 +926,7 @@ describe("msteams monitor handler authz", () => {
       "[Thread history]\nAlice: Allowed context\n[/Thread history]\n\nCurrent message",
     );
     expect(ctxPayload.GroupSpace).toBe("team123");
+    expect(ctxPayload.NativeChannelId).toBe("graph-team-123/19:graph-channel@thread.tacv2");
     expect(String((dispatched.ctxPayload as { BodyForAgent?: string }).BodyForAgent)).not.toContain(
       "Mallory",
     );
@@ -1061,6 +1063,10 @@ describe("msteams monitor handler authz", () => {
       "token",
       "19:dm@thread.v2",
       "message-1",
+      expect.objectContaining({
+        label: "MS Teams inbound preprocessing",
+        timeoutMs: 10_000,
+      }),
     );
     expect(recordFromMockCall(firstSettledDispatch().ctxPayload).SupplementalContext).toMatchObject(
       {

@@ -174,6 +174,7 @@ function expectSpokenStatusMessage(events: SentRealtimeEvent[], message: string)
 describe("WebRtcSdpRealtimeTalkTransport", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   beforeEach(() => {
@@ -325,7 +326,99 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         Authorization: "Bearer client-secret-123",
         "Content-Type": "application/sdp",
       },
+      signal: expect.any(AbortSignal),
     });
+    transport.stop();
+  });
+
+  it("aborts stalled WebRTC SDP answer body reads after the offer timeout", async () => {
+    vi.useFakeTimers();
+    let offerSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      offerSignal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        text: () =>
+          new Promise<string>((_, reject) => {
+            offerSignal?.addEventListener(
+              "abort",
+              () => {
+                const reason = offerSignal?.reason;
+                reject(reason instanceof Error ? reason : new Error("offer request aborted"));
+              },
+              { once: true },
+            );
+          }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const transport = createOpenAiTransport();
+
+    const startResult = transport.start().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(offerSignal?.aborted).toBe(false);
+
+    await vi.runAllTimersAsync();
+
+    await expect(startResult).resolves.toMatchObject(
+      new Error("Realtime WebRTC offer request timed out after 30000ms"),
+    );
+    expect(offerSignal?.aborted).toBe(true);
+  });
+
+  it("aborts a pending WebRTC SDP answer body read when stopped", async () => {
+    let offerSignal: AbortSignal | undefined;
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      offerSignal = init?.signal ?? undefined;
+      return {
+        ok: true,
+        status: 200,
+        text: () =>
+          new Promise<string>((_, reject) => {
+            offerSignal?.addEventListener(
+              "abort",
+              () => {
+                const reason = offerSignal?.reason;
+                reject(reason instanceof Error ? reason : new Error("offer request aborted"));
+              },
+              { once: true },
+            );
+          }),
+      } as Response;
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const transport = createOpenAiTransport();
+
+    const startResult = transport.start();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    transport.stop();
+
+    await expect(startResult).resolves.toBeUndefined();
+    expect(offerSignal?.aborted).toBe(true);
+  });
+
+  it("clears the WebRTC offer timeout after setup succeeds", async () => {
+    vi.useFakeTimers();
+    let offerSignal: AbortSignal | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+        offerSignal = init?.signal ?? undefined;
+        return new Response("answer-sdp");
+      }) as unknown as typeof fetch,
+    );
+    const transport = createOpenAiTransport();
+
+    await transport.start();
+    await vi.runAllTimersAsync();
+
+    expect(offerSignal?.aborted).toBe(false);
     transport.stop();
   });
 
@@ -894,6 +987,52 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
         output: expect.stringContaining('"mode":"steer"'),
       },
     });
+    transport.stop();
+  });
+
+  it("surfaces OpenAI tool-result send failures without an unhandled rejection", async () => {
+    stubAnswerSdpFetch();
+    const onStatus = vi.fn();
+    const onTalkEvent = vi.fn();
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.steer") {
+        return {
+          ok: true,
+          mode: "status",
+          sessionKey: "main",
+          active: true,
+          message: "Still working.",
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const transport = createOpenAiTransport({ request }, { onStatus, onTalkEvent });
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    peer?.channel.send.mockImplementation(() => {
+      throw new Error("OpenAI data channel rejected the tool result");
+    });
+    dispatchRealtimeEvent(peer, {
+      type: "response.function_call_arguments.done",
+      item_id: "item-control",
+      call_id: "call-control",
+      name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+      arguments: JSON.stringify({ text: "status", mode: "status" }),
+    });
+
+    await vi.waitFor(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "OpenAI data channel rejected the tool result",
+      ),
+    );
+    expect(
+      onTalkEvent.mock.calls.some(
+        ([event]) =>
+          (event.type === "tool.progress" || event.type === "tool.error") && event.final === true,
+      ),
+    ).toBe(false);
     transport.stop();
   });
 });

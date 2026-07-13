@@ -275,14 +275,14 @@ actor GatewayWizardClient {
         let identity = DeviceIdentityStore.loadOrCreate()
         let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
-            deviceId: identity.deviceId,
-            clientId: clientId,
-            clientMode: clientMode,
-            role: role,
-            scopes: scopes,
-            signedAtMs: signedAtMs,
-            token: self.token,
-            nonce: connectNonce)
+            fields: .init(
+                deviceId: identity.deviceId,
+                client: .init(id: clientId, mode: clientMode),
+                role: role,
+                scopes: scopes,
+                signedAtMs: signedAtMs,
+                token: self.token,
+                nonce: connectNonce))
         if let device = GatewayDeviceAuthPayload.signedDeviceDictionary(
             payload: payload,
             identity: identity,

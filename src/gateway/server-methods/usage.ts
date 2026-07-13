@@ -1,6 +1,7 @@
 // Usage gateway methods aggregate provider and session cost/token metrics from
 // caches, logs, session stores, and discovered transcript files.
 import fs from "node:fs";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -57,15 +58,12 @@ import type {
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import { listGatewayAgentsBasic } from "../agent-list.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import {
-  listAgentsForGateway,
-  loadCombinedSessionStoreForGateway,
-  loadSessionEntry,
-} from "../session-utils.js";
+import { loadCombinedSessionStoreForGateway, loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
@@ -580,7 +578,7 @@ async function discoverAllSessionsForUsage(params: {
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const agents = requestedAgentId
     ? [{ id: normalizeAgentId(requestedAgentId) }]
-    : listAgentsForGateway(params.config).agents;
+    : listGatewayAgentsBasic(params.config).agents;
   const discovered = await runUsageAgentTasks(
     agents.map((agent) => async () => {
       const agentId = normalizeAgentId(agent.id);
@@ -969,7 +967,7 @@ async function loadAllAgentCostUsageSummary(params: {
   dayBucket?: UsageDailyBucket;
   config: OpenClawConfig;
 }): Promise<CostUsageSummary> {
-  const agentIds = listAgentsForGateway(params.config).agents.map((agent) =>
+  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
   const summaries = await runUsageAgentTasks(
@@ -1427,8 +1425,11 @@ export const usageHandlers: GatewayRequestHandlers = {
         if (!summary) {
           continue;
         }
-        const session = agentSessions[index];
-        const merged = mergedEntries[session.entryIndex];
+        const session = expectDefined(agentSessions[index], "agent sessions entry at index");
+        const merged = expectDefined(
+          mergedEntries[session.entryIndex],
+          "merged entries entry at session.entry index",
+        );
         const usage = usageByEntryIndex[session.entryIndex] ?? createEmptySessionCostSummary();
         usage.sessionId = merged.sessionId;
         usage.sessionFile = merged.sessionFile;
@@ -1444,7 +1445,8 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     for (const [entryIndex, merged] of mergedEntries.entries()) {
       const agentId = merged.agentId;
-      const usage = usageByEntryIndex[entryIndex];
+      // A cold or stale cache intentionally yields null until its background refresh completes.
+      const usage = usageByEntryIndex[entryIndex] ?? null;
 
       if (usage) {
         addCostUsageTotals(aggregateTotals, usage);

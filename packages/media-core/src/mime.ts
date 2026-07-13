@@ -1,7 +1,7 @@
 // Media Core module implements mime behavior.
 import path from "node:path";
 import { type MediaKind, mediaKindFromMime } from "./constants.js";
-import { createLazyImportLoader } from "./lazy-import.js";
+import { extnameFromAnyPath } from "./file-name.js";
 
 /** Maximum byte prefix passed to dependency MIME sniffers for bounded memory/CPU work. */
 export const FILE_TYPE_SNIFF_MAX_BYTES = 1024 * 1024;
@@ -86,8 +86,6 @@ const MIME_BY_EXT: Record<string, string> = {
   ".yml": "application/yaml",
 };
 
-const fileTypeModuleLoader = createLazyImportLoader(() => import("file-type"));
-
 /** Normalizes MIME strings by dropping parameters, lowercasing, and folding APNG to PNG. */
 export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
@@ -113,7 +111,7 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
     return undefined;
   }
   try {
-    const { fileTypeFromBuffer } = await fileTypeModuleLoader.load();
+    const { fileTypeFromBuffer } = await import("file-type");
     const type = await fileTypeFromBuffer(sliceMimeSniffBuffer(buffer));
     if (type?.mime) {
       return normalizeMimeType(type.mime);
@@ -144,12 +142,20 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   try {
     if (/^https?:\/\//i.test(filePath)) {
       const url = new URL(filePath);
-      return path.extname(url.pathname).toLowerCase() || undefined;
+      let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
+      try {
+        // Decode only the URL filename while keeping encoded separators literal.
+        const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
+        filename = decodeURIComponent(decodable);
+      } catch {
+        // Preserve the raw filename when its own percent encoding is malformed.
+      }
+      return path.posix.extname(filename).toLowerCase() || undefined;
     }
   } catch {
     // fall back to plain path parsing
   }
-  const ext = path.extname(filePath).toLowerCase();
+  const ext = extnameFromAnyPath(filePath).toLowerCase();
   return ext || undefined;
 }
 

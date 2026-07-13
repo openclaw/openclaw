@@ -2,10 +2,11 @@
  * GitHub Copilot OAuth flow
  */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
+  assertOkOrThrowProviderError,
   readProviderJsonResponse,
-  readProviderTextResponse,
 } from "../../../agents/provider-http-errors.js";
 import {
   nonNegativeSecondsToSafeMilliseconds,
@@ -74,7 +75,7 @@ function resolveExpiresAtFromEpochSeconds(value: unknown): number | undefined {
   return resolveExpiresAtMsFromEpochSeconds(value, { bufferMs: 5 * 60 * 1000 });
 }
 
-export function normalizeDomain(input: string): string | null {
+function normalizeDomain(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) {
     return null;
@@ -109,13 +110,13 @@ function getBaseUrlFromToken(token: string): string | null {
   if (!match) {
     return null;
   }
-  const proxyHost = match[1];
+  const proxyHost = expectDefined(match[1], "github copilot regex capture 1");
   // Convert proxy.xxx to api.xxx
   const apiHost = proxyHost.replace(/^proxy\./, "api.");
   return `https://${apiHost}`;
 }
 
-export function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
+function getGitHubCopilotBaseUrl(token?: string, enterpriseDomain?: string): string {
   // If we have a token, extract the base URL from proxy-ep
   if (token) {
     const urlFromToken = getBaseUrlFromToken(token);
@@ -188,10 +189,7 @@ async function fetchJson(
 ): Promise<unknown> {
   const response = await fetchResponse(url, init, operation, options);
   const label = `GitHub Copilot ${operation}`;
-  if (!response.ok) {
-    const text = await readProviderTextResponse(response, label);
-    throw new Error(`${response.status} ${response.statusText}: ${text}`);
-  }
+  await assertOkOrThrowProviderError(response, label);
   return readProviderJsonResponse(response, label);
 }
 
@@ -510,7 +508,7 @@ async function enableAllGitHubCopilotModels(
  * @param options.onProgress - Optional progress callback
  * @param options.signal - Optional AbortSignal for cancellation
  */
-export async function loginGitHubCopilot(options: {
+async function loginGitHubCopilot(options: {
   onAuth: (url: string, instructions?: string) => void;
   onPrompt: (prompt: {
     message: string;
@@ -593,5 +591,6 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
 export const testing = {
   enableGitHubCopilotModel,
   listGitHubCopilotModelIds,
+  pollForGitHubAccessToken,
   startDeviceFlow,
 };

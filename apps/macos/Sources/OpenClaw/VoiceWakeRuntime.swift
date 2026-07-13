@@ -121,9 +121,7 @@ actor VoiceWakeRuntime {
 
         let config = snapshot.1
 
-        if self.isStarting {
-            return
-        }
+        if self.isStarting { return }
 
         if self.scheduledRestartTask != nil, config == self.currentConfig, self.recognitionTask == nil {
             return
@@ -143,9 +141,7 @@ actor VoiceWakeRuntime {
     }
 
     private func start(with config: RuntimeConfig) async {
-        if self.isStarting {
-            return
-        }
+        if self.isStarting { return }
         self.isStarting = true
         defer { self.isStarting = false }
         do {
@@ -815,11 +811,6 @@ actor VoiceWakeRuntime {
 
     static func _testMatchedTriggerWord(_ text: String, triggers: [String]) -> String? {
         self.matchedTriggerWordText(transcript: text, triggers: triggers)
-    }
-
-    static func _testAttributedColor(isFinal: Bool) -> NSColor {
-        VoiceOverlayTextFormatting.makeAttributed(committed: "sample", volatile: "", isFinal: isFinal)
-            .attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor ?? .clear
     }
 
     #endif

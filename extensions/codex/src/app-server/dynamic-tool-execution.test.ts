@@ -2,10 +2,6 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
-  CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS,
-  CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
-  CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   resolveTerminalDynamicToolBatchAction,
@@ -15,6 +11,11 @@ import {
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import type { CodexDynamicToolCallResponse } from "./protocol.js";
+
+const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
+const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
+const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS;
 
 describe("dynamic tool execution helpers", () => {
   afterEach(() => {
@@ -151,6 +152,32 @@ describe("dynamic tool execution helpers", () => {
         call: {
           threadId: "thread-1",
           turnId: "turn-1",
+          callId: "call-computer-wait",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "wait", duration: 100 },
+        },
+        config: undefined,
+      }),
+    ).toBe(220_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-computer-transport-timeout",
+          namespace: null,
+          tool: "computer",
+          arguments: { action: "left_click", coordinate: [1, 1], timeoutMs: 1_000 },
+        },
+        config: undefined,
+      }),
+    ).toBe(34_000);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
           callId: "call-image-generate-default",
           namespace: null,
           tool: "image_generate",
@@ -181,6 +208,23 @@ describe("dynamic tool execution helpers", () => {
           namespace: null,
           tool: "message",
           arguments: { action: "send", message: "long outbound update" },
+        },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS);
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-message-transport-timeout",
+          namespace: null,
+          tool: "message",
+          arguments: {
+            action: "send",
+            message: "long outbound update",
+            timeoutMs: 30_000,
+          },
         },
         config: undefined,
       }),

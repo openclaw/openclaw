@@ -4,10 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
+import {
+  isNamedProfile,
+  resolveLegacyStateDirs,
+  resolveNewStateDir,
+  resolveOAuthDir,
+  resolveStateDir,
+} from "../../config/paths.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["audit", "doctor", "logs", "health", "help", "status"]);
@@ -83,9 +89,6 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   ) {
     return true;
   }
-  if (dirHasFile(path.join(stateDir, "feishu", "dedup"), (name) => name.endsWith(".json"))) {
-    return true;
-  }
   if (hasLegacyIMessageStateFiles(stateDir)) {
     return true;
   }
@@ -98,17 +101,20 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   return dirHasFile(oauthDir, isLegacyWhatsAppAuthFile);
 }
 
-function hasLegacyExecApprovalsMigrationInput(stateDir: string): boolean {
-  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+function hasCrossStateDirApprovalMigrationInputs(stateDir: string): boolean {
+  if (!process.env.OPENCLAW_STATE_DIR?.trim() || isNamedProfile()) {
     return false;
   }
   const homeDir = resolveRequiredHomeDir(process.env, os.homedir);
-  const sourcePath = path.join(homeDir, ".openclaw", "exec-approvals.json");
-  const targetPath = path.join(stateDir, "exec-approvals.json");
+  const defaultStateDir = resolveNewStateDir(() => homeDir);
+  if (path.resolve(defaultStateDir) === path.resolve(stateDir)) {
+    return false;
+  }
+  const execApprovalsSource = path.join(defaultStateDir, "exec-approvals.json");
+  const execApprovalsTarget = path.join(stateDir, "exec-approvals.json");
   return (
-    path.resolve(sourcePath) !== path.resolve(targetPath) &&
-    fileOrDirExists(sourcePath) &&
-    !fileOrDirExists(targetPath)
+    (fileOrDirExists(execApprovalsSource) && !fileOrDirExists(execApprovalsTarget)) ||
+    fileOrDirExists(path.join(defaultStateDir, "plugin-binding-approvals.json"))
   );
 }
 
@@ -142,21 +148,25 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "agents"),
       path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "sessions"),
+      path.join(stateDir, "state", "openclaw.sqlite"),
     ].some(fileOrDirExists) ||
     sqliteSidecarPaths.some(
       (sourcePath) => fileOrDirExists(sourcePath) || hasPendingSqliteSidecarArchive(sourcePath),
     ) ||
     hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir) ||
-    hasLegacyExecApprovalsMigrationInput(stateDir)
+    hasCrossStateDirApprovalMigrationInputs(stateDir)
   );
 }
 
 function shouldRunStateMigrationOnlyWithLegacyInputs(commandPath: string[]): boolean {
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
+  // Metadata-only plugin listing still migrates known legacy inputs, but an empty
+  // state must not cold-load doctor and bundled channel runtime graphs.
   return (
     commandName === "agent" ||
     commandName === "status" ||
+    (commandName === "plugins" && subcommandName === "list") ||
     (commandName === "tasks" &&
       (subcommandName === undefined || ALLOWED_INVALID_TASK_SUBCOMMANDS.has(subcommandName)))
   );
@@ -179,7 +189,10 @@ function shouldRequireStartupMigrationCheckpoint(commandPath: string[]): boolean
   );
 }
 
-async function getConfigSnapshot() {
+async function getConfigSnapshot(options?: { observe: false }) {
+  if (options?.observe === false) {
+    return readConfigFileSnapshot(options);
+  }
   // Tests often mutate config fixtures; caching can make those flaky.
   if (process.env.VITEST === "true") {
     return readConfigFileSnapshot();
@@ -202,8 +215,12 @@ export async function ensureConfigReady(params: {
   suppressDoctorStdout?: boolean;
   allowInvalid?: boolean;
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  skipPristineCoreStateMigrations?: boolean;
+  skipPristineStartupStateMigrations?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
+  const commandName = commandPath[0];
+  const subcommandName = commandPath[1];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
   const shouldConsiderStateMigration = shouldMigrateStateFromPath(commandPath);
   const requiresLegacyStateInput = shouldRunStateMigrationOnlyWithLegacyInputs(commandPath);
@@ -214,16 +231,32 @@ export async function ensureConfigReady(params: {
         migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
+        ...(commandName === "status" ? { observe: false } : {}),
+        crossStateDirImports: false,
         ...(shouldRequireStartupMigrationCheckpoint(commandPath)
           ? { requireStartupMigrationCheckpoint: true }
           : {}),
         ...(params.beforeStateMigrations
           ? { beforeStateMigrations: params.beforeStateMigrations }
           : {}),
+        ...(params.skipPristineStartupStateMigrations
+          ? { skipPristineStartupStateMigrations: true }
+          : {}),
+        ...(params.skipPristineCoreStateMigrations
+          ? { skipPristineCoreStateMigrations: true }
+          : {}),
       });
-    return !params.suppressDoctorStdout
-      ? (await runDoctorConfigPreflight()).snapshot
-      : (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
+    try {
+      return !params.suppressDoctorStdout
+        ? (await runDoctorConfigPreflight()).snapshot
+        : (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
+    } catch (error) {
+      if (error instanceof ExitError) {
+        // The migration owner has unwound its lease and heartbeat before this handoff.
+        params.runtime.exit(error.code);
+      }
+      throw error;
+    }
   };
   if (
     !didRunDoctorConfigFlow &&
@@ -233,7 +266,11 @@ export async function ensureConfigReady(params: {
     preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  let snapshot = preflightSnapshot ?? (await getConfigSnapshot());
+  // Status performs a second non-observing read for its materialized/source pair;
+  // keep the startup guard from recording config health before the command begins.
+  const configSnapshotOptions =
+    commandName === "status" ? ({ observe: false } as const) : undefined;
+  let snapshot = preflightSnapshot ?? (await getConfigSnapshot(configSnapshotOptions));
   if (
     !preflightSnapshot &&
     !didRunDoctorConfigFlow &&
@@ -245,8 +282,6 @@ export async function ensureConfigReady(params: {
     preflightSnapshot = await runStateMigrationPreflight();
     snapshot = preflightSnapshot;
   }
-  const commandName = commandPath[0];
-  const subcommandName = commandPath[1];
   const isBareGatewayForegroundRun =
     commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
   const isReadOnlyTaskStateCommand =
@@ -327,4 +362,3 @@ export async function ensureConfigReady(params: {
 export const testApi = {
   resetConfigGuardStateForTests,
 };
-export { testApi as __test__ };

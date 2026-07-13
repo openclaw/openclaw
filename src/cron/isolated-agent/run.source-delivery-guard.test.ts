@@ -288,6 +288,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(args.requireExplicitMessageTarget).toBe(false);
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
@@ -308,6 +309,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -399,6 +401,39 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(true);
     expect(args.messageChannel).toBe("messagechat");
+  });
+
+  it("forwards an explicit OpenClaw runtime override to cron execution", async () => {
+    mockRunCronFallbackPassthrough();
+    const cronSession = makeCronSession() as MutableCronSession;
+    cronSession.sessionEntry.agentRuntimeOverride = "openclaw";
+    cronSession.sessionEntry.agentHarnessId = "codex";
+    const executor = makeExecutor({
+      cfgWithAgentDefaults: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+      liveSelection: { provider: "openai", model: "gpt-5.6-luna" },
+      cronSession,
+      thinkLevel: "ultra",
+    });
+
+    await executor.runPrompt("run an Ultra task");
+
+    expect(getEmbeddedRunArg()).toEqual(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        thinkLevel: "ultra",
+        agentHarnessRuntimeOverride: "openclaw",
+      }),
+    );
+    expect(getEmbeddedRunArg()).not.toHaveProperty("agentHarnessId");
   });
 });
 

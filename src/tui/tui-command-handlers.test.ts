@@ -1,11 +1,14 @@
 // Covers TUI slash command handlers and backend call wiring.
+
 import type { OverlayHandle } from "@earendil-works/pi-tui";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import {
   TUI_RECENT_SESSIONS_ACTIVE_MINUTES,
   TUI_SESSION_PICKER_LIMIT,
 } from "./tui-session-list-policy.js";
+import type { SessionInfo } from "./tui-types.js";
 
 type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
@@ -99,6 +102,7 @@ function createHarness(params?: {
   currentSessionId?: string | null;
   currentAgentId?: string;
   currentSessionKey?: string;
+  sessionInfo?: SessionInfo;
   abortActive?: AbortActiveMock;
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
   isRunObserved?: (runId: string) => boolean;
@@ -159,7 +163,7 @@ function createHarness(params?: {
     pendingSubmitDraft: null as { runId: string; text: string } | null,
     activityStatus: params?.activityStatus ?? "idle",
     isConnected: params?.isConnected ?? true,
-    sessionInfo: {},
+    sessionInfo: params?.sessionInfo ?? {},
   };
 
   const { handleCommand, sendMessage, openSessionSelector } = createCommandHandlers({
@@ -1137,6 +1141,28 @@ describe("tui command handlers", () => {
     });
   });
 
+  it("uses the effective runtime for the no-arg /think usage", async () => {
+    const codex = createHarness({
+      sessionInfo: {
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntime: { id: "codex", source: "model" },
+      },
+    });
+    await codex.handleCommand("/think");
+    expect(codex.addSystem).toHaveBeenCalledWith(expect.not.stringContaining("ultra"));
+
+    const openclaw = createHarness({
+      sessionInfo: {
+        modelProvider: "openai",
+        model: "gpt-5.6-luna",
+        agentRuntime: { id: "openclaw", source: "session-key" },
+      },
+    });
+    await openclaw.handleCommand("/think");
+    expect(openclaw.addSystem).toHaveBeenCalledWith(expect.stringContaining("ultra"));
+  });
+
   it("hides tools locally for /verbose off without reloading history", async () => {
     const patchResult = { entry: { verboseLevel: "off" } };
     const patchSession = vi.fn().mockResolvedValue(patchResult);
@@ -1257,7 +1283,10 @@ describe("tui command handlers", () => {
     });
     expect(reserveAssistantSlot).toHaveBeenCalledWith("run-active");
     const reserveCallOrder = reserveAssistantSlot.mock.invocationCallOrder[0];
-    const addPendingUserCallOrder = addPendingUser.mock.invocationCallOrder[0];
+    const addPendingUserCallOrder = expectDefined(
+      addPendingUser.mock.invocationCallOrder[0],
+      "addPendingUser.mock.invocationCallOrder[0] test invariant",
+    );
     expect(reserveCallOrder).toBeLessThan(addPendingUserCallOrder);
     expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "continue here");
     expect(addSystem).not.toHaveBeenCalledWith(
@@ -1586,6 +1615,24 @@ describe("tui command handlers", () => {
     expect(refreshSessionInfo).toHaveBeenCalledTimes(1);
     expect(closeOverlay).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["codex", "openclaw"])(
+    "forwards model/runtime transactions through the server directive path for %s",
+    async (runtime) => {
+      const sendChat = vi.fn().mockResolvedValue({ status: "ok" });
+      const patchSession = vi.fn();
+      const command = `/model openai/gpt-5.6-luna --runtime ${runtime} continue with this model`;
+      const { handleCommand } = createHarness({ sendChat, patchSession });
+
+      await handleCommand(command);
+
+      expectSendChatFields(sendChat, {
+        message: command,
+        sessionKey: "agent:main:main",
+      });
+      expect(patchSession).not.toHaveBeenCalled();
+    },
+  );
 
   it("shows resolved canonical model ref after /model alias, not raw alias string", async () => {
     // When the user types `/model gpt4` (a bare alias), the gateway resolves it

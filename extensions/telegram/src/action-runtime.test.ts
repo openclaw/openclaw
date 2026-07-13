@@ -33,6 +33,14 @@ const sendDurableMessageBatch = vi.fn(
       mediaUrl?: string;
       mediaUrls?: string[];
       audioAsVoice?: boolean;
+      videoAsNote?: boolean;
+      location?: {
+        latitude: number;
+        longitude: number;
+        accuracy?: number;
+        name?: string;
+        address?: string;
+      };
       delivery?: {
         pin?: true | { enabled?: boolean; notify?: boolean; required?: boolean };
       };
@@ -85,6 +93,7 @@ const sendDurableMessageBatch = vi.fn(
         params.threadId == null ? undefined : Number.parseInt(String(params.threadId), 10),
       quoteText: telegramData?.quoteText,
       asVoice: payload.audioAsVoice,
+      asVideoNote: payload.videoAsNote,
       silent: params.silent,
       forceDocument: params.forceDocument,
       mediaLocalRoots: params.mediaAccess?.localRoots,
@@ -1400,6 +1409,76 @@ describe("handleTelegramAction", () => {
     ).rejects.toThrow(/content required/i);
   });
 
+  it("maps video notes through the existing durable send action", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        mediaUrl: "https://example.com/note.mp4",
+        asVideoNote: true,
+      },
+      telegramConfig(),
+    );
+
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "durable video note");
+    expect(requireRecord(durableCall[0], "durable video note params")).toMatchObject({
+      payloads: [
+        {
+          text: "",
+          mediaUrls: ["https://example.com/note.mp4"],
+          videoAsNote: true,
+        },
+      ],
+    });
+    const sendCall = mockCall(sendMessageTelegram, 0, "video note");
+    expect(requireRecord(sendCall[2], "video note options").asVideoNote).toBe(true);
+  });
+
+  it("accepts a standalone normalized location", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        location: {
+          latitude: 48.858844,
+          longitude: 2.294351,
+          name: "  Eiffel Tower ",
+          address: " Champ de Mars ",
+        },
+      },
+      telegramConfig(),
+    );
+
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "durable location");
+    expect(requireRecord(durableCall[0], "durable location params")).toMatchObject({
+      payloads: [
+        {
+          text: "",
+          location: {
+            latitude: 48.858844,
+            longitude: 2.294351,
+            name: "Eiffel Tower",
+            address: "Champ de Mars",
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects location sends mixed with text or media", async () => {
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "123456",
+          content: "caption",
+          location: { latitude: 1, longitude: 2 },
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow(/cannot be combined/i);
+  });
+
   it("renders presentation text when message content is omitted", async () => {
     await handleTelegramAction(
       {
@@ -1420,6 +1499,70 @@ describe("handleTelegramAction", () => {
     expect(call[0]).toBe("123456");
     expect(call[1]).toBe("Status\n\nBuild completed\n\nmain branch");
     expect(requireRecord(call[2], "presentation text options").token).toBe("tok");
+  });
+
+  it("appends chart data when explicit message content is present", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        message: "Quarterly results",
+        presentation: {
+          title: "FY25 outlook",
+          blocks: [
+            { type: "text", text: "Do not duplicate this block" },
+            {
+              type: "chart",
+              chartType: "bar",
+              title: "Revenue",
+              categories: ["Q1", "Q2"],
+              series: [{ name: "USD", values: [12, 18] }],
+            },
+          ],
+        },
+      },
+      telegramConfig(),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "mixed message and chart");
+    expect(call[0]).toBe("123456");
+    expect(call[1]).toBe(
+      "Quarterly results\n\nFY25 outlook\n\nRevenue (bar chart)\n- USD: Q1: 12; Q2: 18",
+    );
+    expect(requireRecord(call[2], "mixed message and chart options").token).toBe("tok");
+  });
+
+  it("appends complete table data when explicit message content is present", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "123456",
+        message: "Quarterly pipeline",
+        presentation: {
+          title: "FY25 outlook",
+          blocks: [
+            { type: "text", text: "Do not duplicate this block" },
+            {
+              type: "table",
+              caption: "Pipeline",
+              headers: ["Account", "Stage", "ARR"],
+              rows: [
+                ["Acme", "Won", 125000],
+                ["Globex", "Review", 82000],
+              ],
+            },
+          ],
+        },
+      },
+      telegramConfig(),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "mixed message and table");
+    expect(call[0]).toBe("123456");
+    expect(call[1]).toBe(
+      "Quarterly pipeline\n\nFY25 outlook\n\nPipeline (table)\n- Account: Acme; Stage: Won; ARR: 125000\n- Account: Globex; Stage: Review; ARR: 82000",
+    );
+    expect(requireRecord(call[2], "mixed message and table options").token).toBe("tok");
   });
 
   it("uses presentation fallback text for button-only sends", async () => {

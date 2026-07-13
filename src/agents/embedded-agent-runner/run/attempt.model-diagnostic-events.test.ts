@@ -22,7 +22,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../../plugins/hook-runner-global.js";
-import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 
@@ -973,6 +973,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(capturedOptions[0]).not.toBe(callerOptions);
     const capturedOption = requireRecord(capturedOptions[0], "captured stream options");
     expect(capturedOption.sessionId).toBe("provider-session");
+    expect(capturedOption.requestId).toBe("call-traceparent");
     const headers = readRecordField(capturedOption, "headers", "captured stream headers");
     expect(headers["X-Custom"]).toBe("kept");
     expect(typeof headers.traceparent).toBe("string");

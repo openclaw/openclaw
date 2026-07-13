@@ -17,8 +17,19 @@ const browserClientMocks = vi.hoisted(() => ({
     },
   })),
   browserFocusTab: vi.fn(async (..._args: unknown[]) => ({})),
+  browserImportProfile: vi.fn(async (..._args: unknown[]) => ({
+    ok: true,
+    systemProfile: "Default",
+    into: "imported",
+    browser: "chrome",
+    cookies: { total: 1, imported: 1, failed: 0, skipped: 0 },
+    domains: [".example.com"],
+  })),
   browserOpenTab: vi.fn(async (..._args: unknown[]) => ({})),
   browserProfiles: vi.fn(
+    async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
+  ),
+  browserSystemProfiles: vi.fn(
     async (..._args: unknown[]): Promise<Array<Record<string, unknown>>> => [],
   ),
   browserSnapshot: vi.fn(
@@ -282,8 +293,7 @@ vi.mock("./browser-tool.runtime.js", () => {
   };
 });
 
-import { testing as browserToolActionsTesting } from "./browser-tool.actions.js";
-import { testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
+import { createBrowserTool } from "./browser-tool.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 
 function mockSingleBrowserProxyNode() {
@@ -320,42 +330,6 @@ function resetBrowserToolMocks() {
   toolCommonMocks.stageBrowserScreenshotForSharing.mockResolvedValue(
     "/tmp/openclaw-media/outbound/share.png",
   );
-  browserToolTesting.setDepsForTest({
-    browserAct: browserActionsMocks.browserAct as never,
-    browserArmDialog: browserActionsMocks.browserArmDialog as never,
-    browserArmFileChooser: browserActionsMocks.browserArmFileChooser as never,
-    browserCloseTab: browserClientMocks.browserCloseTab as never,
-    browserDoctor: browserClientMocks.browserDoctor as never,
-    browserFocusTab: browserClientMocks.browserFocusTab as never,
-    browserNavigate: browserActionsMocks.browserNavigate as never,
-    browserOpenTab: browserClientMocks.browserOpenTab as never,
-    browserPdfSave: browserActionsMocks.browserPdfSave as never,
-    browserProfiles: browserClientMocks.browserProfiles as never,
-    browserScreenshotAction: browserActionsMocks.browserScreenshotAction as never,
-    browserStart: browserClientMocks.browserStart as never,
-    browserStatus: browserClientMocks.browserStatus as never,
-    browserStop: browserClientMocks.browserStop as never,
-    describeImageFile: toolCommonMocks.describeImageFile as never,
-    imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
-    getRuntimeConfig: configMocks.loadConfig as never,
-    listNodes: nodesUtilsMocks.listNodes as never,
-    callGatewayTool: gatewayMocks.callGatewayTool as never,
-    normalizeBrowserScreenshot: toolCommonMocks.normalizeBrowserScreenshot as never,
-    saveMediaBuffer: toolCommonMocks.saveMediaBuffer as never,
-    stageBrowserScreenshotForSharing: toolCommonMocks.stageBrowserScreenshotForSharing as never,
-    trackSessionBrowserTab: sessionTabRegistryMocks.trackSessionBrowserTab as never,
-    untrackSessionBrowserTab: sessionTabRegistryMocks.untrackSessionBrowserTab as never,
-  });
-  browserToolActionsTesting.setDepsForTest({
-    browserAct: browserActionsMocks.browserAct as never,
-    browserConsoleMessages: browserActionsMocks.browserConsoleMessages as never,
-    browserDownload: browserActionsMocks.browserDownload as never,
-    browserSnapshot: browserClientMocks.browserSnapshot as never,
-    browserTabs: browserClientMocks.browserTabs as never,
-    browserWaitForDownload: browserActionsMocks.browserWaitForDownload as never,
-    getRuntimeConfig: configMocks.loadConfig as never,
-    imageResultFromFile: toolCommonMocks.imageResultFromFile as never,
-  });
 }
 
 function setResolvedBrowserProfiles(
@@ -377,8 +351,6 @@ function registerBrowserToolAfterEachReset() {
   });
   afterEach(() => {
     resetBrowserToolMocks();
-    browserToolActionsTesting.setDepsForTest(null);
-    browserToolTesting.setDepsForTest(null);
   });
 }
 
@@ -461,6 +433,7 @@ function nodeInvokeCall(callIndex: number): {
   request: {
     nodeId?: string;
     command?: string;
+    timeoutMs?: number;
     params?: {
       method?: string;
       path?: string;
@@ -478,6 +451,7 @@ function nodeInvokeCall(callIndex: number): {
   const request = mockCallArg<{
     nodeId?: string;
     command?: string;
+    timeoutMs?: number;
     params?: {
       method?: string;
       path?: string;
@@ -508,6 +482,7 @@ describe("browser tool description", () => {
     expect(tool.description).toContain("Do not assume a profile name");
     expect(tool.description).not.toContain('profile="user"');
     expect(tool.description).toContain("omit timeoutMs on act:type");
+    expect(tool.description).toContain("act:evaluate supports timeoutMs");
     expect(tool.description).toContain("existing-session profiles");
     expect(tool.description).toContain("browser-automation skill");
     expect(tool.description).toContain("trigger ref with paths in the same upload call");
@@ -1883,6 +1858,32 @@ describe("browser tool act compatibility", () => {
     expect(opts.profile).toBe("user");
   });
 
+  it("injects configured action timeout for existing-session evaluate actions", async () => {
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    configMocks.loadConfig.mockReturnValue({ browser: { actionTimeoutMs: 45_000 } });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      profile: "user",
+      target: "host",
+      request: {
+        kind: "evaluate",
+        fn: "() => 1 + 1",
+      },
+    });
+
+    const request = lastMockCallArg<{ kind?: string; fn?: string; timeoutMs?: number }>(
+      browserActionsMocks.browserAct,
+      1,
+    );
+    const opts = lastMockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 2);
+    expect(request).toEqual({ kind: "evaluate", fn: "() => 1 + 1", timeoutMs: 45_000 });
+    expect(opts.profile).toBe("user");
+  });
+
   it("passes configured act timeout through node proxy with transport slack", async () => {
     mockSingleBrowserProxyNode();
     configMocks.loadConfig.mockReturnValue({
@@ -1896,14 +1897,20 @@ describe("browser tool act compatibility", () => {
     await tool.execute?.("call-1", {
       action: "act",
       target: "node",
-      request: { kind: "wait", timeMs: 20_000 },
+      request: { kind: "wait", timeMs: 20_000, text: "ready" },
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(55_000);
+    expect(options.timeoutMs).toBe(75_000);
+    expect(request.timeoutMs).toBe(75_000);
     expect(request.params?.path).toBe("/act");
-    expect(request.params?.body).toEqual({ kind: "wait", timeMs: 20_000, timeoutMs: 45_000 });
-    expect(request.params?.timeoutMs).toBe(45_000 + 5_000);
+    expect(request.params?.body).toEqual({
+      kind: "wait",
+      timeMs: 20_000,
+      text: "ready",
+      timeoutMs: 45_000,
+    });
+    expect(request.params?.timeoutMs).toBe(70_000);
   });
 
   it("honors string act request timeouts when sizing node proxy calls", async () => {
@@ -1912,18 +1919,47 @@ describe("browser tool act compatibility", () => {
     await tool.execute?.("call-1", {
       action: "act",
       target: "node",
-      request: { kind: "wait", timeMs: "20000", timeoutMs: "45000" },
+      request: { kind: "wait", timeMs: "20000", text: "ready", timeoutMs: "45000" },
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(options.timeoutMs).toBe(55_000);
+    expect(options.timeoutMs).toBe(75_000);
     expect(request.params?.path).toBe("/act");
     expect(request.params?.body).toEqual({
       kind: "wait",
       timeMs: "20000",
+      text: "ready",
       timeoutMs: "45000",
     });
-    expect(request.params?.timeoutMs).toBe(50_000);
+    expect(request.params?.timeoutMs).toBe(70_000);
+  });
+
+  it("sizes node proxy calls for recursively nested batch execution", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+
+    await tool.execute?.("call-1", {
+      action: "act",
+      target: "node",
+      request: {
+        kind: "batch",
+        actions: [
+          { kind: "wait", timeMs: 30_000 },
+          {
+            kind: "batch",
+            actions: [
+              { kind: "wait", timeMs: 30_000 },
+              { kind: "wait", timeMs: 30_000 },
+            ],
+          },
+        ],
+      },
+    });
+
+    const { options, request } = lastNodeInvokeCall();
+    expect(request.params?.timeoutMs).toBe(95_000);
+    expect(request.timeoutMs).toBe(100_000);
+    expect(options.timeoutMs).toBe(100_000);
   });
 
   it("rejects fractional act request timeouts before node proxy calls", async () => {
@@ -2164,7 +2200,7 @@ describe("browser tool external content wrapping", () => {
 describe("browser tool act stale target recovery", () => {
   registerBrowserToolAfterEachReset();
 
-  it("retries safe user-browser act once without targetId when exactly one tab remains", async () => {
+  it("retries a target-independent wait once against the one freshly listed tab", async () => {
     browserActionsMocks.browserAct
       .mockRejectedValueOnce(new Error("404: tab not found"))
       .mockResolvedValueOnce({ ok: true });
@@ -2175,37 +2211,74 @@ describe("browser tool act stale target recovery", () => {
       action: "act",
       profile: "user",
       request: {
-        kind: "hover",
+        kind: "wait",
         targetId: "stale-tab",
-        ref: "btn-1",
+        timeMs: 1,
       },
     });
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
     expect(mockCallArg(browserActionsMocks.browserAct, 0, 0)).toBeUndefined();
-    const firstRequest = mockCallArg<{ kind?: string; ref?: string; targetId?: string }>(
+    const firstRequest = mockCallArg<{ kind?: string; targetId?: string; timeMs?: number }>(
       browserActionsMocks.browserAct,
       0,
       1,
     );
     expect(firstRequest.targetId).toBe("stale-tab");
-    expect(firstRequest.kind).toBe("hover");
-    expect(firstRequest.ref).toBe("btn-1");
+    expect(firstRequest.kind).toBe("wait");
+    expect(firstRequest.timeMs).toBe(1);
     const firstOptions = mockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 0, 2);
     expect(firstOptions.profile).toBe("user");
 
     expect(mockCallArg(browserActionsMocks.browserAct, 1, 0)).toBeUndefined();
-    const secondRequest = mockCallArg<{ kind?: string; ref?: string; targetId?: string }>(
+    const secondRequest = mockCallArg<{ kind?: string; targetId?: string; timeMs?: number }>(
       browserActionsMocks.browserAct,
       1,
       1,
     );
-    expect(secondRequest.targetId).toBeUndefined();
-    expect(secondRequest.kind).toBe("hover");
-    expect(secondRequest.ref).toBe("btn-1");
+    expect(secondRequest.targetId).toBe("only-tab");
+    expect(secondRequest.kind).toBe("wait");
+    expect(secondRequest.timeMs).toBe(1);
     const secondOptions = mockCallArg<{ profile?: string }>(browserActionsMocks.browserAct, 1, 2);
     expect(secondOptions.profile).toBe("user");
     expect((result?.details as { ok?: unknown } | undefined)?.ok).toBe(true);
+  });
+
+  it("does not rebind ref-scoped or scripted actions to a replacement tab", async () => {
+    browserActionsMocks.browserAct.mockRejectedValue(new Error("404: tab not found"));
+    browserClientMocks.browserTabs.mockResolvedValue([{ targetId: "only-tab" }]);
+    const tool = createBrowserTool();
+
+    for (const request of [
+      { kind: "hover" as const, targetId: "stale-tab", ref: "btn-1" },
+      { kind: "wait" as const, targetId: "stale-tab", fn: "() => true" },
+      { kind: "wait" as const, targetId: "stale-tab", text: "ready" },
+      { kind: "wait" as const, targetId: "stale-tab", url: "**/ready" },
+    ]) {
+      await expect(
+        tool.execute?.("call-1", { action: "act", profile: "user", request }),
+      ).rejects.toThrow(/Run action=tabs profile="user"/i);
+    }
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(4);
+  });
+
+  it("preserves a target-independent retry failure", async () => {
+    browserActionsMocks.browserAct
+      .mockRejectedValueOnce(new Error("404: tab not found"))
+      .mockRejectedValueOnce(new Error("wait condition failed"));
+    browserClientMocks.browserTabs.mockResolvedValueOnce([{ targetId: "only-tab" }]);
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", {
+        action: "act",
+        profile: "user",
+        request: { kind: "wait", targetId: "stale-tab", timeMs: 1 },
+      }),
+    ).rejects.toThrow(/wait condition failed/);
+
+    expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(2);
   });
 
   it("retries stale targetIds returned through the node browser proxy", async () => {
@@ -2247,9 +2320,8 @@ describe("browser tool act stale target recovery", () => {
     expect(nodeInvokeCall(1).request.params?.path).toBe("/tabs");
     expect(nodeInvokeCall(2).request.params).toMatchObject({
       path: "/act",
-      body: { kind: "wait", timeMs: 1 },
+      body: { kind: "wait", targetId: "only-tab", timeMs: 1 },
     });
-    expect(nodeInvokeCall(2).request.params?.body).not.toHaveProperty("targetId");
     expect(result?.details).toMatchObject({ ok: true, targetId: "only-tab" });
   });
 

@@ -5,6 +5,7 @@ import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { runNodeHost } from "../../node-host/runner.js";
+import { runNodeHostWorker } from "../../node-host/worker.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parsePort } from "../daemon-cli/shared.js";
 import { formatInvalidPortOption } from "../error-format.js";
@@ -17,6 +18,7 @@ import {
   runNodeDaemonStop,
   runNodeDaemonUninstall,
 } from "./daemon.js";
+import { runNodeIdentityShow } from "./identity.js";
 
 function parsePortOption(value: unknown, fallback: number): number | null {
   // Undefined keeps config/default port; invalid explicit input returns null for CLI errors.
@@ -46,6 +48,13 @@ export function registerNodeCli(program: Command) {
     );
 
   node
+    .command("worker", { hidden: true })
+    .description("Run the private macOS app node-host worker")
+    .action(async () => {
+      await runNodeHostWorker();
+    });
+
+  node
     .command("run")
     .description("Run the headless node host (foreground)")
     .option("--host <host>", "Gateway host")
@@ -54,7 +63,7 @@ export function registerNodeCli(program: Command) {
     .option("--tls", "Use TLS for the gateway connection")
     .option("--no-tls", "Disable TLS for the gateway connection")
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override node id (clears pairing token)")
+    .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
     .action(async (opts) => {
       const existing = await loadNodeHostConfig();
@@ -104,6 +113,14 @@ export function registerNodeCli(program: Command) {
     });
 
   node
+    .command("identity")
+    .description("Print the node host device identity (device id + public key)")
+    .option("--json", "Output JSON", false)
+    .action((opts) => {
+      runNodeIdentityShow(opts);
+    });
+
+  node
     .command("install")
     .description("Install the node host service (launchd/systemd/schtasks)")
     .option("--host <host>", "Gateway host")
@@ -111,9 +128,9 @@ export function registerNodeCli(program: Command) {
     .option("--context-path <path>", "Gateway WebSocket context path (e.g. /openclaw-gw)")
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
-    .option("--node-id <id>", "Override node id (clears pairing token)")
+    .option("--node-id <id>", "Override the generated node instance id")
     .option("--display-name <name>", "Override node display name")
-    .option("--runtime <runtime>", "Service runtime (node|bun). Default: node")
+    .option("--runtime <runtime>", "Service runtime (node). Default: node")
     .option("--force", "Reinstall/overwrite if already installed", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
