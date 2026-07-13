@@ -595,7 +595,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it(
     "reveals message context on timestamp hover and keeps click-to-open",
-    { timeout: 20_000 },
+    // This full-app case shares Chromium with concurrent layout pages; match
+    // the UI runner's cold-browser budget instead of imposing a flaky 20s cap.
+    { timeout: 60_000 },
     async () => {
       if (!realChatServer) {
         throw new Error("Expected the Control UI server to be ready");

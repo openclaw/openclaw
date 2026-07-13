@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@openclaw/normalization-core": "workspace:*"
+    "@openclaw/normalization-core": "workspace:*",
+    "@openclaw/retry": "workspace:*"
   },
   "exports": {
     "./runtime-core": "./src/runtime-core.ts",

@@ -712,6 +712,55 @@ describe("runWithModelFallback", () => {
     );
   });
 
+  it("does not replay CLI max-turn failures on configured fallback models", async () => {
+    const failure = new FailoverError(
+      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). Tool actions may already have run; verify their effects before retrying.",
+      {
+        provider: "claude-cli",
+        model: "sonnet",
+        reason: "unknown",
+        code: "cli_max_turns",
+      },
+    );
+    const run = vi.fn().mockRejectedValue(failure);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
+        provider: "claude-cli",
+        model: "sonnet",
+        run,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay aggregate failures containing a CLI max-turn stop", async () => {
+    const maxTurns = new FailoverError("max turns", {
+      provider: "claude-cli",
+      model: "sonnet",
+      reason: "unknown",
+      code: "cli_max_turns",
+    });
+    const failure = new AggregateError(
+      [maxTurns, new Error("fork successor persistence failed")],
+      "CLI turn failed and its fork successor could not be persisted",
+    );
+    const run = vi.fn().mockRejectedValue(failure);
+
+    await expect(
+      runWithModelFallback({
+        cfg: makeDiagnosticFallbackConfig(["anthropic/claude-opus-4-7"]),
+        provider: "claude-cli",
+        model: "sonnet",
+        run,
+      }),
+    ).rejects.toBe(failure);
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the opt-in auth skip cache on the second turn for the same session", async () => {
     const previous = process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS;
     process.env.OPENCLAW_FALLBACK_SKIP_TTL_MS = "60000";

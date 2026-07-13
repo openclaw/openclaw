@@ -7079,6 +7079,36 @@ describe("runAgentTurnWithFallback", () => {
     expect(terminalFailureEvent).toBeDefined();
   });
 
+  it("surfaces CLI max-turn recovery context at normal verbosity", async () => {
+    const recoveryText =
+      "Claude CLI stopped after reaching the maximum number of turns (limit: 1). " +
+      "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
+      "Tool actions may already have run; verify their effects before retrying. " +
+      "Retry with a higher --max-turns value or a narrower task.";
+    const maxTurns = new FailoverError(recoveryText, {
+      reason: "unknown",
+      code: "cli_max_turns",
+      provider: "claude-cli",
+      model: "sonnet",
+    });
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new AggregateError(
+        [maxTurns, new Error("fork successor persistence failed")],
+        "CLI turn failed and its fork successor could not be persisted",
+      ),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
+      expect(result.payload.text).toBe(recoveryText);
+      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
   it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error('Command lane "main" task timed out after 120000ms'),
