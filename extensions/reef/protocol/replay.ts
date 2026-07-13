@@ -1,20 +1,7 @@
-import type { MessageBody } from "./envelope.js";
+import type { CompletedReplay, MessageBody, ReplayClaim, ReplayStore } from "./envelope.js";
 import type { SignedReceipt } from "./receipts.js";
 
-export type ReplayClaim = "new" | "duplicate" | "mismatch" | "in_flight";
-
-export interface CompletedReplay {
-  receipt: SignedReceipt;
-  body?: MessageBody;
-}
-
-export interface ReplayStore {
-  claim(peer: string, id: string, envelopeHash: string): Promise<ReplayClaim>;
-  complete(peer: string, id: string, receipt: SignedReceipt, body?: MessageBody): Promise<void>;
-  consume(peer: string, id: string): Promise<void>;
-  release(peer: string, id: string): Promise<void>;
-  completed(peer: string, id: string): Promise<CompletedReplay | undefined>;
-}
+export type { CompletedReplay, ReplayClaim, ReplayStore } from "./envelope.js";
 
 interface ReplayRecord {
   envelopeHash: string;

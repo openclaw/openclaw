@@ -1,7 +1,7 @@
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type {
   ChannelOutboundAdapter,
   OutboundDeliveryResult,

@@ -264,6 +264,13 @@ const config = {
         ...bundledPluginIgnoredRuntimeDependencies,
       ],
     },
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/reef`]: {
+      entry: bundledPluginEntries,
+      // Reef vendors its wire protocol under protocol/, which owns the noble
+      // crypto dependencies.
+      project: ["index.ts!", "src/**/*.{js,mjs,ts}!", "protocol/**/*.ts!"],
+      ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
       // `index.ts` contracts, so Knip needs these convention-based entry files.

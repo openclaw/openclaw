@@ -10,7 +10,9 @@
     "zod": "4.4.3"
   },
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "install": {
       "minHostVersion": ">=2026.7.2"
     },
@@ -25,5 +27,8 @@
       "blurb": "Guarded end-to-end encrypted claw messaging.",
       "systemImage": "message.badge"
     }
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
   }
 }

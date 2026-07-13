@@ -7,7 +7,23 @@ import { canonicalBytes } from "./canonical.js";
 import { base64, decodeUtf8, fromBase64, fromBase64url, hex, utf8 } from "./encoding.js";
 import { parseHandleEpoch } from "./identity.js";
 import type { SignedReceipt } from "./receipts.js";
-import type { ReplayStore } from "./replay.js";
+
+// Replay-store contract lives here (the leaf) so replay implementations can
+// depend on envelope types without creating an import cycle.
+export type ReplayClaim = "new" | "duplicate" | "mismatch" | "in_flight";
+
+export interface CompletedReplay {
+  receipt: SignedReceipt;
+  body?: MessageBody;
+}
+
+export interface ReplayStore {
+  claim(peer: string, id: string, envelopeHash: string): Promise<ReplayClaim>;
+  complete(peer: string, id: string, receipt: SignedReceipt, body?: MessageBody): Promise<void>;
+  consume(peer: string, id: string): Promise<void>;
+  release(peer: string, id: string): Promise<void>;
+  completed(peer: string, id: string): Promise<CompletedReplay | undefined>;
+}
 
 export interface MessageBody {
   text: string;

@@ -1,4 +1,7 @@
-import { dispatchInboundDirectDmWithRuntime } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  dispatchInboundDirectDmWithRuntime,
+  recordChannelBotPairLoopAndCheckSuppression,
+} from "openclaw/plugin-sdk/channel-inbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import {
@@ -7,7 +10,6 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/core";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {
   ReefChannelConfigSchema,
   autonomyBudget,
