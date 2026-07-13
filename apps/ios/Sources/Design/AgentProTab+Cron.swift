@@ -269,7 +269,9 @@ extension AgentProTab {
         action: () async throws -> String) async
     {
         guard liveGatewayConnected, appModel.hasOperatorAdminScope else { return }
-        cronActionBusyIDs.insert(job.id)
+        // The view's disabled state can lag a rapid second tap. Main-actor insertion
+        // is the admission gate that prevents duplicate mutation and run RPCs.
+        guard cronActionBusyIDs.insert(job.id).inserted else { return }
         cronActionStatusText = nil
         defer { self.cronActionBusyIDs.remove(job.id) }
         do {

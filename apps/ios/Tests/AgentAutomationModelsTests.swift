@@ -182,6 +182,7 @@ struct AgentAutomationModelsTests {
         #expect(tabSource.contains("initialJob: selection.initialJob"))
         #expect(!tabSource.contains("overview.cronJobs.first(where:"))
         #expect(cronSource.contains("sourceGatewayID: sourceGatewayID"))
+        #expect(cronSource.contains("guard cronActionBusyIDs.insert(job.id).inserted else { return }"))
         #expect(cronSource
             .contains(
                 "presentAutomationEditor(\n                    job: job,\n                    sourceGatewayID: sourceGatewayID"))
