@@ -420,6 +420,10 @@ export const ja_JP: TranslationMap = {
     filterAgents: "エージェントを検索…",
     noAgentMatches: "一致するエージェントはありません",
   },
+  agentScope: {
+    label: "エージェントの範囲",
+    allAgents: "すべてのエージェント",
+  },
   newSession: {
     title: "新しいセッション",
     hint: "このセッションが作業する場所を選び、実行する内容を入力してください。",

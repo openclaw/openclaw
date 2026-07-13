@@ -414,6 +414,10 @@ export const id: TranslationMap = {
     filterAgents: "Cari agen…",
     noAgentMatches: "Tidak ada agen yang cocok",
   },
+  agentScope: {
+    label: "Cakupan agen",
+    allAgents: "Semua agen",
+  },
   newSession: {
     title: "Sesi baru",
     hint: "Pilih tempat sesi ini bekerja, lalu katakan apa yang harus dilakukan.",

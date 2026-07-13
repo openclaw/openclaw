@@ -416,6 +416,10 @@ export const nl: TranslationMap = {
     filterAgents: "Agent zoeken…",
     noAgentMatches: "Geen overeenkomende agents",
   },
+  agentScope: {
+    label: "Agentbereik",
+    allAgents: "Alle agents",
+  },
   newSession: {
     title: "Nieuwe sessie",
     hint: "Kies waar deze sessie werkt en zeg vervolgens wat er moet gebeuren.",

@@ -412,6 +412,10 @@ export const ar: TranslationMap = {
     filterAgents: "البحث عن وكيل…",
     noAgentMatches: "لا توجد وكلاء مطابقة",
   },
+  agentScope: {
+    label: "نطاق الوكيل",
+    allAgents: "جميع الوكلاء",
+  },
   newSession: {
     title: "جلسة جديدة",
     hint: "اختر مكان عمل هذه الجلسة، ثم اذكر ما يجب فعله.",

@@ -410,6 +410,10 @@ export const zh_TW: TranslationMap = {
     filterAgents: "尋找 Agent…",
     noAgentMatches: "沒有相符的 Agent",
   },
+  agentScope: {
+    label: "代理程式範圍",
+    allAgents: "所有代理程式",
+  },
   newSession: {
     title: "新工作階段",
     hint: "選擇此工作階段的執行位置，然後說明要執行的事項。",

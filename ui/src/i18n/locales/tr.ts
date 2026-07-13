@@ -417,6 +417,10 @@ export const tr: TranslationMap = {
     filterAgents: "Agent bul…",
     noAgentMatches: "Eşleşen agent yok",
   },
+  agentScope: {
+    label: "Ajan kapsamı",
+    allAgents: "Tüm ajanlar",
+  },
   newSession: {
     title: "Yeni oturum",
     hint: "Bu oturumun nerede çalışacağını seçin, ardından ne yapılacağını söyleyin.",

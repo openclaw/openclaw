@@ -413,6 +413,10 @@ export const hi: TranslationMap = {
     filterAgents: "Agent खोजें…",
     noAgentMatches: "कोई मेल खाने वाला Agent नहीं",
   },
+  agentScope: {
+    label: "एजेंट का दायरा",
+    allAgents: "सभी एजेंट",
+  },
   newSession: {
     title: "नया सेशन",
     hint: "चुनें कि यह session कहाँ काम करेगा, फिर बताएं कि क्या करना है।",

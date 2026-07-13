@@ -410,6 +410,10 @@ export const zh_CN: TranslationMap = {
     filterAgents: "查找 Agent…",
     noAgentMatches: "没有匹配的 Agent",
   },
+  agentScope: {
+    label: "代理范围",
+    allAgents: "所有代理",
+  },
   newSession: {
     title: "新建会话",
     hint: "选择此会话的工作位置，然后说明要执行的操作。",

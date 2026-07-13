@@ -416,6 +416,10 @@ export const vi: TranslationMap = {
     filterAgents: "Tìm agent…",
     noAgentMatches: "Không có agent phù hợp",
   },
+  agentScope: {
+    label: "Phạm vi agent",
+    allAgents: "Tất cả agent",
+  },
   newSession: {
     title: "Phiên mới",
     hint: "Chọn nơi phiên này làm việc, rồi cho biết cần làm gì.",

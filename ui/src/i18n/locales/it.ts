@@ -418,6 +418,10 @@ export const it: TranslationMap = {
     filterAgents: "Trova agente…",
     noAgentMatches: "Nessun agente corrispondente",
   },
+  agentScope: {
+    label: "Ambito dell'agente",
+    allAgents: "Tutti gli agenti",
+  },
   newSession: {
     title: "Nuova sessione",
     hint: "Scegli dove lavora questa sessione, poi indica cosa fare.",

@@ -410,6 +410,10 @@ export const th: TranslationMap = {
     filterAgents: "ค้นหาเอเจนต์…",
     noAgentMatches: "ไม่พบเอเจนต์ที่ตรงกัน",
   },
+  agentScope: {
+    label: "ขอบเขตเอเจนต์",
+    allAgents: "เอเจนต์ทั้งหมด",
+  },
   newSession: {
     title: "เซสชันใหม่",
     hint: "เลือกตำแหน่งที่เซสชันนี้จะทำงาน จากนั้นบอกสิ่งที่ต้องทำ",

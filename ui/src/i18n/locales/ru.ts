@@ -417,6 +417,10 @@ export const ru: TranslationMap = {
     filterAgents: "Найти агента…",
     noAgentMatches: "Подходящие агенты не найдены",
   },
+  agentScope: {
+    label: "Область действия агента",
+    allAgents: "Все агенты",
+  },
   newSession: {
     title: "Новый сеанс",
     hint: "Выберите, где будет работать эта сессия, затем опишите, что нужно сделать.",

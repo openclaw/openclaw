@@ -415,6 +415,10 @@ export const fa: TranslationMap = {
     filterAgents: "یافتن عامل…",
     noAgentMatches: "هیچ عامل منطبقی یافت نشد",
   },
+  agentScope: {
+    label: "دامنه عامل",
+    allAgents: "همه عامل‌ها",
+  },
   newSession: {
     title: "جلسه جدید",
     hint: "انتخاب کنید این جلسه کجا کار کند، سپس بگویید چه کاری انجام دهد.",

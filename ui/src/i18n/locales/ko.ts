@@ -413,6 +413,10 @@ export const ko: TranslationMap = {
     filterAgents: "에이전트 찾기…",
     noAgentMatches: "일치하는 에이전트 없음",
   },
+  agentScope: {
+    label: "에이전트 범위",
+    allAgents: "모든 에이전트",
+  },
   newSession: {
     title: "새 세션",
     hint: "이 세션이 작업할 위치를 선택한 다음, 수행할 작업을 입력하세요.",
