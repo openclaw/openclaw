@@ -15,6 +15,10 @@ import { buildMentionedCardContent } from "./mention.js";
 import { resolveFeishuCardTemplate } from "./native-card.js";
 import { parsePostContent } from "./post.js";
 import {
+  resolveFeishuSendRateLimitMinIntervalMs,
+  runWithFeishuSendRateLimit,
+} from "./send-rate-limit.js";
+import {
   assertFeishuMessageApiSuccess,
   resolveFeishuReceiptKind,
   toFeishuSendResult,
@@ -595,7 +599,13 @@ export async function sendMessageFeishu(
     mentions,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const {
+    accountId: resolvedAccountId,
+    client,
+    config,
+    receiveId,
+    receiveIdType,
+  } = resolveFeishuSendTarget({ cfg, to, accountId });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
@@ -606,16 +616,25 @@ export async function sendMessageFeishu(
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
-  return sendReplyOrFallbackDirect(client, {
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    content,
-    msgType,
-    directParams,
-    directErrorPrefix: "Feishu send failed",
-    replyErrorPrefix: "Feishu reply failed",
-  });
+  return runWithFeishuSendRateLimit(
+    {
+      accountId: resolvedAccountId,
+      receiveId,
+      receiveIdType,
+      minIntervalMs: resolveFeishuSendRateLimitMinIntervalMs(config),
+    },
+    () =>
+      sendReplyOrFallbackDirect(client, {
+        replyToMessageId,
+        replyInThread,
+        allowTopLevelReplyFallback,
+        content,
+        msgType,
+        directParams,
+        directErrorPrefix: "Feishu send failed",
+        replyErrorPrefix: "Feishu reply failed",
+      }),
+  );
 }
 
 type SendFeishuCardParams = {
@@ -632,20 +651,35 @@ type SendFeishuCardParams = {
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
     params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const {
+    accountId: resolvedAccountId,
+    client,
+    config,
+    receiveId,
+    receiveIdType,
+  } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
   const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
-  return sendReplyOrFallbackDirect(client, {
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelReplyFallback,
-    content,
-    msgType: "interactive",
-    directParams,
-    directErrorPrefix: "Feishu card send failed",
-    replyErrorPrefix: "Feishu card reply failed",
-  });
+  return runWithFeishuSendRateLimit(
+    {
+      accountId: resolvedAccountId,
+      receiveId,
+      receiveIdType,
+      minIntervalMs: resolveFeishuSendRateLimitMinIntervalMs(config),
+    },
+    () =>
+      sendReplyOrFallbackDirect(client, {
+        replyToMessageId,
+        replyInThread,
+        allowTopLevelReplyFallback,
+        content,
+        msgType: "interactive",
+        directParams,
+        directErrorPrefix: "Feishu card send failed",
+        replyErrorPrefix: "Feishu card reply failed",
+      }),
+  );
 }
 
 export async function editMessageFeishu(params: {

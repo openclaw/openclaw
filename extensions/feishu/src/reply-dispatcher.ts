@@ -28,6 +28,7 @@ import {
   type RuntimeEnv,
 } from "./reply-dispatcher-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
+import { resolveFeishuSendRateLimitMinIntervalMs } from "./send-rate-limit.js";
 import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
@@ -417,6 +418,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           rootId,
           header: cardHeader,
           note: cardNote,
+          sendRateLimit: {
+            accountId: account.accountId,
+            minIntervalMs: resolveFeishuSendRateLimitMinIntervalMs(account.config),
+          },
         });
         streamingStartBackoffUntilByAccount.delete(account.accountId);
       } catch (error) {

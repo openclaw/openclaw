@@ -582,6 +582,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                           | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
 | `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `messages.tts`                       |
+| `channels.feishu.accounts.<id>.sendRateLimit.minIntervalMs` | Per-account outbound send interval override                                       | inherited                            |
 | `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
 | `channels.feishu.groupPolicy`                            | Group policy (`open`, `allowlist`, `disabled`)                                       | `allowlist`                          |

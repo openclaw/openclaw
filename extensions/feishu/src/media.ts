@@ -25,6 +25,10 @@ import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
+  resolveFeishuSendRateLimitMinIntervalMs,
+  runWithFeishuSendRateLimit,
+} from "./send-rate-limit.js";
+import {
   assertFeishuMessageApiSuccess,
   resolveFeishuReceiptKind,
   toFeishuSendResult,
@@ -523,46 +527,62 @@ async function sendImageFeishu(params: {
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+  const {
+    accountId: resolvedAccountId,
+    client,
+    config,
+    receiveId,
+    receiveIdType,
+  } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
   const content = JSON.stringify({ image_key: imageKey });
+  const send = async () => {
+    if (replyToMessageId) {
+      const response = await requestFeishuApi(
+        () =>
+          client.im.message.reply({
+            path: { message_id: replyToMessageId },
+            data: {
+              content,
+              msg_type: "image",
+              ...(replyInThread ? { reply_in_thread: true } : {}),
+            },
+          }),
+        "Feishu image reply failed",
+        { includeNestedErrorLogId: true },
+      );
+      assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
+      return toFeishuSendResult(response, receiveId, "media");
+    }
 
-  if (replyToMessageId) {
     const response = await requestFeishuApi(
       () =>
-        client.im.message.reply({
-          path: { message_id: replyToMessageId },
+        client.im.message.create({
+          params: { receive_id_type: receiveIdType },
           data: {
+            receive_id: receiveId,
             content,
             msg_type: "image",
-            ...(replyInThread ? { reply_in_thread: true } : {}),
           },
         }),
-      "Feishu image reply failed",
+      "Feishu image send failed",
       { includeNestedErrorLogId: true },
     );
-    assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
+    assertFeishuMessageApiSuccess(response, "Feishu image send failed");
     return toFeishuSendResult(response, receiveId, "media");
-  }
-
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: "image",
-        },
-      }),
-    "Feishu image send failed",
-    { includeNestedErrorLogId: true },
+  };
+  return runWithFeishuSendRateLimit(
+    {
+      accountId: resolvedAccountId,
+      receiveId,
+      receiveIdType,
+      minIntervalMs: resolveFeishuSendRateLimitMinIntervalMs(config),
+    },
+    send,
   );
-  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
-  return toFeishuSendResult(response, receiveId, "media");
 }
 
 /**
@@ -580,46 +600,62 @@ async function sendFileFeishu(params: {
 }): Promise<SendMediaResult> {
   const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
   const msgType = params.msgType ?? "file";
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+  const {
+    accountId: resolvedAccountId,
+    client,
+    config,
+    receiveId,
+    receiveIdType,
+  } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
   const content = JSON.stringify({ file_key: fileKey });
+  const send = async () => {
+    if (replyToMessageId) {
+      const response = await requestFeishuApi(
+        () =>
+          client.im.message.reply({
+            path: { message_id: replyToMessageId },
+            data: {
+              content,
+              msg_type: msgType,
+              ...(replyInThread ? { reply_in_thread: true } : {}),
+            },
+          }),
+        "Feishu file reply failed",
+        { includeNestedErrorLogId: true },
+      );
+      assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
+      return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
+    }
 
-  if (replyToMessageId) {
     const response = await requestFeishuApi(
       () =>
-        client.im.message.reply({
-          path: { message_id: replyToMessageId },
+        client.im.message.create({
+          params: { receive_id_type: receiveIdType },
           data: {
+            receive_id: receiveId,
             content,
             msg_type: msgType,
-            ...(replyInThread ? { reply_in_thread: true } : {}),
           },
         }),
-      "Feishu file reply failed",
+      "Feishu file send failed",
       { includeNestedErrorLogId: true },
     );
-    assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
+    assertFeishuMessageApiSuccess(response, "Feishu file send failed");
     return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
-  }
-
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: msgType,
-        },
-      }),
-    "Feishu file send failed",
-    { includeNestedErrorLogId: true },
+  };
+  return runWithFeishuSendRateLimit(
+    {
+      accountId: resolvedAccountId,
+      receiveId,
+      receiveIdType,
+      minIntervalMs: resolveFeishuSendRateLimitMinIntervalMs(config),
+    },
+    send,
   );
-  assertFeishuMessageApiSuccess(response, "Feishu file send failed");
-  return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
 }
 
 /**

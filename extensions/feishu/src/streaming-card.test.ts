@@ -279,6 +279,7 @@ describe("FeishuStreamingSession", () => {
       im: {
         message: {
           create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
+          reply: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
         },
       },
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
@@ -1037,6 +1038,116 @@ describe("FeishuStreamingSession", () => {
     expect(log).toHaveBeenCalledWith(
       "Final update failed: Error: Update card content failed with HTTP 500",
     );
+  });
+
+  it("paces initial streaming-card replies for the same Feishu target", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const { client, deps } = mockStreamingTokenStart((token) => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: token,
+      expire: 7200,
+    }));
+    const sendTimes: number[] = [];
+    const reply = vi.fn(async () => {
+      sendTimes.push(Date.now());
+      return { code: 0, msg: "ok", data: { message_id: `om_${sendTimes.length}` } };
+    });
+    const typedClient = client as unknown as {
+      im: { message: { reply: typeof reply } };
+    };
+    typedClient.im.message.reply = reply;
+
+    const first = new FeishuStreamingSession(
+      client,
+      {
+        appId: "app_streaming_reply_rate_limit",
+        appSecret: "secret",
+      },
+      undefined,
+      deps,
+    ).start("chat_id", "chat_id", {
+      replyToMessageId: "om_parent",
+      sendRateLimit: { accountId: "main", minIntervalMs: 50 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reply).toHaveBeenCalledTimes(1);
+
+    const second = new FeishuStreamingSession(
+      client,
+      {
+        appId: "app_streaming_reply_rate_limit",
+        appSecret: "secret",
+      },
+      undefined,
+      deps,
+    ).start("chat_id", "chat_id", {
+      replyToMessageId: "om_parent",
+      sendRateLimit: { accountId: "main", minIntervalMs: 50 },
+    });
+
+    await vi.advanceTimersByTimeAsync(49);
+    expect(reply).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all([first, second]);
+
+    expect(reply).toHaveBeenCalledTimes(2);
+    expect(sendTimes[1] - sendTimes[0]).toBeGreaterThanOrEqual(50);
+  });
+
+  it("paces initial streaming-card creates for the same Feishu target", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(20_000);
+    const { client, deps } = mockStreamingTokenStart((token) => ({
+      code: 0,
+      msg: "ok",
+      tenant_access_token: token,
+      expire: 7200,
+    }));
+    const sendTimes: number[] = [];
+    const create = vi.fn(async () => {
+      sendTimes.push(Date.now());
+      return { code: 0, msg: "ok", data: { message_id: `om_${sendTimes.length}` } };
+    });
+    const typedClient = client as unknown as {
+      im: { message: { create: typeof create } };
+    };
+    typedClient.im.message.create = create;
+
+    const first = new FeishuStreamingSession(
+      client,
+      {
+        appId: "app_streaming_create_rate_limit",
+        appSecret: "secret",
+      },
+      undefined,
+      deps,
+    ).start("chat_id", "chat_id", {
+      sendRateLimit: { accountId: "main", minIntervalMs: 50 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(create).toHaveBeenCalledTimes(1);
+
+    const second = new FeishuStreamingSession(
+      client,
+      {
+        appId: "app_streaming_create_rate_limit",
+        appSecret: "secret",
+      },
+      undefined,
+      deps,
+    ).start("chat_id", "chat_id", {
+      sendRateLimit: { accountId: "main", minIntervalMs: 50 },
+    });
+
+    await vi.advanceTimersByTimeAsync(49);
+    expect(create).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.all([first, second]);
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(sendTimes[1] - sendTimes[0]).toBeGreaterThanOrEqual(50);
   });
 
   it("bounds streaming token cache lifetime when token expiry overflows", async () => {
