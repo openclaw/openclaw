@@ -198,6 +198,22 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     ]);
   });
 
+  it("aborts the stream when block delivery fails", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {
+        throw new Error("send failed");
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "streamed text" });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(false);
+    expect(pipeline.isAborted()).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "streamed text" })).toBe(false);
+  });
+
   it("keeps separate deliveries for distinct rich-only payloads", async () => {
     const sent: Array<{ presentation?: unknown }> = [];
     const pipeline = createBlockReplyPipeline({

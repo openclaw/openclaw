@@ -534,7 +534,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     runtime.channel.text.chunkTextWithMode.mockReturnValue(["final text", " overflow"]);
 
     const { result, options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
-    result.replyOptions.onPartialReply?.({ text: "partial" });
+    await result.replyOptions.onPartialReply?.({ text: "partial" });
     await options.deliver({ text: "final text overflow" }, { kind: "final" });
     await options.onIdle?.();
 
@@ -913,7 +913,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     const { result, options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
     });
-    result.replyOptions.onPartialReply?.({ text: "Working on it..." });
+    await result.replyOptions.onPartialReply?.({ text: "Working on it..." });
     await options.deliver({ text: "⚠️ Exec failed", isError: true }, { kind: "final" });
     await options.onIdle?.();
 
@@ -977,7 +977,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({ text: "```md\nidle streamed reply\n```" });
+    await result.replyOptions.onPartialReply?.({ text: "```md\nidle streamed reply\n```" });
     await options.onIdle?.();
     await options.deliver({ text: "```md\nidle streamed reply\n```" }, { kind: "final" });
 
@@ -1032,8 +1032,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
 
-    result.replyOptions.onPartialReply?.({ text: "plain" });
-    result.replyOptions.onPartialReply?.({ text: "plain streamed answer" });
+    await result.replyOptions.onPartialReply?.({ text: "plain" });
+    await result.replyOptions.onPartialReply?.({ text: "plain streamed answer" });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
@@ -1161,7 +1161,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({ text: "hello" });
+    await result.replyOptions.onPartialReply?.({ text: "hello" });
     await options.deliver({ text: "lo world" }, { kind: "block" });
     await options.onIdle?.();
 
@@ -1188,7 +1188,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({ text: "```md\npartial\n```" });
+    await result.replyOptions.onPartialReply?.({ text: "```md\npartial\n```" });
     await options.deliver({ text: "```md\npartial\n```" }, { kind: "block" });
     await options.onIdle?.();
 
@@ -1215,11 +1215,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({
+    await result.replyOptions.onPartialReply?.({
       text: "Preparing the lookup plan with enough text to count as one block.",
     });
-    result.replyOptions.onPartialReply?.({ text: "Found" });
-    result.replyOptions.onPartialReply?.({ text: "Found the answer." });
+    await result.replyOptions.onPartialReply?.({ text: "Found" });
+    await result.replyOptions.onPartialReply?.({ text: "Found the answer." });
     await options.onIdle?.();
 
     expect(streamingInstances).toHaveLength(1);
@@ -1247,7 +1247,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    result.replyOptions.onPartialReply?.({
+    await result.replyOptions.onPartialReply?.({
       text: "<thinking>private chain of thought</thinking>\nvisible answer",
     });
     await options.onIdle?.();
@@ -1308,7 +1308,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
 
-    result.replyOptions.onPartialReply?.({ text: "spoken reply" });
+    await result.replyOptions.onPartialReply?.({ text: "spoken reply" });
     await options.deliver(
       {
         text: "spoken reply",
@@ -1336,7 +1336,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
 
-    result.replyOptions.onPartialReply?.({ text: "caption from stream" });
+    await result.replyOptions.onPartialReply?.({ text: "caption from stream" });
     await options.deliver(
       {
         mediaUrl: "https://example.com/image.png",
@@ -1476,6 +1476,59 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("closes final streaming text before sending regular media attachments", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await options.deliver(
+      {
+        text: "Daily sales summary\nRevenue is up 12%.",
+        mediaUrls: ["https://example.com/dashboard.png"],
+      },
+      { kind: "final" },
+    );
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "Daily sales summary\nRevenue is up 12%.",
+      { note: "Agent: agent" },
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
+      mediaUrl: "https://example.com/dashboard.png",
+    });
+    await expect(result.ensureNoVisibleReplyFallback("dispatch-complete")).resolves.toBe(false);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to text before media when final streaming close has no visible content", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+
+    await result.replyOptions.onPartialReply?.({ text: "Dashboard caption" });
+    streamingInstances[0].close = vi.fn(async () => {
+      streamingInstances[0].active = false;
+      return false;
+    });
+
+    await options.deliver(
+      {
+        text: "Dashboard caption",
+        mediaUrls: ["https://example.com/dashboard.png"],
+      },
+      { kind: "final" },
+    );
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: "Dashboard caption",
+    });
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    await expect(result.ensureNoVisibleReplyFallback("dispatch-complete")).resolves.toBe(false);
+  });
+
   it("passes replyInThread to sendMessageFeishu for plain text", async () => {
     useNonStreamingAutoAccount();
     const { options } = createDispatcherHarness({
@@ -1555,11 +1608,11 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "thinking step 1" });
-    result.replyOptions.onReasoningStream?.({
+    await result.replyOptions.onReasoningStream?.({ text: "thinking step 1" });
+    await result.replyOptions.onReasoningStream?.({
       text: "thinking step 1\nstep 2",
     });
-    result.replyOptions.onPartialReply?.({ text: "answer part" });
+    await result.replyOptions.onPartialReply?.({ text: "answer part" });
     result.replyOptions.onReasoningEnd?.();
     await options.deliver({ text: "answer part final" }, { kind: "final" });
     await options.onIdle?.();
@@ -1633,7 +1686,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "deep thought" });
+    await result.replyOptions.onReasoningStream?.({ text: "deep thought" });
     result.replyOptions.onReasoningEnd?.();
     await options.onIdle?.();
 
@@ -1653,8 +1706,8 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "" });
-    result.replyOptions.onPartialReply?.({ text: "```ts\ncode\n```" });
+    await result.replyOptions.onReasoningStream?.({ text: "" });
+    await result.replyOptions.onPartialReply?.({ text: "```ts\ncode\n```" });
     await options.deliver({ text: "```ts\ncode\n```" }, { kind: "final" });
     await options.onIdle?.();
 
@@ -1671,7 +1724,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
 
     await options.onReplyStart?.();
-    result.replyOptions.onReasoningStream?.({ text: "thought" });
+    await result.replyOptions.onReasoningStream?.({ text: "thought" });
     result.replyOptions.onReasoningEnd?.();
     await options.deliver({ text: "```ts\nfinal answer\n```" }, { kind: "final" });
     await options.onIdle?.();
@@ -1784,7 +1837,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     await options.onReplyStart?.();
     result.replyOptions.onToolStart?.({ name: "web_search" });
-    result.replyOptions.onPartialReply?.({ text: "final answer" });
+    await result.replyOptions.onPartialReply?.({ text: "final answer" });
     await options.onIdle?.();
 
     const updateTexts = streamingUpdateTexts();
@@ -1815,7 +1868,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       args: { command: "pnpm test -- --watch=false" },
       detailMode: "raw",
     });
-    result.replyOptions.onPartialReply?.({ text: "final answer" });
+    await result.replyOptions.onPartialReply?.({ text: "final answer" });
     await options.onIdle?.();
 
     const updateTexts = streamingUpdateTexts();
@@ -1839,7 +1892,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
     await options.onReplyStart?.();
     result.replyOptions.onToolStart?.({ name: "message" });
-    result.replyOptions.onPartialReply?.({ text: "final answer" });
+    await result.replyOptions.onPartialReply?.({ text: "final answer" });
     await options.onIdle?.();
 
     const updateTexts = streamingUpdateTexts();
@@ -2185,6 +2238,91 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       replyToMessageId: "om_msg",
       replyInThread: true,
     });
+  });
+
+  it("preserves final text and media after partial streaming start fails", async () => {
+    const errorMock = vi.fn();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const origPush = streamingInstances.push.bind(streamingInstances);
+    streamingInstances.push = (...args: StreamingSessionStub[]) => {
+      if (streamingInstances.length === 0) {
+        args[0].start = vi
+          .fn()
+          .mockRejectedValue(new Error("Create card request failed with HTTP 400"));
+      }
+      return origPush(...args);
+    };
+
+    try {
+      const { result, options } = createDispatcherHarness({
+        runtime: { log: vi.fn(), error: errorMock } as never,
+      });
+
+      await result.replyOptions.onPartialReply?.({
+        text: "Feishu MEDIA regression proof",
+      });
+      await options.deliver(
+        {
+          text:
+            "Feishu MEDIA regression proof\n" +
+            "If this fix works, this text and the image both appear.",
+          mediaUrl: "/tmp/openclaw-feishu-proof/media.png",
+          mediaUrls: ["/tmp/openclaw-feishu-proof/media.png"],
+        },
+        { kind: "final" },
+      );
+
+      expect(errorMock.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+        "streaming start failed",
+      );
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+      expectMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
+        text:
+          "Feishu MEDIA regression proof\n" +
+          "If this fix works, this text and the image both appear.",
+      });
+      expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+      expectMockArgFields(sendMediaFeishuMock, "media send params", {
+        mediaUrl: "/tmp/openclaw-feishu-proof/media.png",
+      });
+    } finally {
+      streamingInstances.push = origPush;
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("falls back to a static card when block streaming card start fails", async () => {
+    const errorMock = vi.fn();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const origPush = streamingInstances.push.bind(streamingInstances);
+    streamingInstances.push = (...args: StreamingSessionStub[]) => {
+      if (streamingInstances.length === 0) {
+        args[0].start = vi
+          .fn()
+          .mockRejectedValue(new Error("Create card request failed with HTTP 400"));
+      }
+      return origPush(...args);
+    };
+
+    try {
+      const { options } = createDispatcherHarness({
+        runtime: { log: vi.fn(), error: errorMock } as never,
+      });
+
+      await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "block" });
+
+      expect(errorMock.mock.calls.map(([message]) => String(message)).join("\n")).toContain(
+        "streaming start failed",
+      );
+      expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+      expectMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
+        text: "```ts\nconst x = 1\n```",
+      });
+      expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    } finally {
+      streamingInstances.push = origPush;
+      nowSpy.mockRestore();
+    }
   });
 
   it("backs off streaming retries after start() throws (HTTP 400)", async () => {

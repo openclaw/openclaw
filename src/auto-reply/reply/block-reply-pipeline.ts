@@ -217,6 +217,7 @@ export function createBlockReplyPipeline(params: {
           }
           return;
         }
+        aborted = true;
         logVerbose(`block reply delivery failed: ${String(err)}`);
       })
       .finally(() => {
