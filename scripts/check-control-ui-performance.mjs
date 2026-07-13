@@ -40,7 +40,7 @@ export function extractControlUiStartupAssetPaths(html) {
       assets.add(assetPath);
     }
   }
-  return [...assets].toSorted();
+  return [...assets].toSorted((left, right) => left.localeCompare(right));
 }
 
 function readAssetMetrics(assetsDir, entry) {
