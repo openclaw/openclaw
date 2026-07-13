@@ -26,6 +26,9 @@ export const whatsAppChannelConfigUiHints = {
   },
   ...createChannelConfigUiHints({
     channelLabel: "WhatsApp",
-    mentionPatterns: { targetDescription: "WhatsApp conversation IDs such as 123@g.us" },
+    mentionPatterns: {
+      targetDescription: "WhatsApp conversation IDs",
+      policyTargetDescription: "WhatsApp conversation IDs such as 123@g.us",
+    },
   }),
 } satisfies Record<string, ChannelConfigUiHint>;

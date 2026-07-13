@@ -39,19 +39,16 @@ function createChannelConfigWritesUiHint(channelLabel: string): HintMap {
 function createChannelMentionPatternUiHints(params: {
   channelLabel: string;
   targetDescription: string;
-  nativeMentionDescription?: string;
-  nativeDenyMentionDescription?: string;
+  policyTargetDescription?: string;
+  policyNote?: string;
+  denyNote?: string;
 }): HintMap {
-  const policySuffix = params.nativeMentionDescription
-    ? ` ${params.nativeMentionDescription} still trigger even when regex patterns are denied.`
-    : "";
-  const denySuffix = params.nativeDenyMentionDescription
-    ? ` ${params.nativeDenyMentionDescription} still trigger.`
-    : "";
+  const policySuffix = params.policyNote ? ` ${params.policyNote}` : "";
+  const denySuffix = params.denyNote ? ` ${params.denyNote}` : "";
   return {
     mentionPatterns: {
       label: `${params.channelLabel} Mention Pattern Policy`,
-      help: `Scopes configured groupChat mentionPatterns to selected ${params.targetDescription}.${policySuffix}`,
+      help: `Scopes configured groupChat mentionPatterns to selected ${params.policyTargetDescription ?? params.targetDescription}.${policySuffix}`,
     },
     "mentionPatterns.mode": {
       label: `${params.channelLabel} Mention Pattern Mode`,
@@ -159,8 +156,9 @@ export function createChannelConfigUiHints(params: {
   configWrites?: boolean;
   mentionPatterns?: {
     targetDescription: string;
-    nativeMentionDescription?: string;
-    nativeDenyMentionDescription?: string;
+    policyTargetDescription?: string;
+    policyNote?: string;
+    denyNote?: string;
   };
   nativeCommands?: boolean;
   progress?: {

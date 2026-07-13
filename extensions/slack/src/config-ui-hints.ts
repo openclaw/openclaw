@@ -17,8 +17,8 @@ export const slackChannelConfigUiHints = {
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Slack channel IDs",
-      nativeMentionDescription: "Native Slack @mentions",
-      nativeDenyMentionDescription: "Native @mentions",
+      policyNote: "Native Slack @mentions still trigger even when regex patterns are denied.",
+      denyNote: "Native @mentions still trigger.",
     },
     nativeCommands: true,
   }),

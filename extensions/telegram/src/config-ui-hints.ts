@@ -21,8 +21,8 @@ export const telegramChannelConfigUiHints = {
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Telegram group chat IDs or chatId:topic:threadId topic IDs",
-      nativeMentionDescription: "Native Telegram bot mentions",
-      nativeDenyMentionDescription: "Native bot mentions",
+      policyNote: "Native Telegram bot mentions still trigger even when regex patterns are denied.",
+      denyNote: "Native bot mentions still trigger.",
     },
     nativeCommands: true,
   }),

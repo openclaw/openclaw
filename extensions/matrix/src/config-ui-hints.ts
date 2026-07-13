@@ -7,8 +7,9 @@ export const matrixChannelConfigUiHints = {
     channelLabel: "Matrix",
     mentionPatterns: {
       targetDescription: "Matrix room IDs",
-      nativeMentionDescription: "Native Matrix mention evidence",
-      nativeDenyMentionDescription: "Native mention evidence",
+      policyNote:
+        "Native Matrix mention evidence still triggers even when regex patterns are denied.",
+      denyNote: "Native mention evidence still triggers.",
     },
   }),
   allowBots: {

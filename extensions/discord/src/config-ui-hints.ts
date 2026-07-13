@@ -17,8 +17,8 @@ export const discordChannelConfigUiHints = {
     configWrites: true,
     mentionPatterns: {
       targetDescription: "Discord channel IDs",
-      nativeMentionDescription: "Native Discord @mentions",
-      nativeDenyMentionDescription: "Native @mentions",
+      policyNote: "Native Discord @mentions still trigger even when regex patterns are denied.",
+      denyNote: "Native @mentions still trigger.",
     },
   }),
   proxy: {
