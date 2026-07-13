@@ -894,7 +894,8 @@ describe("codex doctor contract", () => {
     const result = await fixture.migration.migrateLegacyState(fixture.params);
 
     expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([expect.stringContaining("owned by agent harness pi")]);
+    expect(result.warnings).toEqual([]);
+    expect(result.notices).toEqual([expect.stringContaining("owned by agent harness pi")]);
     await expect(fs.access(fixture.sidecarPath)).resolves.toBeUndefined();
     await expect(openBindingStore(fixture.env).entries()).resolves.toEqual([]);
 
