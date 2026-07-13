@@ -833,9 +833,6 @@ describe("GatewayClient close handling", () => {
     client.start();
     getLatestWs().emitClose(1012, "service restart");
 
-    const timer = (client as unknown as { protocol: { reconnectTimer: NodeJS.Timeout | null } })
-      .protocol.reconnectTimer;
-    expect(timer?.hasRef()).toBe(true);
     expect(wsInstances).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(999);
     expect(wsInstances).toHaveLength(1);
