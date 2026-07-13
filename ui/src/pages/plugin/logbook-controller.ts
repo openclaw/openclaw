@@ -74,6 +74,10 @@ export type LogbookUiState = {
   askAnswer: string | null;
   askLoading: boolean;
   actionPending: boolean;
+  // Foreground loads advance the result owner; silent loads share it so they
+  // cannot leave a foreground load stuck in its loading state.
+  loadGeneration: number;
+  pollRefresh: Promise<void> | null;
   pollTimer: ReturnType<typeof globalThis.setInterval> | null;
   pollClient: GatewayBrowserClient | null;
   requestUpdate: (() => void) | null;
@@ -117,6 +121,8 @@ export function getLogbookState(host: object): LogbookUiState {
       askAnswer: null,
       askLoading: false,
       actionPending: false,
+      loadGeneration: 0,
+      pollRefresh: null,
       pollTimer: null,
       pollClient: null,
       requestUpdate: null,
@@ -154,6 +160,8 @@ export async function loadLogbook(
   } else if (opts?.today) {
     state.dayPinned = false;
   }
+  const generation = opts?.silent ? state.loadGeneration : ++state.loadGeneration;
+  const requestedDay = state.day;
   if (!opts?.silent) {
     state.loading = true;
     state.error = null;
@@ -163,8 +171,11 @@ export async function loadLogbook(
     const [status, days, timeline] = await Promise.all([
       client.request<LogbookStatusPayload>("logbook.status", {}),
       client.request<LogbookDaysPayload>("logbook.days", {}),
-      client.request<LogbookTimelinePayload>("logbook.timeline", { day: state.day }),
+      client.request<LogbookTimelinePayload>("logbook.timeline", { day: requestedDay }),
     ]);
+    if (generation !== state.loadGeneration || state.day !== requestedDay) {
+      return;
+    }
     state.status = status;
     state.days = days.days;
     // Unpinned views follow the gateway's day: the browser clock can sit in
@@ -172,18 +183,28 @@ export async function loadLogbook(
     // advance the default view.
     if (!state.dayPinned && status.today !== state.day) {
       resetDayView(state, status.today);
-      state.timeline = await client.request<LogbookTimelinePayload>("logbook.timeline", {
+      const todayTimeline = await client.request<LogbookTimelinePayload>("logbook.timeline", {
         day: status.today,
       });
+      if (generation !== state.loadGeneration || state.day !== status.today) {
+        return;
+      }
+      state.timeline = todayTimeline;
     } else {
       state.timeline = timeline;
     }
     state.error = null;
   } catch (err) {
-    state.error = err instanceof Error ? err.message : String(err);
+    if (generation === state.loadGeneration) {
+      state.error = err instanceof Error ? err.message : String(err);
+    }
   } finally {
-    state.loading = false;
-    notify(state);
+    if (generation === state.loadGeneration) {
+      if (!opts?.silent) {
+        state.loading = false;
+      }
+      notify(state);
+    }
   }
 }
 
@@ -220,8 +241,18 @@ export function configureLogbookPolling(
   }
   state.pollClient = client;
   state.pollTimer = setInterval(() => {
-    // Silent refresh keeps the timeline current while analysis batches land.
-    void loadLogbook(state, client, { silent: true });
+    // Keep one silent batch in flight so slow gateway responses cannot stack
+    // another status/days/timeline batch on every interval.
+    if (state.loading || state.pollRefresh) {
+      return;
+    }
+    const refresh = loadLogbook(state, client, { silent: true });
+    state.pollRefresh = refresh;
+    void refresh.finally(() => {
+      if (state.pollRefresh === refresh) {
+        state.pollRefresh = null;
+      }
+    });
   }, POLL_INTERVAL_MS);
 }
 
