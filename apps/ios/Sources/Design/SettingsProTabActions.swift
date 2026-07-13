@@ -924,6 +924,7 @@ extension SettingsProTab {
         case .approvals: String(localized: "Approvals")
         case .permissions: String(localized: "Permissions")
         case .channels: String(localized: "Channels")
+        case .skills: String(localized: "Skills")
         case .voice: String(localized: "Voice & Talk")
         case .diagnostics: String(localized: "Diagnostics")
         case .privacy: String(localized: "Privacy")
