@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { brotliDecompressSync, gunzipSync } from "node:zlib";
+import { brotliCompressSync, brotliDecompressSync, gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { normalizeAssistantIdentity } from "../../ui/src/lib/assistant-identity.ts";
@@ -22,6 +22,7 @@ import { AVATAR_MAX_BYTES, AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-po
 import { withEnvAsync } from "../test-utils/env.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
+import { resolveOpenedControlUiRepresentation } from "./control-ui-static.js";
 import {
   handleControlUiAssistantMediaRequest,
   handleControlUiAvatarRequest,
@@ -1844,7 +1845,9 @@ describe("handleControlUiHttpRequest", () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const source = "console.log('compressed');\n".repeat(200);
-        await writeAssetFile(tmp, "app-AbCd1234.js", source);
+        const { filePath } = await writeAssetFile(tmp, "app-AbCd1234.js", source);
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
         const closeSync = vi.spyOn(fsSync, "closeSync");
 
         try {
@@ -1853,7 +1856,7 @@ describe("handleControlUiHttpRequest", () => {
             method: "GET",
             rootPath: tmp,
             rootKind: "bundled",
-            headers: { "accept-encoding": "gzip;q=0.5, br" },
+            headers: { "accept-encoding": "gzip;q=0.5, br, identity;q=0.1" },
           });
 
           expect(handled).toBe(true);
@@ -1877,7 +1880,74 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
-  it("negotiates gzip and keeps configured-root assets revalidated", async () => {
+  it("serves build-time gzip variants when they are preferred", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('gzip');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-EfGh5678.js", source);
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync(source));
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+
+        const { end, setHeader } = await runControlUiRequest({
+          url: "/assets/app-EfGh5678.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "accept-encoding": "br;q=0.5, gzip, identity;q=0.1" },
+        });
+
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+      },
+    });
+  });
+
+  it("falls through to an acceptable sidecar when the preferred variant is missing", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const source = "console.log('partial-build');\n".repeat(200);
+        const { filePath } = await writeAssetFile(tmp, "app-IjKl9012.js", source);
+        await fs.writeFile(`${filePath}.gz`, gzipSync(source));
+
+        const { end, setHeader } = await runControlUiRequest({
+          url: "/assets/app-IjKl9012.js",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+          headers: { "accept-encoding": "br, gzip;q=0.5, identity;q=0" },
+        });
+
+        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
+        expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+      },
+    });
+  });
+
+  it("closes the source descriptor when opening a sidecar fails", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { filePath } = await writeAssetFile(tmp, "app-MnOp3456.js", "source\n");
+        const fd = fsSync.openSync(filePath, "r");
+        const openError = Object.assign(new Error("descriptor limit"), { code: "EMFILE" });
+
+        expect(() =>
+          resolveOpenedControlUiRepresentation({
+            req: {
+              headers: { "accept-encoding": "br, identity;q=0" },
+            } as IncomingMessage,
+            sourceFile: { path: filePath, fd },
+            precompressed: true,
+            openPrecompressedFile: () => {
+              throw openError;
+            },
+          }),
+        ).toThrow(openError);
+        expect(() => fsSync.fstatSync(fd)).toThrow(/bad file descriptor/iu);
+      },
+    });
+  });
+
+  it("keeps configured-root assets identity encoded and revalidated", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
         const source = "console.log('configured');\n".repeat(100);
@@ -1891,8 +1961,78 @@ describe("handleControlUiHttpRequest", () => {
         });
 
         expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
-        expect(setHeader).toHaveBeenCalledWith("Content-Encoding", "gzip");
-        expect(gunzipSync(end.mock.calls[0]?.[0] as Buffer).toString()).toBe(source);
+        expect(setHeader).not.toHaveBeenCalledWith("Content-Encoding", expect.anything());
+        expect(responseBody(end)).toBe(source);
+      },
+    });
+  });
+
+  it("returns 406 when no available asset representation is acceptable", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "app-settings.js", "console.log('configured');\n");
+
+        const { res, end } = await runControlUiRequest({
+          url: "/assets/app-settings.js",
+          method: "GET",
+          rootPath: tmp,
+          headers: { "accept-encoding": "br;q=0, gzip;q=0, identity;q=0" },
+        });
+
+        expect(res.statusCode).toBe(406);
+        expect(responseBody(end)).toBe("Not Acceptable");
+      },
+    });
+  });
+
+  it("varies identity-only assets on Accept-Encoding", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "logo.png", "png-bytes");
+
+        const { setHeader } = await runControlUiRequest({
+          url: "/assets/logo.png",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expect(setHeader).toHaveBeenCalledWith("Vary", "Accept-Encoding");
+      },
+    });
+  });
+
+  it("does not expose precompressed sidecars as independent assets", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { filePath } = await writeAssetFile(tmp, "app-AbCd1234.js", "source\n");
+        await fs.writeFile(`${filePath}.br`, brotliCompressSync("source\n"));
+
+        const { res, end, handled } = await runControlUiRequest({
+          url: "/assets/app-AbCd1234.js.br",
+          method: "GET",
+          rootPath: tmp,
+          rootKind: "bundled",
+        });
+
+        expectNotFoundResponse({ handled, res, end });
+      },
+    });
+  });
+
+  it("preserves standalone compressed files in configured roots", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "data.gz", "configured-compressed-artifact\n");
+
+        const { end, handled } = await runControlUiRequest({
+          url: "/assets/data.gz",
+          method: "GET",
+          rootPath: tmp,
+        });
+
+        expect(handled).toBe(true);
+        expect(responseBody(end)).toBe("configured-compressed-artifact\n");
       },
     });
   });
@@ -1929,6 +2069,26 @@ describe("handleControlUiHttpRequest", () => {
         } finally {
           closeSync.mockRestore();
         }
+      },
+    });
+  });
+
+  it("returns 406 when every HTML representation is explicitly rejected", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        const { res, end } = makeMockHttpResponse();
+        await handleControlUiHttpRequest(
+          {
+            url: "/",
+            method: "GET",
+            headers: { "accept-encoding": "*;q=0" },
+          } as IncomingMessage,
+          res,
+          { root: { kind: "resolved", path: tmp } },
+        );
+
+        expect(res.statusCode).toBe(406);
+        expect(responseBody(end)).toBe("Not Acceptable");
       },
     });
   });

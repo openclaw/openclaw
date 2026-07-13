@@ -64,9 +64,13 @@ import {
   normalizeControlUiBasePath,
 } from "./control-ui-shared.js";
 import {
+  isControlUiPrecompressedAssetExtension,
   isControlUiStaticAssetExtension,
   readAndCloseControlUiFile,
   readAndCloseControlUiFileText,
+  resolveControlUiHtmlEncoding,
+  resolveOpenedControlUiRepresentation,
+  respondControlUiNotAcceptable,
   respondHeadForControlUiFile,
   sendControlUiHtmlBody,
   serveControlUiAsset,
@@ -1030,7 +1034,6 @@ export async function handleControlUiHttpRequest(
     respondControlUiNotFound(res);
     return true;
   }
-
   const filePath = path.resolve(root, fileRel);
   if (!isWithinDir(root, filePath)) {
     respondControlUiNotFound(res);
@@ -1045,27 +1048,68 @@ export async function handleControlUiHttpRequest(
         argv1: process.argv[1],
         cwd: process.cwd(),
       }));
+  // Bundled sidecars are implementation artifacts selected through
+  // Accept-Encoding. Configured roots retain ordinary .br/.gz resources.
+  if (
+    isBundledRoot &&
+    isControlUiPrecompressedAssetExtension(path.extname(fileRel).toLowerCase())
+  ) {
+    respondControlUiNotFound(res);
+    return true;
+  }
   const rejectHardlinks = !isBundledRoot;
   // Vite fingerprints every file emitted under the bundled assets directory.
   // Configured roots remain revalidated because their naming is not our contract.
   const immutableAsset = isBundledRoot && fileRel.startsWith("assets/");
   const safeFile = resolveSafeControlUiFile(rootReal, filePath, rejectHardlinks);
   if (safeFile) {
-    if (req.method === "HEAD") {
-      try {
-        respondHeadForControlUiFile(req, res, safeFile.path, { immutable: immutableAsset });
-        return true;
-      } finally {
-        fs.closeSync(safeFile.fd);
-      }
-    }
     if (path.basename(safeFile.path) === "index.html") {
+      if (req.method === "HEAD") {
+        try {
+          const encoding = resolveControlUiHtmlEncoding(req);
+          if (encoding === "not-acceptable") {
+            respondControlUiNotAcceptable(res);
+            return true;
+          }
+          respondHeadForControlUiFile(res, safeFile.path, {
+            encoding: encoding === "identity" ? undefined : encoding,
+          });
+          return true;
+        } finally {
+          fs.closeSync(safeFile.fd);
+        }
+      }
       const body = await readAndCloseControlUiFileText(safeFile.fd);
       await serveResolvedIndexHtml(req, res, body, basePath, terminalEnabled);
       return true;
     }
-    const body = await readAndCloseControlUiFile(safeFile.fd);
-    await serveControlUiAsset(req, res, safeFile.path, body, { immutable: immutableAsset });
+    const representation = resolveOpenedControlUiRepresentation({
+      req,
+      sourceFile: safeFile,
+      precompressed: immutableAsset,
+      openPrecompressedFile: (compressedPath) =>
+        resolveSafeControlUiFile(rootReal, compressedPath, false),
+    });
+    if (!representation) {
+      respondControlUiNotAcceptable(res);
+      return true;
+    }
+    if (req.method === "HEAD") {
+      try {
+        respondHeadForControlUiFile(res, representation.contentPath, {
+          immutable: immutableAsset,
+          encoding: representation.encoding,
+        });
+        return true;
+      } finally {
+        fs.closeSync(representation.bodyFile.fd);
+      }
+    }
+    const body = await readAndCloseControlUiFile(representation.bodyFile.fd);
+    await serveControlUiAsset(res, representation.contentPath, body, {
+      immutable: immutableAsset,
+      encoding: representation.encoding,
+    });
     return true;
   }
 
@@ -1085,7 +1129,14 @@ export async function handleControlUiHttpRequest(
   if (safeIndex) {
     if (req.method === "HEAD") {
       try {
-        respondHeadForControlUiFile(req, res, safeIndex.path);
+        const encoding = resolveControlUiHtmlEncoding(req);
+        if (encoding === "not-acceptable") {
+          respondControlUiNotAcceptable(res);
+          return true;
+        }
+        respondHeadForControlUiFile(res, safeIndex.path, {
+          encoding: encoding === "identity" ? undefined : encoding,
+        });
         return true;
       } finally {
         fs.closeSync(safeIndex.fd);
