@@ -9,8 +9,6 @@ export const INPUT_PROVENANCE_KIND_VALUES = [
   "inter_session",
   "internal_system",
 ] as const;
-] as const;
->>>>>>> e71d8f3ee0b (fix(dreaming): use provenance-based heartbeat detection instead of text matching)
 
 type InputProvenanceKind = (typeof INPUT_PROVENANCE_KIND_VALUES)[number];
 

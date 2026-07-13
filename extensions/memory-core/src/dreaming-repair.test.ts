@@ -457,7 +457,7 @@ describe("dreaming artifact repair", () => {
 
     expect(repair.changed).toBe(true);
     expect(repair.removedHeartbeatDerivedLines).toBe(1);
-    expect((repair.clearedSessionCheckpointKeys ?? 0) > 0).toBe(true);
+    expect(repair.clearedSessionCheckpointKeys).toBeUndefined();
     const rewritten = await fs.readFile(corpusPath, "utf-8");
     expect(rewritten).toContain("normal content");
     expect(rewritten).not.toContain("Heartbeat received. Main is active.");
@@ -468,14 +468,14 @@ describe("dreaming artifact repair", () => {
     });
     expect(
       filesEntries.some((entry) => entry.key === "main:sessions/heartbeat-session.jsonl"),
-    ).toBe(false);
+    ).toBe(true);
     expect(filesEntries.some((entry) => entry.key === "main:sessions/other.jsonl")).toBe(true);
 
     const seenEntries = await readMemoryCoreWorkspaceEntries({
       namespace: DREAMING_SESSION_INGESTION_SEEN_NAMESPACE,
       workspaceDir,
     });
-    expect(seenEntries.some((entry) => entry.key === "main:heartbeat-session:0")).toBe(false);
+    expect(seenEntries.some((entry) => entry.key === "main:heartbeat-session:0")).toBe(true);
     expect(seenEntries.some((entry) => entry.key === "main:other:0")).toBe(true);
   });
 
