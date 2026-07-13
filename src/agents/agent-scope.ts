@@ -403,6 +403,11 @@ export function setAgentEffectiveModelPrimary(
   return "defaults";
 }
 
+/** @deprecated Prefer explicit/effective helpers at new call sites. */
+export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
+  return resolveAgentExplicitModelPrimary(cfg, agentId);
+}
+
 export function resolveAgentModelFallbacksOverride(
   cfg: OpenClawConfig,
   agentId: string,
