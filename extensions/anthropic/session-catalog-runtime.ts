@@ -14,11 +14,17 @@ import {
   CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
 } from "./cli-constants.js";
 
+const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
+
 export function currentClaudeSessionCatalogConfig(api: OpenClawPluginApi): OpenClawConfig {
   return (api.runtime.config?.current?.() ?? api.config ?? {}) as OpenClawConfig;
 }
 
-function boundClaudeThreadId(
+export function claudeSessionCatalogSourceKey(hostId: string, threadId: string): string {
+  return `${hostId}\0${threadId}`;
+}
+
+function boundClaudeSource(
   pluginId: string,
   entry: {
     cliSessionBindings?: unknown;
@@ -26,21 +32,26 @@ function boundClaudeThreadId(
     modelSelectionLocked?: boolean;
     pluginExtensions?: unknown;
   },
-): string | undefined {
+): { hostId: string; threadId: string } | undefined {
+  const anthropic = isRecord(entry.pluginExtensions) ? entry.pluginExtensions.anthropic : undefined;
+  const marker = isRecord(anthropic) ? anthropic.sessionCatalog : undefined;
+  const hostId =
+    isRecord(marker) && typeof marker.sourceHostId === "string"
+      ? marker.sourceHostId
+      : CLAUDE_LOCAL_SESSION_HOST_ID;
   const bindings = isRecord(entry.cliSessionBindings) ? entry.cliSessionBindings : undefined;
   const binding = bindings?.[CLAUDE_CLI_BACKEND_ID];
   if (isRecord(binding) && typeof binding.sessionId === "string" && binding.sessionId) {
-    return binding.sessionId;
+    return { hostId, threadId: binding.sessionId };
   }
   if (entry.pluginOwnerId !== pluginId || entry.modelSelectionLocked !== true) {
     return undefined;
   }
-  const anthropic = isRecord(entry.pluginExtensions) ? entry.pluginExtensions.anthropic : undefined;
-  const marker = isRecord(anthropic) ? anthropic.sessionCatalog : undefined;
   return isRecord(marker) && typeof marker.sourceThreadId === "string"
-    ? marker.sourceThreadId
+    ? { hostId, threadId: marker.sourceThreadId }
     : undefined;
 }
+
 export function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
   const config = currentClaudeSessionCatalogConfig(api);
   const defaultAgentId = resolveDefaultAgentId(config);
@@ -52,9 +63,9 @@ export function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, str
   for (const { sessionKey, entry } of agentIds.flatMap((agentId) =>
     api.runtime.agent.session.listSessionEntries({ agentId }),
   )) {
-    const threadId = boundClaudeThreadId(api.id, entry);
-    if (threadId) {
-      bound.set(threadId, sessionKey);
+    const source = boundClaudeSource(api.id, entry);
+    if (source) {
+      bound.set(claudeSessionCatalogSourceKey(source.hostId, source.threadId), sessionKey);
     }
   }
   return bound;

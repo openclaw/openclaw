@@ -1,7 +1,7 @@
 // Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
+import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
-
 export const FIELD_HELP: Record<string, string> = {
   meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
   "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
@@ -677,19 +677,19 @@ export const FIELD_HELP: Record<string, string> = {
     "Opt-in CIDR/IP allowlist for auto-approving first-time node-role device pairing with no requested scopes. Disabled when unset. Operator, browser, Control UI, and any role, scope, metadata, or public-key upgrade pairing still require manual approval.",
   "gateway.nodes.pairing.sshVerify":
     "SSH-verified auto-approval for first-time node-role device pairing (default: enabled). The gateway SSHes back to the pairing host (BatchMode, strict host keys) and approves only when the remote `openclaw node identity` output matches the pending device key. Set false to disable SSH verification (independent of autoApproveCidrs, which stays active); for manual-only pairing also unset autoApproveCidrs. Pass an object to override user/identity/timeoutMs/cidrs.",
-  "gateway.nodes.pluginTools":
-    "Controls whether paired nodes may publish agent-visible plugin tool descriptors.",
-  "gateway.nodes.pluginTools.enabled":
-    "Accept agent-visible plugin tool descriptors published by paired nodes (default: true). Set false to ignore and remove all node-published plugin tools.",
-  "gateway.nodes.skills": "Controls whether paired nodes may publish agent-visible skills.",
-  "gateway.nodes.skills.enabled":
-    "Accept skills published by paired nodes while they are connected (default: true). Set false to ignore node-published skills.",
+  ...NODE_CAPABILITY_FIELD_HELP,
   "gateway.nodes.allowCommands":
     "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
   "gateway.nodes.denyCommands":
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
+  "nodeHost.agentRuns":
+    "Opt in to approval-gated native agent turns on this headless node host. Disabled by default.",
+  "nodeHost.agentRuns.claude":
+    "Controls whether this headless node host may advertise Claude CLI agent turns to the gateway.",
+  "nodeHost.agentRuns.claude.enabled":
+    "Advertise paired-node Claude session continuation when the local claude binary is available (default: false). Runs still require node exec approval.",
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":

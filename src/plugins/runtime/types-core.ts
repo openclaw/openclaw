@@ -84,6 +84,10 @@ type RuntimeCreateSessionEntryBaseParams = {
   agentId?: string;
   label?: string;
   spawnedCwd?: string;
+  /** Bind the created session's CLI execution to this paired node. */
+  execNode?: string;
+  /** Working directory interpreted only by execNode. */
+  execCwd?: string;
   initialEntry:
     | {
         agentHarnessId: string;

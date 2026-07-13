@@ -2226,7 +2226,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/tui/tui-plugin-approvals.ts: parseTuiPluginApproval",
   "src/tui/tui-task-suggestions.ts: parseTuiTaskSuggestion",
   "src/tui/tui-waiting.ts: pickWaitingPhrase",
-  "src/utils/message-channel-constants.ts: NATIVE_APPROVAL_CHANNELS",
   "src/video-generation/runtime-types.ts: ListRuntimeVideoGenerationProvidersParams",
   "src/video-generation/runtime-types.ts: RuntimeVideoGenerationProvider",
   "src/web-search/runtime-types.ts: ListWebSearchProvidersParams",
