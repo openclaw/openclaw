@@ -77,7 +77,7 @@ export class NotPinnedError extends ProtocolError {
     this.name = "NotPinnedError";
   }
 }
-export class WrongRecipientError extends ProtocolError {
+class WrongRecipientError extends ProtocolError {
   constructor(message?: string) {
     super("wrong_recipient", message);
     this.name = "WrongRecipientError";

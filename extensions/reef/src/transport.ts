@@ -4,7 +4,7 @@ import type { InboxEntry, ReefKeys, RelayFriend } from "./types.js";
 
 type FetchLike = typeof fetch;
 
-export class ReefRelayError extends Error {
+class ReefRelayError extends Error {
   constructor(
     readonly status: number,
     message: string,
