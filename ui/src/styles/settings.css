@@ -46,6 +46,20 @@
   flex-direction: column;
 }
 
+/* The page headline adopts the column of the page below it; without this the
+   shell caps headers at 1120px while narrow pages use a 760px column, leaving
+   the title floating left of the content. */
+.shell--settings .content:has(.settings-page) .content-header,
+.shell--settings .content:has(.settings-page) .config-view-toggle-row {
+  max-width: 760px;
+  padding-inline: var(--space-4);
+}
+
+.shell--settings .content:has(.settings-page--wide) .content-header,
+.shell--settings .content:has(.settings-page--wide) .config-view-toggle-row {
+  max-width: 1120px;
+}
+
 /* ── Page ── */
 
 .settings-page {
