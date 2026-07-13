@@ -1,11 +1,4 @@
-<<<<<<< HEAD
-788ff8d97de1abe4fb38b56e5c11191ad630fa3286ae689bb2c013a77a9bcea1  config-baseline.json
-b60c4a5d4f2c35a16fc821804928a753c28615cdc0d3e62f5fd75f303115efd9  config-baseline.core.json
-cb7503a2c1e489fa4d154dfa4bf4a9e2f1277233ab65fac71c1ba8dcb371a032  config-baseline.channel.json
-77a337c9f4f2e43d18da97427905c573abd8857014033d359bfb36b2f15c2f20  config-baseline.plugin.json
-=======
-8694a0cf7ce11cb605aba8a4b9f9cceef7310485d351f607952e2946a9abc985  config-baseline.json
-0883f41da0e064a58ac557e244a97d6052c3d262225d309cffbbef9e7300f48e  config-baseline.core.json
-12ce7ba45d75c1753ce090fca8359a15708343cb2aeabb3dd99e8f6915062628  config-baseline.channel.json
-a7eac21a283d5eefa22a2b6168e1151f30519c19bc7efa2bd4ac2a4583ab0d59  config-baseline.plugin.json
->>>>>>> origin/main
+aa3543c20f3556330938b33c5634026be8062e1e08a3e9bd43bd1df1a12c83d2  config-baseline.json
+81e5973de27b232b02c7888aa1b7614c276131d6ec88ca2a01ca62b792b38c71  config-baseline.core.json
+8d2edbea3c5a41cd3ea41ac543421eeec40a94db65863e21c3c0a971a37abd98  config-baseline.channel.json
+c8e91d6cf442cc74695229319f73af8210bc63cc4de3bedd949db07a64ebb6cc  config-baseline.plugin.json
