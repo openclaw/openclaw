@@ -592,7 +592,34 @@ describe("nostr-profile-http", () => {
 
       const data = expectImportSuccessResponse(res);
       expect(data.saved).toBe(true);
-      expect(ctx.updateConfigProfile).toHaveBeenCalled();
+      expect(data.merged).toEqual({
+        name: "imported",
+        displayName: "Imported User",
+        about: "local bio",
+      });
+      expect(ctx.updateConfigProfile).toHaveBeenCalledWith("default", data.merged);
+    });
+
+    it("does not mutate config for an explicit draft import", async () => {
+      const { ctx, res, run } = createProfileHttpHarness(
+        "POST",
+        "/api/channels/nostr/default/profile/import",
+        {
+          body: { autoMerge: false },
+          ctx: {
+            getConfigProfile: vi.fn().mockReturnValue({ about: "local bio" }),
+          },
+        },
+      );
+
+      mockSuccessfulProfileImport();
+
+      await run();
+
+      const data = expectImportSuccessResponse(res);
+      expect(data.saved).toBe(false);
+      expect(data.merged).toBeUndefined();
+      expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
 
     it("returns error when account not found", async () => {

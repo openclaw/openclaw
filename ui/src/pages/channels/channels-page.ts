@@ -21,6 +21,7 @@ type NostrOperation = {
   gateway: ApplicationContext["gateway"];
   channels: ApplicationContext["channels"];
   client: GatewayBrowserClient;
+  abortController: AbortController;
   formAccountId: string | null;
   accountId: string;
   headers: Record<string, string>;
@@ -54,6 +55,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   private gatewayConnected = false;
   private hasGatewaySnapshot = false;
   private nostrOperationGeneration = 0;
+  private nostrOperationAbortController: AbortController | null = null;
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -118,6 +120,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       this.nostrOperationGeneration += 1;
     }
     if (sourceChanged || clientChanged || !snapshot.connected) {
+      this.abortNostrOperation();
       this.clearNostrForm();
     }
     this.hasGatewaySnapshot = true;
@@ -212,7 +215,13 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.nostrProfileAccountId = null;
   }
 
+  private abortNostrOperation() {
+    this.nostrOperationAbortController?.abort();
+    this.nostrOperationAbortController = null;
+  }
+
   private invalidateNostrForm() {
+    this.abortNostrOperation();
     this.nostrOperationGeneration += 1;
     this.clearNostrForm();
   }
@@ -230,17 +239,27 @@ class ChannelsPage extends OpenClawLightDomElement {
     ) {
       return null;
     }
+    this.abortNostrOperation();
     const generation = this.nostrOperationGeneration + 1;
     this.nostrOperationGeneration = generation;
+    const abortController = new AbortController();
+    this.nostrOperationAbortController = abortController;
     return {
       generation,
       gateway,
       channels,
       client,
+      abortController,
       formAccountId: this.nostrProfileAccountId,
       accountId: this.resolveNostrAccountId(),
       headers: this.buildGatewayHttpHeaders(gateway),
     };
+  }
+
+  private finishNostrOperation(operation: NostrOperation) {
+    if (this.nostrOperationAbortController === operation.abortController) {
+      this.nostrOperationAbortController = null;
+    }
   }
 
   private currentNostrForm(operation: NostrOperation): NonNullable<NostrProfileFormState> | null {
@@ -261,6 +280,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private editNostrProfile(accountId: string, profile: NostrProfile | null) {
+    this.abortNostrOperation();
     this.nostrOperationGeneration += 1;
     this.nostrProfileAccountId = accountId;
     this.nostrProfileFormState = createNostrProfileFormState(profile ?? undefined);
@@ -272,7 +292,7 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private changeNostrProfileField(field: keyof NostrProfile, value: string) {
     const form = this.nostrProfileFormState;
-    if (!form) {
+    if (!form || form.saving || form.importing) {
       return;
     }
     this.nostrProfileFormState = {
@@ -284,7 +304,7 @@ class ChannelsPage extends OpenClawLightDomElement {
 
   private toggleNostrProfileAdvanced() {
     const form = this.nostrProfileFormState;
-    if (!form) {
+    if (!form || form.saving || form.importing) {
       return;
     }
     this.nostrProfileFormState = { ...form, showAdvanced: !form.showAdvanced };
@@ -313,6 +333,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         accountId: operation.accountId,
         headers: operation.headers,
         values: form.values,
+        signal: operation.abortController.signal,
       });
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
@@ -349,6 +370,9 @@ class ChannelsPage extends OpenClawLightDomElement {
       };
       await operation.channels.refresh(true);
     } catch (err) {
+      if (operation.abortController.signal.aborted) {
+        return;
+      }
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
         return;
@@ -359,6 +383,8 @@ class ChannelsPage extends OpenClawLightDomElement {
         error: `Profile update failed: ${String(err)}`,
         success: null,
       };
+    } finally {
+      this.finishNostrOperation(operation);
     }
   }
 
@@ -382,6 +408,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       const { data, response } = await importNostrProfile({
         accountId: operation.accountId,
         headers: operation.headers,
+        signal: operation.abortController.signal,
       });
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
@@ -397,23 +424,20 @@ class ChannelsPage extends OpenClawLightDomElement {
         return;
       }
 
-      const merged = data.merged ?? data.imported ?? null;
-      const values = merged ? { ...currentForm.values, ...merged } : currentForm.values;
+      const imported = data.imported ?? null;
+      const values = imported ? { ...currentForm.values, ...imported } : currentForm.values;
       this.nostrProfileFormState = {
         ...currentForm,
         importing: false,
         values,
         error: null,
-        success: data.saved
-          ? "Profile imported from relays. Review and publish."
-          : "Profile imported. Review and publish.",
+        success: "Profile imported. Review and publish.",
         showAdvanced: Boolean(values.banner || values.website || values.nip05 || values.lud16),
       };
-
-      if (data.saved) {
-        await operation.channels.refresh(true);
-      }
     } catch (err) {
+      if (operation.abortController.signal.aborted) {
+        return;
+      }
       const currentForm = this.currentNostrForm(operation);
       if (!currentForm) {
         return;
@@ -424,6 +448,8 @@ class ChannelsPage extends OpenClawLightDomElement {
         error: `Profile import failed: ${String(err)}`,
         success: null,
       };
+    } finally {
+      this.finishNostrOperation(operation);
     }
   }
 

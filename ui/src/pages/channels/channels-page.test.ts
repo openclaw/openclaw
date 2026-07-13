@@ -20,6 +20,8 @@ type NostrTestPage = ChannelsPageTestElement & {
   } | null;
   nostrProfileAccountId: string | null;
   editNostrProfile: (accountId: string, profile: NostrProfile | null) => void;
+  cancelNostrProfile: () => void;
+  changeNostrProfileField: (field: keyof NostrProfile, value: string) => void;
   saveNostrProfile: () => Promise<void>;
   importNostrProfile: () => Promise<void>;
 };
@@ -179,7 +181,7 @@ describe("ChannelsPage lifecycle", () => {
     expect(page.nostrProfileFormState).toBeNull();
 
     response.resolve(
-      new Response(JSON.stringify({ ok: true, saved: true, merged: { name: "stale import" } }), {
+      new Response(JSON.stringify({ ok: true, imported: { name: "stale import" } }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -188,6 +190,82 @@ describe("ChannelsPage lifecycle", () => {
 
     expect(page.nostrProfileFormState).toBeNull();
     expect(refresh).not.toHaveBeenCalled();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it("requests a draft import and locks field edits while it is pending", async () => {
+    const gateway = createGateway();
+    const source = createContext(gateway);
+    const response = createDeferred<Response>();
+    let requestInit: RequestInit | undefined;
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      requestInit = init;
+      return response.promise;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    page.editNostrProfile("default", { name: "local" });
+
+    const load = page.importNostrProfile();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    expect(requestInit?.body).toBe(JSON.stringify({ autoMerge: false }));
+    expect(requestInit?.signal).toBeInstanceOf(AbortSignal);
+    expect(page.nostrProfileFormState?.importing).toBe(true);
+
+    page.changeNostrProfileField("name", "edited while importing");
+    expect(page.nostrProfileFormState?.values.name).toBe("local");
+
+    response.resolve(
+      new Response(JSON.stringify({ ok: true, imported: { name: "imported" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await load;
+
+    expect(page.nostrProfileFormState?.values.name).toBe("imported");
+    expect(page.nostrProfileFormState?.importing).toBe(false);
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
+  });
+
+  it("aborts a pending import before hiding the form", async () => {
+    const gateway = createGateway();
+    const source = createContext(gateway);
+    const response = createDeferred<Response>();
+    let requestInit: RequestInit | undefined;
+    const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+      requestInit = init;
+      return response.promise;
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const page = document.createElement("openclaw-channels-page") as NostrTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    page.editNostrProfile("default", { name: "local" });
+
+    const load = page.importNostrProfile();
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    page.cancelNostrProfile();
+    expect(requestInit?.signal).toBeInstanceOf(AbortSignal);
+    expect(requestInit?.signal?.aborted).toBe(true);
+    expect(page.nostrProfileFormState).toBeNull();
+
+    response.resolve(
+      new Response(JSON.stringify({ ok: true, imported: { name: "stale import" } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    await load;
+
+    expect(page.nostrProfileFormState).toBeNull();
     source.runtimeConfig.dispose();
     source.channels.dispose();
   });
@@ -209,7 +287,7 @@ describe("ChannelsPage lifecycle", () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
     page.editNostrProfile("new-account", { name: "fresh" });
     response.resolve(
-      new Response(JSON.stringify({ ok: true, saved: true, merged: { name: "stale import" } }), {
+      new Response(JSON.stringify({ ok: true, imported: { name: "stale import" } }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),

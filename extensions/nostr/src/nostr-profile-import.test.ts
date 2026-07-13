@@ -126,10 +126,10 @@ describe("nostr-profile-import", () => {
 
       const result = mergeProfiles(local, imported);
 
-      expect(result.name).toBe("localname"); // local wins
-      expect(result.displayName).toBe("Imported Display"); // imported fills gap
-      expect(result.about).toBe("Local bio"); // local wins
-      expect(result.picture).toBe("https://example.com/pic.jpg"); // imported fills gap
+      expect(result.name).toBe("localname");
+      expect(result.displayName).toBe("Imported Display");
+      expect(result.about).toBe("Local bio");
+      expect(result.picture).toBe("https://example.com/pic.jpg");
     });
 
     it("fills all missing fields from imported", () => {
@@ -159,7 +159,7 @@ describe("nostr-profile-import", () => {
       expect(result.lud16).toBe("user@getalby.com");
     });
 
-    it("handles empty strings as falsy (prefers imported)", () => {
+    it("preserves empty local strings", () => {
       const local: NostrProfile = {
         name: "",
         displayName: "",
@@ -171,13 +171,11 @@ describe("nostr-profile-import", () => {
 
       const result = mergeProfiles(local, imported);
 
-      // Empty strings are still strings, so they "win" over imported
-      // This is JavaScript nullish coalescing behavior
       expect(result.name).toBe("");
       expect(result.displayName).toBe("");
     });
 
-    it("handles null values in local (prefers imported)", () => {
+    it("fills undefined local values from imported", () => {
       const local: NostrProfile = {
         name: undefined,
         displayName: undefined,

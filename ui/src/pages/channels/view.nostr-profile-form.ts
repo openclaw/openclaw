@@ -104,7 +104,7 @@ export function renderNostrProfileForm(params: {
                 const target = e.target as HTMLTextAreaElement;
                 callbacks.onFieldChange(field, target.value);
               }}
-              ?disabled=${state.saving}
+              ?disabled=${state.saving || state.importing}
             ></textarea>
           `
         : html`
@@ -119,7 +119,7 @@ export function renderNostrProfileForm(params: {
                 const target = e.target as HTMLInputElement;
                 callbacks.onFieldChange(field, target.value);
               }}
-              ?disabled=${state.saving}
+              ?disabled=${state.saving || state.importing}
             />
           `;
 
@@ -257,7 +257,7 @@ export function renderNostrProfileForm(params: {
         <button
           class="btn primary"
           @click=${callbacks.onSave}
-          ?disabled=${state.saving || !isDirty}
+          ?disabled=${state.saving || state.importing || !isDirty}
         >
           ${state.saving ? t("common.saving") : t("common.saveAndPublish")}
         </button>
@@ -270,7 +270,11 @@ export function renderNostrProfileForm(params: {
           ${state.importing ? t("common.importing") : t("common.importFromRelays")}
         </button>
 
-        <button class="btn" @click=${callbacks.onToggleAdvanced}>
+        <button
+          class="btn"
+          @click=${callbacks.onToggleAdvanced}
+          ?disabled=${state.saving || state.importing}
+        >
           ${state.showAdvanced ? t("common.hideAdvanced") : t("common.showAdvanced")}
         </button>
 

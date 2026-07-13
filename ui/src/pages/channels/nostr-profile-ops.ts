@@ -32,6 +32,7 @@ export async function putNostrProfile(params: {
   accountId: string;
   headers: Record<string, string>;
   values: NostrProfile;
+  signal?: AbortSignal;
 }) {
   const response = await fetch(buildNostrProfileUrl(params.accountId), {
     method: "PUT",
@@ -40,6 +41,7 @@ export async function putNostrProfile(params: {
       ...params.headers,
     },
     body: JSON.stringify(params.values),
+    signal: params.signal,
   });
   const data = (await response.json().catch(() => null)) as {
     ok?: boolean;
@@ -53,6 +55,7 @@ export async function putNostrProfile(params: {
 export async function importNostrProfile(params: {
   accountId: string;
   headers: Record<string, string>;
+  signal?: AbortSignal;
 }) {
   const response = await fetch(buildNostrProfileUrl(params.accountId, "/import"), {
     method: "POST",
@@ -60,14 +63,13 @@ export async function importNostrProfile(params: {
       "Content-Type": "application/json",
       ...params.headers,
     },
-    body: JSON.stringify({ autoMerge: true }),
+    body: JSON.stringify({ autoMerge: false }),
+    signal: params.signal,
   });
   const data = (await response.json().catch(() => null)) as {
     ok?: boolean;
     error?: string;
     imported?: NostrProfile;
-    merged?: NostrProfile;
-    saved?: boolean;
   } | null;
   return { data, response };
 }

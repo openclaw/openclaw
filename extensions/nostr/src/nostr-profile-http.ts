@@ -490,7 +490,6 @@ async function handleImportProfile(
     return true;
   }
 
-  // Parse options from body
   let autoMerge = false;
   try {
     const body = await readJsonBody(req);
@@ -498,7 +497,7 @@ async function handleImportProfile(
       autoMerge = (body as { autoMerge?: boolean }).autoMerge === true;
     }
   } catch {
-    // Ignore body parse errors - use defaults
+    // Ignore body parse errors and keep the safe draft default.
   }
 
   ctx.log?.info(`[${accountId}] Importing profile for ${pubkey.slice(0, 8)}...`);
@@ -519,7 +518,6 @@ async function handleImportProfile(
     return true;
   }
 
-  // If autoMerge is requested, merge and save
   if (autoMerge && result.profile) {
     const localProfile = ctx.getConfigProfile(accountId);
     const merged = mergeProfiles(localProfile, result.profile);
@@ -538,7 +536,7 @@ async function handleImportProfile(
     return true;
   }
 
-  // Otherwise, just return the imported profile for review
+  // Draft imports do not mutate config, so Cancel cannot hide a persisted change.
   sendJson(res, 200, {
     ok: true,
     imported: result.profile,
