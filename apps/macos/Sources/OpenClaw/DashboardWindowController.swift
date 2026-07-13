@@ -341,11 +341,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.browserProfileImportOfferRequestIsInFlight = true
         Task { [weak self] in
             guard let self else { return }
-            let didQuery = await self.requestBrowserProfileImportOffer()
+            let didApply = await self.requestBrowserProfileImportOffer()
             self.browserProfileImportOfferRequestIsInFlight = false
-            let shouldRetry = self.browserProfileImportOfferRetryPending && !didQuery
+            let shouldRetry = self.browserProfileImportOfferRetryPending && !didApply
             self.browserProfileImportOfferRetryPending = false
-            if didQuery {
+            if didApply {
                 self.didRequestBrowserProfileImportOffer = true
             } else if shouldRetry {
                 self.requestBrowserProfileImportOfferIfNeeded()

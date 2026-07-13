@@ -242,7 +242,7 @@ struct BrowserProfileImportModelTests {
         model._testSetPhase(.offering(forced))
 
         gate.continuation?.resume()
-        _ = await idle.value
+        #expect(await !idle.value)
         #expect(model.phase == .offering(forced))
     }
 

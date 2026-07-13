@@ -125,7 +125,7 @@ final class BrowserProfileImportModel {
     @discardableResult
     func refreshIfIdle() async -> Bool {
         guard !self.dismissedThisSession, case .hidden = self.phase else { return false }
-        return await self.performRefresh(force: false).didQuery
+        return await self.performRefresh(force: false).didApply
     }
 
     /// Defers the one-shot automatic offer until the app can actually query
@@ -144,9 +144,9 @@ final class BrowserProfileImportModel {
         await self.performRefresh(force: force).outcome
     }
 
-    /// Automatic offers are consumed only after a status response. A failed
-    /// startup/reconnect request stays retryable on the next sidebar event.
-    private func performRefresh(force: Bool) async -> (outcome: ForceRefreshOutcome, didQuery: Bool) {
+    /// Automatic offers are consumed only after a status response is applied.
+    /// Failed or stale startup/reconnect requests stay retryable.
+    private func performRefresh(force: Bool) async -> (outcome: ForceRefreshOutcome, didApply: Bool) {
         guard self.isOnboarded(), self.isLocalMode() else {
             self.setPhase(.hidden)
             return (
@@ -168,7 +168,7 @@ final class BrowserProfileImportModel {
             if force {
                 if case .importing = self.phase { return (.offering, true) }
             } else {
-                guard self.phaseGeneration == generation else { return (.offering, true) }
+                guard self.phaseGeneration == generation else { return (.offering, false) }
             }
             guard Self.shouldOffer(status: status, force: force) else {
                 self.setPhase(.hidden)
