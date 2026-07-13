@@ -1,6 +1,7 @@
 // Qa Channel tests cover bus client plugin behavior.
 import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   buildQaTarget,
   getQaBusState,
@@ -272,6 +273,37 @@ describe("qa-bus client", () => {
     await expect(getQaBusState(`http://127.0.0.1:${port}`)).rejects.toThrow(
       "qa-channel.bus-state: JSON response exceeds 16777216 bytes",
     );
+  });
+
+  it("negative control: never-headers peer stays pending without timeoutMs", async () => {
+    // Pre-fix shape: fetchWithSsrFGuard with no timeoutMs / AbortSignal against
+    // a peer that accepts TCP but never returns headers stays pending forever.
+    const server = createServer((_req, _res) => {});
+    const port = await listenLoopbackServer(server);
+    stops.push(async () => {
+      server.closeAllConnections?.();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    });
+
+    const hung = fetchWithSsrFGuard({
+      url: `http://127.0.0.1:${port}/v1/state`,
+      policy: { allowPrivateNetwork: true },
+      auditContext: "qa-channel.bus-state.negative-control",
+    });
+    const outcome = await Promise.race([
+      hung.then(() => "resolved" as const),
+      new Promise<"still-pending">((resolve) => {
+        setTimeout(() => resolve("still-pending"), 200);
+      }),
+    ]);
+    expect(outcome).toBe("still-pending");
+    console.log(
+      `[qa-channel bus-state negative control] outcome=${outcome} wait_ms=200 without_timeoutMs=true`,
+    );
+    // Tear down the hung peer so the orphaned fetch cannot outlive the suite.
+    server.closeAllConnections?.();
   });
 
   it("times out state fetches when the peer never returns headers", async () => {
