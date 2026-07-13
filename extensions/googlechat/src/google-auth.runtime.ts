@@ -42,6 +42,7 @@ const GOOGLE_AUTH_POLICY = buildHostnameAllowlistPolicyFromSuffixAllowlist(
   GOOGLE_AUTH_ALLOWED_HOST_SUFFIXES,
 );
 const GOOGLE_AUTH_AUDIT_CONTEXT = "googlechat.auth.google-auth";
+const GOOGLE_AUTH_FETCH_TIMEOUT_MS = 30_000;
 const GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth";
 const GOOGLE_AUTH_PROVIDER_CERTS_URL = "https://www.googleapis.com/oauth2/v1/certs";
 const GOOGLE_AUTH_TOKEN_URI = "https://oauth2.googleapis.com/token";
@@ -423,6 +424,7 @@ export function createGoogleAuthFetch(baseFetch?: FetchLike): FetchLike {
       dispatcherPolicy: guardedOptions.dispatcherPolicy,
       init: guardedOptions.init,
       policy: GOOGLE_AUTH_POLICY,
+      timeoutMs: GOOGLE_AUTH_FETCH_TIMEOUT_MS,
       url,
       ...(baseFetch ? { fetchImpl: baseFetch } : {}),
     });
