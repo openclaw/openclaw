@@ -96,7 +96,21 @@ afterEach(async () => {
 });
 
 describe("Claude session catalog", () => {
-  it("keeps local and paired-node bindings distinct when thread IDs match", () => {
+  it.each([
+    {
+      label: "catalog marker",
+      nodeEntry: {
+        pluginOwnerId: "anthropic",
+        modelSelectionLocked: true,
+        pluginExtensions: {
+          anthropic: {
+            sessionCatalog: { sourceHostId: "node:node-a", sourceThreadId: "shared-thread" },
+          },
+        },
+      },
+    },
+    { label: "exec binding", nodeEntry: { execHost: "node", execNode: "node-a" } },
+  ])("keeps local and paired-node bindings distinct via $label", ({ nodeEntry }) => {
     const threadId = "shared-thread";
     const api = {
       id: "anthropic",
@@ -114,13 +128,7 @@ describe("Claude session catalog", () => {
                 sessionKey: "agent:main:node",
                 entry: {
                   cliSessionBindings: { "claude-cli": { sessionId: threadId } },
-                  pluginOwnerId: "anthropic",
-                  modelSelectionLocked: true,
-                  pluginExtensions: {
-                    anthropic: {
-                      sessionCatalog: { sourceHostId: "node:node-a", sourceThreadId: threadId },
-                    },
-                  },
+                  ...nodeEntry,
                 },
               },
             ],

@@ -28,6 +28,8 @@ function boundClaudeSource(
   pluginId: string,
   entry: {
     cliSessionBindings?: unknown;
+    execHost?: string;
+    execNode?: string;
     pluginOwnerId?: string;
     modelSelectionLocked?: boolean;
     pluginExtensions?: unknown;
@@ -38,7 +40,9 @@ function boundClaudeSource(
   const hostId =
     isRecord(marker) && typeof marker.sourceHostId === "string"
       ? marker.sourceHostId
-      : CLAUDE_LOCAL_SESSION_HOST_ID;
+      : entry.execHost === "node" && typeof entry.execNode === "string" && entry.execNode.trim()
+        ? `node:${entry.execNode.trim()}`
+        : CLAUDE_LOCAL_SESSION_HOST_ID;
   const bindings = isRecord(entry.cliSessionBindings) ? entry.cliSessionBindings : undefined;
   const binding = bindings?.[CLAUDE_CLI_BACKEND_ID];
   if (isRecord(binding) && typeof binding.sessionId === "string" && binding.sessionId) {
