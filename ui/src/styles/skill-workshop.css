@@ -26,9 +26,13 @@
   flex-shrink: 0;
 }
 
-/* Hub tab strip stays fixed; the board scrolls inside the panel below it. */
-.content--skill-workshop .plugins-tabs {
+/* Hub tab strip stays fixed; the board scrolls inside the panel below it.
+   The board is full-width, so the strip skips the settings-column centering. */
+.content--skill-workshop .plugins-hub-tabs-row {
   flex-shrink: 0;
+  max-width: none;
+  margin: 0;
+  padding-inline: 0;
 }
 
 .sw-hub-panel {
@@ -36,6 +40,7 @@
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+  margin-top: var(--space-4);
 }
 
 /* Replaces the old .content--skill-workshop > .skill-workshop rule: the board
@@ -113,19 +118,6 @@
   border-bottom-color: var(--accent);
 }
 
-.sw-lifecycle-tab__count {
-  background: var(--bg-elevated);
-  color: var(--muted);
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 12px; /* was 11px */
-}
-
-.sw-lifecycle-tab.is-active .sw-lifecycle-tab__count {
-  background: var(--accent-subtle);
-  color: var(--accent);
-}
-
 /* ── Triage two-pane card ───────────────────────────────────────────── */
 .sw-triage {
   display: grid;
@@ -164,27 +156,6 @@
   outline: none;
 }
 
-.sw-queue__head {
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: color-mix(in srgb, var(--bg) 60%, var(--bg-elevated) 40%);
-}
-
-.sw-queue__count {
-  font-weight: 700;
-  color: var(--text-strong);
-  font-size: 15px;
-}
-
-.sw-queue__sub {
-  color: var(--muted);
-  font-size: 12px;
-  margin-left: auto;
-}
-
 .sw-queue__search {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -216,14 +187,6 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-}
-
-.sw-queue__group-pill {
-  background: var(--bg-elevated);
-  color: var(--muted);
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 12px; /* was 10px */
 }
 
 .sw-row {

@@ -22,7 +22,7 @@ export type SessionCatalogCreateTarget = {
   agentRuntime: string;
 };
 
-export type SessionCatalogCreateParams = {
+type SessionCatalogCreateParams = {
   /** Agent whose model/runtime policy must authorize the catalog target. */
   agentId?: string;
 };

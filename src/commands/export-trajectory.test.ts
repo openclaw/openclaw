@@ -93,9 +93,7 @@ describe("exportTrajectoryCommand", () => {
     "rejects a non-canonical base64url request with %s before looking up its session",
     async (_case, makeNonCanonical, sessionKey) => {
       const runtime = createRuntime();
-      const canonical = Buffer.from(JSON.stringify({ sessionKey }), "utf8").toString(
-        "base64url",
-      );
+      const canonical = Buffer.from(JSON.stringify({ sessionKey }), "utf8").toString("base64url");
       const requestJsonBase64 = makeNonCanonical(canonical);
 
       await exportTrajectoryCommand({ requestJsonBase64 }, runtime);

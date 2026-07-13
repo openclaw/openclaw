@@ -1,6 +1,12 @@
 import { html, nothing } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { icons } from "../../components/icons.ts";
+import {
+  renderSettingsPage,
+  renderSettingsRow,
+  renderSettingsSection,
+  renderSettingsValue,
+} from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import "../../styles/about.css";
@@ -54,23 +60,23 @@ function copyStatus(state: AboutCommitCopyState): string {
       : "";
 }
 
+function renderUnavailable() {
+  return html`<span class="muted">${t("aboutPage.unavailable")}</span>`;
+}
+
 function renderCommit(props: AboutProps) {
   const commit = props.buildInfo.commit;
   if (!commit) {
-    return html`<span class="about-build-strip__unavailable">${t("aboutPage.unavailable")}</span>`;
+    return renderUnavailable();
   }
   const label = copyButtonLabel(props.copyState);
   return html`
-    <span class="about-build-strip__commit">
+    <span class="about-commit">
       <code dir="ltr" title=${commit}>${commit.slice(0, SHORT_COMMIT_LENGTH)}</code>
       <openclaw-tooltip .content=${label}>
         <button
           type="button"
-          class="about-build-strip__copy ${props.copyState === "copied"
-            ? "about-build-strip__copy--copied"
-            : props.copyState === "error"
-              ? "about-build-strip__copy--error"
-              : ""}"
+          class="btn btn--icon"
           aria-label=${label}
           aria-busy=${props.copyState === "copying" ? "true" : nothing}
           ?disabled=${props.copyState === "copying"}
@@ -88,82 +94,56 @@ function renderCommit(props: AboutProps) {
 
 export function renderAbout(props: AboutProps) {
   const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
-  return html`
-    <div class="about-page">
-      <section class="card about-card" aria-labelledby="about-artifact-title">
-        <div class="about-card__intro">
-          <h2 id="about-artifact-title" class="card-title">${t("aboutPage.artifactTitle")}</h2>
-          <p class="card-sub">${t("aboutPage.artifactSubtitle")}</p>
-        </div>
-
-        <dl
-          class="about-build-strip ${props.buildInfo.branch
-            ? "about-build-strip--with-branch"
-            : ""}"
-          role="group"
-          aria-label=${t("aboutPage.artifactDetails")}
-        >
-          <div class="about-build-strip__item">
-            <dt>${t("aboutPage.version")}</dt>
+  const buildFacts = html`
+    <dl class="settings-kv" role="group" aria-label=${t("aboutPage.artifactDetails")}>
+      <dt>${t("aboutPage.version")}</dt>
+      <dd>
+        ${props.buildInfo.version
+          ? html`<code dir="ltr" title=${props.buildInfo.version}>${props.buildInfo.version}</code>`
+          : renderUnavailable()}
+      </dd>
+      <dt>${t("aboutPage.commit")}</dt>
+      <dd>${renderCommit(props)}</dd>
+      ${props.buildInfo.branch
+        ? html`
+            <dt>${t("aboutPage.branch")}</dt>
             <dd>
-              ${props.buildInfo.version
-                ? html`<code dir="ltr" title=${props.buildInfo.version}
-                    >${props.buildInfo.version}</code
-                  >`
-                : html`<span class="about-build-strip__unavailable"
-                    >${t("aboutPage.unavailable")}</span
-                  >`}
+              <code dir="ltr" title=${props.buildInfo.branch}
+                >${props.buildInfo.branch}${props.buildInfo.dirty === true ? "*" : ""}</code
+              >
             </dd>
-          </div>
-          <div class="about-build-strip__item">
-            <dt>${t("aboutPage.commit")}</dt>
-            <dd>${renderCommit(props)}</dd>
-          </div>
-          ${props.buildInfo.branch
-            ? html`<div class="about-build-strip__item">
-                <dt>${t("aboutPage.branch")}</dt>
-                <dd>
-                  <code dir="ltr" title=${props.buildInfo.branch}
-                    >${props.buildInfo.branch}${props.buildInfo.dirty === true ? "*" : ""}</code
-                  >
-                </dd>
-              </div>`
-            : nothing}
-          <div class="about-build-strip__item">
-            <dt>${t("aboutPage.built")}</dt>
-            <dd>
-              ${buildDate && props.buildInfo.builtAt
-                ? html`<time
-                    dir="auto"
-                    datetime=${props.buildInfo.builtAt}
-                    title=${props.buildInfo.builtAt}
-                    >${buildDate}</time
-                  >`
-                : html`<span class="about-build-strip__unavailable"
-                    >${t("aboutPage.unavailable")}</span
-                  >`}
-            </dd>
-          </div>
-        </dl>
-
-        <div class="about-gateway-row">
-          <dl>
-            <div>
-              <dt>${t("aboutPage.gatewayVersion")}</dt>
-              <dd>
-                ${props.gatewayVersion
-                  ? html`<code dir="ltr" title=${props.gatewayVersion}
-                      >${props.gatewayVersion}</code
-                    >`
-                  : html`<span class="about-build-strip__unavailable"
-                      >${t("aboutPage.unavailable")}</span
-                    >`}
-              </dd>
-            </div>
-          </dl>
-          <p>${t("aboutPage.gatewayVersionHint")}</p>
-        </div>
-      </section>
-    </div>
+          `
+        : nothing}
+      <dt>${t("aboutPage.built")}</dt>
+      <dd>
+        ${buildDate && props.buildInfo.builtAt
+          ? html`<time
+              dir="auto"
+              datetime=${props.buildInfo.builtAt}
+              title=${props.buildInfo.builtAt}
+              >${buildDate}</time
+            >`
+          : renderUnavailable()}
+      </dd>
+    </dl>
   `;
+  return renderSettingsPage([
+    renderSettingsSection(
+      { title: t("aboutPage.artifactTitle"), description: t("aboutPage.artifactSubtitle") },
+      buildFacts,
+    ),
+    renderSettingsSection(
+      {},
+      renderSettingsRow({
+        title: t("aboutPage.gatewayVersion"),
+        description: t("aboutPage.gatewayVersionHint"),
+        control: props.gatewayVersion
+          ? renderSettingsValue(
+              html`<code dir="ltr" title=${props.gatewayVersion}>${props.gatewayVersion}</code>`,
+              { mono: true },
+            )
+          : renderSettingsValue(t("aboutPage.unavailable")),
+      }),
+    ),
+  ]);
 }

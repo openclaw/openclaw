@@ -63,7 +63,7 @@ describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
       await expect.poll(() => aboutLink.getAttribute("aria-current")).toBe("page");
 
       const strip = page.getByRole("group", { name: "Control UI build details" });
-      const items = strip.locator(":scope > .about-build-strip__item");
+      const items = strip.locator(":scope > dd");
       await expect.poll(() => items.count()).toBe(3);
       await expect.poll(() => items.nth(0).textContent()).toContain("2026.7.10");
 
@@ -76,18 +76,13 @@ describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
       await expect.poll(() => built.getAttribute("datetime")).toBe(BUILT_AT);
       await expect.poll(() => built.getAttribute("title")).toBe(BUILT_AT);
 
-      const gatewayRow = page.locator(".about-gateway-row");
+      const gatewayRow = page.locator(".settings-row", { hasText: "Connected Gateway version" });
       await expect.poll(() => gatewayRow.textContent()).toContain("e2e");
       await expect
         .poll(() => gatewayRow.textContent())
         .toContain("separate from this Control UI build");
 
-      const desktopTops = await items.evaluateAll((elements) =>
-        elements.map((element) => Math.round(element.getBoundingClientRect().top)),
-      );
-      expect(new Set(desktopTops).size).toBe(1);
-
-      const copyButton = strip.locator(".about-build-strip__copy");
+      const copyButton = strip.locator(".about-commit button");
       await expect.poll(() => copyButton.getAttribute("aria-label")).toBe("Copy full commit hash");
       await copyButton.click();
       await expect.poll(() => copyButton.getAttribute("aria-label")).toBe("Commit hash copied");
@@ -103,10 +98,6 @@ describeControlUiE2e("Control UI About mocked Gateway E2E", () => {
         .toBe(COMMIT);
 
       await page.setViewportSize({ height: 812, width: 375 });
-      const mobileTops = await items.evaluateAll((elements) =>
-        elements.map((element) => Math.round(element.getBoundingClientRect().top)),
-      );
-      expect(new Set(mobileTops).size).toBe(3);
       await expect
         .poll(() =>
           page.evaluate(

@@ -1,11 +1,10 @@
 // Nodes page owns these pure view helpers.
-import { html, nothing, type TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { icons } from "../../components/icons.ts";
-import { t } from "../../i18n/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
 export type NodeTargetOption = {
@@ -118,27 +117,12 @@ export function deviceIcon(source: DeviceIconSource): TemplateResult {
   return icons.monitor;
 }
 
-/** Icon tile with a connectivity dot; `connected: null` hides the dot. */
-export function renderDeviceTile(icon: TemplateResult, connected: boolean | null) {
+/* Connectivity state lives in the row's renderSettingsStatus dot + text, so
+   the tile stays a purely decorative form-factor glyph. */
+export function renderDeviceTile(icon: TemplateResult) {
   return html`
-    <div class="nodes-entry__tile">
-      <span class="nodes-entry__tile-icon" aria-hidden="true">${icon}</span>
-      ${connected === null
-        ? nothing
-        : html`
-            <span
-              class="status-dot ${connected ? "status-dot--connected" : "status-dot--offline"}"
-              role="img"
-              aria-label=${connected
-                ? t("nodes.inventory.connected")
-                : t("nodes.inventory.offline")}
-              title=${connected ? t("nodes.inventory.connected") : t("nodes.inventory.offline")}
-            ></span>
-          `}
+    <div class="nodes-entry__tile" aria-hidden="true">
+      <span class="nodes-entry__tile-icon">${icon}</span>
     </div>
   `;
-}
-
-export function renderSectionLabel(label: string) {
-  return html`<div class="nodes-section-label">${label}</div>`;
 }
