@@ -25,6 +25,8 @@ const rootEntries = [
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
   "src/plugin-sdk/*.ts!",
+  // Registry-dated deep-import compatibility surface; keep public until its removal windows pass.
+  "src/channels/plugins/target-parsing-loaded.ts!",
 ] as const;
 
 const bundledPluginEntries = [
