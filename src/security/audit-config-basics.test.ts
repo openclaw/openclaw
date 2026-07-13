@@ -156,6 +156,88 @@ describe("security audit config basics", () => {
     }
   });
 
+  it("accepts a valid symlinked global mcporter registry", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-symlink-"));
+    try {
+      const configDir = path.join(stateDir, "skills", "config");
+      await fs.mkdir(configDir, { recursive: true });
+      const targetPath = path.join(stateDir, "real-mcporter.json");
+      await fs.writeFile(
+        targetPath,
+        JSON.stringify({
+          mcpServers: {
+            "whois-mcp": { baseUrl: "http://whois.example.test/mcp" },
+          },
+        }),
+        "utf8",
+      );
+      await fs.symlink(targetPath, path.join(configDir, "mcporter.json"));
+
+      const report = await runSecurityAudit({
+        config: {
+          agents: {
+            list: [
+              {
+                id: "asset-agent",
+                skills: ["asset-lifecycle-tracking"],
+                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+              },
+            ],
+          },
+        },
+        sourceConfig: {},
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(report.findings.map((finding) => finding.checkId)).toContain(
+        "tools.exec.agent_skill_mcp_boundary_drift",
+      );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats an oversized symlinked global mcporter registry as missing", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-audit-mcporter-symlink-oversized-"),
+    );
+    try {
+      const configDir = path.join(stateDir, "skills", "config");
+      await fs.mkdir(configDir, { recursive: true });
+      const targetPath = path.join(stateDir, "real-mcporter.json");
+      await fs.writeFile(targetPath, Buffer.alloc(16 * 1024 * 1024 + 1, 0x20));
+      await fs.symlink(targetPath, path.join(configDir, "mcporter.json"));
+
+      const report = await runSecurityAudit({
+        config: {
+          agents: {
+            list: [
+              {
+                id: "asset-agent",
+                skills: ["asset-lifecycle-tracking"],
+                tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+              },
+            ],
+          },
+        },
+        sourceConfig: {},
+        env: { OPENCLAW_STATE_DIR: stateDir },
+        stateDir,
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(report.findings.map((finding) => finding.checkId)).not.toContain(
+        "tools.exec.agent_skill_mcp_boundary_drift",
+      );
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not flag per-agent skill allowlists when matching agents deny exec", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-mcporter-deny-"));
     try {
