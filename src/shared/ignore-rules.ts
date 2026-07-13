@@ -48,14 +48,27 @@ function prefixIgnorePattern(line: string, prefix: string): string | null {
   if (pattern.startsWith("!")) {
     negated = true;
     pattern = pattern.slice(1);
-  } else if (pattern.startsWith("\\!")) {
-    pattern = pattern.slice(1);
   }
+  // Keep escaped "!" intact; the ignore library handles "\!" as a literal filename.
 
+  let anchored = false;
   if (pattern.startsWith("/")) {
+    anchored = true;
     pattern = pattern.slice(1);
   }
 
-  const prefixed = prefix ? `${prefix}${pattern}` : pattern;
+  const slashIndex = pattern.indexOf("/");
+  if (slashIndex !== -1 && slashIndex !== pattern.length - 1) {
+    anchored = true;
+  }
+
+  // A pattern without a middle/beginning slash matches at any depth below the
+  // ignore file's directory; prefix with **/ so the ignore library agrees.
+  const needsDepthGlob = prefix && !anchored;
+  const prefixed = prefix
+    ? needsDepthGlob
+      ? `${prefix}**/${pattern}`
+      : `${prefix}${pattern}`
+    : pattern;
   return negated ? `!${prefixed}` : prefixed;
 }
