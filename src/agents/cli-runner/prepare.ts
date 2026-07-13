@@ -388,8 +388,6 @@ async function resolveCliSkillsPrompt(params: {
     },
     effectiveWorkspace: sandboxWorkspace.workspaceDir,
     skillsSnapshot: params.skillsSnapshot,
-    config: params.config,
-    agentId: params.agentId,
   });
   const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
     workspaceDir: skillsWorkspaceDir,

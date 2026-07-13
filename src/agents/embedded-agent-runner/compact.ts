@@ -1029,8 +1029,6 @@ async function compactEmbeddedAgentSessionDirectOnce(
       sandbox,
       effectiveWorkspace,
       skillsSnapshot: params.skillsSnapshot,
-      config: params.config,
-      agentId: effectiveSkillAgentId,
     });
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveSkillsWorkspace,

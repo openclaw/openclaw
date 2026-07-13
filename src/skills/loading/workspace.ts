@@ -246,10 +246,7 @@ type SkillDiscoveryBudget = {
   truncated: boolean;
 };
 
-export function resolveSkillsLimits(
-  config?: OpenClawConfig,
-  agentId?: string,
-): ResolvedSkillsLimits {
+function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): ResolvedSkillsLimits {
   const limits = config?.skills?.limits;
   const agentSkillsLimits = resolveEffectiveAgentSkillsLimits(config, agentId);
   return {

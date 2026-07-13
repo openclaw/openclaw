@@ -81,7 +81,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
   });
 
-  it("drops host snapshot and builds name-only prompt when skipSkillsSync is enabled", () => {
+  it("drops host snapshot when skipSkillsSync is enabled", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({
         sandbox: {
@@ -96,11 +96,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       }),
     ).toEqual({
       skillsPromptWorkspaceDir: "/workspace",
-      skillsSnapshot: {
-        prompt:
-          "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
-        skills: [{ name: "demo" }],
-      },
+      skillsSnapshot: undefined,
       skillsWorkspaceDir: "/state/sandbox-skills",
       workspaceOnly: true,
     });
@@ -284,165 +280,5 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
-  });
-
-  it("escapes XML-special characters in skill names when skipSkillsSync is enabled", () => {
-    const xmlSnapshot: SkillSnapshot = {
-      prompt: "",
-      skills: [{ name: 'a&b<evil>"test"' }],
-      resolvedSkills: [
-        {
-          name: 'a&b<evil>"test"',
-          description: "XML special chars skill",
-          filePath: "/usr/lib/skills/test/SKILL.md",
-          baseDir: "/usr/lib/skills/test",
-          source: "openclaw-bundled",
-          sourceInfo: createSyntheticSourceInfo("/usr/lib/skills/test/SKILL.md", {
-            source: "openclaw-bundled",
-            baseDir: "/usr/lib/skills/test",
-          }),
-          disableModelInvocation: false,
-        },
-      ],
-    };
-    expect(
-      resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsWorkspaceDir: "/state/sandbox-skills",
-          workspaceAccess: "ro",
-          skipSkillsSync: true,
-        },
-        effectiveWorkspace: "/workspace",
-        skillsSnapshot: xmlSnapshot,
-      }),
-    ).toEqual({
-      skillsSnapshot: {
-        prompt:
-          "<available_skills>\n  <skill>\n    <name>a&amp;b&lt;evil&gt;&quot;test&quot;</name>\n  </skill>\n</available_skills>",
-        skills: [{ name: 'a&b<evil>"test"' }],
-      },
-      skillsPromptWorkspaceDir: "/workspace",
-      skillsWorkspaceDir: "/state/sandbox-skills",
-      workspaceOnly: true,
-    });
-  });
-
-  it("respects char limit when building name-only prompt with many skills", () => {
-    const manySkills: SkillSnapshot = {
-      prompt: "",
-      skills: Array.from({ length: 20 }, (_, i) => ({ name: `skill-${i}` })),
-      resolvedSkills: Array.from({ length: 20 }, (_, i) => ({
-        name: `skill-${i}`,
-        description: `skill ${i}`,
-        filePath: `/usr/lib/skills/skill-${i}/SKILL.md`,
-        baseDir: `/usr/lib/skills/skill-${i}`,
-        source: "openclaw-bundled" as const,
-        sourceInfo: createSyntheticSourceInfo(`/usr/lib/skills/skill-${i}/SKILL.md`, {
-          source: "openclaw-bundled" as const,
-          baseDir: `/usr/lib/skills/skill-${i}`,
-        }),
-        disableModelInvocation: false,
-      })),
-    };
-    const result = resolveSandboxSkillRuntimeInputs({
-      sandbox: {
-        enabled: true,
-        containerWorkdir: "/workspace",
-        skillsWorkspaceDir: "/state/sandbox-skills",
-        workspaceAccess: "ro",
-        skipSkillsSync: true,
-      },
-      effectiveWorkspace: "/workspace",
-      skillsSnapshot: manySkills,
-    });
-    const prompt = result.skillsSnapshot!.prompt;
-    // All 20 skills fit well within 18000 chars, so they should all appear
-    expect(prompt).toContain("<name>skill-0</name>");
-    expect(prompt).toContain("<name>skill-19</name>");
-    expect(prompt.length).toBeLessThan(18_000);
-    expect(result.skillsSnapshot!.skills).toHaveLength(20);
-  });
-
-  it("truncates name-only prompt when skills exceed MAX_SKILLS_PROMPT_CHARS", () => {
-    // Each skill name is ~1000 chars, so 20 skills would exceed the 18000 limit
-    const longName = "x".repeat(1000);
-    const tooMany: SkillSnapshot = {
-      prompt: "",
-      skills: Array.from({ length: 20 }, (_, i) => ({ name: `${longName}-${i}` })),
-      resolvedSkills: Array.from({ length: 20 }, (_, i) => ({
-        name: `${longName}-${i}`,
-        description: `long skill ${i}`,
-        filePath: `/usr/lib/skills/long-${i}/SKILL.md`,
-        baseDir: `/usr/lib/skills/long-${i}`,
-        source: "openclaw-bundled" as const,
-        sourceInfo: createSyntheticSourceInfo(`/usr/lib/skills/long-${i}/SKILL.md`, {
-          source: "openclaw-bundled" as const,
-          baseDir: `/usr/lib/skills/long-${i}`,
-        }),
-        disableModelInvocation: false,
-      })),
-    };
-    const result = resolveSandboxSkillRuntimeInputs({
-      sandbox: {
-        enabled: true,
-        containerWorkdir: "/workspace",
-        skillsWorkspaceDir: "/state/sandbox-skills",
-        workspaceAccess: "ro",
-        skipSkillsSync: true,
-      },
-      effectiveWorkspace: "/workspace",
-      skillsSnapshot: tooMany,
-    });
-    const prompt = result.skillsSnapshot!.prompt;
-    // The prompt should include some skills but be truncated below the limit
-    expect(prompt.length).toBeLessThanOrEqual(18_000);
-    // First skill should still be present
-    expect(prompt).toContain("<name>");
-  });
-
-  it("preserves remote eligibility note in skip-mode name-only prompt", () => {
-    const remoteNote = "remote mac available via exec";
-    const eligSnapshot: SkillSnapshot = {
-      prompt: "",
-      skills: [{ name: "macskill" }],
-      resolvedSkills: [
-        {
-          name: "macskill",
-          description: "Mac-only skill",
-          filePath: "/usr/lib/skills/mac/SKILL.md",
-          baseDir: "/usr/lib/skills/mac",
-          source: "openclaw-bundled",
-          sourceInfo: createSyntheticSourceInfo("/usr/lib/skills/mac/SKILL.md", {
-            source: "openclaw-bundled",
-            baseDir: "/usr/lib/skills/mac",
-          }),
-          disableModelInvocation: false,
-        },
-      ],
-    };
-    const result = resolveSandboxSkillRuntimeInputs({
-      sandbox: {
-        enabled: true,
-        containerWorkdir: "/workspace",
-        skillsWorkspaceDir: "/state/sandbox-skills",
-        workspaceAccess: "ro",
-        skipSkillsSync: true,
-        skillsEligibility: {
-          remote: {
-            platforms: ["darwin"],
-            hasBin: () => false,
-            hasAnyBin: () => false,
-            note: remoteNote,
-          },
-        },
-      },
-      effectiveWorkspace: "/workspace",
-      skillsSnapshot: eligSnapshot,
-    });
-    const prompt = result.skillsSnapshot!.prompt;
-    expect(prompt).toContain(remoteNote);
-    expect(prompt).toContain("<name>macskill</name>");
   });
 });
