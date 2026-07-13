@@ -1,3 +1,4 @@
+import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import {
   isSilentReplyPayloadText,
   isSilentReplyText,
@@ -9,6 +10,18 @@ import {
 /** Sanitizes pending final delivery text before channel-visible output. */
 import type { ReplyPayload } from "../types.js";
 import { stripInternalMetadataForDisplay } from "./display-text-sanitize.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
+
+/** Normalize raw final payloads into the channel-agnostic sendable set recovery can mark. */
+export function normalizePendingFinalDeliveryPayloads(
+  payloads: readonly ReplyPayload[],
+): ReplyPayload[] {
+  const normalizedPayloads = payloads.flatMap((payload) => {
+    const normalized = normalizeReplyPayload(payload, { applyChannelTransforms: false });
+    return normalized ? [normalized] : [];
+  });
+  return normalizeReplyPayloadsForDelivery(normalizedPayloads);
+}
 
 /** Build the restart-recovery text represented by one or more final payloads. */
 export function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {

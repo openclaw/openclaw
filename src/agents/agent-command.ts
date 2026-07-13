@@ -2,8 +2,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
-import { normalizeReplyPayload } from "../auto-reply/reply/normalize-reply.js";
-import { buildPendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
+import {
+  buildPendingFinalDeliveryText,
+  normalizePendingFinalDeliveryPayloads,
+} from "../auto-reply/reply/pending-final-delivery.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -35,10 +37,6 @@ import {
   resolveAgentOutboundTarget,
 } from "../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
-import {
-  normalizeOutboundPayloads,
-  normalizeReplyPayloadsForDelivery,
-} from "../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -2703,11 +2701,8 @@ async function agentCommandInternal(
         }
 
         const payloads = result.payloads ?? [];
-        const normalizedFinalPayloads = payloads.flatMap((payload) => {
-          const normalized = normalizeReplyPayload(payload, { applyChannelTransforms: false });
-          return normalized ? [normalized] : [];
-        });
-        const sendableFinalPayloads = normalizeReplyPayloadsForDelivery(normalizedFinalPayloads);
+        const sendableFinalPayloads = normalizePendingFinalDeliveryPayloads(payloads);
+        const hasSendableFinalPayload = sendableFinalPayloads.length > 0;
         let pendingFinalDeliveryTextForThisRun: string | undefined;
 
         // Persist the completed final before optional post-turn compaction. A compaction
@@ -2774,6 +2769,11 @@ async function agentCommandInternal(
               thinkLevel: effectiveTurnThinkLevel,
               extraSystemPrompt: opts.extraSystemPrompt,
             });
+            const restartAbortReason = opts.abortSignal?.reason;
+            if (isAgentRunRestartAbortReason(restartAbortReason)) {
+              throw restartAbortReason;
+            }
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             sessionEntry = compactedSessionEntry;
             runOwnedSessionId = compactedSessionEntry?.sessionId ?? runOwnedSessionId;
           } catch (error) {
@@ -2785,7 +2785,7 @@ async function agentCommandInternal(
               throw error;
             }
             assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-            if (normalizeOutboundPayloads(sendableFinalPayloads).length === 0) {
+            if (!hasSendableFinalPayload) {
               throw error;
             }
             log.warn(
@@ -2834,7 +2834,7 @@ async function agentCommandInternal(
             : deliveryParams,
         );
 
-        // Phase 2: Clear pending delivery payload after successful delivery.
+        // Clear this run's pending delivery payload after successful delivery.
         if (
           sessionStore &&
           sessionKey &&

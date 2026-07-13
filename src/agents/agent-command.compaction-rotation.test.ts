@@ -648,6 +648,42 @@ describe("agentCommand compaction transcript rotation", () => {
     });
   });
 
+  it("does not deliver or clear the pending final when restart wins after successful compaction", async () => {
+    const sessionId = "restart-after-successful-compaction";
+    const sessionKey = `agent:main:explicit:${sessionId}`;
+    const text = "reply owned by restart recovery after compaction";
+    const abortController = new AbortController();
+    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
+    state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
+      expect(params.sessionEntry).toMatchObject({
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: text,
+      });
+      abortController.abort(createAgentRunRestartAbortError());
+      return params.sessionEntry;
+    });
+
+    await expect(
+      agentCommand({
+        message: "room message",
+        sessionId,
+        sessionKey,
+        cwd: state.workspaceDir,
+        channel: "discord",
+        to: "discord:dm:123",
+        accountId: "main",
+        deliver: true,
+        abortSignal: abortController.signal,
+      }),
+    ).rejects.toThrow("agent run aborted for restart");
+
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+    expect(findStoredSessionEntry(sessionKey)).toMatchObject({
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: text,
+    });
+  });
+
   it("does not deliver or clear the pending final after lifecycle ownership turns stale", async () => {
     const sessionId = "stale-during-compaction";
     const sessionKey = `agent:main:explicit:${sessionId}`;
