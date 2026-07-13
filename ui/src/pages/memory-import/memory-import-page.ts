@@ -9,7 +9,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderMemoryImport } from "./view.ts";
@@ -30,6 +29,15 @@ function toErrorMessage(error: unknown): string {
     : typeof error === "string"
       ? error
       : "request failed";
+}
+
+function createIdempotencyKey(): string {
+  if (typeof globalThis.crypto.randomUUID === "function") {
+    return globalThis.crypto.randomUUID();
+  }
+  return [...globalThis.crypto.getRandomValues(new Uint32Array(4))]
+    .map((value) => value.toString(16).padStart(8, "0"))
+    .join("");
 }
 
 export class MemoryImportPage extends OpenClawLightDomElement {
@@ -245,7 +253,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       planFingerprint,
       itemIds: [...itemIds],
       overwrite: this.replaceExisting,
-      idempotencyKey: generateUUID(),
+      idempotencyKey: createIdempotencyKey(),
       attempted: false,
     };
   }
