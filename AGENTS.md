@@ -120,7 +120,11 @@ Skills own workflows; root owns hard policy and routing.
 - Checks in a normal source checkout: `pnpm check:changed` delegates to Crabbox/Testbox; lanes: `pnpm changed:lanes --json`; staged: `pnpm check:changed --staged`; full: `pnpm check`.
 - Checks in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm check*`; use `node scripts/crabbox-wrapper.mjs run ... -- env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 corepack pnpm check:changed` so pnpm runs inside Testbox, not locally.
 - Direct Testbox runs: pass `--provider blacksmith-testbox`; `OPENCLAW_TESTBOX=1` only selects `scripts/pr` prepare behavior.
-- Release-branch Testbox warmup: wrapper subcommand is `warmup`; pass a remote branch/tag to `--blacksmith-ref`; raw SHAs are rejected, and default `main` can create mixed-base dependency state.
+- Release-branch Testbox warmup: `crabbox-wrapper.mjs warmup --provider blacksmith-testbox --blacksmith-ref <remote-branch-or-tag>`; never `--ref`/raw SHA/default `main` (mixed-base dependency state).
+- Multi-command Testbox run: use `--shell -- "cmd1 && cmd2"`; unquoted `&&` escapes the wrapper and runs later commands locally.
+- Fresh Testbox pnpm runs: prefix command with `env CI=1`; non-TTY dependency reconciliation otherwise aborts.
+- Explicit test paths: verify with `rg --files` first; one missing path aborts the whole Testbox shard.
+- Interrupted Crabbox run: verify/terminate remote child + heavy-check lock; local Ctrl-C may leave remote pnpm alive.
 - Crabbox wrapper stop: `node scripts/crabbox-wrapper.mjs stop --provider <provider> --id <lease>`; no positional id or `--timing-json`.
 - Extension tests: `pnpm test:extensions`, `pnpm test extensions`, `pnpm test extensions/<id>`.
 - Typecheck: `tsgo` lanes only (`pnpm tsgo*`, `pnpm check:test-types`); never add `tsc --noEmit`, `typecheck`, `check:types`.
@@ -135,6 +139,7 @@ Skills own workflows; root owns hard policy and routing.
 - Small/narrow tests, lints, format checks, and type probes are fine locally only in a healthy normal checkout.
 - In Codex worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
 - Codex-worktree commit after equivalent remote hook proof: `git commit --no-verify --no-gpg-sign`; do not invoke `scripts/committer`.
+- Git continuation commands run commit hooks too; pre-format and use hook-free continuation only after equivalent remote proof.
 - Full suites, broad changed gates, Docker/package/E2E/live/cross-OS proof, or anything that bogs down the Mac: Crabbox/Testbox.
 - One/few files local. If a local command fans out, stop and move broad proof to Crabbox/Testbox.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
@@ -237,6 +242,8 @@ Skills own workflows; root owns hard policy and routing.
 
 ## Git
 
+- zsh: quote optional glob patterns; unmatched globs abort commands.
+- LTS worktrees: Testbox full sync can mix main hydration with release packages; use direct Crabbox when lock/package shapes differ.
 - Commit via `scripts/committer "<msg>" <file...>`; stage intended files only.
 - Commits: conventional-ish, concise, grouped.
 - No manual stash/autostash unless explicit. Branch switches ok when useful; no new worktrees unless requested.

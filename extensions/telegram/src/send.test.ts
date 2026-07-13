@@ -32,6 +32,10 @@ import {
   setTelegramSentMessageStoreForTest,
   wasSentByBot,
 } from "./sent-message-cache.js";
+import {
+  resolveTelegramStandardFragmentFrame,
+  stripTelegramStandardFragmentMarker,
+} from "./standard-text.js";
 
 installTelegramSendTestHooks();
 
@@ -854,6 +858,56 @@ describe("sendMessageTelegram", () => {
     );
   });
 
+  it("records a completed standard-message batch once without transport framing", async () => {
+    const storePath = `/tmp/openclaw-telegram-send-chunks-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const source = "a".repeat(5_000);
+    let messageId = 1_600;
+    botApi.sendMessage.mockImplementation(async (_chatId, text) => ({
+      message_id: messageId++,
+      date: 1_779_394_740,
+      chat: { id: "-1003966283270", type: "supergroup", title: "Chunk cache" },
+      from: { id: 42, is_bot: true, first_name: "OpenClaw" },
+      text,
+    }));
+
+    await sendMessageTelegram("-1003966283270", source, {
+      cfg,
+      token: "tok",
+      standardMessage: true,
+    });
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    await cache.record({
+      accountId: "default",
+      chatId: "-1003966283270",
+      msg: {
+        chat: { id: -1003966283270, type: "supergroup", title: "Chunk cache" },
+        message_id: 1_700,
+        date: 1_779_425_460,
+        text: "next",
+        from: { id: 7, is_bot: false, first_name: "Ada" },
+      },
+    });
+    const context = await buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: "-1003966283270",
+      messageId: "1700",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 2,
+    });
+    const sentBodies = context
+      .filter((entry) => Number(entry.node.messageId) >= 1_600)
+      .map((entry) => entry.node.body);
+
+    expect(sentBodies).toEqual([source]);
+    expect(sentBodies[0]).not.toContain("\u2060");
+  });
+
   it("normalizes raw code language HTML before sending", async () => {
     const chatId = "123";
     const text = [
@@ -920,6 +974,179 @@ describe("sendMessageTelegram", () => {
       chat_id: "123",
       rich_message: { markdown: "**hi**" },
     });
+  });
+
+  it("uses standard text messages when requested by a peer-bot turn", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "**hi**", {
+      cfg: { channels: { telegram: { linkPreview: false } } },
+      token: "tok",
+      standardMessage: true,
+    });
+
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", "<b>hi</b>", {
+      link_preview_options: { is_disabled: true },
+      parse_mode: "HTML",
+    });
+  });
+
+  it("keeps non-empty plain text when standard formatting renders empty", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", ">", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      standardMessage: true,
+    });
+
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", ">", {});
+  });
+
+  it("chunks long plain-text fallbacks when standard formatting renders empty", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", Array.from({ length: 5_000 }, () => ">").join("\n"), {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      standardMessage: true,
+    });
+
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(botApi.sendMessage.mock.calls.every((call) => String(call[1]).length <= 4096)).toBe(
+      true,
+    );
+  });
+
+  it("uses visible-length chunks when standard HTML would split below fragment admission", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", `**${"a".repeat(5_000)}**`, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      standardMessage: true,
+    });
+
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(String(botApi.sendMessage.mock.calls[0]?.[1]).startsWith("\u2060\u200b")).toBe(true);
+    expect(stripTelegramStandardFragmentMarker(String(botApi.sendMessage.mock.calls[0]?.[1]))).toBe(
+      "a".repeat(4062),
+    );
+    expect(botApi.sendMessage.mock.calls[0]?.[2]).not.toHaveProperty("parse_mode");
+    expect(String(botApi.sendMessage.mock.calls[1]?.[1]).startsWith("\u2060\u200d")).toBe(true);
+    expect(stripTelegramStandardFragmentMarker(String(botApi.sendMessage.mock.calls[1]?.[1]))).toBe(
+      "a".repeat(938),
+    );
+  });
+
+  it("keeps an incomplete standard batch eligible for fallback", async () => {
+    const failure = new Error("second chunk failed");
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 45, chat: { id: "123" } })
+      .mockRejectedValueOnce(failure);
+
+    await expect(
+      sendMessageTelegram("123", "a".repeat(5_000), {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        standardMessage: true,
+      }),
+    ).rejects.toBe(failure);
+    expect(failure).not.toHaveProperty("sentBeforeError");
+    expect(failure).not.toHaveProperty("visibleReplySent");
+    const startFrame = resolveTelegramStandardFragmentFrame(
+      String(botApi.sendMessage.mock.calls[0]?.[1]),
+    );
+    const abortFrame = resolveTelegramStandardFragmentFrame(
+      String(botApi.sendMessage.mock.calls[2]?.[1]),
+    );
+    expect(startFrame?.kind).toBe("start");
+    expect(abortFrame).toEqual({ batchId: startFrame?.batchId, kind: "abort" });
+  });
+
+  it("does not cache an incomplete standard-message prefix", async () => {
+    const storePath = `/tmp/openclaw-telegram-send-incomplete-${process.pid}-${Date.now()}.json`;
+    const cfg = { session: { store: storePath } };
+    const failure = new Error("second chunk failed");
+    botApi.sendMessage
+      .mockResolvedValueOnce({
+        message_id: 45,
+        date: 1_779_394_740,
+        chat: { id: "123", type: "private" },
+        from: { id: 42, is_bot: true, first_name: "OpenClaw" },
+      })
+      .mockRejectedValueOnce(failure);
+
+    await expect(
+      sendMessageTelegram("123", "a".repeat(5_000), {
+        cfg,
+        token: "tok",
+        standardMessage: true,
+      }),
+    ).rejects.toBe(failure);
+
+    const cache = createTelegramMessageCache({
+      scope: resolveTelegramMessageCacheScope(storePath),
+    });
+    await cache.record({
+      accountId: "default",
+      chatId: "123",
+      msg: {
+        chat: { id: 123, type: "private" },
+        message_id: 46,
+        date: 1_779_425_460,
+        text: "next",
+        from: { id: 7, is_bot: false, first_name: "Ada" },
+      },
+    });
+    const context = await buildTelegramConversationContext({
+      cache,
+      accountId: "default",
+      chatId: "123",
+      messageId: "46",
+      replyChainNodes: [],
+      recentLimit: 10,
+      replyTargetWindowSize: 2,
+    });
+
+    expect(context.map((entry) => entry.node.messageId)).not.toContain("45");
+    expect(context.map((entry) => entry.node.body).join("\n")).not.toContain("\u2060");
+  });
+
+  it("preserves single-use reply targets across one standard-message payload", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "a".repeat(5_000), {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      standardMessage: true,
+      replyToMessageId: 42,
+      replyToMode: "first",
+    });
+
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(botApi.sendMessage.mock.calls.every((call) => call[2]?.reply_to_message_id === 42)).toBe(
+      true,
+    );
+  });
+
+  it("preserves explicit reply targets across standard-message chunks", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "a".repeat(5_000), {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      standardMessage: true,
+      replyToMessageId: 42,
+      replyToIdSource: "explicit",
+      replyToMode: "first",
+    });
+
+    expect(botApi.sendMessage.mock.calls.length).toBeGreaterThan(1);
+    expect(botApi.sendMessage.mock.calls.every((call) => call[2]?.reply_to_message_id === 42)).toBe(
+      true,
+    );
   });
 
   it("keeps complex markdown raw for rich message text", async () => {
@@ -1500,6 +1727,107 @@ describe("sendMessageTelegram", () => {
       parse_mode: "HTML",
     });
     expect(res.messageId).toBe("71");
+  });
+
+  it("marks follow-up text failures after visible media as partially delivered", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 70, chat: { id: chatId } });
+    const sendMessage = vi.fn().mockRejectedValue(new Error("follow-up failed"));
+    const api = { sendPhoto, sendMessage } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendMessage: typeof sendMessage;
+    };
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await expect(
+      sendMessageTelegram(chatId, "A".repeat(1100), {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/photo.jpg",
+      }),
+    ).rejects.toMatchObject({
+      message: "follow-up failed",
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+  });
+
+  it("keeps a failed standard media follow-up partial after visible media", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 70, chat: { id: chatId } });
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 71, chat: { id: chatId } })
+      .mockRejectedValueOnce(new Error("second follow-up fragment failed"))
+      .mockResolvedValueOnce({ message_id: 72, chat: { id: chatId } });
+    const api = { sendPhoto, sendMessage } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendMessage: typeof sendMessage;
+    };
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await expect(
+      sendMessageTelegram(chatId, "A".repeat(6_000), {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/photo.jpg",
+        standardMessage: true,
+        replyToMessageId: 42,
+        replyToMode: "first",
+      }),
+    ).rejects.toMatchObject({
+      message: "second follow-up fragment failed",
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledTimes(3);
+    expect(resolveTelegramStandardFragmentFrame(String(sendMessage.mock.calls[2]?.[1]))?.kind).toBe(
+      "abort",
+    );
+    expect(sendMessage.mock.calls[2]?.[2]).toMatchObject({ reply_to_message_id: 42 });
+  });
+
+  it("keeps peer reply targeting on media follow-up text", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 70, chat: { id: chatId } });
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 71, chat: { id: chatId } });
+    const api = { sendPhoto, sendMessage } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendMessage: typeof sendMessage;
+    };
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "A".repeat(1_100), {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+      standardMessage: true,
+      replyToMessageId: 42,
+      replyToMode: "first",
+    });
+
+    expect(firstMockCall(sendPhoto, "send photo call")[2]).toMatchObject({
+      reply_to_message_id: 42,
+    });
+    expect(firstMockCall(sendMessage, "send message call")[2]).toMatchObject({
+      reply_to_message_id: 42,
+    });
   });
 
   it("chunks long default markdown media follow-up text", async () => {

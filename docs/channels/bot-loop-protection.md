@@ -9,9 +9,9 @@ sidebarTitle: "Bot loop protection"
 
 # Bot loop protection
 
-OpenClaw can accept messages written by other bots on channels that support `allowBots`.
-When that path is enabled, pair loop protection prevents two bot identities from
-replying to each other indefinitely.
+OpenClaw can accept messages written by other bots through channel-native bot policy or
+an `allowBots` option. When that path is enabled, pair loop protection prevents two bot
+identities from replying to each other indefinitely.
 
 The guard is enforced by the core inbound reply runner. Each supporting channel
 maps its own inbound event into generic facts: account or scope, conversation id,
@@ -122,6 +122,7 @@ Supporting channels layer their own config over the shared default. Precedence i
 - Slack: native `bot_id` facts for accepted bot-authored messages, keyed by Slack account, channel, and bot pair.
 - Matrix: configured Matrix bot accounts, keyed by Matrix account, room, and configured bot pair.
 - Google Chat: native `sender.type=BOT` facts for accepted bot-authored messages, keyed by account, space, and bot pair.
+- Telegram: native `from.is_bot` facts for accepted bot-authored messages, keyed by Telegram account, chat/topic, and bot pair. Telegram currently uses the shared `channels.defaults.botLoopProtection` policy.
 
 Channels that do not expose a reliable inbound bot identity keep using their
 normal self-message and access-policy filters. They should not opt into this

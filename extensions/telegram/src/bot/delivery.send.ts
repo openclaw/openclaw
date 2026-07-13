@@ -22,6 +22,7 @@ import type { TelegramThreadSpec } from "./helpers.js";
 export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+const HTML_PARSE_ERROR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -99,6 +100,7 @@ export async function sendTelegramText(
     replyQuoteEntities?: unknown[];
     thread?: TelegramThreadSpec | null;
     textMode?: "markdown" | "html";
+    standardMessage?: { plainText: string };
     linkPreview?: boolean;
     silent?: boolean;
     replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
@@ -115,6 +117,37 @@ export async function sendTelegramText(
   });
   const richParams = toTelegramRichMessageContextParams(baseParams);
   const textMode = opts?.textMode ?? "markdown";
+  if (opts?.standardMessage) {
+    const sendStandard = async (message: string, parseMode?: "HTML") => {
+      const res = await sendTelegramWithThreadFallback({
+        operation: "sendMessage",
+        runtime,
+        thread: opts.thread,
+        requestParams: baseParams,
+        send: (effectiveParams) =>
+          bot.api.sendMessage(chatId, message, {
+            ...(parseMode ? { parse_mode: parseMode } : {}),
+            ...(opts.linkPreview === false ? { link_preview_options: { is_disabled: true } } : {}),
+            ...(opts.replyMarkup ? { reply_markup: opts.replyMarkup } : {}),
+            ...effectiveParams,
+          }),
+      });
+      runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
+      return res.message_id;
+    };
+    if (text === opts.standardMessage.plainText) {
+      return await sendStandard(text);
+    }
+    try {
+      return await sendStandard(text, "HTML");
+    } catch (err) {
+      if (!HTML_PARSE_ERROR_RE.test(formatErrorMessage(err))) {
+        throw err;
+      }
+      runtime.log?.("telegram formatted send failed; retrying without formatting");
+      return await sendStandard(opts.standardMessage.plainText);
+    }
+  }
   const richMessage = buildTelegramRichMessage(text, textMode, {
     skipEntityDetection: opts?.linkPreview === false,
   });

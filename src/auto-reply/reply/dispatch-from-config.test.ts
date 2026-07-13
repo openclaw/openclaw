@@ -52,7 +52,7 @@ type ResolveInboundConversationParams = Parameters<
 >[0];
 
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, delivered: true, messageId: "mock" })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
@@ -965,7 +965,7 @@ describe("dispatchReplyFromConfig", () => {
     replyRunTesting.resetReplyRunRegistry();
     resetInboundDedupe();
     mocks.routeReply.mockReset();
-    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     diagnosticMocks.logMessageQueued.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
@@ -1377,6 +1377,83 @@ describe("dispatchReplyFromConfig", () => {
         mirror: false,
       }),
     );
+  });
+
+  it("treats a partially delivered routed final as visible and handled", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    mocks.routeReply.mockResolvedValueOnce({
+      ok: false,
+      delivered: true,
+      error: "second chunk failed",
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+        SessionKey: "agent:main:telegram:group:999",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "Partially delivered routed reply" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(result.counts.final).toBe(1);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
+  });
+
+  it("keeps an explicit routed no-op eligible for visible fallback", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    mocks.routeReply.mockResolvedValueOnce({ ok: true, delivered: false });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+        SessionKey: "agent:main:telegram:group:999",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "Normalized no-op" }),
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.counts.final).toBe(0);
+    expect(result.noVisibleReplyFallbackEligible).toBe(true);
+  });
+
+  it("treats intentional routed suppression as handled but not visible", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    mocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      delivered: false,
+      suppressed: true,
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+        SessionKey: "agent:main:telegram:group:999",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver: async () => ({ text: "Suppressed by hook" }),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(result.counts.final).toBe(0);
+    expect(result.noVisibleReplyFallbackEligible).toBeUndefined();
   });
 
   it("mirrors the delivered ownerless Slack text after dispatcher hook rewrites", async () => {
@@ -7503,7 +7580,7 @@ describe("before_dispatch hook", () => {
   beforeEach(() => {
     resetInboundDedupe();
     mocks.routeReply.mockReset();
-    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     threadInfoMocks.parseSessionThreadInfo.mockReset();
     threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;

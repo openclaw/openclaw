@@ -23,9 +23,11 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   createTelegramActionGate,
+  mergeTelegramAccountConfig,
   resolveDefaultTelegramAccountId,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
@@ -36,6 +38,7 @@ import {
   resolveTelegramTargetChatType,
 } from "./inline-buttons.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
+import { getTelegramPeerBotTurn } from "./peer-bot-turn.js";
 import { resolveTelegramPollVisibility } from "./poll-visibility.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import {
@@ -51,7 +54,11 @@ import {
   sendStickerTelegram,
 } from "./send.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
-import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
+import {
+  normalizeTelegramLookupTarget,
+  normalizeTelegramOutboundTarget,
+  parseTelegramTarget,
+} from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
 import { resolveTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
@@ -284,12 +291,14 @@ function buildTelegramActionSendPayload(params: {
   pin?: ReturnType<typeof normalizeTelegramDeliveryPin>;
   buttons?: ReturnType<typeof resolveTelegramButtonsFromParams>;
   quoteText?: string;
+  standardMessage?: boolean;
 }): ReplyPayload {
   const telegramData =
-    params.buttons || params.quoteText
+    params.buttons || params.quoteText || params.standardMessage
       ? {
           ...(params.buttons ? { buttons: params.buttons } : {}),
           ...(params.quoteText ? { quoteText: params.quoteText } : {}),
+          ...(params.standardMessage ? { standardMessage: true } : {}),
         }
       : undefined;
   return {
@@ -440,6 +449,48 @@ export async function handleTelegramAction(
       throw new Error("Telegram sendMessage is disabled.");
     }
     const to = normalizeTelegramOutboundTarget(readStringParam(params, "to", { required: true }));
+    const peerBotTurn = getTelegramPeerBotTurn();
+    const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultTelegramAccountId(cfg));
+    const peerBotReplyToMode =
+      mergeTelegramAccountConfig(cfg, resolvedAccountId)?.replyToMode ?? "all";
+    const peerAccountMatches =
+      peerBotTurn !== undefined && normalizeAccountId(peerBotTurn.accountId) === resolvedAccountId;
+    const parsedTarget = parseTelegramTarget(to);
+    const peerAliasKey = (raw: string): string | undefined => {
+      const normalized = normalizeTelegramLookupTarget(raw);
+      if (normalized) {
+        return normalized.toLowerCase();
+      }
+      const direct = raw.trim().match(/^@?([a-z0-9_]+)$/i);
+      const telegramUrl = raw.trim().match(/^(?:https?:\/\/)?t\.me\/([a-z0-9_]+)\/?$/i);
+      const username = direct?.[1] ?? telegramUrl?.[1];
+      return username ? `@${username.toLowerCase()}` : undefined;
+    };
+    const normalizedPeerLookupTarget = peerAliasKey(parsedTarget.chatId);
+    const matchesPeerAlias = (aliases?: string[]) =>
+      normalizedPeerLookupTarget !== undefined &&
+      aliases?.some((alias) => peerAliasKey(alias) === normalizedPeerLookupTarget) === true;
+    const peerChatAliasMatches = peerAccountMatches && matchesPeerAlias(peerBotTurn?.chatAliases);
+    const peerSenderAliasMatches =
+      peerAccountMatches && matchesPeerAlias(peerBotTurn?.senderAliases);
+    const peerSenderIdMatches = peerAccountMatches && parsedTarget.chatId === peerBotTurn?.senderId;
+    const targetMatchesPeerSender = peerSenderAliasMatches || peerSenderIdMatches;
+    const targetMatchesSourceChat =
+      peerAccountMatches &&
+      peerBotTurn !== undefined &&
+      (parsedTarget.chatId === peerBotTurn.chatId || peerChatAliasMatches);
+    // Chat aliases identify the source turn. Sender aliases resolve to the known
+    // numeric sender id so private bot delivery never depends on getChat(username).
+    const deliveryTarget = peerChatAliasMatches
+      ? peerBotTurn?.chatId
+      : peerSenderAliasMatches
+        ? peerBotTurn?.senderId
+        : to;
+    const messageThreadId = readTelegramThreadId(params);
+    const effectiveMessageThreadId =
+      messageThreadId ??
+      parsedTarget.messageThreadId ??
+      (targetMatchesSourceChat ? peerBotTurn?.threadId : undefined);
     const mediaUrls = readTelegramSendMediaUrls(params);
     const firstMediaUrl = mediaUrls[0];
     const presentation = normalizeMessagePresentation(params.presentation);
@@ -462,7 +513,9 @@ export async function handleTelegramAction(
         );
       }
       if (inlineButtonsScope === "dm" || inlineButtonsScope === "group") {
-        const targetType = resolveTelegramTargetChatType(to);
+        const targetType = targetMatchesPeerSender
+          ? "direct"
+          : resolveTelegramTargetChatType(deliveryTarget);
         if (targetType === "unknown") {
           throw new Error(
             `Telegram inline buttons require a numeric chat id when inlineButtons="${inlineButtonsScope}".`,
@@ -479,8 +532,17 @@ export async function handleTelegramAction(
       }
     }
     // Optional threading parameters for forum topics and reply chains
-    const replyToMessageId = readTelegramReplyToMessageId(params);
-    const messageThreadId = readTelegramThreadId(params);
+    const explicitReplyToMessageId = readTelegramReplyToMessageId(params);
+    const peerBotSourceReplyTarget =
+      peerBotTurn !== undefined &&
+      targetMatchesSourceChat &&
+      effectiveMessageThreadId === peerBotTurn.threadId;
+    const peerBotStandardTarget = peerBotSourceReplyTarget || targetMatchesPeerSender;
+    const replyToMessageId =
+      explicitReplyToMessageId ??
+      (peerBotSourceReplyTarget && peerBotReplyToMode !== "off"
+        ? peerBotTurn.messageId
+        : undefined);
     const quoteText = readStringParam(params, "quoteText");
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
@@ -493,7 +555,7 @@ export async function handleTelegramAction(
       accountId: accountId ?? undefined,
       gatewayClientScopes: options?.gatewayClientScopes,
       replyToMessageId: replyToMessageId ?? undefined,
-      messageThreadId: messageThreadId ?? undefined,
+      messageThreadId: effectiveMessageThreadId,
       quoteText: quoteText ?? undefined,
       asVoice: readBooleanParam(params, "asVoice"),
       silent: readBooleanParam(params, "silent"),
@@ -502,14 +564,19 @@ export async function handleTelegramAction(
         readBooleanParam(params, "asDocument") ??
         false,
     };
-    const payload = buildTelegramActionSendPayload({
+    const basePayload = buildTelegramActionSendPayload({
       content,
       mediaUrls,
       asVoice: sendOptions.asVoice,
       pin: normalizeTelegramDeliveryPin(params),
       buttons,
       quoteText,
+      standardMessage: peerBotStandardTarget,
     });
+    const payload =
+      explicitReplyToMessageId == null
+        ? basePayload
+        : { ...basePayload, replyToId: String(explicitReplyToMessageId) };
     const mediaAccess =
       options?.mediaLocalRoots || options?.mediaReadFile
         ? {
@@ -525,11 +592,15 @@ export async function handleTelegramAction(
     const durableResult = await telegramActionRuntime.sendDurableMessageBatch({
       cfg,
       channel: "telegram",
-      to,
+      to: deliveryTarget,
       accountId: accountId ?? undefined,
       payloads: [payload],
-      replyToId: replyToMessageId == null ? undefined : String(replyToMessageId),
-      threadId: messageThreadId,
+      replyToId:
+        explicitReplyToMessageId == null && replyToMessageId != null
+          ? String(replyToMessageId)
+          : undefined,
+      replyToMode: peerBotStandardTarget ? peerBotReplyToMode : undefined,
+      threadId: effectiveMessageThreadId,
       forceDocument: sendOptions.forceDocument,
       silent: sendOptions.silent,
       durability: "required",
@@ -537,14 +608,18 @@ export async function handleTelegramAction(
       ...(mediaAccess ? { mediaAccess } : {}),
       ...(outboundSession ? { session: outboundSession } : {}),
     });
-    if (durableResult.status === "failed" || durableResult.status === "partial_failed") {
+    if (durableResult.status === "partial_failed") {
+      notifyVisibleOutboundSuccess(deliveryTarget, effectiveMessageThreadId);
+      throw durableResult.error;
+    }
+    if (durableResult.status === "failed") {
       throw durableResult.error;
     }
     if (durableResult.status === "suppressed") {
       throw new Error("Telegram sendMessage was suppressed before delivery.");
     }
     const result = getLastDurableTelegramActionResult(durableResult);
-    notifyVisibleOutboundSuccess(to, messageThreadId);
+    notifyVisibleOutboundSuccess(deliveryTarget, effectiveMessageThreadId);
     return jsonResult({
       ok: true,
       messageId: result.messageId,

@@ -594,6 +594,288 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("uses observable standard delivery instead of rich drafts for bot-originated turns", async () => {
+    loadSessionStore.mockReturnValue({ s1: { reasoningLevel: "stream" } });
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: { messageIds: ["rich"], visibleReplySent: true },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Ready" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          MessageSid: "456",
+          ReplyToId: "123",
+          ReplyToBody: "quoted human message",
+          ReplyToQuoteText: "quoted human message",
+          ReplyToIsQuote: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: { from: { id: 99, is_bot: true } } as unknown as TelegramMessageContext["msg"],
+      }),
+      replyToMode: "first",
+      telegramCfg: { replyToMode: "first" },
+    });
+
+    expect(createTelegramDraftStream).not.toHaveBeenCalled();
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(1);
+    expect(mockCallArg(deliverInboundReplyWithMessageSendContext)).toMatchObject({
+      payload: {
+        text: "Ready",
+        replyToId: "456",
+        replyToIdSource: "implicit",
+        channelData: { telegram: { standardMessage: true } },
+      },
+      replyToMode: "first",
+    });
+    expect(
+      dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].replyOptions
+        ?.sourceReplyDeliveryMode,
+    ).toBeUndefined();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("defaults bot-originated standard delivery to explicit reply targeting", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Ready" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { MessageSid: "456" } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: { from: { id: 99, is_bot: true } } as unknown as TelegramMessageContext["msg"],
+      }),
+    });
+
+    expect(mockCallArg(deliverInboundReplyWithMessageSendContext)).toMatchObject({
+      payload: {
+        text: "Ready",
+        replyToId: "456",
+        replyToIdSource: "implicit",
+        channelData: { telegram: { standardMessage: true } },
+      },
+      replyToMode: "all",
+    });
+  });
+
+  it("preserves explicit replyToMode off for bot-originated standard delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Ready" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { MessageSid: "456" } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: { from: { id: 99, is_bot: true } } as unknown as TelegramMessageContext["msg"],
+      }),
+      replyToMode: "off",
+      telegramCfg: { replyToMode: "off" },
+    });
+
+    expect(mockCallArg(deliverInboundReplyWithMessageSendContext)).toMatchObject({
+      payload: {
+        text: "Ready",
+        channelData: { telegram: { standardMessage: true } },
+      },
+      replyToMode: "off",
+    });
+    expect(
+      mockCallArg(deliverInboundReplyWithMessageSendContext).payload.replyToId,
+    ).toBeUndefined();
+  });
+
+  it("preserves explicit reply targets on bot-originated standard delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Ready", replyToId: "999" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { MessageSid: "456" } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: { from: { id: 99, is_bot: true } } as unknown as TelegramMessageContext["msg"],
+      }),
+      replyToMode: "first",
+      telegramCfg: { replyToMode: "first" },
+    });
+
+    expect(mockCallArg(deliverInboundReplyWithMessageSendContext).payload).toMatchObject({
+      text: "Ready",
+      replyToId: "999",
+    });
+  });
+
+  it("consumes queued peer-bot implicit targets across payloads", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({ queuedFinal: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { MessageSid: "456" } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: { from: { id: 99, is_bot: true } } as unknown as TelegramMessageContext["msg"],
+      }),
+      replyToMode: "first",
+      telegramCfg: { replyToMode: "first" },
+    });
+
+    const transform =
+      dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].replyOptions
+        ?.queuedDeliveryPayloadTransform;
+    const didDeliver =
+      dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].replyOptions
+        ?.queuedDeliveryPayloadDidDeliver;
+    expect(
+      dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].replyOptions
+        ?.queuedDeliveryReplyToMode,
+    ).toBe("first");
+    expect(transform).toBeTypeOf("function");
+    expect(didDeliver).toBeTypeOf("function");
+    const first = transform?.({ text: "first" });
+    expect(first).toMatchObject({
+      replyToId: "456",
+      replyToIdSource: "implicit",
+    });
+    expect(transform?.({ text: "not-yet-delivered" })).toMatchObject({ replyToId: "456" });
+    if (first) {
+      didDeliver?.(first);
+    }
+    expect(transform?.({ text: "second" })?.replyToId).toBeUndefined();
+    expect(transform?.({ text: "explicit", replyToId: "999" })?.replyToId).toBe("999");
+  });
+
+  it("does not consume a peer reply target before visible delivery", async () => {
+    deliverInboundReplyWithMessageSendContext
+      .mockResolvedValueOnce({ status: "handled_no_send", reason: "no_visible_result" })
+      .mockResolvedValueOnce({
+        status: "handled_visible",
+        delivery: { messageIds: ["visible"], visibleReplySent: true },
+      });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "suppressed" }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: "visible" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { MessageSid: "456" } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: { from: { id: 99, is_bot: true } } as unknown as TelegramMessageContext["msg"],
+      }),
+      replyToMode: "first",
+      telegramCfg: { replyToMode: "first" },
+    });
+
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(2);
+    expect(deliverInboundReplyWithMessageSendContext.mock.calls[1]?.[0].payload).toMatchObject({
+      text: "visible",
+      replyToId: "456",
+      replyToIdSource: "implicit",
+    });
+  });
+
+  it("consumes a peer reply target after a partially visible durable failure", async () => {
+    const partialError = new Error("second chunk failed");
+    deliverInboundReplyWithMessageSendContext
+      .mockResolvedValueOnce({
+        status: "failed",
+        error: partialError,
+        sentBeforeError: true,
+      })
+      .mockResolvedValueOnce({
+        status: "handled_visible",
+        delivery: { messageIds: ["visible"], visibleReplySent: true },
+      });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await expect(dispatcherOptions.deliver({ text: "partial" }, { kind: "final" })).rejects.toBe(
+        partialError,
+      );
+      await dispatcherOptions.deliver({ text: "later" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { MessageSid: "456" } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: { from: { id: 99, is_bot: true } } as unknown as TelegramMessageContext["msg"],
+      }),
+      replyToMode: "first",
+      telegramCfg: { replyToMode: "first" },
+    });
+
+    expect(deliverInboundReplyWithMessageSendContext).toHaveBeenCalledTimes(2);
+    expect(
+      deliverInboundReplyWithMessageSendContext.mock.calls[1]?.[0].payload.replyToId,
+    ).toBeUndefined();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not send a fallback after a partially visible durable failure", async () => {
+    deliverInboundReplyWithMessageSendContext.mockResolvedValueOnce({
+      status: "failed",
+      error: new Error("second chunk failed"),
+      sentBeforeError: true,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "partial" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { MessageSid: "456" } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: { from: { id: 99, is_bot: true } } as unknown as TelegramMessageContext["msg"],
+      }),
+      replyToMode: "first",
+      telegramCfg: { replyToMode: "first" },
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not send a fallback after a partially visible direct failure", async () => {
+    const partialError = Object.assign(new Error("second direct chunk failed"), {
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    deliverReplies.mockRejectedValueOnce(partialError);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "partial" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { MessageSid: "456" } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: { from: { id: 99, is_bot: true } } as unknown as TelegramMessageContext["msg"],
+      }),
+      replyToMode: "first",
+      telegramCfg: { replyToMode: "first" },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends a terminal failure fallback after progress-only delivery", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "working" }, { kind: "tool" });
+      throw new Error("agent failed after progress");
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies.mock.calls[1]?.[0].replies).toEqual([
+      expect.objectContaining({
+        text: "Something went wrong while processing your request. Please try again.",
+      }),
+    ]);
+  });
+
   it("recovers forum thread context from a topic-scoped session key", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
     const oldHistoryKey = "-1003774691294:topic:1";

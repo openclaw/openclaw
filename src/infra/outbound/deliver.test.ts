@@ -1826,6 +1826,43 @@ describe("deliverOutboundPayloads", () => {
     });
   });
 
+  it("preserves adapter partial-delivery metadata without a message receipt", async () => {
+    const adapterError = Object.assign(new Error("later adapter chunk failed"), {
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    const sendPayload = vi.fn().mockRejectedValue(adapterError);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: vi.fn(),
+              sendMedia: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "long peer reply", channelData: { matrix: { mode: "notice" } } }],
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      payloadOutcomes: [expect.objectContaining({ status: "failed", sentBeforeError: true })],
+    });
+  });
+
   it("strips internal runtime scaffolding copied into rendered and normalized nested payloads", async () => {
     const sendPayload = vi.fn().mockResolvedValue({
       channel: "matrix" as const,

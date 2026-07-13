@@ -699,14 +699,33 @@ describe("followup queue collect routing", () => {
       cap: 2,
       dropPolicy: "summarize",
     };
+    const queuedDeliveryPayloadTransform: NonNullable<
+      FollowupRun["queuedDeliveryPayloadTransform"]
+    > = vi.fn((payload) => payload);
+    const queuedDeliveryPayloadDidDeliver: NonNullable<
+      FollowupRun["queuedDeliveryPayloadDidDeliver"]
+    > = vi.fn();
+    const queuedExecutionContext: NonNullable<FollowupRun["queuedExecutionContext"]> = vi.fn(
+      async (run) => await run(),
+    );
 
     enqueueFollowupRun(
       key,
-      createRun({
-        prompt: "first",
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-      }),
+      {
+        ...createRun({
+          prompt: "first",
+          originatingChannel: "slack",
+          originatingTo: "channel:A",
+          originatingAccountId: "account-a",
+          originatingThreadId: "thread-a",
+          originatingReplyToId: "reply-a",
+          originatingChatType: "channel",
+        }),
+        queuedDeliveryPayloadTransform,
+        queuedDeliveryReplyToMode: "first",
+        queuedDeliveryPayloadDidDeliver,
+        queuedExecutionContext,
+      },
       settings,
     );
     enqueueFollowupRun(
@@ -736,6 +755,153 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).toBe("third");
     expect(calls[2]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[2]?.prompt).toContain("- first");
+    expect(calls[2]?.queuedDeliveryPayloadTransform).toBe(queuedDeliveryPayloadTransform);
+    expect(calls[2]?.queuedDeliveryReplyToMode).toBe("first");
+    expect(calls[2]?.queuedDeliveryPayloadDidDeliver).toBe(queuedDeliveryPayloadDidDeliver);
+    expect(calls[2]?.queuedExecutionContext).toBe(queuedExecutionContext);
+    expect(calls[2]).toMatchObject({
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+      originatingAccountId: "account-a",
+      originatingThreadId: "thread-a",
+      originatingReplyToId: "reply-a",
+      originatingChatType: "channel",
+    });
+  });
+
+  it("summarizes mixed-route overflow sources per route", async () => {
+    const key = `test-collect-mixed-summary-routes-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= 4) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "first", originatingChannel: "slack", originatingTo: "channel:A" }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "second", originatingChannel: "telegram", originatingTo: "chat:B" }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "third", originatingChannel: "discord", originatingTo: "channel:C" }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "fourth", originatingChannel: "discord", originatingTo: "channel:C" }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls.slice(0, 2).map((call) => call.prompt)).toEqual(["third", "fourth"]);
+    expect(calls[2]).toMatchObject({
+      originatingChannel: "slack",
+      originatingTo: "channel:A",
+    });
+    expect(calls[2]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[2]?.prompt).toContain("- first");
+    expect(calls[3]).toMatchObject({
+      originatingChannel: "telegram",
+      originatingTo: "chat:B",
+    });
+    expect(calls[3]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[3]?.prompt).toContain("- second");
+  });
+
+  it("compacts same-route runtime overflow under one summary owner", async () => {
+    const key = `test-collect-runtime-summary-owner-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const firstComplete = vi.fn();
+    const secondComplete = vi.fn();
+    const firstTransform: NonNullable<FollowupRun["queuedDeliveryPayloadTransform"]> = vi.fn(
+      (payload) => payload,
+    );
+    const secondTransform: NonNullable<FollowupRun["queuedDeliveryPayloadTransform"]> = vi.fn(
+      (payload) => payload,
+    );
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= 3) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 2,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "first",
+          originatingChannel: "telegram",
+          originatingTo: "chat:A",
+          originatingReplyToId: "1",
+        }),
+        queuedDeliveryPayloadTransform: firstTransform,
+        queuedLifecycle: { onComplete: firstComplete },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({
+          prompt: "second",
+          originatingChannel: "telegram",
+          originatingTo: "chat:A",
+          originatingReplyToId: "2",
+        }),
+        queuedDeliveryPayloadTransform: secondTransform,
+        queuedLifecycle: { onComplete: secondComplete },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "third", originatingChannel: "telegram", originatingTo: "chat:A" }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({ prompt: "fourth", originatingChannel: "telegram", originatingTo: "chat:A" }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls.slice(0, 2).map((call) => call.prompt)).toEqual(["third", "fourth"]);
+    expect(calls[2]?.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
+    expect(calls[2]?.prompt).toContain("- first");
+    expect(calls[2]?.prompt).toContain("- second");
+    expect(calls[2]?.originatingReplyToId).toBe("2");
+    expect(calls[2]?.queuedDeliveryPayloadTransform).toBe(secondTransform);
+    await vi.waitFor(() => {
+      expect(firstComplete).toHaveBeenCalledTimes(1);
+      expect(secondComplete).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("preserves collect order when authorization changes more than once", async () => {
@@ -1431,26 +1597,20 @@ describe("followup queue collect routing", () => {
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
 
-  it("completes summarized room-event lifecycle when overflow summary delivery fails", async () => {
+  it("does not retry a grouped overflow summary after terminal delivery failure", async () => {
     const key = `test-overflow-summary-lifecycle-failure-${Date.now()}`;
     const calls: FollowupRun[] = [];
-    const firstAttempt = createDeferred<void>();
-    const releaseRetry = createDeferred<void>();
-    const done = createDeferred<void>();
+    const summaryFailed = createDeferred<void>();
     const onComplete = vi.fn();
-    let attempts = 0;
     const runFollowup = async (run: FollowupRun) => {
       calls.push(run);
-      attempts += 1;
-      if (attempts === 1) {
-        firstAttempt.resolve();
-        throw new Error("transient failure");
+      if (run.prompt.includes("[Queue overflow]")) {
+        summaryFailed.resolve();
+        throw new Error("terminal failure");
       }
-      await releaseRetry.promise;
-      done.resolve();
     };
     const settings: QueueSettings = {
-      mode: "followup",
+      mode: "collect",
       debounceMs: 0,
       cap: 1,
       dropPolicy: "summarize",
@@ -1469,21 +1629,17 @@ describe("followup queue collect routing", () => {
     enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
 
     scheduleFollowupDrain(key, runFollowup);
-    await firstAttempt.promise;
+    await summaryFailed.promise;
     await new Promise((resolve) => {
       setTimeout(resolve, 10);
     });
 
     expect(onComplete).toHaveBeenCalledTimes(1);
-    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
-
-    releaseRetry.resolve();
-    await done.promise;
-
     expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("live followup");
     expect(calls[1]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
     expect(calls[1]?.prompt).toContain("- dropped ambient");
-    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
   });
 });
 
