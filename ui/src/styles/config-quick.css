@@ -1,22 +1,5 @@
 /* ── Quick Settings ── */
 
-.settings-workspace {
-  width: 100%;
-}
-
-.settings-workspace__body {
-  width: 100%;
-}
-
-.content-header + .settings-workspace,
-.config-view-toggle-row + .settings-workspace {
-  margin-top: 20px;
-}
-
-.settings-workspace__body > * + * {
-  margin-top: 20px;
-}
-
 .content:has(openclaw-logs-page) {
   overflow: hidden;
 }
@@ -36,20 +19,6 @@ openclaw-logs-page {
 
 .content:has(openclaw-logs-page) .content-header {
   flex: 0 0 auto;
-}
-
-.settings-workspace--fill-height {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.settings-workspace--fill-height > .settings-workspace__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
 }
 
 .settings-workspace--fill-height .logs-card {

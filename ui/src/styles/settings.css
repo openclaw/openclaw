@@ -13,6 +13,39 @@
  * ui/src/components/settings-ui.ts rather than hand-rolled markup.
  */
 
+/* ── Workspace shell (shared by every settings takeover page) ── */
+
+.settings-workspace {
+  width: 100%;
+}
+
+.settings-workspace__body {
+  width: 100%;
+}
+
+.content-header + .settings-workspace,
+.config-view-toggle-row + .settings-workspace {
+  margin-top: var(--space-5);
+}
+
+.settings-workspace__body > * + * {
+  margin-top: var(--space-5);
+}
+
+.settings-workspace--fill-height {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-workspace--fill-height > .settings-workspace__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ── Page ── */
 
 .settings-page {
