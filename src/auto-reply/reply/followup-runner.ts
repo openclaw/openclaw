@@ -1774,7 +1774,6 @@ export function createFollowupRunner(params: {
         }
         return true;
       };
-
       if (storePath && replySessionKey) {
         await persistRunSessionUsage({
           storePath,
@@ -1798,7 +1797,6 @@ export function createFollowupRunner(params: {
           logLabel: "followup",
         });
       }
-
       const hasCommittedDelivery =
         hasVisibleOutboundDeliveryEvidence(runResult) ||
         hasCommittedSourceReplyDeliveryEvidence(runResult) ||
@@ -1882,7 +1880,6 @@ export function createFollowupRunner(params: {
       if (!hasTerminalReplyPayload && fallbackPayload) {
         finalPayloads = [...finalPayloads, ...resolveDeliveryPayloads([fallbackPayload])];
       }
-
       if (finalPayloads.length === 0) {
         if (await enqueueStrandedReplyRecoveryRetry()) {
           return;
@@ -1904,7 +1901,6 @@ export function createFollowupRunner(params: {
           new Error("interactive follow-up completed without a visible reply"),
         );
       }
-
       let deliveryPayloads = finalPayloads;
       const responseUsageSessionRaw =
         activeSessionEntry?.responseUsage ??
@@ -1998,7 +1994,6 @@ export function createFollowupRunner(params: {
           ];
         }
       }
-
       if (run.sourceReplyDeliveryMode === "message_tool_only") {
         const suppressionDeliverablePayloads = deliveryPayloads.filter(
           (payload) =>
@@ -2027,7 +2022,6 @@ export function createFollowupRunner(params: {
         );
         return;
       }
-
       await sendRunPayloads(
         deliveryPayloads,
         effectiveQueued,

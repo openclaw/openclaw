@@ -24,6 +24,7 @@ import { renderSettingsWorkspace } from "../../components/settings-workspace.ts"
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   AI_AGENTS_SECTION_KEYS,
@@ -282,7 +283,14 @@ export class ConfigPage extends OpenClawLightDomElement {
   private systemInfoClient: GatewayBrowserClient | null = null;
   private systemInfoLoading = false;
   private systemInfoRequestId = 0;
-  private systemInfoPollInterval: ReturnType<typeof globalThis.setInterval> | null = null;
+  private readonly systemInfoPolling = new PollController(
+    this,
+    SYSTEM_INFO_POLL_INTERVAL_MS,
+    () => {
+      void this.loadSystemInfo();
+    },
+    false,
+  );
   private pendingRouteTargetId: string | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
@@ -322,7 +330,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
-    this.stopSystemInfoPolling();
+    this.systemInfoPolling.stop();
     this.invalidateSystemInfoRequest();
     this.runtimeConfigSource = null;
     this.resetConfigViewState();
@@ -409,7 +417,7 @@ export class ConfigPage extends OpenClawLightDomElement {
 
   private synchronizeSystemInfoGateway(gateway: ApplicationContext["gateway"]) {
     if (gateway !== this.systemInfoGatewaySource) {
-      this.stopSystemInfoPolling();
+      this.systemInfoPolling.stop();
       this.invalidateSystemInfoRequest();
       this.systemInfoGatewaySource = gateway;
       this.resetConfigViewState();
@@ -457,24 +465,12 @@ export class ConfigPage extends OpenClawLightDomElement {
       supportsSystemInfo(gateway.hello) &&
       gateway.client != null;
     if (!shouldPoll) {
-      this.stopSystemInfoPolling();
+      this.systemInfoPolling.stop();
       return;
     }
-    if (this.systemInfoPollInterval !== null) {
-      return;
-    }
-    void this.loadSystemInfo();
-    this.systemInfoPollInterval = globalThis.setInterval(() => {
+    if (this.systemInfoPolling.start()) {
       void this.loadSystemInfo();
-    }, SYSTEM_INFO_POLL_INTERVAL_MS);
-  }
-
-  private stopSystemInfoPolling() {
-    if (this.systemInfoPollInterval === null) {
-      return;
     }
-    globalThis.clearInterval(this.systemInfoPollInterval);
-    this.systemInfoPollInterval = null;
   }
 
   private invalidateSystemInfoRequest() {
@@ -531,7 +527,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
         this.systemInfo = null;
         this.systemInfoUnavailable = true;
-        this.stopSystemInfoPolling();
+        this.systemInfoPolling.stop();
       }
     } finally {
       if (this.isCurrentSystemInfoRequest(requestId, client, gatewaySource)) {
