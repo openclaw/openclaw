@@ -122,6 +122,18 @@ export function revokeAttachGrant(token: string): boolean {
   return grantsByToken.delete(token);
 }
 
+export function revokeAttachGrantsForSession(sessionKey: string): number {
+  const key = sessionKey.trim();
+  let removed = 0;
+  for (const [token, grant] of grantsByToken) {
+    if (grant.sessionKey === key) {
+      grantsByToken.delete(token);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
 function sweepExpiredAttachGrants(nowMs: number = Date.now()): number {
   let removed = 0;
   for (const [token, grant] of grantsByToken) {
