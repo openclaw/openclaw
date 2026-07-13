@@ -876,6 +876,8 @@ describe("test-projects args", () => {
           "test/scripts/ios-pin-version.test.ts",
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
+          "test/scripts/plugins-assertions.test.ts",
+          "test/scripts/validate-release-publish-approval.test.ts",
           "test/test-env.test.ts",
           "test/vitest-scoped-config.test.ts",
         ],
