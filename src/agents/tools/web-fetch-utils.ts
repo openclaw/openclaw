@@ -52,8 +52,9 @@ type TagEndResult = {
 };
 
 function decodeEntities(value: string): string {
-  // Display extraction treats non-breaking spaces as ordinary collapsible whitespace.
-  return decodeHtmlEntities(value).replaceAll("\u00a0", " ");
+  // Display extraction historically accepted mixed-case &nbsp; and treats non-breaking spaces as
+  // ordinary collapsible whitespace. Normalize it before the shared decoder to stay single-pass.
+  return decodeHtmlEntities(value.replace(/&nbsp;/gi, "\u00a0")).replaceAll("\u00a0", " ");
 }
 
 function isAsciiWhitespace(value: string): boolean {
