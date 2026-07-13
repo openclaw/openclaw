@@ -1,4 +1,5 @@
 // Msteams plugin module implements sent message cache behavior.
+import { createHash } from "node:crypto";
 import { createPersistentDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { getOptionalMSTeamsRuntime } from "./runtime.js";
 
@@ -50,7 +51,13 @@ function makeKey(
 ): string {
   const accountId = normalizeSentMessageAccountId(options?.accountId);
   const messageKey = `${conversationId}:${messageId}`;
-  return accountId === "default" ? messageKey : `${accountId}:${messageKey}`;
+  if (accountId === "default") {
+    return messageKey;
+  }
+  const digest = createHash("sha256")
+    .update(JSON.stringify([accountId, conversationId, messageId]))
+    .digest("hex");
+  return `account:v1:${digest}`;
 }
 
 export function recordMSTeamsSentMessage(

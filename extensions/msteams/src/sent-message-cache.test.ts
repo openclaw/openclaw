@@ -126,9 +126,9 @@ describe("msteams sent message cache", () => {
 
     expect(wasMSTeamsMessageSent("conv-1", "msg-1", { accountId: "support" })).toBe(true);
     expect(wasMSTeamsMessageSent("conv-1", "msg-1", { accountId: "finance" })).toBe(false);
-    await vi.waitFor(() =>
-      expect(register).toHaveBeenCalledWith("support:conv-1:msg-1", { sentAt: 1_234_567 }),
-    );
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
+    const supportKey = register.mock.calls[0]?.[0];
+    expect(supportKey).toMatch(/^account:v1:[a-f0-9]{64}$/);
     await expect(
       wasMSTeamsMessageSentWithPersistence({
         conversationId: "conv-1",
@@ -136,6 +136,35 @@ describe("msteams sent message cache", () => {
         accountId: "finance",
       }),
     ).resolves.toBe(false);
-    expect(lookup).toHaveBeenCalledWith("finance:conv-1:msg-1");
+    const financeKey = lookup.mock.calls[0]?.[0];
+    expect(financeKey).toMatch(/^account:v1:[a-f0-9]{64}$/);
+    expect(financeKey).not.toBe(supportKey);
+  });
+
+  it("prevents named-account keys from colliding with legacy default keys", async () => {
+    const register = vi.fn().mockResolvedValue(undefined);
+    const openKeyedStore = vi.fn(() => ({
+      register,
+      lookup: vi.fn().mockResolvedValue(undefined),
+      consume: vi.fn(),
+      delete: vi.fn(),
+      entries: vi.fn(),
+      clear: vi.fn(),
+    }));
+    setMSTeamsRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    recordMSTeamsSentMessage("19:conversation", "message");
+    expect(wasMSTeamsMessageSent("conversation", "message", { accountId: "19" })).toBe(false);
+    recordMSTeamsSentMessage("conversation", "message", { accountId: "19" });
+
+    await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(2));
+    const defaultKey = register.mock.calls[0]?.[0];
+    const namedKey = register.mock.calls[1]?.[0];
+    expect(defaultKey).toBe("19:conversation:message");
+    expect(namedKey).toMatch(/^account:v1:[a-f0-9]{64}$/);
+    expect(namedKey).not.toBe(defaultKey);
   });
 });

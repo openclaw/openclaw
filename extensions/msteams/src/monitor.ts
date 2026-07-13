@@ -503,7 +503,7 @@ export async function monitorMSTeamsProvider(
         await Promise.all(
           userIds.map((userId) =>
             ssoDeps.tokenStore.save({
-              accountId,
+              ...(accountId === DEFAULT_ACCOUNT_ID ? {} : { accountId }),
               connectionName,
               userId,
               token: ctx.token.token,

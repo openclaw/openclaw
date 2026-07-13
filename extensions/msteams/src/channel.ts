@@ -117,8 +117,12 @@ const collectMSTeamsSecurityWarnings = createAllowlistProviderGroupPolicyWarning
       return [];
     }
     const account = resolveMSTeamsAccount({ cfg, accountId });
+    const configPath =
+      account.accountId === DEFAULT_ACCOUNT_ID
+        ? "channels.msteams"
+        : `channels.msteams.accounts.${account.accountId}`;
     return [
-      `- MS Teams[${account.accountId}] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.msteams.groupPolicy="allowlist" + channels.msteams.groupAllowFrom to restrict senders.`,
+      `- MS Teams[${account.accountId}] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set ${configPath}.groupPolicy="allowlist" + ${configPath}.groupAllowFrom to restrict senders.`,
     ];
   },
 });

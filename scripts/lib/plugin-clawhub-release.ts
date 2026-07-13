@@ -215,7 +215,7 @@ async function buildClawHubQueryError(
   request: Awaited<ReturnType<typeof fetchClawHubRequest>>,
 ): Promise<Error> {
   const { response } = request;
-  let body = "";
+  let body: string;
   try {
     body = (
       await readBoundedResponseText(response, message, CLAWHUB_ERROR_BODY_MAX_BYTES, {
@@ -226,7 +226,7 @@ async function buildClawHubQueryError(
       .replace(/\s+/gu, " ")
       .trim();
   } catch {
-    // Keep the original empty diagnostic body when response text cannot be read.
+    body = "";
   }
   if (body.length > CLAWHUB_ERROR_BODY_MAX_CHARS) {
     body = `${body.slice(0, CLAWHUB_ERROR_BODY_MAX_CHARS)}...`;

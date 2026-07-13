@@ -133,7 +133,7 @@ describe("msteamsPlugin", () => {
     );
   });
 
-  it("evaluates group-policy warnings for the requested account", () => {
+  it("evaluates group-policy warnings for the requested account", async () => {
     const cfg = {
       channels: {
         msteams: {
@@ -152,11 +152,16 @@ describe("msteamsPlugin", () => {
     } as OpenClawConfig;
     const account = msteamsPlugin.config.resolveAccount(cfg, "support");
 
+    const warnings = await msteamsPlugin.security?.collectWarnings?.({
+      cfg,
+      accountId: "support",
+      account,
+    });
+    expect(warnings).toEqual([expect.stringContaining("MS Teams[support]")]);
+    expect(warnings?.[0]).toContain("channels.msteams.accounts.support.groupPolicy");
+    expect(warnings?.[0]).toContain("channels.msteams.accounts.support.groupAllowFrom");
     expect(
-      msteamsPlugin.security?.collectWarnings?.({ cfg, accountId: "support", account }),
-    ).toEqual([expect.stringContaining("MS Teams[support]")]);
-    expect(
-      msteamsPlugin.security?.collectWarnings?.({
+      await msteamsPlugin.security?.collectWarnings?.({
         cfg,
         accountId: "default",
         account: msteamsPlugin.config.resolveAccount(cfg, "default"),
