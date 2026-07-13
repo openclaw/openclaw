@@ -48,6 +48,7 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - If user asked for a specific agent, use that agent.
 - If worker fails/hangs, respawn or ask; do not silently hand-code instead.
 - Never checkout branches or run background coding agents in `~/Projects/openclaw`; use an isolated checkout.
+- Treat contributor-controlled refs as untrusted code. Never launch a permission-bypassed worker in them; use the repository's approved untrusted-PR sandbox/review workflow or stop.
 - For tasks that modify a Git-backed project, prepare and verify the Git worktree before launch, then include the exact Git preparation block below in the worker prompt.
 
 ## Mandatory Git preparation
@@ -58,7 +59,8 @@ Before launching Codex, Claude Code, or OpenCode for work that modifies a Git-ba
 2. For new work, run `git fetch --prune <canonical>` immediately before creating a new isolated worktree and branch from `<canonical>/<default>`.
 3. For new work, verify the worktree's initial `HEAD` equals the fetched canonical base SHA. Record the canonical remote, default branch, base SHA, worktree path, and branch.
 4. For an existing PR or shared branch, fetch canonical and the contributor branch immediately before creating an isolated worktree from the fetched contributor branch. Record that source ref and starting SHA, report its divergence from the refreshed canonical default, and do not automatically rebase, merge, reset, force-push, or otherwise rewrite contributor history.
-5. Launch the worker in the isolated worktree, never the primary checkout. For OpenClaw, the primary checkout under `~/Projects/openclaw` remains forbidden.
+5. Classify the prepared ref as trusted or untrusted. An isolated worktree is not a security sandbox; contributor-controlled refs require the repository's approved untrusted-PR sandbox/review workflow and must not use a permission-bypassed worker.
+6. Launch the worker in the isolated worktree, never the primary checkout. For OpenClaw, the primary checkout under `~/Projects/openclaw` remains forbidden.
 
 For tasks that modify a Git-backed project, append this block to the worker prompt with real values:
 
@@ -68,6 +70,7 @@ Git preparation (mandatory before edits):
 - canonical default branch: <canonicalDefaultBranch>
 - fetched canonical base SHA: <canonicalBaseSha>
 - preparation mode: <new work | existing PR/shared branch>
+- checkout trust: <trusted | untrusted contributor ref>
 - prepared source ref: <canonicalRemote/canonicalDefaultBranch | fetched contributor ref>
 - prepared start SHA: <preparedStartSha>
 - isolated worktree: <worktreePath>
@@ -114,7 +117,7 @@ EOF
 printf 'prompt file: %s\n' "$PROMPT"
 ```
 
-Use `$PROMPT` when launching from the same shell/session. If using a separate tool call, substitute the printed path.
+Use `$PROMPT` when launching from the same shell/session. If using a separate tool call, substitute the printed path. The launch forms below are for trusted checkouts only; untrusted contributor refs require the repository's approved sandbox/review workflow.
 
 Codex:
 
