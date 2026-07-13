@@ -9,6 +9,8 @@ import {
   failDelivery,
   failDeliveryAfterPlatformSend,
   failDeliveryBeforePlatformSend,
+  failPendingDelivery,
+  loadPendingDelivery,
   loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
@@ -243,6 +245,63 @@ describe("delivery-queue storage", () => {
       expect(entry.lastError).toBe("connect refused");
       expect(entry.recoveryState).toBeUndefined();
       expect(entry.platformSendStartedAt).toBeUndefined();
+    });
+  });
+
+  describe("failPendingDelivery", () => {
+    it("atomically writes the failed status and immutable reason into row and entry JSON", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "slack",
+        to: "C123",
+        accountId: "enterprise",
+        payloads: [{ text: "blocked" }],
+      });
+      const entry = await loadPendingDelivery(id, tmpDir());
+      if (!entry) {
+        throw new Error("expected pending entry");
+      }
+
+      await expect(
+        failPendingDelivery(
+          {
+            id,
+            expectedStatus: "pending",
+            lastError: "unsupported_enterprise_slack_delivery",
+            entry,
+          },
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ status: "failed" });
+
+      expect(await loadPendingDelivery(id, tmpDir())).toBeNull();
+      expect(readStatus(id)).toBe("failed");
+      expect(readQueuedEntry(tmpDir(), id).lastError).toBe("unsupported_enterprise_slack_delivery");
+    });
+
+    it("returns a typed no-op when a status race already moved the row", async () => {
+      const id = await enqueueTextDelivery({
+        channel: "slack",
+        to: "C123",
+        payloads: [{ text: "blocked" }],
+      });
+      const entry = await loadPendingDelivery(id, tmpDir());
+      if (!entry) {
+        throw new Error("expected pending entry");
+      }
+      await moveToFailed(id, tmpDir());
+
+      await expect(
+        failPendingDelivery(
+          {
+            id,
+            expectedStatus: "pending",
+            lastError: "unsupported_enterprise_slack_delivery",
+            entry,
+          },
+          tmpDir(),
+        ),
+      ).resolves.toEqual({ status: "not_pending" });
+      expect(readQueuedEntry(tmpDir(), id).lastError).toBeUndefined();
     });
   });
 

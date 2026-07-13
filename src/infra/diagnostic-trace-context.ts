@@ -1,6 +1,7 @@
 // Creates and propagates lightweight W3C diagnostic trace contexts.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 
 const TRACEPARENT_VERSION = "00";
 const DEFAULT_TRACE_FLAGS = "01";
@@ -141,7 +142,7 @@ export function parseDiagnosticTraceparent(
   }
   const [version, traceId, spanId, traceFlags] = parts;
   if (
-    !TRACEPARENT_VERSION_RE.test(version) ||
+    !TRACEPARENT_VERSION_RE.test(expectDefined(version, "diagnostic trace context version")) ||
     version === "ff" ||
     (version === TRACEPARENT_VERSION && parts.length !== 4)
   ) {

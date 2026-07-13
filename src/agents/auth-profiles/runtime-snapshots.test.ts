@@ -2,12 +2,17 @@
  * Regression coverage for process-local auth profile snapshots.
  * Verifies snapshots are cloned and isolated across agent-specific stores.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
+  getRuntimeAuthProfileStoreCredentialsRevision,
+  noteRuntimeAuthProfileStorePersistedMutation,
   replaceRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
+  testing,
 } from "./runtime-snapshots.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -52,21 +57,45 @@ function expectOpenAICodexSnapshotCredential(
 }
 
 describe("runtime auth profile snapshots", () => {
+  it("advances credential revision without coupling to usage bookkeeping", () => {
+    const initialRevision = getRuntimeAuthProfileStoreCredentialsRevision();
+    const store = createStore("set");
+    setRuntimeAuthProfileStoreSnapshot(store);
+    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 1);
+
+    setRuntimeAuthProfileStoreSnapshot({
+      ...store,
+      usageStats: { "openai:default": { lastUsed: 2 } },
+    });
+    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 1);
+
+    clearRuntimeAuthProfileStoreSnapshots();
+    expect(getRuntimeAuthProfileStoreCredentialsRevision()).toBe(initialRevision + 2);
+  });
+
   it("isolates set/get/replace snapshot mutations without structuredClone", () => {
     const structuredCloneSpy = vi.spyOn(globalThis, "structuredClone");
     const agentDir = "/tmp/openclaw-auth-runtime-snapshot-agent";
     try {
       const stored = createStore("access-1");
       setRuntimeAuthProfileStoreSnapshot(stored, agentDir);
-      stored.profiles["openai:default"].provider = "mutated";
-      stored.order!["openai"].push("mutated");
+      expectDefined(
+        stored.profiles["openai:default"],
+        'stored.profiles["openai:default"] test invariant',
+      ).provider = "mutated";
+      expectDefined(stored.order?.openai, "stored OpenAI profile order").push("mutated");
 
       const first = getRuntimeAuthProfileStoreSnapshot(agentDir);
       expectOpenAICodexSnapshotCredential(first, { access: "access-1" });
       expect(first?.order?.["openai"]).toEqual(["openai:default"]);
 
-      first!.profiles["openai:default"].provider = "mutated-again";
-      first!.usageStats!["openai:default"].lastUsed = 99;
+      const firstSnapshot = expectDefined(first, "first auth profile snapshot");
+      expectDefined(firstSnapshot.profiles["openai:default"], "first OpenAI profile").provider =
+        "mutated-again";
+      expectDefined(
+        firstSnapshot.usageStats?.["openai:default"],
+        "first OpenAI usage stats",
+      ).lastUsed = 99;
 
       const second = getRuntimeAuthProfileStoreSnapshot(agentDir);
       expectOpenAICodexSnapshotCredential(second, { access: "access-1" });
@@ -90,5 +119,27 @@ describe("runtime auth profile snapshots", () => {
       structuredCloneSpy.mockRestore();
       clearRuntimeAuthProfileStoreSnapshots();
     }
+  });
+
+  it("bounds persisted mutation lineage by owner and profile", () => {
+    for (let index = 0; index <= testing.MAX_PERSISTED_MUTATION_OWNERS; index += 1) {
+      noteRuntimeAuthProfileStorePersistedMutation(`/tmp/openclaw-mutation-owner-${index}`, {
+        credentialsChanged: true,
+        stateChanged: false,
+        profileIds: ["openai:default"],
+      });
+    }
+    for (let index = 0; index <= testing.MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER; index += 1) {
+      noteRuntimeAuthProfileStorePersistedMutation("/tmp/openclaw-mutation-profile-owner", {
+        credentialsChanged: true,
+        stateChanged: false,
+        profileIds: [`openai:${index}`],
+      });
+    }
+
+    const counts = testing.getPersistedMutationRecordCounts();
+    expect(counts.owners).toBeLessThanOrEqual(testing.MAX_PERSISTED_MUTATION_OWNERS);
+    expect(counts.profiles).toBeLessThanOrEqual(testing.MAX_PERSISTED_MUTATION_PROFILES_PER_OWNER);
+    testing.resetPersistedMutationLineage();
   });
 });

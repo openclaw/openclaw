@@ -29,7 +29,7 @@ export function evictOldHistoryKeys<T>(
   }
 }
 
-export type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
+export type { HistoryEntry } from "./history.types.js";
 
 /** Wraps previous chat history and the current message in the prompt context marker format. */
 export function buildHistoryContext(params: {

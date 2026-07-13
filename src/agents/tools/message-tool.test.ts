@@ -9,6 +9,10 @@ import {
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
+import {
+  mintMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} from "../../gateway/message-action-turn-capability.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
 import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
@@ -130,18 +134,26 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 type RunMessageActionInput = {
   agentId?: string;
   cfg?: unknown;
+  conversationReadOrigin?: "delegated" | "direct-operator";
   defaultAccountId?: string;
   gateway?: {
     timeoutMs?: unknown;
   };
   params?: Record<string, unknown>;
+  requesterAccountId?: string;
   requesterSenderId?: string;
+  messageActionAuthorization?: {
+    requesterAccountId?: string;
+    requesterSenderId?: string;
+    toolContext?: RunMessageActionInput["toolContext"];
+  };
   sandboxRoot?: string;
   sessionKey?: string;
   sourceReplyDeliveryMode?: string;
   inboundAudio?: boolean;
   toolContext?: {
     currentChannelId?: string;
+    currentChatType?: string;
     currentMessagingTarget?: string;
     currentChannelProvider?: string;
     currentThreadTs?: string;
@@ -334,6 +346,8 @@ beforeAll(async () => {
   ({ createOpenClawTools } = await import("../openclaw-tools.js"));
 });
 
+const mintedTurnCapabilities: string[] = [];
+
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
   resetDiagnosticSessionStateForTest();
@@ -345,6 +359,12 @@ beforeEach(() => {
   }));
   mocks.getScopedChannelsCommandSecretTargets.mockClear();
   setActivePluginRegistry(createTestRegistry([]));
+});
+
+afterEach(() => {
+  for (const token of mintedTurnCapabilities.splice(0)) {
+    revokeMessageActionTurnCapability(token);
+  }
 });
 
 function createChannelPlugin(params: {
@@ -422,6 +442,10 @@ async function executeSendWithResult(params: {
 }
 
 describe("message tool gateway timeout", () => {
+  it("does not advertise the Codex-only final delivery control", () => {
+    expect(getToolProperties(createMessageTool())).not.toHaveProperty("final");
+  });
+
   it("advertises timeoutMs as a positive integer", () => {
     const tool = createMessageTool();
     expect(getToolProperties(tool).timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
@@ -709,18 +733,12 @@ describe("message tool secret scoping", () => {
     });
     const defaultTool = createMessageTool();
 
-    expect(scopedTool.description).toContain(
-      'use action="send" with message for visible replies to the current source conversation',
-    );
-    expect(scopedTool.description).toContain("target defaults to the current source conversation");
-    expect(scopedTool.description).toContain("Normal final answers stay private");
-    expect(explicitTargetTool.description).toContain("Include target when sending");
-    expect(explicitTargetTool.description).not.toContain(
-      "target defaults to the current source conversation",
-    );
-    expect(defaultTool.description).not.toContain(
-      "visible replies to the current source conversation",
-    );
+    expect(scopedTool.description).toContain('visible reply: action="send" + message');
+    expect(scopedTool.description).toContain("target defaults current source");
+    expect(scopedTool.description).toContain("Final answer private");
+    expect(explicitTargetTool.description).toContain("send needs target");
+    expect(explicitTargetTool.description).not.toContain("target defaults current source");
+    expect(defaultTool.description).not.toContain('visible reply: action="send" + message');
   });
 
   it("forwards source reply delivery mode through createOpenClawTools", () => {
@@ -729,9 +747,7 @@ describe("message tool secret scoping", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     }).find((candidate) => candidate.name === "message");
 
-    expect(tool?.description).toContain(
-      'use action="send" with message for visible replies to the current source conversation',
-    );
+    expect(tool?.description).toContain('visible reply: action="send" + message');
   });
 
   it("passes source reply delivery mode to the outbound runner", async () => {
@@ -805,6 +821,24 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
+  it("keeps direct operator authority on the in-process action only", async () => {
+    mockSendResult();
+
+    const direct = await executeSend({
+      action: { message: "direct" },
+      toolOptions: { conversationReadOrigin: "direct-operator" },
+    });
+    const delegated = await executeSend({
+      action: { message: "delegated" },
+      toolOptions: { conversationReadOrigin: "delegated" },
+    });
+
+    expect(direct?.conversationReadOrigin).toBe("direct-operator");
+    expect(direct?.gateway).toBeUndefined();
+    expect(delegated?.conversationReadOrigin).toBe("delegated");
+    expect(delegated?.gateway).toMatchObject({ timeoutMs: expect.any(Number) });
+  });
+
   it("reads steered inbound audio when the message action runs", async () => {
     mockSendResult();
     let hasCurrentInboundAudio = false;
@@ -836,7 +870,7 @@ describe("message tool secret scoping", () => {
     );
   });
 
-  it("reuses the unresolved autogenerated idempotency key for exact retries", async () => {
+  it("keeps the Codex final control out of delivery and retry idempotency", async () => {
     mocks.runMessageAction
       .mockRejectedValueOnce(new Error("gateway timeout"))
       .mockResolvedValueOnce({
@@ -861,6 +895,7 @@ describe("message tool secret scoping", () => {
         message: "same",
         to: "123",
         timeoutMs: 1,
+        final: true,
       }),
     ).rejects.toThrow("gateway timeout");
     const first = firstRunMessageActionInput();
@@ -870,10 +905,13 @@ describe("message tool secret scoping", () => {
       timeoutMs: 30_000,
       to: "123",
       message: "same",
+      final: false,
     });
     const second = lastRunMessageActionInput();
 
     expect(first?.params?.idempotencyKey).toBe(second?.params?.idempotencyKey);
+    expect(first?.params).not.toHaveProperty("final");
+    expect(second?.params).not.toHaveProperty("final");
   });
 
   it("uses delivery params to avoid collisions across distinct sends", async () => {
@@ -1009,10 +1047,32 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
     expect(input?.toolContext?.currentChannelId).toBe("-5150615830");
+    expect(input?.toolContext?.currentChatType).toBe("group");
     expect(input?.params).toEqual({ action: "send", message: "hi" });
 
     const secretResolveCall = latestSecretResolveCall();
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
+  });
+
+  it("preserves a routable current target that differs from the channel id", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        currentChannelProvider: "msteams",
+        currentChannelId: "conversation:19:channel@thread.tacv2",
+        currentChatType: "channel",
+        currentMessagingTarget: "graph-team/19:channel@thread.tacv2",
+      },
+    });
+
+    expect(input?.toolContext).toMatchObject({
+      currentChannelProvider: "msteams",
+      currentChannelId: "conversation:19:channel@thread.tacv2",
+      currentChatType: "channel",
+      currentMessagingTarget: "graph-team/19:channel@thread.tacv2",
+    });
   });
 
   it("preserves empty opaque target segments in inferred session delivery", async () => {
@@ -1128,6 +1188,7 @@ describe("message tool secret scoping", () => {
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("msteams");
     expect(input?.toolContext?.currentChannelId).toBe("user:user-1");
+    expect(input?.toolContext?.currentChatType).toBe("direct");
     expect(input?.params).toEqual({ action: "send", message: "hi" });
 
     const secretResolveCall = latestSecretResolveCall();
@@ -1434,7 +1495,7 @@ describe("message tool delivery mode schema", () => {
       | undefined;
 
     expect(bestEffort?.type).toBe("boolean");
-    expect(bestEffort?.description).toContain("required durable delivery");
+    expect(bestEffort?.description).toContain("requiring durable delivery");
   });
 });
 
@@ -1555,6 +1616,7 @@ describe("message tool agent routing", () => {
       config: {} as never,
       agentChannel: "slack",
       currentChannelId: "D123",
+      currentChatType: "direct",
       currentMessagingTarget: "user:U123",
       currentThreadTs: "111.222",
       replyToMode: "all",
@@ -1574,6 +1636,7 @@ describe("message tool agent routing", () => {
     const call = firstRunMessageActionInput();
     expect(call?.toolContext).toMatchObject({
       currentChannelId: "D123",
+      currentChatType: "direct",
       currentMessagingTarget: "user:U123",
       currentChannelProvider: "slack",
       currentThreadTs: "111.222",
@@ -1873,10 +1936,37 @@ describe("message tool schema scoping", () => {
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
       const presentationSchemaJson = JSON.stringify(properties.presentation);
+      const presentationBlockItemSchema = (
+        properties.presentation as {
+          properties?: { blocks?: { items?: Record<string, unknown> } };
+        }
+      ).properties?.blocks?.items;
 
       expect(properties).toHaveProperty("presentation");
       expect(presentationSchemaJson).toContain('"action"');
       expect(presentationSchemaJson).toContain('"command"');
+      expect(presentationSchemaJson).toContain('"const":"url"');
+      expect(presentationSchemaJson).toContain('"const":"web-app"');
+      expect(presentationSchemaJson).not.toContain('"const":"approval"');
+      expect(presentationSchemaJson).toContain('"chartType"');
+      expect(presentationSchemaJson).toContain('"pie"');
+      expect(presentationSchemaJson).toContain('"table"');
+      expect(presentationSchemaJson).toContain('"caption"');
+      expect(presentationSchemaJson).toContain('"headers"');
+      expect(presentationSchemaJson).toContain('"rows"');
+      expect(presentationSchemaJson).toContain('"rowHeaderColumnIndex"');
+      expect(presentationSchemaJson).not.toContain('"maxItems"');
+      expect(presentationSchemaJson).not.toContain('"maxLength"');
+      expect(presentationSchemaJson).not.toContain('"exclusiveMinimum"');
+      expect(presentationBlockItemSchema).toMatchObject({ type: "object" });
+      expect(presentationBlockItemSchema).not.toHaveProperty("anyOf");
+      expect(
+        (
+          presentationBlockItemSchema as {
+            properties?: { rows?: { items?: { items?: unknown } } };
+          }
+        ).properties?.rows?.items?.items,
+      ).toEqual({ type: ["string", "number"] });
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -2239,8 +2329,7 @@ describe("message tool schema scoping", () => {
 
     expect(getActionEnum(properties)).toContain("read");
     expectStringSchema(properties.messageId, {
-      description:
-        "Target message id for read/react/edit/delete/pin/unpin. Reaction-like defaults current inbound id when available.",
+      description: "Target read/react/edit/delete/pin/unpin id; reactions default current inbound.",
     });
   });
 });
@@ -2316,7 +2405,7 @@ describe("message tool description", () => {
     const userId = properties.userId as { description?: string } | undefined;
 
     expect(userId?.description).toMatch(/member-info/i);
-    expect(userId?.description).toMatch(/not.*`target`|does not accept.*target/i);
+    expect(userId?.description).toMatch(/not.*target|does not accept.*target/i);
   });
 
   it("hides iMessage group actions for DM targets", () => {
@@ -2480,7 +2569,7 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    expect(tool.description).toContain('Use action="read" with threadId');
+    expect(tool.description).toContain('action="read" + threadId');
   });
 
   it("omits the thread read hint when the current channel does not support read", () => {
@@ -2501,7 +2590,7 @@ describe("message tool description", () => {
       currentChannelProvider: "signal",
     });
 
-    expect(tool.description).not.toContain('Use action="read" with threadId');
+    expect(tool.description).not.toContain('action="read" + threadId');
   });
 
   it("includes the thread read hint in the generic fallback when configured actions include read", () => {
@@ -2522,7 +2611,7 @@ describe("message tool description", () => {
     });
 
     expect(tool.description).toContain("Supports actions:");
-    expect(tool.description).toContain('Use action="read" with threadId');
+    expect(tool.description).toContain('action="read" + threadId');
   });
 
   it("includes broadcast in the generic fallback description", () => {
@@ -2630,6 +2719,20 @@ describe("message tool reasoning tag sanitization", () => {
                 },
               ],
             },
+            {
+              type: "chart",
+              chartType: "line",
+              title: "<think>chart rationale</think>Latency",
+              categories: ["<think>category rationale</think>Monday"],
+              series: [
+                {
+                  name: "<think>series rationale</think>p95",
+                  values: [250],
+                },
+              ],
+              xLabel: "<think>axis rationale</think>Day",
+              yLabel: "<think>axis rationale</think>Milliseconds",
+            },
           ],
         },
       },
@@ -2653,6 +2756,15 @@ describe("message tool reasoning tag sanitization", () => {
           type: "select",
           placeholder: "Pick a lane",
           options: [{ label: "Main", value: "main" }],
+        },
+        {
+          type: "chart",
+          chartType: "line",
+          title: "Latency",
+          categories: ["Monday"],
+          series: [{ name: "p95", values: [250] }],
+          xLabel: "Day",
+          yLabel: "Milliseconds",
         },
       ],
     });
@@ -2713,6 +2825,45 @@ describe("message tool reasoning tag sanitization", () => {
       ],
     });
   });
+
+  it("sanitizes mixed-case table captions, headers, and string cells", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          blocks: [
+            {
+              type: "Table",
+              caption: "  <think>caption rationale</think>Pipeline report  ",
+              headers: [" <think>header rationale</think>Account ", " ARR "],
+              rows: [
+                [" <think>cell rationale</think>Acme ", 125000],
+                [" Globex ", 82000],
+              ],
+              rowHeaderColumnIndex: 0,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      blocks: [
+        {
+          type: "Table",
+          caption: "Pipeline report",
+          headers: ["Account", "ARR"],
+          rows: [
+            ["Acme", 125000],
+            ["Globex", 82000],
+          ],
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    });
+  });
 });
 
 describe("message tool boot-echo guard", () => {
@@ -2728,15 +2879,15 @@ describe("message tool boot-echo guard", () => {
   ].join("\n");
 
   let setBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").setBootEchoContextForSession;
-  let resetBootEchoContextForTests: typeof import("../../gateway/boot-echo-guard.js").resetBootEchoContextForTests;
+  let clearBootEchoContextForSession: typeof import("../../gateway/boot-echo-guard.js").clearBootEchoContextForSession;
 
   beforeAll(async () => {
-    ({ setBootEchoContextForSession, resetBootEchoContextForTests } =
+    ({ setBootEchoContextForSession, clearBootEchoContextForSession } =
       await import("../../gateway/boot-echo-guard.js"));
   });
 
   afterEach(() => {
-    resetBootEchoContextForTests();
+    clearBootEchoContextForSession("agent:main");
   });
 
   it("suppresses text-only sends that echo a substantial chunk of the registered boot prompt without preserving the wrapper markers (#53732)", async () => {
@@ -2943,6 +3094,16 @@ describe("message tool boot-echo guard", () => {
               buttons: [
                 { label: "Status", url: echoedText },
                 { label: "App", webApp: { url: echoedText }, web_app: { url: echoedText } },
+                {
+                  label: "Typed status",
+                  action: { type: "url", url: echoedText },
+                  value: "must-not-become-active",
+                },
+                {
+                  label: "Typed app",
+                  action: { type: "web-app", url: echoedText },
+                  url: "https://legacy.example.test",
+                },
               ],
             },
           ],
@@ -2956,7 +3117,12 @@ describe("message tool boot-echo guard", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [{ label: "Status" }, { label: "App" }],
+          buttons: [
+            { label: "Status" },
+            { label: "App" },
+            { label: "Typed status" },
+            { label: "Typed app" },
+          ],
         },
       ],
     });
@@ -3221,17 +3387,96 @@ describe("message tool sandbox passthrough", () => {
     expect(call?.sandboxRoot).toBe(expected);
   });
 
-  it("forwards trusted requesterSenderId to runMessageAction", async () => {
+  it("does not trust ambient current-turn identity without a capability", async () => {
     mockSendResult({ to: "discord:123" });
 
     const call = await executeSend({
-      toolOptions: { requesterSenderId: "1234567890" },
+      toolOptions: {
+        agentId: "main",
+        agentSessionKey: "agent:main:runtime-policy",
+        runId: "run-1",
+        sessionId: "session-1",
+        agentAccountId: "forged-account",
+        requesterSenderId: "forged-sender",
+        currentChannelProvider: "discord",
+        currentChannelId: "forged-current",
+      },
       action: {
         target: "discord:123",
         message: "hi",
       },
     });
 
-    expect(call?.requesterSenderId).toBe("1234567890");
+    expect(call?.requesterAccountId).toBeUndefined();
+    expect(call?.requesterSenderId).toBeUndefined();
+    expect(call?.toolContext).toMatchObject({
+      currentChannelProvider: "discord",
+      currentChannelId: "forged-current",
+    });
+    expect(call?.messageActionAuthorization).toEqual({
+      requesterAccountId: undefined,
+      requesterSenderId: undefined,
+      toolContext: undefined,
+    });
+  });
+
+  it("forwards capability-bound current-turn identity to local actions", async () => {
+    mockSendResult({ to: "discord:123" });
+    const token = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:runtime-policy",
+      sessionId: "session-1",
+      requesterAccountId: "trusted-account",
+      requesterSenderId: "trusted-sender",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "trusted-current",
+        currentChatType: "channel",
+      },
+    });
+    mintedTurnCapabilities.push(token);
+
+    const call = await executeSend({
+      toolOptions: {
+        agentId: "main",
+        agentSessionKey: "agent:main:runtime-policy",
+        runId: "run-1",
+        sessionId: "session-1",
+        messageActionTurnCapability: token,
+        agentAccountId: "forged-account",
+        requesterSenderId: "forged-sender",
+        currentChannelProvider: "discord",
+        currentChannelId: "forged-current",
+      },
+      action: {
+        target: "discord:123",
+        message: "hi",
+      },
+    });
+
+    expect(call?.requesterAccountId).toBe("trusted-account");
+    expect(call?.requesterSenderId).toBe("trusted-sender");
+    expect(call?.toolContext).toMatchObject({
+      currentChannelProvider: "discord",
+      currentChannelId: "forged-current",
+    });
+    expect(call?.messageActionAuthorization).toMatchObject({
+      requesterAccountId: "trusted-account",
+      requesterSenderId: "trusted-sender",
+      toolContext: {
+        currentChannelProvider: "discord",
+        currentChannelId: "trusted-current",
+        currentChatType: "channel",
+      },
+    });
+    expect(call?.messageActionAuthorization?.toolContext).not.toMatchObject({
+      currentChannelId: "forged-current",
+    });
+    expect(call?.toolContext).toMatchObject({
+      currentChannelProvider: "discord",
+      currentChannelId: "forged-current",
+      skipCrossContextDecoration: true,
+    });
   });
 });

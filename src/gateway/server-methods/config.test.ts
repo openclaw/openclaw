@@ -1,6 +1,8 @@
 /**
  * Tests for config gateway methods, writes, validation, and auth transitions.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -50,7 +52,10 @@ function mockExecFileError(error: Error) {
 
 async function invokeConfigOpenFile() {
   const harness = createConfigHandlerHarness({ method: "config.openFile" });
-  await configHandlers["config.openFile"](harness.options);
+  await expectDefined(
+    configHandlers["config.openFile"],
+    'configHandlers["config.openFile"] test invariant',
+  )(harness.options);
   return harness;
 }
 
@@ -128,6 +133,19 @@ describe("config.openFile", () => {
       );
       expect(logGateway.warn).toHaveBeenCalledWith(
         "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+      );
+    });
+  });
+
+  it("does not split surrogate pairs when truncating the failed config path", async () => {
+    const pathPrefix = `/tmp/${"a".repeat(111)}`;
+    await withEnvAsync({ OPENCLAW_CONFIG_PATH: `${pathPrefix}😀tail.json` }, async () => {
+      mockExecFileError(new Error("open failed"));
+
+      const { logGateway } = await invokeConfigOpenFile();
+
+      expect(logGateway.warn).toHaveBeenCalledWith(
+        `config.openFile failed path=${pathPrefix}...: open failed`,
       );
     });
   });

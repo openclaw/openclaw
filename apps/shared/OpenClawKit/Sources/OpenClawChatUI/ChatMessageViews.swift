@@ -34,7 +34,11 @@ struct ChatAgentAvatar: View {
                 Circle()
                     .strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
             .shadow(color: (self.tint ?? OpenClawChatTheme.accent).opacity(0.18), radius: 8, y: 4)
-            .accessibilityLabel(self.name.map { "\($0) avatar" } ?? "Agent avatar")
+            .accessibilityLabel(self.name.map {
+                String(
+                    format: String(localized: "%@ avatar"),
+                    $0)
+            } ?? String(localized: "Agent avatar"))
     }
 
     private var displayText: String {
@@ -208,6 +212,7 @@ struct ChatMessageBubble: View {
     let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let isClean: Bool
+    let contextWindowTokens: Int?
 
     var body: some View {
         if self.isUser {
@@ -245,7 +250,8 @@ struct ChatMessageBubble: View {
             markdownVariant: self.markdownVariant,
             userAccent: self.userAccent,
             showsAssistantTrace: self.showsAssistantTrace,
-            isClean: self.isClean)
+            isClean: self.isClean,
+            contextWindowTokens: self.contextWindowTokens)
     }
 }
 
@@ -259,6 +265,7 @@ private struct ChatMessageBody: View {
     let userAccent: Color?
     let showsAssistantTrace: Bool
     let isClean: Bool
+    let contextWindowTokens: Int?
 
     var body: some View {
         let text = self.primaryText
@@ -321,8 +328,7 @@ private struct ChatMessageBody: View {
             if self.showsAssistantTrace, !self.toolCalls.isEmpty {
                 ForEach(self.toolCalls.indices, id: \.self) { idx in
                     ToolCallCard(
-                        content: self.toolCalls[idx],
-                        isUser: self.isUser)
+                        content: self.toolCalls[idx])
                 }
             }
 
@@ -336,6 +342,17 @@ private struct ChatMessageBody: View {
                         isUser: self.isUser,
                         toolName: toolResult.name)
                 }
+            }
+
+            if let usagePresentation = self.usagePresentation {
+                Text(usagePresentation.text)
+                    .font(OpenClawChatTypography.caption2)
+                    .monospacedDigit()
+                    .foregroundStyle(self.usageTint(usagePresentation.pressure))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(String(localized: "Message usage"))
+                    .accessibilityValue(usagePresentation.accessibilityValue)
             }
         }
         .textSelection(.enabled)
@@ -397,6 +414,23 @@ private struct ChatMessageBody: View {
     private var isToolResultMessage: Bool {
         let role = self.message.role.lowercased()
         return role == "toolresult" || role == "tool_result"
+    }
+
+    private var usagePresentation: ChatMessageUsagePresentation? {
+        ChatMessageUsagePresentation.make(
+            message: self.message,
+            contextWindowTokens: self.contextWindowTokens)
+    }
+
+    private func usageTint(_ pressure: ChatMessageUsagePresentation.Pressure) -> Color {
+        switch pressure {
+        case .normal:
+            OpenClawChatTheme.muted
+        case .warning:
+            OpenClawChatTheme.warning
+        case .danger:
+            OpenClawChatTheme.danger
+        }
     }
 
     private var toolResultTitle: String {
@@ -505,7 +539,6 @@ private struct AttachmentRow: View {
 
 private struct ToolCallCard: View {
     let content: OpenClawChatMessageContent
-    let isUser: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -662,8 +695,8 @@ struct ChatSpeechStatusChip: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(self.isPreparing
-            ? Text("Preparing audio, tap to cancel")
-            : Text("Speaking, tap to stop"))
+            ? "Preparing audio, tap to cancel"
+            : "Speaking, tap to stop")
     }
 }
 
@@ -681,10 +714,12 @@ struct ChatOutboxStatusLabel: View {
         }
         .foregroundStyle(self.state.isFailed ? AnyShapeStyle(OpenClawChatTheme.danger) : AnyShapeStyle(.secondary))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(self.accessibilityText)
+        .accessibilityLabel(
+            Text(self.accessibilityText)
+                .font(OpenClawChatTypography.caption))
     }
 
-    private var title: String {
+    private var title: LocalizedStringResource {
         switch self.state {
         case .queued:
             "Queued"
@@ -714,7 +749,7 @@ struct ChatOutboxStatusLabel: View {
         }
     }
 
-    private var accessibilityText: String {
+    private var accessibilityText: LocalizedStringResource {
         switch self.state {
         case .queued:
             "Queued, sends when reconnected"
@@ -740,11 +775,22 @@ extension ChatTypingIndicatorBubble: @MainActor Equatable {
     }
 }
 
+// Keep this explicit for SwiftPM toolchains where SwiftUI macro plugins are unavailable.
+// swiftformat:disable environmentEntry
+private struct OpenClawAssistantBubblesInCleanChromeKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
     /// Clients that want iMessage-style assistant bubbles in the clean chrome
     /// (the iOS app) opt in; the default keeps the plain clean look elsewhere.
-    @Entry public var openClawAssistantBubblesInCleanChrome: Bool = false
+    public var openClawAssistantBubblesInCleanChrome: Bool {
+        get { self[OpenClawAssistantBubblesInCleanChromeKey.self] }
+        set { self[OpenClawAssistantBubblesInCleanChromeKey.self] = newValue }
+    }
 }
+
+// swiftformat:enable environmentEntry
 
 private struct AssistantBubbleContainerStyle: ViewModifier {
     let isClean: Bool
@@ -827,7 +873,7 @@ struct ChatPendingToolsBubble: View {
                 let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text("\(display.emoji) \(display.label)")
+                        Text(verbatim: "\(display.emoji) \(display.label)")
                             .font(OpenClawChatTypography.mono(size: 13, relativeTo: .footnote))
                             .lineLimit(1)
                         Spacer(minLength: 0)

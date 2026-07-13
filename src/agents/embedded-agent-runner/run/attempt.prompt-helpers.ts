@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
+  ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
@@ -17,7 +18,9 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
@@ -30,7 +33,6 @@ import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../vid
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { truncateUtf16Safe } from "../../../utils.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -317,7 +319,8 @@ function hasNonEmptyContent(content: unknown): boolean {
 }
 
 const QUEUED_USER_MESSAGE_MARKER =
-  "[Queued user message that arrived while the previous turn was still active]";
+  "[Queued user message from a previous active turn; preserved as context only. " +
+  "Continue with the active prompt below.]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
 const MAX_STRUCTURED_JSON_STRING_CHARS = 300;
 const MAX_STRUCTURED_JSON_DEPTH = 4;
@@ -497,6 +500,16 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+function shouldDropStaleInternalOrphanedUserPrompt(params: {
+  prompt: string;
+  leafMessage: { provenance?: unknown };
+}): boolean {
+  return (
+    params.prompt.trim().length > 0 &&
+    shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance)
+  );
+}
+
 /**
  * Merges a trailing user message that was queued in transcript history but not
  * present in the active prompt. The leaf is removed whether merged or already
@@ -505,13 +518,21 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
   if (!orphanText) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
   if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
+  }
+  if (
+    shouldDropStaleInternalOrphanedUserPrompt({
+      prompt: params.prompt,
+      leafMessage: params.leafMessage,
+    })
+  ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
 
@@ -559,6 +580,7 @@ export function resolveAttemptMediaTaskSystemPromptAddition(params: {
 
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
+  | "sessionTarget"
   | "sessionKey"
   | "sandboxSessionKey"
   | "messageChannel"
@@ -573,15 +595,44 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "provider"
   | "modelId"
   | "agentHarnessId"
+  | "modelSelectionLocked"
   | "thinkLevel"
   | "reasoningLevel"
   | "bashElevated"
   | "extraSystemPrompt"
   | "ownerNumbers"
   | "authProfileId"
+  | "authProfileIdSource"
+  | "runtimePlan"
 > & {
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
+
+function resolveRuntimeContextSessionTarget(params: {
+  attempt: AfterTurnRuntimeContextAttempt;
+  activeAgentId?: string;
+}): ContextEngineSessionTarget | undefined {
+  const sessionTarget = params.attempt.sessionTarget;
+  const agentId = sessionTarget?.agentId ?? params.activeAgentId;
+  const sessionId = sessionTarget?.sessionId ?? params.attempt.sessionId;
+  const sessionKey = sessionTarget?.sessionKey ?? params.attempt.sessionKey;
+  if (
+    !agentId &&
+    !sessionId &&
+    !sessionKey &&
+    !sessionTarget?.storePath &&
+    sessionTarget?.threadId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(sessionTarget?.storePath ? { storePath: sessionTarget.storePath } : {}),
+    ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
+  };
+}
 
 /** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
@@ -595,6 +646,10 @@ export function buildAfterTurnRuntimeContext(params: {
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
 }): ContextEngineRuntimeContext {
+  const sessionTarget = resolveRuntimeContextSessionTarget({
+    attempt: params.attempt,
+    activeAgentId: params.activeAgentId,
+  });
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
@@ -605,6 +660,8 @@ export function buildAfterTurnRuntimeContext(params: {
       currentThreadTs: params.attempt.currentThreadTs,
       currentMessageId: params.attempt.currentMessageId,
       authProfileId: params.attempt.authProfileId,
+      authProfileIdSource: params.attempt.authProfileIdSource,
+      runtimeAuthPlan: params.attempt.runtimePlan?.auth,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
       agentDir: params.agentDir,
@@ -614,6 +671,7 @@ export function buildAfterTurnRuntimeContext(params: {
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,
       harnessRuntime: params.attempt.agentHarnessId,
+      modelSelectionLocked: params.attempt.modelSelectionLocked,
       thinkLevel: params.attempt.thinkLevel,
       reasoningLevel: params.attempt.reasoningLevel,
       bashElevated: params.attempt.bashElevated,
@@ -646,6 +704,8 @@ export function buildAfterTurnRuntimeContext(params: {
       ? { currentTokenCount: Math.floor(params.currentTokenCount) }
       : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
+    transcriptStorage: { kind: "sqlite" },
+    ...(sessionTarget ? { sessionTarget } : {}),
   };
 }
 

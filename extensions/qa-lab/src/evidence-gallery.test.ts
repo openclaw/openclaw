@@ -2,13 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   buildQaEvidenceGalleryModel,
   resolveQaEvidenceArtifactFileByIndex,
   resolveQaEvidenceArtifactFile,
   resolveQaEvidenceProducerFile,
-  resolveQaEvidenceFile,
 } from "./evidence-gallery.js";
 import {
   QA_EVIDENCE_FILENAME,
@@ -62,7 +62,7 @@ function vitestArtifactEvidence(params: {
           provider: {
             id: "mock-openai",
             live: false,
-            model: { name: "mock-openai/gpt-5.5", ref: "mock-openai/gpt-5.5" },
+            model: { name: "mock-openai/gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
           },
           packageSource: { kind: "source-checkout" },
           artifacts: [{ ...params.artifact, source: "vitest" }],
@@ -90,7 +90,7 @@ describe("evidence gallery", () => {
         OPENCLAW_QA_REF: "gallery-test",
       } as NodeJS.ProcessEnv,
       generatedAt: "2026-06-17T12:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.5",
+      primaryModel: "mock-openai/gpt-5.6-luna",
       providerMode: "mock-openai",
       targets: [
         {
@@ -119,10 +119,15 @@ describe("evidence gallery", () => {
         },
       ],
     });
+    const noArtifactsEntry = expectDefined(evidence.entries[1], "no-artifacts evidence entry");
+    const noArtifactsExecution = expectDefined(
+      noArtifactsEntry.execution,
+      "no-artifacts evidence execution",
+    );
     evidence.entries[1] = {
-      ...evidence.entries[1],
+      ...noArtifactsEntry,
       execution: {
-        ...evidence.entries[1].execution!,
+        ...noArtifactsExecution,
         artifacts: [],
       },
     };
@@ -172,8 +177,9 @@ describe("evidence gallery", () => {
       title: "Failure path evidence",
       artifact: { kind: "log", path: "missing.log" },
     });
+    const failureEntry = expectDefined(evidence.entries[0], "failure evidence entry");
     evidence.entries[0] = {
-      ...evidence.entries[0],
+      ...failureEntry,
       result: {
         status: "blocked",
         failure: {
@@ -189,7 +195,8 @@ describe("evidence gallery", () => {
       repoRoot,
     });
 
-    expect(model.entries[0].failureReason).toBe(
+    const failureModelEntry = expectDefined(model.entries[0], "failure gallery entry");
+    expect(failureModelEntry.failureReason).toBe(
       "Command failed at <repo-root>/openclaw.mjs and file://<repo-root>/trace.log",
     );
     expect(JSON.stringify(model)).not.toContain(repoRoot);
@@ -215,14 +222,23 @@ describe("evidence gallery", () => {
       artifact: { kind: "log", path: artifactPath },
     });
     evidence.profile = `${repoRoot}/qa-profile`;
+    const absoluteEntry = expectDefined(evidence.entries[0], "absolute-path evidence entry");
+    const absoluteExecution = expectDefined(
+      absoluteEntry.execution,
+      "absolute-path evidence execution",
+    );
+    const absoluteArtifact = expectDefined(
+      absoluteExecution.artifacts[0],
+      "absolute-path evidence artifact",
+    );
     evidence.entries[0] = {
-      ...evidence.entries[0],
+      ...absoluteEntry,
       coverage: [{ id: `${repoRoot}/coverage`, role: `${repoRoot}/role` }],
       execution: {
-        ...evidence.entries[0].execution!,
+        ...absoluteExecution,
         artifacts: [
           {
-            ...evidence.entries[0].execution!.artifacts[0],
+            ...absoluteArtifact,
             kind: `${repoRoot}/log`,
             source: `${repoRoot}/vitest`,
           },
@@ -234,7 +250,7 @@ describe("evidence gallery", () => {
         ],
       },
       test: {
-        ...evidence.entries[0].test,
+        ...absoluteEntry.test,
         id: `${repoRoot}/qa-lab.absolute-artifact-path`,
         kind: `${repoRoot}/vitest-test`,
         source: { path: path.join(repoRoot, "extensions/qa-lab/src/absolute.test.ts") },
@@ -616,9 +632,11 @@ describe("evidence gallery", () => {
       }),
     );
 
-    await expect(resolveQaEvidenceFile({ inputPath: outputDir, repoRoot })).resolves.toBe(
-      await fs.realpath(evidencePath),
-    );
+    await expect(
+      buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot }),
+    ).resolves.toMatchObject({
+      counts: { blocked: 0, fail: 0, pass: 1, skipped: 0 },
+    });
     await expect(
       resolveQaEvidenceArtifactFile({
         artifactPath: "artifact.log",
@@ -649,7 +667,8 @@ describe("evidence gallery", () => {
     ).resolves.toBe(await fs.realpath(path.join(outputDir, "runner", "result.json")));
     await fs.rm(path.join(outputDir, "runner", "result.json"));
     const missingBundleModel = await buildQaEvidenceGalleryModel({ evidencePath, repoRoot });
-    expect(missingBundleModel.entries[0].artifacts[0]).toMatchObject({
+    const missingEntry = expectDefined(missingBundleModel.entries[0], "missing-bundle entry");
+    expect(missingEntry.artifacts[0]).toMatchObject({
       exists: false,
       error: "Evidence artifact not found.",
       preview: null,
@@ -674,13 +693,18 @@ describe("evidence gallery", () => {
     const outsideArtifact = path.join(outsideDir, "artifact.log");
     await fs.writeFile(outsideArtifact, "outside secret\n", "utf8");
     await fs.symlink(outsideArtifact, path.join(outputDir, "escape.log"));
+    const collisionEntry = expectDefined(collisionEvidence.entries[0], "collision evidence entry");
+    const collisionExecution = expectDefined(
+      collisionEntry.execution,
+      "collision evidence execution",
+    );
     await writeJson(evidencePath, {
       ...collisionEvidence,
       entries: [
         {
-          ...collisionEvidence.entries[0],
+          ...collisionEntry,
           execution: {
-            ...collisionEvidence.entries[0].execution,
+            ...collisionExecution,
             artifacts: [{ kind: "log", path: "escape.log", source: "vitest" }],
           },
         },
@@ -694,7 +718,10 @@ describe("evidence gallery", () => {
       }),
     ).rejects.toThrow("Evidence artifact not found.");
     await expect(
-      resolveQaEvidenceFile({ inputPath: "/tmp/not-openclaw-evidence.json", repoRoot }),
+      buildQaEvidenceGalleryModel({
+        evidencePath: "/tmp/not-openclaw-evidence.json",
+        repoRoot,
+      }),
     ).rejects.toThrow("Evidence path not found.");
   });
 });

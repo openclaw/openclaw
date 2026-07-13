@@ -24,6 +24,7 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SecretRef } from "../config/types.secrets.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
@@ -143,6 +144,7 @@ import type {
   ProviderThinkingPolicyContext,
 } from "./provider-thinking.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginHookOptions,
   OpenClawPluginToolFactory,
@@ -338,6 +340,8 @@ export type ProviderAuthContext = {
   workspaceDir?: string;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
+  /** Cancels browser callbacks, device polling, and other app-owned auth work. */
+  signal?: AbortSignal;
   /**
    * Optional onboarding CLI options that triggered this auth flow.
    *
@@ -655,7 +659,15 @@ export type ProviderResolveUsageAuthContext = {
   resolveOAuthToken: (params?: { provider?: string }) => Promise<ProviderUsageAuthToken | null>;
 };
 
-export type ProviderUsageAuthToken = { token: string; accountId?: string };
+export type ProviderUsageAuthToken = {
+  token: string;
+  accountId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
+  /** Account email captured on the resolved credential, when known. */
+  email?: string;
+};
 
 /**
  * Result of `resolveUsageAuth`.
@@ -688,6 +700,11 @@ export type ProviderFetchUsageSnapshotContext = {
   token: string;
   accountId?: string;
   authProfileId?: string;
+  /** Non-secret plan metadata from the resolved credential (e.g. Claude "max"). */
+  subscriptionType?: string;
+  rateLimitTier?: string;
+  /** Account email captured on the resolved credential, when known. */
+  email?: string;
   timeoutMs: number;
   fetchFn: typeof fetch;
 };
@@ -713,6 +730,9 @@ export type ProviderAuthDoctorHintContext = {
  * Use this to set provider defaults or rewrite provider-specific config keys
  * into the merged `extraParams` object. Return the full next extraParams object.
  */
+/** Provider-facing effort after OpenClaw lowers orchestration-only modes. */
+export type ProviderTransportThinkingLevel = Exclude<ThinkLevel, "ultra">;
+
 export type ProviderPrepareExtraParamsContext = {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -723,7 +743,7 @@ export type ProviderPrepareExtraParamsContext = {
   modelId: string;
   model?: ProviderRuntimeModel;
   extraParams?: Record<string, unknown>;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderTransportThinkingLevel;
 };
 
 export type ProviderExtraParamsForTransportContext = Omit<
@@ -1250,6 +1270,74 @@ export type ProviderTransformSystemPromptContext = ProviderSystemPromptContribut
 };
 
 export type PluginTextTransformRegistration = PluginTextTransforms;
+
+/** JSON-compatible provider settings for one configured worker profile. */
+export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
+
+/** SSH endpoint material returned by a worker provider after provisioning. */
+export type WorkerSshEndpoint = {
+  host: string;
+  port: number;
+  user: string;
+  /** OpenSSH public host-key line obtained from trusted provisioning output. */
+  hostKey: string;
+  /** Secret reference only; providers must never return plaintext key material. */
+  keyRef: SecretRef;
+};
+
+/** Resolved SSH client identity. Providers may return a local path or ephemeral material. */
+export type WorkerSshIdentity =
+  | { kind: "path"; path: string }
+  | { kind: "material"; contents: string };
+
+/** Durable context supplied when a worker provider resolves the identity it minted. */
+export type WorkerSshIdentityRequest = {
+  leaseId: string;
+  profile: WorkerProfile;
+  keyRef: SecretRef;
+};
+
+/** Durable lease identity and endpoint returned by a successful provision operation. */
+export type WorkerLease = {
+  leaseId: string;
+  ssh: WorkerSshEndpoint;
+};
+
+/** Authoritative inspection result for an already-known worker lease. */
+export type WorkerLeaseStatus =
+  | { status: "active" }
+  | { status: "destroyed" }
+  | { status: "unknown" };
+
+/** Permanent provider rejection recorded as a terminal worker failure. */
+export class WorkerProviderError extends Error {
+  readonly code = "invalid_profile";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkerProviderError";
+  }
+}
+
+/** Cloud-worker lifecycle capability registered by a plugin. */
+export type WorkerProvider = {
+  id: string;
+  /**
+   * Provision or adopt the lease for this operation id.
+   * Repeating the same operation id must be idempotent across gateway restarts.
+   */
+  provision: (profile: WorkerProfile, operationId: string) => Promise<WorkerLease>;
+  /** Throws on transient/indeterminate failures; `unknown` means authoritative absence. */
+  inspect: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<WorkerLeaseStatus>;
+  /**
+   * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic
+   * SecretRef resolver; when present, failures are authoritative and never fall back.
+   */
+  resolveSshIdentity?: (request: WorkerSshIdentityRequest) => Promise<WorkerSshIdentity>;
+  renew?: (leaseId: string) => Promise<void>;
+  /** Idempotent; resolves only after the provider can prove teardown. */
+  destroy: (lease: { leaseId: string; profile: WorkerProfile }) => Promise<void>;
+};
 
 /** Text-inference provider capability registered by a plugin. */
 export type ProviderPlugin = {
@@ -1955,7 +2043,15 @@ export type PluginCommandDiagnosticsSession = {
   sessionKey?: string;
   /** Ephemeral OpenClaw session id when available. */
   sessionId?: string;
-  /** Transcript file for this OpenClaw session when available. */
+  /**
+   * Deprecated transcript locator for this OpenClaw session when available.
+   *
+   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
+   * marker, not a filesystem path. Use session id/key plus transcript-runtime
+   * helpers for active transcript reads.
+   *
+   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
+   */
   sessionFile?: string;
   /** Embedded agent harness selected for this session. */
   agentHarnessId?: string;
@@ -1993,7 +2089,15 @@ export type PluginCommandContext = {
   sessionKey?: string;
   /** Ephemeral host session id for the active conversation when available. */
   sessionId?: string;
-  /** Transcript file for the active OpenClaw session when available. */
+  /**
+   * Deprecated transcript locator for the active OpenClaw session when available.
+   *
+   * SQLite-backed sessions use a `sqlite:<agentId>:<sessionId>:<storePath>`
+   * marker, not a filesystem path. Use session id/key plus transcript-runtime
+   * helpers for active transcript reads.
+   *
+   * @deprecated Use session identity fields with `plugin-sdk/session-transcript-runtime`.
+   */
   sessionFile?: string;
   /** Raw command arguments after the command name */
   args?: string;
@@ -2015,7 +2119,7 @@ export type PluginCommandContext = {
   diagnosticsSessions?: PluginCommandDiagnosticsSession[];
   /** Host-bound runtime capabilities scoped to this command invocation. */
   runtimeContext?: {
-    llm?: import("./runtime/types-core.js").PluginRuntimeCore["llm"];
+    llm?: Pick<import("./runtime/types-core.js").PluginRuntimeCore["llm"], "complete">;
   };
   /** Internal diagnostics-only marker that exec approval already authorized upload. */
   diagnosticsUploadApproved?: boolean;
@@ -2211,10 +2315,33 @@ export type OpenClawPluginReloadRegistration = {
   noopPrefixes?: string[];
 };
 
+export type OpenClawPluginNodeHostCommandAvailabilityContext = {
+  /** Node-local configuration used to build this host's Gateway declaration. */
+  config: OpenClawConfig;
+  /** Node-host process environment. */
+  env: NodeJS.ProcessEnv;
+};
+
 export type OpenClawPluginNodeHostCommand = {
   command: string;
   cap?: string;
   dangerous?: boolean;
+  /** Return false to omit this command and capability from the node declaration. */
+  isAvailable?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => boolean;
+  agentTool?: {
+    name: string;
+    description: string;
+    parameters?: Record<string, unknown>;
+    /**
+     * Platforms where this node-hosted agent tool should be allowlisted by
+     * default. Omit to require explicit `gateway.nodes.allowCommands`.
+     */
+    defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
+    mcp?: {
+      server: string;
+      tool: string;
+    };
+  };
   handle: (paramsJSON?: string | null) => Promise<string>;
 };
 
@@ -2677,6 +2804,8 @@ export type OpenClawPluginApi = {
     handler: GatewayRequestHandler,
     opts?: { scope?: OperatorScope },
   ) => void;
+  /** Register a read-only external-session catalog with optional native adoption actions. */
+  registerSessionCatalog: (provider: SessionCatalogProvider) => void;
   registerCli: (
     registrar: OpenClawPluginCliRegistrar,
     opts?: {
@@ -2723,6 +2852,8 @@ export type OpenClawPluginApi = {
   registerAutoEnableProbe: (probe: PluginSetupAutoEnableProbe) => void;
   /** Register a native model/provider plugin (text inference capability). */
   registerProvider: (provider: ProviderPlugin) => void;
+  /** Register a cloud-worker lifecycle provider. */
+  registerWorkerProvider: (provider: WorkerProvider) => void;
   /** Register provider-owned model catalog rows for text and media generation. */
   registerModelCatalogProvider: (provider: UnifiedModelCatalogProviderPlugin) => void;
   /** Register a general embedding provider (embedding capability). */

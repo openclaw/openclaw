@@ -46,12 +46,22 @@ export type PairedDevice = {
   deviceId: string;
   publicKey?: string;
   displayName?: string;
+  /** Operator-assigned label; preferred over client displayName when rendering. */
+  operatorLabel?: string;
+  platform?: string;
+  clientId?: string;
+  clientMode?: string;
+  role?: string;
   roles?: string[];
   scopes?: string[];
   remoteIp?: string;
   tokens?: DeviceTokenSummary[];
+  approvedVia?: "owner" | "silent" | "trusted-cidr" | "ssh-verified" | "bootstrap";
+  /** Server-computed: the device currently holds a live gateway connection. */
+  connected?: boolean;
   createdAtMs?: number;
   approvedAtMs?: number;
+  lastSeenAtMs?: number;
 };
 
 export type DevicePairingList = {
@@ -118,26 +128,28 @@ export type ExecApprovalsSnapshot = FileExecApprovalsSnapshot | NativeExecApprov
 
 export type ExecApprovalsTarget = { kind: "gateway" } | { kind: "node"; nodeId: string };
 
-type NodesState = {
+type NodesRequestState = {
   client: GatewayRequestClient | null;
   connected: boolean;
+  // Auto-reconnect keeps the same client; the page advances this generation
+  // whenever requests from the previous connection must become inert.
+  requestGeneration: number;
+};
+
+type NodesState = NodesRequestState & {
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   lastError: string | null;
   chatError?: string | null;
 };
 
-type DevicesState = {
-  client: GatewayRequestClient | null;
-  connected: boolean;
+type DevicesState = NodesRequestState & {
   devicesLoading: boolean;
   devicesError: string | null;
   devicesList: DevicePairingList | null;
 };
 
-export type ExecApprovalsState = {
-  client: GatewayRequestClient | null;
-  connected: boolean;
+export type ExecApprovalsState = NodesRequestState & {
   execApprovalsLoading: boolean;
   execApprovalsSaving: boolean;
   execApprovalsDirty: boolean;
@@ -174,6 +186,7 @@ export function createInitialNodesState(
   return {
     client: snapshot.client ?? null,
     connected: snapshot.connected ?? false,
+    requestGeneration: 0,
     nodesLoading: false,
     nodes: [],
     lastError: null,
@@ -189,6 +202,14 @@ export function createInitialNodesState(
   };
 }
 
+function isCurrentNodesRequest(
+  state: NodesRequestState,
+  client: GatewayRequestClient,
+  generation: number,
+): boolean {
+  return state.connected && state.client === client && state.requestGeneration === generation;
+}
+
 export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   const client = state.client;
   if (!client || !state.connected || state.nodesLoading) {
@@ -199,17 +220,18 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
     state.lastError = null;
     state.chatError = null;
   }
+  const generation = state.requestGeneration;
   try {
     const res = await client.request<{ nodes?: unknown }>("node.list", {});
-    if (state.client === client) {
+    if (isCurrentNodesRequest(state, client, generation)) {
       state.nodes = Array.isArray(res.nodes) ? (res.nodes as Array<Record<string, unknown>>) : [];
     }
   } catch (err) {
-    if (!opts?.quiet && state.client === client) {
+    if (!opts?.quiet && isCurrentNodesRequest(state, client, generation)) {
       state.lastError = String(err);
     }
   } finally {
-    if (state.client === client) {
+    if (isCurrentNodesRequest(state, client, generation)) {
       state.nodesLoading = false;
     }
   }
@@ -224,53 +246,178 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   if (!opts?.quiet) {
     state.devicesError = null;
   }
+  const generation = state.requestGeneration;
   try {
     const res = await client.request<{
       pending?: Array<PendingDevice>;
       paired?: Array<PairedDevice>;
     }>("device.pair.list", {});
-    if (state.client === client) {
+    if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesList = {
         pending: Array.isArray(res?.pending) ? res.pending : [],
         paired: Array.isArray(res?.paired) ? res.paired : [],
       };
     }
   } catch (err) {
-    if (!opts?.quiet && state.client === client) {
+    if (!opts?.quiet && isCurrentNodesRequest(state, client, generation)) {
       state.devicesError = String(err);
     }
   } finally {
-    if (state.client === client) {
+    if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesLoading = false;
     }
   }
 }
 
 export async function approveDevicePairing(state: DevicesState, requestId: string) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
+  const generation = state.requestGeneration;
   try {
-    await state.client.request("device.pair.approve", { requestId });
-    await loadDevices(state);
+    await client.request("device.pair.approve", { requestId });
+    if (isCurrentNodesRequest(state, client, generation)) {
+      await loadDevices(state);
+    }
   } catch (err) {
-    state.devicesError = String(err);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      state.devicesError = String(err);
+    }
   }
 }
 
 export async function rejectDevicePairing(state: DevicesState, requestId: string) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
   const confirmed = window.confirm("Reject this device pairing request?");
   if (!confirmed) {
     return;
   }
+  const generation = state.requestGeneration;
   try {
-    await state.client.request("device.pair.reject", { requestId });
-    await loadDevices(state);
+    await client.request("device.pair.reject", { requestId });
+    if (isCurrentNodesRequest(state, client, generation)) {
+      await loadDevices(state);
+    }
   } catch (err) {
-    state.devicesError = String(err);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      state.devicesError = String(err);
+    }
+  }
+}
+
+/** Entry removal request resolved from the unified inventory row. */
+export type InventoryRemovalRequest = {
+  id: string;
+  name: string;
+  removeNode: boolean;
+  removeDevice: boolean;
+};
+
+type InventoryState = NodesState & DevicesState;
+
+async function removeInventoryEntryRpc(
+  client: GatewayRequestClient,
+  entry: InventoryRemovalRequest,
+) {
+  // Node removal first: it revokes the node role (deleting node-only device rows)
+  // and clears any legacy node pairing under the same id. A mixed-role record
+  // then loses its remaining roles via the device-level removal.
+  if (entry.removeNode) {
+    await client.request("node.pair.remove", { nodeId: entry.id });
+  }
+  if (entry.removeDevice) {
+    await client.request("device.pair.remove", { deviceId: entry.id });
+  }
+}
+
+// Reload quietly and assign the failure afterwards: a non-quiet loadDevices
+// clears devicesError first, which would erase the message before it renders.
+async function reloadInventory(state: InventoryState, opts?: { error?: string }) {
+  const quiet = opts?.error !== undefined;
+  await Promise.all([loadDevices(state, { quiet }), loadNodes(state, { quiet })]);
+  if (opts?.error !== undefined) {
+    state.devicesError = opts.error;
+  }
+}
+
+export async function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
+  const client = state.client;
+  if (!client || !state.connected) {
+    return;
+  }
+  const confirmed = window.confirm(`Remove ${entry.name} (${entry.id.slice(0, 12)}…)?`);
+  if (!confirmed) {
+    return;
+  }
+  try {
+    await removeInventoryEntryRpc(client, entry);
+    await reloadInventory(state);
+  } catch (err) {
+    await reloadInventory(state, { error: String(err) });
+  }
+}
+
+export async function removeStaleInventoryEntries(
+  state: InventoryState,
+  entries: InventoryRemovalRequest[],
+) {
+  const client = state.client;
+  if (!client || !state.connected || entries.length === 0) {
+    return;
+  }
+  const confirmed = window.confirm(
+    `Remove ${entries.length} stale pairing${entries.length === 1 ? "" : "s"}? Affected clients re-pair silently on their next connection.`,
+  );
+  if (!confirmed) {
+    return;
+  }
+  const failures: string[] = [];
+  for (const entry of entries) {
+    try {
+      await removeInventoryEntryRpc(client, entry);
+    } catch (err) {
+      failures.push(`${entry.name}: ${String(err)}`);
+    }
+  }
+  await reloadInventory(
+    state,
+    failures.length > 0
+      ? {
+          error: `Failed to remove ${failures.length} entr${failures.length === 1 ? "y" : "ies"}: ${failures[0]}`,
+        }
+      : undefined,
+  );
+}
+
+export async function approveNodePairingRequest(state: InventoryState, requestId: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  try {
+    await state.client.request("node.pair.approve", { requestId });
+    await reloadInventory(state);
+  } catch (err) {
+    await reloadInventory(state, { error: String(err) });
+  }
+}
+
+export async function rejectNodePairingRequest(state: InventoryState, requestId: string) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const confirmed = window.confirm("Reject this node pairing request?");
+  if (!confirmed) {
+    return;
+  }
+  try {
+    await state.client.request("node.pair.reject", { requestId });
+    await reloadInventory(state);
+  } catch (err) {
+    await reloadInventory(state, { error: String(err) });
   }
 }
 
@@ -278,19 +425,27 @@ export async function rotateDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
 ) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
+  const generation = state.requestGeneration;
   try {
     const { gatewayUrl, ...requestParams } = params;
-    const res = await state.client.request<{
+    const res = await client.request<{
       token?: string;
       role?: string;
       deviceId?: string;
       scopes?: Array<string>;
     }>("device.token.rotate", requestParams);
+    if (!isCurrentNodesRequest(state, client, generation)) {
+      return;
+    }
     if (res?.token) {
       const identity = await loadOrCreateDeviceIdentity();
+      if (!isCurrentNodesRequest(state, client, generation)) {
+        return;
+      }
       const role = res.role ?? params.role;
       if (res.deviceId === identity.deviceId || params.deviceId === identity.deviceId) {
         storeDeviceAuthToken({
@@ -303,9 +458,13 @@ export async function rotateDeviceToken(
       }
       window.prompt("New device token (copy and store securely):", res.token);
     }
-    await loadDevices(state);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      await loadDevices(state);
+    }
   } catch (err) {
-    state.devicesError = String(err);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      state.devicesError = String(err);
+    }
   }
 }
 
@@ -313,17 +472,25 @@ export async function revokeDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string },
 ) {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return;
   }
   const confirmed = window.confirm(`Revoke token for ${params.deviceId} (${params.role})?`);
   if (!confirmed) {
     return;
   }
+  const generation = state.requestGeneration;
   try {
     const { gatewayUrl, ...requestParams } = params;
-    await state.client.request("device.token.revoke", requestParams);
+    await client.request("device.token.revoke", requestParams);
+    if (!isCurrentNodesRequest(state, client, generation)) {
+      return;
+    }
     const identity = await loadOrCreateDeviceIdentity();
+    if (!isCurrentNodesRequest(state, client, generation)) {
+      return;
+    }
     if (params.deviceId === identity.deviceId) {
       clearDeviceAuthToken({
         deviceId: identity.deviceId,
@@ -331,9 +498,13 @@ export async function revokeDeviceToken(
         role: params.role,
       });
     }
-    await loadDevices(state);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      await loadDevices(state);
+    }
   } catch (err) {
-    state.devicesError = String(err);
+    if (isCurrentNodesRequest(state, client, generation)) {
+      state.devicesError = String(err);
+    }
   }
 }
 
@@ -370,6 +541,7 @@ export async function loadExecApprovals(
   state.execApprovalsLoading = true;
   state.lastError = null;
   state.chatError = null;
+  const generation = state.requestGeneration;
   try {
     const rpc = resolveExecApprovalsRpc(target);
     if (!rpc) {
@@ -377,15 +549,15 @@ export async function loadExecApprovals(
       return;
     }
     const res = await client.request<ExecApprovalsSnapshot>(rpc.method, rpc.params);
-    if (state.client === client) {
+    if (isCurrentNodesRequest(state, client, generation)) {
       applyExecApprovalsSnapshot(state, res);
     }
   } catch (err) {
-    if (state.client === client) {
+    if (isCurrentNodesRequest(state, client, generation)) {
       state.lastError = String(err);
     }
   } finally {
-    if (state.client === client) {
+    if (isCurrentNodesRequest(state, client, generation)) {
       state.execApprovalsLoading = false;
     }
   }
@@ -420,6 +592,7 @@ export async function saveExecApprovals(
   state.execApprovalsSaving = true;
   state.lastError = null;
   state.chatError = null;
+  const generation = state.requestGeneration;
   try {
     if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {
       state.lastError =
@@ -438,17 +611,17 @@ export async function saveExecApprovals(
       return;
     }
     await client.request(rpc.method, rpc.params);
-    if (state.client !== client) {
+    if (!isCurrentNodesRequest(state, client, generation)) {
       return;
     }
     state.execApprovalsDirty = false;
     await loadExecApprovals(state, target);
   } catch (err) {
-    if (state.client === client) {
+    if (isCurrentNodesRequest(state, client, generation)) {
       state.lastError = String(err);
     }
   } finally {
-    if (state.client === client) {
+    if (isCurrentNodesRequest(state, client, generation)) {
       state.execApprovalsSaving = false;
     }
   }

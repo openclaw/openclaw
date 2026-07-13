@@ -180,9 +180,9 @@ function resetMusicGenerateMocks() {
   taskExecutorMocks.failTaskRunByRunId.mockReset();
   taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
   musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockReset();
-  musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue(
-    true,
-  );
+  musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue({
+    status: "delivered",
+  });
 }
 
 function detailsOf(result: { details?: unknown }): Record<string, unknown> {
@@ -270,8 +270,8 @@ describe("createMusicGenerateTool", () => {
       }),
     );
 
-    expect(tool.description).toContain("call music_generate");
-    expect(tool.description).toContain("do not just write lyrics");
+    expect(tool.description).toContain("Make/generate music => call");
+    expect(tool.description).toContain("lyrics-only request => text only");
     expect(JSON.stringify(tool.parameters)).toContain("For song/style requests, use prompt");
   });
 
@@ -563,7 +563,7 @@ describe("createMusicGenerateTool", () => {
     });
     const wakeSpy = vi
       .spyOn(musicGenerateBackground.musicGenerationTaskLifecycle, "wakeTaskCompletion")
-      .mockResolvedValue(true);
+      .mockResolvedValue({ status: "delivered" });
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
       provider: "google",
       model: "lyria-3-clip-preview",

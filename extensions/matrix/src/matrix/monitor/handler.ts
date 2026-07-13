@@ -670,7 +670,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return undefined;
         }
         if (eventId && inboundDeduper) {
-          claimedInboundEvent = inboundDeduper.claimEvent({ roomId, eventId });
+          claimedInboundEvent = await inboundDeduper.claimEvent({ roomId, eventId });
           if (!claimedInboundEvent) {
             logVerboseMessage(`matrix: skip duplicate inbound event room=${roomId} id=${eventId}`);
             return undefined;
@@ -1657,7 +1657,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         logVerboseMessage(`matrix: drop reply context (mode=${contextVisibilityMode})`);
       }
 
-      const preview = bodyText.slice(0, 200).replace(/\n/g, "\\n");
+      const preview = truncateUtf16Safe(bodyText, 200).replace(/\n/g, "\\n");
       logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);
 
       const replyTarget = ctxPayload.To;

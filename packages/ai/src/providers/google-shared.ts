@@ -98,6 +98,7 @@ function isThinkingPart(part: Pick<Part, "thought" | "thoughtSignature">): boole
  *
  * Note: this does NOT merge or move signatures across distinct response parts. It only prevents
  * a signature from being overwritten with `undefined` within the same streamed block.
+ * @internal Directly tested provider implementation detail.
  */
 export function retainThoughtSignature(
   existing: string | undefined,
@@ -134,17 +135,19 @@ function resolveThoughtSignature(
 
 /**
  * Models via Google APIs that require explicit tool call IDs in function calls/responses.
+ * @internal Directly tested provider implementation detail.
  */
 export function requiresToolCallId(modelId: string): boolean {
   return modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 }
 
 function getGeminiMajorVersion(modelId: string): number | undefined {
-  const match = modelId.toLowerCase().match(/^gemini(?:-live)?-(\d+)/);
+  const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
   if (!match) {
     return undefined;
   }
-  return Number.parseInt(match[1], 10);
+  const majorVersion = match.at(1);
+  return majorVersion === undefined ? undefined : Number.parseInt(majorVersion, 10);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
@@ -157,6 +160,7 @@ function supportsMultimodalFunctionResponse(modelId: string): boolean {
 
 /**
  * Convert internal messages to Gemini Content[] format.
+ * @internal Directly tested provider implementation detail.
  */
 export function convertMessages<T extends GoogleApiType>(
   model: Model<T>,
@@ -374,6 +378,7 @@ function sanitizeForOpenApi(schema: unknown): unknown {
  * anyOf, oneOf, const, etc.). Set `useParameters` to true to use the legacy `parameters`
  * field instead (OpenAPI 3.03 Schema). This is needed for Cloud Code Assist with Claude
  * models, where the API translates `parameters` into Anthropic's `input_schema`.
+ * @internal Directly tested provider implementation detail.
  */
 export function convertTools(
   tools: Tool[],
@@ -397,6 +402,7 @@ export function convertTools(
 
 /**
  * Map tool choice string to Gemini FunctionCallingConfigMode.
+ * @internal Directly tested provider implementation detail.
  */
 export function mapToolChoice(choice: string): FunctionCallingConfigMode {
   switch (choice) {
@@ -557,8 +563,11 @@ export function buildGoogleSimpleThinking<T extends GoogleApiType>(
   }
 
   const clampedReasoning = clampThinkingLevel(model, options.reasoning);
+  if (clampedReasoning === "off") {
+    return { enabled: false };
+  }
   const effort = (
-    clampedReasoning === "off" || clampedReasoning === "max" ? "high" : clampedReasoning
+    clampedReasoning === "max" ? "high" : clampedReasoning
   ) as ClampedGoogleThinkingLevel;
 
   if (
@@ -611,6 +620,7 @@ export function getDisabledGoogleThinkingConfig<T extends GoogleApiType>(
   return { thinkingBudget: 0 };
 }
 
+/** @internal Directly tested provider implementation detail. */
 export function isGemma4Model<T extends GoogleApiType>(model: Model<T>): boolean {
   return /gemma-?4/.test(model.id.toLowerCase());
 }
@@ -706,6 +716,7 @@ function getGoogleBudget<T extends GoogleApiType>(
 
 /**
  * Map Gemini FinishReason to our StopReason.
+ * @internal Directly tested provider implementation detail.
  */
 export function mapStopReason(reason: FinishReason): StopReason {
   switch (reason) {
@@ -736,6 +747,7 @@ export function mapStopReason(reason: FinishReason): StopReason {
   }
 }
 
+/** @internal Directly tested provider implementation detail. */
 export async function consumeGoogleGenerateContentStream<T extends GoogleApiType>(params: {
   chunks: AsyncIterable<GenerateContentResponse>;
   model: Model<T>;

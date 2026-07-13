@@ -1,5 +1,6 @@
-import { LitElement, html } from "lit";
+import { html } from "lit";
 import { property } from "lit/decorators.js";
+import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const HOVER_DELAY = 150;
 const TOUCH_DELAY = 450;
@@ -16,7 +17,11 @@ function createTooltipId() {
   return `openclaw-tooltip-${nextTooltipId}`;
 }
 
-class TooltipProvider extends LitElement {
+function normalizeTooltipText(text: string) {
+  return text.replace(/\s+/gu, " ").trim();
+}
+
+class TooltipProvider extends OpenClawLitElement {
   @property({ type: Number }) delay = HOVER_DELAY;
   @property({ type: Number }) skipDelay = SKIP_DELAY;
   @property({ type: Number }) touchDelay = TOUCH_DELAY;
@@ -34,12 +39,13 @@ class TooltipProvider extends LitElement {
 
   override disconnectedCallback() {
     this.removeEventListener("pointerdown", this.handlePointerDown, true);
-    this.activeTooltip?.closeFromProvider();
+    // Sever ownership first so child teardown cannot start a skip-delay window
+    // on a provider that is no longer available.
+    const activeTooltip = this.activeTooltip;
     this.activeTooltip = null;
-    if (this.skipDelayTimer !== null) {
-      window.clearTimeout(this.skipDelayTimer);
-      this.skipDelayTimer = null;
-    }
+    activeTooltip?.closeFromProvider();
+    this.clearSkipDelayTimer();
+    this.delayed = true;
     this.suppressFocus = false;
     super.disconnectedCallback();
   }
@@ -67,9 +73,7 @@ class TooltipProvider extends LitElement {
     }
     this.activeTooltip = tooltip;
     this.delayed = false;
-    if (this.skipDelayTimer !== null) {
-      window.clearTimeout(this.skipDelayTimer);
-    }
+    this.clearSkipDelayTimer();
   }
 
   closeTooltip(tooltip: Tooltip) {
@@ -77,12 +81,10 @@ class TooltipProvider extends LitElement {
       return;
     }
     this.activeTooltip = null;
+    this.clearSkipDelayTimer();
     if (this.skipDelay <= 0) {
       this.delayed = true;
       return;
-    }
-    if (this.skipDelayTimer !== null) {
-      window.clearTimeout(this.skipDelayTimer);
     }
     this.skipDelayTimer = window.setTimeout(() => {
       this.skipDelayTimer = null;
@@ -94,12 +96,20 @@ class TooltipProvider extends LitElement {
     return this.delayed;
   }
 
+  private clearSkipDelayTimer() {
+    if (this.skipDelayTimer === null) {
+      return;
+    }
+    window.clearTimeout(this.skipDelayTimer);
+    this.skipDelayTimer = null;
+  }
+
   override render() {
     return html`<slot></slot>`;
   }
 }
 
-class Tooltip extends LitElement {
+class Tooltip extends OpenClawLitElement {
   @property() content = "";
 
   private trigger: HTMLElement | null = null;
@@ -112,6 +122,7 @@ class Tooltip extends LitElement {
   private open = false;
   private pointerDown = false;
   private describedBy: string | null = null;
+  private activeProvider: TooltipProvider | null = null;
   private readonly tooltipId = createTooltipId();
 
   override connectedCallback() {
@@ -119,18 +130,24 @@ class Tooltip extends LitElement {
     this.style.display = "contents";
   }
 
-  protected override firstUpdated() {
-    this.attachTrigger();
+  protected override updated() {
+    if (this.isConnected) {
+      this.attachTrigger();
+    }
   }
 
   override disconnectedCallback() {
     this.close();
     document.removeEventListener("pointerup", this.handleDocumentPointerUp);
+    this.pointerDown = false;
     this.detachTrigger();
     super.disconnectedCallback();
   }
 
   private attachTrigger() {
+    if (!this.isConnected) {
+      return;
+    }
     const slot = this.renderRoot.querySelector("slot");
     const trigger = slot
       ?.assignedElements({ flatten: true })
@@ -292,13 +309,43 @@ class Tooltip extends LitElement {
     }, delay);
   }
 
+  // Tooltips that merely repeat text the trigger already shows in full are
+  // noise (e.g. a model row echoing its own visible label); suppress those
+  // opens, but keep the tooltip when any trigger element clips its content so
+  // ellipsized labels still reveal the full text on hover.
+  private isRedundantContent() {
+    const trigger = this.trigger;
+    if (!trigger) {
+      return false;
+    }
+    const content = normalizeTooltipText(this.content);
+    if (!content || !normalizeTooltipText(trigger.textContent ?? "").includes(content)) {
+      return false;
+    }
+    return [trigger, ...trigger.querySelectorAll("*")].every(
+      (element) => !(element instanceof HTMLElement) || element.scrollWidth <= element.clientWidth,
+    );
+  }
+
   private show() {
     const trigger = this.trigger;
     if (!trigger || !this.content.trim()) {
       return;
     }
     this.clearTimers();
-    this.provider?.openTooltip(this);
+    if (this.open) {
+      if (this.portal) {
+        this.portal.textContent = this.content;
+        this.positionTooltip();
+      }
+      return;
+    }
+    if (this.isRedundantContent()) {
+      return;
+    }
+    const provider = this.provider;
+    provider?.openTooltip(this);
+    this.activeProvider = provider;
     this.open = true;
     this.describedBy ??= trigger.getAttribute("aria-describedby");
     this.portal = document.createElement("div");
@@ -324,12 +371,14 @@ class Tooltip extends LitElement {
 
   private close() {
     const wasOpen = this.open;
+    const provider = this.activeProvider;
+    this.activeProvider = null;
     this.clearTimers();
     this.touchStart = null;
     this.touchOpened = false;
     this.open = false;
     if (wasOpen) {
-      this.provider?.closeTooltip(this);
+      provider?.closeTooltip(this);
     }
     this.restoreDescription();
     this.portal?.remove();

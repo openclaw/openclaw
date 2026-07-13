@@ -3,12 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { collectChannelSchemaMetadata } from "../config/channel-config-metadata.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import type { PluginCandidate } from "./discovery.js";
-import {
-  __testing as manifestRegistryTesting,
-  loadPluginManifestRegistry,
-} from "./manifest-registry.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -99,6 +97,40 @@ function createPluginCandidate(params: {
     bundledManifest: params.bundledManifest,
     bundledManifestPath: params.bundledManifestPath,
   };
+}
+
+function createMsteamsClawHubInstallRecord(
+  installPath: string,
+  overrides: Partial<PluginInstallRecord> = {},
+): PluginInstallRecord {
+  const record: PluginInstallRecord = {
+    source: "clawhub",
+    spec: "clawhub:@openclaw/msteams",
+    installPath,
+    clawhubUrl: "https://clawhub.ai",
+    clawhubPackage: "@openclaw/msteams",
+    clawhubChannel: "official",
+  };
+  return { ...record, ...overrides };
+}
+
+function resolveMsteamsClawHubTrust(overrides: Partial<PluginInstallRecord> = {}) {
+  const dir = makeTempDir();
+  writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+  const registry = loadPluginManifestRegistry({
+    installRecords: {
+      msteams: createMsteamsClawHubInstallRecord(dir, overrides),
+    },
+    candidates: [
+      createPluginCandidate({
+        idHint: "msteams",
+        rootDir: dir,
+        packageName: "@openclaw/msteams",
+        origin: "global",
+      }),
+    ],
+  });
+  return registry.plugins[0]?.trustedOfficialInstall;
 }
 
 function loadRegistry(candidates: PluginCandidate[]) {
@@ -478,6 +510,25 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
   });
 
+  it("preserves manifest catalog metadata on registry records", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "catalog-demo",
+      catalog: { featured: true, order: 20 },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "catalog-demo",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.catalog).toEqual({ featured: true, order: 20 });
+  });
+
   it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
@@ -719,6 +770,196 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
   });
 
+  it.each([
+    { name: "complete records", overrides: {} },
+    {
+      name: "versioned ClawHub specs",
+      overrides: { spec: "clawhub:@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "legacy spec-only records",
+      overrides: { clawhubPackage: undefined },
+    },
+    {
+      name: "package-only records",
+      overrides: { spec: undefined },
+    },
+    {
+      name: "matching npm resolved specs",
+      overrides: { resolvedSpec: "@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "matching ClawHub resolved specs",
+      overrides: { resolvedSpec: "clawhub:@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "matching resolved package names",
+      overrides: { resolvedName: "@openclaw/msteams" },
+    },
+  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
+    "marks official npm-only ClawHub installs with $name as trusted",
+    ({ overrides }) => {
+      expect(resolveMsteamsClawHubTrust(overrides)).toBe(true);
+    },
+  );
+
+  it.each([
+    {
+      name: "community ClawHub channel",
+      overrides: { clawhubChannel: "community" },
+    },
+    {
+      name: "private ClawHub channel",
+      overrides: { clawhubChannel: "private" },
+    },
+    {
+      name: "custom ClawHub URL",
+      overrides: { clawhubUrl: "https://example.invalid" },
+    },
+    {
+      name: "missing ClawHub URL",
+      overrides: { clawhubUrl: undefined },
+    },
+    {
+      name: "conflicting ClawHub package",
+      overrides: { clawhubPackage: "@openclaw/line" },
+    },
+    {
+      name: "conflicting requested spec",
+      overrides: { spec: "clawhub:@openclaw/line" },
+    },
+    {
+      name: "conflicting npm resolved spec",
+      overrides: { resolvedSpec: "@openclaw/line@2026.6.11" },
+    },
+    {
+      name: "conflicting ClawHub resolved spec",
+      overrides: { resolvedSpec: "clawhub:@openclaw/line@2026.6.11" },
+    },
+    {
+      name: "blank ClawHub package",
+      overrides: { clawhubPackage: " " },
+    },
+    {
+      name: "malformed ClawHub package",
+      overrides: { clawhubPackage: "@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "malformed requested spec",
+      overrides: { spec: "@openclaw/msteams" },
+    },
+    {
+      name: "malformed resolved spec",
+      overrides: { resolvedSpec: "file:plugin.tgz" },
+    },
+    {
+      name: "conflicting resolved package name",
+      overrides: { resolvedName: "@openclaw/line" },
+    },
+    {
+      name: "malformed resolved package name",
+      overrides: { resolvedName: "@openclaw/msteams@2026.6.11" },
+    },
+    {
+      name: "missing package identities",
+      overrides: {
+        clawhubPackage: undefined,
+        spec: undefined,
+        resolvedSpec: undefined,
+      },
+    },
+    {
+      name: "resolved identity without ClawHub source identity",
+      overrides: {
+        clawhubPackage: undefined,
+        spec: undefined,
+        resolvedSpec: "@openclaw/msteams@2026.6.11",
+      },
+    },
+  ] satisfies Array<{ name: string; overrides: Partial<PluginInstallRecord> }>)(
+    "does not trust npm-only official ClawHub installs from $name",
+    ({ overrides }) => {
+      expect(resolveMsteamsClawHubTrust(overrides)).toBeUndefined();
+    },
+  );
+
+  it("does not trust ClawHub records from a different install path", () => {
+    expect(resolveMsteamsClawHubTrust({ installPath: makeTempDir() })).toBeUndefined();
+  });
+
+  it("does not trust a stale source path after switching to ClawHub", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        msteams: createMsteamsClawHubInstallRecord(makeTempDir(), { sourcePath: dir }),
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "msteams",
+          rootDir: dir,
+          packageName: "@openclaw/msteams",
+          origin: "config",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
+  it("does not trust custom ClawHub sources for catalog entries with a ClawHub spec", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        "diagnostics-otel": {
+          source: "clawhub",
+          spec: "clawhub:@openclaw/diagnostics-otel",
+          installPath: dir,
+          clawhubUrl: "https://example.invalid",
+          clawhubPackage: "@openclaw/diagnostics-otel",
+          clawhubChannel: "official",
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "diagnostics-otel",
+          rootDir: dir,
+          packageName: "@openclaw/diagnostics-otel",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
+  it("preserves legacy spec-only records for catalog-backed ClawHub installs", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        "diagnostics-otel": {
+          source: "clawhub",
+          spec: "clawhub:@openclaw/diagnostics-otel@2026.5.18",
+          installPath: dir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "diagnostics-otel",
+          rootDir: dir,
+          packageName: "@openclaw/diagnostics-otel",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+  });
+
   it("marks official diagnostics-otel config paths trusted when the install record matches", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
@@ -798,6 +1039,25 @@ describe("loadPluginManifestRegistry", () => {
           idHint: "diagnostics-prometheus",
           rootDir: dir,
           packageName: "@openclaw/diagnostics-prometheus",
+          origin: "global",
+        }),
+      ],
+    });
+
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
+  });
+
+  it("does not trust unrecorded npm-only official ClawHub channel globals", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "msteams", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {},
+      candidates: [
+        createPluginCandidate({
+          idHint: "msteams",
+          rootDir: dir,
+          packageName: "@openclaw/msteams",
           origin: "global",
         }),
       ],
@@ -1426,6 +1686,26 @@ describe("loadPluginManifestRegistry", () => {
     expectNoRegistryDiagnosticContains(registry, "without channelConfigs metadata");
   });
 
+  it("hydrates and overlays official external catalog curation metadata", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "diffs",
+      catalog: { featured: false },
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "diffs",
+        rootDir: dir,
+        origin: "global",
+        packageName: "@openclaw/diffs",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.catalog).toEqual({ featured: false, order: 40 });
+  });
+
   it("fills missing official external catalog descriptors for partial npm channel configs", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
@@ -2034,6 +2314,7 @@ describe("loadPluginManifestRegistry", () => {
       contracts: {
         externalAuthProviders: ["acme-ai"],
         usageProviders: ["acme-ai"],
+        workerProviders: [" static-ssh ", ""],
       },
       configSchema: { type: "object" },
     });
@@ -2047,6 +2328,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.contracts).toEqual({
       externalAuthProviders: ["acme-ai"],
       usageProviders: ["acme-ai"],
+      workerProviders: ["static-ssh"],
     });
   });
 
@@ -2070,26 +2352,6 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.contracts).toEqual({
       agentToolResultMiddleware: ["openclaw", "codex"],
       trustedToolPolicies: ["workflow-budget"],
-    });
-  });
-
-  it("preserves host-trusted plugin contracts from catalog overlays", () => {
-    const contracts = manifestRegistryTesting.mergeManifestContracts(
-      {
-        agentToolResultMiddleware: ["openclaw"],
-        usageProviders: ["openai"],
-      },
-      {
-        agentToolResultMiddleware: ["codex"],
-        trustedToolPolicies: ["workflow-budget"],
-        usageProviders: ["openrouter"],
-      },
-    );
-
-    expect(contracts).toEqual({
-      agentToolResultMiddleware: ["openclaw", "codex"],
-      trustedToolPolicies: ["workflow-budget"],
-      usageProviders: ["openai", "openrouter"],
     });
   });
 

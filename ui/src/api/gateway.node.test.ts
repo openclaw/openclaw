@@ -1,10 +1,11 @@
-// @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+/** @vitest-environment node */
 import {
+  ConnectErrorDetailCodes,
+  GATEWAY_CLIENT_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-} from "../../../packages/gateway-protocol/src/version.js";
+} from "@openclaw/gateway-client/browser";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../lib/nodes/index.ts";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
@@ -125,6 +126,7 @@ vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
 }));
 
 const {
+  CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OPERATOR_SCOPES,
   GatewayBrowserClient,
   GatewayRequestError,
@@ -137,9 +139,10 @@ type ConnectFrame = {
   id?: string;
   method?: string;
   params?: {
-    auth?: { token?: string; password?: string; deviceToken?: string };
+    auth?: { token?: string; bootstrapToken?: string; password?: string; deviceToken?: string };
     maxProtocol?: number;
     minProtocol?: number;
+    caps?: string[];
     scopes?: string[];
   };
 };
@@ -412,7 +415,31 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
+    expect(connectFrame.params?.caps).toEqual([
+      GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+      GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+    ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("requests handoff scopes with bootstrap token auth", async () => {
+    const client = new GatewayBrowserClient({
+      url: "wss://gateway.example",
+      bootstrapToken: "boot-1",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.token).toBeUndefined();
+    expect(connectFrame.params?.auth?.bootstrapToken).toBe("boot-1");
+    expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]);
+    const [, signedPayload] = requireFirstSignCall();
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES],
+      token: "boot-1",
+      nonce: "nonce-1",
+    });
   });
 
   it("adds the current Control UI protocol to bare protocol mismatch errors", () => {
@@ -619,6 +646,9 @@ describe("GatewayBrowserClient", () => {
 
   it("reports connect phase timing without credentials or nonce values", async () => {
     const onConnectTiming = vi.fn();
+    vi.stubGlobal("performance", {
+      now: vi.fn().mockReturnValueOnce(10).mockReturnValueOnce(35).mockReturnValue(40),
+    });
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -634,6 +664,7 @@ describe("GatewayBrowserClient", () => {
       "connect-plan-ready",
       "request-sent",
     ]);
+    expect([sentPayloads[0]?.durationMs, sentPayloads[0]?.phaseDurationMs]).toEqual([25, 25]);
     for (const payload of sentPayloads) {
       expect(payload.generation).toBe(1);
       expect(payload.durationMs).toBeTypeOf("number");
@@ -1539,11 +1570,13 @@ describe("GatewayBrowserClient", () => {
   it("reports willRetry=false on credential rejections so the UI can fall back to the login gate", async () => {
     useNodeFakeTimers();
     const onClose = vi.fn();
+    const onConnectTiming = vi.fn();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       password: "wrong-password",
       onClose,
+      onConnectTiming,
     });
 
     const { ws, connectFrame } = await startConnect(client);
@@ -1562,6 +1595,12 @@ describe("GatewayBrowserClient", () => {
 
     const close = requireFirstMockArg(onClose, "close");
     expect(close.willRetry).toBe(false);
+    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+      phase: "failed",
+      errorCode: "INVALID_REQUEST",
+      hasDeviceIdentity: true,
+      hasPassword: true,
+    });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 

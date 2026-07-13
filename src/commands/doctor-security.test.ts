@@ -1,7 +1,7 @@
 // Doctor security tests cover security audit checks, config findings, and repair output.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 
@@ -21,6 +21,16 @@ vi.mock("../channels/read-only-account-inspect.js", () => ({
   inspectReadOnlyChannelAccount: vi.fn(async () => null),
 }));
 
+// These doctor assertions cover core secret fields. Registry integration tests
+// own plugin-derived targets, so avoid compiling every bundled plugin here.
+vi.mock("../secrets/target-registry-data.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../secrets/target-registry-data.js")>();
+  return {
+    ...actual,
+    getSecretTargetRegistry: actual.getCoreSecretTargetRegistry,
+  };
+});
+
 import { noteSecurityWarnings } from "./doctor-security.js";
 
 describe("noteSecurityWarnings gateway exposure", () => {
@@ -28,11 +38,6 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
   let prevServiceKind: string | undefined;
-
-  beforeAll(async () => {
-    listReadOnlyChannelPluginsForConfigMock.mockReturnValue([]);
-    await noteSecurityWarnings({ gateway: { bind: "loopback" } } as OpenClawConfig);
-  });
 
   beforeEach(() => {
     note.mockClear();
@@ -574,7 +579,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('agents.runner.ask="always"');
   });
 
-  it("ignores malformed host policy fields when attributing doctor conflicts", async () => {
+  it("fails closed on malformed persisted host policy instead of attributing partial fields", async () => {
     await withExecApprovalsFile(
       {
         version: 1,
@@ -591,6 +596,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
         await noteSecurityWarnings({
           tools: {
             exec: {
+              security: "full",
               ask: "off",
             },
           },
@@ -603,7 +609,8 @@ describe("noteSecurityWarnings gateway exposure", () => {
 
     const message = lastMessage();
     expect(message).toContain("agents.list.runner.tools.exec is broader than the host exec policy");
-    expect(message).toContain('defaults.ask="always"');
+    expect(message).toContain('defaults.security="deny"');
+    expect(message).not.toContain('defaults.ask="always"');
     expect(message).not.toContain('agents.runner.ask="foo"');
   });
 

@@ -45,15 +45,6 @@ import {
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
 
-export {
-  isSafeToCopyOAuthIdentity,
-  isSameOAuthIdentity,
-  normalizeAuthEmailToken,
-  normalizeAuthIdentityToken,
-  shouldMirrorRefreshedOAuthCredential,
-} from "./oauth-identity.js";
-export type { OAuthMirrorDecision, OAuthMirrorDecisionReason } from "./oauth-identity.js";
-
 function listOAuthProviderIds(): string[] {
   if (typeof getOAuthProviders !== "function") {
     return [];
@@ -201,6 +192,8 @@ async function refreshOAuthCredential(
   }
 
   if (credential.provider === "chutes") {
+    // Chutes refresh shipped before provider hooks and still covers registry-load
+    // windows where the synchronous hook resolver intentionally returns no owner.
     return await refreshChutesTokens({ credential });
   }
 

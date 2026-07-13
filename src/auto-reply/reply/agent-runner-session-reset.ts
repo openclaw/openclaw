@@ -1,12 +1,15 @@
 // Handles session reset requests produced during agent runner execution.
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionTranscriptPath,
-} from "../../config/sessions.js";
+import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  isModelSelectionLocked,
+  ModelSelectionLockedError,
+  MODEL_SELECTION_LOCKED_RESET_MESSAGE,
+} from "../../sessions/model-overrides.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 
 type ResetSessionOptions = {
@@ -51,6 +54,9 @@ export async function resetReplyRunSession(params: {
   if (!prevEntry) {
     return false;
   }
+  if (isModelSelectionLocked(prevEntry)) {
+    throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+  }
   const prevSessionId = params.options.cleanupTranscripts ? prevEntry.sessionId : undefined;
   const nextSessionId = deps.generateSecureUuid();
   const now = Date.now();
@@ -90,11 +96,11 @@ export async function resetReplyRunSession(params: {
     memoryFlushLastFailureError: undefined,
   };
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const nextSessionFile = resolveSessionTranscriptPath(
-    nextSessionId,
+  const nextSessionFile = formatSqliteSessionFileMarker({
     agentId,
-    params.messageThreadId,
-  );
+    sessionId: nextSessionId,
+    storePath: params.storePath,
+  });
   nextEntry.sessionFile = nextSessionFile;
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {

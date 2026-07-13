@@ -343,6 +343,47 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         .locator(".workboard-toolbar__filters .workboard-select")
         .nth(1);
       const priorityTrigger = prioritySelect.locator(".workboard-select__trigger");
+      const priorityMenu = prioritySelect.locator(".workboard-select__menu");
+      const immediateOpen = await prioritySelect.evaluate((select) => {
+        const details = select as HTMLDetailsElement;
+        const menu = details.querySelector<HTMLElement>(".workboard-select__menu");
+        if (!menu) {
+          throw new Error("Workboard select menu is missing");
+        }
+        details.open = true;
+        const style = getComputedStyle(menu);
+        return { left: style.left, top: style.top, visibility: style.visibility };
+      });
+      expect(immediateOpen).toEqual({ left: "0px", top: "0px", visibility: "hidden" });
+      await expect
+        .poll(() => priorityMenu.evaluate((menu) => menu.style.visibility))
+        .toBe("visible");
+      const positionedMenu = await prioritySelect.evaluate((select) => {
+        const trigger = select.querySelector<HTMLElement>(".workboard-select__trigger");
+        const menu = select.querySelector<HTMLElement>(".workboard-select__menu");
+        if (!trigger || !menu) {
+          throw new Error("Workboard select is incomplete");
+        }
+        const triggerRect = trigger.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        return {
+          menuLeft: menuRect.left,
+          menuTop: menuRect.top,
+          triggerBottom: triggerRect.bottom,
+          triggerLeft: triggerRect.left,
+          visibility: getComputedStyle(menu).visibility,
+        };
+      });
+      expect(positionedMenu.visibility).toBe("visible");
+      expect(Math.abs(positionedMenu.menuLeft - positionedMenu.triggerLeft)).toBeLessThanOrEqual(1);
+      expect(positionedMenu.menuTop).toBeGreaterThan(positionedMenu.triggerBottom);
+      await prioritySelect.evaluate((select) => {
+        (select as HTMLDetailsElement).open = false;
+      });
+      await expect
+        .poll(() => priorityMenu.evaluate((menu) => menu.style.visibility))
+        .toBe("hidden");
+
       await priorityTrigger.focus();
       await writable.page.keyboard.press("ArrowDown");
       expect(await writable.page.locator(":focus").textContent()).toContain("All priorities");
@@ -385,6 +426,26 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         status: "todo",
         title: createdCard.title,
       });
+      expect(await createDialog.getByLabel("Title").isDisabled()).toBe(true);
+      expect(await createDialog.getByLabel("Notes").isDisabled()).toBe(true);
+      expect(await createDialog.getByLabel("Labels").isDisabled()).toBe(true);
+      expect(
+        await createDialog.locator(".workboard-select__trigger[aria-disabled='true']").count(),
+      ).toBe(4);
+      const pendingCancelButtons = createDialog.getByRole("button", {
+        name: "Cancel",
+        exact: true,
+      });
+      expect(await pendingCancelButtons.count()).toBe(2);
+      expect(await pendingCancelButtons.first().isDisabled()).toBe(true);
+      expect(await pendingCancelButtons.last().isDisabled()).toBe(true);
+      expect(await createDialog.locator(".workboard-template-strip button:disabled").count()).toBe(
+        5,
+      );
+      await writable.page.keyboard.press("Escape");
+      await expect.poll(() => createDialog.isVisible()).toBe(true);
+      await writable.page.locator(".workboard-modal").click({ position: { x: 4, y: 4 } });
+      await expect.poll(() => createDialog.isVisible()).toBe(true);
       await writableGateway.resolveDeferred("workboard.cards.create", { card: createdCard });
       await cardInColumn(writable.page, "Todo", createdCard.title).waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "03-created-card");
@@ -454,6 +515,8 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
 
       await writableGateway.deferNext("workboard.cards.update");
       const syncBefore = (await writableGateway.getRequests("workboard.cards.update")).length;
+      const sessionListBeforeSync = (await writableGateway.getRequests("sessions.list")).length;
+      await writableGateway.deferNext("sessions.list");
       await writableGateway.emitGatewayEvent("sessions.changed", {
         ...sessionRow({
           hasActiveRun: false,
@@ -464,6 +527,13 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         sessionKey: linkedSessionKey,
         ts: baseTime + 4,
       });
+      await waitForNextRequest(writableGateway, "sessions.list", sessionListBeforeSync);
+      await writableGateway.resolveDeferred(
+        "sessions.list",
+        sessionsListResponse([
+          sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
+        ]),
+      );
       const syncRequest = await waitForNextRequest(
         writableGateway,
         "workboard.cards.update",
@@ -471,6 +541,7 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       );
       expect(requestParams(syncRequest)).toMatchObject({ id: runningCard.id });
       expect(requireRecord(requestParams(syncRequest).patch)).toMatchObject({
+        metadata: { lifecycleStatusSourceUpdatedAt: baseTime + 4 },
         status: "review",
       });
       await writableGateway.resolveDeferred("workboard.cards.update", { card: reviewedCard });

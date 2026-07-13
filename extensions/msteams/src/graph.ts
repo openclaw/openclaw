@@ -4,6 +4,11 @@ import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsHttpError } from "./http-error.js";
+import {
+  MSTEAMS_REQUEST_TIMEOUT_MS,
+  resolveMSTeamsRequestTimeoutMs,
+  type MSTeamsRequestDeadline,
+} from "./request-timeout.js";
 import { responseWithRelease } from "./response-with-release.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { readAccessToken } from "./token-response.js";
@@ -19,12 +24,12 @@ export type GraphUser = {
   mail?: string;
 };
 
-type GraphGroup = {
+export type GraphGroup = {
   id?: string;
   displayName?: string;
 };
 
-type GraphChannel = {
+export type GraphChannel = {
   id?: string;
   displayName?: string;
 };
@@ -47,13 +52,12 @@ async function requestGraph(params: {
   headers?: Record<string, string>;
   body?: unknown;
   errorPrefix?: string;
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<Response> {
   const hasBody = params.body !== undefined;
   const url = `${params.root ?? GRAPH_ROOT}${params.path}`;
-  const currentFetch = globalThis.fetch;
   const { response, release } = await fetchWithSsrFGuard({
     url,
-    fetchImpl: async (input, guardedInit) => await currentFetch(input, guardedInit),
     init: {
       method: params.method,
       headers: {
@@ -65,6 +69,7 @@ async function requestGraph(params: {
       body: hasBody ? JSON.stringify(params.body) : undefined,
     },
     auditContext: "msteams.graph",
+    timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
   });
   let releaseInFinally = true;
   try {
@@ -100,6 +105,8 @@ export async function fetchGraphJson<T>(params: {
   method?: string;
   /** Request body (serialized as JSON). Only used for non-GET methods. */
   body?: unknown;
+  /** Optional shared operation deadline; actively aborts the guarded fetch when spent. */
+  deadline?: MSTeamsRequestDeadline;
 }): Promise<T> {
   const res = await requestGraph({
     token: params.token,
@@ -107,6 +114,7 @@ export async function fetchGraphJson<T>(params: {
     method: params.method as "GET" | "POST" | "DELETE" | undefined,
     body: params.body,
     headers: params.headers,
+    deadline: params.deadline,
   });
   return await readOptionalGraphJson<T>(res, `Graph ${params.path} failed`);
 }
@@ -130,6 +138,7 @@ export async function fetchGraphAbsoluteUrl<T>(params: {
       },
     },
     auditContext: "msteams.graph.absolute",
+    timeoutMs: MSTEAMS_REQUEST_TIMEOUT_MS,
   });
   try {
     if (!response.ok) {
@@ -148,7 +157,7 @@ type GraphPagedResponse<T> = {
 };
 
 /** Result of a paginated Graph API fetch. */
-type PaginatedResult<T> = {
+export type PaginatedResult<T> = {
   items: T[];
   truncated: boolean;
   found?: T;
@@ -243,11 +252,17 @@ export async function resolveGraphToken(
 }
 
 export async function listTeamsByName(token: string, query: string): Promise<GraphGroup[]> {
+  return (await listTeamsByNameWithPageInfo(token, query)).items;
+}
+
+export async function listTeamsByNameWithPageInfo(
+  token: string,
+  query: string,
+): Promise<PaginatedResult<GraphGroup>> {
   const escaped = escapeOData(query);
   const filter = `resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'${escaped}')`;
   const path = `/groups?$filter=${encodeURIComponent(filter)}&$select=id,displayName`;
-  const { items } = await fetchAllGraphPages<GraphGroup>({ token, path, maxPages: 5 });
-  return items;
+  return await fetchAllGraphPages<GraphGroup>({ token, path });
 }
 
 export async function postGraphJson<T>(params: {
@@ -306,7 +321,13 @@ export async function patchGraphJson<T>(params: {
 }
 
 export async function listChannelsForTeam(token: string, teamId: string): Promise<GraphChannel[]> {
+  return (await listChannelsForTeamWithPageInfo(token, teamId)).items;
+}
+
+export async function listChannelsForTeamWithPageInfo(
+  token: string,
+  teamId: string,
+): Promise<PaginatedResult<GraphChannel>> {
   const path = `/teams/${encodeURIComponent(teamId)}/channels?$select=id,displayName`;
-  const { items } = await fetchAllGraphPages<GraphChannel>({ token, path, maxPages: 10 });
-  return items;
+  return await fetchAllGraphPages<GraphChannel>({ token, path });
 }

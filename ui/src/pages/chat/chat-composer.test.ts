@@ -1,9 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { html, nothing, render } from "lit";
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GatewaySessionRow } from "../../api/types.ts";
-import { renderProviderQuotaPill } from "../../components/provider-quota-pill.ts";
+import type { GatewaySessionRow, ModelAuthStatusResult } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import {
   getContextNoticeViewModel,
@@ -12,7 +11,6 @@ import {
   renderCompactionIndicator,
   renderContextNotice,
   renderFallbackIndicator,
-  renderSideResult,
   resetContextNoticeThemeCacheForTest,
   type ChatRunControlsProps,
 } from "./components/chat-composer.ts";
@@ -21,13 +19,10 @@ vi.mock("../../components/icons.ts", () => ({
   icons: {},
 }));
 
-vi.mock("../../components/markdown.ts", () => ({
-  toSanitizedMarkdownHtml: (value: string) => value,
-}));
-
 function createProps(overrides: Partial<ChatRunControlsProps> = {}): ChatRunControlsProps {
   return {
     canAbort: false,
+    canSend: true,
     connected: true,
     draft: "",
     hasMessages: false,
@@ -98,7 +93,8 @@ describe("chat run controls", () => {
       container,
     );
     const stopVoiceButton = getButton(container, 'button[aria-label="Stop voice input"]');
-    expect(stopVoiceButton.classList.contains("chat-send-btn--stop")).toBe(true);
+    expect(stopVoiceButton.classList.contains("chat-send-btn--voice-live")).toBe(true);
+    expect(stopVoiceButton.querySelector(".agent-chat__voice-activity")).not.toBeNull();
     stopVoiceButton.click();
     expect(onToggleVoice).toHaveBeenCalledTimes(2);
   });
@@ -123,6 +119,35 @@ describe("chat run controls", () => {
     expect(container.querySelector('button[aria-label="Start voice input"]')).toBeNull();
   });
 
+  it("keeps queued sends available offline while disabling live voice input", () => {
+    const container = document.createElement("div");
+    const onSend = vi.fn();
+    const onToggleVoice = vi.fn();
+
+    render(
+      renderChatRunControls(
+        createProps({
+          connected: false,
+          draft: "queue this offline",
+          onSend,
+          onToggleVoice,
+        }),
+      ),
+      container,
+    );
+
+    const sendButton = getButton(
+      container,
+      `button[aria-label="${t("chat.runControls.sendMessage")}"]`,
+    );
+    expect(sendButton.disabled).toBe(false);
+    sendButton.click();
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    render(renderChatRunControls(createProps({ connected: false, onToggleVoice })), container);
+    expect(getButton(container, 'button[aria-label="Start voice input"]').disabled).toBe(true);
+  });
+
   it("keeps voice and generation stop actions available when both are active", () => {
     const container = document.createElement("div");
     const onAbort = vi.fn();
@@ -144,6 +169,13 @@ describe("chat run controls", () => {
       container,
       `button[aria-label="${t("chat.runControls.stopGenerating")}"]`,
     );
+
+    // Redesign guard: the two controls must stay visually distinct — a live
+    // waveform pill for voice and a single danger stop square for the run.
+    expect(stopVoiceButton.classList.contains("chat-send-btn--voice-live")).toBe(true);
+    expect(stopVoiceButton.classList.contains("chat-send-btn--stop")).toBe(false);
+    expect(stopGenerationButton.classList.contains("chat-send-btn--stop")).toBe(true);
+    expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
 
     stopVoiceButton.click();
     stopGenerationButton.click();
@@ -289,15 +321,15 @@ describe("chat run controls", () => {
 });
 
 describe("chat status indicators", () => {
-  it("renders compact composer run statuses", () => {
+  it("renders only interrupted as a visible composer run status", () => {
     const container = document.createElement("div");
     const nowSpy = vi.spyOn(Date, "now");
     try {
       nowSpy.mockReturnValue(1_000);
+      // Working and Done have no composer chrome: the thread spark and content
+      // arriving cover them (the sr-only region announces them separately).
       render(renderChatRunStatusIndicator({ phase: "in-progress" }), container);
-      let indicator = container.querySelector(".agent-chat__run-status--in-progress");
-      expect(indicator?.textContent).toContain("In progress");
-      expect(indicator?.getAttribute("aria-label")).toBe("Run status: In progress");
+      expect(container.querySelector(".agent-chat__run-status")).toBeNull();
 
       render(
         renderChatRunStatusIndicator({
@@ -308,8 +340,7 @@ describe("chat status indicators", () => {
         }),
         container,
       );
-      indicator = container.querySelector(".agent-chat__run-status--done");
-      expect(indicator?.textContent).toContain("Done");
+      expect(container.querySelector(".agent-chat__run-status")).toBeNull();
 
       render(
         renderChatRunStatusIndicator({
@@ -320,20 +351,21 @@ describe("chat status indicators", () => {
         }),
         container,
       );
-      indicator = container.querySelector(".agent-chat__run-status--interrupted");
+      const indicator = container.querySelector(".agent-chat__run-status--interrupted");
       expect(indicator?.textContent).toContain("Interrupted");
+      expect(indicator?.getAttribute("aria-label")).toBe("Run status: Interrupted");
 
       nowSpy.mockReturnValue(7_000);
       render(
         renderChatRunStatusIndicator({
-          phase: "done",
+          phase: "interrupted",
           runId: "run-1",
           sessionKey: "main",
           occurredAt: 1_000,
         }),
         container,
       );
-      expect(container.querySelector(".agent-chat__run-status--done")).toBeNull();
+      expect(container.querySelector(".agent-chat__run-status--interrupted")).toBeNull();
     } finally {
       nowSpy.mockRestore();
     }
@@ -428,12 +460,10 @@ describe("context notice", () => {
   });
 
   it("treats unavailable provider usage as absent content", () => {
-    expect(renderProviderQuotaPill({ modelAuthStatusResult: null })).toBe(nothing);
-
     const container = document.createElement("div");
     render(
       renderContextNotice(undefined, 200_000, {
-        providerQuota: { modelAuthStatusResult: null },
+        providerUsage: { modelAuthStatusResult: null },
       }),
       container,
     );
@@ -449,19 +479,19 @@ describe("context notice", () => {
     };
     render(
       renderContextNotice(session, 200_000, {
-        providerQuota: { modelAuthStatusResult: null },
+        providerUsage: { modelAuthStatusResult: null },
       }),
       container,
     );
     expect(container.querySelector(".context-usage")).not.toBeNull();
-    expect(container.querySelector(".context-usage__quota")).toBeNull();
+    expect(container.querySelector(".context-usage__plan-header")).toBeNull();
   });
 
   it("keeps provider usage available before context token metrics arrive", () => {
     const container = document.createElement("div");
     render(
       renderContextNotice(undefined, 200_000, {
-        providerQuota: {
+        providerUsage: {
           basePath: "/rosita",
           modelAuthStatusResult: {
             ts: Date.now(),
@@ -471,7 +501,7 @@ describe("context notice", () => {
                 displayName: "OpenAI",
                 status: "ok",
                 profiles: [{ profileId: "openai", type: "oauth", status: "ok" }],
-                usage: { windows: [{ label: "Week", usedPercent: 72 }] },
+                usage: { providerId: "openai", windows: [{ label: "Week", usedPercent: 72 }] },
               },
             ],
           },
@@ -486,14 +516,112 @@ describe("context notice", () => {
     expect(context?.querySelector(".context-ring__detail")).toBeNull();
     expect(container.querySelector(".context-usage__bar")).toBeNull();
     expect(container.querySelector(".context-usage__stats")).toBeNull();
-    const quota = container.querySelector<HTMLAnchorElement>(
+    const planHeader = container.querySelector(".context-usage__plan-header");
+    expect(planHeader?.textContent?.replace(/\s+/g, " ").trim()).toBe("Plan usage");
+    const usageLink = container.querySelector<HTMLAnchorElement>(
       ".context-usage__popover [data-chat-provider-usage='true']",
     );
-    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage Remaining 28%");
-    expect(quota?.getAttribute("href")).toBe("/rosita/usage");
+    expect(usageLink?.getAttribute("href")).toBe("/rosita/usage");
+    const limitRow = container.querySelector(".context-usage__limit");
+    expect(limitRow?.textContent?.replace(/\s+/g, " ").trim()).toBe("Weekly · all models 72%");
+    const limitFill = container.querySelector<HTMLElement>(".context-usage__limit-bar span");
+    expect(limitFill?.style.width).toBe("72%");
 
     render(renderContextNotice(undefined, 200_000), container);
     expect(container.querySelector(".context-usage")).toBeNull();
+  });
+
+  it("shows plan windows and hides cost sections for subscription-billed sessions", () => {
+    // Single shared timestamp: both auth rows must dedupe to one group, and the
+    // 45s pad keeps formatQuotaReset at exactly "2h" despite wall-clock drift.
+    const fiveHourReset = Date.now() + 2 * 3_600_000 + 45_000;
+    const authStatus: ModelAuthStatusResult = {
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          status: "ok",
+          profiles: [{ profileId: "anthropic:oauth", type: "oauth", status: "ok" }],
+          usage: {
+            providerId: "anthropic",
+            plan: "Max (20x)",
+            accountEmail: "clawd@example.com",
+            windows: [
+              { label: "5h", usedPercent: 22, resetAt: fiveHourReset },
+              { label: "Week", usedPercent: 25 },
+              { label: "Fable", usedPercent: 92 },
+            ],
+            billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD" }],
+          },
+        },
+        {
+          provider: "claude-cli",
+          displayName: "Claude",
+          status: "ok",
+          profiles: [{ profileId: "claude-cli", type: "oauth", status: "ok" }],
+          usage: {
+            providerId: "anthropic",
+            plan: "Max (20x)",
+            accountEmail: "clawd@example.com",
+            windows: [
+              { label: "5h", usedPercent: 22, resetAt: fiveHourReset },
+              { label: "Week", usedPercent: 25 },
+              { label: "Fable", usedPercent: 92 },
+            ],
+            billing: [{ type: "budget", used: 157.85, limit: 400, unit: "USD" }],
+          },
+        },
+      ],
+    };
+    const session: GatewaySessionRow = {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      inputTokens: 2,
+      outputTokens: 3,
+      totalTokens: 78_700,
+      contextTokens: 1_000_000,
+      estimatedCostUsd: 0.02,
+      model: "claude-fable-5",
+      // sessions.list canonicalizes CLI aliases (claude-cli -> anthropic); the
+      // popover must match plan usage through usage.providerId, not the auth
+      // row's provider id.
+      modelProvider: "anthropic",
+    };
+    const container = document.createElement("div");
+    render(
+      renderContextNotice(session, 1_000_000, {
+        // Trailing user turn: no assistant cost stats to fall back on.
+        messages: [{ role: "user", content: "hi" }],
+        providerUsage: { modelAuthStatusResult: authStatus },
+      }),
+      container,
+    );
+
+    // Identical usage exposed via anthropic + claude-cli rows collapses to one group.
+    expect(container.querySelectorAll(".context-usage__plan-header")).toHaveLength(1);
+    expect(container.querySelector(".context-usage__plan-badge")?.textContent).toBe("Max (20x)");
+    expect(container.querySelector(".context-usage__account")?.textContent?.trim()).toBe(
+      "clawd@example.com",
+    );
+    const rows = [...container.querySelectorAll(".context-usage__limit")].map((row) =>
+      row.textContent?.replace(/\s+/g, " ").trim(),
+    );
+    expect(rows).toEqual([
+      "5-hour limit Resets 2h 22%",
+      "Weekly · all models 25%",
+      "Fable 92%",
+      "Usage credits $157.85 of $400.00",
+    ]);
+    const fills = [...container.querySelectorAll<HTMLElement>(".context-usage__limit-bar span")];
+    expect(fills.map((fill) => fill.style.width)).toEqual(["22%", "25%", "92%", "39%"]);
+    expect(fills[2]?.classList.contains("context-usage__limit-fill--danger")).toBe(true);
+
+    // Subscription-billed: token stats stay, dollar estimates disappear.
+    expect(container.querySelector(".context-usage__stats")).not.toBeNull();
+    expect(container.querySelector(".context-usage__stats--cost")).toBeNull();
+    expect(container.textContent).not.toContain("Est. cost");
   });
 
   it("renders persistent fresh context usage and keeps high-usage warning behavior", () => {
@@ -640,71 +768,5 @@ describe("context notice", () => {
       "Session context usage: ~190k of 200k (~95%)",
     );
     expect(container.querySelector(".context-ring__action")).toBeNull();
-  });
-});
-
-describe("side result render", () => {
-  it("renders, dismisses, and styles BTW side results outside transcript history", () => {
-    const container = document.createElement("div");
-    const onDismissSideResult = vi.fn();
-
-    render(
-      renderSideResult(
-        {
-          kind: "btw",
-          runId: "btw-run-1",
-          sessionKey: "main",
-          question: "what changed?",
-          text: "The web UI now renders **BTW** separately.",
-          isError: false,
-          ts: 2,
-        },
-        onDismissSideResult,
-      ),
-      container,
-    );
-
-    const sideResult = container.querySelector<HTMLElement>(".chat-side-result");
-    expect(sideResult).toBeInstanceOf(HTMLElement);
-    expect([...sideResult!.classList]).toEqual(["chat-side-result"]);
-    expect(sideResult!.getAttribute("aria-label")).toBe("BTW side result");
-    expect(sideResult!.querySelector(".chat-side-result__label")?.textContent).toBe("BTW");
-    expect(sideResult!.querySelector(".chat-side-result__meta")?.textContent).toBe(
-      "Not saved to chat history",
-    );
-    expect(sideResult!.querySelector(".chat-side-result__question")?.textContent).toBe(
-      "what changed?",
-    );
-    expect(
-      sideResult!
-        .querySelector(".chat-side-result__body")
-        ?.textContent?.trim()
-        .replaceAll("**", ""),
-    ).toBe("The web UI now renders BTW separately.");
-
-    const button = container.querySelector<HTMLButtonElement>(".chat-side-result__dismiss");
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error("Expected side result dismiss button");
-    }
-    button.click();
-    expect(onDismissSideResult).toHaveBeenCalledTimes(1);
-
-    render(
-      renderSideResult({
-        kind: "btw",
-        runId: "btw-run-3",
-        sessionKey: "main",
-        question: "what failed?",
-        text: "The side question could not be answered.",
-        isError: true,
-        ts: 4,
-      }),
-      container,
-    );
-
-    const errorResult = container.querySelector<HTMLElement>(".chat-side-result--error");
-    expect(errorResult).toBeInstanceOf(HTMLElement);
-    expect([...errorResult!.classList]).toEqual(["chat-side-result", "chat-side-result--error"]);
   });
 });

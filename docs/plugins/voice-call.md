@@ -156,7 +156,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
             defaultMode: "notify", // notify | conversation
           },
 
-          streaming: { enabled: true /* see Streaming transcription */ },
+          streaming: { enabled: true /* Twilio only; see Streaming transcription */ },
           realtime: { enabled: false /* see Realtime voice conversations */ },
         },
       },
@@ -328,7 +328,7 @@ for tool work, current information, memory lookups, or workspace state.
 <Tabs>
   <Tab title="Google Gemini Live">
     Defaults: API key from `realtime.providers.google.apiKey`, `GEMINI_API_KEY`,
-    or `GOOGLE_API_KEY`; model `gemini-2.5-flash-native-audio-preview-12-2025`;
+    or `GOOGLE_API_KEY`; model `gemini-3.1-flash-live-preview`;
     voice `Kore`. `sessionResumption` and `contextWindowCompression` default on
     for longer, reconnectable calls. Use `silenceDurationMs`,
     `startSensitivity`, and `endSensitivity` to tune faster turn-taking on
@@ -355,7 +355,7 @@ for tool work, current information, memory lookups, or workspace state.
                 providers: {
                   google: {
                     apiKey: "${GEMINI_API_KEY}",
-                    model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                    model: "gemini-3.1-flash-live-preview",
                     speakerVoice: "Kore",
                     silenceDurationMs: 500,
                     startSensitivity: "high",
@@ -399,7 +399,10 @@ options.
 
 ## Streaming transcription
 
-`streaming` selects a realtime transcription provider for live call audio.
+`streaming` connects Twilio Media Streams to a realtime transcription provider.
+The classic streaming path requires `provider: "twilio"`; configuration with
+Telnyx, Plivo, or mock is rejected. Telnyx live audio uses the separately
+authenticated `realtime.enabled` path instead.
 
 Current runtime behavior:
 

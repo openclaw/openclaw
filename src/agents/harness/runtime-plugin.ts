@@ -2,6 +2,7 @@
  * Ensures runtime plugins required by selected native harnesses are installed.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
 import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
@@ -70,7 +71,8 @@ function resolveSelectedMemoryPluginIds(params: {
   return activationState.activated ? [plugin.pluginId] : [];
 }
 
-function resolveHarnessPluginIds(params: {
+/** Resolve manifest owners required by one selected non-core harness runtime. */
+export function resolveAgentHarnessOwnerPluginIds(params: {
   runtime: string;
   provider: string;
   config?: OpenClawConfig;
@@ -156,9 +158,12 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  agentHarnessId?: string;
   agentHarnessRuntimeOverride?: string;
+  requestTransportOverrides?: ProviderRouteOverridePresence;
   workspaceDir: string;
 }): Promise<void> {
+  const pinnedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
   const policy = resolveAgentHarnessPolicy({
     provider: params.provider,
@@ -166,9 +171,13 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    requestTransportOverrides: params.requestTransportOverrides,
   });
+  const requestedRuntime = pinnedHarnessId ?? runtimeOverride;
   const runtime =
-    runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride) ? runtimeOverride : policy.runtime;
+    requestedRuntime && !isDefaultAgentRuntimeId(requestedRuntime)
+      ? requestedRuntime
+      : policy.runtime;
   if (
     isDefaultAgentRuntimeId(runtime) ||
     runtime === OPENCLAW_AGENT_RUNTIME_ID ||
@@ -183,7 +192,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
 
   const { ensurePluginRegistryLoaded } =
     await import("../../plugins/runtime/runtime-registry-loader.js");
-  const pluginIds = resolveHarnessPluginIds({
+  const pluginIds = resolveAgentHarnessOwnerPluginIds({
     runtime,
     provider: params.provider,
     config: params.config,

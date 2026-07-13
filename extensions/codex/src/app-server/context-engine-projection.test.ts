@@ -2,12 +2,13 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
-  CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
   fitCodexProjectedContextForTurnStart,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+
+const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 
 function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
   return {
@@ -155,6 +156,17 @@ describe("projectContextEngineAssemblyForCodex", () => {
 
     expect(result.promptText).toContain("[truncated ");
     expect(result.promptText.length).toBeLessThan(25_000);
+  });
+
+  it("reports the exact text dropped when a text-part boundary crosses an emoji", () => {
+    const prefix = "x".repeat(5_999);
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", `${prefix}😀tail`)],
+      originalHistoryMessages: [],
+      prompt: "next",
+    });
+
+    expect(result.promptText).toContain(`[assistant]\n${prefix}\n[truncated 6 chars]`);
   });
 
   it("keeps recent context when the rendered conversation overflows", () => {

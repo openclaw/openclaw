@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig, SecurityConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -40,7 +41,7 @@ const POLICY_INTERPRETER_NAMES = new Set([
 ]);
 const POLICY_SCRIPT_ARG_PATTERN = /\.(?:bash|cjs|cts|js|mjs|mts|pl|ps1|py|rb|sh|ts|zsh)$/i;
 
-export type InstallPolicyTarget = "skill" | "plugin";
+type InstallPolicyTarget = "skill" | "plugin";
 export type InstallPolicyRequestKind =
   | "skill-install"
   | "plugin-dir"
@@ -120,7 +121,7 @@ export type InstallPolicyRequest = {
   };
 };
 
-export type InstallPolicyResult =
+type InstallPolicyResult =
   | { blocked?: undefined; findings?: InstallPolicyFinding[] }
   | {
       blocked: {
@@ -140,7 +141,7 @@ type ExecRunResult = {
 
 type InstallPolicyExecConfig = NonNullable<NonNullable<SecurityConfig["installPolicy"]>["exec"]>;
 
-export type InstallPolicyValidationIssue = {
+type InstallPolicyValidationIssue = {
   severity: "error" | "warning";
   message: string;
 };
@@ -378,7 +379,7 @@ async function assertSecurePolicyScriptArg(params: {
 }
 
 function truncateText(value: string, maxChars: number): string {
-  return value.length <= maxChars ? value : `${value.slice(0, maxChars)}...`;
+  return value.length <= maxChars ? value : `${truncateUtf16Safe(value, maxChars)}...`;
 }
 
 function createPolicyChildEnv(sourceEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {

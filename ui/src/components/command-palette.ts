@@ -1,6 +1,6 @@
 // Control UI component renders the command palette.
 import { consume } from "@lit/context";
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { ref } from "lit/directives/ref.js";
 import type { RouteId } from "../app-route-paths.ts";
@@ -10,6 +10,9 @@ import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { getVisibleSessionRows } from "../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
+import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
 import { icons, type IconName } from "./icons.ts";
 
 type PaletteItem = {
@@ -27,53 +30,53 @@ const SESSION_SEARCH_LIMIT = 10;
 const SESSION_SEARCH_MAX_PAGES = 4;
 const SESSION_SEARCH_PAGE_SIZE = 50;
 
-export const COMMAND_PALETTE_TARGET_EVENT = "openclaw-command-palette-target";
-
-export type CommandPaletteTargetDetail = {
-  owner: Element;
-  onSlashCommand: ((command: string) => void) | null;
-};
-
 function getPaletteBaseItems(): PaletteItem[] {
   return [
     {
-      id: "nav-overview",
-      label: t("overview.palette.items.overview"),
-      icon: "barChart",
+      id: "nav-new-session",
+      label: t("newSession.title"),
+      icon: "plus",
       category: "navigation",
-      action: "nav:overview",
+      action: "nav:new-session",
     },
     {
       id: "nav-sessions",
-      label: t("overview.palette.items.sessions"),
+      label: t("palette.items.sessions"),
       icon: "fileText",
       category: "navigation",
       action: "nav:sessions",
     },
     {
       id: "nav-cron",
-      label: t("overview.palette.items.scheduled"),
+      label: t("palette.items.scheduled"),
       icon: "scrollText",
       category: "navigation",
       action: "nav:cron",
     },
     {
       id: "nav-skills",
-      label: t("overview.palette.items.skills"),
+      label: t("palette.items.skills"),
       icon: "zap",
       category: "navigation",
       action: "nav:skills",
     },
     {
+      id: "nav-plugins",
+      label: t("palette.items.plugins"),
+      icon: "puzzle",
+      category: "navigation",
+      action: "nav:plugins",
+    },
+    {
       id: "nav-config",
-      label: t("overview.palette.items.settings"),
+      label: t("palette.items.settings"),
       icon: "settings",
       category: "navigation",
       action: "nav:config",
     },
     {
       id: "nav-agents",
-      label: t("overview.palette.items.agents"),
+      label: t("palette.items.agents"),
       icon: "folder",
       category: "navigation",
       action: "nav:agents",
@@ -84,7 +87,7 @@ function getPaletteBaseItems(): PaletteItem[] {
       icon: "terminal",
       category: "search",
       action: "/verbose full",
-      description: "Toggle verbose mode.",
+      description: t("palette.descriptions.verboseMode"),
     },
   ];
 }
@@ -104,6 +107,8 @@ type CommandPaletteProps = {
   onNavigate: (routeId: RouteId) => void;
   onSelectSession?: (sessionKey: string) => void;
   onSlashCommand?: (command: string) => void;
+  onDialogRef: (element: Element | undefined) => void;
+  onInputRef: (element: Element | undefined) => void;
 };
 
 function filteredItems(
@@ -215,6 +220,9 @@ function trapFocus(event: KeyboardEvent, root: HTMLElement) {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const first = focusable[0];
   const last = focusable[focusable.length - 1];
+  if (!first || !last) {
+    return;
+  }
   const focusInside = active ? focusable.includes(active) : false;
 
   if (event.shiftKey && (!focusInside || active === first)) {
@@ -254,8 +262,11 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
       break;
     case "Enter":
       e.preventDefault();
-      if (items[props.activeIndex]) {
-        selectItem(items[props.activeIndex], props);
+      {
+        const item = items[props.activeIndex];
+        if (item) {
+          selectItem(item, props);
+        }
       }
       break;
     case "Escape":
@@ -269,11 +280,11 @@ function handleKeydown(e: KeyboardEvent, props: CommandPaletteProps) {
 function getCategoryLabel(category: string): string {
   switch (category) {
     case "search":
-      return t("overview.palette.categories.search");
+      return t("palette.categories.search");
     case "navigation":
-      return t("overview.palette.categories.navigation");
+      return t("palette.categories.navigation");
     case "skills":
-      return t("overview.palette.categories.skills");
+      return t("palette.categories.skills");
     case "chats":
       return t("sessionsView.title");
     default:
@@ -330,11 +341,11 @@ function renderCommandPalette(props: CommandPaletteProps) {
   const grouped = groupItems(items);
   const activeItem = items[props.activeIndex];
   const activeOptionId = activeItem ? getOptionId(activeItem) : nothing;
-  const paletteLabel = t("overview.palette.placeholder");
+  const paletteLabel = t("palette.placeholder");
 
   return html`
     <dialog
-      ${ref(syncDialog)}
+      ${ref(props.onDialogRef)}
       class="cmd-palette-overlay"
       aria-labelledby=${paletteDialogLabelId}
       @cancel=${(e: Event) => {
@@ -356,7 +367,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
           >${paletteLabel}</label
         >
         <input
-          ${ref(focusInput)}
+          ${ref(props.onInputRef)}
           id=${paletteInputId}
           class="cmd-palette__input"
           role="combobox"
@@ -377,7 +388,7 @@ function renderCommandPalette(props: CommandPaletteProps) {
                 <span class="nav-item__icon" style="opacity:0.3;width:20px;height:20px"
                   >${icons.search}</span
                 >
-                <span>${t("overview.palette.noResults")}</span>
+                <span>${t("palette.noResults")}</span>
               </div>`
             : grouped.map(
                 ([category, groupedItems]) => html`
@@ -411,42 +422,56 @@ function renderCommandPalette(props: CommandPaletteProps) {
               )}
         </div>
         <div class="cmd-palette__footer">
-          <span><kbd>↑↓</kbd> ${t("overview.palette.footer.navigate")}</span>
-          <span><kbd>↵</kbd> ${t("overview.palette.footer.select")}</span>
-          <span><kbd>esc</kbd> ${t("overview.palette.footer.close")}</span>
+          <span><kbd>↑↓</kbd> ${t("palette.footer.navigate")}</span>
+          <span><kbd>↵</kbd> ${t("palette.footer.select")}</span>
+          <span><kbd>esc</kbd> ${t("palette.footer.close")}</span>
         </div>
       </div>
     </dialog>
   `;
 }
 
-export class CommandPalette extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+export class CommandPalette extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onNavigate?: (routeId: RouteId) => void;
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
-  @consume({ context: applicationContext, subscribe: false })
+  @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext<RouteId>;
   @state() private open = false;
   @state() private query = "";
   @state() private activeIndex = 0;
   @state() private sessionItems: readonly PaletteItem[] = [];
 
+  private readonly subscriptions = new SubscriptionsController(this);
   private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private sessionSearchId = 0;
+  private sessionSearchSource?: {
+    gateway: ApplicationContext<RouteId>["gateway"];
+    client: ApplicationContext<RouteId>["gateway"]["snapshot"]["client"];
+    connected: boolean;
+  };
+
+  constructor() {
+    super();
+    this.subscriptions.watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) => this.synchronizeGateway(gateway),
+    );
+  }
 
   override connectedCallback() {
     super.connectedCallback();
-    this.style.display = "contents";
     document.addEventListener("keydown", this.handleGlobalKeydown);
   }
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleGlobalKeydown);
+    this.open = false;
+    this.query = "";
+    this.activeIndex = 0;
     this.clearSessionSearch();
+    this.sessionSearchSource = undefined;
     if (activeDialog) {
       activeDialog.close();
       restoreFocus();
@@ -461,7 +486,11 @@ export class CommandPalette extends LitElement {
     this.clearSessionSearch();
   }
 
-  private readonly togglePalette = () => {
+  get isOpen(): boolean {
+    return this.open;
+  }
+
+  readonly togglePalette = () => {
     if (this.open) {
       this.open = false;
       this.clearSessionSearch();
@@ -470,6 +499,42 @@ export class CommandPalette extends LitElement {
     }
     this.openPalette();
   };
+
+  private readonly handleDialogRef = (element: Element | undefined) => {
+    if (!this.open) {
+      syncDialog(undefined);
+      return;
+    }
+    syncDialog(element);
+  };
+
+  private readonly handleInputRef = (element: Element | undefined) => {
+    if (this.open) {
+      focusInput(element);
+    }
+  };
+
+  private synchronizeGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
+    const snapshot = gateway.snapshot;
+    const previous = this.sessionSearchSource;
+    const sourceChanged = previous?.gateway !== gateway;
+    const clientChanged = previous?.client !== snapshot.client;
+    const reconnected = previous?.connected === false && snapshot.connected;
+    this.sessionSearchSource = {
+      gateway,
+      client: snapshot.client,
+      connected: snapshot.connected,
+    };
+
+    if (sourceChanged || clientChanged || !snapshot.connected) {
+      // Query results belong to one runtime/client connection. Discard them as
+      // soon as that owner changes so detached or reconnecting rows stay inert.
+      this.clearSessionSearch();
+    }
+    if (snapshot.connected && (sourceChanged || clientChanged || reconnected)) {
+      this.scheduleSessionSearch(this.query);
+    }
+  }
 
   private clearSessionSearch() {
     if (this.sessionSearchTimer !== null) {
@@ -490,7 +555,7 @@ export class CommandPalette extends LitElement {
     this.sessionSearchId += 1;
     this.sessionItems = [];
     const search = normalizeOptionalString(query);
-    if (!search || !this.onSelectSession) {
+    if (!this.open || !search || !this.onSelectSession) {
       return;
     }
     this.sessionSearchTimer = globalThis.setTimeout(() => {
@@ -500,8 +565,11 @@ export class CommandPalette extends LitElement {
   }
 
   private async searchSessions(search: string) {
-    const sessions = this.context?.sessions;
-    if (!sessions || !this.context?.gateway.snapshot.connected) {
+    const context = this.context;
+    const sessions = context?.sessions;
+    const gateway = context?.gateway;
+    const client = gateway?.snapshot.client;
+    if (!sessions || !gateway?.snapshot.connected || !client) {
       return;
     }
     const requestId = ++this.sessionSearchId;
@@ -520,7 +588,15 @@ export class CommandPalette extends LitElement {
           includeUnknown: false,
         });
         pagesLoaded += 1;
-        if (requestId !== this.sessionSearchId || !this.open || !result) {
+        if (
+          requestId !== this.sessionSearchId ||
+          !this.open ||
+          this.context?.sessions !== sessions ||
+          this.context?.gateway !== gateway ||
+          gateway.snapshot.client !== client ||
+          !gateway.snapshot.connected ||
+          !result
+        ) {
           return;
         }
         const pageRows = getVisibleSessionRows(result, {
@@ -570,7 +646,7 @@ export class CommandPalette extends LitElement {
       this.togglePalette();
       return;
     }
-    if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key.toLowerCase() === "k") {
+    if (isCommandPaletteShortcut(event)) {
       event.preventDefault();
       this.togglePalette();
     }
@@ -594,6 +670,8 @@ export class CommandPalette extends LitElement {
       onNavigate: (routeId) => this.onNavigate?.(routeId),
       onSelectSession: this.onSelectSession,
       onSlashCommand: this.onSlashCommand,
+      onDialogRef: this.handleDialogRef,
+      onInputRef: this.handleInputRef,
     });
   }
 }
