@@ -894,7 +894,10 @@ export function createBrowserTool(opts?: {
             profile,
             proxyRequest,
           });
-          touchTrackedTab(normalizeOptionalString(params.targetId));
+          touchTrackedTab(
+            readStringValue((result as { details?: { targetId?: unknown } }).details?.targetId) ??
+              normalizeOptionalString(params.targetId),
+          );
           return result;
         }
         case "pdf": {
