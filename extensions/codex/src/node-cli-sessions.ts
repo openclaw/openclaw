@@ -292,8 +292,8 @@ async function runCodexExecResume(params: {
       forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), 2_000);
       forceKillTimeout.unref?.();
     }, params.timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk)).on("error", () => {});
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk)).on("error", () => {});
     child.stdin.end(params.prompt);
     const exitCode = await new Promise<number | null>((resolve, reject) => {
       child.on("error", reject);
