@@ -89,6 +89,8 @@ type PendingExperienceReview = {
 };
 
 function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
+  // Only harnesses that report both the resolved model and actual host-side
+  // Workshop availability may schedule. Other runtimes fail closed here.
   if (ctx.skillWorkshopAvailable !== true || !ctx.modelProviderId?.trim() || !ctx.modelId?.trim()) {
     return false;
   }

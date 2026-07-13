@@ -88,6 +88,9 @@ Experience review is deliberately delayed and bounded:
   the same session restarts that quiet period.
 - If any agent or reply run is still active, review waits another 30 seconds.
 - Only one experience review runs at a time.
+- Delayed review is process-local Gateway work. The Gateway must remain running
+  through the idle window; one-shot local and CLI-backed runtimes do not retain
+  enough trajectory and tool-availability context to schedule it.
 
 The foreground answer is never delayed for learning. A failed or ineligible
 turn does not start experience review, although direct user corrections can
@@ -189,6 +192,8 @@ Check all of the following:
    hook, or subagent run.
 4. The original run had access to `skill_workshop` and was not sandboxed.
 5. The system remained idle long enough for the delayed review.
+6. The long-running Gateway process stayed active through the idle window; a
+   one-shot local command does not wait for delayed review.
 
 A qualifying review may still produce no proposal. Abstention is the expected
 result when the evidence does not clear the reusable-procedure bar.
