@@ -56,6 +56,23 @@ describe("isRetryableAssistantError", () => {
   });
 
   it.each([
+    "OpenAI API error (500): 500 The server had an error while processing your request. Sorry about that!",
+    "Azure OpenAI API error (503): 503 Service Unavailable",
+    "Mistral API error (502): 502 Bad Gateway",
+    "OpenAI API error (504): Gateway Timeout",
+  ])("retries provider-wrapped transient 5xx: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
+  });
+
+  it.each([
+    "OpenAI API error (400): Bad request",
+    "Azure OpenAI API error (401): Unauthorized",
+    "Mistral API error (403): Forbidden",
+  ])("does not retry provider-wrapped non-transient status: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
+  it.each([
     "429 You exceeded your daily request limit. Please try again in 24 hours.",
     "rate limit reached for requests. Retry after 6h.",
     "429 RPM limit exceeded; Retry-After: 2 hours",

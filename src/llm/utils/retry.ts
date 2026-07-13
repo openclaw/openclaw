@@ -58,6 +58,15 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
   "please retry your request",
 ]);
 
+const PROVIDER_WRAPPED_STATUS_RE = /\bAPI error\s*\((\d{3})\)/i;
+
+function extractProviderWrappedHttpStatus(message: string): number | null {
+  const match = message.match(PROVIDER_WRAPPED_STATUS_RE);
+  if (!match) return null;
+  const code = Number(match[1]);
+  return Number.isFinite(code) ? code : null;
+}
+
 /** Classify transient provider/transport failures for outer retry policy. */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
   if (message.stopReason !== "error" || !message.errorMessage) {
@@ -69,6 +78,16 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
   }
   const status = extractLeadingHttpStatus(errorMessage)?.code;
   if (status && status !== 429 && RETRYABLE_HTTP_STATUS_CODES.has(status)) {
+    return true;
+  }
+  // Recognize provider-wrapped transient status codes from built-in adapters:
+  // OpenAI API error (500): ..., Azure OpenAI API error (503): ..., Mistral API error (502): ...
+  const providerStatus = extractProviderWrappedHttpStatus(errorMessage);
+  if (
+    providerStatus &&
+    providerStatus !== 429 &&
+    RETRYABLE_HTTP_STATUS_CODES.has(providerStatus)
+  ) {
     return true;
   }
   const hasRateLimitContext = status === 429 || RATE_LIMIT_CONTEXT_PATTERN.test(errorMessage);
