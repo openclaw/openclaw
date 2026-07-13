@@ -2178,6 +2178,7 @@ describe("ci workflow guards", () => {
         targets: ["src/focused.test.ts"],
       }),
     ]);
+    expect(changedPullRequest.outputs.run_checks_node_core_dist).toBe("true");
 
     const plannerImportFailure = runCiManifestFixture({
       bundledPlanner: true,

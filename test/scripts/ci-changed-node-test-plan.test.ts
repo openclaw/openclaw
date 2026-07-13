@@ -40,6 +40,12 @@ describe("CI changed Node test plan", () => {
     expect(createChangedNodeTestShards(["src/removed-module.ts"])).toBeNull();
   });
 
+  it("fails safe when an unresolved path is mixed with a precise source change", () => {
+    expect(
+      createChangedNodeTestShards(["src/agents/live-model-filter.ts", "tsconfig.json"]),
+    ).toBeNull();
+  });
+
   it("fails safe when public SDK changes affect extension imports", () => {
     expect(createChangedNodeTestShards(["src/plugin-sdk/index.ts"])).toBeNull();
   });

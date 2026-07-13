@@ -623,6 +623,9 @@ jobs:
             : [];
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
+          // Targeted jobs cannot discover repository-scanning boundary tests
+          // through imports, so preserve the existing full boundary gate.
+          const runNodeCoreDist = changedNodeTestShards !== null || nodeTestDistShards.length > 0;
           const channelContractShards = runNodeFull ? createChannelContractTestShards() : [];
           const protocolCoverageRequested = runNode || runIosBuild || runAndroid;
           const runProtocolEventCoverage =
@@ -653,7 +656,7 @@ jobs:
             run_checks: runNodeFull,
             run_checks_node_core_nondist: nodeTestNonDistShards.length > 0,
             checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
-            run_checks_node_core_dist: nodeTestDistShards.length > 0,
+            run_checks_node_core_dist: runNodeCoreDist,
             run_check: runNodeFull,
             run_check_additional: runNodeFull,
             run_check_docs: docsChanged && eventName !== "push",

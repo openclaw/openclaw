@@ -59,13 +59,25 @@ export function createChangedNodeTestShards(changedPaths, options = {}) {
     return null;
   }
 
-  const plan = resolveChangedTestTargetPlan(changedPaths, {
-    broad: true,
-    combineSiblingWithImportGraph: true,
-    cwd,
-    forceFullImportGraph: true,
-    includeExtensionImpact: false,
-  });
+  const resolveTargetPlan = (paths) =>
+    resolveChangedTestTargetPlan(paths, {
+      broad: true,
+      combineSiblingWithImportGraph: true,
+      cwd,
+      forceFullImportGraph: true,
+      includeExtensionImpact: false,
+    });
+  const plan = resolveTargetPlan(changedPaths);
+  // Aggregate resolution must not let one precise path hide another path that
+  // contributes no tests. Partial plans silently drop coverage.
+  if (
+    changedPaths.some((changedPath) => {
+      const changedPathPlan = resolveTargetPlan([changedPath]);
+      return changedPathPlan.mode !== "targets" || changedPathPlan.targets.length === 0;
+    })
+  ) {
+    return null;
+  }
   if (
     plan.mode !== "targets" ||
     plan.targets.length === 0 ||
