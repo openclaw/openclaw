@@ -317,7 +317,10 @@ export class TokenManager {
 
   private abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(resolve, ms);
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
       if (signal.aborted) {
         clearTimeout(timer);
         reject(new Error("Aborted"));

@@ -247,4 +247,51 @@ describe("QQBot token manager", () => {
     expect(stalledFetch).toHaveBeenCalledTimes(2);
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
   });
+
+  it("does not grow abort listeners across background refresh sleeps", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
+
+    const accessTokenField = ["access", "token"].join("_");
+    for (let i = 1; i <= 4; i += 1) {
+      const body = JSON.stringify({ [accessTokenField]: `token-${i}`, expires_in: 0 });
+      mockGuardedTokenResponse(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
+    const addListenerSpy = vi.spyOn(AbortSignal.prototype, "addEventListener");
+    const removeListenerSpy = vi.spyOn(AbortSignal.prototype, "removeEventListener");
+    const abortAddCount = () =>
+      addListenerSpy.mock.calls.filter(([type]) => type === "abort").length;
+    const abortRemoveCount = () =>
+      removeListenerSpy.mock.calls.filter(([type]) => type === "abort").length;
+    const activeAbortListenerCount = () => abortAddCount() - abortRemoveCount();
+
+    const manager = new TokenManager();
+    try {
+      manager.startBackgroundRefresh("app-id", "secret", {
+        refreshAheadMs: 0,
+        randomOffsetMs: 0,
+        minRefreshIntervalMs: 5,
+        retryDelayMs: 5,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      expect(activeAbortListenerCount()).toBe(1);
+
+      for (let cycle = 2; cycle <= 4; cycle += 1) {
+        await vi.advanceTimersByTimeAsync(5);
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(cycle);
+        expect(activeAbortListenerCount()).toBe(1);
+      }
+    } finally {
+      manager.stopBackgroundRefresh("app-id");
+      await vi.advanceTimersByTimeAsync(0);
+      addListenerSpy.mockRestore();
+      removeListenerSpy.mockRestore();
+    }
+  });
 });
