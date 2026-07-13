@@ -9500,6 +9500,47 @@ describe("openai transport stream", () => {
     expect(params.max_completion_tokens).toBe(8192);
   });
 
+  it("preserves the configured completion cap for proxy-like endpoints when a large system prompt or tool schema would fool the char-estimate (covers #105729)", () => {
+    // #105729: LiteLLM/llama.cpp shape. Configured 6000-token completion cap
+    // is well under the model's context window, but the transport's coarse
+    // char-based input estimate over-counts a large system prompt + tools,
+    // dragging remainingBudget below the cap and collapsing the request to
+    // `max_completion_tokens=1`. The estimate is a fallback for the strict
+    // over-context case in #85889; it must not silently clamp accepted
+    // requests whose configured cap fits the window.
+    const bigSystem = "x".repeat(200_000);
+    const bigTools = Array.from({ length: 20 }, (_, i) => ({
+      type: "function",
+      function: {
+        name: `tool_${i}`,
+        description: "y".repeat(2_000),
+        parameters: { type: "object", properties: {} },
+      },
+    }));
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "llama-3.1-8b",
+        name: "llama-3.1-8b",
+        api: "openai-completions",
+        provider: "vllm",
+        baseUrl: "http://localhost:4000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131_072,
+        maxTokens: 6_000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: bigSystem,
+        messages: [],
+        tools: bigTools,
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(6_000);
+  });
+
   it("preserves the configured maxTokens for native openai-completions endpoints even when it equals or exceeds contextWindow", () => {
     const params = buildOpenAICompletionsParams(
       {
