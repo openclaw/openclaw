@@ -2193,7 +2193,6 @@ openclaw-session-menu[popover] {
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
-
 .sidebar-mode-switch {
   display: inline-flex;
   margin-left: 2px;
