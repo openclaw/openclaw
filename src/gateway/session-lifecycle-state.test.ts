@@ -2,7 +2,7 @@
  * Session lifecycle state derivation tests.
  */
 import { describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 
 const persistenceMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -258,6 +258,11 @@ describe("session lifecycle state", () => {
   });
 
   it("preserves recovery state for a late interrupted-run event", async () => {
+    const mainRestartRecovery = {
+      cycleId: "cycle-1",
+      revision: 2,
+      chargedAttempts: 2,
+    };
     const persisted = await persistLifecycle(
       {
         sessionId: "session-id",
@@ -265,6 +270,7 @@ describe("session lifecycle state", () => {
         status: "running",
         abortedLastRun: true,
         restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+        mainRestartRecovery,
       },
       {
         ts: 2_000,
@@ -279,7 +285,38 @@ describe("session lifecycle state", () => {
       status: "running",
       abortedLastRun: true,
       restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+      mainRestartRecovery,
     });
+  });
+
+  it("clears main recovery state after normal lifecycle completion", async () => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 2,
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "done",
+      abortedLastRun: false,
+    });
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(persisted.mainRestartRecovery).toBeUndefined();
   });
 
   it("clears only the completed recovery marker", async () => {

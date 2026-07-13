@@ -22,6 +22,7 @@ import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { runWithAgentCommandRecoveryOwner } from "./agent-command-recovery-owner.js";
 import {
   buildCurrentRunRestartRecoveryClaim,
   shouldPersistRestartRecoveryCleanup,
@@ -57,6 +58,7 @@ import { createAgentRunRestartAbortError } from "./run-termination.js";
 const log = createSubsystemLogger("agents/agent-command");
 
 async function agentCommandInternal(
+  prepared: Awaited<ReturnType<typeof prepareAgentCommandExecution>>,
   initialOpts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
@@ -66,7 +68,6 @@ async function agentCommandInternal(
   const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
   const preserveUserFacingSessionModelState =
     initialOpts.preserveUserFacingSessionModelState === true;
-  const prepared = await prepareAgentCommandExecution(initialOpts, runtime);
   const lifecycleAbortController = new AbortController();
   const storedDeliveryMediaUrls =
     prepared.sessionEntry?.restartRecoveryDeliveryRunId === prepared.runId &&
@@ -129,7 +130,6 @@ async function agentCommandInternal(
     pluginsEnabled,
     manifestMetadataSnapshot,
     modelManifestContext,
-    runLease,
   } = prepared;
   let lifecycleGeneration = opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(runId);
   let sessionEntry = prepared.sessionEntry,
@@ -454,9 +454,6 @@ async function agentCommandInternal(
       return finalized.deliveryResult;
     });
   } finally {
-    if (runLease) {
-      await runLease.release();
-    }
     sessionWorkAdmission?.release();
     if (internalModelRunTargets) {
       // Compaction may rotate a private session identity. Remove every owned
@@ -489,6 +486,7 @@ async function agentCommandInternal(
             ...buildRestartRecoveryClaimCleanupPatch({
               entry,
               recordTerminalSource: true,
+              terminalRunId: runId,
               terminalDeliveryEvidence: restartRecoveryTerminalDeliveryEvidence,
             }),
             updatedAt: Date.now(),
@@ -532,8 +530,10 @@ export async function agentCommand(
         getRuntimeConfig,
       },
       async () =>
-        await agentCommandInternal(
-          {
+        await runWithAgentCommandRecoveryOwner({
+          lifecycleGeneration,
+          mode: "reject_uncoordinated",
+          opts: {
             ...opts,
             lifecycleGeneration,
             // agentCommand is the trusted-operator entrypoint used by CLI/local flows.
@@ -543,9 +543,11 @@ export async function agentCommand(
             // Local/CLI callers are trusted by default for per-run model overrides.
             allowModelOverride: opts.allowModelOverride ?? true,
           },
-          runtime,
-          resolvedDeps,
-        ),
+          prepare: async (preparedOpts) =>
+            await prepareAgentCommandExecution(preparedOpts, runtime),
+          run: async (prepared) =>
+            await agentCommandInternal(prepared, prepared.opts, runtime, resolvedDeps),
+        }),
     ),
   );
 }
@@ -562,15 +564,17 @@ export async function agentCommandFromIngress(
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
   return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-    const result = await agentCommandInternal(
-      {
+    const result = await runWithAgentCommandRecoveryOwner({
+      lifecycleGeneration,
+      mode: "claim",
+      opts: {
         ...opts,
         lifecycleGeneration,
         senderIsOwner: opts.senderIsOwner === true,
       },
-      runtime,
-      deps,
-    );
+      prepare: async (preparedOpts) => await prepareAgentCommandExecution(preparedOpts, runtime),
+      run: async (prepared) => await agentCommandInternal(prepared, prepared.opts, runtime, deps),
+    });
 
     if (result) {
       emitIngressModelUsageDiagnostic(result, opts);

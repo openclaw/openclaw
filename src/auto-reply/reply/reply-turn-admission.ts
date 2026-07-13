@@ -1,11 +1,22 @@
+import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery-state.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
+import {
+  claimMainSessionRecoveryOwner,
+  releaseMainSessionRecoveryOwner,
+  type MainSessionRecoveryPendingTarget,
+  type MainSessionRecoveryOwnerLease,
+} from "../../agents/main-session-recovery-store.js";
 // Decides whether an inbound turn may start, queue, or abort a reply run.
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -40,14 +51,26 @@ type ReplyTurnAdmission =
 
 class QueuedFollowupLifecycleInvalidatedError extends Error {}
 
+const log = createSubsystemLogger("auto-reply/reply-turn-admission");
 const lifecycleAdmissionByOperation = new WeakMap<ReplyOperation, SessionWorkAdmissionLease>();
+
+async function releaseReplyRecoveryOwner(
+  lease: MainSessionRecoveryOwnerLease | undefined,
+): Promise<MainSessionRecoveryPendingTarget | undefined> {
+  try {
+    return await releaseMainSessionRecoveryOwner(lease);
+  } catch (error) {
+    log.warn(`failed to release main-session recovery reply owner: ${formatErrorMessage(error)}`);
+    return undefined;
+  }
+}
 
 /** Runs owner work with its admission marked as the initiating lifecycle context. */
 export async function runWithReplyOperationLifecycleAdmission<T>(
-  operation: ReplyOperation | undefined,
+  operation: ReplyOperation,
   run: () => Promise<T>,
 ): Promise<T> {
-  const admission = operation ? lifecycleAdmissionByOperation.get(operation) : undefined;
+  const admission = lifecycleAdmissionByOperation.get(operation);
   return admission ? await admission.run(run) : await run();
 }
 
@@ -155,6 +178,7 @@ async function admitReplyTurnWithWaitSignal(
       const storePath = params.storePath;
       let operation: ReplyOperation | undefined;
       let admittedSessionEntry: SessionEntry | undefined;
+      let recoveryOwnerLease: MainSessionRecoveryOwnerLease | undefined;
       let interruptedBeforeOperation = false;
       const admission = storePath
         ? await beginSessionWorkAdmission({
@@ -229,14 +253,32 @@ async function admitReplyTurnWithWaitSignal(
             },
           })
         : undefined;
-      if (interruptedBeforeOperation) {
-        admission?.release();
-        rejectLifecycleInvalidatedWork({
-          kind: params.kind,
-          message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
-        });
-      }
       try {
+        if (
+          storePath &&
+          admittedSessionEntry?.status === "running" &&
+          admittedSessionEntry.abortedLastRun === true &&
+          isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey)
+        ) {
+          const ownerClaim = await claimMainSessionRecoveryOwner({
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            sessionId,
+            target: { sessionKey: params.sessionKey, storePath },
+          });
+          if (ownerClaim.kind === "invalidated") {
+            rejectLifecycleInvalidatedWork({
+              kind: params.kind,
+              message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+            });
+          }
+          recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
+        }
+        if (interruptedBeforeOperation || isAbortSignalAborted(params.upstreamAbortSignal)) {
+          rejectLifecycleInvalidatedWork({
+            kind: params.kind,
+            message: `Session "${params.sessionKey}" changed while starting work. Retry.`,
+          });
+        }
         if (params.adoptOperation) {
           // The dispatch closures own this object's abort/delivery lifecycle,
           // so the reservation must move rather than be recreated. Throws
@@ -255,6 +297,9 @@ async function admitReplyTurnWithWaitSignal(
           });
         }
       } catch (error) {
+        if (recoveryOwnerLease) {
+          await releaseReplyRecoveryOwner(recoveryOwnerLease);
+        }
         if (
           error instanceof ReplyRunAlreadyActiveError &&
           admission &&
@@ -281,7 +326,11 @@ async function admitReplyTurnWithWaitSignal(
         lifecycleAdmissionByOperation.set(operation, admission);
         runAfterReplyOperationClear(operation, () => {
           lifecycleAdmissionByOperation.delete(operation);
-          admission.release();
+          // Keep reset/delete behind durable owner release and its writer lock.
+          void releaseReplyRecoveryOwner(recoveryOwnerLease).then((pendingTarget) => {
+            admission.release();
+            scheduleMainSessionRecoveryPendingTarget(pendingTarget);
+          });
         });
       }
       return {

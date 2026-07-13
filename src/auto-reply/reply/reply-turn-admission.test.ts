@@ -4,10 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   deleteSessionEntryLifecycle,
+  loadSessionEntry,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import {
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
@@ -47,6 +48,13 @@ function createSessionStore(entries: Record<string, object>): string {
     replaceSessionEntrySync({ sessionKey, storePath }, entry as SessionEntry);
   }
   return storePath;
+}
+
+async function readSessionEntry(
+  storePath: string,
+  sessionKey: string,
+): Promise<SessionEntry | undefined> {
+  return loadSessionEntry({ sessionKey, storePath });
 }
 
 describe("reply turn admission", () => {
@@ -322,6 +330,87 @@ describe("reply turn admission", () => {
     admission.operation.complete();
     await mutation;
     expect(mutationRan).toBe(true);
+  });
+
+  it.each(["visible", "heartbeat", "queued_followup"] as const)(
+    "fences restart recovery from %s reply admission until the operation clears",
+    async (kind) => {
+      const sessionKey = `agent:main:telegram:topic:recovery-race:${kind}`;
+      const sessionId = "interrupted-session";
+      const storePath = createSessionStore({
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 100,
+          status: "running",
+          abortedLastRun: true,
+          mainRestartRecovery: {
+            cycleId: "cycle-1",
+            revision: 1,
+            chargedAttempts: 3,
+          },
+        },
+      });
+      const admission = await admitReplyTurn({
+        sessionKey,
+        sessionId,
+        expectedSessionId: sessionId,
+        storePath,
+        kind,
+        resetTriggered: false,
+      });
+      expect(admission.status).toBe("owned");
+      if (admission.status !== "owned") {
+        return;
+      }
+
+      const claimedEntry = await readSessionEntry(storePath, sessionKey);
+      admission.operation.complete();
+      await vi.waitFor(async () => {
+        const entry = await readSessionEntry(storePath, sessionKey);
+        expect(entry?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
+      });
+
+      expect(claimedEntry?.mainRestartRecovery).toMatchObject({
+        foregroundClaims: {
+          tokens: [expect.any(String)],
+        },
+      });
+      await expect(readSessionEntry(storePath, sessionKey)).resolves.toMatchObject({
+        sessionId,
+        status: "running",
+      });
+    },
+  );
+
+  it("leaves interrupted subagent sessions to the subagent recovery owner", async () => {
+    const sessionKey = "agent:main:subagent:child-1";
+    const sessionId = "subagent-session";
+    const storePath = createSessionStore({
+      [sessionKey]: {
+        sessionId,
+        updatedAt: 100,
+        status: "running",
+        abortedLastRun: true,
+        spawnDepth: 1,
+      },
+    });
+
+    const admission = await admitReplyTurn({
+      sessionKey,
+      sessionId,
+      expectedSessionId: sessionId,
+      storePath,
+      kind: "visible",
+      resetTriggered: false,
+    });
+
+    expect(admission.status).toBe("owned");
+    if (admission.status === "owned") {
+      admission.operation.complete();
+    }
+    await expect(readSessionEntry(storePath, sessionKey)).resolves.not.toHaveProperty(
+      "mainRestartRecovery",
+    );
   });
 
   it("holds interrupted queued reply work until its owner exits", async () => {

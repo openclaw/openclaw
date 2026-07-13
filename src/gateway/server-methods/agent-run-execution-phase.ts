@@ -2,6 +2,12 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { consumeExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
+import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-owner-release.js";
+import {
+  releaseMainSessionRecoveryOwner,
+  type MainSessionRecoveryPendingTarget,
+  type MainSessionRecoveryOwnerLease,
+} from "../../agents/main-session-recovery-store.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import {
   setChannelSourceTurnId,
@@ -45,6 +51,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export function startAgentRunExecution(params: {
   prepared: PreparedAgentRunDispatch;
+  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
   request: AgentRunRequest;
   cfg: OpenClawConfig;
   cfgForAgent?: OpenClawConfig;
@@ -59,6 +66,7 @@ export function startAgentRunExecution(params: {
   isNewSession: boolean;
   isRawModelRun: boolean;
   isOneShotModelRun: boolean;
+  isRestartRecoveryResumeRun: boolean;
   suppressVisibleSessionEffects: boolean;
   message: string;
   images: Array<{ type: "image"; data: string; mimeType: string }>;
@@ -101,8 +109,10 @@ export function startAgentRunExecution(params: {
   void prepared.activeGatewayWorkAdmission.run(async () => {
     await yieldAfterAgentAcceptedAck();
     let dispatched = false;
+    let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
     try {
       if (prepared.activeRunAbort.controller.signal.aborted) {
+        pendingRecovery = await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
         const stopReason = resolveAbortedAgentStopReason(prepared.activeRunAbort.entry);
         setAbortedAgentDedupeEntries({
           dedupe: params.context.dedupe,
@@ -382,6 +392,12 @@ export function startAgentRunExecution(params: {
             sessionEntry: params.sessionEntry,
           }),
           allowGatewaySubagentBinding: true,
+          ...(params.mainRestartRecoveryOwnerLease
+            ? { mainRestartRecoveryOwnerLease: params.mainRestartRecoveryOwnerLease }
+            : {}),
+          ...(params.isRestartRecoveryResumeRun
+            ? { mainRestartRecoveryAdmitted: true }
+            : {}),
           allowModelOverride: prepared.effectiveAllowModelOverride,
         },
         runId: params.runId,
@@ -419,9 +435,24 @@ export function startAgentRunExecution(params: {
     } finally {
       if (!dispatched) {
         try {
+          pendingRecovery ??= await prepared.restoreAdmittedRestartRecoveryInterrupted?.();
           await params.releaseCronContinuationClaimWithRecovery();
         } finally {
-          cleanupAdmittedRun({ force: true });
+          try {
+            pendingRecovery ??= await releaseMainSessionRecoveryOwner(
+              params.mainRestartRecoveryOwnerLease,
+            );
+          } catch (err) {
+            params.context.logGateway.warn(
+              `failed to release undispatched main restart recovery owner: ${formatForLog(err)}`,
+            );
+          } finally {
+            try {
+              cleanupAdmittedRun({ force: true });
+            } finally {
+              scheduleMainSessionRecoveryPendingTarget(pendingRecovery);
+            }
+          }
         }
       }
     }
