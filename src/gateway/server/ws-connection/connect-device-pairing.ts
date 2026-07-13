@@ -59,7 +59,8 @@ export async function authorizeGatewayConnectDevice(
     reportedClientIpSource,
     hasBrowserOriginHeader,
   } = context;
-  let { scopes, handoffBootstrapProfile } = state;
+  const { scopes } = state;
+  let { handoffBootstrapProfile } = state;
   const {
     role,
     isControlUi,
@@ -167,7 +168,7 @@ export async function authorizeGatewayConnectDevice(
           connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE) ||
           (isControlUi && role === "operator"))
           ? await getBoundDeviceBootstrapProfile({
-              ["token"]: bootstrapTokenCandidate,
+              token: bootstrapTokenCandidate,
               deviceId: device.id,
               publicKey: devicePublicKey,
             })
@@ -416,7 +417,7 @@ export async function authorizeGatewayConnectDevice(
       if (!(skipLocalBackendSelfPairing || skipControlUiPairingForDevice)) {
         const ok = await requirePairing("not-paired", paired);
         if (!ok) {
-          return;
+          return undefined;
         }
         hasServerApprovedDeviceTokenBaseline = true;
       } else if (
@@ -438,7 +439,7 @@ export async function authorizeGatewayConnectDevice(
         logUpgradeAudit,
       });
       if (!existingDevice.ok) {
-        return;
+        return undefined;
       }
       handoffBootstrapProfile = existingDevice.handoffBootstrapProfile;
     }

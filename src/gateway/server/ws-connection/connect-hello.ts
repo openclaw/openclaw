@@ -95,7 +95,7 @@ export async function sendGatewayHello(
       scopes: helloOkAuthScopes,
       ...(deviceToken
         ? {
-            ["deviceToken"]: deviceToken.token,
+            deviceToken: deviceToken.token,
             issuedAtMs: deviceToken.rotatedAtMs ?? deviceToken.createdAtMs,
             ...(bootstrapDeviceTokens.length > 1
               ? { deviceTokens: bootstrapDeviceTokens.slice(1) }
@@ -118,13 +118,13 @@ export async function sendGatewayHello(
     try {
       if (handoffBootstrapProfile || issuedBootstrapProfile) {
         const redemption = await redeemDeviceBootstrapTokenProfile({
-          ["token"]: bootstrapTokenCandidate,
+          token: bootstrapTokenCandidate,
           role,
           scopes,
         });
         if (handoffBootstrapProfile || redemption.fullyRedeemed) {
           const revoked = await revokeDeviceBootstrapToken({
-            ["token"]: bootstrapTokenCandidate,
+            token: bootstrapTokenCandidate,
           });
           if (!revoked.removed) {
             logGateway.warn(
@@ -180,17 +180,17 @@ export async function sendGatewayHello(
   });
   advanceHandshakePhase("ready");
   if (role === "node") {
-    const context = buildRequestContext();
+    const requestContext = buildRequestContext();
     const nodeId = connectParams.device?.id ?? connectParams.client.id;
-    const nodeSession = context.nodeRegistry.get(nodeId);
+    const nodeSession = requestContext.nodeRegistry.get(nodeId);
     // Only a current session that received hello-ok counts as connected;
     // failed or replaced handshakes must not alert or consume cooldown.
     if (nodeSession?.connId === connId) {
-      scheduleNodeConnectionNotification(context.nodeRegistry, nodeSession);
+      scheduleNodeConnectionNotification(requestContext.nodeRegistry, nodeSession);
     }
   }
   if (pendingNodePairingCleanup.value) {
-    const context = buildRequestContext();
+    const requestContext = buildRequestContext();
     const cleanupClaim = pendingNodePairingCleanup.value;
     pendingNodePairingCleanup.value = undefined;
     try {
@@ -199,7 +199,7 @@ export async function sendGatewayHello(
         : await finalizeNodePairingCleanupClaim(cleanupClaim);
       const resolvedAt = Date.now();
       for (const resolved of resolvedPairings) {
-        context.broadcast(
+        requestContext.broadcast(
           "node.pair.resolved",
           {
             requestId: resolved.requestId,

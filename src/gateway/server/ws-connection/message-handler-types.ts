@@ -147,7 +147,7 @@ export type AuthenticatedGatewayConnect = {
 };
 
 export type DeviceAuthorizedGatewayConnect = AuthenticatedGatewayConnect & {
-  ["deviceToken"]: DeviceAuthToken | null;
+  deviceToken: DeviceAuthToken | null;
   bootstrapDeviceTokens: Array<{
     deviceToken: string;
     role: string;

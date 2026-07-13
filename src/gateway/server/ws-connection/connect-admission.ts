@@ -1,4 +1,5 @@
 // Gateway WebSocket connect admission validates protocol, role, and browser origin.
+import type { IncomingMessage } from "node:http";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -85,7 +86,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       }),
     }).catch(() => {});
     queueMicrotask(() => close(GATEWAY_STARTUP_CLOSE_CODE, GATEWAY_STARTUP_CLOSE_REASON));
-    return;
+    return undefined;
   }
 
   // protocol negotiation
@@ -124,7 +125,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       },
     });
     close(1002, "protocol mismatch");
-    return;
+    return undefined;
   }
 
   const roleRaw = connectParams.role ?? "operator";
@@ -133,7 +134,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     markHandshakeFailure("invalid-role", { role: roleRaw });
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "invalid role");
     close(1008, "invalid role");
-    return;
+    return undefined;
   }
   // Default-deny: scopes must be explicit. Empty/missing scopes means no permissions.
   // Note: If the client does not present a device identity, we can't bind scopes to a paired
@@ -175,7 +176,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
         },
       });
       close(1008, truncateCloseReason(errorMessage));
-      return;
+      return undefined;
     }
     if (originCheck.matchedBy === "host-header-fallback") {
       originCheckMetrics.hostHeaderFallbackAccepted += 1;
@@ -201,4 +202,3 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     isNativeAppUi,
   };
 }
-import type { IncomingMessage } from "node:http";

@@ -133,7 +133,7 @@ export async function authorizeExistingGatewayDevice(params: {
     pairedRoles.includes("operator") &&
     device
       ? await getBoundDeviceBootstrapProfile({
-          ["token"]: bootstrapTokenCandidate,
+          token: bootstrapTokenCandidate,
           deviceId: device.id,
           publicKey: devicePublicKey,
         })

@@ -44,7 +44,7 @@ export async function issueGatewayConnectDeviceTokens(params: {
   const bootstrapDeviceTokens: DeviceAuthorizedGatewayConnect["bootstrapDeviceTokens"] = [];
   if (issuedDeviceGrant) {
     bootstrapDeviceTokens.push({
-      ["deviceToken"]: issuedDeviceGrant.token,
+      deviceToken: issuedDeviceGrant.token,
       role: issuedDeviceGrant.role,
       scopes: issuedDeviceGrant.scopes,
       issuedAtMs: issuedDeviceGrant.rotatedAtMs ?? issuedDeviceGrant.createdAtMs,
@@ -71,12 +71,12 @@ export async function issueGatewayConnectDeviceTokens(params: {
         continue;
       }
       bootstrapDeviceTokens.push({
-        ["deviceToken"]: extraToken.token,
+        deviceToken: extraToken.token,
         role: extraToken.role,
         scopes: extraToken.scopes,
         issuedAtMs: extraToken.rotatedAtMs ?? extraToken.createdAtMs,
       });
     }
   }
-  return { ["deviceToken"]: issuedDeviceGrant, bootstrapDeviceTokens };
+  return { deviceToken: issuedDeviceGrant, bootstrapDeviceTokens };
 }

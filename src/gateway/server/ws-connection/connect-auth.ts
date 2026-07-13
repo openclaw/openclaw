@@ -82,7 +82,7 @@ export async function authenticateGatewayConnect(
   const resolvedAuth = getResolvedAuth();
   const admission = await admitGatewayConnect(context);
   if (!admission) {
-    return;
+    return undefined;
   }
   let { scopes } = admission;
   const {
@@ -307,7 +307,7 @@ export async function authenticateGatewayConnect(
     return false;
   };
   if (!handleMissingDeviceIdentity()) {
-    return;
+    return undefined;
   }
   const deviceProof = verifyGatewayConnectDeviceProof(context, {
     device,
@@ -317,7 +317,7 @@ export async function authenticateGatewayConnect(
     scopes,
   });
   if (!deviceProof.ok) {
-    return;
+    return undefined;
   }
 
   const authDecision = await resolveConnectAuthDecision({
@@ -390,7 +390,7 @@ export async function authenticateGatewayConnect(
   });
   if (!authOk) {
     rejectUnauthorized(authResult);
-    return;
+    return undefined;
   }
   advanceHandshakePhase("auth_validated");
   const usesSharedGatewayAuth =
@@ -412,14 +412,14 @@ export async function authenticateGatewayConnect(
         authGenerationStale: true,
       });
       close(4001, "gateway auth changed");
-      return;
+      return undefined;
     }
   }
   const issuedBootstrapProfile =
     authMethod === "bootstrap-token" && bootstrapTokenCandidate
-      ? await getDeviceBootstrapTokenProfile({ ["token"]: bootstrapTokenCandidate })
+      ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
       : null;
-  let handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
+  const handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
   const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
     isControlUi,
     role,

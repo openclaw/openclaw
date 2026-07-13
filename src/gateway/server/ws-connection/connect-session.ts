@@ -325,8 +325,8 @@ export async function attachAuthenticatedGatewayConnect(
     incrementPresenceVersion();
   }
   if (role === "node") {
-    const context = buildRequestContext();
-    const nodeSession = context.nodeRegistry.register(nextClient, {
+    const requestContext = buildRequestContext();
+    const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
     });
     const instanceIdRaw = connectParams.client.instanceId;
@@ -374,7 +374,7 @@ export async function attachAuthenticatedGatewayConnect(
     runDetachedConnectWork(
       async () => {
         const cfg = await loadVoiceWakeConfig();
-        context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.changed", {
+        requestContext.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.changed", {
           triggers: cfg.triggers,
         });
       },
@@ -386,7 +386,7 @@ export async function attachAuthenticatedGatewayConnect(
     runDetachedConnectWork(
       async () => {
         const routing = await loadVoiceWakeRoutingConfig();
-        context.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
+        requestContext.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
           config: routing,
         });
       },
