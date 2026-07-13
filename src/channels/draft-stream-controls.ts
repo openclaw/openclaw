@@ -23,14 +23,20 @@ type StopAndClearMessageIdParams<T> = {
 type ClearFinalizableDraftMessageParams<T> = StopAndClearMessageIdParams<T> & {
   isValidMessageId: (value: unknown) => value is T;
   deleteMessage: (messageId: T) => Promise<void>;
+  onDeleteFailure?: (messageId: T) => void;
   onDeleteSuccess?: (messageId: T) => void;
   warn?: (message: string) => void;
   warnPrefix: string;
 };
 
+type DeleteFinalizableDraftMessageParams<T> = Omit<
+  ClearFinalizableDraftMessageParams<T>,
+  "isValidMessageId" | "onDeleteFailure" | "stopForClear"
+>;
+
 type FinalizableDraftLifecycleParams<T> = Omit<
   ClearFinalizableDraftMessageParams<T>,
-  "stopForClear"
+  "onDeleteFailure" | "stopForClear"
 > & {
   throttleMs: number;
   state: FinalizableDraftStreamState;
@@ -127,8 +133,27 @@ export async function takeMessageIdAfterStop<T>(
   return messageId;
 }
 
+async function deleteFinalizableDraftMessage<T>(
+  params: DeleteFinalizableDraftMessageParams<T>,
+  messageId: T,
+): Promise<boolean> {
+  try {
+    await params.deleteMessage(messageId);
+    // A replacement preview may become current while deletion is in flight; never clear its ID.
+    if (Object.is(params.readMessageId(), messageId)) {
+      params.clearMessageId();
+    }
+    params.onDeleteSuccess?.(messageId);
+    return true;
+  } catch (err) {
+    params.warn?.(`${params.warnPrefix}: ${formatErrorMessage(err)}`);
+    return false;
+  }
+}
+
 /**
  * Stops a draft stream and deletes its preview message when the stored id is valid.
+ * Stateful callers can retain the exact failed target through onDeleteFailure.
  */
 export async function clearFinalizableDraftMessage<T>(
   params: ClearFinalizableDraftMessageParams<T>,
@@ -139,15 +164,9 @@ export async function clearFinalizableDraftMessage<T>(
     params.clearMessageId();
     return;
   }
-  try {
-    await params.deleteMessage(messageId);
-    // A replacement preview may become current while deletion is in flight; never clear its ID.
-    if (Object.is(params.readMessageId(), messageId)) {
-      params.clearMessageId();
-    }
-    params.onDeleteSuccess?.(messageId);
-  } catch (err) {
-    params.warn?.(`${params.warnPrefix}: ${formatErrorMessage(err)}`);
+  const deleted = await deleteFinalizableDraftMessage(params, messageId);
+  if (!deleted) {
+    params.onDeleteFailure?.(messageId);
   }
 }
 
@@ -161,21 +180,39 @@ export function createFinalizableDraftLifecycle<T>(params: FinalizableDraftLifec
     sendOrEditStreamMessage: params.sendOrEditStreamMessage,
   });
 
-  const clear = async () => {
-    await clearFinalizableDraftMessage({
-      stopForClear: controls.stopForClear,
-      readMessageId: params.readMessageId,
-      clearMessageId: params.clearMessageId,
-      isValidMessageId: params.isValidMessageId,
-      deleteMessage: params.deleteMessage,
-      onDeleteSuccess: params.onDeleteSuccess,
-      warn: params.warn,
-      warnPrefix: params.warnPrefix,
-    });
+  let pendingDeleteIds: T[] = [];
+  let clearTail = Promise.resolve();
+
+  const clearOnce = async (stopForClear: () => Promise<void>) => {
+    await stopForClear();
+    const currentMessageId = params.readMessageId();
+    const deleteIds = pendingDeleteIds;
+    pendingDeleteIds = [];
+    if (!params.isValidMessageId(currentMessageId)) {
+      params.clearMessageId();
+    } else if (!deleteIds.some((messageId) => Object.is(messageId, currentMessageId))) {
+      deleteIds.push(currentMessageId);
+    }
+
+    for (const messageId of deleteIds) {
+      const deleted = await deleteFinalizableDraftMessage(params, messageId);
+      if (!deleted && !pendingDeleteIds.some((pendingId) => Object.is(pendingId, messageId))) {
+        pendingDeleteIds.push(messageId);
+      }
+    }
   };
+
+  const clearWithStop = (stopForClear: () => Promise<void>) => {
+    // Custom channel stops share the same serialized retry ownership as the default clear path.
+    const clearRun = clearTail.catch(() => {}).then(() => clearOnce(stopForClear));
+    clearTail = clearRun;
+    return clearRun;
+  };
+  const clear = () => clearWithStop(controls.stopForClear);
 
   return {
     ...controls,
     clear,
+    clearWithStop,
   };
 }

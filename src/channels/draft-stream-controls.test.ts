@@ -122,6 +122,74 @@ describe("draft-stream-controls", () => {
     expect(messageId).toBe("preview-new");
   });
 
+  it("clearFinalizableDraftMessage reports the failed target after its id is replaced", async () => {
+    let messageId: string | undefined = "preview-old";
+    const pendingDelete = createDeferred();
+    const onDeleteFailure = vi.fn();
+    const deleteMessage = vi.fn(() => pendingDelete.promise);
+    const clearPromise = clearFinalizableDraftMessage({
+      stopForClear: async () => {},
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      onDeleteFailure,
+      warnPrefix: "cleanup failed",
+    });
+    await vi.waitFor(() => expect(deleteMessage).toHaveBeenCalledWith("preview-old"));
+
+    messageId = "preview-new";
+    pendingDelete.reject(new Error("boom"));
+    await clearPromise;
+
+    expect(onDeleteFailure).toHaveBeenCalledWith("preview-old");
+    expect(messageId).toBe("preview-new");
+  });
+
+  it("lifecycle retries a failed old deletion after the current id is replaced", async () => {
+    const state = { stopped: false, final: false };
+    let messageId: string | undefined = "preview-old";
+    const pendingDelete = createDeferred();
+    const warn = vi.fn();
+    const deleteMessage = vi
+      .fn<(messageId: string) => Promise<void>>()
+      .mockImplementationOnce(() => pendingDelete.promise)
+      .mockResolvedValue(undefined);
+    const lifecycle = createFinalizableDraftLifecycle({
+      throttleMs: 250,
+      state,
+      sendOrEditStreamMessage: async () => true,
+      readMessageId: () => messageId,
+      clearMessageId: () => {
+        messageId = undefined;
+      },
+      isValidMessageId: (value): value is string => typeof value === "string",
+      deleteMessage,
+      warn,
+      warnPrefix: "cleanup failed",
+    });
+
+    const firstClear = lifecycle.clear();
+    await vi.waitFor(() => expect(deleteMessage).toHaveBeenCalledWith("preview-old"));
+    messageId = "preview-new";
+    pendingDelete.reject(new Error("boom"));
+    await firstClear;
+
+    expect(messageId).toBe("preview-new");
+    expect(warn).toHaveBeenCalledWith("cleanup failed: boom");
+
+    await lifecycle.clear();
+
+    expect(deleteMessage.mock.calls.map(([id]) => id)).toEqual([
+      "preview-old",
+      "preview-old",
+      "preview-new",
+    ]);
+    expect(messageId).toBeUndefined();
+  });
+
   it("controls ignore updates after final", async () => {
     const sendOrEditStreamMessage = vi.fn(async () => true);
     const controls = createFinalizableDraftStreamControlsForState({
