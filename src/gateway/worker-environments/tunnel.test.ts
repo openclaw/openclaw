@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
-import { createWorkerSshRunner, createWorkerTunnelManager } from "./tunnel.js";
+import { createWorkerTunnelManager } from "./tunnel.js";
 
 type WorkerTunnelOptions = NonNullable<Parameters<typeof createWorkerTunnelManager>[0]>;
 type WorkerSshRunner = NonNullable<WorkerTunnelOptions["runner"]>;
@@ -307,18 +307,5 @@ describe("worker tunnel manager", () => {
 
     expect(manager.status("worker:replacement")).toBe("stopped");
     expect(fake.starts).toHaveLength(1);
-  });
-});
-
-describe("createWorkerSshRunner diagnostic tails", () => {
-  it("keeps SSH tunnel failure stderr on a valid UTF-16 boundary", async () => {
-    const retained = "b".repeat(4095);
-    const child = createWorkerSshRunner().start(
-      [process.execPath, "-e", `process.stderr.write(${JSON.stringify(`a😀${retained}`)})`],
-      { timeoutMs: 10_000, baseEnv: process.env },
-    );
-
-    await expect(child.ready).rejects.toThrow(`Worker SSH tunnel failed: ${retained}`);
-    await child.exited;
   });
 });

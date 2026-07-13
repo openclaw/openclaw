@@ -17,10 +17,7 @@ import {
   registerContextEngineForOwner,
 } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import type {
-  McpLoopbackClientGrant,
-  McpLoopbackRequestContext,
-} from "../../gateway/mcp-grant-store.js";
+import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
@@ -50,6 +47,10 @@ import {
   shouldSkipLocalCliCredentialEpoch,
 } from "./prepare.js";
 import type { RunCliAgentParams } from "./types.js";
+
+type McpLoopbackClientGrant = ReturnType<
+  (typeof import("../../gateway/mcp-grant-store.js"))["mintMcpLoopbackClientGrant"]
+>;
 
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({})));
 const ensureSandboxWorkspaceForSessionMock = vi.hoisted(() =>
@@ -186,6 +187,7 @@ function createCliBackendConfig(
 function setCliBackendForPrepareTest(
   params: {
     autoSelectAuthProfile?: boolean;
+    bundleMcp?: boolean;
     command?: string;
     id?: string;
     liveSession?: boolean;
@@ -207,7 +209,8 @@ function setCliBackendForPrepareTest(
         id,
         pluginId: params.pluginId ?? "anthropic",
         modelProvider: params.modelProvider ?? "anthropic",
-        bundleMcp: false,
+        bundleMcp: params.bundleMcp ?? false,
+        ...(params.bundleMcp ? { bundleMcpMode: "claude-config-file" as const } : {}),
         ...(params.autoSelectAuthProfile !== undefined
           ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
           : {}),
@@ -3791,6 +3794,98 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       });
       expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
       expect(context.openClawHistoryPrompt).toContain("latest ask");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-node-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: { role: "user", content: "gateway-only history", timestamp: 1 },
+    });
+    try {
+      setCliBackendForPrepareTest({
+        bundleMcp: true,
+        liveSession: true,
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+      const prepareClaudeCliSkillsPlugin = vi.fn(async () => ({
+        args: ["--plugin-dir", "/tmp/gateway-skills"],
+        cleanup: vi.fn(async () => undefined),
+      }));
+      const transcriptCheck = vi.fn(async () => false);
+      const orphanCheck = vi.fn(async () => false);
+      setCliRunnerPrepareTestDeps({
+        ensureMcpLoopbackServer,
+        prepareClaudeCliSkillsPlugin,
+        claudeCliSessionTranscriptHasContent: transcriptCheck,
+        claudeCliSessionTranscriptHasOrphanedToolUse: orphanCheck,
+      });
+
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "claude-cli",
+          model: "opus",
+          timeoutMs: 1_000,
+          runId: "run-node-claude-missing-placement",
+          sessionEntry: { execHost: "node" } as never,
+          config: createCliBackendConfig(),
+        }),
+      ).rejects.toThrow("node-placed Claude CLI session is missing execNode");
+      expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:catalog-adopt:claude:node",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-node-claude-prepare",
+        cliSessionBinding: {
+          sessionId: "node-source-session",
+          forceReuse: true,
+          forkNextResume: true,
+        },
+        cliSessionId: "node-source-session",
+        sessionEntry: {
+          execHost: "node",
+          execNode: "node-a",
+          execCwd: "/work/on-node",
+        } as never,
+        skillsSnapshot: {
+          prompt: "GATEWAY_ONLY_SKILL_PATH=/tmp/gateway-skill/SKILL.md",
+          skills: [],
+          resolvedSkills: [],
+        },
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.reusableCliSession).toEqual({
+        mode: "reuse",
+        sessionId: "node-source-session",
+      });
+      // The reseed prompt is gateway-built text, so node placement keeps the
+      // backend's raw-transcript reseed semantics for fresh-retry paths.
+      expect(context.openClawHistoryPrompt).toContain("gateway-only history");
+      expect(context.claudeSkillsPluginArgs).toEqual([]);
+      expect(context.systemPrompt).not.toContain("GATEWAY_ONLY_SKILL_PATH");
+      expect(context.mcpDeliveryCapture).toBeUndefined();
+      expect(ensureMcpLoopbackServer).not.toHaveBeenCalled();
+      expect(prepareClaudeCliSkillsPlugin).not.toHaveBeenCalled();
+      expect(transcriptCheck).not.toHaveBeenCalled();
+      expect(orphanCheck).not.toHaveBeenCalled();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -99,12 +99,6 @@ function selectTranscriptIndexView(
   return view === "all" ? { ...index, entries: index.allEntries } : index;
 }
 
-/** Clears transcript index caches and in-flight builds between tests. */
-export function clearSessionTranscriptIndexCache(): void {
-  transcriptIndexCache.clear();
-  transcriptIndexBuilds.clear();
-}
-
 function isIndexableTranscriptRecord(record: unknown): record is ParsedTranscriptRecord {
   return Boolean(record && typeof record === "object" && !Array.isArray(record));
 }

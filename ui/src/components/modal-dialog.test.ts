@@ -82,6 +82,18 @@ describe("openclaw-modal-dialog", () => {
     expect(document.activeElement).not.toBe(container.querySelector("#first-action"));
   });
 
+  it("focuses slotted autofocus content", async () => {
+    render(
+      html`<openclaw-modal-dialog label="Edit">
+        <textarea id="autofocus-target" autofocus></textarea>
+      </openclaw-modal-dialog>`,
+      container,
+    );
+    await getRenderedModalDialog(container);
+
+    expect(document.activeElement).toBe(container.querySelector("#autofocus-target"));
+  });
+
   it("cycles Tab and Shift+Tab inside focusable dialog content", async () => {
     const { dialog } = await renderModal();
     const first = container.querySelector<HTMLButtonElement>("#first-action");
@@ -130,6 +142,16 @@ describe("openclaw-modal-dialog", () => {
         composed: true,
       }),
     );
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("emits modal-cancel when the backdrop is clicked", async () => {
+    const { modal, dialog } = await renderModal();
+    const onCancel = vi.fn();
+    modal.addEventListener("modal-cancel", onCancel);
+
+    dialog.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
