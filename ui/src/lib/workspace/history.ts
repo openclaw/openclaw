@@ -4,7 +4,7 @@ import type { WorkspaceDocument, WorkspaceTab, WorkspaceWidget } from "./types.t
 
 export type WorkspaceHistoryEntry = { version: number; savedAt: string; bytes: number };
 export type WorkspaceHistorySnapshot = { version: number; workspace: WorkspaceDocument };
-export type WorkspaceStructuralDiffKind =
+type WorkspaceStructuralDiffKind =
   | "widget-added"
   | "widget-removed"
   | "widget-moved"
@@ -13,7 +13,7 @@ export type WorkspaceStructuralDiffKind =
   | "tab-added"
   | "tab-removed"
   | "tab-retitled";
-export type WorkspaceStructuralDiffEntry = {
+type WorkspaceStructuralDiffEntry = {
   kind: WorkspaceStructuralDiffKind;
   creator: string | null;
   id: string;
@@ -196,7 +196,7 @@ function hasWidget(workspace: WorkspaceDocument, widgetId: string): boolean {
   return workspace.tabs.some((tab) => tab.widgets.some((widget) => widget.id === widgetId));
 }
 
-export type WorkspaceFirstSeen =
+type WorkspaceFirstSeen =
   | { kind: "exact"; version: number }
   | { kind: "range"; afterVersion: number; byVersion: number }
   | { kind: "unknown" };

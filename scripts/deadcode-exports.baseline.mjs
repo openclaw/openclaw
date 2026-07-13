@@ -3331,7 +3331,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "ui/src/lib/workspace/grid.ts: WorkspaceGridMetrics",
   "ui/src/lib/workspace/index.ts: applyPointer",
   "ui/src/lib/workspace/index.ts: cancelActiveDrag",
-  "ui/src/lib/workspace/index.ts: normalizeWorkspace",
   "ui/src/lib/workspace/index.ts: stopBindingPolling",
   "ui/src/lib/workspace/index.ts: stopWorkspaceEvents",
   "ui/src/lib/workspace/index.ts: WORKSPACE_POLL_INTERVAL_MS",
