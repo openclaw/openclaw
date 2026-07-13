@@ -107,7 +107,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     if (!assembled) {
       throw new Error("context engine assemble returned no result");
     }
-    promptState.contextEngineProjection = readContextEngineThreadBootstrapProjection(
+    const contextEngineProjection = readContextEngineThreadBootstrapProjection(
       assembled.contextProjection,
     );
     const projection = projectContextEngineAssemblyForCodex({
@@ -116,16 +116,16 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       prompt: params.prompt,
       systemPromptAddition: assembled.systemPromptAddition,
       maxRenderedContextChars: codexContextProjectionMaxChars,
-      toolPayloadMode: promptState.contextEngineProjection ? "preserve" : "elide",
+      toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
     });
-    const projectionDecision = promptState.contextEngineProjection
+    const projectionDecision = contextEngineProjection
       ? resolveContextEngineBootstrapProjectionDecision({
           startupBinding: decisionStartupBinding,
           expectedBinding: buildContextEngineBinding(
             buildActiveRunAttemptParams(),
-            promptState.contextEngineProjection,
+            contextEngineProjection,
           ),
-          projection: promptState.contextEngineProjection,
+          projection: contextEngineProjection,
           dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
           legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
         })
@@ -136,11 +136,9 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       sessionKey: contextSessionKey,
       engineId: activeContextEngine.info.id,
       mode:
-        promptState.contextEngineProjection?.mode ??
-        assembled.contextProjection?.mode ??
-        "per_turn",
-      epoch: promptState.contextEngineProjection?.epoch,
-      fingerprint: promptState.contextEngineProjection?.fingerprint,
+        contextEngineProjection?.mode ?? assembled.contextProjection?.mode ?? "per_turn",
+      epoch: contextEngineProjection?.epoch,
+      fingerprint: contextEngineProjection?.fingerprint,
       previousThreadId: decisionBinding?.threadId,
       previousEpoch: decisionBinding?.contextEngine?.projection?.epoch,
       previousFingerprint: decisionBinding?.contextEngine?.projection?.fingerprint,
@@ -151,6 +149,8 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       projectedPromptChars: projection.promptText.length,
       developerInstructionAdditionChars: projection.developerInstructionAddition?.length ?? 0,
     });
+    // Projection metadata and rendered prompt must advance together or retries can skip context.
+    promptState.contextEngineProjection = contextEngineProjection;
     promptState.promptText = projectionDecision.project ? projection.promptText : params.prompt;
     promptState.promptContextRange = projectionDecision.project
       ? projection.promptContextRange

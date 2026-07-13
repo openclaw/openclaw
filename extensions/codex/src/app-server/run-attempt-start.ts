@@ -16,6 +16,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     trajectoryRecorder,
     activateNativePreToolUseFailureFallback,
     releaseSandboxExecEnvironment,
+    releaseSharedClientLeaseOnce,
     releaseCurrentRoute,
     startupTimeoutMs,
     buildNativeHookRelayFinalConfigPatch,
@@ -108,6 +109,10 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.runtimeArtifact = startupResult.runtimeArtifact;
     state.turnRouter = startupResult.turnRouter;
     state.turnRoute = startupResult.turnRoute;
+    // Adopt cleanup ownership before any fallible validation of the started thread.
+    state.sandboxExecEnvironmentAcquired = Boolean(startupResult.sandboxEnvironment);
+    state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
+    state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
     pluginAppServer = startupResult.pluginAppServer;
     if (
       usesSupervisionConnection &&
@@ -147,12 +152,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         );
       }
     }
-    state.sandboxExecEnvironmentAcquired = Boolean(startupResult.sandboxEnvironment);
     state.codexEnvironmentSelection = startupResult.environmentSelection;
     state.codexExecutionCwd = startupResult.executionCwd;
     state.codexSandboxPolicy = startupResult.sandboxPolicy;
-    state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
-    state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
     void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "thread_ready", threadId: state.thread.threadId },
@@ -162,6 +164,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     releaseCurrentRoute();
     state.nativeHookRelay?.unregister();
     await releaseSandboxExecEnvironment();
+    releaseSharedClientLeaseOnce();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }
