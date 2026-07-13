@@ -1719,8 +1719,6 @@ export const en: TranslationMap = {
     cancel: "Cancel",
     removedRestart: "Removed {name}. A Gateway restart is required to apply the change.",
     verifiedSource: "Verified source",
-    menuLabel: "{name} actions",
-    menuDetails: "View details",
     enableAction: "Enable",
     disableAction: "Disable",
     working: "Working…",
