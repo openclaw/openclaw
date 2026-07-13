@@ -175,8 +175,16 @@ export async function runCommandWithTimeout(
       noOutputTimer = undefined;
     }
   };
+  const ownsExitedProcessTree = Boolean(killProcessTree && process.platform !== "win32");
   const cancel = (reason: Exclude<CommandTerminationReason, "exit">) => {
-    if (termination || commandSettled) {
+    // Direct exit ends ordinary timer/abort ownership; releaseChildProcessOutputAfterExit
+    // still bounds inherited pipes. POSIX tree mode must reap descendants, while
+    // output caps remain meaningful for bytes drained after exit.
+    if (
+      termination ||
+      commandSettled ||
+      (childExited && reason !== "output-limit" && !ownsExitedProcessTree)
+    ) {
       return;
     }
     termination = reason;
@@ -193,7 +201,12 @@ export async function runCommandWithTimeout(
     ? resolveTimerTimeoutMs(noOutputTimeoutMs, 1)
     : undefined;
   const armNoOutputTimer = () => {
-    if (resolvedNoOutputTimeoutMs === undefined || commandSettled || termination) {
+    if (
+      resolvedNoOutputTimeoutMs === undefined ||
+      commandSettled ||
+      termination ||
+      (childExited && !ownsExitedProcessTree)
+    ) {
       return;
     }
     clearNoOutputTimer();

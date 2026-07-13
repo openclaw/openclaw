@@ -368,6 +368,28 @@ describe("Windows command execution", () => {
     });
   });
 
+  it("does not time out after the direct child exits while output settles", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    execaMock.mockReturnValueOnce(command);
+
+    await withMockedWindowsPlatform(async () => {
+      const resultPromise = runCommandWithTimeout(["node", "quick.js"], { timeoutMs: 80 });
+      command.exitCode = 0;
+      command.emit("exit", 0, null);
+
+      await vi.advanceTimersByTimeAsync(81);
+      expect(execaMock).toHaveBeenCalledTimes(1);
+      expect(command.stdout.destroyed).toBe(false);
+      await vi.advanceTimersByTimeAsync(19);
+      expect(command.stdout.destroyed).toBe(true);
+      expect(command.stderr.destroyed).toBe(true);
+
+      command.finish();
+      await expect(resultPromise).resolves.toMatchObject({ code: 0, termination: "exit" });
+    });
+  });
+
   it("gracefully then force-kills a Windows process tree", async () => {
     vi.useFakeTimers();
     const command = createMockSubprocess({ autoFinish: false });
