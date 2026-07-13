@@ -179,15 +179,15 @@ export class MatrixDecryptBridge<TRawEvent extends DecryptBridgeRawEvent> {
     }
     this.cryptoRetrySignalsBound = true;
 
-    const trigger = (reason: string): void => {
-      this.retryPendingNow(reason, { includeExhausted: true });
+    const trigger = (reason: string, options?: { includeExhausted?: boolean }): void => {
+      this.retryPendingNow(reason, options);
     };
 
     crypto.on(CryptoEvent.KeyBackupDecryptionKeyCached, () => {
-      trigger("crypto.keyBackupDecryptionKeyCached");
+      trigger("crypto.keyBackupDecryptionKeyCached", { includeExhausted: true });
     });
     crypto.on(CryptoEvent.RehydrationCompleted, () => {
-      trigger("dehydration.RehydrationCompleted");
+      trigger("dehydration.RehydrationCompleted", { includeExhausted: true });
     });
     crypto.on(CryptoEvent.DevicesUpdated, () => {
       trigger("crypto.devicesUpdated");

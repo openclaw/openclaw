@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixTestRuntime } from "../test-runtime.js";
@@ -3823,5 +3824,69 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     expect(events[0]?.attemptDecryption).not.toHaveBeenCalled();
     expect(events.at(-1)?.attemptDecryption).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not rehydrate exhausted decrypt retries on generic device updates", async () => {
+    const listeners = new Map<string, () => void>();
+    const cryptoApi = {
+      on: vi.fn((eventName: string, listener: () => void) => {
+        listeners.set(eventName, listener);
+      }),
+    };
+    const bridge = new MatrixDecryptBridge({
+      client: {
+        getCrypto: () => cryptoApi,
+      },
+      toRaw: (event) => ({
+        event_id: event.getId() ?? "",
+      }),
+      emitDecryptedEvent: vi.fn(),
+      emitFailedDecryption: vi.fn(),
+      emitMessage: vi.fn(),
+    });
+    const event = new FakeMatrixEvent({
+      roomId: "!room:example.org",
+      eventId: "$event",
+      sender: "@alice:example.org",
+      type: "m.room.encrypted",
+      ts: Date.now(),
+      content: {},
+      decryptionFailure: true,
+    });
+    event.onAttemptDecryption(() => {});
+    (
+      bridge as unknown as {
+        exhaustedDecryptRetries: Map<
+          string,
+          {
+            event: FakeMatrixEvent;
+            roomId: string;
+            eventId: string;
+            attempts: number;
+            inFlight: boolean;
+            timer: ReturnType<typeof setTimeout> | null;
+            exhaustedAt: number;
+          }
+        >;
+      }
+    ).exhaustedDecryptRetries.set("!room:example.org|$event", {
+      event,
+      roomId: "!room:example.org",
+      eventId: "$event",
+      attempts: 8,
+      inFlight: false,
+      timer: null,
+      exhaustedAt: Date.now(),
+    });
+
+    bridge.bindCryptoRetrySignals(cryptoApi);
+    listeners.get(CryptoEvent.DevicesUpdated)?.();
+    await Promise.resolve();
+
+    expect(event.attemptDecryption).not.toHaveBeenCalled();
+    listeners.get(CryptoEvent.KeyBackupDecryptionKeyCached)?.();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(event.attemptDecryption).toHaveBeenCalledTimes(1);
   });
 });
