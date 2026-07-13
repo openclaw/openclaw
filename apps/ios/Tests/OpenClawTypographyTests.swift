@@ -375,6 +375,20 @@ struct OpenClawTypographyTests {
             "Text(body)",
         ]
         #expect(!Self.isAccessibilityMetadataTextCall(at: 1, in: nearbyVisualText))
+
+        let sameLineVisualLabel = [
+            "Label(\"Status\", systemImage: \"circle\").accessibilityLabel(Text(status))",
+        ]
+        #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: sameLineVisualLabel))
+
+        let trailingVisualText = [".accessibilityLabel(Text(status)); Text(body)"]
+        #expect(!Self.isAccessibilityMetadataTextCall(at: 0, in: trailingVisualText))
+
+        let modifierTextInString = [
+            "let sample = \".accessibilityLabel(\"",
+            "Text(body)",
+        ]
+        #expect(!Self.isAccessibilityMetadataTextCall(at: 1, in: modifierTextInString))
     }
 
     @Test func `secure fields do not use platform placeholder text`() throws {
@@ -497,20 +511,14 @@ struct OpenClawTypographyTests {
     }
 
     private static func isAccessibilityMetadataTextCall(at idx: Int, in lines: [String]) -> Bool {
-        let line = lines[idx]
-        guard let textCall = line.range(of: #"\bText\s*\("#, options: .regularExpression) else { return false }
-
         let contextStart = max(lines.startIndex, idx - 4)
-        let precedingLines = lines[contextStart..<idx].joined(separator: "\n")
-        let currentLinePrefix = line[..<textCall.upperBound]
-        let context = precedingLines.isEmpty
-            ? String(currentLinePrefix)
-            : precedingLines + "\n" + String(currentLinePrefix)
+        let context = lines[contextStart...idx].joined(separator: "\n")
+        let textArgument = #"(?:[^()"\\]|\\.|"(?:\\.|[^"\\])*")*"#
+        let accessibilityExpression =
+            #"(?s)(?:^|\n)\s*\.accessibility(?:Label|Value|Hint)\s*\(\s*Text\s*\(\#(textArgument)\)\s*\)\s*$"#
 
-        // Accessibility metadata is announced, not rendered; localized Text overloads need no visual font.
-        return context.range(
-            of: #"\.accessibility(?:Label|Value|Hint)\s*\(\s*Text\s*\($"#,
-            options: .regularExpression) != nil
+        // Direct accessibility metadata is announced, not rendered. Complex expressions fail closed.
+        return context.range(of: accessibilityExpression, options: .regularExpression) != nil
     }
 
     private static func isShorthandControlCall(_ line: String) -> Bool {
