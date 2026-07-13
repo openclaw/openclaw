@@ -35,7 +35,6 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
-import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -2188,6 +2187,7 @@ describe("gateway server chat", () => {
       expect(context.chatAbortedRuns.has(runId)).toBe(false);
 
       const agentEndedAt = Date.now();
+      const { persistGatewaySessionLifecycleEvent } = await import("./session-lifecycle-state.js");
       const agentTerminalPersistence = persistGatewaySessionLifecycleEvent({
         sessionKey: "agent:main:main",
         event: {
