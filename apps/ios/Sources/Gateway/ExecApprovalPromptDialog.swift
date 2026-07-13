@@ -2,61 +2,109 @@ import SwiftUI
 
 private struct ExecApprovalPromptDialogModifier: ViewModifier {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
-    let suppressedApprovalID: String?
+    @AccessibilityFocusState private var approvalCardFocused: Bool
+    let suppressedApproval: NodeAppModel.ExecApprovalInboxKey?
 
     func body(content: Content) -> some View {
-        content
-            .overlay {
-                if let prompt = self.appModel.pendingExecApprovalPrompt,
-                   prompt.id != self.suppressedApprovalID
-                {
-                    ZStack {
-                        Color.black.opacity(0.38)
-                            .ignoresSafeArea()
+        let prompt = self.presentedPrompt
+        ZStack {
+            content
+                .allowsHitTesting(prompt == nil)
+                .accessibilityHidden(prompt != nil)
 
-                        ExecApprovalPromptCard(
-                            prompt: prompt,
-                            isResolving: self.appModel.pendingExecApprovalPromptResolving,
-                            errorText: self.appModel.pendingExecApprovalPromptErrorText,
-                            onAllowOnce: {
-                                Task {
-                                    await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
-                                }
-                            },
-                            onAllowAlways: {
-                                Task {
-                                    await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always")
-                                }
-                            },
-                            onDeny: {
-                                Task {
-                                    await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny")
-                                }
-                            },
-                            onCancel: {
-                                self.appModel.dismissPendingExecApprovalPrompt()
-                            })
-                            .padding(.horizontal, 20)
-                            .frame(maxWidth: 460)
-                            .transition(.scale(scale: 0.98).combined(with: .opacity))
-                    }
-                    .zIndex(1)
+            if let prompt {
+                ZStack {
+                    Color.black.opacity(0.38)
+                        .ignoresSafeArea()
+                        .accessibilityHidden(true)
+
+                    ExecApprovalPromptCard(
+                        prompt: prompt,
+                        isResolving: self.appModel.pendingExecApprovalPromptResolving,
+                        canDismiss: self.appModel.pendingExecApprovalPromptCanDismiss,
+                        errorText: self.appModel.pendingExecApprovalPromptErrorText,
+                        resolvedText: self.appModel.pendingExecApprovalPromptResolvedText,
+                        resolvedTone: self.appModel.pendingExecApprovalPromptOutcome?.tone,
+                        onAllowOnce: {
+                            Task {
+                                await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
+                            }
+                        },
+                        onAllowAlways: {
+                            Task {
+                                await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-always")
+                            }
+                        },
+                        onDeny: {
+                            Task {
+                                await self.appModel.resolvePendingExecApprovalPrompt(decision: "deny")
+                            }
+                        },
+                        onCancel: {
+                            self.appModel.dismissPendingExecApprovalPrompt()
+                        })
+                        .frame(maxHeight: 680)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 16)
+                        .frame(maxWidth: 460)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityAddTraits(.isModal)
+                        .accessibilityFocused(self.$approvalCardFocused)
+                        .onAppear { self.approvalCardFocused = true }
+                        .transition(.scale(scale: 0.98).combined(with: .opacity))
                 }
+                .zIndex(1)
             }
-            .animation(.easeInOut(duration: 0.18), value: self.appModel.pendingExecApprovalPrompt?.id)
+        }
+        .onChange(of: self.presentedPromptKey) { _, key in
+            self.approvalCardFocused = key != nil
+        }
+        .animation(.easeInOut(duration: 0.18), value: self.presentedPromptKey)
+    }
+
+    private var presentedPrompt: NodeAppModel.ExecApprovalPrompt? {
+        guard let prompt = self.appModel.pendingExecApprovalPrompt,
+              NodeAppModel.execApprovalInboxKey(prompt) != self.suppressedApproval
+        else { return nil }
+        return prompt
+    }
+
+    private var presentedPromptKey: NodeAppModel.ExecApprovalInboxKey? {
+        NodeAppModel.execApprovalInboxKey(self.presentedPrompt)
     }
 }
 
 private struct ExecApprovalPromptCard: View {
     let prompt: NodeAppModel.ExecApprovalPrompt
     let isResolving: Bool
+    let canDismiss: Bool
     let errorText: String?
+    let resolvedText: String?
+    let resolvedTone: NodeAppModel.ExecApprovalOutcomeTone?
     let onAllowOnce: () -> Void
     let onAllowAlways: () -> Void
     let onDeny: () -> Void
     let onCancel: () -> Void
 
     var body: some View {
+        VStack(spacing: 0) {
+            ScrollView {
+                self.reviewContent
+                    .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .accessibilityIdentifier("exec-approval-review-scroll")
+
+            Divider()
+
+            self.actionFooter
+                .padding(18)
+                .accessibilityIdentifier("exec-approval-actions")
+        }
+        .proPanelSurface(tint: OpenClawBrand.accentHot, radius: 20, isProminent: true)
+    }
+
+    private var reviewContent: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Exec approval required")
@@ -73,6 +121,17 @@ private struct ExecApprovalPromptCard: View {
                 .background(
                     .black.opacity(0.14),
                     in: RoundedRectangle(cornerRadius: OpenClawRadius.md, style: .continuous))
+
+            if let warningText = self.normalized(self.prompt.warningText) {
+                Label {
+                    Text(warningText)
+                        .font(OpenClawType.footnote)
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                }
+                .foregroundStyle(OpenClawBrand.warn)
+                .fixedSize(horizontal: false, vertical: true)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 if let host = self.normalized(self.prompt.host) {
@@ -95,6 +154,12 @@ private struct ExecApprovalPromptCard: View {
                     .foregroundStyle(OpenClawBrand.danger)
             }
 
+            if let resolvedText = self.normalized(self.resolvedText) {
+                Text(resolvedText)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(self.resolvedColor)
+            }
+
             if self.isResolving {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -104,17 +169,23 @@ private struct ExecApprovalPromptCard: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+    }
 
-            VStack(spacing: 10) {
-                Button {
-                    self.onAllowOnce()
-                } label: {
-                    Text("Allow Once")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
+    private var actionFooter: some View {
+        VStack(spacing: 10) {
+            if self.resolvedText == nil {
+                if self.prompt.allowsAllowOnce {
+                    Button {
+                        self.onAllowOnce()
+                    } label: {
+                        Text("Allow Once")
+                            .font(OpenClawType.subheadSemiBold)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.isResolving)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(self.isResolving)
 
                 if self.prompt.allowsAllowAlways {
                     Button {
@@ -128,33 +199,58 @@ private struct ExecApprovalPromptCard: View {
                     .disabled(self.isResolving)
                 }
 
-                HStack(spacing: 10) {
-                    Button(role: .destructive) {
-                        self.onDeny()
-                    } label: {
-                        Text("Deny")
-                            .font(OpenClawType.subheadSemiBold)
-                            .frame(maxWidth: .infinity)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 10) {
+                        if self.prompt.allowsDeny {
+                            self.denyButton
+                        }
+                        self.cancelButton
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(self.isResolving)
 
-                    Button(role: .cancel) {
-                        self.onCancel()
-                    } label: {
-                        Text("Cancel")
-                            .font(OpenClawType.subheadSemiBold)
-                            .frame(maxWidth: .infinity)
+                    VStack(spacing: 10) {
+                        if self.prompt.allowsDeny {
+                            self.denyButton
+                        }
+                        self.cancelButton
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(self.isResolving)
                 }
+            } else {
+                Button(role: .cancel) {
+                    self.onCancel()
+                } label: {
+                    Text("Dismiss")
+                        .font(OpenClawType.subheadSemiBold)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
             }
-            .controlSize(.large)
-            .frame(maxWidth: .infinity)
         }
-        .padding(18)
-        .proPanelSurface(tint: OpenClawBrand.accentHot, radius: 20, isProminent: true)
+        .controlSize(.large)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var denyButton: some View {
+        Button(role: .destructive) {
+            self.onDeny()
+        } label: {
+            Text("Deny")
+                .font(OpenClawType.subheadSemiBold)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .disabled(self.isResolving)
+    }
+
+    private var cancelButton: some View {
+        Button(role: .cancel) {
+            self.onCancel()
+        } label: {
+            Text("Cancel")
+                .font(OpenClawType.subheadSemiBold)
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .disabled(!self.canDismiss)
     }
 
     private func normalized(_ value: String?) -> String? {
@@ -162,26 +258,45 @@ private struct ExecApprovalPromptCard: View {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private var resolvedColor: Color {
+        switch self.resolvedTone {
+        case .success:
+            OpenClawBrand.ok
+        case .danger:
+            OpenClawBrand.danger
+        case .warning:
+            OpenClawBrand.warn
+        case .neutral, nil:
+            .secondary
+        }
+    }
+
     private func expiresText(_ expiresAtMs: Int64?) -> String? {
         guard let expiresAtMs else { return nil }
         let remainingSeconds = Int((Double(expiresAtMs) / 1000.0) - Date().timeIntervalSince1970)
         if remainingSeconds <= 0 {
-            return "expired"
+            return String(localized: "expired")
         }
         if remainingSeconds < 60 {
-            return "under a minute"
+            return String(localized: "under a minute")
         }
         if remainingSeconds < 3600 {
             let minutes = Int(ceil(Double(remainingSeconds) / 60.0))
-            return minutes == 1 ? "about 1 minute" : "about \(minutes) minutes"
+            return String(
+                AttributedString(
+                    localized: "about ^[\(minutes) minute](inflect: true)")
+                    .characters)
         }
         let hours = Int(ceil(Double(remainingSeconds) / 3600.0))
-        return hours == 1 ? "about 1 hour" : "about \(hours) hours"
+        return String(
+            AttributedString(
+                localized: "about ^[\(hours) hour](inflect: true)")
+                .characters)
     }
 }
 
 private struct ExecApprovalPromptMetadataRow: View {
-    let label: String
+    let label: LocalizedStringKey
     let value: String
 
     var body: some View {
@@ -189,7 +304,7 @@ private struct ExecApprovalPromptMetadataRow: View {
             Text(self.label)
                 .font(OpenClawType.caption)
                 .foregroundStyle(.secondary)
-            Text(self.value)
+            Text(verbatim: self.value)
                 .font(OpenClawType.footnote)
                 .textSelection(.enabled)
         }
@@ -197,7 +312,9 @@ private struct ExecApprovalPromptMetadataRow: View {
 }
 
 extension View {
-    func execApprovalPromptDialog(suppressedApprovalID: String? = nil) -> some View {
-        modifier(ExecApprovalPromptDialogModifier(suppressedApprovalID: suppressedApprovalID))
+    func execApprovalPromptDialog(
+        suppressedApproval: NodeAppModel.ExecApprovalInboxKey? = nil) -> some View
+    {
+        modifier(ExecApprovalPromptDialogModifier(suppressedApproval: suppressedApproval))
     }
 }

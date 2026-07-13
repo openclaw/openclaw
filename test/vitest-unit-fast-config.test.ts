@@ -126,7 +126,12 @@ describe("unit-fast vitest lane", () => {
       );
     `;
     configProbeResult = spawnNodeEvalSync(script, {
-      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      env: {
+        ...process.env,
+        FORCE_COLOR: "0",
+        NO_COLOR: "1",
+        OPENCLAW_VITEST_INCLUDE_FILE: undefined,
+      },
       evalFlag: "-e",
       imports: ["tsx"],
     });
@@ -206,7 +211,10 @@ describe("unit-fast vitest lane", () => {
 
   it("keeps obvious stateful files out of the unit-fast lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/agents/openai-transport-stream.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/auto-reply/reply/dispatch-from-config.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/acp/runtime/session-meta.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/flows/channel-setup.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/flows/doctor-health-contributions.test.ts")).toBe(false);

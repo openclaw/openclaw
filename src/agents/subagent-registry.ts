@@ -35,7 +35,8 @@ import {
   prependAgentSteeringPrompt,
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "./agent-steering-queue.js";
-import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
+import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
+import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
@@ -1066,7 +1067,7 @@ async function discardSuspendedPendingFinalDelivery(
   if (shouldDeleteAttachments) {
     await safeRemoveAttachmentsDir(entry);
   }
-  await removeInternalSessionEffectsTranscript(entry.execution?.transcriptFile);
+  await removeInternalSessionEffectsSession(entry.execution?.transcriptTarget);
   const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
   completeCleanupBookkeeping({
     runId,
@@ -1090,14 +1091,19 @@ async function discardSuspendedPendingFinalDelivery(
 }
 
 async function retireSupersededSubagentRun(runId: string, entry: SubagentRunRecord): Promise<void> {
-  const transcriptFile = entry.execution?.transcriptFile;
+  const transcriptTarget = entry.execution?.transcriptTarget;
   clearPendingLifecycleError(runId);
   subagentRuns.delete(runId);
-  const transcriptStillOwned = Array.from(subagentRuns.values()).some(
-    (candidate) => candidate.execution?.transcriptFile === transcriptFile,
-  );
-  if (transcriptFile && !transcriptStillOwned) {
-    await removeInternalSessionEffectsTranscript(transcriptFile);
+  const transcriptStillOwned = Array.from(subagentRuns.values()).some((candidate) => {
+    const candidateTarget = candidate.execution?.transcriptTarget;
+    return (
+      candidateTarget?.sessionId === transcriptTarget?.sessionId &&
+      candidateTarget?.sessionKey === transcriptTarget?.sessionKey &&
+      candidateTarget?.storePath === transcriptTarget?.storePath
+    );
+  });
+  if (transcriptTarget && !transcriptStillOwned) {
+    await removeInternalSessionEffectsSession(transcriptTarget);
   }
   if (entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
     await safeRemoveAttachmentsDir(entry);
@@ -1715,7 +1721,7 @@ export function replaceSubagentRunAfterSteer(params: {
   fallback?: SubagentRunRecord;
   runTimeoutSeconds?: number;
   preserveFrozenResultFallback?: boolean;
-  transcriptFile?: string;
+  transcriptTarget?: AgentRunSessionTarget;
   task?: string;
 }) {
   return subagentRunManager.replaceSubagentRunAfterSteer(params);
@@ -2043,4 +2049,3 @@ export function initSubagentRegistry() {
 // Importing this module also registers the subagent maintenance preserve-key
 // provider as a side effect (see subagent-registry-maintenance.ts).
 export { listSessionMaintenanceProtectedSubagentSessionKeys } from "./subagent-registry-maintenance.js";
-export { testing as __testing };

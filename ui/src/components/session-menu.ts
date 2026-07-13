@@ -5,8 +5,9 @@ import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
+import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 
-export type SessionMenuData = {
+type SessionMenuData = {
   key: string;
   label: string;
   pinned: boolean;
@@ -51,6 +52,10 @@ const EMPTY_SESSION: SessionMenuData = {
 
 class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION;
+  // >1 renders the batch menu: only actions that apply to every selected
+  // session (unread/group/archive/delete); `session` then carries aggregated
+  // flags (unread = all unread, category = shared category or null).
+  @property({ attribute: false }) selectionCount = 1;
   @property({ attribute: false }) x = 0;
   @property({ attribute: false }) y = 0;
   @property({ attribute: false }) trigger: HTMLElement | null = null;
@@ -76,16 +81,7 @@ class SessionMenu extends OpenClawLightDomElement {
     // which paints below the sidebar resizer divider (z-index 20); promoting
     // the menu to the popover top layer keeps app chrome from bleeding
     // through it (same pattern as openclaw-native-link-menu).
-    this.setAttribute("popover", "manual");
-    if (typeof this.showPopover === "function") {
-      try {
-        this.showPopover();
-        return;
-      } catch {
-        // Fall through to in-flow rendering when the top-layer API is unavailable.
-      }
-    }
-    this.removeAttribute("popover");
+    promoteToPopoverTopLayer(this);
   }
 
   override disconnectedCallback() {
@@ -268,7 +264,9 @@ class SessionMenu extends OpenClawLightDomElement {
               category: null,
             })
           : nothing}
-        <div class="session-menu__separator" role="separator"></div>
+        ${this.groups.length > 0 || session.category
+          ? html`<div class="session-menu__separator" role="separator"></div>`
+          : nothing}
         ${entry(t("sessionsView.newGroup"), false, { kind: "new-group" })}
       </div>
     `;
@@ -281,14 +279,18 @@ class SessionMenu extends OpenClawLightDomElement {
     const clampedY = Math.max(8, Math.min(this.y, window.innerHeight - menuMaxHeight - 8));
     const submenuLeft = clampedX + menuWidth * 2 + 4 > window.innerWidth - 8;
     const session = this.session;
+    const batch = this.selectionCount > 1;
+    const count = String(this.selectionCount);
     return html`
       <div
         class="session-menu"
         role="menu"
-        aria-label=${t("chat.sidebar.sessionMenu", { session: session.label })}
+        aria-label=${batch
+          ? t("chat.sidebar.sessionMenuMany", { count })
+          : t("chat.sidebar.sessionMenu", { session: session.label })}
         style="left: ${clampedX}px; top: ${clampedY}px;"
       >
-        ${this.canOpenChat
+        ${!batch && this.canOpenChat
           ? html`
               <button
                 type="button"
@@ -305,24 +307,30 @@ class SessionMenu extends OpenClawLightDomElement {
               </button>
             `
           : nothing}
-        ${this.renderWorkItems(submenuLeft)}
-        <button
-          type="button"
-          class="session-menu__item"
-          role="menuitem"
-          data-shortcut="p"
-          aria-keyshortcuts="P"
-          ?disabled=${this.disabled || session.archived}
-          @click=${() => this.runAction({ kind: "toggle-pin" })}
-        >
-          <span class="session-menu__icon" aria-hidden="true"
-            >${session.pinned ? icons.pinOff : icons.pin}</span
-          >
-          <span class="session-menu__text"
-            >${session.pinned ? t("sessionsView.unpinSession") : t("sessionsView.pinSession")}</span
-          >
-          ${menuShortcutHint("p")}
-        </button>
+        ${batch ? nothing : this.renderWorkItems(submenuLeft)}
+        ${batch
+          ? nothing
+          : html`
+              <button
+                type="button"
+                class="session-menu__item"
+                role="menuitem"
+                data-shortcut="p"
+                aria-keyshortcuts="P"
+                ?disabled=${this.disabled || session.archived}
+                @click=${() => this.runAction({ kind: "toggle-pin" })}
+              >
+                <span class="session-menu__icon" aria-hidden="true"
+                  >${session.pinned ? icons.pinOff : icons.pin}</span
+                >
+                <span class="session-menu__text"
+                  >${session.pinned
+                    ? t("sessionsView.unpinSession")
+                    : t("sessionsView.pinSession")}</span
+                >
+                ${menuShortcutHint("p")}
+              </button>
+            `}
         <button
           type="button"
           class="session-menu__item"
@@ -336,37 +344,47 @@ class SessionMenu extends OpenClawLightDomElement {
             >${session.unread ? icons.eye : icons.circle}</span
           >
           <span class="session-menu__text"
-            >${session.unread ? t("sessionsView.markRead") : t("sessionsView.markUnread")}</span
+            >${batch
+              ? session.unread
+                ? t("sessionsView.markReadCount", { count })
+                : t("sessionsView.markUnreadCount", { count })
+              : session.unread
+                ? t("sessionsView.markRead")
+                : t("sessionsView.markUnread")}</span
           >
           ${menuShortcutHint("u")}
         </button>
-        <button
-          type="button"
-          class="session-menu__item"
-          role="menuitem"
-          data-shortcut="r"
-          aria-keyshortcuts="R"
-          ?disabled=${this.disabled}
-          @click=${() => this.runAction({ kind: "rename" })}
-        >
-          <span class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
-          <span class="session-menu__text">${t("sessionsView.renameSessionMenu")}</span>
-          ${menuShortcutHint("r")}
-        </button>
-        <button
-          type="button"
-          class="session-menu__item"
-          role="menuitem"
-          data-shortcut="f"
-          aria-keyshortcuts="F"
-          ?disabled=${this.disabled || this.forkDisabled}
-          @click=${() => this.runAction({ kind: "fork" })}
-        >
-          <span class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
-          <span class="session-menu__text">${t("sessionsView.forkSession")}</span>
-          ${menuShortcutHint("f")}
-        </button>
-        ${this.workboard
+        ${batch
+          ? nothing
+          : html`
+              <button
+                type="button"
+                class="session-menu__item"
+                role="menuitem"
+                data-shortcut="r"
+                aria-keyshortcuts="R"
+                ?disabled=${this.disabled}
+                @click=${() => this.runAction({ kind: "rename" })}
+              >
+                <span class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
+                <span class="session-menu__text">${t("sessionsView.renameSessionMenu")}</span>
+                ${menuShortcutHint("r")}
+              </button>
+              <button
+                type="button"
+                class="session-menu__item"
+                role="menuitem"
+                data-shortcut="f"
+                aria-keyshortcuts="F"
+                ?disabled=${this.disabled || this.forkDisabled}
+                @click=${() => this.runAction({ kind: "fork" })}
+              >
+                <span class="session-menu__icon" aria-hidden="true">${icons.copy}</span>
+                <span class="session-menu__text">${t("sessionsView.forkSession")}</span>
+                ${menuShortcutHint("f")}
+              </button>
+            `}
+        ${!batch && this.workboard
           ? html`
               <button
                 type="button"
@@ -410,7 +428,11 @@ class SessionMenu extends OpenClawLightDomElement {
             }}
           >
             <span class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
-            <span class="session-menu__text">${t("sessionsView.moveToGroupMenu")}</span>
+            <span class="session-menu__text"
+              >${batch
+                ? t("sessionsView.moveToGroupMenuCount", { count })
+                : t("sessionsView.moveToGroupMenu")}</span
+            >
             <span class="session-menu__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </button>
           ${this.openSubmenu === "group" ? this.renderGroupSubmenu(submenuLeft) : nothing}
@@ -429,9 +451,11 @@ class SessionMenu extends OpenClawLightDomElement {
             >${session.archived ? icons.archiveRestore : icons.archive}</span
           >
           <span class="session-menu__text"
-            >${session.archived
-              ? t("sessionsView.restoreSession")
-              : t("sessionsView.archiveSession")}</span
+            >${batch
+              ? t("sessionsView.archiveSessionCount", { count })
+              : session.archived
+                ? t("sessionsView.restoreSession")
+                : t("sessionsView.archiveSession")}</span
           >
           ${menuShortcutHint("a")}
         </button>
@@ -445,7 +469,11 @@ class SessionMenu extends OpenClawLightDomElement {
           @click=${() => this.runAction({ kind: "delete" })}
         >
           <span class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
-          <span class="session-menu__text">${t("sessionsView.deleteSessionMenu")}</span>
+          <span class="session-menu__text"
+            >${batch
+              ? t("sessionsView.deleteSessionCount", { count })
+              : t("sessionsView.deleteSessionMenu")}</span
+          >
           ${menuShortcutHint("d")}
         </button>
       </div>

@@ -61,7 +61,6 @@ const BUNDLED_PLUGIN_INSTALL_UNINSTALL_E2E_PATH =
 const AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH = "scripts/e2e/agent-bundle-mcp-tools-docker.sh";
 const COMMITMENTS_SAFETY_DOCKER_E2E_PATH = "scripts/e2e/commitments-safety-docker.sh";
 const CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH = "scripts/e2e/crestodian-first-run-docker.sh";
-const CRESTODIAN_PLANNER_DOCKER_E2E_PATH = "scripts/e2e/crestodian-planner-docker.sh";
 const CRESTODIAN_RESCUE_DOCKER_E2E_PATH = "scripts/e2e/crestodian-rescue-docker.sh";
 const SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH = "scripts/e2e/session-runtime-context-docker.sh";
 const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SWEEP_PATH =
@@ -144,7 +143,11 @@ function cleanupSmokeLogTailHelpers(): string {
   if (!match) {
     throw new Error("cleanup smoke log helpers were not found");
   }
-  return match[1];
+  const helpers = match[1];
+  if (helpers === undefined) {
+    throw new Error("cleanup smoke log helper capture was not found");
+  }
+  return helpers;
 }
 
 function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {
@@ -3466,7 +3469,6 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
       AGENT_BUNDLE_MCP_TOOLS_DOCKER_E2E_PATH,
       COMMITMENTS_SAFETY_DOCKER_E2E_PATH,
       CRESTODIAN_FIRST_RUN_DOCKER_E2E_PATH,
-      CRESTODIAN_PLANNER_DOCKER_E2E_PATH,
       CRESTODIAN_RESCUE_DOCKER_E2E_PATH,
       PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH,
       SESSION_RUNTIME_CONTEXT_DOCKER_E2E_PATH,
@@ -4326,11 +4328,17 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(runner).toContain(
       'PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_PORT 18789)"',
     );
-    expect(runner).toContain('MOCK_PORT="80"');
+    expect(runner).toContain('MOCK_PORT="443"');
     expect(runner).not.toContain("OPENCLAW_OPENAI_WEB_SEARCH_MINIMAL_MOCK_PORT");
     expect(runner).toContain('-e "PORT=$PORT"');
     expect(runner).toContain('-e "MOCK_PORT=$MOCK_PORT"');
     expect(runner).toContain("scripts/e2e/lib/openai-web-search-minimal/scenario.sh");
+    expect(scenario).toContain('export NODE_EXTRA_CA_CERTS="$TLS_CA_CERT"');
+    expect(scenario).toContain('MOCK_TLS_CERT="$TLS_SERVER_CERT"');
+    expect(scenario).toContain('MOCK_TLS_KEY="$TLS_SERVER_KEY"');
+    expect(scenario).toContain(
+      'openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "https://api.openai.com:$MOCK_PORT"',
+    );
     expect(scenario).toContain("scripts/e2e/lib/openai-web-search-minimal/client.mjs");
     expect(client).toContain("const callGateway = await loadCallGateway();");
     expect(client).toContain('method: "agent"');
@@ -4347,7 +4355,9 @@ heartbeat_elapsed="\${BASH_REMATCH[1]}"
     expect(scenario).toContain(
       'gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"',
     );
-    expect(scenario).toContain('openclaw_e2e_wait_mock_openai "$MOCK_PORT"');
+    expect(scenario).toContain(
+      'openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "https://api.openai.com:$MOCK_PORT"',
+    );
     expect(scenario).toContain(
       'openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$PORT"',
     );

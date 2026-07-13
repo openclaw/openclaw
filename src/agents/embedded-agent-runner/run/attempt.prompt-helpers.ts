@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
+  ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
@@ -579,6 +580,7 @@ export function resolveAttemptMediaTaskSystemPromptAddition(params: {
 
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
+  | "sessionTarget"
   | "sessionKey"
   | "sandboxSessionKey"
   | "messageChannel"
@@ -600,9 +602,37 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "extraSystemPrompt"
   | "ownerNumbers"
   | "authProfileId"
+  | "authProfileIdSource"
+  | "runtimePlan"
 > & {
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
+
+function resolveRuntimeContextSessionTarget(params: {
+  attempt: AfterTurnRuntimeContextAttempt;
+  activeAgentId?: string;
+}): ContextEngineSessionTarget | undefined {
+  const sessionTarget = params.attempt.sessionTarget;
+  const agentId = sessionTarget?.agentId ?? params.activeAgentId;
+  const sessionId = sessionTarget?.sessionId ?? params.attempt.sessionId;
+  const sessionKey = sessionTarget?.sessionKey ?? params.attempt.sessionKey;
+  if (
+    !agentId &&
+    !sessionId &&
+    !sessionKey &&
+    !sessionTarget?.storePath &&
+    sessionTarget?.threadId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(sessionTarget?.storePath ? { storePath: sessionTarget.storePath } : {}),
+    ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
+  };
+}
 
 /** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
@@ -616,6 +646,10 @@ export function buildAfterTurnRuntimeContext(params: {
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
 }): ContextEngineRuntimeContext {
+  const sessionTarget = resolveRuntimeContextSessionTarget({
+    attempt: params.attempt,
+    activeAgentId: params.activeAgentId,
+  });
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
@@ -626,6 +660,8 @@ export function buildAfterTurnRuntimeContext(params: {
       currentThreadTs: params.attempt.currentThreadTs,
       currentMessageId: params.attempt.currentMessageId,
       authProfileId: params.attempt.authProfileId,
+      authProfileIdSource: params.attempt.authProfileIdSource,
+      runtimeAuthPlan: params.attempt.runtimePlan?.auth,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
       agentDir: params.agentDir,
@@ -668,6 +704,8 @@ export function buildAfterTurnRuntimeContext(params: {
       ? { currentTokenCount: Math.floor(params.currentTokenCount) }
       : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
+    transcriptStorage: { kind: "sqlite" },
+    ...(sessionTarget ? { sessionTarget } : {}),
   };
 }
 

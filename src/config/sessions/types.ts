@@ -3,8 +3,6 @@ import crypto from "node:crypto";
 import type {
   AcpSessionRuntimeOptions,
   SessionAcpIdentity,
-  SessionAcpIdentitySource,
-  SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
@@ -14,11 +12,12 @@ import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
+import type { SessionRestartRecoveryState } from "./restart-recovery-types.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
 export type SessionScope = "per-sender" | "global";
 
-export type SessionChannelId = ChannelId;
+type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
 
@@ -35,13 +34,7 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
-export type {
-  AcpSessionRuntimeOptions,
-  SessionAcpIdentity,
-  SessionAcpIdentitySource,
-  SessionAcpIdentityState,
-  SessionAcpMeta,
-};
+export type { AcpSessionRuntimeOptions, SessionAcpIdentity, SessionAcpMeta };
 
 export type CliSessionReseedReceipt = {
   version: 1;
@@ -52,6 +45,8 @@ export type CliSessionReseedReceipt = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Resume with the backend's fork argument once, then clear before process start. */
+  forkNextResume?: true;
   /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
   forceReuse?: boolean;
   authProfileId?: string;
@@ -73,7 +68,7 @@ export type SessionCompactionCheckpointReason =
   | "overflow-retry"
   | "timeout-retry";
 
-export type SessionCompactionTranscriptReference = {
+type SessionCompactionTranscriptReference = {
   sessionId: string;
   sessionFile?: string;
   leafId?: string;
@@ -94,7 +89,7 @@ export type SessionCompactionCheckpoint = {
   postCompaction: SessionCompactionTranscriptReference;
 };
 
-export type SessionContextBudgetStatusRoute =
+type SessionContextBudgetStatusRoute =
   | "fits"
   | "compact_only"
   | "truncate_tool_results_only"
@@ -128,7 +123,7 @@ export type AmbientTranscriptWatermark = {
   updatedAt: number;
 };
 
-export type SessionPluginDebugEntry = {
+type SessionPluginDebugEntry = {
   pluginId: string;
   lines: string[];
 };
@@ -141,7 +136,7 @@ export type SessionPluginJsonValue =
   | SessionPluginJsonValue[]
   | { [key: string]: SessionPluginJsonValue };
 
-export type SessionPluginNextTurnInjection = {
+type SessionPluginNextTurnInjection = {
   id: string;
   pluginId: string;
   pluginName?: string;
@@ -153,7 +148,7 @@ export type SessionPluginNextTurnInjection = {
   metadata?: SessionPluginJsonValue;
 };
 
-export type SubagentRecoveryState = {
+type SubagentRecoveryState = {
   /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
   automaticAttempts?: number;
   /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
@@ -166,7 +161,7 @@ export type SubagentRecoveryState = {
   wedgedReason?: string;
 };
 
-export type LaneExecutionState =
+type LaneExecutionState =
   | "active"
   | "draining"
   | "suspended"
@@ -228,7 +223,7 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
-export type SessionEntry = {
+export type SessionEntry = SessionRestartRecoveryState & {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
    * Stored on the main session entry.
@@ -297,12 +292,14 @@ export type SessionEntry = {
   inheritedToolDeny?: string[];
   /** Session-scoped tool allow entries inherited from the caller that created this session. */
   inheritedToolAllow?: string[];
-  /** Plugin id that created this session through api.runtime.subagent. */
+  /** Plugin id that owns this session through a trusted runtime creation seam. */
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /** Interrupted run generations whose late lifecycle events must be ignored. */
   restartRecoveryRuns?: RestartRecoveryRun[];
+  /** Keeps automatic restart recovery limited to replay-safe tools until the run terminates. */
+  restartRecoveryForceSafeTools?: true;
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */
@@ -375,6 +372,8 @@ export type SessionEntry = {
   execSecurity?: string;
   execAsk?: string;
   execNode?: string;
+  /** Working directory interpreted only by the bound exec node. */
+  execCwd?: string;
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
@@ -422,10 +421,6 @@ export type SessionEntry = {
   pendingFinalDeliveryContext?: DeliveryContext;
   /** Durable send intent backing pending final delivery, when already created. */
   pendingFinalDeliveryIntentId?: string | null;
-  /** Current visible run delivery context used only for restart recovery. */
-  restartRecoveryDeliveryContext?: DeliveryContext;
-  /** Active run id that owns restartRecoveryDeliveryContext cleanup. */
-  restartRecoveryDeliveryRunId?: string;
   /**
    * Whether totalTokens reflects a fresh context snapshot for the latest run.
    * Undefined means legacy/unknown freshness; false forces consumers to treat
@@ -594,7 +589,7 @@ export function setSessionRuntimeModel(
   return true;
 }
 
-export type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
+type SessionEntryMergePolicy = "touch-activity" | "preserve-activity";
 
 type MergeSessionEntryOptions = {
   policy?: SessionEntryMergePolicy;
@@ -622,7 +617,7 @@ function normalizeMergedUpdatedAt(value: number | undefined, now: number): numbe
   return Math.min(value, now);
 }
 
-export function mergeSessionEntryWithPolicy(
+function mergeSessionEntryWithPolicy(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
   options?: MergeSessionEntryOptions,
@@ -733,6 +728,8 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /** Effective node-exec eligibility used to select connected node-hosted skills. */
+  nodeSkillsEligibility?: { canExec: boolean; node?: string };
   /**
    * Runtime-only, never persisted. Carries the full parsed Skill[] (including
    * each SKILL.md body) so the embedded runner can skip a workspace skill

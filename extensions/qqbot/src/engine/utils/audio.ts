@@ -11,6 +11,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { readRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "./format.js";
 import { debugLog, debugError, debugWarn } from "./log.js";
@@ -34,7 +35,7 @@ function loadSilkWasm(): Promise<SilkWasm | null> {
 }
 
 /** Wrap raw PCM s16le data into a standard WAV file. */
-export function pcmToWav(
+function pcmToWav(
   pcmData: Uint8Array,
   sampleRate: number,
   channels = 1,
@@ -69,7 +70,7 @@ export function pcmToWav(
 }
 
 /** Strip the AMR header that may be present in QQ voice payloads. */
-export function stripAmrHeader(buf: Buffer): Buffer {
+function stripAmrHeader(buf: Buffer): Buffer {
   const AMR_HEADER = Buffer.from("#!AMR\n");
   if (buf.length > 6 && buf.subarray(0, 6).equals(AMR_HEADER)) {
     return buf.subarray(6);
@@ -395,14 +396,14 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 
     let floatMono: Float32Array;
     if (decoded.channelData.length === 1) {
-      floatMono = decoded.channelData[0];
+      floatMono = expectDefined(decoded.channelData.at(0), "single decoded MP3 channel");
     } else {
       floatMono = new Float32Array(decoded.samplesDecoded);
       const channels = decoded.channelData.length;
       for (let i = 0; i < decoded.samplesDecoded; i++) {
         let sum = 0;
-        for (let ch = 0; ch < channels; ch++) {
-          sum += decoded.channelData[ch][i];
+        for (const channel of decoded.channelData) {
+          sum += expectDefined(channel.at(i), "decoded MP3 channel sample");
         }
         floatMono[i] = sum / channels;
       }
@@ -411,7 +412,8 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
     const s16 = new Uint8Array(floatMono.length * 2);
     const view = new DataView(s16.buffer);
     for (let i = 0; i < floatMono.length; i++) {
-      const clamped = Math.max(-1, Math.min(1, floatMono[i]));
+      const sample = expectDefined(floatMono.at(i), "mono MP3 sample index");
+      const clamped = Math.max(-1, Math.min(1, sample));
       const val = clamped < 0 ? clamped * 32768 : clamped * 32767;
       view.setInt16(i * 2, Math.round(val), true);
     }
@@ -447,7 +449,7 @@ async function wasmDecodeMp3ToPCM(buf: Buffer, targetRate: number): Promise<Buff
 }
 
 /** Parse a standard PCM WAV and extract mono 24 kHz PCM data. */
-export function parseWavFallback(buf: Buffer): Buffer | null {
+function parseWavFallback(buf: Buffer): Buffer | null {
   if (buf.length < 44) {
     return null;
   }

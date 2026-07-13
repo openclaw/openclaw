@@ -1,40 +1,22 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("../markdown.ts", async (importOriginal) => await importOriginal());
-vi.mock("../tool-display.ts", () => ({
-  formatToolDetail: (display: { detail?: string }) => display.detail,
-  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => {
-    const labels: Record<string, string> = {
-      sessions_spawn: "Sub-agent",
-      skill_workshop: "Skill Workshop",
-      web_search: "Web Search",
-    };
-    const detail =
-      name === "skill_workshop" &&
-      args &&
-      typeof args === "object" &&
-      typeof (args as { action?: unknown }).action === "string"
-        ? (args as { action: string }).action
-        : undefined;
-    return {
-      name,
-      label: labels[name] ?? name,
-      icon: "zap",
-      detail,
-    };
-  },
-}));
-
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../../../i18n/index.ts";
 import {
   formatDistinctCollapsedToolSummaryText,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
-  isToolErrorOutput,
 } from "../../../lib/chat/tool-cards.ts";
-import { renderToolCard } from "./chat-tool-cards.ts";
+import { renderToolCard, renderToolPreview } from "./chat-tool-cards.ts";
+
+const lazyElementMocks = vi.hoisted(() => ({
+  ensureCustomElementDefined: vi.fn<
+    (tagName: string, loadModule: () => Promise<unknown>) => Promise<void>
+  >(() => Promise.resolve()),
+}));
+
+vi.mock("../../../app/lazy-custom-element.ts", () => lazyElementMocks);
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -64,6 +46,82 @@ function pointerClick(element: Element) {
 }
 
 describe("tool-cards", () => {
+  beforeEach(() => {
+    lazyElementMocks.ensureCustomElementDefined.mockClear();
+  });
+
+  it("routes MCP App previews through the dedicated double-iframe host", async () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_app",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_message",
+        { sessionKey: "agent:main:main" },
+      ),
+      container,
+    );
+
+    const view = container.querySelector("mcp-app-view");
+    expect(view).not.toBeNull();
+    expect(view?.getAttribute("src")).toBeNull();
+    expect((view as { sessionKey?: string }).sessionKey).toBe("agent:main:main");
+    expect((view as { viewId?: string }).viewId).toBe("cv_app");
+    expect((view as { height?: number }).height).toBe(600);
+    expect(lazyElementMocks.ensureCustomElementDefined).toHaveBeenCalledOnce();
+    const [tagName, loadModule] = lazyElementMocks.ensureCustomElementDefined.mock.calls[0]!;
+    expect(tagName).toBe("mcp-app-view");
+    expect(loadModule).toBeTypeOf("function");
+    await loadModule();
+    expect(customElements.get("mcp-app-view")).toBeDefined();
+    expect((view as { sessionKey?: string }).sessionKey).toBe("agent:main:main");
+    expect((view as { viewId?: string }).viewId).toBe("cv_app");
+
+    lazyElementMocks.ensureCustomElementDefined.mockClear();
+    const toolContainer = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          mcpApp: { viewId: "cv_app" },
+        },
+        "chat_tool",
+        { sessionKey: "agent:main:main" },
+      ),
+      toolContainer,
+    );
+    expect(toolContainer.querySelector("mcp-app-view")).toBeNull();
+    expect(lazyElementMocks.ensureCustomElementDefined).not.toHaveBeenCalled();
+  });
+
+  it("keeps ordinary canvas previews off the MCP Apps chunk", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          kind: "canvas",
+          surface: "assistant_message",
+          render: "url",
+          viewId: "cv_canvas",
+          url: "https://canvas.example/widget",
+        },
+        "chat_message",
+        { allowExternalEmbedUrls: true },
+      ),
+      container,
+    );
+
+    expect(container.querySelector("iframe")).not.toBeNull();
+    expect(lazyElementMocks.ensureCustomElementDefined).not.toHaveBeenCalled();
+  });
+
   it("keeps selected summary text from toggling the disclosure", () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -277,6 +335,46 @@ describe("tool-cards", () => {
         );
       }
     }
+  });
+
+  it.each([
+    { name: "read", args: { path: "packages/app/src/read.ts" }, path: "packages/app/src/read.ts" },
+    {
+      name: "edit",
+      args: { file_path: "packages/app/src/edit.ts", oldText: "old", newText: "new" },
+      path: "packages/app/src/edit.ts",
+    },
+    {
+      name: "write",
+      args: { path: "packages/app/src/write.ts", content: "new" },
+      path: "packages/app/src/write.ts",
+    },
+  ])("opens the raw file path from an expanded $name card", ({ name, args, path }) => {
+    const container = document.createElement("div");
+    const onOpenWorkspaceFile = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: `msg:${name}:open`,
+          name,
+          args,
+          completed: true,
+        },
+        {
+          expanded: true,
+          onOpenWorkspaceFile,
+          onToggleExpanded: vi.fn(),
+        },
+      ),
+      container,
+    );
+
+    const pathButton = container.querySelector<HTMLButtonElement>(
+      '.chat-tool-card__detail-link[title="Open file"]',
+    );
+    expect(pathButton).toBeInstanceOf(HTMLButtonElement);
+    pathButton!.click();
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path });
   });
 
   it("keeps read offsets and limits visible in expanded args", () => {
@@ -637,73 +735,15 @@ describe("tool-cards", () => {
     const sidebarButton = container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn");
     expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
     expect([...sidebarButton!.classList]).toEqual(["chat-tool-card__action-btn"]);
+    const tooltip = sidebarButton!.parentElement as HTMLElement & { content?: string };
+    expect(tooltip.content).toBe(t("chat.toolCards.openDetails"));
+    expect(sidebarButton!.getAttribute("aria-label")).toBe(t("chat.toolCards.openDetails"));
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
     expect(sidebar.kind).toBe("canvas");
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
-  });
-  describe("isToolErrorOutput", () => {
-    it("flags JSON payloads that carry a top-level error string", () => {
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            error: "missing_brave_api_key",
-            message: "BRAVE_API_KEY is not configured",
-            provider: "brave",
-          }),
-        ),
-      ).toBe(true);
-    });
-
-    it("flags JSON payloads that carry a top-level isError flag", () => {
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            isError: true,
-            content: [{ type: "text", text: "Tool error: boom" }],
-          }),
-        ),
-      ).toBe(true);
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({
-            is_error: true,
-            content: [{ type: "text", text: "Tool error: boom" }],
-          }),
-        ),
-      ).toBe(true);
-    });
-
-    it("flags 'Tool not found' bodies regardless of trailing punctuation or case", () => {
-      expect(isToolErrorOutput("Tool not found")).toBe(true);
-      expect(isToolErrorOutput("  tool not found.  ")).toBe(true);
-      expect(isToolErrorOutput("TOOL NOT FOUND")).toBe(true);
-    });
-
-    it("flags JSON payloads with top-level failure statuses", () => {
-      expect(isToolErrorOutput(JSON.stringify({ status: "error" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "failed" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "timeout" }))).toBe(true);
-      expect(isToolErrorOutput(JSON.stringify({ status: "completed" }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ status: "ok" }))).toBe(false);
-    });
-
-    it("does not flag successful payloads or strings without a tool error signal", () => {
-      expect(isToolErrorOutput(undefined)).toBe(false);
-      expect(isToolErrorOutput("")).toBe(false);
-      expect(isToolErrorOutput("Opened page")).toBe(false);
-      expect(
-        isToolErrorOutput(
-          JSON.stringify({ isError: false, result: "ok", error: "no validation errors" }),
-        ),
-      ).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: null }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: "" }))).toBe(false);
-      expect(isToolErrorOutput(JSON.stringify({ result: "ok" }))).toBe(false);
-      expect(isToolErrorOutput("{ not really json }")).toBe(false);
-    });
   });
 
   it("renders an error summary without a redundant Error badge", () => {

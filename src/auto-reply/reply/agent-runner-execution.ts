@@ -1,5 +1,6 @@
 /** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -48,7 +49,7 @@ import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import { isFailoverError } from "../../agents/failover-error.js";
+import { findCliMaxTurnsError, isFailoverError } from "../../agents/failover-error.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -69,6 +70,7 @@ import {
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
+import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { resolveGroupSessionKey, type SessionEntry } from "../../config/sessions.js";
@@ -417,7 +419,7 @@ export type RuntimeFallbackAttempt = {
 };
 
 /** Result of running an agent turn through fallback/retry handling. */
-export type AgentRunLoopResult =
+type AgentRunLoopResult =
   | {
       kind: "success";
       runId: string;
@@ -564,7 +566,7 @@ function collapseRepeatedFailureDetail(message: string): string {
     .map((part) => part.trim())
     .filter(Boolean);
   if (parts.length >= 2 && parts.every((part) => part === parts[0])) {
-    return parts[0];
+    return expectDefined(parts[0], "parts entry at 0");
   }
   return message.trim();
 }
@@ -694,7 +696,7 @@ function buildMissingApiKeyFailureText(input: { message: string; error?: unknown
     return null;
   }
   if (provider === "openai" && normalizedMessage.includes("OpenAI Codex OAuth")) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.6-sol` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
   }
   if (provider === "openai") {
     return '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.';
@@ -790,6 +792,13 @@ function buildExternalRunFailureReply(
   const authProfileFailoverFailure = buildAuthProfileFailoverFailureText(error);
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
+  }
+  const cliMaxTurnsError = findCliMaxTurnsError(error);
+  if (cliMaxTurnsError) {
+    return {
+      text: sanitizeUserFacingText(cliMaxTurnsError.message, { errorContext: true }),
+      isGenericRunnerFailure: false,
+    };
   }
   const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
   if (providerRequestError) {
@@ -2072,196 +2081,210 @@ async function runAgentTurnWithFallbackInternal(
                 },
               });
               const result = await agentTurnTiming.measure("cli_run", () =>
-                runCliAgentWithLifecycle({
-                  runId,
-                  lifecycleGeneration,
-                  provider: cliExecutionProvider,
-                  startedAt: cliLifecycleStartedAt,
-                  emitLifecycleTerminal: false,
-                  onAgentRunStart: notifyAgentRunStart,
-                  suppressAssistantBridge: params.followupRun.run.silentExpected,
-                  onActivity: () => params.replyOperation?.recordActivity(),
-                  preserveProgressCallbackStartOrder,
-                  onAssistantText: async (text) => {
-                    if (!preserveProgressCallbackStartOrder) {
-                      const textForTyping = await handlePartialForTyping({
-                        text,
-                      } as ReplyPayload);
-                      if (textForTyping === undefined || !params.opts?.onPartialReply) {
-                        return;
-                      }
-                      await params.opts.onPartialReply({ text: textForTyping });
-                      return;
-                    }
-                    const textForTyping = preparePartialForTyping({ text } as ReplyPayload);
-                    if (textForTyping === undefined) {
-                      return;
-                    }
-                    // Assistant and tool CLI bridges drain independently; stage presentation
-                    // before typing I/O so a later tool cannot overtake this text.
-                    await startPresentationWhileTyping(
-                      params.typingSignals.signalTextDelta(textForTyping),
-                      () => params.opts?.onPartialReply?.({ text: textForTyping }),
-                    );
-                  },
-                  onReasoningText: createCliReasoningStreamBridge(params.opts?.onReasoningStream),
-                  onReasoningProgress: async (payload) => {
-                    await params.opts?.onReasoningProgress?.(payload);
-                  },
-                  onToolEvent: async (payload) => {
-                    if (!preserveProgressCallbackStartOrder) {
-                      await cliToolSummaryTracker.noteToolEvent(payload);
-                      if (payload.phase === "result") {
-                        return;
-                      }
-                      const { name, phase, args } = payload;
-                      await Promise.all([
-                        params.typingSignals.signalToolStart(),
-                        params.opts?.onToolStart?.({
-                          name,
-                          phase,
-                          args,
-                          detailMode: params.toolProgressDetail,
-                        }),
-                      ]);
-                      return;
-                    }
-                    const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
-                    if (payload.phase === "result") {
-                      await summaryPromise;
-                      return;
-                    }
-                    const { name, phase, args } = payload;
-                    // Tool and assistant CLI bridges drain independently. Start channel
-                    // presentation before either bridge can yield and invert source order.
-                    await Promise.all([
-                      summaryPromise,
-                      startPresentationWhileTyping(params.typingSignals.signalToolStart(), () =>
-                        params.opts?.onToolStart?.({
-                          name,
-                          phase,
-                          args,
-                          detailMode: params.toolProgressDetail,
-                        }),
-                      ),
-                    ]);
-                  },
-                  onCommentaryText:
-                    params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
-                      ? async (payload) => {
-                          await params.opts?.onItemEvent?.({
-                            itemId: payload.itemId,
-                            kind: "preamble",
-                            progressText: payload.text,
-                          });
-                        }
-                      : undefined,
-                  onFastModeAutoProgress: async (payload) => {
-                    await params.opts?.onToolResult?.(payload);
-                  },
-                  transformResult:
-                    params.followupRun.currentInboundEventKind === "room_event"
-                      ? (resultLocal) =>
-                          keepCliSessionBindingOnlyWhenReused({
-                            result: resultLocal,
-                            existingSessionId: cliSessionBinding?.sessionId,
-                            onDroppedReplacement: () => {
-                              droppedCliSessionReplacement = true;
-                            },
-                          })
-                      : undefined,
-                  runParams: {
+                withLocalSessionPlacementTurnAdmission(
+                  {
                     sessionId: params.followupRun.run.sessionId,
                     sessionKey: params.sessionKey,
-                    runtimePolicySessionKey:
-                      params.followupRun.run.runtimePolicySessionKey ??
-                      params.runtimePolicySessionKey,
                     agentId: params.followupRun.run.agentId,
-                    trigger: params.isHeartbeat ? "heartbeat" : "user",
-                    sessionFile: params.followupRun.run.sessionFile,
-                    workspaceDir: params.followupRun.run.workspaceDir,
-                    cwd: params.followupRun.run.cwd,
-                    config: runtimeConfig,
-                    prompt: params.commandBody,
-                    transcriptPrompt: params.transcriptCommandBody,
-                    suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
-                    userTurnTranscriptRecorder,
-                    onUserMessagePersisted: notifyUserMessagePersisted,
-                    persistAssistantTranscript:
-                      params.followupRun.currentInboundEventKind !== "room_event" &&
-                      params.followupRun.run.suppressTranscriptOnlyAssistantPersistence !== true,
-                    storePath: params.storePath,
-                    currentInboundEventKind: params.followupRun.currentInboundEventKind,
-                    currentInboundContext: params.followupRun.currentInboundContext,
-                    inputProvenance: params.followupRun.run.inputProvenance,
-                    modelProvider: provider,
-                    provider: cliExecutionProvider,
-                    execOverrides: params.followupRun.run.execOverrides,
-                    bashElevated: params.followupRun.run.bashElevated,
-                    model,
-                    thinkLevel: candidateThinkLevel,
-                    fastMode: candidateFastMode.fastMode,
-                    fastModeStartedAtMs,
-                    fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
-                    fastModeAutoProgressState,
-                    isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
-                    timeoutMs: params.followupRun.run.timeoutMs,
-                    runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
                     runId,
-                    lane: runLane,
-                    extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-                    sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
-                    taskSuggestionDeliveryMode: params.followupRun.run.taskSuggestionDeliveryMode,
-                    silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
-                    allowEmptyAssistantReplyAsSilent:
-                      params.followupRun.run.allowEmptyAssistantReplyAsSilent,
-                    extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
-                    cliSessionBindingFacts: params.followupRun.run.cliSessionBindingFacts,
-                    ownerNumbers: params.followupRun.run.ownerNumbers,
-                    cliSessionId: cliSessionBinding?.sessionId,
-                    cliSessionBinding,
-                    authProfileId: authProfile.authProfileId,
-                    bootstrapContextMode: params.opts?.bootstrapContextMode,
-                    bootstrapContextRunKind,
-                    bootstrapPromptWarningSignaturesSeen,
-                    bootstrapPromptWarningSignature:
-                      bootstrapPromptWarningSignaturesSeen[
-                        bootstrapPromptWarningSignaturesSeen.length - 1
-                      ],
-                    images: currentTurnImages.images,
-                    imageOrder: currentTurnImages.imageOrder,
-                    skillsSnapshot: params.followupRun.run.skillsSnapshot,
-                    messageChannel: params.followupRun.originatingChannel ?? undefined,
-                    messageProvider: hookMessageProvider,
-                    clientCaps: params.followupRun.run.clientCaps,
-                    currentChannelId:
-                      params.followupRun.originatingTo ??
-                      params.sessionCtx.OriginatingTo ??
-                      params.sessionCtx.To,
-                    senderId: params.followupRun.run.senderId,
-                    senderName: params.followupRun.run.senderName,
-                    senderUsername: params.followupRun.run.senderUsername,
-                    senderE164: params.followupRun.run.senderE164,
-                    groupId: params.followupRun.run.groupId,
-                    groupChannel: params.followupRun.run.groupChannel,
-                    groupSpace: params.followupRun.run.groupSpace,
-                    spawnedBy: params.followupRun.run.spawnedBy,
-                    chatId: params.followupRun.originatingChatId,
-                    channelContext: params.followupRun.run.channelContext,
-                    currentThreadTs:
-                      cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
-                    currentMessageId: cliCurrentMessageId,
-                    currentInboundAudio: hasInboundAudio(params.sessionCtx),
-                    agentAccountId: params.followupRun.run.agentAccountId,
-                    senderIsOwner: params.followupRun.run.senderIsOwner,
-                    approvalReviewerDeviceId: params.followupRun.run.approvalReviewerDeviceId,
-                    toolsAllow: params.opts?.toolsAllow,
-                    disableTools: params.opts?.disableTools,
-                    abortSignal: runAbortSignal,
-                    onExecutionPhase: signalExecutionPhaseForTyping,
-                    replyOperation: params.replyOperation,
                   },
-                }),
+                  () =>
+                    runCliAgentWithLifecycle({
+                      runId,
+                      lifecycleGeneration,
+                      provider: cliExecutionProvider,
+                      startedAt: cliLifecycleStartedAt,
+                      emitLifecycleTerminal: false,
+                      onAgentRunStart: notifyAgentRunStart,
+                      suppressAssistantBridge: params.followupRun.run.silentExpected,
+                      onActivity: () => params.replyOperation?.recordActivity(),
+                      preserveProgressCallbackStartOrder,
+                      onAssistantText: async (text) => {
+                        if (!preserveProgressCallbackStartOrder) {
+                          const textForTyping = await handlePartialForTyping({
+                            text,
+                          } as ReplyPayload);
+                          if (textForTyping === undefined || !params.opts?.onPartialReply) {
+                            return;
+                          }
+                          await params.opts.onPartialReply({ text: textForTyping });
+                          return;
+                        }
+                        const textForTyping = preparePartialForTyping({ text } as ReplyPayload);
+                        if (textForTyping === undefined) {
+                          return;
+                        }
+                        // Assistant and tool CLI bridges drain independently; stage presentation
+                        // before typing I/O so a later tool cannot overtake this text.
+                        await startPresentationWhileTyping(
+                          params.typingSignals.signalTextDelta(textForTyping),
+                          () => params.opts?.onPartialReply?.({ text: textForTyping }),
+                        );
+                      },
+                      onReasoningText: createCliReasoningStreamBridge(
+                        params.opts?.onReasoningStream,
+                      ),
+                      onReasoningProgress: async (payload) => {
+                        await params.opts?.onReasoningProgress?.(payload);
+                      },
+                      onToolEvent: async (payload) => {
+                        if (!preserveProgressCallbackStartOrder) {
+                          await cliToolSummaryTracker.noteToolEvent(payload);
+                          if (payload.phase === "result") {
+                            return;
+                          }
+                          const { name, phase, args } = payload;
+                          await Promise.all([
+                            params.typingSignals.signalToolStart(),
+                            params.opts?.onToolStart?.({
+                              name,
+                              phase,
+                              args,
+                              detailMode: params.toolProgressDetail,
+                            }),
+                          ]);
+                          return;
+                        }
+                        const summaryPromise = cliToolSummaryTracker.noteToolEvent(payload);
+                        if (payload.phase === "result") {
+                          await summaryPromise;
+                          return;
+                        }
+                        const { name, phase, args } = payload;
+                        // Tool and assistant CLI bridges drain independently. Start channel
+                        // presentation before either bridge can yield and invert source order.
+                        await Promise.all([
+                          summaryPromise,
+                          startPresentationWhileTyping(params.typingSignals.signalToolStart(), () =>
+                            params.opts?.onToolStart?.({
+                              name,
+                              phase,
+                              args,
+                              detailMode: params.toolProgressDetail,
+                            }),
+                          ),
+                        ]);
+                      },
+                      onCommentaryText:
+                        params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
+                          ? async (payload) => {
+                              await params.opts?.onItemEvent?.({
+                                itemId: payload.itemId,
+                                kind: "preamble",
+                                progressText: payload.text,
+                              });
+                            }
+                          : undefined,
+                      onFastModeAutoProgress: async (payload) => {
+                        await params.opts?.onToolResult?.(payload);
+                      },
+                      transformResult:
+                        params.followupRun.currentInboundEventKind === "room_event"
+                          ? (resultLocal) =>
+                              keepCliSessionBindingOnlyWhenReused({
+                                result: resultLocal,
+                                existingSessionId: cliSessionBinding?.sessionId,
+                                onDroppedReplacement: () => {
+                                  droppedCliSessionReplacement = true;
+                                },
+                              })
+                          : undefined,
+                      runParams: {
+                        sessionId: params.followupRun.run.sessionId,
+                        sessionKey: params.sessionKey,
+                        runtimePolicySessionKey:
+                          params.followupRun.run.runtimePolicySessionKey ??
+                          params.runtimePolicySessionKey,
+                        agentId: params.followupRun.run.agentId,
+                        trigger: params.isHeartbeat ? "heartbeat" : "user",
+                        sessionFile: params.followupRun.run.sessionFile,
+                        workspaceDir: params.followupRun.run.workspaceDir,
+                        cwd: params.followupRun.run.cwd,
+                        config: runtimeConfig,
+                        prompt: params.commandBody,
+                        transcriptPrompt: params.transcriptCommandBody,
+                        suppressNextUserMessagePersistence:
+                          suppressQueuedUserPersistenceForCandidate,
+                        userTurnTranscriptRecorder,
+                        onUserMessagePersisted: notifyUserMessagePersisted,
+                        persistAssistantTranscript:
+                          params.followupRun.currentInboundEventKind !== "room_event" &&
+                          params.followupRun.run.suppressTranscriptOnlyAssistantPersistence !==
+                            true,
+                        storePath: params.storePath,
+                        currentInboundEventKind: params.followupRun.currentInboundEventKind,
+                        currentInboundContext: params.followupRun.currentInboundContext,
+                        inputProvenance: params.followupRun.run.inputProvenance,
+                        modelProvider: provider,
+                        provider: cliExecutionProvider,
+                        execOverrides: params.followupRun.run.execOverrides,
+                        bashElevated: params.followupRun.run.bashElevated,
+                        model,
+                        thinkLevel: candidateThinkLevel,
+                        fastMode: candidateFastMode.fastMode,
+                        fastModeStartedAtMs,
+                        fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
+                        fastModeAutoProgressState,
+                        isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
+                        timeoutMs: params.followupRun.run.timeoutMs,
+                        runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
+                        runId,
+                        lane: runLane,
+                        extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
+                        sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                        taskSuggestionDeliveryMode:
+                          params.followupRun.run.taskSuggestionDeliveryMode,
+                        silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                        allowEmptyAssistantReplyAsSilent:
+                          params.followupRun.run.allowEmptyAssistantReplyAsSilent,
+                        extraSystemPromptStatic: params.followupRun.run.extraSystemPromptStatic,
+                        cliSessionBindingFacts: params.followupRun.run.cliSessionBindingFacts,
+                        ownerNumbers: params.followupRun.run.ownerNumbers,
+                        cliSessionId: cliSessionBinding?.sessionId,
+                        cliSessionBinding,
+                        authProfileId: authProfile.authProfileId,
+                        bootstrapContextMode: params.opts?.bootstrapContextMode,
+                        bootstrapContextRunKind,
+                        bootstrapPromptWarningSignaturesSeen,
+                        bootstrapPromptWarningSignature:
+                          bootstrapPromptWarningSignaturesSeen[
+                            bootstrapPromptWarningSignaturesSeen.length - 1
+                          ],
+                        images: currentTurnImages.images,
+                        imageOrder: currentTurnImages.imageOrder,
+                        skillsSnapshot: params.followupRun.run.skillsSnapshot,
+                        messageChannel: params.followupRun.originatingChannel ?? undefined,
+                        messageProvider: hookMessageProvider,
+                        clientCaps: params.followupRun.run.clientCaps,
+                        currentChannelId:
+                          params.followupRun.originatingTo ??
+                          params.sessionCtx.OriginatingTo ??
+                          params.sessionCtx.To,
+                        senderId: params.followupRun.run.senderId,
+                        senderName: params.followupRun.run.senderName,
+                        senderUsername: params.followupRun.run.senderUsername,
+                        senderE164: params.followupRun.run.senderE164,
+                        groupId: params.followupRun.run.groupId,
+                        groupChannel: params.followupRun.run.groupChannel,
+                        groupSpace: params.followupRun.run.groupSpace,
+                        spawnedBy: params.followupRun.run.spawnedBy,
+                        chatId: params.followupRun.originatingChatId,
+                        channelContext: params.followupRun.run.channelContext,
+                        currentThreadTs:
+                          cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
+                        currentMessageId: cliCurrentMessageId,
+                        currentInboundAudio: hasInboundAudio(params.sessionCtx),
+                        agentAccountId: params.followupRun.run.agentAccountId,
+                        senderIsOwner: params.followupRun.run.senderIsOwner,
+                        approvalReviewerDeviceId: params.followupRun.run.approvalReviewerDeviceId,
+                        toolsAllow: params.opts?.toolsAllow,
+                        disableTools: params.opts?.disableTools,
+                        abortSignal: runAbortSignal,
+                        onExecutionPhase: signalExecutionPhaseForTyping,
+                        replyOperation: params.replyOperation,
+                      },
+                    }),
+                ),
               );
               if (droppedCliSessionReplacement) {
                 await clearDroppedCliSessionBinding({
@@ -3062,7 +3085,13 @@ async function runAgentTurnWithFallbackInternal(
         : isFailoverError(err)
           ? err.reason === "billing"
           : isBillingErrorMessage(message);
-      const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
+      // Prefer structured FailoverError reasons over message-text heuristics so
+      // typed context-overflow/transient failures are not misclassified when the
+      // error string lacks overflow/HTTP status tokens.
+      const isContextOverflow =
+        !isBilling &&
+        ((isFailoverError(err) && err.reason === "context_overflow") ||
+          isLikelyContextOverflowError(message));
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
       // OAuth/auth-profile failures must reach buildExternalRunFailureReply so
       // the targeted re-auth/failover copy is surfaced instead of the generic
@@ -3077,7 +3106,11 @@ async function runAgentTurnWithFallbackInternal(
         !shouldSurfaceToControlUi
           ? classifyProviderRequestError(err)
           : undefined;
-      const isTransientHttp = isTransientHttpError(message);
+      // Typed overloaded failures stay out of the transient retry: they surface
+      // dedicated overloaded copy immediately instead of being retried silently.
+      const isTransientHttp =
+        isTransientHttpError(message) ||
+        (isFailoverError(err) && (err.reason === "timeout" || err.reason === "server_error"));
 
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its

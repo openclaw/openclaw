@@ -48,13 +48,7 @@ import { callGatewayTool } from "../tools/gateway.js";
 import { runAgentHarnessAfterToolCallHook } from "./hook-helpers.js";
 import { runAgentHarnessBeforeAgentFinalizeHook } from "./lifecycle-hook-helpers.js";
 
-export type JsonValue =
-  | null
-  | boolean
-  | number
-  | string
-  | JsonValue[]
-  | { [key: string]: JsonValue };
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 const NATIVE_HOOK_RELAY_EVENTS = [
   "pre_tool_use",
@@ -68,7 +62,7 @@ const NATIVE_HOOK_RELAY_PROVIDERS = ["codex"] as const;
 export type NativeHookRelayEvent = (typeof NATIVE_HOOK_RELAY_EVENTS)[number];
 export type NativeHookRelayProvider = (typeof NATIVE_HOOK_RELAY_PROVIDERS)[number];
 
-export type NativeHookRelayInvocation = {
+type NativeHookRelayInvocation = {
   provider: NativeHookRelayProvider;
   relayId: string;
   event: NativeHookRelayEvent;
@@ -97,7 +91,7 @@ export type NativeHookRelayProcessResponse = {
   failureDisposition?: Exclude<BeforeToolCallFailureDisposition, "blocked">;
 };
 
-export type NativeHookRelayRegistration = {
+type NativeHookRelayRegistration = {
   relayId: string;
   provider: NativeHookRelayProvider;
   generationMismatchGraceExpiresAtMs?: number;
@@ -130,7 +124,7 @@ export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   unregister: () => void;
 };
 
-export type RegisterNativeHookRelayParams = {
+type RegisterNativeHookRelayParams = {
   provider: NativeHookRelayProvider;
   relayId?: string;
   generation?: string;
@@ -148,18 +142,18 @@ export type RegisterNativeHookRelayParams = {
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 
-export type NativeHookRelayCommandOptions = {
+type NativeHookRelayCommandOptions = {
   executable?: string;
   nice?: number | false;
   nodeExecutable?: string;
   timeoutMs?: number;
 };
 
-export type NativeHookRelayCommandForEventOptions = {
+type NativeHookRelayCommandForEventOptions = {
   timeoutMs?: number;
 };
 
-export type InvokeNativeHookRelayParams = {
+type InvokeNativeHookRelayParams = {
   provider: unknown;
   relayId: unknown;
   generation?: unknown;
@@ -168,7 +162,7 @@ export type InvokeNativeHookRelayParams = {
   requireGeneration?: boolean;
 };
 
-export type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
+type InvokeNativeHookRelayBridgeParams = InvokeNativeHookRelayParams & {
   registrationTimeoutMs?: number;
   timeoutMs?: number;
 };
@@ -318,7 +312,7 @@ type NativeHookRelayPreToolUseApproval = {
   resolutionPromise?: Promise<NativeHookRelayDeferredApprovalOutcome>;
 };
 
-export type NativeHookRelayDeferredApprovalOutcome =
+type NativeHookRelayDeferredApprovalOutcome =
   | {
       handled: true;
       outcome: "approved-once";
@@ -1770,7 +1764,10 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
   for (const key of keys) {
     hash.update(JSON.stringify(key));
     hash.update(":");
-    updateJsonHash(hash, value[key]);
+    const item = value[key];
+    if (item !== undefined) {
+      updateJsonHash(hash, item);
+    }
     hash.update(",");
   }
   if (truncated) {
@@ -1784,7 +1781,10 @@ function updateJsonHash(hash: ReturnType<typeof createHash>, value: JsonValue): 
       }
       hash.update(JSON.stringify(key));
       hash.update(":");
-      updateJsonHash(hash, value[key]);
+      const item = value[key];
+      if (item !== undefined) {
+        updateJsonHash(hash, item);
+      }
       hash.update(",");
     }
   }
@@ -1909,7 +1909,10 @@ function snapshotJsonValue(value: JsonValue, state: { remainingStringLength: num
   const snapshot: Record<string, JsonValue> = {};
   const keys = Object.keys(value);
   for (const key of keys.slice(0, MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS)) {
-    snapshot[snapshotString(key, state)] = snapshotJsonValue(value[key], state);
+    const item = value[key];
+    if (item !== undefined) {
+      snapshot[snapshotString(key, state)] = snapshotJsonValue(item, state);
+    }
   }
   if (keys.length > MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS) {
     snapshot["[truncated]"] = keys.length - MAX_NATIVE_HOOK_RELAY_HISTORY_OBJECT_KEYS;
@@ -2123,7 +2126,9 @@ async function requestNativeHookRelayPermissionApproval(
       signal: request.signal,
       timeoutMs,
     });
-    decision = waitResult?.decision;
+    // Bind the verdict to the request that parked this call. A stale or
+    // misrouted reply must never release a different tool gate.
+    decision = waitResult?.id === approvalId ? waitResult.decision : undefined;
   }
   if (decision === PluginApprovalResolutions.ALLOW_ONCE) {
     return "allow";
@@ -2473,4 +2478,3 @@ export const testing = {
     nativeHookRelayDeferredToolApprovalRequester = requester;
   },
 } as const;
-export { testing as __testing };

@@ -1,40 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   buildMoreDetailsSideCommand,
-  buildSideChatComposerDraft,
-  CHAT_SELECTION_SNIPPET_MAX_CHARS,
-  collapseChatSelectionSnippet,
+  buildSideChatFollowUpCommand,
   combineSideChatComposerDraft,
   extractSideQuestionDisplayText,
 } from "./side-question.ts";
-
-describe("collapseChatSelectionSnippet", () => {
-  it("collapses newlines and runs of whitespace into single spaces", () => {
-    expect(collapseChatSelectionSnippet("Let's Encrypt cert\n  is valid\tfor both")).toBe(
-      "Let's Encrypt cert is valid for both",
-    );
-  });
-
-  it("caps overlong selections", () => {
-    const collapsed = collapseChatSelectionSnippet("x".repeat(5000));
-    expect(collapsed.length).toBeLessThanOrEqual(CHAT_SELECTION_SNIPPET_MAX_CHARS);
-  });
-});
 
 describe("side question builders", () => {
   it("builds a single-line /btw command quoting the selection", () => {
     expect(buildMoreDetailsSideCommand("Let's Encrypt cert\nis valid")).toBe(
       `/btw Explain "Let's Encrypt cert is valid" from this conversation in more detail.`,
     );
-  });
-
-  it("builds a composer draft that leaves room for the user's question", () => {
-    expect(buildSideChatComposerDraft("cron scan job")).toBe(`/btw Regarding "cron scan job": `);
-  });
-
-  it("returns null for whitespace-only selections", () => {
-    expect(buildMoreDetailsSideCommand("  \n\t ")).toBeNull();
-    expect(buildSideChatComposerDraft("")).toBeNull();
   });
 });
 
@@ -67,10 +43,43 @@ describe("combineSideChatComposerDraft", () => {
   });
 });
 
+describe("buildSideChatFollowUpCommand", () => {
+  it("sends a plain /btw when there is no previous turn", () => {
+    expect(buildSideChatFollowUpCommand(null, "what about tests?")).toEqual({
+      command: "/btw what about tests?",
+      question: "what about tests?",
+    });
+  });
+
+  it("carries the previous side question and answer as context", () => {
+    expect(
+      buildSideChatFollowUpCommand(
+        { question: "Is cert A valid?", answer: "No,\nit expired." },
+        "when did it expire?",
+      ),
+    ).toEqual({
+      command:
+        '/btw Context — the previous side question "Is cert A valid?" was answered: "No, it expired.". Follow-up question: when did it expire?',
+      question: "when did it expire?",
+    });
+  });
+
+  it("collapses multiline questions and rejects empty ones", () => {
+    expect(buildSideChatFollowUpCommand(null, "first\nsecond")?.question).toBe("first second");
+    expect(buildSideChatFollowUpCommand(null, "  \n ")).toBeNull();
+  });
+});
+
 describe("extractSideQuestionDisplayText", () => {
   it("drops the /btw and /side prefixes", () => {
     expect(extractSideQuestionDisplayText("/btw what changed?")).toBe("what changed?");
     expect(extractSideQuestionDisplayText("/side: what changed?")).toBe("what changed?");
     expect(extractSideQuestionDisplayText("/btw")).toBe("");
+  });
+
+  it("never truncates questions that merely resemble follow-up context", () => {
+    expect(
+      extractSideQuestionDisplayText("/btw Why does this say Follow-up question: pending?"),
+    ).toBe("Why does this say Follow-up question: pending?");
   });
 });

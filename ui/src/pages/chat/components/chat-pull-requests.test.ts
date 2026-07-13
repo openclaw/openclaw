@@ -2,23 +2,17 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionBranch,
+  ControlUiSessionPullRequest,
+} from "../../../../../src/gateway/control-ui-contract.js";
 import {
   chatPullRequestId,
+  createPullRequestBranch,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
   renderChatPullRequests,
 } from "./chat-pull-requests.ts";
-
-const localStorageValues = vi.hoisted(() => new Map<string, string>());
-
-vi.mock("../../../local-storage.ts", () => ({
-  getSafeLocalStorage: () => ({
-    getItem: (key: string) => localStorageValues.get(key) ?? null,
-    removeItem: (key: string) => localStorageValues.delete(key),
-    setItem: (key: string, value: string) => localStorageValues.set(key, value),
-  }),
-}));
 
 function pullRequest(
   overrides: Partial<ControlUiSessionPullRequest> = {},
@@ -38,6 +32,44 @@ function pullRequest(
     ...overrides,
   };
 }
+
+function sessionBranch(overrides: Partial<ControlUiSessionBranch> = {}): ControlUiSessionBranch {
+  return {
+    owner: "openclaw",
+    repo: "openclaw",
+    branch: "claude/cloud-workers-live-events",
+    additions: 2819,
+    deletions: 205,
+    createUrl: "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
+    ...overrides,
+  };
+}
+
+describe("createPullRequestBranch", () => {
+  it("passes the branch through when no live PR exists", () => {
+    const branch = sessionBranch();
+    expect(createPullRequestBranch([], branch)).toBe(branch);
+    expect(createPullRequestBranch([pullRequest({ state: "merged" })], branch)).toBe(branch);
+    expect(createPullRequestBranch([pullRequest({ state: "closed" })], branch)).toBe(branch);
+  });
+
+  it("hides the row while an open or draft PR exists, even a dismissed one", () => {
+    expect(createPullRequestBranch([pullRequest()], sessionBranch())).toBeUndefined();
+    expect(
+      createPullRequestBranch([pullRequest({ state: "draft" })], sessionBranch()),
+    ).toBeUndefined();
+  });
+
+  it("does not second-guess diff counts; the gateway owns branch emptiness", () => {
+    expect(
+      createPullRequestBranch([], sessionBranch({ additions: 0, deletions: 0 })),
+    ).toBeDefined();
+    expect(
+      createPullRequestBranch([], sessionBranch({ additions: undefined, deletions: undefined })),
+    ).toBeDefined();
+    expect(createPullRequestBranch([], undefined)).toBeUndefined();
+  });
+});
 
 describe("renderChatPullRequests", () => {
   let container: HTMLDivElement;
@@ -209,6 +241,58 @@ describe("renderChatPullRequests", () => {
     expect(container.querySelector(".chat-pr__warning")).not.toBeNull();
   });
 
+  it("renders a Create PR branch row with locale-formatted diff stats", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [],
+        branch: sessionBranch(),
+        rateLimited: false,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+      }),
+      container,
+    );
+    const row = container.querySelector('.chat-pr[data-state="branch"]');
+    expect(row?.querySelector(".chat-pr__repo")?.textContent).toBe("openclaw");
+    expect(row?.querySelector(".chat-pr__branch")?.textContent).toBe(
+      "claude/cloud-workers-live-events",
+    );
+    // Thousands separators match GitHub's diff-stat rendering.
+    expect(row?.querySelector(".chat-pr__additions")?.textContent).toBe(
+      `+${(2819).toLocaleString()}`,
+    );
+    expect(row?.querySelector(".chat-pr__deletions")?.textContent).toBe(
+      `−${(205).toLocaleString()}`,
+    );
+    const create = row?.querySelector<HTMLAnchorElement>(".chat-pr__create");
+    expect(create?.getAttribute("href")).toBe(
+      "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
+    );
+    expect(create?.textContent?.trim()).toBe("Create PR");
+    expect(row?.querySelector(".chat-pr__warning")).toBeNull();
+    // The branch row is not dismissible; it reflects the checkout itself.
+    expect(row?.querySelector(".chat-pr__dismiss")).toBeNull();
+  });
+
+  it("marks the branch row stale when GitHub is rate limited", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [],
+        branch: sessionBranch(),
+        rateLimited: true,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+      }),
+      container,
+    );
+    const row = container.querySelector('.chat-pr[data-state="branch"]');
+    // While rate limited, "no PR found" is unreliable; the warning says so.
+    expect(row?.querySelector(".chat-pr__warning")).not.toBeNull();
+    expect(row?.querySelector(".chat-pr__create")).not.toBeNull();
+  });
+
   it("dismisses a chip through the X button", () => {
     const onDismiss = vi.fn();
     render(
@@ -228,7 +312,12 @@ describe("renderChatPullRequests", () => {
 
 describe("dismissed pull request storage", () => {
   beforeEach(() => {
-    localStorageValues.clear();
+    vi.stubGlobal("localStorage", window.localStorage);
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("persists dismissals per session", () => {
@@ -256,7 +345,7 @@ describe("dismissed pull request storage", () => {
   });
 
   it("ignores malformed stored payloads", () => {
-    localStorageValues.set("openclaw.chat.dismissedPullRequests", "not json");
+    localStorage.setItem("openclaw.chat.dismissedPullRequests", "not json");
     expect(listDismissedChatPullRequests("agent:main:main").size).toBe(0);
   });
 });

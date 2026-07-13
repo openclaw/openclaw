@@ -164,9 +164,11 @@ android {
   productFlavors {
     create("play") {
       dimension = "store"
+      manifestPlaceholders["nodeForegroundServiceType"] = "connectedDevice|microphone"
     }
     create("thirdParty") {
       dimension = "store"
+      manifestPlaceholders["nodeForegroundServiceType"] = "connectedDevice|microphone|location"
     }
   }
 
@@ -328,6 +330,8 @@ dependencies {
   implementation(libs.androidx.exifinterface)
   implementation(libs.okhttp)
   implementation(libs.bcprov)
+  implementation(libs.coil.compose)
+  implementation(libs.coil.svg)
   implementation(libs.commonmark)
   implementation(libs.commonmark.ext.autolink)
   implementation(libs.commonmark.ext.gfm.strikethrough)

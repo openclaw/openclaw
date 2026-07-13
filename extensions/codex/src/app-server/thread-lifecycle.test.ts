@@ -6,7 +6,6 @@ import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import { CodexAppServerRpcError } from "./client.js";
-import { fingerprintCodexAppServerNetworkProxyConfigPatch } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 import {
@@ -25,14 +24,65 @@ import {
   buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
+  areCodexDynamicToolFingerprintsCompatible,
   codexDynamicToolsFingerprint,
-  formatCodexThreadLifecycleTimingSummary,
+  codexLegacyDynamicToolsFingerprint,
   resolveCodexAppServerThreadModelSelection,
   resolveReasoningEffort,
-  shouldWarnCodexThreadLifecycleTimingSummary,
   startOrResumeThread as startOrResumeThreadImpl,
-  type CodexThreadLifecycleTimingLogger,
 } from "./thread-lifecycle.js";
+
+type CodexThreadLifecycleTimingLogger = NonNullable<
+  NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
+>;
+
+describe("Codex ring-zero thread config", () => {
+  it("applies the restriction to both thread start and resume", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.toolsAllow = ["crestodian"];
+    const appServer = createAppServerOptions() as never;
+    const start = buildThreadStartParams(params, {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostCrestodianActive: true,
+      nativeCodeModeEnabled: false,
+    });
+    const resume = buildThreadResumeParams(params, {
+      appServer,
+      dynamicTools: [],
+      hostCrestodianActive: true,
+      nativeCodeModeEnabled: false,
+      threadId: "thread-1",
+    });
+
+    expect(start.environments).toEqual([]);
+    expect(start.baseInstructions).toBe("");
+    for (const config of [start.config, resume.config]) {
+      expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
+      expect(config?.["features.multi_agent"]).toBe(false);
+      expect(config?.["features.multi_agent_v2"]).toBe(false);
+      expect(config?.["features.goals"]).toBe(false);
+      expect(config?.["orchestrator.mcp.enabled"]).toBe(false);
+      expect(config?.["orchestrator.skills.enabled"]).toBe(false);
+      expect(config?.project_doc_max_bytes).toBe(0);
+      expect(config?.hooks).toMatchObject({
+        PreToolUse: [],
+        SessionStart: [],
+        UserPromptSubmit: [],
+        Stop: [],
+      });
+    }
+
+    const normal = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      appServer,
+      cwd: "/repo",
+      dynamicTools: [],
+      hostCrestodianActive: false,
+    });
+    expect(normal.baseInstructions).toBeUndefined();
+  });
+});
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
@@ -132,7 +182,7 @@ function createNetworkProxyAppServerOptions() {
     ...createAppServerOptions(),
     networkProxy: {
       profileName: "mock-proxy",
-      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configFingerprint: "test-network-proxy",
       configPatch,
     },
   } as const;
@@ -408,10 +458,10 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).toContain("## Skill Workshop");
-    expect(instructions).toContain("Route durable skill work");
-    expect(instructions).toContain("through the `skill_workshop` tool");
-    expect(instructions).toContain("Generated skills are pending proposals.");
-    expect(instructions).toContain("only when the user explicitly asks");
+    expect(instructions).toContain("Durable reusable skill/playbook/workflow work");
+    expect(instructions).toContain("`skill_workshop`");
+    expect(instructions).toContain("Generated = pending proposal");
+    expect(instructions).toContain("only explicit user ask");
   });
 
   it("keeps developer instructions compact when no dynamic tools are deferred", () => {
@@ -427,6 +477,25 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
+  });
+
+  it("instructs Codex to mark only completed message-tool-only source replies final", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.sourceReplyDeliveryMode = "message_tool_only";
+
+    const instructions = buildDeveloperInstructions(params, {
+      dynamicTools: [
+        {
+          type: "function",
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+
+    expect(instructions).toContain("For progress, set `final=false`.");
+    expect(instructions).toContain("set `final=true`");
   });
 
   it("keeps durable dynamic tool fingerprints scoped to loading mode", () => {
@@ -464,6 +533,36 @@ describe("Codex app-server native code mode config", () => {
     ]);
 
     expect(searchableFingerprint).not.toBe(directFingerprint);
+  });
+
+  it("keeps hashed dynamic tool fingerprints compatible with legacy JSON bindings", () => {
+    const tools = [
+      {
+        type: "function" as const,
+        name: "message",
+        description: "Send a visible message",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            text: { type: "string" },
+          },
+          required: ["text"],
+        },
+      },
+    ];
+    const hashed = codexDynamicToolsFingerprint(tools);
+    const legacy = codexLegacyDynamicToolsFingerprint(tools);
+
+    expect(hashed).toMatch(/^sha256:/);
+    expect(legacy).toContain('"name":"message"');
+    expect(
+      areCodexDynamicToolFingerprintsCompatible({
+        previous: legacy,
+        next: hashed,
+        nextLegacy: legacy,
+      }),
+    ).toBe(true);
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {
@@ -1135,7 +1234,7 @@ describe("Codex app-server turn params", () => {
       "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
-      "Use heartbeats to create useful proactive progress",
+      "Heartbeat = useful proactive progress",
     );
     expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",
@@ -2611,49 +2710,6 @@ describe("Codex app-server thread lifecycle timing", () => {
   afterEach(async () => {
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
-  });
-
-  it("formats stage summaries with run, session, action, and elapsed timing", () => {
-    const message = formatCodexThreadLifecycleTimingSummary({
-      runId: "run-a",
-      sessionId: "session-a",
-      sessionKey: "agent:main:session-a",
-      action: "started",
-      summary: {
-        totalMs: 12,
-        spans: [
-          { name: "read-binding", durationMs: 4, elapsedMs: 4 },
-          { name: "thread-start-request", durationMs: 8, elapsedMs: 12 },
-        ],
-      },
-    });
-
-    expect(message).toBe(
-      "[trace:codex-app-server] thread lifecycle: runId=run-a sessionId=session-a " +
-        "sessionKey=agent:main:session-a action=started totalMs=12 " +
-        "stages=read-binding:4ms@4ms,thread-start-request:8ms@12ms",
-    );
-  });
-
-  it("warns when the total or a single stage crosses the lifecycle threshold", () => {
-    expect(
-      shouldWarnCodexThreadLifecycleTimingSummary(
-        {
-          totalMs: 9,
-          spans: [{ name: "thread-start-request", durationMs: 10, elapsedMs: 10 }],
-        },
-        { totalThresholdMs: 50, stageThresholdMs: 10 },
-      ),
-    ).toBe(true);
-    expect(
-      shouldWarnCodexThreadLifecycleTimingSummary(
-        {
-          totalMs: 50,
-          spans: [{ name: "thread-start-request", durationMs: 1, elapsedMs: 1 }],
-        },
-        { totalThresholdMs: 50, stageThresholdMs: 10 },
-      ),
-    ).toBe(true);
   });
 
   it("emits a trace stage summary when starting a new thread with trace enabled", async () => {

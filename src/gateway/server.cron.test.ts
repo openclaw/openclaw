@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as setImmediatePromise } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
@@ -264,7 +265,10 @@ async function directCronReq(
     };
   };
   try {
-    await cronHandlers[method]({
+    await expectDefined(
+      cronHandlers[method],
+      "cronHandlers[method] test invariant",
+    )({
       req: {} as never,
       params,
       respond,
@@ -1308,6 +1312,41 @@ describe("gateway server cron", () => {
       expect(
         (allEntries as Array<{ jobId?: unknown }>).some((entry) => entry.jobId === jobId),
       ).toBe(true);
+
+      const writerAddResult = await cronState.cron.add({
+        name: "writer log test",
+        agentId: "writer",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "writer hello" },
+      });
+      const writerJobId = ("job" in writerAddResult ? writerAddResult.job : writerAddResult).id;
+      const writerFinished = events.wait(
+        (payload) => payload?.jobId === writerJobId && payload?.action === "finished",
+      );
+      const writerRun = await directCronReq(cronState, "cron.run", {
+        id: writerJobId,
+        mode: "force",
+      });
+      expect(writerRun.ok).toBe(true);
+      await writerFinished;
+
+      const mainRuns = await directCronReq(cronState, "cron.runs", {
+        scope: "all",
+        agentId: "main",
+      });
+      const writerRuns = await directCronReq(cronState, "cron.runs", {
+        scope: "all",
+        agentId: "writer",
+      });
+      expect(
+        (mainRuns.payload as { entries: Array<{ jobId: string }> }).entries,
+      ).not.toContainEqual(expect.objectContaining({ jobId: writerJobId }));
+      expect((writerRuns.payload as { entries: Array<{ jobId: string }> }).entries).toContainEqual(
+        expect.objectContaining({ jobId: writerJobId }),
+      );
 
       const statusRes = await directCronReq(cronState, "cron.status", {});
       expect(statusRes.ok).toBe(true);

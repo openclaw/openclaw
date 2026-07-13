@@ -587,10 +587,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
     const scripts = packageJson.scripts ?? {};
     const missing = plan.lanes
       .flatMap((lane) =>
-        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu), (match) => ({
-          lane: lane.name,
-          script: match[1],
-        })),
+        Array.from(lane.command.matchAll(/\bpnpm\s+(test:docker:[\w:-]+)/gu)).flatMap((match) =>
+          match[1] === undefined ? [] : [{ lane: lane.name, script: match[1] }],
+        ),
       )
       .filter(({ script }) => !scripts[script]);
 
@@ -1092,7 +1091,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "cron-mcp-cleanup",
         "agent-bundle-mcp-tools",
         "crestodian-first-run",
-        "crestodian-planner",
         "crestodian-rescue",
         "config-reload",
         "plugin-update",
@@ -1122,7 +1120,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "cron-mcp-cleanup", stateScenario: "empty" },
       { name: "agent-bundle-mcp-tools", stateScenario: "empty" },
       { name: "crestodian-first-run", stateScenario: "empty" },
-      { name: "crestodian-planner", stateScenario: "empty" },
       { name: "crestodian-rescue", stateScenario: "empty" },
       { name: "config-reload", stateScenario: "empty" },
       { name: "plugin-update", stateScenario: "empty" },

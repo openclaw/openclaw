@@ -78,11 +78,6 @@ struct OpenClawApp: App {
         }
         .onChange(of: self.controlChannel.state) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
-            if self.controlChannel.state == .connected {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                    BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
-                }
-            }
         }
         .onChange(of: self.gatewayManager.status) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
@@ -93,6 +88,7 @@ struct OpenClawApp: App {
         .onChange(of: self.state.connectionMode) { _, mode in
             Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "connection-mode")
+            BrowserProfileImportModel.shared.handleConnectionModeChange()
         }
 
         Window("OpenClaw Settings", id: SettingsWindowOpener.windowID) {
@@ -193,11 +189,11 @@ struct OpenClawApp: App {
         let handler = StatusItemMouseHandlerView()
         handler.translatesAutoresizingMaskIntoConstraints = false
         handler.onLeftClick = { [self] in
-            HoverHUDController.shared.dismiss(reason: "statusItemClick")
+            HoverHUDController.shared.dismiss()
             self.openDashboardWindow()
         }
         handler.onRightClick = { [self] in
-            HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
+            HoverHUDController.shared.dismiss()
             WebChatManager.shared.closePanel()
             self.isMenuPresented = true
             self.updateStatusHighlight()
@@ -226,7 +222,7 @@ struct OpenClawApp: App {
 
     @MainActor
     private func statusButtonScreenFrame() -> NSRect? {
-        guard let button = self.statusItem?.button, let window = button.window else { return nil }
+        guard let button = statusItem?.button, let window = button.window else { return nil }
         let inWindow = button.convert(button.bounds, to: nil)
         return window.convertToScreen(inWindow)
     }
@@ -261,7 +257,7 @@ private final class StatusItemMouseHandlerView: NSView {
         }
     }
 
-    override func rightMouseDown(with event: NSEvent) {
+    override func rightMouseDown(with _: NSEvent) {
         self.onRightClick?()
         // Do not call super; menu will be driven by isMenuPresented binding.
     }
@@ -271,11 +267,11 @@ private final class StatusItemMouseHandlerView: NSView {
         TrackingAreaSupport.resetMouseTracking(on: self, tracking: &self.tracking, owner: self)
     }
 
-    override func mouseEntered(with event: NSEvent) {
+    override func mouseEntered(with _: NSEvent) {
         self.onHoverChanged?(true)
     }
 
-    override func mouseExited(with event: NSEvent) {
+    override func mouseExited(with _: NSEvent) {
         self.onHoverChanged?(false)
     }
 }
@@ -394,11 +390,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @MainActor
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_: Notification) {
         if self.isDuplicateInstance() {
             NSWorkspace.shared.open(Self.dashboardURL)
             NSApp.terminate(nil)
             return
+        }
+        switch ApplicationRelocator.handleLaunch() {
+        case .terminating:
+            return
+        case let .continueLaunch(startUpdater):
+            if startUpdater {
+                self.updaterController.start()
+            }
         }
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
@@ -409,7 +413,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MacNodeModeCoordinator.prepareNodeIdentityProfile(
                 isExistingInstallation: state.onboardingSeen || state.connectionMode != .unconfigured)
         }
-        AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
+        AppActivationPolicy.apply(showDockIcon: state?.showDockIcon ?? false)
         if let state {
             let shouldWaitForConnection = state.connectionMode != .unconfigured
             if !shouldWaitForConnection {
@@ -441,12 +445,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
-        Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
+        AppStateStore.shared.applyPeekabooBridgeHostState()
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             CLIInstallPrompter.shared.checkAndPromptIfNeeded(reason: "launch")
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) {
-            BrowserProfileImportPrompter.shared.checkAndPromptIfNeeded()
         }
 
         #if DEBUG
@@ -480,7 +481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationWillTerminate(_ notification: Notification) {
+    func applicationWillTerminate(_: Notification) {
         PresenceReporter.shared.stop()
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
@@ -534,53 +535,123 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static func shouldOpenDashboardInsteadOfOnboarding(
         connectionMode: AppState.ConnectionMode,
         onboardingSeen: Bool,
-        hasStoredConnectionMode: Bool,
+        crestodianResumePending: Bool,
         gatewayConnected: Bool,
         configuredInferenceModel: String?) -> Bool
     {
         let model = configuredInferenceModel?.trimmingCharacters(in: .whitespacesAndNewlines)
         return connectionMode != .unconfigured &&
             !onboardingSeen &&
-            !hasStoredConnectionMode &&
+            !crestodianResumePending &&
             gatewayConnected &&
             model?.isEmpty == false
     }
 
+    static func isCurrentFirstRunInferenceProbe(
+        expectedConnectionMode: AppState.ConnectionMode,
+        currentConnectionMode: AppState.ConnectionMode,
+        expectedRouteIdentity: String?,
+        currentRouteIdentity: String?,
+        gatewayRouteIsCurrent: Bool) -> Bool
+    {
+        expectedConnectionMode != .unconfigured &&
+            expectedConnectionMode == currentConnectionMode &&
+            expectedRouteIdentity != nil &&
+            expectedRouteIdentity == currentRouteIdentity &&
+            gatewayRouteIsCurrent
+    }
+
+    static func shouldPresentScheduledFirstRunOnboarding(
+        expectedConnectionMode: AppState.ConnectionMode,
+        currentConnectionMode: AppState.ConnectionMode,
+        expectedRouteIdentity: String?,
+        currentRouteIdentity: String?,
+        onboardingSeen: Bool) -> Bool
+    {
+        !onboardingSeen &&
+            expectedConnectionMode == currentConnectionMode &&
+            expectedRouteIdentity == currentRouteIdentity
+    }
+
     private func scheduleFirstRunOnboardingIfNeeded(gatewayConnected: Bool) async {
         let connectionMode = AppStateStore.shared.connectionMode
-        let onboardingSeen = AppStateStore.shared.onboardingSeen
-        // A stored app mode means onboarding already selected a Gateway; reconnecting
-        // must not turn an interrupted first-run flow into a completed installation.
-        let hasStoredConnectionMode = UserDefaults.standard.object(forKey: connectionModeKey) != nil
+        let expectedRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
         var configuredInferenceModel: String?
         if connectionMode != .unconfigured,
-           !onboardingSeen,
-           !hasStoredConnectionMode,
-           gatewayConnected,
-           let route = await GatewayConnection.shared.captureRoute()
+           !AppStateStore.shared.onboardingSeen,
+           gatewayConnected
         {
+            guard let route = await GatewayConnection.shared.captureRoute() else {
+                self.scheduleFirstRunOnboardingRecovery()
+                return
+            }
             // Bind inference discovery to the connected route. A socket without a
             // default-agent model cannot run Crestodian and must stay in onboarding.
-            configuredInferenceModel = try? await GatewayConnection.shared.configuredInferenceModel(
-                ifCurrentRoute: route)
+            do {
+                configuredInferenceModel = try await GatewayConnection.shared.configuredInferenceModel(
+                    ifCurrentRoute: route)
+            } catch {
+                // A transient read failure is not evidence that inference is absent.
+                // Onboarding retries the same read without mutating on failure.
+                self.scheduleFirstRunOnboardingRecovery()
+                return
+            }
+            let gatewayRouteIsCurrent = await GatewayConnection.shared.isCurrentRoute(route)
+            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            guard Self.isCurrentFirstRunInferenceProbe(
+                expectedConnectionMode: connectionMode,
+                currentConnectionMode: AppStateStore.shared.connectionMode,
+                expectedRouteIdentity: expectedRouteIdentity,
+                currentRouteIdentity: currentRouteIdentity,
+                gatewayRouteIsCurrent: gatewayRouteIsCurrent)
+            else {
+                self.scheduleFirstRunOnboardingRecovery()
+                return
+            }
         }
+        let onboardingSeen = AppStateStore.shared.onboardingSeen
+        let crestodianResumePending = OnboardingCrestodianResumeStore.isPending(for: expectedRouteIdentity)
         let shouldOpenDashboard = Self.shouldOpenDashboardInsteadOfOnboarding(
             connectionMode: connectionMode,
             onboardingSeen: onboardingSeen,
-            hasStoredConnectionMode: hasStoredConnectionMode,
+            crestodianResumePending: crestodianResumePending,
             gatewayConnected: gatewayConnected,
             configuredInferenceModel: configuredInferenceModel)
         if connectionMode != .unconfigured, onboardingSeen || shouldOpenDashboard {
+            // Completion flags do not own any route's activation receipt.
             OnboardingController.markComplete()
             if shouldOpenDashboard {
                 self.openDashboardAction()
             }
             return
         }
+        self.scheduleFirstRunOnboardingPresentation(
+            expectedConnectionMode: connectionMode,
+            expectedRouteIdentity: expectedRouteIdentity)
+    }
+
+    private func scheduleFirstRunOnboardingRecovery() {
+        self.scheduleFirstRunOnboardingPresentation(
+            expectedConnectionMode: AppStateStore.shared.connectionMode,
+            expectedRouteIdentity: OnboardingCrestodianResumeStore.selectedRouteIdentity())
+    }
+
+    private func scheduleFirstRunOnboardingPresentation(
+        expectedConnectionMode: AppState.ConnectionMode,
+        expectedRouteIdentity: String?)
+    {
         let seenVersion = UserDefaults.standard.integer(forKey: onboardingVersionKey)
-        let shouldShow = seenVersion < currentOnboardingVersion || !onboardingSeen
+        let shouldShow = seenVersion < currentOnboardingVersion || !AppStateStore.shared.onboardingSeen
         guard shouldShow else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+            let currentRouteIdentity = OnboardingCrestodianResumeStore.selectedRouteIdentity()
+            guard Self.shouldPresentScheduledFirstRunOnboarding(
+                expectedConnectionMode: expectedConnectionMode,
+                currentConnectionMode: AppStateStore.shared.connectionMode,
+                expectedRouteIdentity: expectedRouteIdentity,
+                currentRouteIdentity: currentRouteIdentity,
+                onboardingSeen: AppStateStore.shared.onboardingSeen)
+            else { return }
             OnboardingController.shared.show()
         }
     }
@@ -600,7 +671,12 @@ protocol UpdaterProviding: AnyObject {
     var automaticallyDownloadsUpdates: Bool { get set }
     var isAvailable: Bool { get }
     var updateStatus: UpdateStatus { get }
+    func start()
     func checkForUpdates(_ sender: Any?)
+}
+
+extension UpdaterProviding {
+    func start() {}
 }
 
 /// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
@@ -633,12 +709,18 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
         updaterDelegate: self,
         userDriverDelegate: nil)
     let updateStatus = UpdateStatus()
+    private var started = false
 
     init(savedAutoUpdate: Bool) {
         super.init()
         let updater = self.controller.updater
         updater.automaticallyChecksForUpdates = savedAutoUpdate
         updater.automaticallyDownloadsUpdates = savedAutoUpdate
+    }
+
+    func start() {
+        guard !self.started else { return }
+        self.started = true
         self.controller.startUpdater()
     }
 
@@ -653,29 +735,31 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
     }
 
     var isAvailable: Bool {
-        true
+        self.started
     }
 
     func checkForUpdates(_ sender: Any?) {
+        guard self.started else { return }
         self.controller.checkForUpdates(sender)
     }
 
-    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+    func updater(_: SPUUpdater, didDownloadUpdate _: SUAppcastItem) {
         self.updateStatus.isUpdateReady = true
     }
 
-    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
+    func updater(_: SPUUpdater, failedToDownloadUpdate _: SUAppcastItem, error _: Error) {
         self.updateStatus.isUpdateReady = false
     }
 
-    func userDidCancelDownload(_ updater: SPUUpdater) {
+    func userDidCancelDownload(_: SPUUpdater) {
         self.updateStatus.isUpdateReady = false
     }
 
+    // periphery:ignore - Sparkle invokes this optional Objective-C delegate callback dynamically.
     func updater(
-        _ updater: SPUUpdater,
+        _: SPUUpdater,
         userDidMakeChoice choice: SPUUserUpdateChoice,
-        forUpdate updateItem: SUAppcastItem,
+        forUpdate _: SUAppcastItem,
         state: SPUUserUpdateState)
     {
         switch choice {

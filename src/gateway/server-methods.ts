@@ -1,5 +1,4 @@
-// Gateway method registry aggregator wires core and plugin RPC descriptors to
-// lazy-loaded handler families, role checks, scopes, and control-plane budgets.
+// Gateway registry wires RPC descriptors to handlers, scopes, and budgets.
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
   gatewayStartupUnavailableDetails,
@@ -29,6 +28,7 @@ import {
 } from "./methods/registry.js";
 import { isOperatorScope } from "./operator-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { NODE_PAIR_GATEWAY_METHODS } from "./server-methods-node-methods.js";
 import type {
   GatewayRequestHandler,
   GatewayRequestHandlerOptions,
@@ -171,6 +171,10 @@ const loadModelsHandlers = lazyHandlerModule(
   () => import("./server-methods/models.js"),
   (module) => module.modelsHandlers,
 );
+const loadModelsProbeHandlers = lazyHandlerModule(
+  () => import("./server-methods/models-probe.js"),
+  (module) => module.modelsProbeHandlers,
+);
 const loadNativeHookRelayHandlers = lazyHandlerModule(
   () => import("./server-methods/native-hook-relay.js"),
   (module) => module.nativeHookRelayHandlers,
@@ -219,6 +223,10 @@ const loadSessionsHandlers = lazyHandlerModule(
   () => import("./server-methods/sessions.js"),
   (module) => module.sessionsHandlers,
 );
+const loadSessionCatalogHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-catalog.js"),
+  (module) => module.sessionCatalogHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -250,6 +258,10 @@ const loadToolsEffectiveHandlers = lazyHandlerModule(
 const loadToolsInvokeHandlers = lazyHandlerModule(
   () => import("./server-methods/tools-invoke.js"),
   (module) => module.toolsInvokeHandlers,
+);
+const loadMcpAppHandlers = lazyHandlerModule(
+  () => import("./server-methods/mcp-app.js"),
+  (module) => module.mcpAppHandlers,
 );
 const loadTtsHandlers = lazyHandlerModule(
   () => import("./server-methods/tts.js"),
@@ -443,7 +455,12 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadDoctorHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["environments.list", "environments.status"],
+    methods: [
+      "environments.list",
+      "environments.status",
+      "environments.create",
+      "environments.destroy",
+    ],
     loadHandlers: loadEnvironmentsHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -477,6 +494,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["models.list"],
     loadHandlers: loadModelsHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["models.probe"],
+    loadHandlers: loadModelsProbeHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["models.authLogout", "models.authStatus"],
@@ -517,7 +538,13 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadWizardHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["crestodian.chat", "crestodian.setup.detect", "crestodian.setup.activate"],
+    methods: [
+      "crestodian.chat",
+      "crestodian.setup.detect",
+      "crestodian.setup.verify",
+      "crestodian.setup.activate",
+      "crestodian.setup.auth.start",
+    ],
     loadHandlers: loadCrestodianHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -529,6 +556,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.session.endTurn",
       "talk.session.cancelTurn",
       "talk.session.cancelOutput",
+      "talk.session.acknowledgeMark",
       "talk.session.submitToolResult",
       "talk.session.steer",
       "talk.session.close",
@@ -543,7 +571,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadTalkHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["audit.list"],
+    methods: ["audit.list", "audit.activity.list"],
     loadHandlers: loadAuditHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -570,6 +598,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["tools.invoke"],
     loadHandlers: loadToolsInvokeHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "mcp.app.view",
+      "mcp.app.callTool",
+      "mcp.app.listTools",
+      "mcp.app.listResources",
+      "mcp.app.listResourceTemplates",
+      "mcp.app.readResource",
+    ],
+    loadHandlers: loadMcpAppHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -616,7 +655,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
+      "sessions.catalog.list",
+      "sessions.catalog.read",
+      "sessions.catalog.continue",
+      "sessions.catalog.archive",
+    ],
+    loadHandlers: loadSessionCatalogHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
       "sessions.list",
+      "sessions.search",
       "sessions.cleanup",
       "sessions.subscribe",
       "sessions.unsubscribe",
@@ -643,6 +692,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.groups.put",
       "sessions.groups.rename",
       "sessions.groups.delete",
+      "sessions.dispatch",
     ],
     loadHandlers: loadSessionsHandlers,
   }),
@@ -663,17 +713,18 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   }),
   ...createLazyCoreHandlers({
     methods: [
-      "node.pair.list",
-      "node.pair.approve",
-      "node.pair.reject",
+      ...NODE_PAIR_GATEWAY_METHODS,
       "node.pair.remove",
       "node.rename",
       "node.list",
       "node.describe",
       "node.pluginSurface.refresh",
+      "node.pluginTools.update",
+      "node.skills.update",
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",
+      "node.invoke.progress",
       "node.invoke.result",
       "node.event",
     ],
@@ -740,7 +791,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadArtifactsHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.files.list", "sessions.files.get"],
+    methods: ["sessions.files.list", "sessions.files.get", "sessions.files.set"],
     loadHandlers: loadSessionsFilesHandlers,
   }),
   ...createLazyCoreHandlers({

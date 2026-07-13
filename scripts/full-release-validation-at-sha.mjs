@@ -7,23 +7,27 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const WORKFLOW = "full-release-validation.yml";
+const RELEASE_BRANCH_PATTERN =
+  /^(?:release\/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable\/[0-9]{4}\.[0-9]+\.33)$/u;
+const RELEASE_TAG_PATTERN = /^v[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:alpha|beta)\.[0-9]+)?$/u;
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
-  release_profile: "full",
   rerun_group: "all",
   reuse_evidence: "true",
 };
 
 function usage() {
-  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
+  console.error(`Usage: node scripts/full-release-validation-at-sha.mjs [--sha <target-sha>] [--target-ref <canonical-release-branch-or-tag>] [--workflow-sha <trusted-main-ref>] [--keep-branch] [--dry-run] [-- -f key=value ...]
 
 Creates a temporary remote branch pinned to trusted main release tooling,
 dispatches Full Release Validation with the target commit as its ref input,
 watches the parent run, verifies all child workflow head SHAs match the trusted
 workflow lineage through the release evidence manifest, then deletes the
-temporary branch by default. Exact-target evidence reuse stays enabled; pass
--f reuse_evidence=false to force a fresh run.`);
+temporary branch by default. Exact-target and changelog-only Release SHA
+evidence reuse stay enabled; pass -f reuse_evidence=false to force a fresh
+run. The release profile defaults to beta for alpha/beta package versions and
+stable otherwise; pass -f release_profile=full for the broad advisory sweep.`);
 }
 
 function run(command, args, options = {}) {
@@ -60,6 +64,7 @@ function readOptionValue(argv, index, optionName) {
 export function parseArgs(argv) {
   const args = {
     sha: "",
+    targetRef: "",
     workflowSha: "",
     keepBranch: false,
     dryRun: false,
@@ -79,6 +84,11 @@ export function parseArgs(argv) {
     }
     if (arg === "--workflow-sha") {
       args.workflowSha = readOptionValue(argv, i, arg);
+      i += 1;
+      continue;
+    }
+    if (arg === "--target-ref") {
+      args.targetRef = readOptionValue(argv, i, arg);
       i += 1;
       continue;
     }
@@ -126,15 +136,70 @@ export function parseArgs(argv) {
   if (!["true", "false"].includes(args.inputs.reuse_evidence)) {
     throw new Error("reuse_evidence must be true or false");
   }
+  if (
+    args.inputs.release_profile &&
+    !["beta", "stable", "full"].includes(args.inputs.release_profile)
+  ) {
+    throw new Error("release_profile must be beta, stable, or full");
+  }
   if (Object.hasOwn(args.inputs, "ref")) {
     throw new Error("SHA-pinned release validation reserves the ref input for --sha");
   }
+  if (
+    args.targetRef &&
+    !RELEASE_BRANCH_PATTERN.test(args.targetRef) &&
+    !RELEASE_TAG_PATTERN.test(args.targetRef)
+  ) {
+    throw new Error("--target-ref must be a canonical OpenClaw release branch or tag");
+  }
   return args;
+}
+
+export function resolveRemoteTargetRefSha(targetRef, executeGit = (args) => run("git", args)) {
+  if (RELEASE_BRANCH_PATTERN.test(targetRef)) {
+    return executeGit(["ls-remote", "--heads", "origin", `refs/heads/${targetRef}`]).split(
+      /\s+/u,
+    )[0];
+  }
+
+  const tagRef = `refs/tags/${targetRef}`;
+  const peeledSha = executeGit(["ls-remote", "--tags", "origin", `${tagRef}^{}`]).split(/\s+/u)[0];
+  if (peeledSha) {
+    return peeledSha;
+  }
+  return executeGit(["ls-remote", "--tags", "origin", tagRef]).split(/\s+/u)[0];
+}
+
+function verifyTargetRef(targetRef, targetSha) {
+  if (!targetRef) {
+    return targetSha;
+  }
+  const remoteSha = resolveRemoteTargetRefSha(targetRef);
+  if (remoteSha !== targetSha) {
+    throw new Error(`Target ref ${targetRef} does not resolve to ${targetSha}`);
+  }
+  return targetRef;
 }
 
 function resolveSha(requestedSha) {
   const rev = requestedSha || "HEAD";
   return run("git", ["rev-parse", "--verify", `${rev}^{commit}`], { dryRun: false });
+}
+
+export function releaseProfileForTarget(
+  targetSha,
+  readPackageJson = (sha) => run("git", ["show", `${sha}:package.json`]),
+) {
+  let version;
+  try {
+    version = JSON.parse(readPackageJson(targetSha)).version;
+  } catch {
+    throw new Error(`Could not read package.json from target SHA ${targetSha}`);
+  }
+  if (typeof version !== "string" || !/^[0-9]{4}\.[0-9]+\.[0-9]+(?:-.+)?$/u.test(version)) {
+    throw new Error(`Target SHA ${targetSha} has an invalid package version`);
+  }
+  return /-(?:alpha|beta)\.[1-9][0-9]*$/u.test(version) ? "beta" : "stable";
 }
 
 function resolveTrustedWorkflowSha(requestedSha) {
@@ -234,11 +299,17 @@ function verifyReleaseEvidence(parentRunId, workflowSha) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const targetSha = resolveSha(args.sha);
+  args.inputs.release_profile ??= releaseProfileForTarget(targetSha);
+  const targetContextRef = verifyTargetRef(args.targetRef, targetSha);
   const workflowSha = resolveTrustedWorkflowSha(args.workflowSha);
   const shortSha = workflowSha.slice(0, 12);
   const branch = `release-ci/${shortSha}-${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
-  const dispatchInputs = { ref: targetSha, ...args.inputs };
+  const dispatchInputs = {
+    ref: targetSha,
+    ...(targetContextRef !== targetSha ? { target_context_ref: targetContextRef } : {}),
+    ...args.inputs,
+  };
 
   console.log(`Target SHA: ${targetSha}`);
   console.log(`Trusted workflow SHA: ${workflowSha}`);

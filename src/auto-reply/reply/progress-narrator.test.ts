@@ -2,11 +2,27 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
+
+const narratorWarnSpy = vi.hoisted(() => vi.fn());
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: narratorWarnSpy,
+    }),
+  };
+});
+
 import {
   attachProgressNarratorToReplyOptions,
   createProgressNarrator,
-  type ProgressNarrationInput,
 } from "./progress-narrator.js";
+
+type ProgressNarrationInput = Parameters<
+  NonNullable<Parameters<typeof createProgressNarrator>[0]["generate"]>
+>[0];
 
 const cfg = {} as OpenClawConfig;
 
@@ -129,7 +145,8 @@ describe("createProgressNarrator", () => {
     expect(onUpdate).toHaveBeenCalledTimes(1);
   });
 
-  it("disables after consecutive failed generations", async () => {
+  it("disables after consecutive failed generations and warns once", async () => {
+    narratorWarnSpy.mockClear();
     let nowMs = 0;
     const { narrator, generate, onUpdate } = createNarratorHarness({
       texts: [null],
@@ -144,6 +161,10 @@ describe("createProgressNarrator", () => {
 
     expect(generate).toHaveBeenCalledTimes(2);
     expect(onUpdate).not.toHaveBeenCalled();
+    expect(narratorWarnSpy).toHaveBeenCalledTimes(1);
+    expect(String(narratorWarnSpy.mock.calls[0]?.[0])).toContain(
+      "narration disabled after 2 consecutive failures",
+    );
   });
 
   it("clears rendered narration when it disables after failures", async () => {

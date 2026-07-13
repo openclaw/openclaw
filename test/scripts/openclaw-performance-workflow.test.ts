@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -82,7 +83,7 @@ describe("OpenClaw performance workflow", () => {
 
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const kovaRef = "790f0b28229cb60a60c289ef8c250d76c639f48f";
+    const kovaRef = "2b02b7d33418db0c6952c4cf8fe8a608e7964859";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
 
@@ -102,6 +103,20 @@ describe("OpenClaw performance workflow", () => {
     ).toBeLessThan(installRun.indexOf('cat > "$HOME/.local/bin/kova"'));
     expect(workflow).toContain("PERFORMANCE_MODEL_ID: gpt-5.6");
     expect(workflow).toContain("Kova live OpenAI GPT 5.6 agent turn");
+  });
+
+  it("pins the OCM release archive and checksum", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const installRun = findStep("Install OCM and Kova").run ?? "";
+
+    expect(workflow).toContain("OCM_VERSION: v0.2.25");
+    expect(workflow).toContain(
+      "OCM_LINUX_X64_SHA256: 57530199d21eb5bfa29695749928b40fd2869484c7edff69b7c65bfc84f2f1aa",
+    );
+    expect(installRun).toContain(
+      '"https://github.com/shakkernerd/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
+    );
+    expect(installRun).toContain('echo "${OCM_LINUX_X64_SHA256}  ${ocm_archive}" | sha256sum -c -');
   });
 
   it("resolves each target once before benchmark and publication fan out", () => {
@@ -146,16 +161,34 @@ describe("OpenClaw performance workflow", () => {
     );
   });
 
-  it("fetches the public clawgrit baseline without publisher credentials", () => {
+  it("sparse-fetches only the public source baseline without publisher credentials", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
     const baseline = findStep("Fetch previous source performance baseline", "source_performance");
+    const run = baseline.run ?? "";
 
     expect(baseline.if).toBeUndefined();
     expect(baseline.env?.CLAWGRIT_REPORTS_TOKEN).toBeUndefined();
-    expect(baseline.run).toContain(
-      'remote add origin "https://github.com/openclaw/clawgrit-reports.git"',
-    );
+    expect(run).toContain('remote add origin "https://github.com/openclaw/clawgrit-reports.git"');
+    expect(run).toContain("fetch --filter=blob:none --depth=1 origin main");
+    expect(run).toContain('cat-file -e "FETCH_HEAD:${pointer}"');
+    expect(run).toContain('show "FETCH_HEAD:${pointer}"');
+    expect(run).toContain("sparse-checkout init --no-cone");
+    expect(run).toContain("printf '/%s/source/\\n'");
+    expect(run).toContain("sparse-checkout set --stdin");
+    expect(run).toContain("checkout --detach FETCH_HEAD");
+    expect(run).not.toContain("checkout -B main FETCH_HEAD");
     expect(workflowText).not.toContain("https://x-access-token:");
+  });
+
+  it("builds only the QA and startup artifacts required by source probes", () => {
+    const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
+    const build = "OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance";
+
+    expect(run).toContain("module.BUILD_ALL_PROFILES?.sourcePerformance");
+    expect(run).toContain(build);
+    expect(run).toContain("pnpm build");
+    expect(run.indexOf(build)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+    expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
   });
 
   it("isolates required publication in a fresh artifact-consuming job", () => {
@@ -627,7 +660,9 @@ esac
     const plan = findStep("Kova version and plan sanity");
     const runKova = findStep("Run Kova");
     const matrixEntries = kovaMatrixEntries();
-    const includeFilters = matrixEntries.map((entry) => entry.include_filters);
+    const includeFilters = matrixEntries.map((entry, index) =>
+      expectDefined(entry.include_filters, `Kova matrix include filters ${index}`),
+    );
     const expectedReleaseEntries = matrixEntries.map((entry) => entry.expected_release_entries);
 
     expect(includeFilters).toEqual([
@@ -758,8 +793,10 @@ esac
   });
 
   it("installs local workspace packages beside the OCM root tarball", () => {
+    const workflow = readWorkflow();
     const configure = findStep("Configure OCM local workspace dependencies");
 
+    expect(workflow.jobs?.kova?.env).not.toHaveProperty("OPENCLAW_OCM_RUNTIME_BUILD_PROFILE");
     expect(configure.run).toContain(
       'npm_wrapper="$PERFORMANCE_HELPER_DIR/scripts/ocm-npm-workspace-deps.mjs"',
     );

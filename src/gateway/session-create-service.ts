@@ -55,6 +55,12 @@ import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-st
 import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
+type TrustedCatalogSessionTarget = {
+  model: string;
+  agentRuntime: string;
+  pluginOwnerId: string;
+};
+
 const loadSessionLifecycleRuntime = createLazyRuntimeModule(
   () => import("./server-methods/sessions.runtime.js"),
 );
@@ -154,7 +160,11 @@ type CreatedGatewaySession = {
 };
 
 type TrustedInitialSessionEntry = {
-  agentHarnessId: NonNullable<SessionEntry["agentHarnessId"]>;
+  agentHarnessId?: NonNullable<SessionEntry["agentHarnessId"]>;
+  pluginOwnerId?: string;
+  providerOverride?: string;
+  modelOverride?: string;
+  cliSessionBindings?: SessionEntry["cliSessionBindings"];
   initializationPending?: true;
   modelSelectionLocked?: true;
   pluginExtensions?: SessionEntry["pluginExtensions"];
@@ -177,12 +187,18 @@ export async function createGatewaySession(params: {
   agentId?: string;
   label?: string;
   model?: string;
+  /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
+  catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
   spawnedCwd?: string;
   /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
   worktree?: { id: string; branch: string; repoRoot: string };
   /** Bind session exec to host=node with this node id; caller scope-checks. */
   execNode?: string;
+  /** Working directory interpreted only by execNode. */
+  execCwd?: string;
+  /** Clear a prior node binding when a new Gateway-host session replaces it. */
+  clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
   emitCommandHooks?: boolean;
@@ -193,12 +209,23 @@ export async function createGatewaySession(params: {
   initialEntry?: TrustedInitialSessionEntry;
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
+  /** Exact plugin namespace authorized by the scoped plugin runtime. */
+  authorizedPluginId?: string;
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
+  const catalogModel = normalizeOptionalString(params.catalogTarget?.model);
+  const catalogAgentRuntime = normalizeOptionalAgentRuntimeId(params.catalogTarget?.agentRuntime);
+  const catalogPluginOwnerId = normalizeOptionalString(params.catalogTarget?.pluginOwnerId);
+  if (params.catalogTarget && (!catalogModel || !catalogAgentRuntime || !catalogPluginOwnerId)) {
+    return {
+      ok: false,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, "invalid catalog session target"),
+    };
+  }
   if (requestedKey) {
     const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
     if (
@@ -225,6 +252,19 @@ export async function createGatewaySession(params: {
           mainKey: params.cfg.session?.mainKey,
         })
     : undefined;
+  if (
+    params.catalogTarget &&
+    explicitTargetKey &&
+    !explicitTargetKey.startsWith(`agent:${agentId}:dashboard:`)
+  ) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "catalog sessions require a generated dashboard key",
+      ),
+    };
+  }
 
   const authorizedHarnessCreation = Boolean(
     explicitTargetKey &&
@@ -233,6 +273,20 @@ export async function createGatewaySession(params: {
       normalizeOptionalAgentRuntimeId(params.initialEntry.agentHarnessId) &&
     isAgentHarnessSessionKeyOwnedBy(explicitTargetKey, params.authorizedAgentHarnessId),
   );
+  const authorizedPluginCreation = Boolean(
+    explicitTargetKey &&
+    params.initialEntry?.pluginOwnerId &&
+    params.authorizedPluginId === params.initialEntry.pluginOwnerId,
+  );
+  if (params.initialEntry?.pluginOwnerId && !authorizedPluginCreation) {
+    return {
+      ok: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "trusted plugin session owner is not authorized",
+      ),
+    };
+  }
   const existingHarnessEntry =
     explicitTargetKey && isAgentHarnessSessionKey(explicitTargetKey)
       ? resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey: explicitTargetKey }).entry
@@ -326,6 +380,9 @@ export async function createGatewaySession(params: {
     params.emitCommandHooks === true &&
     !requestedKey &&
     params.resetMainWhenUnspecified === true &&
+    // Catalog targets need a fresh locked row; resetting main would return before
+    // the catalog-owned model/runtime pair is persisted.
+    !params.catalogTarget &&
     params.cfg.session?.dmScope === "main"
   ) {
     const parentAgentId = normalizeAgentId(
@@ -337,6 +394,7 @@ export async function createGatewaySession(params: {
     if (canonicalParentSessionKey === parentMainKey) {
       const { performGatewaySessionReset } = await loadSessionLifecycleRuntime();
       const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
+      const execCwd = normalizeOptionalString(params.execCwd);
       const resetResult = await performGatewaySessionReset({
         key: canonicalParentSessionKey,
         ...(canonicalParentSessionKey === "global" && parentSelectedAgentId
@@ -347,6 +405,8 @@ export async function createGatewaySession(params: {
         ...(spawnedCwd ? { spawnedCwd } : {}),
         ...(params.worktree ? { worktree: params.worktree } : {}),
         ...(params.execNode ? { execNode: params.execNode } : {}),
+        ...(execCwd ? { execCwd } : {}),
+        ...(params.clearExecBinding ? { clearExecBinding: true } : {}),
         ...(params.clearSpawnedCwd && !spawnedCwd ? { clearSpawnedCwd: true } : {}),
       });
       if (!resetResult.ok) {
@@ -482,6 +542,15 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        if (params.catalogTarget && existingEntry !== undefined) {
+          return {
+            ok: false,
+            error: errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "catalog session target requires a new session",
+            ),
+          };
+        }
         const patched = await applySessionsPatchToStore({
           cfg: params.cfg,
           store: sessionEntries,
@@ -490,7 +559,7 @@ export async function createGatewaySession(params: {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
-            model: normalizeOptionalString(params.model),
+            model: catalogModel ?? normalizeOptionalString(params.model),
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,
@@ -500,15 +569,18 @@ export async function createGatewaySession(params: {
         }
         const spawnedCwd = normalizeOptionalString(params.spawnedCwd);
         const execNode = normalizeOptionalString(params.execNode);
+        const execCwd = normalizeOptionalString(params.execCwd);
         const initialAgentHarnessId = params.initialEntry
           ? normalizeOptionalString(params.initialEntry.agentHarnessId)
           : undefined;
-        if (params.initialEntry && !initialAgentHarnessId) {
+        if (params.initialEntry && !initialAgentHarnessId && !authorizedPluginCreation) {
           return {
             ok: false,
             error: errorShape(
               ErrorCodes.INVALID_REQUEST,
-              "initial agentHarnessId must be non-empty",
+              params.initialEntry?.agentHarnessId !== undefined
+                ? "initial agentHarnessId must be non-empty"
+                : "trusted initial session state requires an authorized owner",
             ),
           };
         }
@@ -524,14 +596,41 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        const catalogResolvedModel = params.catalogTarget
+          ? resolveSessionModelRef(params.cfg, patched.entry, target.agentId)
+          : undefined;
         const initializedEntry: SessionEntry = {
           ...patched.entry,
+          ...(catalogResolvedModel && catalogAgentRuntime
+            ? {
+                providerOverride: catalogResolvedModel.provider,
+                modelOverride: catalogResolvedModel.model,
+                modelOverrideSource: "user" as const,
+                agentRuntimeOverride: catalogAgentRuntime,
+                modelSelectionLocked: true,
+                pluginOwnerId: catalogPluginOwnerId,
+              }
+            : {}),
           // Session worktrees adopt cwd only during admin-gated creation; public patching stays
           // restricted to spawned subagent and ACP lineage.
           ...(spawnedCwd ? { spawnedCwd } : {}),
           ...(params.worktree ? { worktree: params.worktree } : {}),
-          ...(execNode ? { execHost: "node", execNode } : {}),
+          ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
           ...(initialAgentHarnessId ? { agentHarnessId: initialAgentHarnessId } : {}),
+          ...(authorizedPluginCreation
+            ? { pluginOwnerId: params.initialEntry?.pluginOwnerId }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.providerOverride
+            ? { providerOverride: params.initialEntry.providerOverride }
+            : {}),
+          ...(authorizedPluginCreation && params.initialEntry?.modelOverride
+            ? { modelOverride: params.initialEntry.modelOverride }
+            : {}),
+          // Seeded CLI bindings ride only the plugin-authorized creation path;
+          // harness creations must never smuggle pre-bound CLI session ids.
+          ...(authorizedPluginCreation && params.initialEntry?.cliSessionBindings
+            ? { cliSessionBindings: structuredClone(params.initialEntry.cliSessionBindings) }
+            : {}),
           ...(params.initialEntry?.initializationPending === true
             ? { initializationPending: true }
             : {}),
@@ -547,9 +646,10 @@ export async function createGatewaySession(params: {
         if (!canonicalParentSessionKey) {
           return initialized;
         }
-        const inheritedSelection = normalizeOptionalString(params.model)
-          ? {}
-          : inheritSessionSelection(currentParentSessionEntry);
+        const inheritedSelection =
+          catalogModel || normalizeOptionalString(params.model)
+            ? {}
+            : inheritSessionSelection(currentParentSessionEntry);
         const entry: SessionEntry = {
           ...initializedEntry,
           ...inheritedSelection,

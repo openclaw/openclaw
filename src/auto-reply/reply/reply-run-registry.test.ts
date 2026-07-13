@@ -4,6 +4,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import {
   getDiagnosticSessionActivitySnapshot,
   resetDiagnosticRunActivityForTest,
+  RUN_STALE_TAKEOVER_MS,
 } from "../../logging/diagnostic-run-activity.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
@@ -16,13 +17,15 @@ import {
   isReplyRunActiveForSessionId,
   isReplyRunAbortableForCompaction,
   isReplyRunAbortableForSignal,
+  clearReplyRunForResetBySessionId,
   queueReplyRunMessage,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  REPLY_RUN_STALE_TAKEOVER_MS,
   REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS,
+  ReplyRunAlreadyActiveError,
   replyRunRegistry,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
+  resolveReplyRunPhaseForSessionId,
   waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
@@ -78,12 +81,17 @@ describe("reply run registry", () => {
     expect(isReplyRunActiveForSessionId("session-compact")).toBe(true);
     expect(isReplyRunAbortableForCompaction("session-compact")).toBe(false);
 
+    operation.markWaitingForDeferredMaintenance();
+
+    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(false);
+
+    operation.markDeferredMaintenanceWaitEnded();
     operation.setPhase("running");
 
     expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
   });
 
-  it("mirrors active reply operations into diagnostic work state", () => {
+  it("records reply-operation progress without claiming embedded-run activity", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:telegram:direct:chat-1",
       sessionId: "session-1",
@@ -94,8 +102,11 @@ describe("reply run registry", () => {
       getDiagnosticSessionActivitySnapshot({
         sessionId: "session-1",
         sessionKey: "agent:main:telegram:direct:chat-1",
-      }).activeWorkKind,
-    ).toBe("embedded_run");
+      }),
+    ).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "reply_operation:queued",
+    });
 
     operation.updateSessionId("session-2");
 
@@ -103,8 +114,11 @@ describe("reply run registry", () => {
       getDiagnosticSessionActivitySnapshot({
         sessionId: "session-2",
         sessionKey: "agent:main:telegram:direct:chat-1",
-      }).activeWorkKind,
-    ).toBe("embedded_run");
+      }),
+    ).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "reply_operation:session_updated",
+    });
 
     operation.complete();
 
@@ -112,8 +126,77 @@ describe("reply run registry", () => {
       getDiagnosticSessionActivitySnapshot({
         sessionId: "session-2",
         sessionKey: "agent:main:telegram:direct:chat-1",
-      }).activeWorkKind,
-    ).toBeUndefined();
+      }),
+    ).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "reply_operation:ended",
+    });
+  });
+
+  it("tracks deferred-maintenance wait as a reply-operation phase", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:telegram:direct:chat-1",
+      sessionId: "session-wait",
+      resetTriggered: false,
+    });
+
+    operation.markWaitingForDeferredMaintenance();
+
+    expect(operation.phase).toBe("waiting_for_deferred_maintenance");
+    expect(resolveReplyRunPhaseForSessionId("session-wait")).toBe(
+      "waiting_for_deferred_maintenance",
+    );
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-wait",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }),
+    ).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "deferred_maintenance:waiting",
+    });
+
+    operation.markDeferredMaintenanceWaitEnded();
+
+    expect(operation.phase).toBe("queued");
+    expect(
+      getDiagnosticSessionActivitySnapshot({
+        sessionId: "session-wait",
+        sessionKey: "agent:main:telegram:direct:chat-1",
+      }),
+    ).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "deferred_maintenance:wait_ended",
+    });
+  });
+
+  it("clears deferred-maintenance operations immediately on user abort", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-waiting-abort",
+      resetTriggered: false,
+    });
+
+    operation.markWaitingForDeferredMaintenance();
+    operation.abortByUser();
+
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+    expect(isReplyRunActiveForSessionId("session-waiting-abort")).toBe(false);
+  });
+
+  it("does not reset deferred-maintenance operations as backend-owned work", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-waiting-reset",
+      resetTriggered: false,
+    });
+
+    operation.markWaitingForDeferredMaintenance();
+    clearReplyRunForResetBySessionId("session-waiting-reset");
+
+    expect(operation.result).toBeNull();
+    expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
   });
 
   it("clears queued operations immediately on user abort", () => {
@@ -901,7 +984,7 @@ describe("reply run registry", () => {
       });
       operation.setPhase("running");
 
-      vi.advanceTimersByTime(REPLY_RUN_STALE_TAKEOVER_MS + 1);
+      vi.advanceTimersByTime(RUN_STALE_TAKEOVER_MS + 1);
 
       expect(queueReplyRunMessage("session-running", "stale")).toBe(false);
       expect(queueMessage).not.toHaveBeenCalled();
@@ -977,5 +1060,67 @@ describe("reply run registry", () => {
     expect(abortActiveReplyRuns({ mode: "compacting" })).toBe(true);
     expect(compactingOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
     expect(runningOperation.result).toBeNull();
+  });
+
+  it("moves a queued reservation to the target slot and frees the source", async () => {
+    const sourceSessionKey = "agent:main:telegram:slash:rekey-user";
+    const targetSessionKey = "agent:main:telegram:group:rekey-target";
+    const operation = createReplyOperation({
+      sessionKey: sourceSessionKey,
+      sessionId: "rekey-session",
+      resetTriggered: false,
+    });
+    const sourceIdle = replyRunRegistry.waitForIdle(sourceSessionKey, 1_000);
+
+    operation.updateSessionKey(targetSessionKey);
+
+    expect(operation.key).toBe(targetSessionKey);
+    expect(replyRunRegistry.get(sourceSessionKey)).toBeUndefined();
+    expect(replyRunRegistry.get(targetSessionKey)).toBe(operation);
+    expect(resolveActiveReplyRunSessionId(targetSessionKey)).toBe("rekey-session");
+    await expect(sourceIdle).resolves.toBe(true);
+
+    const targetWait = waitForReplyRunEndBySessionId("rekey-session", 1_000);
+    operation.complete();
+    await expect(targetWait).resolves.toBe(true);
+    expect(replyRunRegistry.get(targetSessionKey)).toBeUndefined();
+  });
+
+  it("refuses to rekey onto an owned target slot and keeps the source slot", () => {
+    const targetSessionKey = "agent:main:telegram:group:rekey-owned";
+    const sourceSessionKey = "agent:main:telegram:slash:rekey-blocked";
+    const blocker = createReplyOperation({
+      sessionKey: targetSessionKey,
+      sessionId: "owned-session",
+      resetTriggered: false,
+    });
+    const operation = createReplyOperation({
+      sessionKey: sourceSessionKey,
+      sessionId: "blocked-session",
+      resetTriggered: false,
+    });
+
+    expect(() => operation.updateSessionKey(targetSessionKey)).toThrow(ReplyRunAlreadyActiveError);
+    expect(operation.key).toBe(sourceSessionKey);
+    expect(replyRunRegistry.get(sourceSessionKey)).toBe(operation);
+    expect(replyRunRegistry.get(targetSessionKey)).toBe(blocker);
+
+    blocker.complete();
+    operation.complete();
+  });
+
+  it("refuses to rekey after the run leaves the queued phase", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:telegram:slash:rekey-late",
+      sessionId: "late-session",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+
+    expect(() => operation.updateSessionKey("agent:main:telegram:group:rekey-late")).toThrow(
+      /Cannot rekey reply operation/,
+    );
+
+    operation.complete();
   });
 });

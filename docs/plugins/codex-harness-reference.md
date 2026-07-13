@@ -130,7 +130,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.144.1`):
+with the official plugin (currently `@openai/codex` `0.144.3`):
 
 ```bash
 codex app-server --listen stdio://
@@ -139,6 +139,18 @@ codex app-server --listen stdio://
 This keeps the app-server version tied to the official `codex` plugin instead of
 whichever separate Codex CLI happens to be installed locally. Set
 `appServer.command` only when you intentionally want a different executable.
+Ordinary managed turns with the default isolated agent home prefer this pinned
+package even when a macOS desktop bundle is installed. When
+[Computer Use](/plugins/codex-computer-use) is enabled, or when `homeScope` is
+`"user"` and can load native Computer Use state, managed startup instead prefers
+the desktop app binary that owns the required macOS permissions. The same
+desktop-first rule applies when an isolated agent home's effective Codex config
+enables native Computer Use. If no desktop app bundle is installed, OpenClaw
+falls back to the pinned package binary.
+
+Executable handoff and native-config fencing coordinate clients inside one
+running Gateway process. Restart the Gateway after another process changes the
+native Codex plugin config.
 
 Supervision resolves a separate connection. With no explicit
 `appServer` connection settings, it uses managed stdio with `homeScope: "user"`;
@@ -574,7 +586,7 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog:
 | `gpt-5.4-mini` | GPT-5.4-Mini | low, medium, high, xhigh |
 
 <Note>
-The current bundled harness is `@openai/codex` `0.144.1`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.144.3`. A `model/list` probe
 against that bundled app-server returned these public picker rows:
 
 | Model id        | Input modalities | Reasoning efforts                    |

@@ -5,7 +5,7 @@ import { chromium, type Browser, type BrowserContext, type Locator, type Page } 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { WORKBOARD_STATUSES, type WorkboardCard } from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardStatus } from "../../lib/workboard/index.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -25,6 +25,17 @@ const viewport = { height: 1000, width: 2400 };
 const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
 const linkedSessionKey = "agent:main:workboard-proof";
 const linkedSessionName = "Implementation session";
+const WORKBOARD_STATUSES: readonly WorkboardStatus[] = [
+  "triage",
+  "backlog",
+  "todo",
+  "scheduled",
+  "ready",
+  "running",
+  "review",
+  "blocked",
+  "done",
+];
 
 let server: ControlUiE2eServer;
 
@@ -426,6 +437,26 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
         status: "todo",
         title: createdCard.title,
       });
+      expect(await createDialog.getByLabel("Title").isDisabled()).toBe(true);
+      expect(await createDialog.getByLabel("Notes").isDisabled()).toBe(true);
+      expect(await createDialog.getByLabel("Labels").isDisabled()).toBe(true);
+      expect(
+        await createDialog.locator(".workboard-select__trigger[aria-disabled='true']").count(),
+      ).toBe(4);
+      const pendingCancelButtons = createDialog.getByRole("button", {
+        name: "Cancel",
+        exact: true,
+      });
+      expect(await pendingCancelButtons.count()).toBe(2);
+      expect(await pendingCancelButtons.first().isDisabled()).toBe(true);
+      expect(await pendingCancelButtons.last().isDisabled()).toBe(true);
+      expect(await createDialog.locator(".workboard-template-strip button:disabled").count()).toBe(
+        5,
+      );
+      await writable.page.keyboard.press("Escape");
+      await expect.poll(() => createDialog.isVisible()).toBe(true);
+      await writable.page.locator(".workboard-modal").click({ position: { x: 4, y: 4 } });
+      await expect.poll(() => createDialog.isVisible()).toBe(true);
       await writableGateway.resolveDeferred("workboard.cards.create", { card: createdCard });
       await cardInColumn(writable.page, "Todo", createdCard.title).waitFor({ state: "visible" });
       await captureScreenshot(writable.page, artifacts, "03-created-card");

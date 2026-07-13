@@ -1,10 +1,11 @@
 // Manages device pairing requests, approvals, and token issuance.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import {
-  resolveBootstrapProfileScopesForRole,
-  resolveBootstrapProfileScopesForRoles,
+  resolveDeviceProfileRoleScopes,
+  resolveDeviceProfileScopes,
   type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
 import {
@@ -29,22 +30,16 @@ import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type {
   DeviceAuthToken,
-  DevicePairingPendingRecord,
   DevicePairingPendingRequest,
   PairedDevice,
-  PairedDeviceApprovalKind,
-  PairedDeviceNodeSurface,
   PairedDevicePendingNodeSurface,
 } from "./device-pairing.types.js";
 
 /** Pending request summary returned when a replacement supersedes older requests. */
-export type DevicePairingSupersededRequest = Pick<
-  DevicePairingPendingRequest,
-  "requestId" | "deviceId"
->;
+type DevicePairingSupersededRequest = Pick<DevicePairingPendingRequest, "requestId" | "deviceId">;
 
 /** Result for creating or refreshing a pending device pairing request. */
-export type RequestDevicePairingResult = {
+type RequestDevicePairingResult = {
   status: "pending";
   request: DevicePairingPendingRequest;
   created: boolean;
@@ -69,19 +64,19 @@ export type RotateDeviceTokenDenyReason =
   | "caller-missing-scope";
 
 /** Token rotation result with the replacement token entry on success. */
-export type RotateDeviceTokenResult =
+type RotateDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RotateDeviceTokenDenyReason; scope?: string };
 
 export type RevokeDeviceTokenDenyReason = "unknown-device-or-role" | "caller-missing-scope";
 
 /** Token revocation result with the revoked entry on success. */
-export type RevokeDeviceTokenResult =
+type RevokeDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RevokeDeviceTokenDenyReason; scope?: string };
 
 /** Metadata fields a device may refresh without changing approval or token state. */
-export type PairedDeviceMetadataPatch = Pick<
+type PairedDeviceMetadataPatch = Pick<
   PairedDevice,
   | "displayName"
   | "operatorLabel"
@@ -94,19 +89,19 @@ export type PairedDeviceMetadataPatch = Pick<
 >;
 
 /** Paired-device access metadata refreshed when an existing device reconnects. */
-export type DevicePairingAccessMetadata = Pick<
+type DevicePairingAccessMetadata = Pick<
   PairedDevice,
   "displayName" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
 >;
 
 /** Combined pending/paired view returned by pairing list APIs. */
-export type DevicePairingList = {
+type DevicePairingList = {
   pending: DevicePairingPendingRequest[];
   paired: PairedDevice[];
 };
 
 /** Authorization failure categories for owner approval and bootstrap approval flows. */
-export type DevicePairingForbiddenReason =
+type DevicePairingForbiddenReason =
   | "caller-scopes-required"
   | "caller-missing-scope"
   | "scope-outside-requested-roles"
@@ -114,7 +109,7 @@ export type DevicePairingForbiddenReason =
   | "bootstrap-scope-not-allowed";
 
 /** Structured forbidden result with the missing/disallowed role or scope when known. */
-export type DevicePairingForbiddenResult = {
+type DevicePairingForbiddenResult = {
   status: "forbidden";
   reason: DevicePairingForbiddenReason;
   scope?: string;
@@ -122,7 +117,7 @@ export type DevicePairingForbiddenResult = {
 };
 
 /** Pairing approval outcome: approved, forbidden with reason, or request not found. */
-export type ApproveDevicePairingResult =
+type ApproveDevicePairingResult =
   | { status: "approved"; requestId: string; device: PairedDevice }
   | DevicePairingForbiddenResult
   | null;
@@ -677,9 +672,15 @@ function reconcilePendingPairingRequests<
 }): PendingPairingRequestResult<TPending> {
   if (
     params.existing.length === 1 &&
-    params.canRefreshSingle(params.existing[0], params.incoming)
+    params.canRefreshSingle(
+      expectDefined(params.existing[0], "existing entry at 0"),
+      params.incoming,
+    )
   ) {
-    const refreshed = params.refreshSingle(params.existing[0], params.incoming);
+    const refreshed = params.refreshSingle(
+      expectDefined(params.existing[0], "existing entry at 0"),
+      params.incoming,
+    );
     params.pendingById[refreshed.requestId] = refreshed;
     params.persist();
     return { status: "pending", request: refreshed, created: false };
@@ -918,10 +919,7 @@ export async function approveBootstrapDevicePairing(
       : optionsOrBaseDir;
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   const approvedRoles = mergeRoles(bootstrapProfile.roles) ?? [];
-  const approvedScopes = resolveBootstrapProfileScopesForRoles(
-    approvedRoles,
-    bootstrapProfile.scopes,
-  );
+  const approvedScopes = resolveDeviceProfileScopes(bootstrapProfile, approvedRoles);
   return await withLock(async () => {
     const state = await loadState(baseDir);
     const pending = state.pendingById[requestId];
@@ -948,7 +946,11 @@ export async function approveBootstrapDevicePairing(
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
     const grantedRoles = requestedRoles;
-    const grantedScopes = resolveBootstrapProfileScopesForRoles(grantedRoles, pending.scopes ?? []);
+    const grantedScopes = resolveDeviceProfileScopes(
+      bootstrapProfile,
+      grantedRoles,
+      pending.scopes ?? [],
+    );
     const grantedRoleSet = new Set(grantedRoles);
     const preservedExistingScopes = (mergeRoles(existing?.roles, existing?.role) ?? []).flatMap(
       (existingRole) =>
@@ -966,7 +968,7 @@ export async function approveBootstrapDevicePairing(
       const existingToken = tokens[roleForToken];
       const tokenScopes =
         roleForToken === OPERATOR_ROLE
-          ? resolveBootstrapProfileScopesForRole(roleForToken, grantedScopes)
+          ? resolveDeviceProfileRoleScopes(bootstrapProfile, roleForToken, grantedScopes)
           : [];
       tokens[roleForToken] = buildDeviceAuthToken({
         role: roleForToken,

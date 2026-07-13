@@ -18,6 +18,7 @@ import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -47,7 +48,6 @@ import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js"
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
-import { createCrestodianTool } from "./tools/crestodian-tool.js";
 import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -67,10 +67,11 @@ import { createPdfTool } from "./tools/pdf-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
+import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
-import { createSkillWorkshopTool } from "./tools/skill-workshop-tool.js";
+import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
@@ -170,11 +171,8 @@ export function createOpenClawTools(
     modelProvider?: string;
     /** Active model id for provider/model-specific tool gating. */
     modelId?: string;
-    /**
-     * Ring-zero Crestodian setup tool. Only the Crestodian agent runner sets
-     * this; normal agents must never receive it (wildcard allowlists included).
-     */
-    crestodianTool?: import("./tools/crestodian-tool.js").CrestodianToolOptions;
+    /** Internal review-run restrictions and proposal provenance. */
+    skillWorkshop?: SkillWorkshopRunOptions;
     /** If true, nodes action="invoke" can call media-returning commands directly. */
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
@@ -288,13 +286,6 @@ export function createOpenClawTools(
       ? undefined
       : options?.onYield
     : options?.onYield;
-  const skillWorkshopSessionKey = normalizeOptionalString(
-    options?.runSessionKey ?? options?.agentSessionKey,
-  );
-  const skillWorkshopRunId = normalizeOptionalString(options?.runId);
-  const skillWorkshopMessageId = normalizeOptionalString(
-    options?.currentMessageId === undefined ? undefined : String(options.currentMessageId),
-  );
   const taskSuggestionSessionKey = normalizeOptionalString(
     options?.runSessionKey ?? options?.agentSessionKey,
   );
@@ -474,7 +465,6 @@ export function createOpenClawTools(
   });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
-    ...(options?.crestodianTool ? [createCrestodianTool(options.crestodianTool)] : []),
     ...(embedded
       ? []
       : [
@@ -555,16 +545,14 @@ export function createOpenClawTools(
     ...(options?.sandboxed
       ? []
       : [
-          createSkillWorkshopTool({
+          createConfiguredSkillWorkshopTool({
             workspaceDir,
             config: resolvedConfig,
             agentId: sessionAgentId,
-            origin: {
-              agentId: sessionAgentId,
-              ...(skillWorkshopSessionKey ? { sessionKey: skillWorkshopSessionKey } : {}),
-              ...(skillWorkshopRunId ? { runId: skillWorkshopRunId } : {}),
-              ...(skillWorkshopMessageId ? { messageId: skillWorkshopMessageId } : {}),
-            },
+            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
+            messageId: options?.currentMessageId,
+            run: options?.skillWorkshop,
           }),
         ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
@@ -575,6 +563,13 @@ export function createOpenClawTools(
       callGateway: effectiveCallGateway,
     }),
     createSessionsHistoryTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+      config: resolvedConfig,
+      callGateway: effectiveCallGateway,
+    }),
+    createSessionsSearchTool({
+      agentId: sessionAgentId,
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,
       config: resolvedConfig,
@@ -660,7 +655,15 @@ export function createOpenClawTools(
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
   const gatewayCallerIdentity =
     hookAgentId && options?.agentSessionKey?.trim()
-      ? { agentId: hookAgentId, sessionKey: options.agentSessionKey.trim() }
+      ? {
+          agentId: hookAgentId,
+          sessionKey: options.agentSessionKey.trim(),
+          turnSourceChannel: options.agentChannel,
+          turnSourceTo:
+            options.currentMessagingTarget ?? options.currentChannelId ?? options.agentTo,
+          turnSourceAccountId: options.agentAccountId,
+          turnSourceThreadId: options.currentThreadTs ?? options.agentThreadId,
+        }
       : undefined;
   const wrapGatewayCallerIdentity = (tool: AnyAgentTool) =>
     wrapToolWithGatewayCallerIdentity(tool, gatewayCallerIdentity);
@@ -701,4 +704,3 @@ export const testing = {
       : defaultOpenClawToolsDeps;
   },
 };
-export { testing as __testing };

@@ -3,9 +3,17 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./session-menu.ts";
-import type { SessionMenuAction, SessionMenuData, SessionMenuWork } from "./session-menu.ts";
+import type { SessionMenuAction, SessionMenuWork } from "./session-menu.ts";
 
 type SessionMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
+type SessionMenuData = {
+  key: string;
+  label: string;
+  pinned: boolean;
+  unread: boolean;
+  archived: boolean;
+  category: string | null;
+};
 
 const containers: HTMLElement[] = [];
 
@@ -22,6 +30,7 @@ async function mountMenu(
     work?: SessionMenuWork | null;
     workboard?: { captured: boolean; busy: boolean } | null;
     archiveAllowed?: boolean;
+    selectionCount?: number;
     groups?: readonly string[];
     trigger?: HTMLElement | null;
     onAction?: (action: SessionMenuAction) => void;
@@ -43,6 +52,7 @@ async function mountMenu(
   render(
     html`<openclaw-session-menu
       .session=${session}
+      .selectionCount=${options.selectionCount ?? 1}
       .x=${100}
       .y=${100}
       .trigger=${options.trigger ?? null}
@@ -101,6 +111,26 @@ describe("session menu", () => {
       "Archive session",
       "Delete…",
     ]);
+  });
+
+  it("renders only batch actions with counts for a multi-selection", async () => {
+    const menu = await mountMenu({
+      selectionCount: 3,
+      work: { loading: false, pullRequestUrl: "https://example.test/pr", worktreePath: "/tmp/x" },
+    });
+
+    expect(menuItemLabels(menu)).toEqual([
+      "Mark 3 as unread",
+      "Move 3 to group",
+      "Archive 3",
+      "Delete 3…",
+    ]);
+  });
+
+  it("offers Mark N as read when every selected session is unread", async () => {
+    const menu = await mountMenu({ selectionCount: 2, session: { unread: true } });
+
+    expect(menuItemLabels(menu)).toContain("Mark 2 as read");
   });
 
   it("omits Open chat and Workboard when unavailable", async () => {
@@ -172,6 +202,33 @@ describe("session menu", () => {
     await menu.updateComplete;
 
     expect(menuItemLabels(menu)).not.toContain("Remove from group");
+  });
+
+  it("omits the submenu separator when New group is the only entry", async () => {
+    const menu = await mountMenu({ groups: [] });
+
+    menuItem(menu, "Move to group").click();
+    await menu.updateComplete;
+
+    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
+    if (!submenu) {
+      throw new Error("Expected group submenu");
+    }
+    expect(menuItemLabels(submenu)).toEqual(["New group…"]);
+    expect(submenu.querySelector('[role="separator"]')).toBeNull();
+  });
+
+  it("keeps the submenu separator when groups exist", async () => {
+    const menu = await mountMenu({ groups: ["Research"] });
+
+    menuItem(menu, "Move to group").click();
+    await menu.updateComplete;
+
+    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
+    if (!submenu) {
+      throw new Error("Expected group submenu");
+    }
+    expect(submenu.querySelector('[role="separator"]')).not.toBeNull();
   });
 
   it("numbers group submenu entries and dispatches them from digit keys", async () => {

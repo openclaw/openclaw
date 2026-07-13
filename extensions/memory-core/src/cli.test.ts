@@ -10,15 +10,12 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "./dreaming-state.js";
-import {
-  readShortTermRecallEntries,
-  recordShortTermRecalls,
-  testing as shortTermTesting,
-} from "./short-term-promotion.js";
+  shortTermTestState as shortTermTesting,
+} from "./test-helpers.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -216,10 +213,13 @@ describe("memory cli", () => {
     expect(loggedOutput(spy)).not.toContain(expected);
   }
 
-  async function runMemoryCli(args: string[]) {
+  async function runMemoryCli(
+    args: string[],
+    hostOptions?: Parameters<typeof registerMemoryCli>[1],
+  ) {
     const program = new Command();
     program.name("test");
-    registerMemoryCli(program);
+    registerMemoryCli(program, hostOptions);
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
 
@@ -1442,6 +1442,21 @@ describe("memory cli", () => {
     });
     expect(log).toHaveBeenCalledWith("No matches.");
     expect(close).toHaveBeenCalled();
+  });
+
+  it("passes the host local-service hook to CLI memory managers", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({ search: vi.fn(async () => []), close });
+    const acquireLocalService = vi.fn(async () => undefined);
+
+    await runMemoryCli(["search", "hello"], { acquireLocalService });
+
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+      acquireLocalService,
+    });
   });
 
   it("accepts --query for memory search", async () => {

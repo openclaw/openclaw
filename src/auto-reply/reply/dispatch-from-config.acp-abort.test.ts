@@ -32,7 +32,7 @@ let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
-let replyRunTesting: typeof import("./reply-run-registry.js").__testing;
+let replyRunTesting: typeof import("./reply-run-registry.js").testing;
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
@@ -160,7 +160,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       replyRunRegistry,
       getActiveReplyRunCount,
       createReplyOperation,
-      __testing: replyRunTesting,
+      testing: replyRunTesting,
     } = await import("./reply-run-registry.js"));
   });
 
@@ -199,6 +199,10 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     sessionStoreMocks.loadSessionEntry
       .mockReset()
       .mockImplementation(() => sessionStoreMocks.currentEntry);
+    sessionStoreMocks.loadSessionStoreEntry.mockReset();
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
+      () => sessionStoreMocks.currentEntry,
+    );
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
@@ -294,9 +298,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       replyOptions: { abortSignal: abortController.signal },
     });
 
-    await vi.waitFor(() => {
-      expect(runtime.runTurn).toHaveBeenCalledTimes(1);
-    });
+    await vi.waitFor(
+      () => {
+        expect(runtime.runTurn).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5_000 },
+    );
     abortController.abort();
     const outcome = await raceWithTimeoutResult(
       dispatchPromise.then(() => "settled" as const),
@@ -507,7 +514,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         conversationId: "C1",
       },
     };
-    const sessionStore = {
+    const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {
       [sourceSessionKey]: {
         sessionId: "source-session-id",
         updatedAt: Date.now(),
@@ -519,17 +526,12 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     };
     sessionBindingMocks.resolveByConversation.mockReturnValue(boundConversation);
     sessionStoreMocks.currentEntry = sessionStore[sourceSessionKey];
-    sessionStoreMocks.loadSessionStore.mockReturnValue(sessionStore);
-    sessionStoreMocks.resolveSessionStoreEntry.mockImplementation((...args: unknown[]) => {
-      const params = args[0] as { store?: Record<string, unknown>; sessionKey?: string };
-      const existing =
-        params.store && params.sessionKey ? params.store[params.sessionKey] : undefined;
-      return {
-        existing:
-          existing && typeof existing === "object"
-            ? (existing as Record<string, unknown>)
-            : undefined,
-      };
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { sessionKey?: string };
+      const existing = params.sessionKey ? sessionStore[params.sessionKey] : undefined;
+      return existing && typeof existing === "object"
+        ? (existing as Record<string, unknown>)
+        : undefined;
     });
     acpMocks.readAcpSessionEntry.mockImplementation((params: { sessionKey: string }) =>
       params.sessionKey === boundAcpSessionKey

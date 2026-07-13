@@ -6,6 +6,10 @@ import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseChatSendAck
+import ai.openclaw.app.i18n.NativeText
+import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.resolveOptionalNativeText
+import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.parseGatewayModels
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
 import ai.openclaw.app.ui.chat.thinkingSupportedForSelection
@@ -44,6 +48,19 @@ internal data class ChatCacheScope(
   val gatewayId: String,
   val connectionGeneration: Long,
 )
+
+internal data class MainSessionBinding(
+  val key: String,
+  val label: String,
+)
+
+private class MainSessionReadiness(
+  val gatewayScope: ChatCacheScope,
+  val binding: MainSessionBinding,
+  val ready: CompletableDeferred<Unit>,
+) {
+  var job: Job? = null
+}
 
 class ChatController internal constructor(
   private val scope: CoroutineScope,
@@ -106,8 +123,8 @@ class ChatController internal constructor(
   private val _historyLoading = MutableStateFlow(false)
   val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
 
-  private val _errorText = MutableStateFlow<String?>(null)
-  val errorText: StateFlow<String?> = _errorText.asStateFlow()
+  private val _errorText = MutableStateFlow<NativeText?>(null)
+  val errorText: StateFlow<String?> = _errorText.resolveOptionalNativeText()
 
   private val _healthOk = MutableStateFlow(false)
   val healthOk: StateFlow<Boolean> = _healthOk.asStateFlow()
@@ -162,6 +179,13 @@ class ChatController internal constructor(
   private val historyRequestSequence = AtomicLong(0)
   private val modelSelectionGeneration = AtomicLong(0)
   private val sessionsRequestSequence = AtomicLong(0)
+
+  // Every live history path awaits this gateway/session readiness. Per-gateway locking keeps
+  // rapid agent switches from letting an older lookup refresh before the new session is ready.
+  private val mainSessionAdoptionLocks = ConcurrentHashMap<String, Mutex>()
+  private val desiredMainSessions = ConcurrentHashMap<String, MainSessionBinding>()
+  private val mainSessionReadinessLock = Any()
+  private var mainSessionReadiness: MainSessionReadiness? = null
   private val gatewayScopeApplyLock = Any()
   private var latestAppliedHistoryRequest = 0L
   private var latestAppliedInFlightRunId: String? = null
@@ -187,6 +211,14 @@ class ChatController internal constructor(
 
   private fun updateErrorText(
     message: String?,
+    historyGeneration: Long? = null,
+  ) {
+    _errorText.value = message?.let(::verbatimText)
+    historyLoadErrorGeneration = historyGeneration
+  }
+
+  private fun updateLocalizedErrorText(
+    message: NativeText?,
     historyGeneration: Long? = null,
   ) {
     _errorText.value = message
@@ -229,6 +261,7 @@ class ChatController internal constructor(
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
+    retireMainSessionReadiness()
     historyLoadGeneration.incrementAndGet()
     restoreRunStateOnReconnect = true
     reconnectRecoveryGeneration = null
@@ -260,6 +293,84 @@ class ChatController internal constructor(
 
   /** Refreshes the connected gateway while preserving recovery ownership after a disconnect. */
   fun onGatewayConnected() {
+    refreshConnectedGateway()
+  }
+
+  /** Creates/adopts the app-owned main session before connected history can load. */
+  internal fun onGatewayConnected(mainSession: MainSessionBinding) {
+    val requestScope = currentCacheScope()
+    if (requestScope == null) {
+      refreshConnectedGateway()
+      return
+    }
+    desiredMainSessions[requestScope.gatewayId] = mainSession
+    val readiness =
+      MainSessionReadiness(
+        gatewayScope = requestScope,
+        binding = mainSession,
+        ready = CompletableDeferred(),
+      )
+    val adoptionJob =
+      scope.launch(start = CoroutineStart.LAZY) {
+        try {
+          val adoptionLock = mainSessionAdoptionLocks.computeIfAbsent(requestScope.gatewayId) { Mutex() }
+          adoptionLock.withLock {
+            if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
+            try {
+              val describeParams = buildJsonObject { put("key", JsonPrimitive(mainSession.key)) }
+              val describeResponse =
+                requestGatewayBound(requestScope.gatewayId, "sessions.describe", describeParams.toString())
+              val describeRoot = json.parseToJsonElement(describeResponse).asObjectOrNull() ?: error("invalid sessions.describe response")
+              if (!describeRoot.containsKey("session")) error("sessions.describe returned no session field")
+              if (desiredMainSessions[requestScope.gatewayId] != mainSession) return@withLock
+              val existingSession = describeRoot["session"].asObjectOrNull()
+              val existingLabel =
+                existingSession
+                  ?.get("label")
+                  .asStringOrNull()
+                  ?.trim()
+                  ?.takeIf { it.isNotEmpty() }
+              if (existingLabel == null) {
+                // Label-only sessions.patch is operator.write-scoped and atomically upserts the row,
+                // avoiding the concurrent-session identity race in sessions.create.
+                val patchParams =
+                  buildJsonObject {
+                    put("key", JsonPrimitive(mainSession.key))
+                    put("label", JsonPrimitive(mainSession.label))
+                  }
+                requestGatewayBound(requestScope.gatewayId, "sessions.patch", patchParams.toString())
+              }
+            } catch (err: CancellationException) {
+              throw err
+            } catch (_: Throwable) {
+              // History remains usable under the already-bound key when adoption cannot be verified.
+            }
+          }
+        } finally {
+          readiness.ready.complete(Unit)
+        }
+        // A superseded connect owns the next refresh and must not inherit this response.
+        if (
+          synchronized(mainSessionReadinessLock) { mainSessionReadiness === readiness } &&
+          requestScope == currentCacheScope() &&
+          desiredMainSessions[requestScope.gatewayId] == mainSession
+        ) {
+          refreshConnectedGateway()
+        }
+      }
+    readiness.job = adoptionJob
+    val supersededReadiness =
+      synchronized(mainSessionReadinessLock) {
+        val current = mainSessionReadiness
+        mainSessionReadiness = readiness
+        current
+      }
+    supersededReadiness?.job?.cancel()
+    supersededReadiness?.ready?.complete(Unit)
+    adoptionJob.start()
+  }
+
+  private fun refreshConnectedGateway() {
     if (!restoreRunStateOnReconnect) {
       refresh()
       return
@@ -270,6 +381,7 @@ class ChatController internal constructor(
 
   /** Invalidates and clears gateway-bound UI state before a target switch can race old responses. */
   fun onGatewayScopeChanging(retireRunState: Boolean = false) {
+    retireMainSessionReadiness()
     synchronized(gatewayScopeApplyLock) {
       if (retireRunState) {
         restoreRunStateOnReconnect = false
@@ -298,6 +410,17 @@ class ChatController internal constructor(
       // Outbox rows are gateway-scoped too; the next publish repopulates them for the new scope.
       _outboxItems.value = emptyList()
     }
+  }
+
+  private fun retireMainSessionReadiness() {
+    val staleReadiness =
+      synchronized(mainSessionReadinessLock) {
+        val current = mainSessionReadiness
+        mainSessionReadiness = null
+        current
+      }
+    staleReadiness?.job?.cancel()
+    staleReadiness?.ready?.complete(Unit)
   }
 
   /** Restores the selected gateway's local state without waiting for transport availability. */
@@ -330,6 +453,28 @@ class ChatController internal constructor(
 
   /** Rebinds chat to a new canonical main session key after gateway hello/agent changes. */
   fun applyMainSessionKey(mainSessionKey: String) {
+    bindMainSessionKey(mainSessionKey, loadHistory = true)
+  }
+
+  /** Rebinds without loading; the connected lifecycle creates/adopts the session first. */
+  internal fun prepareMainSessionKey(mainSessionKey: String) {
+    bindMainSessionKey(mainSessionKey, loadHistory = false)
+  }
+
+  /** Selects a newly chosen agent's main session without racing history ahead of adoption. */
+  internal fun prepareAndSelectMainSessionKey(mainSessionKey: String) {
+    val selectedKey = mainSessionKey.trim()
+    if (selectedKey.isEmpty()) return
+    prepareSessionSelection(selectedKey)
+    bindMainSessionKey(mainSessionKey, loadHistory = false)
+    val key = normalizeRequestedSessionKey(mainSessionKey)
+    if (_sessionKey.value != key) beginHistoryLoad(key, clearMessages = true)
+  }
+
+  private fun bindMainSessionKey(
+    mainSessionKey: String,
+    loadHistory: Boolean,
+  ) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
     val nextState =
@@ -341,6 +486,7 @@ class ChatController internal constructor(
     appliedMainSessionKey = nextState.appliedMainSessionKey
     if (_sessionKey.value == nextState.currentSessionKey) return
     val generation = beginHistoryLoad(nextState.currentSessionKey, clearMessages = true)
+    if (!loadHistory) return
     scope.launch {
       bootstrap(
         sessionKey = nextState.currentSessionKey,
@@ -567,7 +713,7 @@ class ChatController internal constructor(
     val parentKey = normalizeRequestedSessionKey(_sessionKey.value)
     if (parentKey.isEmpty()) return false
     if (_pendingRunCount.value > 0) {
-      updateErrorText("Wait for the current response to finish before starting a new chat.")
+      updateLocalizedErrorText(nativeText("Wait for the current response to finish before starting a new chat."))
       return false
     }
     if (!newChatCreateInFlight.compareAndSet(false, true)) {
@@ -664,7 +810,7 @@ class ChatController internal constructor(
           } catch (err: CancellationException) {
             throw err
           } catch (err: Throwable) {
-            updateErrorText(err.message ?: "Could not update model.")
+            updateLocalizedErrorText(err.message?.let(::verbatimText) ?: nativeText("Could not update model."))
             false
           }
         }
@@ -682,16 +828,20 @@ class ChatController internal constructor(
   fun switchSession(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     if (key.isEmpty()) return
-    if (key != unreadPatchSessionKey) {
-      unreadPatchSessionKey = key
-      unreadPatchRequested = false
-    }
-    acknowledgeUnreadIfNeeded(key, _sessions.value.firstOrNull { it.key == key })
+    prepareSessionSelection(key)
     if (key == _sessionKey.value) return
     val generation = beginHistoryLoad(key, clearMessages = true)
     scope.launch {
       bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = false)
     }
+  }
+
+  private fun prepareSessionSelection(key: String) {
+    if (key != unreadPatchSessionKey) {
+      unreadPatchSessionKey = key
+      unreadPatchRequested = false
+    }
+    acknowledgeUnreadIfNeeded(key, _sessions.value.firstOrNull { it.key == key })
   }
 
   private fun beginHistoryLoad(
@@ -808,7 +958,7 @@ class ChatController internal constructor(
       when (val outbox = commandOutbox) {
         null -> {
           if (!_healthOk.value) {
-            updateErrorText("Gateway health not OK; cannot send")
+            updateLocalizedErrorText(nativeText("Gateway health not OK; cannot send"))
             return false
           }
           null
@@ -939,7 +1089,7 @@ class ChatController internal constructor(
               // Terminal timeout/error means the gateway did not accept a runnable turn.
               // Surface failed acceptance instead of letting a cleared composer look successful.
               unresolvedRepliesByRunId.remove(actualRunId)
-              updateErrorText("Chat failed before the run started; try again.")
+              updateLocalizedErrorText(nativeText("Chat failed before the run started; try again."))
               // The parked row owns the input; restoring the draft would duplicate it.
               journaled != null
             }
@@ -1321,6 +1471,13 @@ class ChatController internal constructor(
     val requestSequence = historyRequestSequence.incrementAndGet()
     val requestModelSelectionGeneration = modelSelectionGeneration.get()
     val requestCacheScope = currentCacheScope()
+    awaitMainSessionReadiness(sessionKey, requestCacheScope)
+    if (
+      !isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get()) ||
+      requestCacheScope != currentCacheScope()
+    ) {
+      return false
+    }
     val history =
       try {
         val historyJson =
@@ -1415,6 +1572,20 @@ class ChatController internal constructor(
     persistTranscript(requestCacheScope, sessionKey, history.messages)
     confirmDurableSendsFromHistory(requestCacheScope, history)
     return true
+  }
+
+  private suspend fun awaitMainSessionReadiness(
+    sessionKey: String,
+    requestScope: ChatCacheScope?,
+  ) {
+    val readiness =
+      synchronized(mainSessionReadinessLock) {
+        mainSessionReadiness
+          ?.takeIf { state ->
+            state.gatewayScope == requestScope && state.binding.key == sessionKey
+          }?.ready
+      }
+    readiness?.await()
   }
 
   /** Canonical history is the only proof that retires journaled sends; every apply checks it. */
@@ -1661,7 +1832,7 @@ class ChatController internal constructor(
     attachments: List<OutgoingAttachment>,
   ): ChatOutboxItem? {
     if (outboxScope == null) {
-      updateErrorText("Gateway health not OK; cannot send")
+      updateLocalizedErrorText(nativeText("Gateway health not OK; cannot send"))
       return null
     }
     val payloads =
@@ -1676,7 +1847,7 @@ class ChatController internal constructor(
           )
         }
       } catch (_: IllegalArgumentException) {
-        updateErrorText("Could not stage an attachment for sending.")
+        updateLocalizedErrorText(nativeText("Could not stage an attachment for sending."))
         return null
       }
     // Slash commands are connection-gated: they may auto-send only inside the connection epoch
@@ -1696,7 +1867,7 @@ class ChatController internal constructor(
       } catch (err: CancellationException) {
         throw err
       } catch (_: Throwable) {
-        updateErrorText("Could not queue message for later delivery.")
+        updateLocalizedErrorText(nativeText("Could not queue message for later delivery."))
         return null
       }
     return when (result) {
@@ -1706,19 +1877,19 @@ class ChatController internal constructor(
         result.item
       }
       ChatOutboxEnqueueResult.QueueFull -> {
-        updateErrorText("Offline queue is full ($OUTBOX_MAX_QUEUED messages); delete queued items first.")
+        updateLocalizedErrorText(nativeText("Offline queue is full (\$OUTBOX_MAX_QUEUED messages); delete queued items first.", OUTBOX_MAX_QUEUED))
         null
       }
       ChatOutboxEnqueueResult.AttachmentsTooLarge -> {
-        updateErrorText("Attachments are too large to queue for one message; remove some and try again.")
+        updateLocalizedErrorText(nativeText("Attachments are too large to queue for one message; remove some and try again."))
         null
       }
       ChatOutboxEnqueueResult.StorageFull -> {
-        updateErrorText("Offline attachment storage is full; delete queued items first.")
+        updateLocalizedErrorText(nativeText("Offline attachment storage is full; delete queued items first."))
         null
       }
       ChatOutboxEnqueueResult.Unavailable -> {
-        updateErrorText("Gateway health not OK; cannot send")
+        updateLocalizedErrorText(nativeText("Gateway health not OK; cannot send"))
         null
       }
     }
@@ -2324,7 +2495,13 @@ class ChatController internal constructor(
             pendingToolCallsById.clear()
             publishPendingToolCalls()
             _streamingAssistantText.value = null
-            updateErrorText(if (state == "error") payload["errorMessage"].asStringOrNull() ?: "Chat failed" else null)
+            updateLocalizedErrorText(
+              if (state == "error") {
+                payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed")
+              } else {
+                null
+              },
+            )
           }
           refreshCurrentHistoryBestEffort(updateSessionInfo = true)
           return
@@ -2338,7 +2515,7 @@ class ChatController internal constructor(
           return
         }
         if (state == "error") {
-          updateErrorText(payload["errorMessage"].asStringOrNull() ?: "Chat failed")
+          updateLocalizedErrorText(payload["errorMessage"].asStringOrNull()?.let(::verbatimText) ?: nativeText("Chat failed"))
         }
         if (runId != null) {
           clearPendingRun(runId)
@@ -2441,7 +2618,7 @@ class ChatController internal constructor(
         }
       }
       "error" -> {
-        updateErrorText("Event stream interrupted; try refreshing.")
+        updateLocalizedErrorText(nativeText("Event stream interrupted; try refreshing."))
         clearPendingRuns()
         pendingToolCallsById.clear()
         publishPendingToolCalls()
@@ -2521,7 +2698,7 @@ class ChatController internal constructor(
         unresolvedRepliesByRunId.remove(runId)
         terminalWithoutReplyRunIds.remove(runId)
         timedOutRunIds.add(runId)
-        updateErrorText("Timed out waiting for a reply; try again or refresh.")
+        updateLocalizedErrorText(nativeText("Timed out waiting for a reply; try again or refresh."))
         // The optimistic bubble is gone, so the journaled row must stay visible for review;
         // history proof still retires it later if the turn did persist.
         parkUnconfirmedDurableSend(runId)
@@ -2713,7 +2890,7 @@ class ChatController internal constructor(
         unresolvedRunIds.forEach(::removeOptimisticMessage)
         unresolvedRunIds.forEach(unresolvedRepliesByRunId::remove)
         unresolvedRunIds.forEach(terminalWithoutReplyRunIds::remove)
-        updateErrorText("Timed out confirming the sent message; refresh to check delivery.")
+        updateLocalizedErrorText(nativeText("Timed out confirming the sent message; refresh to check delivery."))
         // Ownership expired without proof; keep the journaled copies visible for manual review.
         for (unresolvedRunId in unresolvedRunIds) {
           parkUnconfirmedDurableSend(unresolvedRunId)
@@ -2952,7 +3129,7 @@ class ChatController internal constructor(
             label = option.label.trim().takeIf { it.isNotEmpty() } ?: id,
           )
         }.distinctBy { it.id }
-        .ifEmpty { listOf(ChatThinkingLevelOption(id = "off", label = "off")) }
+        .ifEmpty { listOf(ChatThinkingLevelOption(id = "off", label = "Off")) }
     _thinkingLevelSelection.value =
       ChatThinkingLevelSelection(
         options = options,
@@ -3131,13 +3308,16 @@ internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
         text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
       )
 
-    "image", "audio" ->
+    "image", "audio" -> {
+      val type = obj["type"].asStringOrNull() ?: "image"
+      val inlineContent = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() }
       ChatMessageContent(
-        type = obj["type"].asStringOrNull() ?: "image",
+        type = type,
         mimeType = obj["mimeType"].asStringOrNull(),
         fileName = obj["fileName"].asStringOrNull(),
-        base64 = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() },
+        base64 = inlineContent?.takeIf { type != "image" || it.length <= CHAT_IMAGE_MAX_BASE64_CHARS },
       )
+    }
 
     "attachment" -> {
       val attachment = obj["attachment"].asObjectOrNull() ?: return null

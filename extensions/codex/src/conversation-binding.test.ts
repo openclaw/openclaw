@@ -57,8 +57,21 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 vi.mock("./app-server/shared-client.js", () => ({
   ...sharedClientMocks,
-  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient: async (...args: unknown[]) => {
+    const client = (await sharedClientMocks.getSharedCodexAppServerClient(...args)) as {
+      getInstanceId?: () => string;
+    };
+    client.getInstanceId ??= () => "test-client";
+    return client;
+  },
   releaseLeasedSharedCodexAppServerClient: vi.fn(),
+  releaseCodexAppServerClientLease: vi.fn((lease: { client?: unknown }) => {
+    lease.client = undefined;
+  }),
+  withLeasedCodexAppServerClientStartSelectionRetry: async (params: {
+    lease: { client?: unknown };
+    run: (client: unknown) => Promise<unknown>;
+  }) => await params.run(params.lease.client),
 }));
 vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => {
   const actual =
@@ -79,11 +92,12 @@ import {
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { legacyCodexConversationBindingId } from "./conversation-binding-data.js";
-import {
-  handleCodexConversationBindingResolved as handleCodexConversationBindingResolvedImpl,
-  handleCodexConversationInboundClaim as handleCodexConversationInboundClaimImpl,
-  startCodexConversationThread as startCodexConversationThreadImpl,
-} from "./conversation-binding.js";
+import { codexConversationBindingRuntime } from "./conversation-binding.js";
+
+const handleCodexConversationBindingResolvedImpl =
+  codexConversationBindingRuntime.handleBindingResolved;
+const handleCodexConversationInboundClaimImpl = codexConversationBindingRuntime.handleInboundClaim;
+const startCodexConversationThreadImpl = codexConversationBindingRuntime.startThread;
 
 function testConversationIdentity(sessionFile: string) {
   return {
@@ -98,7 +112,7 @@ async function writeTestConversationBinding(
 ): Promise<void> {
   await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
     kind: "set",
-    binding,
+    binding: { clientId: "test-client", ...binding },
   });
 }
 

@@ -17,6 +17,16 @@ struct UpdateOrchestrationTests {
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: nil).isEmpty)
     }
 
+    #if canImport(Sparkle)
+    @Test func `Sparkle stays unavailable until launch relocation finishes`() {
+        let updater = SparkleUpdaterController(savedAutoUpdate: false)
+
+        #expect(!updater.isAvailable)
+        updater.checkForUpdates(nil)
+        #expect(!updater.isAvailable)
+    }
+    #endif
+
     @Test func `dashboard accepts only start update payloads`() {
         #expect(DashboardWindowController.isStartUpdateRequest(["type": "start-update"]))
         #expect(!DashboardWindowController.isStartUpdateRequest(["type": "update.run"]))
@@ -87,6 +97,22 @@ struct UpdateOrchestrationTests {
             launchAgentUsesManagedCLI: true,
             gatewayUpdateChannel: "beta",
             launchAgentWriteDisabled: false))
+    }
+
+    @Test func `CLI management follows configured node modes`() {
+        #expect(CLIInstallPrompter.shouldManageCLI(connectionMode: .local))
+        #expect(CLIInstallPrompter.shouldManageCLI(connectionMode: .remote))
+        #expect(!CLIInstallPrompter.shouldManageCLI(connectionMode: .unconfigured))
+
+        #expect(CLIInstallPrompter.shouldRestartManagedGateway(
+            requested: true,
+            connectionMode: .local))
+        #expect(!CLIInstallPrompter.shouldRestartManagedGateway(
+            requested: true,
+            connectionMode: .remote))
+        #expect(!CLIInstallPrompter.shouldRestartManagedGateway(
+            requested: false,
+            connectionMode: .local))
     }
 
     @Test func `managed repair only upgrades`() {

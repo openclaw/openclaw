@@ -70,6 +70,10 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       `  printf "%s" ${shellSingleQuote(helpText)}`,
       "  exit 0",
       "fi",
+      'if [ "$1" = "run" ] && [ -n "${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}" ] && [ "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS" != "0" ]; then',
+      '  printf "%s\\n" "fake run failure" >&2',
+      '  exit "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS"',
+      "fi",
       'if [ "$1" = "config" ] && [ "$2" = "show" ]; then',
       '  for arg in "$@"; do',
       '    if [ "$arg" = "--json" ]; then',
@@ -201,6 +205,10 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     'if (args[0] === "run" && args[1] === "--help") {',
     `  process.stdout.write(${JSON.stringify(helpText)});`,
     "  process.exit(0);",
+    "}",
+    'if (args[0] === "run" && Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10) !== 0) {',
+    "  process.stderr.write('fake run failure\\n');",
+    "  process.exit(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS, 10));",
     "}",
     `require(${JSON.stringify(helperPath)});`,
   ].join("\n");
@@ -340,8 +348,8 @@ function makeFakeGit(
       '  rm -rf "$4"',
       "  exit 0",
       "fi",
-      ...Object.entries(responses).flatMap(([key, response]) => {
-        const args = key.split("\u0000");
+      ...Object.entries(responses).flatMap(([responseKey, response]) => {
+        const args = responseKey.split("\u0000");
         return [
           `if ${shellArgListCondition(args)}; then`,
           response.stdout ? `  printf "%s" ${shellSingleQuote(response.stdout)}` : "",
@@ -652,6 +660,30 @@ describe("scripts/crabbox-wrapper", () => {
     expect(parseFakeCrabboxOutput(result).args).toContain("local-container");
   });
 
+  it("hints at lease expiry when a reused-lease run fails fast", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "local-container", "--id", "tbx_expired_fixture", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "1" } },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "run --id tbx_expired_fixture failed fast; reusable leases expire after their idle timeout",
+    );
+  });
+
+  it("keeps failed runs without a reused lease free of the expiry hint", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "local-container", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "1" } },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("failed fast; reusable leases expire");
+  });
+
   it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
     const result = runWrapper(
       "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
@@ -766,6 +798,42 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
   });
 
+  it("fails before reuse when a Blacksmith Testbox is claimed by another repo", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const id = "tbx_claimed";
+    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    mkdirSync(path.dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, "fake test key\n", "utf8");
+    const stateRoot = path.join(home, ".local", "state");
+    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+    mkdirSync(path.dirname(claimPath), { recursive: true });
+    writeFileSync(
+      claimPath,
+      `${JSON.stringify({ leaseID: id, repoRoot: "/tmp/other-repo" })}\n`,
+      "utf8",
+    );
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(`lease ${id} is claimed by repo /tmp/other-repo`);
+    expect(result.stderr).toContain(`use --reclaim to claim it for ${repoRoot}`);
+
+    const reclaimed = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--reclaim", "--", "echo ok"],
+      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
+    );
+    expect(reclaimed.status).toBe(0);
+    expect(parseFakeCrabboxOutput(reclaimed).args).toContain("--reclaim");
+  });
+
   it("lets Crabbox resolve reusable Testbox slugs", () => {
     const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
     tempDirs.push(home);
@@ -864,7 +932,7 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.scriptContent);
+    const remoteCommand = normalizeShellLineEndings(output.scriptContent!);
     expect(result.status).toBe(0);
     expect(output.args.slice(0, 7)).toEqual([
       "run",
@@ -1530,7 +1598,7 @@ describe("scripts/crabbox-wrapper", () => {
         "env -i bash scripts/package-mac-app.sh >out.log 2>&1",
         "openclaw_crabbox_env -i bash scripts/package-mac-app.sh >out.log 2>&1",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -1586,7 +1654,7 @@ describe("scripts/crabbox-wrapper", () => {
         "time env -i bash scripts/package-mac-app.sh",
         "time openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -1613,7 +1681,7 @@ describe("scripts/crabbox-wrapper", () => {
         "{ env -i bash scripts/package-mac-app.sh; }",
         "{ openclaw_crabbox_env -i bash scripts/package-mac-app.sh; }",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -1705,7 +1773,7 @@ describe("scripts/crabbox-wrapper", () => {
         "PATH=/usr/bin:/bin env -i bash scripts/package-mac-app.sh",
         "PATH=/usr/bin:/bin openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],

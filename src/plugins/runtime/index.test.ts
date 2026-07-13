@@ -1,7 +1,4 @@
 // Plugin runtime index tests cover runtime entrypoint exports and registry setup.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
@@ -10,12 +7,7 @@ import {
   type OpenClawConfig,
 } from "../../config/config.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
-import {
-  requestHeartbeat,
-  resetHeartbeatWakeStateForTests,
-  setHeartbeatWakeHandler,
-} from "../../infra/heartbeat-wake.js";
-import * as jsonFiles from "../../infra/json-files.js";
+import { requestHeartbeat, setHeartbeatWakeHandler } from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
@@ -28,12 +20,9 @@ const runtimeModelAuthMocks = vi.hoisted(() => ({
 
 vi.mock("./runtime-model-auth.runtime.js", () => runtimeModelAuthMocks);
 
-import {
-  clearGatewaySubagentRuntime,
-  createPluginRuntime,
-  setGatewayNodesRuntime,
-  setGatewaySubagentRuntime,
-} from "./index.js";
+import { setGatewayNodesRuntime, setGatewaySubagentRuntime } from "./gateway-bindings.js";
+import { clearGatewaySubagentRuntime } from "./gateway-bindings.test-fixtures.js";
+import { createPluginRuntime } from "./index.js";
 
 function createCommandResult() {
   return {
@@ -197,12 +186,11 @@ describe("plugin runtime command execution", () => {
 
   it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
     vi.useFakeTimers();
-    resetHeartbeatWakeStateForTests();
     const handler = vi.fn(async (_request: Parameters<typeof requestHeartbeat>[0]) => ({
       status: "skipped" as const,
       reason: "disabled",
     }));
-    setHeartbeatWakeHandler(handler);
+    const dispose = setHeartbeatWakeHandler(handler);
     try {
       createPluginRuntime().system.requestHeartbeatNow({
         reason: "legacy-plugin",
@@ -216,7 +204,7 @@ describe("plugin runtime command execution", () => {
       expect(request?.intent).toBe("immediate");
       expect(request?.reason).toBe("legacy-plugin");
     } finally {
-      resetHeartbeatWakeStateForTests();
+      dispose();
       vi.useRealTimers();
     }
   });
@@ -322,17 +310,13 @@ describe("plugin runtime command execution", () => {
         ]);
         expect(runtime.agent.runEmbeddedPiAgent).toBe(runtime.agent.runEmbeddedAgent);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
-          "loadSessionStore",
           "createSessionEntry",
           "getSessionEntry",
           "listSessionEntries",
           "patchSessionEntry",
           "upsertSessionEntry",
           "runWithWorkAdmission",
-          "saveSessionStore",
-          "updateSessionStore",
           "updateSessionStoreEntry",
-          "resolveSessionFilePath",
         ]);
       },
     },
@@ -357,41 +341,6 @@ describe("plugin runtime command execution", () => {
     },
   ] as const)("$name", ({ assert }) => {
     expectRuntimeShape(assert);
-  });
-
-  it("preserves requireWriteSuccess through runtime session entry updates", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-runtime-session-store-"));
-    const storePath = path.join(tempDir, "sessions.json");
-    const sessionKey = "agent:main:main";
-    const runtime = createPluginRuntime();
-
-    try {
-      await runtime.agent.session.upsertSessionEntry({
-        sessionKey,
-        storePath,
-        entry: {
-          sessionId: "session-1",
-          updatedAt: 10,
-        },
-      });
-      const writeError = Object.assign(new Error("write failed"), { code: "ENOENT" });
-      const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic").mockRejectedValue(writeError);
-
-      try {
-        await expect(
-          runtime.agent.session.updateSessionStoreEntry({
-            sessionKey,
-            storePath,
-            requireWriteSuccess: true,
-            update: () => ({ model: "gpt-5.5" }),
-          }),
-        ).rejects.toBe(writeError);
-      } finally {
-        writeSpy.mockRestore();
-      }
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 
   it("modelAuth wrappers strip agentDir and store to prevent credential steering", async () => {

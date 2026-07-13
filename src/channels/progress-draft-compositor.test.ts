@@ -94,11 +94,13 @@ describe("createChannelProgressDraftCompositor", () => {
     expect(await progress.pushReasoningProgress("queued-turn thinking")).toBe(false);
 
     // New assistant message boundary on a queued/followup turn.
-    progress.beginNewTurn();
+    expect(progress.beginNewTurn()).toBe(true);
+    expect(progress.hasStarted).toBe(false);
     await progress.start();
     await progress.pushReasoningProgress("queued-turn thinking", { snapshot: true });
 
     expect(update).toHaveBeenCalled();
+    expect(progress.beginNewTurn()).toBe(false);
   });
 
   it("does not resurrect progress after suppression", async () => {
@@ -313,6 +315,35 @@ describe("createChannelProgressDraftCompositor", () => {
     // Narration stopping (empty update) falls back to the raw tool lines.
     await progress.pushNarrationProgress("");
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n🛠️ Wc", expect.anything());
+  });
+
+  it("holds narration behind the initial progress delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const update = vi.fn();
+      const progress = createChannelProgressDraftCompositor({
+        entry: { streaming: { mode: "progress" } },
+        mode: "progress",
+        active: true,
+        seed: "test",
+        update,
+      });
+
+      await progress.pushToolProgress("🛠️ Exec");
+      await progress.pushNarrationProgress("Reading the gateway config.");
+
+      expect(update).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS - 1);
+      expect(update).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(update).toHaveBeenCalledWith("Reading the gateway config.", {
+        flush: true,
+        lines: ["🛠️ Exec"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores narration once the final reply started and resets it per turn", async () => {

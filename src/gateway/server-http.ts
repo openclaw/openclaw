@@ -26,7 +26,10 @@ import {
   type GatewayAuthResult,
   type ResolvedGatewayAuth,
 } from "./auth.js";
-import { isControlUiPluginManagerRequest } from "./control-ui-routing.js";
+import {
+  isControlUiApprovalDocumentPath,
+  isControlUiPluginManagerRequest,
+} from "./control-ui-routing.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, setDefaultSecurityHeaders } from "./http-common.js";
@@ -47,7 +50,12 @@ import {
 } from "./server/plugins-http/path-context.js";
 import type { PreauthConnectionBudget } from "./server/preauth-connection-budget.js";
 import type { ReadinessChecker } from "./server/readiness.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
+import {
+  GATEWAY_WS_CONNECTION_KIND_PROPERTY,
+  GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  type GatewayIngressWebSocket,
+  type GatewayWsClient,
+} from "./server/ws-types.js";
 
 type PluginHttpRequestHandler = (
   req: IncomingMessage,
@@ -323,7 +331,7 @@ type GatewayHttpRequestStage = {
   continueOnError?: boolean;
 };
 
-export async function runGatewayHttpRequestStages(
+async function runGatewayHttpRequestStages(
   stages: readonly GatewayHttpRequestStage[],
 ): Promise<boolean> {
   for (const stage of stages) {
@@ -539,6 +547,19 @@ export function createGatewayHttpServer(opts: {
         ? resolvePluginRoutePathContext(scopedRequestPath)
         : null;
       const resolvedAuthValue = getResolvedAuth();
+      const handleControlUiRequest = async () =>
+        (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
+          basePath: controlUiBasePath,
+          config: configSnapshot,
+          terminalEnabled:
+            opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
+          agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
+          root: controlUiRoot,
+          auth: resolvedAuthValue,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+        });
       const requestStages: GatewayHttpRequestStage[] = [
         {
           name: "gateway-probes",
@@ -670,6 +691,32 @@ export function createGatewayHttpServer(opts: {
         });
       }
       if (
+        isControlUiApprovalDocumentPath({
+          basePath: controlUiBasePath,
+          pathname: scopedRequestPath,
+        })
+      ) {
+        requestStages.push({
+          name: "control-ui-approval-document",
+          run: async () => {
+            if (!controlUiEnabled) {
+              res.statusCode = 404;
+              res.setHeader("Content-Type", "text/plain; charset=utf-8");
+              res.end("Not Found");
+              return true;
+            }
+            const handled = await handleControlUiRequest();
+            if (handled) {
+              return true;
+            }
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Not Found");
+            return true;
+          },
+        });
+      }
+      if (
         handlePluginRequest &&
         pluginPathContext &&
         resolvePluginNodeCapabilityRoute?.(pluginPathContext)
@@ -795,19 +842,7 @@ export function createGatewayHttpServer(opts: {
         });
         requestStages.push({
           name: "control-ui-http",
-          run: async () =>
-            (await getControlUiModule()).handleControlUiHttpRequest(req, res, {
-              basePath: controlUiBasePath,
-              config: configSnapshot,
-              terminalEnabled:
-                opts.isTerminalEnabled?.() ?? configSnapshot.gateway?.terminal?.enabled === true,
-              agentId: resolveAssistantIdentity({ cfg: configSnapshot }).agentId,
-              root: controlUiRoot,
-              auth: resolvedAuthValue,
-              trustedProxies,
-              allowRealIpFallback,
-              rateLimiter,
-            }),
+          run: handleControlUiRequest,
         });
       }
 
@@ -1005,5 +1040,61 @@ export function attachGatewayUpgradeHandler(opts: {
       log?.warn(`ws upgrade error from ${remoteAddress}: ${errorMessage}`);
       socket.destroy();
     });
+  });
+}
+
+/** Attach the loopback-only worker ingress and force every accepted socket into worker mode. */
+export function attachWorkerGatewayUpgradeHandler(params: {
+  httpServer: HttpServer;
+  wss: WebSocketServer;
+  preauthConnectionBudget: PreauthConnectionBudget;
+  log?: { warn: (message: string) => void };
+}): void {
+  params.httpServer.on("upgrade", (req, socket, head) => {
+    if (isGatewayWorkAdmissionClosed()) {
+      writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket admission closed");
+      socket.destroy();
+      return;
+    }
+    const preauthBudgetKey = req.socket.remoteAddress;
+    if (params.wss.listenerCount("connection") === 0) {
+      writeGatewayUpgradeServiceUnavailable(socket, "Worker websocket handlers unavailable");
+      socket.destroy();
+      return;
+    }
+    if (!params.preauthConnectionBudget.acquire(preauthBudgetKey)) {
+      writeGatewayUpgradeServiceUnavailable(socket, "Too many unauthenticated sockets");
+      socket.destroy();
+      return;
+    }
+    let budgetTransferred = false;
+    const releaseUpgradeBudget = () => {
+      if (budgetTransferred) {
+        return;
+      }
+      budgetTransferred = true;
+      params.preauthConnectionBudget.release(preauthBudgetKey);
+    };
+    socket.once("close", releaseUpgradeBudget);
+    try {
+      params.wss.handleUpgrade(req, socket, head, (ws) => {
+        const workerSocket = ws as GatewayIngressWebSocket;
+        workerSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] = "worker";
+        workerSocket[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] = params.preauthConnectionBudget;
+        workerSocket["__openclawPreauthBudgetKey"] = preauthBudgetKey;
+        params.wss.emit("connection", ws, req);
+        if (workerSocket["__openclawPreauthBudgetClaimed"]) {
+          budgetTransferred = true;
+          socket.off("close", releaseUpgradeBudget);
+        }
+      });
+    } catch (error) {
+      socket.off("close", releaseUpgradeBudget);
+      releaseUpgradeBudget();
+      params.log?.warn(
+        `worker websocket upgrade failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      socket.destroy();
+    }
   });
 }
