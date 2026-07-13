@@ -51,6 +51,9 @@ describe("Claude CLI node command", () => {
     { argv: ["--mcp-config", "/tmp/mcp.json"], error: "unsupported Claude CLI argument" },
     { argv: ["--plugin-dir", "/tmp/plugin"], error: "unsupported Claude CLI argument" },
     { argv: ["--allowedTools", "Bash"], error: "unsupported Claude CLI argument" },
+    // Tool policy must arrive as one comma-joined value; the multi-token
+    // variadic form fails closed instead of parsing partially.
+    { argv: ["--disallowedTools", "Bash", "Edit"], error: "unsupported Claude CLI argument" },
     { argv: ["--append-system-prompt", "inline"], error: "unsupported Claude CLI argument" },
     {
       argv: ["-p", "--resume", "--dangerously-skip-permissions"],

@@ -60,7 +60,9 @@ const VALUE_ARGS = new Set([
   "--max-budget-usd",
   // Native tool policy projected from the gateway. --allowedTools stays
   // rejected: Claude reads it as auto-approval, which must not bypass this
-  // node's own approval surface.
+  // node's own approval surface. The gateway always sends these as one
+  // comma-joined value (resolveClaudeCliToolAvailabilityArgs); a multi-token
+  // variadic form fails closed as an unsupported argument.
   "--tools",
   "--disallowedTools",
 ]);
