@@ -1257,7 +1257,7 @@ function resolveOfficialExternalPluginCatalogProfileConfigFromConfig(config?: {
 export async function loadConfiguredHostedOfficialExternalPluginCatalogEntries(
   config: { marketplaces?: OfficialExternalPluginCatalogProfileConfig } | undefined,
   params?: Omit<
-    Parameters<typeof loadHostedOfficialExternalPluginCatalogEntries>[0],
+    NonNullable<Parameters<typeof loadHostedOfficialExternalPluginCatalogEntries>[0]>,
     "catalogConfig"
   >,
 ): Promise<HostedOfficialExternalPluginCatalogLoadResult> {

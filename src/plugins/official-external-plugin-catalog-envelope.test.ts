@@ -35,7 +35,7 @@ function createSigningKey(keyId: string): SigningKey {
 }
 
 function exportPublicKey(key: SigningKey): string {
-  return key.publicKey.export({ type: "spki", format: "pem" });
+  return key.publicKey.export({ type: "spki", format: "pem" }).toString();
 }
 
 function signingInput(payloadType: string, payloadBytes: Buffer): Buffer {
