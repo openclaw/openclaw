@@ -46,11 +46,6 @@ type OpField = {
   value?: unknown;
 };
 
-type OpItem = {
-  title?: unknown;
-  fields?: unknown;
-};
-
 function defaultRunner(
   file: string,
   args: string[],
@@ -142,6 +137,11 @@ function classifyOpError(error: unknown): OnePasswordError {
     return new OnePasswordError("ITEM_NOT_FOUND", "1Password item was not found");
   }
   if (
+    /isn't a field\b|field.+(?:is not found|isn't found|not found|does not exist)/u.test(normalized)
+  ) {
+    return new OnePasswordError("FIELD_NOT_FOUND", "1Password field was not found");
+  }
+  if (
     /unauthorized|authentication|not signed in|invalid service account|permission denied/u.test(
       normalized,
     )
@@ -151,48 +151,32 @@ function classifyOpError(error: unknown): OnePasswordError {
   return new OnePasswordError("OP_ERROR", "1Password CLI request failed");
 }
 
-function parseItem(stdout: string): OpItem {
+function parseField(stdout: string, requestedField: string, itemTitle: string): ResolvedSecret {
+  let field: OpField;
   try {
     const parsed: unknown = JSON.parse(stdout);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error("item response is not an object");
+      throw new Error("field response is not an object");
     }
-    return parsed as OpItem;
+    field = parsed as OpField;
   } catch (error) {
     throw new OnePasswordError("OP_ERROR", "1Password CLI returned invalid JSON", {
       cause: error,
     });
   }
-}
-
-function normalizeFields(item: OpItem): OpField[] {
-  return Array.isArray(item.fields)
-    ? item.fields.filter(
-        (field): field is OpField =>
-          Boolean(field) && typeof field === "object" && !Array.isArray(field),
-      )
-    : [];
-}
-
-function extractSecret(item: OpItem, requestedField: string): ResolvedSecret {
-  const fields = normalizeFields(item);
-  const exactLabel = fields.find((field) => field.label === requestedField);
-  const selected = exactLabel ?? fields.find((field) => field.id === requestedField);
-  if (!selected || typeof selected.value !== "string") {
-    const labels = fields
-      .map((field) => (typeof field.label === "string" ? field.label : undefined))
-      .filter((label): label is string => Boolean(label))
-      .toSorted();
-    const suffix = labels.length > 0 ? ` Available fields: ${labels.join(", ")}` : "";
+  if (
+    (field.label !== requestedField && field.id !== requestedField) ||
+    typeof field.value !== "string"
+  ) {
     throw new OnePasswordError(
       "FIELD_NOT_FOUND",
-      `1Password field ${requestedField} was not found.${suffix}`,
+      `1Password field ${requestedField} was not found`,
     );
   }
   return {
-    value: selected.value,
-    itemTitle: typeof item.title === "string" ? item.title : "",
-    fieldLabel: typeof selected.label === "string" ? selected.label : requestedField,
+    value: field.value,
+    itemTitle,
+    fieldLabel: typeof field.label === "string" ? field.label : requestedField,
   };
 }
 
@@ -265,6 +249,8 @@ export class OpClient {
       params.item,
       "--vault",
       params.vault,
+      "--fields",
+      params.field,
       "--format",
       "json",
       "--cache=false",
@@ -278,7 +264,7 @@ export class OpClient {
         timeoutMs: this.timeoutMs,
         maxBufferBytes: MAX_STDOUT_BYTES,
       });
-      return extractSecret(parseItem(result.stdout), params.field);
+      return parseField(result.stdout, params.field, params.item);
     } catch (error) {
       throw classifyOpError(error);
     }

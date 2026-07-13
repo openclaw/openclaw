@@ -1,11 +1,6 @@
 import type { PluginHookBeforeToolCallResult } from "openclaw/plugin-sdk/types";
 import { describe, expect, it, vi } from "vitest";
-import {
-  fingerprintOnePasswordTarget,
-  OnePasswordBroker,
-  type AuditRow,
-  type StandingGrant,
-} from "./broker.js";
+import { OnePasswordBroker, type AuditRow, type StandingGrant } from "./broker.js";
 import type { OnePasswordConfig, OnePasswordItemConfig } from "./config.js";
 import { MemoryKeyedStore } from "./memory-store.test-support.js";
 
@@ -93,21 +88,21 @@ async function before(
 
 describe("OnePasswordBroker validation and policy", () => {
   it("lists only registry metadata and active grant state", async () => {
-    const configured = config();
-    const { broker, grants, getItem } = setup(1_000, configured);
-    await grants.register("approval", {
+    const { broker, getItem } = setup();
+    const approval = await before(broker, "list-grant", {
+      action: "get",
       slug: "approval",
-      grantedAtMs: 900,
-      expiresAtMs: 2_000,
-      targetFingerprint: fingerprintOnePasswordTarget(configuredItem(configured, "approval")),
+      reason: "create listing fixture",
     });
-    await grants.register("automatic", {
-      slug: "automatic",
-      grantedAtMs: 900,
-      expiresAtMs: 2_000,
-      targetFingerprint: "stale-target",
-    });
-    const items = await broker.list();
+    await approval?.requireApproval?.onResolution?.("allow-always");
+    await broker.get(
+      "list-grant",
+      { action: "get", slug: "approval", reason: "create listing fixture" },
+      invocation,
+    );
+    getItem.mockClear();
+
+    const items = await broker.list(invocation);
     expect(items).toEqual([
       {
         slug: "approval",
@@ -267,7 +262,7 @@ describe("OnePasswordBroker validation and policy", () => {
   });
 
   it("persists allow-always grants and expires them", async () => {
-    const { broker, audit, getItem, advance } = setup();
+    const { broker, audit, grants, getItem, advance } = setup();
     const first = await before(broker, "grant-1", {
       action: "get",
       slug: "approval",
@@ -283,6 +278,7 @@ describe("OnePasswordBroker validation and policy", () => {
       },
       invocation,
     );
+    expect((await grants.entries()).map((entry) => entry.value.agentId)).toEqual(["agent-a"]);
 
     advance(300_001);
     const second = await before(broker, "grant-2", {
@@ -309,6 +305,55 @@ describe("OnePasswordBroker validation and policy", () => {
       "approved",
       "grant",
     ]);
+  });
+
+  it("scopes standing grants and list state to the approved agent", async () => {
+    const { broker } = setup();
+    const approved = await before(broker, "agent-grant-1", {
+      action: "get",
+      slug: "approval",
+      reason: "agent a access",
+    });
+    await approved?.requireApproval?.onResolution?.("allow-always");
+    await broker.get(
+      "agent-grant-1",
+      { action: "get", slug: "approval", reason: "agent a access" },
+      invocation,
+    );
+
+    const otherAgent = {
+      agentId: "agent-b",
+      sessionKey: "session-b",
+      sessionId: "conversation-b",
+    };
+    const otherRequest = await broker.beforeToolCall(
+      {
+        toolName: "onepassword",
+        toolCallId: "agent-grant-2",
+        params: { action: "get", slug: "approval", reason: "agent b access" },
+      },
+      { toolName: "onepassword", toolCallId: "agent-grant-2", ...otherAgent },
+    );
+    expect(otherRequest?.requireApproval).toBeDefined();
+    expect((await broker.list(invocation)).find((item) => item.slug === "approval")).toMatchObject({
+      standingGrantActive: true,
+    });
+    expect((await broker.list(otherAgent)).find((item) => item.slug === "approval")).toMatchObject({
+      standingGrantActive: false,
+    });
+  });
+
+  it("does not offer a durable grant without an agent identity", async () => {
+    const { broker } = setup();
+    const result = await broker.beforeToolCall(
+      {
+        toolName: "onepassword",
+        toolCallId: "unknown-agent",
+        params: { action: "get", slug: "approval", reason: "one call only" },
+      },
+      { toolName: "onepassword", toolCallId: "unknown-agent" },
+    );
+    expect(result?.requireApproval?.allowedDecisions).toEqual(["allow-once", "deny"]);
   });
 
   it("invalidates a standing grant when its configured target changes", async () => {
@@ -339,6 +384,7 @@ describe("OnePasswordBroker validation and policy", () => {
     const { broker, grants } = setup();
     for (const slug of ["removed-a", "removed-b"]) {
       await grants.register(slug, {
+        agentId: "agent-a",
         slug,
         grantedAtMs: 900,
         expiresAtMs: 10_000,
@@ -356,7 +402,7 @@ describe("OnePasswordBroker validation and policy", () => {
       { action: "get", slug: "approval", reason: "replace removed grants" },
       invocation,
     );
-    expect((await grants.entries()).map((entry) => entry.key)).toEqual(["approval"]);
+    expect((await grants.entries()).map((entry) => entry.value.slug)).toEqual(["approval"]);
   });
 
   it("rechecks a standing grant before serving a cached value", async () => {

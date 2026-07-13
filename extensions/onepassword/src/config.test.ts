@@ -18,6 +18,12 @@ describe("parseOnePasswordConfig", () => {
         items: { token: { item: "Token", vault: "-Other" } },
       }),
     ).toThrow("token vault must not start with a hyphen");
+    expect(() =>
+      parseOnePasswordConfig({
+        vault: "Automation",
+        items: { token: { item: "Token", field: "username,password" } },
+      }),
+    ).toThrow("field must not contain commas");
   });
 
   it("applies defaults and item overrides", () => {

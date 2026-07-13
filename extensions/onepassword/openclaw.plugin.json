@@ -75,6 +75,7 @@
             "field": {
               "type": "string",
               "minLength": 1,
+              "pattern": "^[^,]+$",
               "default": "credential"
             },
             "policy": {

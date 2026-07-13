@@ -37,6 +37,7 @@ export type AuditRow = {
 };
 
 export type StandingGrant = {
+  agentId: string;
   slug: string;
   grantedAtMs: number;
   expiresAtMs: number;
@@ -140,6 +141,12 @@ export function fingerprintOnePasswordTarget(item: OnePasswordItemConfig): strin
     .digest("hex");
 }
 
+function standingGrantKey(agentId: string, slug: string): string {
+  return createHash("sha256")
+    .update(JSON.stringify([agentId, slug]))
+    .digest("hex");
+}
+
 export function parseToolInput(params: Record<string, unknown>): ParsedToolInput {
   if (params.action === "list") {
     return { action: "list" };
@@ -240,10 +247,12 @@ export class OnePasswordBroker {
   private async pruneStaleGrants(): Promise<void> {
     const now = this.now();
     for (const entry of await this.stores.grants.entries()) {
-      const item = this.config.items[entry.key];
+      const item = Object.hasOwn(this.config.items, entry.value.slug)
+        ? this.config.items[entry.value.slug]
+        : undefined;
       if (
-        !Object.hasOwn(this.config.items, entry.key) ||
         !item ||
+        entry.key !== standingGrantKey(entry.value.agentId, entry.value.slug) ||
         entry.value.expiresAtMs <= now ||
         entry.value.targetFingerprint !== fingerprintOnePasswordTarget(item)
       ) {
@@ -305,9 +314,13 @@ export class OnePasswordBroker {
       return;
     }
 
-    const grant = await this.stores.grants.lookup(input.slug);
+    const grantKey =
+      context.agentId === "unknown" ? undefined : standingGrantKey(context.agentId, input.slug);
+    const grant = grantKey ? await this.stores.grants.lookup(grantKey) : undefined;
     if (
       grant &&
+      grant.agentId === context.agentId &&
+      grant.slug === input.slug &&
       grant.expiresAtMs > this.now() &&
       grant.targetFingerprint === fingerprintOnePasswordTarget(item)
     ) {
@@ -319,8 +332,8 @@ export class OnePasswordBroker {
       });
       return;
     }
-    if (grant) {
-      await this.stores.grants.delete(input.slug);
+    if (grant && grantKey) {
+      await this.stores.grants.delete(grantKey);
     }
 
     return {
@@ -329,7 +342,12 @@ export class OnePasswordBroker {
         description: `Agent ${context.agentId} requests ${input.slug}. Reason: ${input.reason}`,
         severity: "warning",
         timeoutMs: APPROVAL_TIMEOUT_MS,
-        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        // Durable grants must bind to a concrete core-provided agent identity.
+        // Unknown callers can still receive one-call approval, never shared access.
+        allowedDecisions:
+          context.agentId === "unknown"
+            ? ["allow-once", "deny"]
+            : ["allow-once", "allow-always", "deny"],
         // Core fires onResolution without awaiting it; the synchronous pending.set
         // below is what guarantees the authorization exists before the tool
         // handler runs. Do not move it behind an await.
@@ -338,7 +356,7 @@ export class OnePasswordBroker {
             this.pending.set(this.pendingKey(context), {
               ...context,
               outcome: "approved",
-              persistGrant: decision === "allow-always",
+              persistGrant: decision === "allow-always" && context.agentId !== "unknown",
               expiresAtMs: this.now() + PENDING_AUTHORIZATION_TTL_MS,
             });
             return;
@@ -357,21 +375,24 @@ export class OnePasswordBroker {
     };
   }
 
-  async list(): Promise<ListedItem[]> {
+  async list(invocation: ToolInvocationContext): Promise<ListedItem[]> {
     const grants = new Map(
       (await this.stores.grants.entries()).map((entry) => [entry.key, entry.value]),
     );
     const now = this.now();
+    const agentId = invocation.agentId;
     return Object.entries(this.config.items)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([slug, item]) => {
-        const grant = grants.get(slug);
+        const grant = agentId ? grants.get(standingGrantKey(agentId, slug)) : undefined;
         return {
           slug,
           description: item.description ?? "",
           policy: item.policy,
           standingGrantActive: Boolean(
             grant &&
+            grant.agentId === agentId &&
+            grant.slug === slug &&
             grant.expiresAtMs > now &&
             grant.targetFingerprint === fingerprintOnePasswordTarget(item),
           ),
@@ -428,9 +449,13 @@ export class OnePasswordBroker {
       throw internalError("POLICY_CHANGED", "1Password policy changed before tool execution");
     }
     if (authorization.outcome === "grant") {
-      const grant = await this.stores.grants.lookup(input.slug);
+      const grant = await this.stores.grants.lookup(
+        standingGrantKey(authorization.agentId, input.slug),
+      );
       if (
         !grant ||
+        grant.agentId !== authorization.agentId ||
+        grant.slug !== input.slug ||
         grant.expiresAtMs <= this.now() ||
         grant.targetFingerprint !== fingerprintOnePasswordTarget(item)
       ) {
@@ -448,8 +473,9 @@ export class OnePasswordBroker {
       try {
         await this.pruneStaleGrants();
         await this.stores.grants.register(
-          input.slug,
+          standingGrantKey(authorization.agentId, input.slug),
           {
+            agentId: authorization.agentId,
             slug: input.slug,
             grantedAtMs,
             expiresAtMs: grantedAtMs + ttlMs,

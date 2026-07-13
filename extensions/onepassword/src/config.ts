@@ -116,10 +116,16 @@ export function parseOnePasswordConfig(value: unknown): OnePasswordConfig | unde
         `1Password config item ${slug} description must be at most ${MAX_DESCRIPTION_LENGTH} characters`,
       );
     }
+    const field = optionalString(rawItem, "field") ?? "credential";
+    // op treats commas in --fields as multiple selectors. Reject them so one
+    // registry entry can never load more than its single configured field.
+    if (field.includes(",")) {
+      throw new Error(`1Password config item ${slug} field must not contain commas`);
+    }
     items[slug] = {
       item,
       vault: itemVault,
-      field: optionalString(rawItem, "field") ?? "credential",
+      field,
       policy: readPolicy(rawItem.policy, `items.${slug}.policy`, defaultPolicy),
       ...(description ? { description } : {}),
     };

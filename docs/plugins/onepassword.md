@@ -106,8 +106,8 @@ Add plugin config to `openclaw.json`:
 
 Slugs use lowercase letters, numbers, and hyphens, start with a letter or
 number, and contain at most 64 characters. A registry can contain up to 32
-slugs; descriptions can contain up to 200 characters. `field` defaults to
-`credential`.
+slugs; descriptions can contain up to 200 characters. `field` accepts one field
+label or ID, must not contain a comma, and defaults to `credential`.
 An item-level `vault` overrides the default vault. `opBin` can set an absolute
 path to the `op` executable; otherwise the plugin resolves `op` from `PATH`.
 Item titles must not start with a hyphen.
@@ -147,9 +147,11 @@ field label.
   always, or deny.
 
 Allow once authorizes only the current tool call. Allow always writes a standing
-grant for that slug to SQLite. The grant expires after `grantTtlHours`, which
-defaults to 720 hours. An unresolved or timed-out approval denies the request;
-the maximum approval wait is 600 seconds.
+grant for that agent and slug to SQLite; other agents must receive their own
+approval. OpenClaw offers allow always only when the caller has a concrete agent
+identity. The grant expires after `grantTtlHours`, which defaults to 720 hours.
+An unresolved or timed-out approval denies the request; the maximum approval
+wait is 600 seconds.
 
 The in-memory cache defaults to 300 seconds and is bounded by the configured
 slug registry. Set `cacheTtlSeconds` to `0` to disable it. Policy is evaluated
@@ -180,8 +182,9 @@ value to the audit log.
 
 ## 1Password CLI behavior
 
-Each cache miss runs `op item get` with the configured item and vault, JSON
-output, a bounded timeout, and `--cache=false`. Only
+Each cache miss runs `op item get` with the configured item, vault, and exact
+field selector, JSON output, a bounded timeout, and `--cache=false`. The child
+receives only that field rather than the full item. Only
 `OP_SERVICE_ACCOUNT_TOKEN` and `HOME` are present in the child environment.
 
 The plugin makes one attempt. `RATE_LIMITED` errors should be handled by waiting

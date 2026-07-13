@@ -103,7 +103,7 @@ export function createOnePasswordTool(
       try {
         const input = parseToolInput(params);
         if (input.action === "list") {
-          return jsonResult({ ok: true, items: await broker.list() });
+          return jsonResult({ ok: true, items: await broker.list(invocation) });
         }
         const secret = await broker.get(toolCallId, input, invocation);
         return jsonResult({ ok: true, ...secret });
