@@ -253,11 +253,13 @@ it("selects a different agent and ignores the already-selected agent", async () 
       bubbles: true,
       cancelable: true,
     });
+    (alpha as HTMLElement).focus();
     dropdown?.dispatchEvent(repeatedSelection);
 
     expect(onSelect).toHaveBeenCalledOnce();
     expect(repeatedSelection.defaultPrevented).toBe(true);
     expect((alpha as HTMLElement & { checked: boolean }).checked).toBe(true);
+    expect(document.activeElement).toBe(element.querySelector(".agent-select__trigger"));
   } finally {
     element.remove();
   }

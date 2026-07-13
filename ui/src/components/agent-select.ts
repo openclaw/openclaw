@@ -111,7 +111,9 @@ export class AgentSelect extends OpenClawLightDomElement {
     if (agentId === this.selectedId) {
       event.preventDefault();
       item.checked = true;
-      (event.currentTarget as HTMLElement & { open: boolean }).open = false;
+      const dropdown = event.currentTarget as HTMLElement & { open: boolean };
+      dropdown.querySelector<HTMLElement>('[slot="trigger"]')?.focus({ preventScroll: true });
+      dropdown.open = false;
       return;
     }
     this.onSelect(agentId);
