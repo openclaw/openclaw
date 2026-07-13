@@ -4,10 +4,10 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  initSessionState,
   ReplySessionInitConflictError,
   runWithSessionInitConflictRetry,
-} from "./session.js";
+} from "./session-init-conflict-retry.js";
+import { initSessionState } from "./session.js";
 
 const commitConflictControl = vi.hoisted(() => ({
   abortController: undefined as AbortController | undefined,
@@ -122,7 +122,10 @@ describe("runWithSessionInitConflictRetry", () => {
   it("cancels an in-progress backoff without starting another attempt", async () => {
     const controller = new AbortController();
     const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
-    const sleepStarted = Promise.withResolvers<void>();
+    let markSleepStarted = () => {};
+    const sleepStarted = new Promise<void>((resolve) => {
+      markSleepStarted = resolve;
+    });
     const sleep = vi.fn(
       async (_ms: number, signal?: AbortSignal) =>
         await new Promise<void>((_resolve, reject) => {
@@ -132,7 +135,7 @@ describe("runWithSessionInitConflictRetry", () => {
             () => reject(new Error("aborted", { cause: signal.reason })),
             { once: true },
           );
-          sleepStarted.resolve();
+          markSleepStarted();
         }),
     );
 
@@ -140,7 +143,7 @@ describe("runWithSessionInitConflictRetry", () => {
       signal: controller.signal,
       sleep,
     });
-    await sleepStarted.promise;
+    await sleepStarted;
     controller.abort(new Error("stop retrying"));
 
     await expect(retrying).rejects.toThrow("aborted");
