@@ -80,7 +80,7 @@ export type WorkspaceDocument = {
 };
 
 /** Capability names a custom widget may hold (00 §2). */
-export type WorkspaceWidgetCapability = "data:read" | "prompt:send";
+export type WorkspaceWidgetCapability = "data:read" | "prompt:send" | "bus:pubsub";
 
 /**
  * The subset of a custom widget's `widget.json` manifest the parent bridge needs

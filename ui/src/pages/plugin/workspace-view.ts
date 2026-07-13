@@ -16,6 +16,7 @@ import {
   type WorkspaceWidgetCellCallbacks,
 } from "../../components/workspace-widget-cell.ts";
 import { t } from "../../i18n/index.ts";
+import { createWorkspaceWidgetBus, type WorkspaceWidgetBus } from "../../lib/workspace/bus.ts";
 import {
   beginDrag,
   collides,
@@ -108,6 +109,8 @@ type WorkspaceViewState = {
   dialog: WorkspaceDialogState | null;
   /** First-visit onboarding banner dismissed this session (#5); mirrors localStorage. */
   onboardingDismissed: boolean;
+  /** Parent broker owned by this view and revoked with its lifecycle. */
+  widgetBus: WorkspaceWidgetBus;
 };
 
 /** localStorage flag so the first-visit onboarding banner (#5) stays dismissed across reloads. */
@@ -208,6 +211,8 @@ function syncMenuDismiss(
 /** View-level teardown: drop any menu-dismiss listeners. Called from the controller's stop. */
 export function stopWorkspaceView(host: object): void {
   teardownMenuDismiss(host);
+  workspaceViewStates.get(host)?.widgetBus.dispose();
+  workspaceViewStates.delete(host);
 }
 
 function getViewState(host: object): WorkspaceViewState {
@@ -227,6 +232,7 @@ function getViewState(host: object): WorkspaceViewState {
       dataVersion: 0,
       dialog: null,
       onboardingDismissed: isOnboardingDismissed(),
+      widgetBus: createWorkspaceWidgetBus(),
     };
     workspaceViewStates.set(host, state);
   }
@@ -523,6 +529,7 @@ function buildCustomContext(
   viewState: WorkspaceViewState,
   workspace: WorkspaceDocument,
   widget: WorkspaceWidget,
+  tabSlug: string,
 ): WorkspaceCustomWidgetContext | null {
   const name = customWidgetName(widget.kind);
   if (!name) {
@@ -532,6 +539,8 @@ function buildCustomContext(
     client: props.client,
     basePath: props.basePath ?? "",
     sessionKey: props.sessionKey ?? "main",
+    widgetBus: viewState.widgetBus,
+    tabSlug,
   };
   const createdBy = workspace.widgetsRegistry[name]?.createdBy;
   return {
@@ -574,7 +583,7 @@ function renderGrid(
   return html`
     <div class="workspace-grid" style="min-height: ${minHeight}px" data-test-id="workspace-grid">
       ${tab.widgets.map((widget) => {
-        const custom = buildCustomContext(props, state, viewState, workspace, widget);
+        const custom = buildCustomContext(props, state, viewState, workspace, widget, tab.slug);
         return renderWidgetCell({
           widget,
           binding: viewState.bindingResults.get(widget.id) ?? null,
@@ -951,6 +960,9 @@ function renderBody(
       </div>
     `;
   }
+  // Revoke every connection from a tab removed by a document replacement before
+  // the corresponding iframe directive completes its disconnect callback.
+  viewState.widgetBus.retainTabs(new Set(workspace.tabs.map((tab) => tab.slug)));
   if (workspace.tabs.length === 0) {
     return html`
       <div class="workspace-empty workspace-empty--onboarding" data-test-id="workspace-empty">

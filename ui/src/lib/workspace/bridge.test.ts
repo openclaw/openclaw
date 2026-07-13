@@ -238,6 +238,138 @@ describe("sendPrompt capability + confirm + rate limit", () => {
   });
 });
 
+describe("pub/sub capability + limits + cleanup", () => {
+  function fakeBus() {
+    const published: Array<{ channel: string; payload: unknown }> = [];
+    const subscriptions = new Map<string, (channel: string, payload: unknown) => void>();
+    const bus: NonNullable<WidgetBridgeDeps["bus"]> = {
+      publish: (channel, payload) => published.push({ channel, payload }),
+      subscribe: (channel, deliver) => {
+        subscriptions.set(channel, deliver);
+        return () => subscriptions.delete(channel);
+      },
+    };
+    return { bus, published, subscriptions };
+  }
+
+  it("brokers publish and subscribe only for an approved widget", () => {
+    const gated = fakeBus();
+    const approved = makeBridge({
+      manifest: manifest({ capabilities: ["bus:pubsub"] }),
+      bus: gated.bus,
+    });
+    approved.bridge.handleMessage({ v: 1, type: "workspace:subscribe", channel: "selection" });
+    approved.bridge.handleMessage({
+      v: 1,
+      type: "workspace:publish",
+      channel: "selection",
+      payload: { region: "eu" },
+    });
+    gated.subscriptions.get("selection")?.("selection", { region: "us" });
+    expect(gated.published).toEqual([{ channel: "selection", payload: { region: "eu" } }]);
+    expect(approved.posted).toContainEqual({
+      v: 1,
+      type: "workspace:message",
+      channel: "selection",
+      payload: { region: "us" },
+    });
+
+    const denied = fakeBus();
+    const unapproved = makeBridge({ manifest: manifest({ capabilities: [] }), bus: denied.bus });
+    unapproved.bridge.handleMessage({ v: 1, type: "workspace:subscribe", channel: "selection" });
+    unapproved.bridge.handleMessage({
+      v: 1,
+      type: "workspace:publish",
+      channel: "selection",
+      payload: 1,
+    });
+    expect(denied.subscriptions.size).toBe(0);
+    expect(denied.published).toHaveLength(0);
+    expect(unapproved.posted).toHaveLength(2);
+    expect(unapproved.posted[0]).toMatchObject({
+      type: "workspace:error",
+      code: "capability_denied",
+    });
+  });
+
+  it("rejects oversized, unserializable, and over-rate publishes", () => {
+    const { bus, published } = fakeBus();
+    const { bridge, posted } = makeBridge({
+      manifest: manifest({ name: "limited", capabilities: ["bus:pubsub"] }),
+      bus,
+      now: () => 1_000,
+    });
+    bridge.handleMessage({
+      v: 1,
+      type: "workspace:publish",
+      channel: "c",
+      payload: "x".repeat(8 * 1024 + 1),
+    });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    bridge.handleMessage({
+      v: 1,
+      type: "workspace:publish",
+      channel: "c",
+      payload: circular,
+    });
+    bridge.handleMessage({
+      v: 1,
+      type: "workspace:publish",
+      channel: "c",
+      // Structured clone accepts this, but it is not JSON. JSON.stringify would
+      // misleadingly measure the 1 MiB buffer as `{}` and omit `undefined`.
+      payload: { bytes: new ArrayBuffer(1024 * 1024), omitted: undefined },
+    });
+    let deeplyNested: unknown = null;
+    for (let index = 0; index < 10_000; index += 1) {
+      deeplyNested = { value: deeplyNested };
+    }
+    expect(() =>
+      bridge.handleMessage({
+        v: 1,
+        type: "workspace:publish",
+        channel: "c",
+        payload: deeplyNested,
+      }),
+    ).not.toThrow();
+    for (let index = 0; index < 61; index += 1) {
+      bridge.handleMessage({ v: 1, type: "workspace:publish", channel: "c", payload: index });
+    }
+
+    expect(published).toHaveLength(60);
+    expect(posted).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "workspace:error", code: "payload_too_large" }),
+        expect.objectContaining({ type: "workspace:error", code: "malformed" }),
+        expect.objectContaining({ type: "workspace:error", code: "rate_limited" }),
+      ]),
+    );
+    expect(
+      posted.filter((message) => message.type === "workspace:error" && message.code === "malformed")
+        .length,
+    ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("unsubscribe and dispose sever child delivery", () => {
+    const { bus, subscriptions } = fakeBus();
+    const { bridge, posted } = makeBridge({
+      manifest: manifest({ capabilities: ["bus:pubsub"] }),
+      bus,
+    });
+    bridge.handleMessage({ v: 1, type: "workspace:subscribe", channel: "a" });
+    bridge.handleMessage({ v: 1, type: "workspace:subscribe", channel: "b" });
+    bridge.handleMessage({ v: 1, type: "workspace:unsubscribe", channel: "a" });
+    expect(subscriptions.has("a")).toBe(false);
+    expect(subscriptions.has("b")).toBe(true);
+
+    bridge.dispose();
+
+    expect(subscriptions.size).toBe(0);
+    expect(posted).toHaveLength(0);
+  });
+});
+
 describe("push", () => {
   it("posts a push for a declared binding", async () => {
     const { bridge, posted } = makeBridge({ resolveBinding: async () => 7 });

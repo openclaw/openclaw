@@ -83,6 +83,11 @@ An agent can author a real HTML widget with `workspace_widget_scaffold` (or you 
 Sending a prompt into chat from a widget additionally requires a manifest capability, a
 per-invocation confirmation quoting the exact text, and passes a rate limit.
 
+Widgets approved for `bus:pubsub` can exchange JSON payloads through the parent broker with
+`workspace:publish`, `workspace:subscribe`, and `workspace:unsubscribe`. Delivery uses
+`workspace:message`, stays within the current tab, excludes the publisher, and stops when the
+widget, tab, or Workspaces view is removed. Publishes are limited to 8 KiB and 60 per minute.
+
 ## CLI
 
 ```sh
