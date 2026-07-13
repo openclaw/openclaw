@@ -16,8 +16,6 @@ export {
   registerCoreCliCommands,
 };
 
-/** Core command registration contract re-exported for program builders and tests. */
-
 /** Register all root-program commands for the current argv shape. */
 export function registerProgramCommands(
   program: Command,

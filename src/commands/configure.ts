@@ -1,2 +1,2 @@
-// Public configure command barrel for wizard entry points and shared config helpers.
+// Public configure command barrel for wizard entry points.
 export { configureCommandFromSectionsArg } from "./configure.commands.js";
