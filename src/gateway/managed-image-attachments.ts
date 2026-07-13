@@ -522,15 +522,8 @@ async function readManagedImageRecord(
     const raw = await fs.readFile(resolveOutgoingRecordPath(attachmentId, stateDir), "utf-8");
     return JSON.parse(raw) as ManagedImageRecord;
   } catch (err) {
-    // ENOENT means the record was never created or has already been cleaned
-    // up — return null so callers can distinguish "not found" from corrupt
-    // metadata. Other errors (e.g. SyntaxError from truncated JSON) are
-    // propagated so upstream handlers can log or respond appropriately
-    // instead of silently treating the attachment as non-existent.
-    if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw err;
+    if (!(err instanceof Error && (err as NodeJS.ErrnoException).code === "ENOENT")) throw err;
+    return null;
   }
 }
 
@@ -1121,13 +1114,7 @@ export async function handleManagedOutgoingImageHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  let record: ManagedImageRecord | null;
-  try {
-    record = await readManagedImageRecord(attachmentId, opts.stateDir);
-  } catch {
-    sendStatus(res, 500, "internal server error");
-    return true;
-  }
+  const record = await readManagedImageRecord(attachmentId, opts.stateDir);
   if (!record || record.sessionKey !== sessionKey) {
     sendStatus(res, 404, "not found");
     return true;
