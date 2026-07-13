@@ -87,6 +87,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
   workspaceDir: string;
+  containerWorkdir: string;
 }> {
   const { cfg, rawSessionKey } = params;
   const { agentWorkspaceDir, sandboxWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir } =
@@ -95,6 +96,15 @@ async function ensureSandboxWorkspaceLayout(params: {
       rawSessionKey,
       workspaceDir: params.workspaceDir,
     });
+  const containerWorkdir =
+    resolveSandboxWorkspaceInfoWorkdir({
+      cfg,
+      rawSessionKey,
+      scopeKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      skillsWorkspaceDir,
+    }) ?? DEFAULT_SANDBOX_WORKDIR;
 
   let syncedSkills: Awaited<ReturnType<typeof syncSandboxSkillsToWorkspace>>;
   if (cfg.workspaceAccess !== "rw") {
@@ -132,6 +142,7 @@ async function ensureSandboxWorkspaceLayout(params: {
     ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
     ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
     workspaceDir,
+    containerWorkdir,
   };
 }
 
@@ -194,6 +205,7 @@ export async function resolveSandboxContext(params: {
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
+    containerWorkdir,
   } = await ensureSandboxWorkspaceLayout({
     cfg,
     agentId: runtime.agentId,
@@ -317,6 +329,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     skillUsagePaths,
     skillsWorkspaceDir,
     workspaceDir,
+    containerWorkdir,
   } = await ensureSandboxWorkspaceLayout({
     cfg,
     agentId: runtime.agentId,
@@ -325,17 +338,9 @@ export async function ensureSandboxWorkspaceForSession(params: {
     workspaceDir: params.workspaceDir,
   });
 
-  const containerWorkdir = resolveSandboxWorkspaceInfoWorkdir({
-    cfg,
-    rawSessionKey,
-    scopeKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    skillsWorkspaceDir,
-  });
   return {
     workspaceDir,
-    ...(containerWorkdir ? { containerWorkdir } : {}),
+    containerWorkdir,
     skillsWorkspaceDir,
     ...(skillsEligibility ? { skillsEligibility } : {}),
     ...(skillUsagePaths ? { skillUsagePaths } : {}),

@@ -7,6 +7,7 @@
 import path from "node:path";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import type { SkillEntry } from "../../skills/types.js";
+import { DEFAULT_SANDBOX_WORKDIR } from "../sandbox/constants.js";
 import type { SandboxContext } from "../sandbox/types.js";
 
 const MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS = [".openclaw", "sandbox-skills"] as const;
@@ -144,7 +145,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             params.sandbox.containerWorkdir,
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
-        : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
+        : (params.sandbox.containerWorkdir ?? DEFAULT_SANDBOX_WORKDIR);
     return {
       ...(params.sandbox.skillsEligibility
         ? { skillsEligibility: params.sandbox.skillsEligibility }
