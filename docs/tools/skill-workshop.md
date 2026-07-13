@@ -4,6 +4,7 @@ read_when:
   - You want the agent to create or update a skill from chat
   - You need to review, apply, reject, or quarantine a generated skill draft
   - You are configuring Skill Workshop approval, autonomy, storage, or limits
+  - You want to understand where self-learning proposals are reviewed
 title: "Skill Workshop"
 sidebarTitle: "Skill Workshop"
 ---
@@ -236,18 +237,13 @@ the most recent detected workflow through `skill_workshop`; the user decides whe
 proposal. This built-in suggestion does not create or change a skill by itself. Enable
 `skills.workshop.autonomous.enabled` to create pending proposals directly instead.
 
-With autonomous capture enabled, OpenClaw can also review successful substantial work after the
-foreground run has ended. A turn qualifies only after at least ten model iterations. OpenClaw then
-waits for 30 seconds and keeps waiting while any agent run is active. The isolated review receives
-the completed turn trajectory and only the `skill_workshop` tool.
+With autonomous capture enabled, OpenClaw can also perform a conservative review after successful,
+substantial work and after the whole agent system becomes idle. That isolated review can create or
+revise at most one pending proposal. It cannot update a live skill or apply, reject, or quarantine a
+proposal, even when `approvalPolicy` is `"auto"`.
 
-The reviewer creates or changes at most one pending proposal. It does so only when the trajectory
-shows a reusable recovery from model difficulty or a stable procedure that would remove at least
-two future model/tool round trips. It skips routine completion, one-off requests, user-specific
-facts, secrets, transient failures, unsupported negative claims, and generic advice. The isolated
-tool cannot apply, reject, or quarantine proposals, even when `approvalPolicy` is `"auto"`.
-Workshop also rejects recognized literal credentials in proposal content, support files, goals, and
-evidence before writing proposal state.
+See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
+the proposal threshold, and troubleshooting.
 
 ## Approval and autonomy
 
@@ -287,6 +283,9 @@ foreground run as proposal provenance, cannot access general agent tools, and ca
 decisions. The review starts only when the foreground runtime reports both its exact resolved model
 and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
 fails closed and creates no proposal.
+
+See [Self-learning](/tools/self-learning) for the complete autonomous review behavior and safety
+model.
 
 Proposal descriptions are always capped at 160 bytes, independent of
 `maxSkillBytes`.
@@ -372,6 +371,7 @@ Workshop is built in and prints the same policy hint when applicable.
 ## Related
 
 - [Skills](/tools/skills) for load order, precedence, and visibility
+- [Self-learning](/tools/self-learning) for conservative post-run skill proposals
 - [Creating skills](/tools/creating-skills) for hand-written `SKILL.md`
   basics
 - [Skills config](/tools/skills-config) for the full `skills.workshop` schema
