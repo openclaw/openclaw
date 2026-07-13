@@ -106,9 +106,8 @@ describe("draft-stream-controls", () => {
     expect(warn).toHaveBeenCalledWith("cleanup failed: boom");
 
     // Retry: call clear again and expect a second DELETE attempt.
-    deleteMessage.mockReset();
-    deleteMessage.mockResolvedValueOnce(undefined);
-    warn.mockReset();
+    const retryDelete = vi.fn(async () => {});
+    const retryWarn = vi.fn();
 
     await clearFinalizableDraftMessage({
       stopForClear: async () => {},
@@ -117,14 +116,14 @@ describe("draft-stream-controls", () => {
         messageId = undefined;
       },
       isValidMessageId: (value): value is string => typeof value === "string",
-      deleteMessage,
-      warn,
+      deleteMessage: retryDelete,
+      warn: retryWarn,
       warnPrefix: "cleanup failed",
     });
 
-    expect(deleteMessage).toHaveBeenCalledWith("m-3");
+    expect(retryDelete).toHaveBeenCalledWith("m-3");
     expect(messageId).toBeUndefined();
-    expect(warn).not.toHaveBeenCalled();
+    expect(retryWarn).not.toHaveBeenCalled();
   });
 
   it("clearFinalizableDraftMessage does not clear a replaced preview id", async () => {
