@@ -2054,7 +2054,11 @@ importers:
         specifier: 7.0.5
         version: 7.0.5
 
-  packages/model-catalog-core: {}
+  packages/model-catalog-core:
+    dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
 
   packages/net-policy:
     dependencies:
@@ -2084,6 +2088,9 @@ importers:
 
   packages/terminal-core:
     dependencies:
+      '@openclaw/normalization-core':
+        specifier: workspace:*
+        version: link:../normalization-core
       '@clack/prompts':
         specifier: 1.6.0
         version: 1.6.0
