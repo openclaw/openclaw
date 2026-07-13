@@ -167,9 +167,8 @@ describe("downloadInboundMedia", () => {
       // Pre-fix shape: saveMediaStream's unbounded `for await` on a stalled
       // Baileys stream never settles. Prove the hang before asserting the wrap.
       const consume = (async () => {
-        for await (const _chunk of neverYieldingStream()) {
-          void _chunk;
-        }
+        // Hang on the first stalled `next()` — same unbounded wait as bare `for await`.
+        await neverYieldingStream()[Symbol.asyncIterator]().next();
       })();
       const outcome = await Promise.race([
         consume.then(() => "resolved" as const),
