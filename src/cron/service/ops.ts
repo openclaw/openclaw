@@ -35,14 +35,13 @@ import {
   nextWakeAtMs,
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
+import { sortCronJobs } from "./list-page-sort.js";
 import type {
   CronJobsEnabledFilter,
   CronJobsLastRunStatusFilter,
   CronJobsScheduleKindFilter,
-  CronJobsSortBy,
   CronListPageOptions,
   CronListPageResult,
-  CronSortDir,
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
@@ -361,39 +360,6 @@ function resolveJobLastRunStatus(job: CronJob): CronJobsLastRunStatusFilter {
   return job.state.lastRunStatus ?? job.state.lastStatus ?? "unknown";
 }
 
-function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir) {
-  const dir = sortDir === "desc" ? -1 : 1;
-  return jobs.toSorted((a, b) => {
-    let cmp;
-    if (sortBy === "name") {
-      const aName = typeof a.name === "string" ? a.name : "";
-      const bName = typeof b.name === "string" ? b.name : "";
-      cmp = aName.localeCompare(bName, undefined, { sensitivity: "base" });
-    } else if (sortBy === "updatedAtMs") {
-      cmp = a.updatedAtMs - b.updatedAtMs;
-    } else {
-      const aNext = a.state.nextRunAtMs;
-      const bNext = b.state.nextRunAtMs;
-      if (typeof aNext === "number" && typeof bNext === "number") {
-        cmp = aNext - bNext;
-      } else if (typeof aNext === "number") {
-        cmp = -1;
-      } else if (typeof bNext === "number") {
-        cmp = 1;
-      } else {
-        cmp = 0;
-      }
-    }
-    if (cmp !== 0) {
-      return cmp * dir;
-    }
-    // Stable id tiebreaker keeps pagination deterministic when sort keys match.
-    const aId = typeof a.id === "string" ? a.id : "";
-    const bId = typeof b.id === "string" ? b.id : "";
-    return aId.localeCompare(bId);
-  });
-}
-
 function resolveEffectiveJobAgentId(job: CronJob, defaultAgentId: string | undefined) {
   return (
     normalizeOptionalAgentId(job.agentId) ??
@@ -443,7 +409,7 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     });
     // Execution mutates stored job state in place. Detach the complete result
     // under the lock so every returned page still matches its revision later.
-    const snapshot = structuredClone(sortJobs(filtered, sortBy, sortDir));
+    const snapshot = structuredClone(sortCronJobs(filtered, sortBy, sortDir));
     const snapshotRevision = resolveCronListSnapshotRevision(snapshot);
     const total = snapshot.length;
     const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
