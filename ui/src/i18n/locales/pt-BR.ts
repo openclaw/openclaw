@@ -231,6 +231,16 @@ export const pt_BR: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Escaneie este código QR no app móvel para conectar um novo telefone.",
       generating: "Criando um código de configuração seguro…",
+      accessTitle: "Acesso móvel",
+      fullAccess: "Acesso completo (recomendado)",
+      fullAccessHint:
+        "Nó e controles completos do Gateway, incluindo configurações e atualizações.",
+      limitedAccess: "Acesso limitado",
+      limitedAccessHint: "Nó, chat e aprovações sem controles administrativos.",
+      generateCode: "Criar código de configuração",
+      transportLimitedTitle: "Limitado para segurança da rede",
+      transportLimitedHint:
+        "Esta URL do Gateway usa ws:// sem criptografia. Use wss:// ou Tailscale Serve e crie um novo código para acesso completo.",
       failed: "Não foi possível criar um código de configuração.",
       qrAlt: "Código QR de pareamento do OpenClaw mobile",
       qrUnavailable: "QR indisponível. Copie o código de configuração em vez disso.",
@@ -264,7 +274,8 @@ export const pt_BR: TranslationMap = {
     },
     inventory: {
       title: "Dispositivos",
-      subtitle: "Uma linha por cliente pareado: status, funções, tokens.",
+      summaryConnected: "{connected} de {total} conectados",
+      summaryPending: "{count} aguardando aprovação",
       cleanupStale: "Limpar {count} obsoletos",
       pendingApproval: "Aprovação pendente",
       paired: "Pareado",

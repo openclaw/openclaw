@@ -155,17 +155,19 @@ struct MacNodeModeCoordinatorTests {
             nodeHostWorker: worker,
             notificationCenter: notificationCenter,
             observeNotifications: true)
-        _ = coordinator
+        // The full parallel suite can keep MainActor busy for several seconds.
+        let restartTimeout: Duration = .seconds(15)
+        defer { withExtendedLifetime(coordinator) {} }
 
         notificationCenter.post(name: .openclawConfigDidChange, object: nil)
 
-        try await self.waitUntil("node-host worker restart") {
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
             await worker.stops() == 1
         }
 
         notificationCenter.post(name: .openclawCLIInstalled, object: nil)
 
-        try await self.waitUntil("node-host worker restart") {
+        try await self.waitUntil("node-host worker restart", timeout: restartTimeout) {
             await worker.stops() == 2
         }
     }

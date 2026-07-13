@@ -2,12 +2,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   normalizeStringEntries,
   uniqueStrings,
-} from "./string-utils.js";
+} from "@openclaw/normalization-core/string-normalization";
+export { normalizeAgentId };
 export { splitShellArgs } from "./openclaw-runtime-io.js";
 
 // Shared OpenClaw config helpers used by memory host, QMD, and agent context code.
@@ -165,34 +169,11 @@ export type OpenClawConfig = {
 };
 
 /** Root memory filename used in agent workspaces. */
-export const CANONICAL_ROOT_MEMORY_FILENAME = "MEMORY.md";
+export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
 
 const DEFAULT_AGENT_ID = "main";
-const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
-const INVALID_CHARS_RE = /[^a-z0-9_-]+/g;
-const LEADING_DASH_RE = /^-+/;
-const TRAILING_DASH_RE = /-+$/;
 const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
-/** Normalize user or config agent ids to the filesystem-safe canonical form. */
-export function normalizeAgentId(value: string | undefined | null): string {
-  const trimmed = (value ?? "").trim();
-  if (!trimmed) {
-    return DEFAULT_AGENT_ID;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(trimmed);
-  if (VALID_ID_RE.test(trimmed)) {
-    return normalized;
-  }
-  return (
-    normalized
-      .replace(INVALID_CHARS_RE, "-")
-      .replace(LEADING_DASH_RE, "")
-      .replace(TRAILING_DASH_RE, "")
-      .slice(0, 64) || DEFAULT_AGENT_ID
-  );
-}
-
 /** Treat shell-placeholder home values as absent. */
 function normalizeHomeValue(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
@@ -223,8 +204,8 @@ function resolveRequiredHomeDir(
   return rawHome ? path.resolve(rawHome) : path.resolve(process.cwd());
 }
 
-/** Resolve absolute user paths, including "~" against the effective OpenClaw home. */
-export function resolveUserPath(
+/** Resolve standalone memory-host paths without importing core home-directory policy. */
+export function resolveMemoryHostUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -251,7 +232,7 @@ function resolveStateDir(
 ): string {
   const override = env.OPENCLAW_STATE_DIR?.trim();
   if (override) {
-    return resolveUserPath(override, env, homedir);
+    return resolveMemoryHostUserPath(override, env, homedir);
   }
   const effectiveHome = () => resolveRequiredHomeDir(env, homedir);
   const nextDir = path.join(effectiveHome(), NEW_STATE_DIRNAME);
@@ -308,7 +289,7 @@ function stripNullBytes(value: string): string {
 }
 
 /** Resolve the workspace directory for an agent id and config defaults. */
-export function resolveAgentWorkspaceDir(
+export function resolveMemoryHostAgentWorkspaceDir(
   cfg: OpenClawConfig,
   agentId: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -316,22 +297,22 @@ export function resolveAgentWorkspaceDir(
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
-    return stripNullBytes(resolveUserPath(configured, env));
+    return stripNullBytes(resolveMemoryHostUserPath(configured, env));
   }
   const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (id === resolveDefaultAgentId(cfg)) {
     return stripNullBytes(
-      fallback ? resolveUserPath(fallback, env) : resolveDefaultAgentWorkspaceDir(env),
+      fallback ? resolveMemoryHostUserPath(fallback, env) : resolveDefaultAgentWorkspaceDir(env),
     );
   }
   if (fallback) {
-    return stripNullBytes(path.join(resolveUserPath(fallback, env), id));
+    return stripNullBytes(path.join(resolveMemoryHostUserPath(fallback, env), id));
   }
   return stripNullBytes(path.join(resolveStateDir(env), `workspace-${id}`));
 }
 
 /** Resolve context limits for an agent with defaults fallback. */
-export function resolveAgentContextLimits(
+export function resolveMemoryHostAgentContextLimits(
   cfg: OpenClawConfig | undefined,
   agentId?: string | null,
 ): AgentContextLimitsConfig | undefined {
@@ -343,7 +324,7 @@ export function resolveAgentContextLimits(
 }
 
 /** Resolve enabled memory search config plus deduplicated extra paths for an agent. */
-export function resolveMemorySearchConfig(
+export function resolveMemoryHostSearchPathConfig(
   cfg: OpenClawConfig,
   agentId: string,
 ): { enabled: boolean; extraPaths: string[] } | null {

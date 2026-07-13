@@ -231,6 +231,17 @@ export const vi: TranslationMap = {
       title: "OpenClaw di động",
       subtitle: "Quét mã QR này trong ứng dụng di động để kết nối điện thoại mới.",
       generating: "Đang tạo mã thiết lập bảo mật…",
+      accessTitle: "Truy cập trên thiết bị di động",
+      fullAccess: "Toàn quyền truy cập (khuyên dùng)",
+      fullAccessHint:
+        "Quyền truy cập Node cùng toàn bộ tính năng điều khiển Gateway, bao gồm cài đặt và nâng cấp.",
+      limitedAccess: "Quyền truy cập hạn chế",
+      limitedAccessHint:
+        "Quyền truy cập Node, trò chuyện và phê duyệt, không bao gồm các tính năng quản trị.",
+      generateCode: "Tạo mã thiết lập",
+      transportLimitedTitle: "Bị giới hạn để đảm bảo an toàn mạng",
+      transportLimitedHint:
+        "URL Gateway này sử dụng ws:// dạng văn bản thuần. Hãy sử dụng wss:// hoặc Tailscale Serve, sau đó tạo mã mới để có toàn quyền truy cập.",
       failed: "Không thể tạo mã thiết lập.",
       qrAlt: "Mã QR ghép nối OpenClaw di động",
       qrUnavailable: "Không có mã QR. Hãy sao chép mã thiết lập thay thế.",
@@ -264,7 +275,8 @@ export const vi: TranslationMap = {
     },
     inventory: {
       title: "Thiết bị",
-      subtitle: "Mỗi hàng là một client đã ghép nối: trạng thái, vai trò, token.",
+      summaryConnected: "{connected} trong tổng số {total} đã kết nối",
+      summaryPending: "{count} đang chờ phê duyệt",
       cleanupStale: "Dọn dẹp {count} mục cũ",
       pendingApproval: "Chờ phê duyệt",
       paired: "Đã ghép nối",

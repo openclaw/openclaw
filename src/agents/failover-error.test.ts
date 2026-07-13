@@ -391,6 +391,41 @@ describe("failover-error", () => {
     ).toBe("model_not_found");
   });
 
+  it("classifies account-restricted model 400s as model_not_found (#104490)", () => {
+    // Codex/OpenAI reject plan-restricted models with HTTP 400
+    // invalid_request_error; without a model_not_found classification the 400
+    // branch collapses this into "format" and users get generic retry//new copy
+    // for a config-only failure.
+    const codexAccountRestrictedPayload =
+      '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-5.5-pro\' model is not supported when using Codex with a ChatGPT account."}}';
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "codex",
+        status: 400,
+        message: codexAccountRestrictedPayload,
+      }),
+    ).toBe("model_not_found");
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "The 'gpt-5.5-pro' model is not supported when using Codex with a ChatGPT account.",
+      }),
+    ).toBe("model_not_found");
+    // Capability rejections stay out of the model_not_found class.
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "This model is not supported for tool calling.",
+      }),
+    ).not.toBe("model_not_found");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "This model is not supported when using tool calling.",
+      }),
+    ).not.toBe("model_not_found");
+  });
+
   it("does not classify generic access errors as model_not_found", () => {
     expect(
       resolveFailoverReasonFromError({

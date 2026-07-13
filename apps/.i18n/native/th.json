@@ -4436,7 +4436,7 @@
     {
       "id": "native.android.6926684139f297b5",
       "source": "Limited Gateway access",
-      "translated": "Limited Gateway access"
+      "translated": "การเข้าถึง Gateway แบบจำกัด"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4556,17 +4556,17 @@
     {
       "id": "native.android.feac408f68bedd1c",
       "source": "Full",
-      "translated": "Full"
+      "translated": "เต็มรูปแบบ"
     },
     {
       "id": "native.android.c39ba12c18acb958",
       "source": "Limited",
-      "translated": "Limited"
+      "translated": "จำกัด"
     },
     {
       "id": "native.android.f6ab96d066bd583c",
       "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
-      "translated": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades."
+      "translated": "ใช้ Gateway แบบ wss:// ที่ปลอดภัยหรือ Tailscale Serve สร้างรหัสตั้งค่าแบบเข้าถึงเต็มรูปแบบใน Control UI หรือด้วย openclaw qr จากนั้นสแกนหรือวางรหัสด้านล่างแล้วเชื่อมต่อใหม่เพื่อเปิดใช้การตั้งค่าและการอัปเกรด"
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -11361,37 +11361,37 @@
     {
       "id": "native.apple.412973e8b46051ca",
       "source": "Access",
-      "translated": "Access"
+      "translated": "การเข้าถึง"
     },
     {
       "id": "native.apple.77609c6953ae454f",
       "source": "Full",
-      "translated": "Full"
+      "translated": "เต็มรูปแบบ"
     },
     {
       "id": "native.apple.5dd76b852cf24f49",
       "source": "Limited",
-      "translated": "Limited"
+      "translated": "จำกัด"
     },
     {
       "id": "native.apple.5b56380d4922e78b",
       "source": "Upgrade access",
-      "translated": "Upgrade access"
+      "translated": "อัปเกรดการเข้าถึง"
     },
     {
       "id": "native.apple.7221013549a7c1b3",
       "source": "This phone has limited Gateway access.",
-      "translated": "This phone has limited Gateway access."
+      "translated": "โทรศัพท์เครื่องนี้มีการเข้าถึง Gateway แบบจำกัด"
     },
     {
       "id": "native.apple.7793f5de6975faef",
       "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
-      "translated": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades."
+      "translated": "ใช้ Gateway แบบ wss:// ที่ปลอดภัยหรือ Tailscale Serve จากนั้นสแกนรหัสตั้งค่าแบบเข้าถึงเต็มรูปแบบจาก Control UI หรือ openclaw qr แล้วเชื่อมต่อใหม่เพื่อเปิดใช้การตั้งค่าและการอัปเกรด"
     },
     {
       "id": "native.apple.666cea428e126188",
       "source": "Scan Full-Access Code",
-      "translated": "Scan Full-Access Code"
+      "translated": "สแกนรหัสเข้าถึงเต็มรูปแบบ"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",

@@ -5927,6 +5927,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Safety
   - H2: Related
 
+## plugins/onepassword.md
+
+- Route: /plugins/onepassword
+- Headings:
+  - H1: 1Password secrets broker
+  - H2: Security model
+  - H2: Before you begin
+  - H2: Configure registered secrets
+  - H2: Use the agent tool
+  - H2: Policy tiers and approvals
+  - H2: Inspect status and audit history
+  - H2: 1Password CLI behavior
+
 ## plugins/plugin-inventory.md
 
 - Route: /plugins/plugin-inventory
@@ -6706,6 +6719,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/ollama
 - Headings:
   - H1: Ollama plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/onepassword.md
+
+- Route: /plugins/reference/onepassword
+- Headings:
+  - H1: Onepassword plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs
