@@ -3,7 +3,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveModelRuntimePolicy } from "openclaw/plugin-sdk/model-session-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF } from "./cli-constants.js";
+import {
+  CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID,
+  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+} from "./cli-constants.js";
 
 export function boundClaudeThreadId(
   pluginId: string,
@@ -36,7 +40,7 @@ export function resolveClaudeCatalogCreateSession(
   const policy = resolveModelRuntimePolicy({
     config,
     provider: "anthropic",
-    modelId: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+    modelId: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID,
     agentId: resolveDefaultAgentId(config),
   }).policy;
   return policy?.id?.trim() === CLAUDE_CLI_BACKEND_ID
