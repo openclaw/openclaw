@@ -1251,6 +1251,8 @@ export const hi: TranslationMap = {
     allowOnce: "एक बार अनुमति दें",
     alwaysAllow: "हमेशा अनुमति दें",
     allowAlwaysUnavailable: "इस कमांड के लिए हमेशा अनुमति दें उपलब्ध नहीं है।",
+    allowAlwaysNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "अस्वीकार करें",
     labels: {
       host: "होस्ट",

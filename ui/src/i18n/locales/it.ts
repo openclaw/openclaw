@@ -1266,6 +1266,8 @@ export const it: TranslationMap = {
     allowOnce: "Consenti una volta",
     alwaysAllow: "Consenti sempre",
     allowAlwaysUnavailable: "Consenti sempre non è disponibile per questo comando.",
+    allowAlwaysNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "Nega",
     labels: {
       host: "Host",

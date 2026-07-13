@@ -1241,6 +1241,8 @@ export const zh_CN: TranslationMap = {
     allowOnce: "允许一次",
     alwaysAllow: "始终允许",
     allowAlwaysUnavailable: "“始终允许”不可用于此命令。",
+    allowAlwaysNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "拒绝",
     labels: {
       host: "主机",

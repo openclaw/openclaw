@@ -1254,6 +1254,8 @@ export const fa: TranslationMap = {
     allowOnce: "یک‌بار مجاز کن",
     alwaysAllow: "همیشه مجاز کن",
     allowAlwaysUnavailable: "«همیشه مجاز باشد» برای این فرمان در دسترس نیست.",
+    allowAlwaysNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "رد کردن",
     labels: {
       host: "میزبان",

@@ -1,11 +1,13 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-07-12T19:39:37.151Z",
+  "fallbackKeys": [
+    "execApproval.allowAlwaysNonPersistable"
+  ],
+  "generatedAt": "2026-07-13T02:19:27.708Z",
   "locale": "id",
   "model": "gpt-5.6-sol",
   "provider": "openai",
-  "sourceHash": "0318403fb105c1b901bd9599934b1d96607cd621830ac456b7bf4e1f509cf5b8",
-  "totalKeys": 3088,
+  "sourceHash": "4b63bcd002ac061c1e98478fa388d7e6878168fd9b6655e4391687ac80710ee3",
+  "totalKeys": 3089,
   "translatedKeys": 3088,
   "workflow": 1
 }

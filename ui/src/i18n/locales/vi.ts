@@ -1253,6 +1253,8 @@ export const vi: TranslationMap = {
     allowOnce: "Cho phép một lần",
     alwaysAllow: "Luôn cho phép",
     allowAlwaysUnavailable: "Luôn cho phép không khả dụng cho lệnh này.",
+    allowAlwaysNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "Từ chối",
     labels: {
       host: "Máy chủ",

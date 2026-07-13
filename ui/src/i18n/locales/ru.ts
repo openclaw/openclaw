@@ -1263,6 +1263,8 @@ export const ru: TranslationMap = {
     allowOnce: "Разрешить один раз",
     alwaysAllow: "Всегда разрешать",
     allowAlwaysUnavailable: "«Всегда разрешать» недоступно для этой команды.",
+    allowAlwaysNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "Запретить",
     labels: {
       host: "Хост",
