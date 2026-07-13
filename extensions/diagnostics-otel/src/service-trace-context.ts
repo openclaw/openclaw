@@ -35,7 +35,7 @@ export function normalizeTraceContext(value: unknown): DiagnosticTraceContext | 
   };
 }
 
-export function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
+function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
   const parsed = Number.parseInt(traceFlags ?? "00", 16);
   return (parsed & TraceFlags.SAMPLED) !== 0 ? TraceFlags.SAMPLED : TraceFlags.NONE;
 }

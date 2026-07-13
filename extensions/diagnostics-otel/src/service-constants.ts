@@ -47,7 +47,7 @@ export const GEN_AI_OPERATION_DURATION_BUCKETS = [
 ];
 // Preserve the SDK's existing finite boundaries so upgrades do not remove
 // exported bucket series that dashboards or alerts may already reference.
-export const OTEL_DEFAULT_HISTOGRAM_BUCKETS = [
+const OTEL_DEFAULT_HISTOGRAM_BUCKETS = [
   0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000,
 ];
 // Agent run / harness durations routinely exceed the SDK default's 10s ceiling.

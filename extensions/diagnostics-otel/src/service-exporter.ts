@@ -19,7 +19,7 @@ export function normalizeEndpoint(endpoint?: string): string | undefined {
   return trimmed ? trimmed.replace(/\/+$/, "") : undefined;
 }
 
-export function resolveOtelUrl(endpoint: string | undefined, path: string): string | undefined {
+function resolveOtelUrl(endpoint: string | undefined, path: string): string | undefined {
   if (!endpoint) {
     return undefined;
   }
@@ -52,7 +52,7 @@ export function resolveSignalOtelUrl(params: {
   );
 }
 
-export function readOtelEnvFile(params: {
+function readOtelEnvFile(params: {
   signalIdentifier: OtelSignalIdentifier;
   signalSuffix: "CERTIFICATE" | "CLIENT_CERTIFICATE" | "CLIENT_KEY";
   sharedEnvName: string;
@@ -74,7 +74,7 @@ export function readOtelEnvFile(params: {
   }
 }
 
-export function normalizeOtelEnvValue(value: string | undefined): string | undefined {
+function normalizeOtelEnvValue(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
 }
@@ -161,7 +161,7 @@ export function errorCategory(err: unknown): string {
   }
 }
 
-export function collectNestedErrorCandidates(err: unknown): unknown[] {
+function collectNestedErrorCandidates(err: unknown): unknown[] {
   const queue: unknown[] = [err];
   const seen = new Set<unknown>();
   const candidates: unknown[] = [];
@@ -204,7 +204,7 @@ export function collectNestedErrorCandidates(err: unknown): unknown[] {
   return candidates;
 }
 
-export function readErrorName(err: unknown): string | undefined {
+function readErrorName(err: unknown): string | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }

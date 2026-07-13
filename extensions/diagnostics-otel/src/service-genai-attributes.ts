@@ -8,7 +8,7 @@ import {
 } from "./service-constants.js";
 import type { ModelCallLifecycleDiagnosticEvent } from "./service-types.js";
 
-export function hasOtelSemconvOptIn(value: string | undefined, optIn: string): boolean {
+function hasOtelSemconvOptIn(value: string | undefined, optIn: string): boolean {
   return (
     value
       ?.split(",")
@@ -17,7 +17,7 @@ export function hasOtelSemconvOptIn(value: string | undefined, optIn: string): b
   );
 }
 
-export function emitLatestGenAiSemconv(): boolean {
+function emitLatestGenAiSemconv(): boolean {
   return hasOtelSemconvOptIn(
     process.env[OTEL_SEMCONV_STABILITY_OPT_IN_ENV],
     GEN_AI_LATEST_EXPERIMENTAL_OPT_IN,
@@ -72,7 +72,7 @@ export function assignModelCallSizeTimingAttrs(
   );
 }
 
-export function assignNumberAttr(
+function assignNumberAttr(
   attrs: Record<string, string | number | boolean>,
   key: string,
   value: number | undefined,
@@ -82,7 +82,7 @@ export function assignNumberAttr(
   }
 }
 
-export function modelCallPromptTokens(usage: {
+function modelCallPromptTokens(usage: {
   promptTokens?: number;
   input?: number;
   cacheRead?: number;

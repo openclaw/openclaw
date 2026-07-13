@@ -38,7 +38,7 @@ export function lowCardinalityAttr(value: string | undefined, fallback = "unknow
   return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
 }
 
-export function securityTargetNameAttr(value: string | undefined, fallback = "unknown"): string {
+function securityTargetNameAttr(value: string | undefined, fallback = "unknown"): string {
   if (!value) {
     return fallback;
   }
@@ -71,7 +71,7 @@ export function shouldCaptureOtelLogBody(policy: OtelContentCapturePolicy): bool
   return policy.logBodies;
 }
 
-export function otelLogTimestampIso(timestamp: LogRecord["timestamp"]): string {
+function otelLogTimestampIso(timestamp: LogRecord["timestamp"]): string {
   if (timestamp instanceof Date) {
     return timestamp.toISOString();
   }
@@ -163,7 +163,7 @@ export function assignOtelLogEventAttributes(
   }
 }
 
-export function assignOtelSecurityEventAttributes(
+function assignOtelSecurityEventAttributes(
   attributes: Record<string, string | number | boolean>,
   eventAttributes: Record<string, string | number | boolean> | undefined,
 ): void {

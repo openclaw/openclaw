@@ -8,7 +8,7 @@ import type {
 } from "../api.js";
 
 export type OtelLogsExporter = "otlp" | "stdout" | "both";
-export type OtelHttpAgent = HttpAgent | HttpsAgent;
+type OtelHttpAgent = HttpAgent | HttpsAgent;
 export type OtelHttpAgentFactory = (protocol: string) => OtelHttpAgent | Promise<OtelHttpAgent>;
 export type OtelSignalIdentifier = "TRACES" | "METRICS" | "LOGS";
 export type OtelHttpAgentOptions = HttpsAgentOptions & {
