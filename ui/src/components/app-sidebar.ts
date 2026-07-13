@@ -311,7 +311,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   // Anchored by its bottom edge so the footer menu grows upward regardless of height.
   @state() private agentMenuPosition: { x: number; bottom: number } | null = null;
   @state() private agentMenuFilter = "";
-  @state() private agentMenuHelpOpen = false;
   @state() private visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
   @state() private sessionsResult: SessionsListResult | null = null;
   @state() private sessionsAgentId: string | null = null;
@@ -1371,19 +1370,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
     };
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(".sidebar-customize-menu__item")?.focus();
-    });
   }
 
   private closeCustomizeMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.customizeMenuTrigger;
     this.customizeMenuTrigger = null;
     this.customizeMenuPosition = null;
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -1408,19 +1400,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       x: Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
     };
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(".sidebar-more-menu .sidebar-customize-menu__item")?.focus();
-    });
   }
 
   private closeMoreMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.moreMenuTrigger;
     this.moreMenuTrigger = null;
     this.moreMenuPosition = null;
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -1506,19 +1491,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       x: Math.max(8, Math.min(x, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(y, window.innerHeight - menuMaxHeight - 8)),
     };
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(".sidebar-session-group-menu .session-menu__item")?.focus();
-    });
   }
 
   private closeSessionGroupMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.sessionGroupMenuTrigger;
     this.sessionGroupMenuTrigger = null;
     this.sessionGroupMenu = null;
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -1542,19 +1520,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       x: Math.max(8, Math.min(rect.right, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menuMaxHeight - 8)),
     };
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>(".sidebar-session-sort-menu__item")?.focus();
-    });
   }
 
   private closeSessionSortMenu(options: { restoreFocus?: boolean } = {}) {
     const trigger = this.sessionSortMenuTrigger;
     this.sessionSortMenuTrigger = null;
     this.sessionSortMenuPosition = null;
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -1579,14 +1550,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       x: Math.max(8, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 8)),
       bottom: Math.max(8, window.innerHeight - rect.top + 4),
     };
-    document.addEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-    void this.updateComplete.then(() => {
-      // Large rosters open on the filter so typing narrows immediately.
-      this.querySelector<HTMLElement>(
-        ".sidebar-agent-menu__filter input, .sidebar-agent-menu .sidebar-customize-menu__item",
-      )?.focus();
-    });
   }
 
   private closeAgentMenu(options: { restoreFocus?: boolean } = {}) {
@@ -1594,9 +1557,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.agentMenuTrigger = null;
     this.agentMenuPosition = null;
     this.agentMenuFilter = "";
-    this.agentMenuHelpOpen = false;
-    document.removeEventListener("pointerdown", this.handleDocumentPointerDown, true);
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     if (options.restoreFocus) {
       trigger?.focus();
     }
@@ -2047,101 +2007,12 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
   }
 
-  private readonly handleDocumentPointerDown = (event: PointerEvent) => {
-    const path = event.composedPath();
-    if (this.sessionSortMenuTrigger && path.includes(this.sessionSortMenuTrigger)) {
-      return;
-    }
-    if (this.agentMenuTrigger && path.includes(this.agentMenuTrigger)) {
-      return;
-    }
-    if (this.moreMenuTrigger && path.includes(this.moreMenuTrigger)) {
-      return;
-    }
-    const menu = this.querySelector(
-      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu, .sidebar-agent-menu",
-    );
-    if (menu && path.includes(menu)) {
-      return;
-    }
-    this.closeCustomizeMenu();
-    this.closeMoreMenu();
-    this.closeSessionGroupMenu();
-    this.closeSessionSortMenu();
-    this.closeAgentMenu();
-  };
-
-  // Registered only while one of the transient menus is open. Keeping this
-  // listener lifecycle-bound prevents menu shortcuts from consuming page keys.
-  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      this.closeCustomizeMenu({ restoreFocus: true });
-      this.closeMoreMenu({ restoreFocus: true });
-      this.closeSessionGroupMenu({ restoreFocus: true });
-      this.closeSessionSortMenu({ restoreFocus: true });
-      this.closeAgentMenu({ restoreFocus: true });
-      return;
-    }
-    if (event.key === "Tab") {
-      // Menu items stay outside the page tab order. Restore the durable trigger
-      // before the browser performs its normal forward/backward Tab movement.
-      this.closeCustomizeMenu({ restoreFocus: true });
-      this.closeMoreMenu({ restoreFocus: true });
-      this.closeSessionGroupMenu({ restoreFocus: true });
-      this.closeSessionSortMenu({ restoreFocus: true });
-      this.closeAgentMenu({ restoreFocus: true });
-      return;
-    }
-    this.moveTransientMenuFocus(event);
-  };
-
-  private moveTransientMenuFocus(event: KeyboardEvent) {
-    const menu = this.querySelector<HTMLElement>(
-      ".sidebar-customize-menu, .sidebar-session-group-menu, .sidebar-session-sort-menu, .sidebar-agent-menu",
-    );
-    if (!menu) {
-      return;
-    }
-    const items = Array.from(
-      menu.querySelectorAll<HTMLElement>(
-        '[role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"]',
-      ),
-    ).filter((item) => !item.matches(":disabled"));
-    if (items.length === 0) {
-      return;
-    }
-    // Typing in a menu filter keeps caret keys; arrows still enter the list.
-    if (
-      (event.target as HTMLElement | null)?.tagName === "INPUT" &&
-      (event.key === "Home" || event.key === "End")
-    ) {
-      return;
-    }
-    const activeIndex = items.indexOf(document.activeElement as HTMLElement);
-    let nextIndex: number;
-    if (event.key === "ArrowDown") {
-      nextIndex = (activeIndex + 1) % items.length;
-    } else if (event.key === "ArrowUp") {
-      nextIndex = activeIndex <= 0 ? items.length - 1 : activeIndex - 1;
-    } else if (event.key === "Home") {
-      nextIndex = 0;
-    } else if (event.key === "End") {
-      nextIndex = items.length - 1;
-    } else {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    items[nextIndex]?.focus();
-  }
-
   private renderCustomizeMenu() {
     return renderSidebarCustomizeMenu({
       position: this.customizeMenuPosition,
       pinnedRoutes: this.sidebarPinnedRoutes,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      onClose: () => this.closeCustomizeMenu({ restoreFocus: true }),
       onToggleRoute: (routeId) => {
         const pinned = this.sidebarPinnedRoutes;
         const next = pinned.includes(routeId)
@@ -2171,10 +2042,6 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       gatewayVersion: this.gatewayVersion,
       themeMode: this.themeMode,
       agentUnreadCount: (agentId) => this.agentUnreadCount(agentId),
-      helpOpen: this.agentMenuHelpOpen,
-      onHelpOpenChange: (next) => {
-        this.agentMenuHelpOpen = next;
-      },
       onFilterChange: (next) => {
         this.agentMenuFilter = next;
       },
@@ -2289,55 +2156,59 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     return html`
       <openclaw-menu-surface>
-        <div
+        <wa-dropdown
           class="session-menu sidebar-session-group-menu"
-          role="menu"
+          .open=${true}
+          placement="bottom-start"
+          .distance=${0}
           aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
-          style="left: ${menu.x}px; top: ${menu.y}px;"
+          @wa-after-hide=${() => this.closeSessionGroupMenu({ restoreFocus: true })}
         >
           <button
+            slot="trigger"
             type="button"
-            class="session-menu__item"
-            role="menuitem"
             tabindex="-1"
+            aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
+            style="position: fixed; left: ${menu.x}px; top: ${menu.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+          ></button>
+          <wa-dropdown-item
+            class="session-menu__item"
+            value="rename-group"
             ?disabled=${!this.connected}
             @click=${() => {
               this.closeSessionGroupMenu();
               this.renameSessionGroupFromMenu(menu.group);
             }}
           >
-            <span class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
+            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.edit}</span>
             <span class="session-menu__text">${t("sessionsView.renameGroupMenu")}</span>
-          </button>
-          <button
-            type="button"
+          </wa-dropdown-item>
+          <wa-dropdown-item
             class="session-menu__item"
-            role="menuitem"
-            tabindex="-1"
+            value="new-group"
             @click=${() => {
               this.closeSessionGroupMenu();
               this.createSessionGroup();
             }}
           >
-            <span class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
+            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.folder}</span>
             <span class="session-menu__text">${t("sessionsView.newGroup")}</span>
-          </button>
+          </wa-dropdown-item>
           <div class="session-menu__separator" role="separator"></div>
-          <button
-            type="button"
+          <wa-dropdown-item
             class="session-menu__item session-menu__item--destructive"
-            role="menuitem"
-            tabindex="-1"
+            value="delete-group"
+            variant="danger"
             ?disabled=${!this.connected}
             @click=${() => {
               this.closeSessionGroupMenu();
               this.deleteSessionGroupFromMenu(menu.group);
             }}
           >
-            <span class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
+            <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
             <span class="session-menu__text">${t("sessionsView.deleteGroupMenu")}</span>
-          </button>
-        </div>
+          </wa-dropdown-item>
+        </wa-dropdown>
       </openclaw-menu-surface>
     `;
   }
@@ -2353,73 +2224,70 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     ] as const satisfies ReadonlyArray<{ grouping: SidebarSessionsGrouping; label: string }>;
     return html`
       <openclaw-menu-surface>
-        <div
+        <wa-dropdown
           class="sidebar-session-sort-menu"
-          role="menu"
+          .open=${true}
+          placement="bottom-end"
+          .distance=${0}
           aria-label=${t("chat.sidebar.sortSessions")}
-          style="left: ${position.x}px; top: ${position.y}px;"
+          @wa-after-hide=${() => this.closeSessionSortMenu({ restoreFocus: true })}
         >
+          <button
+            slot="trigger"
+            type="button"
+            tabindex="-1"
+            aria-label=${t("chat.sidebar.sortSessions")}
+            style="position: fixed; left: ${position.x}px; top: ${position.y}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
+          ></button>
           <div class="sidebar-session-sort-menu__title">${t("sessionsView.groupBy")}</div>
           ${groupingOptions.map(
             (option) => html`
-              <button
-                type="button"
+              <wa-dropdown-item
                 class="sidebar-session-sort-menu__item"
-                role="menuitemradio"
-                tabindex="-1"
-                aria-checked=${String(this.sessionsGrouping === option.grouping)}
+                type="checkbox"
+                value=${`grouping:${option.grouping}`}
+                .checked=${this.sessionsGrouping === option.grouping}
                 @click=${() => {
                   this.setSessionsGrouping(option.grouping);
                   this.closeSessionSortMenu({ restoreFocus: true });
                 }}
               >
-                <span class="session-menu__check" aria-hidden="true">
-                  ${this.sessionsGrouping === option.grouping ? icons.check : nothing}
-                </span>
                 <span class="session-menu__text">${option.label}</span>
-              </button>
+              </wa-dropdown-item>
             `,
           )}
           <div class="session-menu__separator" role="separator"></div>
           <div class="sidebar-session-sort-menu__title">${t("chat.sidebar.sortBy")}</div>
           ${SIDEBAR_SESSION_SORT_OPTIONS.map(
             (option) => html`
-              <button
-                type="button"
+              <wa-dropdown-item
                 class="sidebar-session-sort-menu__item"
-                role="menuitemradio"
-                tabindex="-1"
-                aria-checked=${String(this.sessionSortMode === option.mode)}
+                type="checkbox"
+                value=${`sort:${option.mode}`}
+                .checked=${this.sessionSortMode === option.mode}
                 @click=${() => {
                   this.sessionSortMode = option.mode;
                   this.closeSessionSortMenu({ restoreFocus: true });
                 }}
               >
-                <span class="session-menu__check" aria-hidden="true">
-                  ${this.sessionSortMode === option.mode ? icons.check : nothing}
-                </span>
                 <span class="session-menu__text">${t(option.labelKey)}</span>
-              </button>
+              </wa-dropdown-item>
             `,
           )}
           <div class="session-menu__separator" role="separator"></div>
-          <button
-            type="button"
+          <wa-dropdown-item
             class="sidebar-session-sort-menu__item"
-            role="menuitemcheckbox"
-            tabindex="-1"
-            aria-checked=${String(this.sessionsShowCron)}
+            type="checkbox"
+            value="show-cron"
+            .checked=${this.sessionsShowCron}
             @click=${() => {
               this.setSessionsShowCron(!this.sessionsShowCron);
               this.closeSessionSortMenu({ restoreFocus: true });
             }}
           >
-            <span class="session-menu__check" aria-hidden="true">
-              ${this.sessionsShowCron ? icons.check : nothing}
-            </span>
             <span class="session-menu__text">${t("sessionsView.showCronSessions")}</span>
-          </button>
-        </div>
+          </wa-dropdown-item>
+        </wa-dropdown>
       </openclaw-menu-surface>
     `;
   }
@@ -2953,6 +2821,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       pinnedRoutes: this.sidebarPinnedRoutes,
       pluginTabs: sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs),
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
+      onClose: () => this.closeMoreMenu({ restoreFocus: true }),
       onNavigateRoute: (routeId) => {
         this.closeMoreMenu({ restoreFocus: true });
         this.onNavigate?.(routeId);

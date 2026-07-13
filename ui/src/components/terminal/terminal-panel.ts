@@ -10,6 +10,7 @@ import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import "../web-awesome.ts";
 import {
   isTerminalPanelShortcut,
   TERMINAL_PANEL_TOGGLE_EVENT,
@@ -839,41 +840,44 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
               aria-label=${t("terminal.resize")}
             ></div>`}
         <header class="tp-header">
-          <div class="tp-tabs" role="tablist">
+          <wa-tab-group
+            class="tp-tabs"
+            .active=${this.activeId ?? ""}
+            activation="auto"
+            without-scroll-controls
+            @wa-tab-show=${(event: CustomEvent<{ name: string }>) =>
+              this.switchTo(event.detail.name)}
+          >
             ${this.tabs.map((tab) => {
               const statusLabel = terminalTabStatusLabel(tab);
               return html`
-                <div
-                  class="tp-tab ${tab.id === this.activeId ? "is-active" : ""} ${tab.status ===
-                  "exited"
-                    ? "is-exited"
-                    : ""}"
-                  role="tab"
+                <wa-tab
+                  id=${`terminal-tab-${tab.id}`}
+                  class="tp-tab ${tab.status === "exited" ? "is-exited" : ""}"
+                  panel=${tab.id}
+                  aria-controls="terminal-tab-panel"
                   title=${terminalTabHint(tab) || nothing}
-                  aria-selected=${tab.id === this.activeId ? "true" : "false"}
-                  @click=${() => this.switchTo(tab.id)}
                 >
                   <span class="tp-tab__icon" aria-hidden="true">${TERMINAL_GLYPH}</span>
                   <span class="tp-tab__label">${terminalTabLabel(tab)}</span>
                   ${statusLabel
                     ? html`<span class="tp-tab__status">${statusLabel}</span>`
                     : nothing}
-                  <button
-                    class="tp-tab__close"
-                    type="button"
-                    title=${t("terminal.closeSession")}
-                    aria-label=${t("terminal.closeSession")}
-                    @click=${(e: Event) => {
-                      e.stopPropagation();
-                      this.closeTab(tab.id);
-                    }}
-                  >
-                    ${CLOSE_GLYPH}
-                  </button>
-                </div>
+                </wa-tab>
+                <button
+                  slot="nav"
+                  class="tp-tab__close"
+                  type="button"
+                  title=${t("terminal.closeSession")}
+                  aria-label=${`${t("terminal.closeSession")}: ${terminalTabLabel(tab)}`}
+                  @click=${() => this.closeTab(tab.id)}
+                >
+                  ${CLOSE_GLYPH}
+                </button>
               `;
             })}
             <button
+              slot="nav"
               class="tp-new"
               type="button"
               ?disabled=${this.booting}
@@ -883,7 +887,7 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
             >
               ${PLUS_GLYPH}
             </button>
-          </div>
+          </wa-tab-group>
           ${this.fullscreen
             ? nothing
             : html`<div class="tp-actions">
@@ -919,11 +923,17 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         ${this.errorText
           ? html`<div class="tp-error" role="alert">${this.errorText}</div>`
           : nothing}
-        <div class="tp-viewport">
+        <wa-tab-panel
+          id="terminal-tab-panel"
+          class="tp-viewport"
+          name=${this.activeId ?? "terminal"}
+          active
+          aria-labelledby=${this.activeId ? `terminal-tab-${this.activeId}` : nothing}
+        >
           ${this.booting && this.tabs.length === 0
             ? html`<div class="tp-empty">${t("terminal.starting")}</div>`
             : nothing}
-        </div>
+        </wa-tab-panel>
       </section>
     `;
   }
@@ -1002,16 +1012,23 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       min-height: 36px;
     }
     .tp-tabs {
+      --track-width: 0;
+      display: block;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .tp-tabs::part(nav) {
       display: flex;
       align-items: stretch;
       gap: 1px;
-      overflow-x: auto;
-      scrollbar-width: none;
+    }
+    .tp-tabs::part(body) {
+      display: none;
     }
     .tp-tabs::-webkit-scrollbar {
       display: none;
     }
-    .tp-tab {
+    .tp-tab::part(base) {
       display: flex;
       align-items: center;
       gap: 7px;
@@ -1026,15 +1043,15 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
         color 0.12s ease,
         background 0.12s ease;
     }
-    .tp-tab:hover {
+    .tp-tab:hover::part(base) {
       color: var(--text, #d7dae0);
       background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
     }
-    .tp-tab.is-active {
+    .tp-tab[active]::part(base) {
       color: var(--text, #d7dae0);
       border-bottom-color: var(--accent, #ff5c5c);
     }
-    .tp-tab.is-exited {
+    .tp-tab.is-exited::part(base) {
       opacity: 0.55;
     }
     .tp-tab__icon {
@@ -1064,8 +1081,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
       border-radius: 4px;
       padding: 0;
     }
-    .tp-tab:hover .tp-tab__close,
-    .tp-tab.is-active .tp-tab__close {
+    .tp-tab:hover + .tp-tab__close,
+    .tp-tab[active] + .tp-tab__close,
+    .tp-tab__close:focus-visible {
       opacity: 0.7;
     }
     .tp-new,

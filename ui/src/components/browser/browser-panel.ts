@@ -13,6 +13,7 @@ import { t } from "../../i18n/index.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
+import "../web-awesome.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
   type BrowserPanelToggleDetail,
@@ -1010,15 +1011,22 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
 
   private renderTabStrip() {
     return html`
-      <div class="bp-tabs" role="tablist">
+      <wa-tab-group
+        class="bp-tabs"
+        .active=${this.activeTargetId ?? ""}
+        activation="auto"
+        without-scroll-controls
+        @wa-tab-show=${(event: CustomEvent<{ name: string }>) =>
+          void this.selectTab(event.detail.name)}
+      >
         ${this.tabs.map(
           (tab) => html`
-            <div
-              class="bp-tab ${tab.id === this.activeTargetId ? "is-active" : ""}"
-              role="tab"
+            <wa-tab
+              id=${`browser-tab-${tab.id}`}
+              class="bp-tab"
+              panel=${tab.id}
+              aria-controls="browser-tab-panel"
               title=${tab.url}
-              aria-selected=${tab.id === this.activeTargetId ? "true" : "false"}
-              @click=${() => void this.selectTab(tab.id)}
               @auxclick=${(event: MouseEvent) => {
                 if (event.button === 1) {
                   event.preventDefault();
@@ -1027,22 +1035,21 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
               }}
             >
               <span class="bp-tab__label">${tabLabel(tab)}</span>
-              <button
-                class="bp-tab__close"
-                type="button"
-                title=${t("browser.closeTab")}
-                aria-label=${t("browser.closeTab")}
-                @click=${(event: Event) => {
-                  event.stopPropagation();
-                  void this.closeTab(tab.id);
-                }}
-              >
-                ${CLOSE_GLYPH}
-              </button>
-            </div>
+            </wa-tab>
+            <button
+              slot="nav"
+              class="bp-tab__close"
+              type="button"
+              title=${t("browser.closeTab")}
+              aria-label=${`${t("browser.closeTab")}: ${tabLabel(tab)}`}
+              @click=${() => void this.closeTab(tab.id)}
+            >
+              ${CLOSE_GLYPH}
+            </button>
           `,
         )}
         <button
+          slot="nav"
           class="bp-new"
           type="button"
           title=${t("browser.newTab")}
@@ -1057,7 +1064,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
         >
           ${PLUS_GLYPH}
         </button>
-      </div>
+      </wa-tab-group>
     `;
   }
 
@@ -1339,8 +1346,12 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
           : this.noticeText
             ? html`<div class="bp-note" role="status">${this.noticeText}</div>`
             : nothing}
-        <div
+        <wa-tab-panel
+          id="browser-tab-panel"
           class="bp-viewport"
+          name=${this.activeTargetId ?? "browser"}
+          active
+          aria-labelledby=${this.activeTargetId ? `browser-tab-${this.activeTargetId}` : nothing}
           tabindex="0"
           @wheel=${(event: WheelEvent) => this.handleWheel(event)}
           @keydown=${(event: KeyboardEvent) => this.handleViewportKeydown(event)}
@@ -1349,7 +1360,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
             ? html`<span class="bp-loading">${t("browser.loading")}</span>`
             : nothing}
           ${this.renderViewport()}
-        </div>
+        </wa-tab-panel>
       </section>
     `;
   }

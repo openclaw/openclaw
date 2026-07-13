@@ -344,9 +344,9 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     const rows = [
-      ...(sidebar.querySelectorAll<HTMLButtonElement>(
-        '.sidebar-agent-menu [role="menuitemradio"]',
-      ) ?? []),
+      ...sidebar.querySelectorAll<HTMLElement>(
+        '.sidebar-agent-menu wa-dropdown-item[type="checkbox"]',
+      ),
     ];
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
     // createSessionState stamps ascending updatedAt, so the last key is newest.
@@ -465,17 +465,16 @@ describe("AppSidebar agent chip", () => {
     expect(menu?.querySelector(".sidebar-pair-mobile")).not.toBeNull();
     expect(menu?.querySelector("openclaw-sidebar-build-chip")).not.toBeNull();
     expect(menu?.querySelector("openclaw-theme-mode-toggle")).not.toBeNull();
-    // External help links fold into the Help flyout; they only render open.
-    expect(menu?.querySelector('a[role="menuitem"]')).toBeNull();
+    // External help links stay folded into Web Awesome's keyboard-navigable submenu.
     const helpRow = [
-      ...(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]') ?? []),
+      ...(menu?.querySelectorAll<HTMLElement>("wa-dropdown-item") ?? []),
     ].find((row) => row.textContent?.includes("Help"));
     expect(helpRow?.getAttribute("aria-haspopup")).toBe("menu");
     helpRow?.click();
     await sidebar.updateComplete;
 
     const linkHrefs = [
-      ...(menu?.querySelectorAll('.sidebar-customize-menu__submenu a[role="menuitem"]') ?? []),
+      ...(menu?.querySelectorAll('wa-dropdown-item[slot="submenu"] a[href]') ?? []),
     ].map((link) => link.getAttribute("href"));
     expect(linkHrefs).toEqual([
       "https://docs.openclaw.ai",
@@ -484,16 +483,7 @@ describe("AppSidebar agent chip", () => {
       "https://docs.openclaw.ai/releases",
     ]);
 
-    // Real mouse flow fires pointerenter before the click; the click must not
-    // invert the hover-opened state back to closed.
-    const helpHost = menu?.querySelector(".sidebar-customize-menu__submenu-host");
-    helpHost?.dispatchEvent(Object.assign(new Event("pointerenter"), { pointerType: "mouse" }));
-    await sidebar.updateComplete;
-    helpRow?.click();
-    await sidebar.updateComplete;
-    expect(menu?.querySelector(".sidebar-customize-menu__submenu")).not.toBeNull();
-
-    const agentRows = [...(menu?.querySelectorAll('[role="menuitemradio"]') ?? [])];
+    const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? [])];
     expect(agentRows).toHaveLength(2);
     const researchRow = agentRows.find((row) => row.textContent?.includes("research"));
     expect(researchRow).toBeDefined();
@@ -524,7 +514,7 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     const settingsRow = [
-      ...sidebar.querySelectorAll<HTMLButtonElement>('.sidebar-agent-menu [role="menuitem"]'),
+      ...sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu wa-dropdown-item"),
     ].find((row) => row.textContent?.includes("Agent settings"));
     expect(settingsRow).toBeDefined();
     settingsRow?.click();
@@ -555,7 +545,9 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).toBeNull();
-    expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]')).toHaveLength(
+      10,
+    );
   });
 
   it("shows pinned agents plus filter for large rosters and filters on input", async () => {
@@ -580,7 +572,7 @@ describe("AppSidebar agent chip", () => {
     const labels = () =>
       [
         ...sidebar.querySelectorAll(
-          '.sidebar-agent-menu [role="menuitemradio"] .sidebar-customize-menu__text',
+          '.sidebar-agent-menu wa-dropdown-item[type="checkbox"] .sidebar-customize-menu__text',
         ),
       ].map((el) => el.textContent?.trim());
     expect(labels()).toEqual(["agent-7", "agent-12", "agent-1"]);
@@ -608,7 +600,9 @@ describe("AppSidebar agent chip", () => {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
     expect(sidebar.querySelector(".sidebar-agent-menu__filter")).not.toBeNull();
-    expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]')).toHaveLength(
+      10,
+    );
   });
 
   it("ignores stale pins when choosing the large-roster fallback", async () => {
@@ -625,7 +619,9 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
-    expect(sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')).toHaveLength(10);
+    expect(sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]')).toHaveLength(
+      10,
+    );
   });
 
   it("keeps an active agent outside the first ten reachable when nothing is pinned", async () => {
@@ -644,7 +640,9 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
     await sidebar.updateComplete;
-    const rows = [...sidebar.querySelectorAll('.sidebar-agent-menu [role="menuitemradio"]')];
+    const rows = [
+      ...sidebar.querySelectorAll('.sidebar-agent-menu wa-dropdown-item[type="checkbox"]'),
+    ];
     expect(rows).toHaveLength(10);
     expect(rows.some((row) => row.textContent?.includes("agent-12"))).toBe(true);
   });

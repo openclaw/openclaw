@@ -8,6 +8,7 @@ import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { normalizeChatSendShortcut, type ChatSendShortcut } from "../../../app/settings.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import {
@@ -2654,59 +2655,47 @@ export function renderChatComposer(props: ChatComposerProps) {
         })}
 
         <div class="agent-chat__composer-input-row">
-          <details class="agent-chat__attach-menu">
-            <summary
+          <wa-dropdown class="agent-chat__attach-menu" placement="top-start">
+            <button
+              slot="trigger"
+              type="button"
               class="agent-chat__input-btn agent-chat__input-btn--attach"
               aria-label=${t("chat.composer.addAttachment")}
-              aria-disabled=${canCompose ? "false" : "true"}
+              ?disabled=${!canCompose}
               title=${t("chat.composer.addAttachment")}
               @pointerdown=${(event: PointerEvent) => {
                 if (document.activeElement === composerTextarea) {
                   event.preventDefault();
                 }
               }}
-              @click=${(event: MouseEvent) => {
-                if (!canCompose) {
-                  event.preventDefault();
-                }
-              }}
             >
               ${icons.plus}
-            </summary>
-            <div
-              class="agent-chat__attach-menu-popover"
-              role="menu"
-              aria-label=${t("chat.composer.addAttachment")}
+            </button>
+            <wa-dropdown-item
+              class="agent-chat__attach-menu-option"
+              value="camera"
+              @click=${clickComposerCameraInput}
             >
-              <button
-                type="button"
-                class="agent-chat__attach-menu-option"
-                role="menuitem"
-                @click=${clickComposerCameraInput}
-              >
-                ${icons.camera}
-                <span>${t("chat.composer.takePhoto")}</span>
-              </button>
-              <button
-                type="button"
-                class="agent-chat__attach-menu-option"
-                role="menuitem"
-                @click=${clickComposerPhotoInput}
-              >
-                ${icons.image}
-                <span>${t("chat.composer.attachPhoto")}</span>
-              </button>
-              <button
-                type="button"
-                class="agent-chat__attach-menu-option"
-                role="menuitem"
-                @click=${clickComposerFileInput}
-              >
-                ${icons.folder}
-                <span>${t("chat.composer.attachFileOption")}</span>
-              </button>
-            </div>
-          </details>
+              <span slot="icon" aria-hidden="true">${icons.camera}</span>
+              <span>${t("chat.composer.takePhoto")}</span>
+            </wa-dropdown-item>
+            <wa-dropdown-item
+              class="agent-chat__attach-menu-option"
+              value="photo"
+              @click=${clickComposerPhotoInput}
+            >
+              <span slot="icon" aria-hidden="true">${icons.image}</span>
+              <span>${t("chat.composer.attachPhoto")}</span>
+            </wa-dropdown-item>
+            <wa-dropdown-item
+              class="agent-chat__attach-menu-option"
+              value="file"
+              @click=${clickComposerFileInput}
+            >
+              <span slot="icon" aria-hidden="true">${icons.folder}</span>
+              <span>${t("chat.composer.attachFileOption")}</span>
+            </wa-dropdown-item>
+          </wa-dropdown>
           <div class="agent-chat__composer-combobox">
             <textarea
               ${ref((element) => {

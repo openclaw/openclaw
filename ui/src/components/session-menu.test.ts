@@ -6,6 +6,7 @@ import "./session-menu.ts";
 import type { SessionMenuAction, SessionMenuData, SessionMenuWork } from "./session-menu.ts";
 
 type SessionMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
+type SessionMenuItem = HTMLElement & { checked: boolean; disabled: boolean };
 
 const containers: HTMLElement[] = [];
 
@@ -75,11 +76,15 @@ function itemLabel(item: HTMLElement): string {
 }
 
 function menuItemLabels(menu: ParentNode): string[] {
-  return Array.from(menu.querySelectorAll<HTMLElement>('[role="menuitem"]')).map(itemLabel);
+  const selector =
+    menu instanceof Element && menu.matches("wa-dropdown-item")
+      ? ":scope > wa-dropdown-item[slot='submenu']"
+      : ":scope > wa-dropdown > wa-dropdown-item";
+  return Array.from(menu.querySelectorAll<HTMLElement>(selector)).map(itemLabel);
 }
 
-function menuItem(menu: ParentNode, label: string): HTMLButtonElement {
-  const item = Array.from(menu.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')).find(
+function menuItem(menu: ParentNode, label: string): SessionMenuItem {
+  const item = Array.from(menu.querySelectorAll<SessionMenuItem>("wa-dropdown-item")).find(
     (candidate) => itemLabel(candidate) === label,
   );
   if (!item) {
@@ -170,12 +175,12 @@ describe("session menu", () => {
       onAction,
     });
 
-    menuItem(menu, "Move to group").click();
-    await menu.updateComplete;
+    const submenu = menuItem(menu, "Move to group");
+    (submenu as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
 
-    expect(menuItemLabels(menu)).toContain("Research");
-    expect(menuItemLabels(menu)).toContain("Projects");
-    expect(menuItem(menu, "Research").querySelector(".session-menu__check svg")).not.toBeNull();
+    expect(menuItemLabels(submenu)).toContain("Research");
+    expect(menuItemLabels(submenu)).toContain("Projects");
+    expect(menuItem(submenu, "Research").checked).toBe(true);
 
     menuItem(menu, "Projects").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });
@@ -190,37 +195,24 @@ describe("session menu", () => {
   it("omits Remove from group when the session has no category", async () => {
     const menu = await mountMenu({ groups: ["Research"] });
 
-    menuItem(menu, "Move to group").click();
-    await menu.updateComplete;
+    const submenu = menuItem(menu, "Move to group");
 
-    expect(menuItemLabels(menu)).not.toContain("Remove from group");
+    expect(menuItemLabels(submenu)).not.toContain("Remove from group");
   });
 
-  it("omits the submenu separator when New group is the only entry", async () => {
+  it("uses Web Awesome submenu slots when New group is the only entry", async () => {
     const menu = await mountMenu({ groups: [] });
 
-    menuItem(menu, "Move to group").click();
-    await menu.updateComplete;
-
-    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
-    if (!submenu) {
-      throw new Error("Expected group submenu");
-    }
+    const submenu = menuItem(menu, "Move to group");
     expect(menuItemLabels(submenu)).toEqual(["New group…"]);
-    expect(submenu.querySelector('[role="separator"]')).toBeNull();
+    expect(submenu.querySelector("wa-dropdown-item")?.getAttribute("slot")).toBe("submenu");
   });
 
-  it("keeps the submenu separator when groups exist", async () => {
+  it("renders existing groups in the Web Awesome submenu", async () => {
     const menu = await mountMenu({ groups: ["Research"] });
 
-    menuItem(menu, "Move to group").click();
-    await menu.updateComplete;
-
-    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
-    if (!submenu) {
-      throw new Error("Expected group submenu");
-    }
-    expect(submenu.querySelector('[role="separator"]')).not.toBeNull();
+    const submenu = menuItem(menu, "Move to group");
+    expect(menuItemLabels(submenu)).toEqual(["Research", "New group…"]);
   });
 
   it("numbers group submenu entries and dispatches them from digit keys", async () => {
@@ -235,22 +227,17 @@ describe("session menu", () => {
     document.dispatchEvent(closedDigit);
     expect(onAction).not.toHaveBeenCalled();
 
-    menuItem(menu, "Move to group").click();
-    await menu.updateComplete;
-
-    const submenu = menu.querySelector<HTMLElement>(".session-menu__submenu");
-    if (!submenu) {
-      throw new Error("Expected group submenu");
-    }
+    const submenu = menuItem(menu, "Move to group");
+    (submenu as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
     expect(menuItemLabels(submenu)).toEqual([
       "Research",
       "Projects",
       "Remove from group",
       "New group…",
     ]);
-    const shortcuts = Array.from(submenu.querySelectorAll<HTMLElement>('[role="menuitem"]')).map(
-      (item) => item.dataset.shortcut,
-    );
+    const shortcuts = Array.from(
+      submenu.querySelectorAll<HTMLElement>("wa-dropdown-item[slot='submenu']"),
+    ).map((item) => item.dataset.shortcut);
     expect(shortcuts).toEqual(["1", "2", "3", "4"]);
     expect(
       menuItem(submenu, "Projects").querySelector(".session-menu__shortcut")?.textContent,
@@ -305,13 +292,11 @@ describe("session menu", () => {
     });
 
     expect(menuItem(menu, "Open PR").disabled).toBe(true);
-    menuItem(menu, "Open in").click();
-    await menu.updateComplete;
+    const openIn = menuItem(menu, "Open in");
+    (openIn as SessionMenuItem & { submenuOpen: boolean }).submenuOpen = true;
 
-    expect(menuItemLabels(menu)).toEqual(
-      expect.arrayContaining(["Cursor", "VS Code", "Windsurf", "Zed"]),
-    );
-    menuItem(menu, "VS Code").click();
+    expect(menuItemLabels(openIn)).toEqual(["Cursor", "VS Code", "Windsurf", "Zed"]);
+    menuItem(openIn, "VS Code").click();
     expect(onAction).toHaveBeenCalledWith({
       kind: "open-in",
       editor: "vscode",
@@ -329,7 +314,7 @@ describe("session menu", () => {
     const pin = menuItem(menu, "Pin session");
     expect(pin.querySelector(".session-menu__shortcut")?.textContent).toBe("P");
     expect(pin.getAttribute("aria-keyshortcuts")).toBe("P");
-    expect(menuItem(menu, "Move to group").querySelector(".session-menu__shortcut")).toBeNull();
+    expect(menuItem(menu, "Move to group").dataset.shortcut).toBeUndefined();
 
     const keydown = new KeyboardEvent("keydown", { key: "p", bubbles: true, cancelable: true });
     document.dispatchEvent(keydown);
@@ -354,20 +339,18 @@ describe("session menu", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("closes on Escape and outside pointerdown but ignores its trigger", async () => {
+  it("restores its trigger and closes after Web Awesome hides", async () => {
     const trigger = document.createElement("button");
     document.body.append(trigger);
     containers.push(trigger);
     const onClose = vi.fn();
-    await mountMenu({ trigger, onClose });
+    const menu = await mountMenu({ trigger, onClose });
 
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    menu
+      .querySelector("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-after-hide", { bubbles: true, composed: true }));
+
     expect(onClose).toHaveBeenCalledTimes(1);
-
-    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
-    expect(onClose).toHaveBeenCalledTimes(2);
-
-    trigger.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
-    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(document.activeElement).toBe(trigger);
   });
 });

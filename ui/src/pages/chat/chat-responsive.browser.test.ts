@@ -190,7 +190,7 @@ function composerControlsHtml() {
         <button class="chat-view-menu-trigger" type="button" aria-label="View">
           ${iconSvg()}
         </button>
-        <div class="chat-view-menu" role="menu" aria-label="View">
+        <div class="chat-view-menu" role="menu" aria-label="View" hidden>
           <button class="chat-view-menu__item" role="menuitemcheckbox">Reasoning</button>
         </div>
       </div>
@@ -1770,6 +1770,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
         await modelTrigger.click();
         await page.locator(".chat-view-menu").evaluate((node) => {
+          node.removeAttribute("hidden");
           node.classList.add("chat-view-menu--open");
         });
 
@@ -1794,6 +1795,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const page = await openFixture(width, height);
       try {
         await page.locator(".chat-view-menu").evaluate((node) => {
+          node.removeAttribute("hidden");
           node.classList.add("chat-view-menu--open");
         });
 

@@ -241,9 +241,10 @@ describe("openclaw-file-preview-modal", () => {
     await i18n.setLocale("pt-BR");
     await modal.updateComplete;
 
-    expect(modal.shadowRoot?.querySelector(".modal")?.getAttribute("aria-label")).toBe(
-      "Arquivos de suporte",
-    );
+    expect(
+      modal.shadowRoot?.querySelector<HTMLElement & { label: string }>("openclaw-modal-dialog")
+        ?.label,
+    ).toBe("Arquivos de suporte");
     expect(shadowText(modal)).toContain("2 arquivos");
     expect(shadowText(modal)).toContain("Fechar");
   });

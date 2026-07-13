@@ -3804,7 +3804,7 @@ describe("chat attachment picker", () => {
     ).find((button) => button.textContent?.trim() === t("chat.composer.attachFileOption"));
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
-    expect(attachButton).toBeInstanceOf(HTMLButtonElement);
+    expect(attachButton).toBeInstanceOf(HTMLElement);
     attachButton!.click();
 
     expect(clickInput).toHaveBeenCalledTimes(1);
@@ -3825,7 +3825,7 @@ describe("chat attachment picker", () => {
 
     expect(input.accept).toBe("image/*");
     expect(input.getAttribute("capture")).toBe("environment");
-    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
+    expect(cameraButton).toBeInstanceOf(HTMLElement);
     expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
     cameraButton!.click();
     expect(clickInput).toHaveBeenCalledTimes(1);
@@ -3851,7 +3851,7 @@ describe("chat attachment picker", () => {
       container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
     ).find((button) => button.textContent?.trim() === t("chat.composer.takePhoto"));
 
-    expect(cameraButton).toBeInstanceOf(HTMLButtonElement);
+    expect(cameraButton).toBeInstanceOf(HTMLElement);
     expect(container.querySelector(".agent-chat__camera-btn")).toBeNull();
     expect(container.querySelector('button[aria-label="Send message"]')).not.toBeNull();
   });

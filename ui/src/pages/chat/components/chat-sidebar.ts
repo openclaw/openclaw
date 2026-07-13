@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/web-awesome.ts";
 import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
@@ -270,7 +271,7 @@ type FileViewControls = {
   onSave: () => void;
   onSearchInput: (query: string) => void;
   onSearchKeydown: (event: KeyboardEvent) => void;
-  onToggleEditorMenu: () => void;
+  onEditorMenuOpenChange: (open: boolean) => void;
   onToggleSearch: () => void;
 };
 
@@ -364,36 +365,39 @@ function renderFileSidebarContent(
                         <openclaw-tooltip
                           .content=${absolutePath ? "Open in editor" : "Workspace root unknown"}
                         >
-                          <button
-                            class="btn btn--sm sidebar-file-view__action"
-                            type="button"
-                            aria-label=${absolutePath ? "Open in editor" : "Workspace root unknown"}
-                            aria-haspopup="menu"
-                            aria-expanded=${String(controls.editorMenuOpen)}
-                            ?disabled=${!absolutePath}
-                            @click=${controls.onToggleEditorMenu}
+                          <wa-dropdown
+                            class="sidebar-file-view__editor-menu"
+                            placement="bottom-end"
+                            .open=${controls.editorMenuOpen}
+                            @wa-show=${() => controls.onEditorMenuOpenChange(true)}
+                            @wa-hide=${() => controls.onEditorMenuOpenChange(false)}
                           >
-                            ${icons.externalLink}
-                          </button>
-                        </openclaw-tooltip>
-                        ${controls.editorMenuOpen && absolutePath
-                          ? html`
-                              <div class="sidebar-file-view__editor-menu" role="menu">
-                                ${EDITOR_IDS.map(
+                            <button
+                              slot="trigger"
+                              class="btn btn--sm sidebar-file-view__action"
+                              type="button"
+                              aria-label=${absolutePath
+                                ? "Open in editor"
+                                : "Workspace root unknown"}
+                              ?disabled=${!absolutePath}
+                            >
+                              ${icons.externalLink}
+                            </button>
+                            ${absolutePath
+                              ? EDITOR_IDS.map(
                                   (editor) => html`
-                                    <button
+                                    <wa-dropdown-item
                                       class="sidebar-file-view__editor-item"
-                                      type="button"
-                                      role="menuitem"
+                                      value=${editor}
                                       @click=${() => controls.onOpenEditor(editor)}
                                     >
                                       ${EDITOR_LABELS[editor]}
-                                    </button>
+                                    </wa-dropdown-item>
                                   `,
-                                )}
-                              </div>
-                            `
-                          : nothing}
+                                )
+                              : nothing}
+                          </wa-dropdown>
+                        </openclaw-tooltip>
                       </div>
                       <openclaw-tooltip content="Copy file contents">
                         <button
@@ -1299,8 +1303,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
             onSave: this.saveFile,
             onSearchInput: this.updateFileSearch,
             onSearchKeydown: this.handleFileSearchKeydown,
-            onToggleEditorMenu: () => {
-              this.fileEditorMenuOpen = !this.fileEditorMenuOpen;
+            onEditorMenuOpenChange: (open) => {
+              this.fileEditorMenuOpen = open;
             },
             onToggleSearch: this.toggleFileSearch,
           },

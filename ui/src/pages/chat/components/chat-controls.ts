@@ -3,6 +3,7 @@ import { html } from "lit";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
+import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import { renderChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.ts";
 
@@ -60,49 +61,51 @@ export function renderChatControls(props: ChatControlsProps) {
   return html`
     <div class="chat-view-menu-wrapper">
       <openclaw-tooltip .content=${menuTitle}>
-        <button
-          class="chat-view-menu-trigger ${open ? "chat-view-menu-trigger--open" : ""}"
-          type="button"
-          aria-label=${menuTitle}
-          aria-haspopup="menu"
-          aria-expanded=${open}
-          aria-controls=${menuId}
-          @click=${(event: Event) => {
-            event.stopPropagation();
-            props.onViewMenuOpenChange(!open, { trigger: event.currentTarget as HTMLElement });
+        <wa-dropdown
+          id=${menuId}
+          class="chat-view-menu"
+          placement="top-start"
+          .open=${open}
+          @wa-show=${() => {
+            if (!open) {
+              props.onViewMenuOpenChange(true);
+            }
+          }}
+          @wa-hide=${() => {
+            if (open) {
+              props.onViewMenuOpenChange(false, { restoreFocus: true });
+            }
           }}
         >
-          ${icons.eye}
-        </button>
+          <button
+            slot="trigger"
+            class="chat-view-menu-trigger ${open ? "chat-view-menu-trigger--open" : ""}"
+            type="button"
+            aria-label=${menuTitle}
+            @click=${(event: Event) => event.stopPropagation()}
+          >
+            ${icons.eye}
+          </button>
+          ${chatViewMenuRows(props).map(
+            (row, index) => html`
+              <wa-dropdown-item
+                class="chat-view-menu__item"
+                type="checkbox"
+                value=${`view-${index}`}
+                .checked=${row.checked}
+                ?disabled=${props.onboarding}
+                @click=${() => {
+                  if (!props.onboarding) {
+                    row.onToggle();
+                  }
+                }}
+              >
+                <span class="chat-view-menu__text">${row.label}</span>
+              </wa-dropdown-item>
+            `,
+          )}
+        </wa-dropdown>
       </openclaw-tooltip>
-      <div
-        id=${menuId}
-        class="chat-view-menu ${open ? "chat-view-menu--open" : ""}"
-        role="menu"
-        aria-label=${t("chat.view.menu")}
-      >
-        ${chatViewMenuRows(props).map(
-          (row) => html`
-            <button
-              type="button"
-              class="chat-view-menu__item"
-              role="menuitemcheckbox"
-              aria-checked=${row.checked}
-              ?disabled=${props.onboarding}
-              @click=${() => {
-                if (!props.onboarding) {
-                  row.onToggle();
-                }
-              }}
-            >
-              <span class="chat-view-menu__check" aria-hidden="true">
-                ${row.checked ? icons.check : ""}
-              </span>
-              <span class="chat-view-menu__text">${row.label}</span>
-            </button>
-          `,
-        )}
-      </div>
     </div>
     <div
       class="chat-composer-model-control"
