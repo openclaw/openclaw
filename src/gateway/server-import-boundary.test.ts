@@ -55,30 +55,65 @@ describe("gateway startup import boundaries", () => {
     );
     expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
+    const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
+    expect(serverImpl).toContain('import("./server-worker-environment-startup.js")');
+    for (const workerModule of ["live-events", "service", "store", "transcript-commit"]) {
+      expect(serverImpl).not.toContain(`from "./worker-environments/${workerModule}.js"`);
+      expect(workerStartup).toContain(`import("./worker-environments/${workerModule}.js")`);
+    }
+    expect(serverImpl).not.toContain('from "../plugins/worker-provider-registry.js"');
+    expect(workerStartup).toContain('import("../plugins/worker-provider-registry.js")');
+    expect(serverImpl).not.toContain(
+      'from "../../packages/gateway-protocol/src/schema/worker-admission.js"',
+    );
+    expect(workerStartup).toContain(
+      'import("../../packages/gateway-protocol/src/schema/worker-admission.js")',
+    );
+  });
+
+  it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
+    const serverImpl = readSource("src/gateway/server.impl.ts");
+    const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");
+    const importBoundary = serverImpl.indexOf("type LoadGatewayModelCatalog");
+    const serverStart = serverImpl.indexOf("export async function startGatewayServer");
+    const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({", serverStart);
+    const cleanupCall = serverImpl.lastIndexOf("cleanupRetainedPluginInstallGenerations(");
+
+    expect(importBoundary).toBeGreaterThan(-1);
+    expect(serverImpl.slice(0, importBoundary)).not.toContain("managed-npm-retention");
+    expect(serverImpl.slice(0, importBoundary)).not.toContain("installed-plugin-index-records");
+    expect(cleanup).toContain('import("../plugins/managed-npm-retention.js")');
+    expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
+    expect(postReadyStart).toBeGreaterThan(serverStart);
+    expect(cleanupCall).toBeGreaterThan(postReadyStart);
+    expect(serverImpl.slice(postReadyStart, cleanupCall + 300)).not.toContain(
+      "startupConfigLoad.pluginMetadataSnapshot?.index.installRecords",
+    );
+    expect(cleanup).toContain("loadInstalledPluginIndexInstallRecordsSync()");
   });
 
   it("loads the worker bootstrap runtime only when an operation needs it", () => {
-    const serverImpl = readSource("src/gateway/server.impl.ts");
-    const runtimeLoad = "await loadWorkerEnvironmentRuntimeModule()";
-    const prepareStart = serverImpl.indexOf("const prepareWorkerInstallation = async");
-    const serviceStart = serverImpl.indexOf("const workerEnvironmentService =", prepareStart);
-    const identityStart = serverImpl.indexOf("resolveSshIdentity: async", serviceStart);
-    const bootstrapStart = serverImpl.indexOf("bootstrapWorker: async", serviceStart);
-    const loggerStart = serverImpl.indexOf("logger: log.child", bootstrapStart);
+    const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
+    const runtimeLoad = "loadWorkerEnvironmentRuntimeModule()";
+    const prepareStart = workerStartup.indexOf("const prepareInstallation = async");
+    const serviceStart = workerStartup.indexOf("const workerEnvironmentService =", prepareStart);
+    const identityStart = workerStartup.indexOf("resolveSshIdentity: async", serviceStart);
+    const bootstrapStart = workerStartup.indexOf("bootstrapWorker: async", serviceStart);
+    const loggerStart = workerStartup.indexOf("logger: params.log.child", bootstrapStart);
 
     expect(prepareStart).toBeGreaterThan(-1);
     expect(serviceStart).toBeGreaterThan(prepareStart);
     expect(identityStart).toBeGreaterThan(serviceStart);
     expect(bootstrapStart).toBeGreaterThan(serviceStart);
     expect(loggerStart).toBeGreaterThan(bootstrapStart);
-    expect(serverImpl.slice(0, prepareStart)).not.toContain(runtimeLoad);
-    expect(serverImpl.slice(prepareStart, serviceStart)).toContain(runtimeLoad);
-    expect(serverImpl.slice(identityStart, bootstrapStart)).toContain(runtimeLoad);
-    expect(serverImpl.slice(bootstrapStart, loggerStart)).toContain(runtimeLoad);
-    expect(serverImpl.slice(bootstrapStart, loggerStart)).toContain(
+    expect(workerStartup.slice(0, prepareStart)).not.toContain(runtimeLoad);
+    expect(workerStartup.slice(prepareStart, serviceStart)).toContain(runtimeLoad);
+    expect(workerStartup.slice(identityStart, bootstrapStart)).toContain(runtimeLoad);
+    expect(workerStartup.slice(bootstrapStart, loggerStart)).toContain(runtimeLoad);
+    expect(workerStartup.slice(bootstrapStart, loggerStart)).toContain(
       "pinnedHostKey: sshEndpoint.hostKey",
     );
-    expect(serverImpl.match(/await loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
+    expect(workerStartup.match(/loadWorkerEnvironmentRuntimeModule\(\)/gu)).toHaveLength(3);
   });
 
   it("fences config reload before gateway teardown and gateway_stop hooks", () => {

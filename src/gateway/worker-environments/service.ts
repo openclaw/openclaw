@@ -71,7 +71,7 @@ import {
 import type { WorkerTunnelRequest } from "./tunnel-contract.js";
 import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 
-export type WorkerEnvironmentServiceErrorCode =
+type WorkerEnvironmentServiceErrorCode =
   | "profile_not_found"
   | "provider_not_found"
   | "environment_not_found"
@@ -80,7 +80,7 @@ export type WorkerEnvironmentServiceErrorCode =
   | "provider_failure"
   | "bootstrap_failure";
 
-export class WorkerEnvironmentServiceError extends Error {
+class WorkerEnvironmentServiceError extends Error {
   constructor(
     readonly code: WorkerEnvironmentServiceErrorCode,
     message: string,
@@ -93,7 +93,7 @@ const serviceError = (code: WorkerEnvironmentServiceErrorCode, message: string) 
   new WorkerEnvironmentServiceError(code, message);
 const ORPHANED_LEASE_ERROR = "Worker provider no longer recognizes the lease";
 
-export type WorkerEnvironmentServiceOptions = {
+type WorkerEnvironmentServiceOptions = {
   store: WorkerEnvironmentStore;
   getConfig: () => OpenClawConfig;
   resolveProvider: (providerId: string) => WorkerProvider | undefined;
@@ -133,15 +133,15 @@ export type WorkerEnvironmentServiceOptions = {
   inferenceStore?: WorkerInferenceStore;
 };
 
-export type WorkerTranscriptCommitApplicationResult =
+type WorkerTranscriptCommitApplicationResult =
   | { ok: true; result: WorkerTranscriptCommitResult }
   | { ok: false; reason: WorkerTranscriptCommitErrorReason };
 
-export type WorkerTranscriptCommitServiceResult =
+type WorkerTranscriptCommitServiceResult =
   | WorkerTranscriptCommitApplicationResult
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 
-export type WorkerLiveEventServiceResult =
+type WorkerLiveEventServiceResult =
   | WorkerLiveEventApplicationResult
   | { ok: false; closeReason: WorkerProtocolCloseReason };
 

@@ -24,7 +24,7 @@ type PairingDatabase = Pick<
   "channel_pairing_allow_entries" | "channel_pairing_requests"
 >;
 
-export type ChannelPairingState = {
+type ChannelPairingState = {
   version: 1;
   requests: PairingRequest[];
   allowFrom?: Record<string, string[]>;
@@ -200,24 +200,6 @@ export function writeChannelPairingStateToDatabase(
       );
     }
   }
-}
-
-export function readChannelPairingStateSnapshot(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-): ChannelPairingState {
-  return readChannelPairingState(channel, env);
-}
-
-export function writeChannelPairingStateSnapshot(
-  channel: PairingChannel,
-  state: ChannelPairingState,
-  env: NodeJS.ProcessEnv = process.env,
-): void {
-  runOpenClawStateWriteTransaction(
-    (database) => writeChannelPairingStateToDatabase(database, channel, state),
-    sqliteOptionsForEnv(env),
-  );
 }
 
 export function updateChannelPairingStateSnapshot<T>(

@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
 import { createPluginRegistry } from "../../plugins/registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
-import { createBundledPluginRecord } from "../../plugins/status.test-helpers.js";
+import { createBundledPluginRecord } from "../../plugins/status.test-fixtures.js";
 import type { PluginCommandContext, PluginCommandHandler } from "../../plugins/types.js";
 import type { MsgContext } from "../templating.js";
 import { createDiagnosticsCommandHandler } from "./commands-diagnostics.js";

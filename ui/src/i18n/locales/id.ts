@@ -82,6 +82,7 @@ export const id: TranslationMap = {
     relink: "Tautkan ulang",
     waitForScan: "Tunggu pemindaian",
     logout: "Keluar",
+    skipToMainContent: "Lewati ke konten utama",
   },
   nativeLinkMenu: {
     label: "Tindakan tautan",
@@ -218,10 +219,11 @@ export const id: TranslationMap = {
   lazyView: {
     loadingTitle: "Memuat panel",
     errorTitle: "Panel gagal dimuat",
-    errorSubtitle:
-      "Muat ulang halaman untuk memuat bundel Control UI terbaru, atau coba lagi jika permintaan jaringan gagal.",
+    genericSubtitle: "Terjadi kesalahan saat memuat panel ini.",
+    staleTitle: "Versi baru tersedia",
+    staleSubtitle:
+      "OpenClaw telah diperbarui di latar belakang. Muat ulang untuk mendapatkan panel terbaru.",
     retry: "Coba lagi",
-    unknownError: "Kesalahan pemuatan modul yang tidak diketahui.",
   },
   nodes: {
     pairing: {
@@ -230,6 +232,15 @@ export const id: TranslationMap = {
       title: "OpenClaw seluler",
       subtitle: "Pindai kode QR ini di aplikasi seluler untuk menghubungkan ponsel baru.",
       generating: "Membuat kode penyiapan yang aman…",
+      accessTitle: "Akses seluler",
+      fullAccess: "Akses penuh (disarankan)",
+      fullAccessHint: "Node beserta kontrol Gateway lengkap, termasuk pengaturan dan peningkatan.",
+      limitedAccess: "Akses terbatas",
+      limitedAccessHint: "Node, chat, dan persetujuan tanpa kontrol administratif.",
+      generateCode: "Buat kode penyiapan",
+      transportLimitedTitle: "Dibatasi demi keamanan jaringan",
+      transportLimitedHint:
+        "URL Gateway ini menggunakan ws:// tanpa enkripsi. Gunakan wss:// atau Tailscale Serve, lalu buat kode baru untuk akses penuh.",
       failed: "Tidak dapat membuat kode penyiapan.",
       qrAlt: "Kode QR pemasangan OpenClaw seluler",
       qrUnavailable: "QR tidak tersedia. Salin kode penyiapan sebagai gantinya.",
@@ -263,7 +274,8 @@ export const id: TranslationMap = {
     },
     inventory: {
       title: "Perangkat",
-      subtitle: "Satu baris per klien yang dipasangkan: status, peran, token.",
+      summaryConnected: "{connected} dari {total} terhubung",
+      summaryPending: "{count} menunggu persetujuan",
       cleanupStale: "Bersihkan {count} usang",
       pendingApproval: "Menunggu persetujuan",
       paired: "Dipasangkan",
@@ -378,6 +390,18 @@ export const id: TranslationMap = {
     title: "Worktree Terkelola",
     subtitle: "Checkout repositori terisolasi yang dimiliki oleh OpenClaw.",
     cleanNow: "Bersihkan sekarang",
+    cleanupTitle: "Pembersihan",
+    cleanupSubtitle:
+      "OpenClaw secara berkala menghapus worktree lama untuk mengosongkan ruang disk. Atur seberapa agresif pembersihan dijalankan.",
+    cleanupMaxCount: "Worktree maksimum",
+    cleanupMaxCountHelp:
+      "Jumlah maksimum worktree terkelola yang dipertahankan di seluruh repositori. Worktree yang lebih lama dibuatkan snapshot dan dihapus terlebih dahulu. Atur ke 0 untuk menonaktifkan batas jumlah.",
+    cleanupMaxSize: "Ukuran total maksimum (GB)",
+    cleanupMaxSizeHelp:
+      "Ukuran total maksimum dalam GB di seluruh worktree terkelola. Atur ke 0 untuk menonaktifkan batas ukuran.",
+    cleanupDecrease: "Kurangi {label}",
+    cleanupIncrease: "Tambah {label}",
+    cleanupSaveFailed: "Gagal menyimpan batas pembersihan.",
     name: "Nama",
     repo: "Repositori",
     branch: "Branch",
@@ -396,6 +420,17 @@ export const id: TranslationMap = {
     working: "Sedang bekerja…",
     ready: "Siap mengobrol",
     whatCanAgentDo: "Apa yang dapat dilakukan {name}?",
+    help: "Bantuan",
+    getHelp: "Dapatkan bantuan",
+    discord: "Komunitas Discord",
+    viewChangelog: "Lihat log perubahan",
+    agentSettings: "Pengaturan agen",
+    filterAgents: "Cari agen…",
+    noAgentMatches: "Tidak ada agen yang cocok",
+  },
+  agentScope: {
+    label: "Cakupan agen",
+    allAgents: "Semua agen",
   },
   newSession: {
     title: "Sesi baru",
@@ -564,6 +599,7 @@ export const id: TranslationMap = {
     groupBy: "Kelompokkan berdasarkan",
     groupByNone: "Tidak ada",
     groupByCategory: "Grup kustom",
+    showCronSessions: "Tampilkan sesi cron",
     groupByChannel: "Saluran",
     groupByKind: "Jenis",
     groupByAgent: "Agen",
@@ -604,6 +640,8 @@ export const id: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Sematkan ke pengalih",
+    unpinFromSwitcher: "Lepaskan sematan dari pengalih",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -628,6 +666,18 @@ export const id: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identitas",
+      subtitle: "Nama, emoji, dan avatar yang ditampilkan di obrolan dan bilah samping.",
+      name: "Nama tampilan",
+      namePlaceholder: "Nama agen",
+      emoji: "Emoji",
+      chooseImage: "Pilih gambar…",
+      replaceImage: "Ganti gambar…",
+      imageUnusable:
+        "Gambar tersebut tidak dapat digunakan. Pilih file gambar berukuran hingga 2 MB.",
+      fileHint: "Agen dapat mengaturnya sendiri dengan mengedit IDENTITY.md di ruang kerja mereka.",
     },
     overview: {
       title: "Ikhtisar",
@@ -1072,6 +1122,7 @@ export const id: TranslationMap = {
     settingsView: "Tampilan pengaturan",
     simple: "Sederhana",
     advanced: "Lanjutan",
+    content: "Konten pengaturan",
     themeImported: "Mengimpor {name}.",
     themeRemoved: "Tema kustom dihapus.",
     channels: {
@@ -1199,6 +1250,10 @@ export const id: TranslationMap = {
       inlineHintAfter:
         "untuk menambahkan satu tema tweakcn lokal browser. Di tweakcn, gunakan Share dan tempel tautan yang disalin di sini.",
       textSize: "Ukuran teks",
+    },
+    chatPrefs: {
+      title: "Chat",
+      hint: "Preferensi chat lokal di browser.",
     },
     connection: {
       title: "Koneksi",
@@ -1423,6 +1478,8 @@ export const id: TranslationMap = {
     platforms: "Platform: {platforms}",
     installNamed: "Pasang {name}",
     notFound: "Skill tidak ditemukan.",
+    openDetails: "Buka detail {name}",
+    enabledNamed: "{name} diaktifkan",
     invalidLink: "Tautan ClawHub tidak valid",
     overview: "Ikhtisar",
     skillCard: "Kartu Skill",
@@ -1726,8 +1783,6 @@ export const id: TranslationMap = {
     cancel: "Batal",
     removedRestart: "{name} dihapus. Gateway perlu dimulai ulang untuk menerapkan perubahan.",
     verifiedSource: "Sumber terverifikasi",
-    menuLabel: "Tindakan {name}",
-    menuDetails: "Lihat detail",
     enableAction: "Aktifkan",
     disableAction: "Nonaktifkan",
     working: "Memproses…",
@@ -1864,6 +1919,10 @@ export const id: TranslationMap = {
       useCurrentChatAria: "Gunakan obrolan saat ini untuk permintaan revisi",
       useCurrentChatTooltip:
         "Kirim permintaan revisi ke sesi obrolan saat ini alih-alih sesi workshop proposal.",
+      selfLearning: "Pembelajaran mandiri",
+      selfLearningAria: "Aktifkan atau nonaktifkan usulan Skills dari pembelajaran mandiri",
+      selfLearningTooltip:
+        "Catat koreksi dan tinjau pekerjaan penting yang telah diselesaikan untuk dijadikan proposal skill yang tertunda. Menggunakan token latar belakang tambahan; draf muncul di papan ini sebagai proposal tertunda.",
       view: "Tampilan workshop",
       board: "Papan",
       today: "Hari ini",
@@ -1944,6 +2003,14 @@ export const id: TranslationMap = {
       noProposalsTitle: "Belum ada proposal",
       noProposalsBody: "{agent} belum membuat proposal skill apa pun.",
       noProposalsFooter: "Proposal baru akan muncul di sini untuk ditinjau.",
+    },
+    selfLearning: {
+      pitchTitle: "Aktifkan pembelajaran mandiri",
+      pitchBody:
+        "OpenClaw meninjau koreksi dan proses penting yang telah diselesaikan, lalu menyusun draf proposal skill untuk papan ini. Fitur ini menggunakan token latar belakang tambahan dan draf akan muncul sebagai proposal tertunda.",
+      enable: "Aktifkan pembelajaran mandiri",
+      enabling: "Mengaktifkan…",
+      updateError: "Tidak dapat memperbarui pengaturan pembelajaran mandiri.",
     },
     today: {
       emptyTitle: "Tidak ada yang menunggu hari ini",
@@ -3077,24 +3144,16 @@ export const id: TranslationMap = {
       rateLimited:
         "Batas laju GitHub API tercapai. Status pull request mungkin tidak terbaru hingga batas direset.",
     },
-    refreshTitle: "Refresh data chat",
-    settings: "Pengaturan chat",
     usageRemaining: "Sisa penggunaan",
-    voiceSettings: "Suara",
-    thinkingToggle: "Alihkan output berpikir/bekerja asisten",
-    toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
-    commentaryToggle: "Simpan komentar setelah jawaban akhir",
-    commentaryLabel: "Komentar",
-    autoScrollMode: "Mode gulir otomatis",
-    autoScrollAlways: "Selalu",
-    autoScrollNearBottom: "Dekat bagian bawah",
-    autoScrollOff: "Nonaktif",
+    view: {
+      menu: "Tampilan",
+      reasoning: "Penalaran",
+      toolCalls: "Panggilan tool",
+      commentary: "Pertahankan komentar",
+    },
     sendShortcut: "Pintasan kirim",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Sembunyikan sesi cron",
-    showCronSessions: "Tampilkan sesi cron",
-    showCronSessionsHidden: "Tampilkan sesi cron ({count} disembunyikan)",
     onboardingDisabled: "Dinonaktifkan selama penyiapan",
     gatewayStatus: "Status Gateway: {status}",
     commandPaletteTitle: "Cari atau lompat ke… (⌘K)",
@@ -3284,7 +3343,6 @@ export const id: TranslationMap = {
       },
       takePhoto: "Ambil foto",
       dismissVoiceInputError: "Tutup kesalahan input suara",
-      loadingMicrophones: "Memuat mikrofon…",
       microphoneAccessFailed: "Tidak dapat mengakses input mikrofon.",
       microphoneBusy: "Input mikrofon sedang digunakan atau tidak tersedia untuk browser.",
       microphoneFallback: "Mikrofon {number}",
@@ -3302,19 +3360,6 @@ export const id: TranslationMap = {
       stillListening: "Masih mendengarkan",
       stopVoiceInput: "Hentikan input suara",
       systemDefaultMicrophone: "Default sistem",
-      talkAdvancedSettingsRequiresAdmin: "Pengaturan lanjutan memerlukan akses admin",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Pengaturan Talk lanjutan memerlukan akses operator.admin.",
-      talkDefault: "Default",
-      talkModel: "Model",
-      talkModelAuto: "Otomatis",
-      talkMoreInSettings: "Lainnya di Pengaturan",
-      talkSensitivity: "Sensitivitas",
-      talkSensitivityHigh: "Tinggi",
-      talkSensitivityLow: "Rendah",
-      talkSensitivityMedium: "Sedang",
-      talkVoice: "Suara",
-      voiceOptions: "Opsi suara",
       voiceTranscript: "Transkrip suara",
     },
     selectors: {
@@ -3399,6 +3444,8 @@ export const id: TranslationMap = {
       empty: "Belum ada tugas latar belakang untuk agen ini.",
       running: "Berjalan ({count})",
       finished: "Selesai ({count})",
+      statusRunningOne: "1 tugas sedang berjalan",
+      statusRunningMany: "{count} tugas sedang berjalan",
       stopTask: "Hentikan {title}",
       viewTranscript: "Lihat transkrip",
       toolUseOne: "1 penggunaan alat",
@@ -3487,11 +3534,13 @@ export const id: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Status otomatisasi",
       all: "Semua",
       active: "Aktif",
       paused: "Dijeda",
     },
     list: {
+      viewLabel: "Tampilan otomatisasi",
       searchPlaceholder: "Cari tugas terjadwal",
       newTask: "Tugas baru",
       filters: "Filter",
@@ -3558,12 +3607,12 @@ export const id: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Penjadwal",
       tasks: "Tugas",
       failing: "Gagal",
       nextWake: "Bangun berikutnya",
     },
     detail: {
+      tabsLabel: "Detail otomatisasi",
       newTitle: "Tugas terjadwal baru",
       newSubtitle: "Jelaskan apa yang harus dilakukan OpenClaw, lalu pilih kapan ia berjalan.",
       back: "Semua otomatisasi",
@@ -3583,7 +3632,6 @@ export const id: TranslationMap = {
       clone: "Klon",
       remove: "Hapus",
       more: "Tindakan lainnya",
-      history: "Riwayat",
     },
     runNotStarted: {
       notDue: "Otomatisasi ini belum waktunya dijalankan.",

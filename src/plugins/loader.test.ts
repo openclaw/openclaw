@@ -24,6 +24,7 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
   getDetachedTaskLifecycleRuntimeRegistration,
@@ -31,13 +32,12 @@ import {
   type DetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
-import { buildPluginApi } from "./api-builder.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
 import { getCompactionProvider } from "./compaction-provider.js";
 import {
-  getEmbeddingProvider,
-  listEmbeddingProviders,
+  getRegisteredEmbeddingProvider,
+  listRegisteredEmbeddingProviders,
   registerEmbeddingProvider,
 } from "./embedding-providers.js";
 import {
@@ -48,25 +48,23 @@ import {
 import { createHookRunner } from "./hooks.js";
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
-  clearPluginInteractiveHandlerRegistrations,
   clearPluginInteractiveHandlers,
   resolvePluginInteractiveNamespaceMatch,
 } from "./interactive-registry.js";
+import { clearPluginInteractiveHandlerRegistrations } from "./interactive-registry.test-fixtures.js";
 import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
 import { warnWhenAllowlistIsOpen } from "./loader-provenance.js";
 import {
-  testing,
-  clearPluginLoaderCache,
   loadOpenClawPluginCliRegistry,
   loadOpenClawPlugins,
   type PluginLoadOptions,
-  PluginLoadReentryError,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
 import {
+  clearPluginLoaderCache,
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
   makeTempDir,
@@ -95,8 +93,7 @@ import {
   registerMemoryCorpusSupplement,
   registerMemoryPromptSupplement,
   resolveMemoryFlushPlan,
-} from "./memory-state.js";
-import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
+} from "./memory-state.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
@@ -111,6 +108,11 @@ import {
   ensurePluginRegistryLoaded,
 } from "./runtime/runtime-registry-loader.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
+
+const getEmbeddingProvider = (id: string) => getRegisteredEmbeddingProvider(id)?.adapter;
+const listEmbeddingProviders = () =>
+  listRegisteredEmbeddingProviders().map((entry) => entry.adapter);
+
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 
@@ -1460,133 +1462,6 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.rootDir).toBe(fs.realpathSync.native(plugin.dir));
   });
 
-  it("refreshes bundled plugin-sdk aliases without deleting the shared alias directory", () => {
-    const distRoot = makeTempDir();
-    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-    const aliasDir = path.join(distRoot, "extensions", "node_modules", "openclaw", "plugin-sdk");
-    mkdirSafe(pluginSdkDir);
-    mkdirSafe(aliasDir);
-    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const value = 1;\n", "utf8");
-    fs.writeFileSync(path.join(pluginSdkDir, "core.js"), "export const core = 1;\n", "utf8");
-    fs.writeFileSync(path.join(aliasDir, "sentinel.txt"), "keep\n", "utf8");
-
-    ensureOpenClawPluginSdkAlias(distRoot);
-    fs.writeFileSync(path.join(pluginSdkDir, "core.js"), "export const core = 2;\n", "utf8");
-    ensureOpenClawPluginSdkAlias(distRoot);
-
-    expect(fs.existsSync(path.join(aliasDir, "sentinel.txt"))).toBe(true);
-    expect(fs.readFileSync(path.join(aliasDir, "core.js"), "utf8")).toContain("core.js");
-  });
-
-  it("keeps private local-only plugin-sdk artifacts out of package dist aliases", () => {
-    const packageRoot = makeTempDir();
-    const distRoot = path.join(packageRoot, "dist");
-    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-    const aliasRoot = path.join(distRoot, "extensions", "node_modules", "openclaw");
-    const aliasDir = path.join(aliasRoot, "plugin-sdk");
-    mkdirSafe(pluginSdkDir);
-    mkdirSafe(aliasDir);
-    fs.writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify(
-        {
-          name: "openclaw",
-          version: "2026.4.22",
-          type: "module",
-          exports: {
-            "./plugin-sdk": "./dist/plugin-sdk/index.js",
-            "./plugin-sdk/string-coerce-runtime": "./dist/plugin-sdk/string-coerce-runtime.js",
-          },
-        },
-        null,
-        2,
-      ),
-      "utf8",
-    );
-    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const root = true;\n", "utf8");
-    fs.writeFileSync(
-      path.join(pluginSdkDir, "string-coerce-runtime.js"),
-      "export const publicRuntime = true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginSdkDir, "ssrf-runtime-internal.js"),
-      "export const internal = true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(aliasDir, "ssrf-runtime-internal.js"),
-      "export const staleInternal = true;\n",
-      "utf8",
-    );
-
-    ensureOpenClawPluginSdkAlias(distRoot);
-
-    const aliasPackage = JSON.parse(
-      fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
-    ) as { exports?: Record<string, string> };
-    expect(aliasPackage.exports).toEqual({
-      "./plugin-sdk": "./plugin-sdk/index.js",
-      "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
-    });
-    expect(fs.existsSync(path.join(aliasDir, "index.js"))).toBe(true);
-    expect(fs.existsSync(path.join(aliasDir, "string-coerce-runtime.js"))).toBe(true);
-    expect(fs.existsSync(path.join(aliasDir, "ssrf-runtime-internal.js"))).toBe(false);
-  });
-
-  it("keeps private local-only plugin-sdk artifacts out of legacy package dist aliases", () => {
-    const packageRoot = makeTempDir();
-    const distRoot = path.join(packageRoot, "dist");
-    const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-    const aliasRoot = path.join(distRoot, "extensions", "node_modules", "openclaw");
-    const aliasDir = path.join(aliasRoot, "plugin-sdk");
-    mkdirSafe(pluginSdkDir);
-    mkdirSafe(aliasDir);
-    fs.writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.4.22", type: "module" }, null, 2),
-      "utf8",
-    );
-    fs.writeFileSync(path.join(pluginSdkDir, "index.js"), "export const root = true;\n", "utf8");
-    fs.writeFileSync(
-      path.join(pluginSdkDir, "string-coerce-runtime.js"),
-      "export const publicRuntime = true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginSdkDir, "ssrf-runtime-internal.js"),
-      "export const internal = true;\n",
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(aliasDir, "ssrf-runtime-internal.js"),
-      "export const staleInternal = true;\n",
-      "utf8",
-    );
-
-    ensureOpenClawPluginSdkAlias(distRoot);
-
-    const aliasPackage = JSON.parse(
-      fs.readFileSync(path.join(aliasRoot, "package.json"), "utf8"),
-    ) as { exports?: Record<string, string> };
-    expect(aliasPackage.exports).toEqual({
-      "./plugin-sdk": "./plugin-sdk/index.js",
-      "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
-    });
-    expect(fs.existsSync(path.join(aliasDir, "index.js"))).toBe(true);
-    expect(fs.existsSync(path.join(aliasDir, "string-coerce-runtime.js"))).toBe(true);
-    expect(fs.existsSync(path.join(aliasDir, "ssrf-runtime-internal.js"))).toBe(false);
-  });
-
-  it("keeps private QA plugin-sdk filenames out of bundled source markers", () => {
-    const source = fs.readFileSync(new URL("./plugin-sdk-dist-alias.ts", import.meta.url), "utf8");
-
-    expect(source).not.toContain("qa-channel.js");
-    expect(source).not.toContain("qa-channel-protocol.js");
-    expect(source).not.toContain("qa-lab.js");
-    expect(source).not.toContain("qa-runtime.js");
-  });
-
   it("disables bundled plugins by default", () => {
     const bundledDir = makeTempDir();
     writePlugin({
@@ -1625,7 +1500,25 @@ describe("loadOpenClawPlugins", () => {
       "export const normalizeLowercaseStringOrEmpty = (value) => String(value).toLowerCase();\n",
       "utf-8",
     );
-    ensureOpenClawPluginSdkAlias(path.join(packageRoot, "dist"));
+    const aliasRoot = path.join(bundledDir, "node_modules", "openclaw");
+    const aliasPluginSdkDir = path.join(aliasRoot, "plugin-sdk");
+    fs.mkdirSync(aliasPluginSdkDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(aliasRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        type: "module",
+        exports: {
+          "./plugin-sdk/string-coerce-runtime": "./plugin-sdk/string-coerce-runtime.js",
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(aliasPluginSdkDir, "string-coerce-runtime.js"),
+      "export * from '../../../../plugin-sdk/string-coerce-runtime.js';\n",
+      "utf-8",
+    );
     fs.writeFileSync(
       path.join(pluginRoot, "index.js"),
       [
@@ -2176,98 +2069,6 @@ describe("loadOpenClawPlugins", () => {
       },
     },
     {
-      label:
-        "keeps sendSessionAttachment callable after register closes while blocking registration-only APIs",
-      run: () => {
-        const registerGatewayMethod = vi.fn();
-        const registerSessionExtension = vi.fn();
-        const sendSessionAttachment = vi.fn(async () => ({
-          ok: true as const,
-          channel: "proofchat",
-          deliveredTo: "12345",
-          count: 1,
-        }));
-        const emitAgentEvent = vi.fn(() => ({
-          emitted: true as const,
-          stream: "late-attachment-plugin.workflow",
-        }));
-        const api = buildPluginApi({
-          id: "late-attachment-plugin",
-          name: "Late Attachment Plugin",
-          source: "/tmp/late-attachment-plugin/index.cjs",
-          registrationMode: "full",
-          config: {},
-          runtime: {} as never,
-          logger: {
-            info() {},
-            warn() {},
-            error() {},
-            debug() {},
-          },
-          resolvePath: (input) => input,
-          handlers: {
-            emitAgentEvent,
-            registerGatewayMethod,
-            registerSessionExtension,
-            sendSessionAttachment,
-          },
-        });
-        let capturedApi: typeof api | undefined;
-
-        testing.runPluginRegisterSync((guardedApi) => {
-          capturedApi = guardedApi;
-          // Host-hook delivery remains callable after registration closes; only registration-only APIs lock.
-          guardedApi.registerGatewayMethod("proofchat.ping", vi.fn() as never);
-        }, api);
-
-        expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
-        expect(
-          capturedApi?.registerGatewayMethod("proofchat.late-ping", vi.fn() as never),
-        ).toBeUndefined();
-        expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
-
-        const attachmentParams = {
-          sessionKey: "agent:main:main",
-          files: [{ path: "./proof-report.txt" }],
-          text: "attachment ready",
-        };
-        const lateResult = capturedApi?.sendSessionAttachment(attachmentParams);
-        const lateWorkflowResult =
-          capturedApi?.session?.workflow.sendSessionAttachment(attachmentParams);
-        const eventParams = {
-          runId: "run-late",
-          stream: "late-attachment-plugin.workflow",
-          data: { phase: "done" },
-        };
-        const lateEventResult = capturedApi?.emitAgentEvent(eventParams);
-        const lateNamespacedEventResult = capturedApi?.agent?.events.emitAgentEvent(eventParams);
-        capturedApi?.session?.state.registerSessionExtension({
-          namespace: "late",
-          description: "late extension should stay blocked",
-        });
-
-        expect(lateResult).toBe(sendSessionAttachment.mock.results[0]?.value);
-        expect(lateWorkflowResult).toBe(sendSessionAttachment.mock.results[1]?.value);
-        expect(sendSessionAttachment).toHaveBeenCalledWith({
-          sessionKey: "agent:main:main",
-          files: [{ path: "./proof-report.txt" }],
-          text: "attachment ready",
-        });
-        expect(sendSessionAttachment).toHaveBeenCalledTimes(2);
-        expect(lateEventResult).toEqual({
-          emitted: true,
-          stream: "late-attachment-plugin.workflow",
-        });
-        expect(lateNamespacedEventResult).toEqual({
-          emitted: true,
-          stream: "late-attachment-plugin.workflow",
-        });
-        expect(emitAgentEvent).toHaveBeenCalledTimes(2);
-        expect(emitAgentEvent).toHaveBeenCalledWith(eventParams);
-        expect(registerSessionExtension).not.toHaveBeenCalled();
-      },
-    },
-    {
       label: "limits imports to the requested plugin ids",
       run: () => {
         useNoBundledPlugins();
@@ -2524,7 +2325,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
           const reentryError = Reflect.get(globalThis, marker) as
             | { name?: unknown; message?: unknown }
             | undefined;
-          expect(reentryError?.name).toBe(PluginLoadReentryError.name);
+          expect(reentryError?.name).toBe("PluginLoadReentryError");
           expect(String(reentryError?.message)).toContain("plugin load reentry detected");
           const record = registry.plugins.find((entry) => entry.id === "reentrant-snapshot");
           expect(record?.status).toBe("error");
@@ -4814,53 +4615,6 @@ module.exports = { id: "throws-after-import", register() {} };`,
     },
   ])("$name", ({ setup }) => {
     expectCacheMissThenHit(setup());
-  });
-
-  it("evicts least recently used registries when the loader cache exceeds its cap", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "cache-eviction",
-      filename: "cache-eviction.cjs",
-      body: `module.exports = { id: "cache-eviction", register() {} };`,
-    });
-    const previousCacheCap = testing.maxPluginRegistryCacheEntries;
-    testing.setMaxPluginRegistryCacheEntriesForTest(4);
-    const stateDirs = Array.from({ length: testing.maxPluginRegistryCacheEntries + 1 }, () =>
-      makeTempDir(),
-    );
-
-    const loadWithStateDir = (stateDir: string) =>
-      loadOpenClawPlugins({
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
-        },
-        config: {
-          plugins: {
-            allow: ["cache-eviction"],
-            load: {
-              paths: [plugin.file],
-            },
-          },
-        },
-      });
-
-    try {
-      const first = loadWithStateDir(stateDirs[0] ?? makeTempDir());
-      const second = loadWithStateDir(stateDirs[1] ?? makeTempDir());
-
-      expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
-
-      for (const stateDir of stateDirs.slice(2)) {
-        loadWithStateDir(stateDir);
-      }
-
-      expect(loadWithStateDir(stateDirs[0] ?? makeTempDir())).toBe(first);
-      expect(loadWithStateDir(stateDirs[1] ?? makeTempDir())).not.toBe(second);
-    } finally {
-      testing.setMaxPluginRegistryCacheEntriesForTest(previousCacheCap);
-    }
   });
 
   it("normalizes bundled plugin env overrides against the provided env", () => {
@@ -7350,26 +7104,6 @@ module.exports = {
     expect(
       registry.plugins.find((entry) => entry.id === "healthy-after-register-throw")?.status,
     ).toBe("loaded");
-  });
-
-  it("prefers setupEntry for configured channel loads during startup when opted in", () => {
-    expect(
-      testing.shouldLoadChannelPluginInSetupRuntime({
-        manifestChannels: ["setup-runtime-preferred-test"],
-        setupSource: "./setup-entry.cjs",
-        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
-        cfg: {
-          channels: {
-            "setup-runtime-preferred-test": {
-              enabled: true,
-              token: "configured",
-            },
-          },
-        },
-        env: {},
-        preferSetupRuntimeForChannelPlugins: true,
-      }),
-    ).toBe(true);
   });
 
   it("prefers built bundled plugin artifacts over source TS when requested", () => {
@@ -9938,19 +9672,19 @@ export const runtimeValue = helperValue;`,
   it("converts Windows absolute import specifiers to file URLs only for module loading", () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
-      expect(testing.toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
+      expect(toSafeImportPath("C:\\Users\\alice\\plugin\\index.mjs")).toBe(
         "file:///C:/Users/alice/plugin/index.mjs",
       );
-      expect(testing.toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
+      expect(toSafeImportPath("C:\\Users\\alice\\plugin folder\\x#y.mjs")).toBe(
         "file:///C:/Users/alice/plugin%20folder/x%23y.mjs",
       );
-      expect(testing.toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
+      expect(toSafeImportPath("\\\\server\\share\\plugin\\index.mjs")).toBe(
         "file://server/share/plugin/index.mjs",
       );
-      expect(testing.toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
+      expect(toSafeImportPath("file:///C:/Users/alice/plugin/index.mjs")).toBe(
         "file:///C:/Users/alice/plugin/index.mjs",
       );
-      expect(testing.toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
+      expect(toSafeImportPath("./relative/index.mjs")).toBe("./relative/index.mjs");
     } finally {
       platformSpy.mockRestore();
     }

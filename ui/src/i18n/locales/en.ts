@@ -1,5 +1,6 @@
 // Control UI English locale strings are the i18n source bundle.
 import type { TranslationMap } from "../lib/types.ts";
+import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap = {
   common: {
@@ -81,6 +82,7 @@ export const en: TranslationMap = {
     relink: "Relink",
     waitForScan: "Wait for scan",
     logout: "Logout",
+    skipToMainContent: "Skip to main content",
   },
   nativeLinkMenu: {
     label: "Link actions",
@@ -216,10 +218,10 @@ export const en: TranslationMap = {
   lazyView: {
     loadingTitle: "Loading panel",
     errorTitle: "Panel failed to load",
-    errorSubtitle:
-      "Reload the page to load the latest Control UI bundle, or retry if the network request failed.",
+    genericSubtitle: "Something went wrong while loading this panel.",
+    staleTitle: "A new version is available",
+    staleSubtitle: "OpenClaw was updated in the background. Reload to get the latest panel.",
     retry: "Retry",
-    unknownError: "Unknown module load error.",
   },
   nodes: {
     pairing: {
@@ -228,6 +230,15 @@ export const en: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Scan this QR code in the mobile app to connect a new phone.",
       generating: "Creating a secure setup code…",
+      accessTitle: "Mobile access",
+      fullAccess: "Full access (recommended)",
+      fullAccessHint: "Node plus complete Gateway controls, including settings and upgrades.",
+      limitedAccess: "Limited access",
+      limitedAccessHint: "Node, chat, and approvals without administrative controls.",
+      generateCode: "Create setup code",
+      transportLimitedTitle: "Limited for network safety",
+      transportLimitedHint:
+        "This Gateway URL uses plaintext ws://. Use wss:// or Tailscale Serve, then create a new code for full access.",
       failed: "Could not create a setup code.",
       qrAlt: "OpenClaw mobile pairing QR code",
       qrUnavailable: "QR unavailable. Copy the setup code instead.",
@@ -260,8 +271,9 @@ export const en: TranslationMap = {
       any: "any",
     },
     inventory: {
-      title: "Devices",
-      subtitle: "One row per paired client: status, roles, tokens.",
+      title: "Paired devices",
+      summaryConnected: "{connected} of {total} connected",
+      summaryPending: "{count} awaiting approval",
       cleanupStale: "Clean up {count} stale",
       pendingApproval: "Pending approval",
       paired: "Paired",
@@ -376,6 +388,18 @@ export const en: TranslationMap = {
     title: "Managed Worktrees",
     subtitle: "Isolated repository checkouts owned by OpenClaw.",
     cleanNow: "Clean up now",
+    cleanupTitle: "Cleanup",
+    cleanupSubtitle:
+      "OpenClaw periodically removes old worktrees to free disk space. Tune how aggressively cleanup runs.",
+    cleanupMaxCount: "Max worktrees",
+    cleanupMaxCountHelp:
+      "Maximum number of managed worktrees to retain across all repositories. Older worktrees are snapshotted and removed first. Set to 0 to disable the count limit.",
+    cleanupMaxSize: "Max total size (GB)",
+    cleanupMaxSizeHelp:
+      "Maximum total size in GB across all managed worktrees. Set to 0 to disable the size limit.",
+    cleanupDecrease: "Decrease {label}",
+    cleanupIncrease: "Increase {label}",
+    cleanupSaveFailed: "Saving cleanup limits failed.",
     name: "Name",
     repo: "Repository",
     branch: "Branch",
@@ -388,13 +412,8 @@ export const en: TranslationMap = {
     confirmDelete: "Snapshot and delete {name}?",
     confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
   },
-  agentChip: {
-    menuLabel: "Agent menu",
-    agents: "Agents",
-    working: "Working…",
-    ready: "Ready to chat",
-    whatCanAgentDo: "What can {name} do?",
-  },
+  agentChip: agentEn.agentChip,
+  agentScope: agentEn.agentScope,
   newSession: {
     title: "New session",
     hint: "Pick where this session works, then say what to do.",
@@ -562,6 +581,7 @@ export const en: TranslationMap = {
     groupBy: "Group by",
     groupByNone: "None",
     groupByCategory: "Custom groups",
+    showCronSessions: "Show cron sessions",
     groupByChannel: "Channel",
     groupByKind: "Kind",
     groupByAgent: "Agent",
@@ -601,6 +621,7 @@ export const en: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    ...agentEn.pinning,
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -626,6 +647,7 @@ export const en: TranslationMap = {
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
     },
+    identity: agentEn.identity,
     overview: {
       title: "Overview",
       subtitle: "Workspace paths and identity metadata.",
@@ -1067,6 +1089,7 @@ export const en: TranslationMap = {
     settingsView: "Settings view",
     simple: "Simple",
     advanced: "Advanced",
+    content: "Settings content",
     themeImported: "Imported {name}.",
     themeRemoved: "Custom theme removed.",
     channels: {
@@ -1194,6 +1217,10 @@ export const en: TranslationMap = {
       inlineHintAfter:
         "to add one browser-local tweakcn theme. In tweakcn, use Share and paste the copied link here.",
       textSize: "Text size",
+    },
+    chatPrefs: {
+      title: "Chat",
+      hint: "Browser-local chat preferences.",
     },
     connection: {
       title: "Connection",
@@ -1415,6 +1442,8 @@ export const en: TranslationMap = {
     platforms: "Platforms: {platforms}",
     installNamed: "Install {name}",
     notFound: "Skill not found.",
+    openDetails: "Open {name} details",
+    enabledNamed: "{name} enabled",
     invalidLink: "ClawHub link invalid",
     overview: "Overview",
     skillCard: "Skill Card",
@@ -1580,7 +1609,7 @@ export const en: TranslationMap = {
     skills: "Skills and API keys.",
     plugins: "Install and manage optional capabilities.",
     skillWorkshop: "Review, refine, and apply proposals before they become live skills.",
-    nodes: "Paired devices, live connections, and commands.",
+    nodes: "Paired devices, pairing approvals, and exec bindings.",
     chat: "Gateway chat for quick interventions.",
     config: "Edit openclaw.json.",
     profile: "Your agent's stats, streaks, and life in the reef.",
@@ -1716,8 +1745,6 @@ export const en: TranslationMap = {
     cancel: "Cancel",
     removedRestart: "Removed {name}. A Gateway restart is required to apply the change.",
     verifiedSource: "Verified source",
-    menuLabel: "{name} actions",
-    menuDetails: "View details",
     enableAction: "Enable",
     disableAction: "Disable",
     working: "Working…",
@@ -1851,6 +1878,10 @@ export const en: TranslationMap = {
       useCurrentChatAria: "Use current chat for revision requests",
       useCurrentChatTooltip:
         "Send revision requests to the current chat session instead of the proposal's workshop session.",
+      selfLearning: "Self-learning",
+      selfLearningAria: "Toggle self-learning skill proposals",
+      selfLearningTooltip:
+        "Capture corrections and review substantial completed work into pending skill proposals. Spends extra background tokens; drafts land on this board as pending proposals.",
       view: "Workshop view",
       board: "Board",
       today: "Today",
@@ -1929,6 +1960,14 @@ export const en: TranslationMap = {
       noProposalsTitle: "No proposals yet",
       noProposalsBody: "{agent} hasn't drafted any skill proposals.",
       noProposalsFooter: "New proposals will appear here for review.",
+    },
+    selfLearning: {
+      pitchTitle: "Turn on self-learning",
+      pitchBody:
+        "OpenClaw reviews corrections and substantial completed runs, then drafts skill proposals for this board. It spends extra background tokens and drafts arrive as pending proposals.",
+      enable: "Enable self-learning",
+      enabling: "Enabling…",
+      updateError: "Could not update the self-learning setting.",
     },
     today: {
       emptyTitle: "Nothing waiting today",
@@ -3053,24 +3092,16 @@ export const en: TranslationMap = {
       rateLimited:
         "GitHub API rate limit reached. Pull request status may be out of date until the limit resets.",
     },
-    refreshTitle: "Refresh chat data",
-    settings: "Chat settings",
     usageRemaining: "Usage Remaining",
-    voiceSettings: "Voice",
-    thinkingToggle: "Toggle assistant thinking/working output",
-    toolCallsToggle: "Toggle tool calls and tool results",
-    commentaryToggle: "Keep commentary after the final answer",
-    commentaryLabel: "Commentary",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    view: {
+      menu: "View",
+      reasoning: "Reasoning",
+      toolCalls: "Tool calls",
+      commentary: "Keep commentary",
+    },
     sendShortcut: "Send shortcut",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Hide cron sessions",
-    showCronSessions: "Show cron sessions",
-    showCronSessionsHidden: "Show cron sessions ({count} hidden)",
     onboardingDisabled: "Disabled during setup",
     gatewayStatus: "Gateway status: {status}",
     commandPaletteTitle: "Search or jump to… (⌘K)",
@@ -3260,7 +3291,6 @@ export const en: TranslationMap = {
       },
       takePhoto: "Take photo",
       dismissVoiceInputError: "Dismiss voice input error",
-      loadingMicrophones: "Loading microphones…",
       microphoneAccessFailed: "Unable to access microphone inputs.",
       microphoneBusy: "Microphone inputs are busy or unavailable to the browser.",
       microphoneFallback: "Microphone {number}",
@@ -3278,19 +3308,6 @@ export const en: TranslationMap = {
       stillListening: "Still listening",
       stopVoiceInput: "Stop voice input",
       systemDefaultMicrophone: "System default",
-      talkAdvancedSettingsRequiresAdmin: "Advanced settings require admin",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "Advanced Talk settings require operator.admin access.",
-      talkDefault: "Default",
-      talkModel: "Model",
-      talkModelAuto: "Auto",
-      talkMoreInSettings: "More in Settings",
-      talkSensitivity: "Sensitivity",
-      talkSensitivityHigh: "High",
-      talkSensitivityLow: "Low",
-      talkSensitivityMedium: "Medium",
-      talkVoice: "Voice",
-      voiceOptions: "Voice options",
       voiceTranscript: "Voice transcript",
     },
     selectors: {
@@ -3375,6 +3392,8 @@ export const en: TranslationMap = {
       empty: "No background tasks for this agent yet.",
       running: "Running ({count})",
       finished: "Finished ({count})",
+      statusRunningOne: "1 running task",
+      statusRunningMany: "{count} running tasks",
       stopTask: "Stop {title}",
       viewTranscript: "View transcript",
       toolUseOne: "1 tool use",
@@ -3462,11 +3481,13 @@ export const en: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Automation status",
       all: "All",
       active: "Active",
       paused: "Paused",
     },
     list: {
+      viewLabel: "Automation views",
       searchPlaceholder: "Search automations",
       newTask: "New automation",
       filters: "Filters",
@@ -3532,12 +3553,12 @@ export const en: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Scheduler",
       tasks: "Automations",
       failing: "Failing",
       nextWake: "Next wake",
     },
     detail: {
+      tabsLabel: "Automation details",
       newTitle: "New automation",
       newSubtitle: "Describe what OpenClaw should do, then pick when it runs.",
       back: "All automations",
@@ -3557,7 +3578,6 @@ export const en: TranslationMap = {
       clone: "Clone",
       remove: "Remove",
       more: "More actions",
-      history: "History",
     },
     runNotStarted: {
       notDue: "This automation is not due yet.",

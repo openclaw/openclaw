@@ -19,9 +19,6 @@ const markdownRenderMock = vi.hoisted(() =>
     (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
   ),
 );
-const streamingTextRenderMock = vi.hoisted(() =>
-  vi.fn((value: string) => `<div class="markdown-plain-text-fallback">${value}</div>`),
-);
 const streamingMarkdownRenderMock = vi.hoisted(() =>
   vi.fn(
     (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
@@ -43,7 +40,6 @@ vi.mock("../../../components/markdown.ts", async (importOriginal) => {
     ...actual,
     toSanitizedMarkdownHtml: markdownRenderMock,
     toStreamingMarkdownHtml: streamingMarkdownRenderMock,
-    toStreamingPlainTextHtml: streamingTextRenderMock,
   };
 });
 
@@ -85,30 +81,6 @@ vi.mock("./chat-avatar.ts", () => ({
     return element;
   },
 }));
-
-vi.mock("../../../lib/chat/tool-display.ts", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../../lib/chat/tool-display.ts")>();
-  return {
-    ...actual,
-    formatToolDetail: () => undefined,
-    resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
-      name,
-      label:
-        {
-          sessions_spawn: "Sub-agent",
-          skill_workshop: "Skill Workshop",
-          web_search: "Web Search",
-        }[name] ?? name,
-      icon: "zap",
-      detail:
-        args && typeof args === "object" && "detail" in args
-          ? String((args as { detail: unknown }).detail)
-          : args && typeof args === "object" && name === "skill_workshop" && "action" in args
-            ? String((args as { action: unknown }).action)
-            : undefined,
-    }),
-  };
-});
 
 type RenderMessageGroupOptions = Parameters<typeof renderMessageGroup>[1];
 
@@ -1029,7 +1001,6 @@ describe("grouped chat rendering", () => {
     const container = document.createElement("div");
     markdownRenderMock.mockClear();
     streamingMarkdownRenderMock.mockClear();
-    streamingTextRenderMock.mockClear();
 
     render(
       renderStreamGroup([
@@ -1045,7 +1016,6 @@ describe("grouped chat rendering", () => {
     );
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
-    expect(streamingTextRenderMock).not.toHaveBeenCalled();
     expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
       codeBlockChrome: "copy",
       fileLinks: true,
@@ -1703,7 +1673,7 @@ describe("grouped chat rendering", () => {
 
     const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
     expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "heartbeat_respond",
+      "Heartbeat Respond",
     );
     expect(summary.querySelector(".chat-tool-msg-summary__names")).toBeNull();
   });

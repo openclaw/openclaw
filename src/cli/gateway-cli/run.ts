@@ -1098,4 +1098,3 @@ export const testing = {
   resolveGatewayStartupFailureExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
-export { testing as __testing };

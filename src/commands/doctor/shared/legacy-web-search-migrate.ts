@@ -50,7 +50,7 @@ const RETIRED_GROK_CODE_MODELS = new Set([
   "grok-code-fast-1-0825",
 ]);
 
-export function resolveLegacyGrokWebSearchModelTarget(model: unknown): string | undefined {
+function resolveLegacyGrokWebSearchModelTarget(model: unknown): string | undefined {
   if (typeof model !== "string") {
     return undefined;
   }

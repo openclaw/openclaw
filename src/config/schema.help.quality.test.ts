@@ -188,7 +188,6 @@ const TARGET_KEYS = [
   "session.maintenance.pruneAfter",
   "session.maintenance.pruneDays",
   "session.maintenance.maxEntries",
-  "session.maintenance.rotateBytes",
   "session.maintenance.resetArchiveRetention",
   "session.maintenance.maxDiskBytes",
   "session.maintenance.highWaterBytes",
@@ -839,13 +838,6 @@ describe("config help copy quality", () => {
     );
     expect(pruneAfter.includes("30d")).toBe(true);
     expect(pruneAfter.includes("12h")).toBe(true);
-
-    const rotate = expectDefined(
-      FIELD_HELP["session.maintenance.rotateBytes"],
-      'FIELD_HELP["session.maintenance.rotateBytes"] test invariant',
-    );
-    expect(/deprecated/i.test(rotate)).toBe(true);
-    expect(rotate.includes("doctor --fix")).toBe(true);
 
     const deprecated = expectDefined(
       FIELD_HELP["session.maintenance.pruneDays"],

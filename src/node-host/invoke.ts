@@ -946,7 +946,7 @@ function serializedJsonBytes(value: unknown): number {
 }
 
 /** Keeps MCP text/image content while bounding text sent through node.invoke. */
-export function boundMcpToolResultPayload(result: {
+function boundMcpToolResultPayload(result: {
   content: readonly unknown[];
   structuredContent?: Record<string, unknown>;
 }): { content: McpInvokeContentBlock[]; structuredContent?: Record<string, unknown> } {

@@ -99,18 +99,19 @@ const SetupCodeQrDataUrlSchema = Type.String({
 /**
  * Generates a device-pairing setup code (and optional QR) so a mobile/companion
  * client can scan it and connect to this gateway. The embedded setup code mints
- * a short-lived bootstrap token that hands off broad operator scopes
- * (read/write/approvals/talk.secrets), so this method requires operator.admin
+ * a short-lived bootstrap token that defaults to full native-mobile operator
+ * access, so this method requires operator.admin
  * (enforced by the core method descriptor's method-scope policy, not the handler)
- * and is not advertised. `bootstrapProfile: "node"` narrows the handoff to a
- * node role with no operator scopes for companion devices such as watchOS.
+ * and is not advertised. `bootstrapProfile: "limited"` omits operator.admin;
+ * `bootstrapProfile: "node"` narrows the handoff to a node role with no operator
+ * scopes for companion devices such as watchOS.
  */
 export const DevicePairSetupCodeParamsSchema = Type.Object(
   {
     publicUrl: Type.Optional(NonEmptyString),
     preferRemoteUrl: Type.Optional(Type.Boolean()),
     includeQr: Type.Optional(Type.Boolean()),
-    bootstrapProfile: Type.Optional(Type.Literal("node")),
+    bootstrapProfile: Type.Optional(Type.String({ enum: ["limited", "node"] })),
   },
   { additionalProperties: false },
 );
@@ -118,6 +119,8 @@ export const DevicePairSetupCodeParamsSchema = Type.Object(
 /**
  * Setup code plus non-secret connection metadata. `auth` is a label only
  * ("token" | "password"); the gateway credential itself is never returned.
+ * `accessDowngraded` reports the plaintext-LAN safety fallback from full to
+ * limited access so the presenting client can explain how to upgrade.
  */
 export const DevicePairSetupCodeResultSchema = Type.Object(
   {
@@ -129,6 +132,10 @@ export const DevicePairSetupCodeResultSchema = Type.Object(
     ),
     auth: Type.Union([Type.Literal("token"), Type.Literal("password")]),
     urlSource: NonEmptyString,
+    access: Type.Optional(
+      Type.Union([Type.Literal("full"), Type.Literal("limited"), Type.Literal("node")]),
+    ),
+    accessDowngraded: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

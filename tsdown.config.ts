@@ -383,6 +383,7 @@ function buildGatewayClientDistEntries(): Record<string, string> {
     // Keep package entrypoints explicit so package.json exports and root build
     // config cannot drift when client internals are split again.
     index: "packages/gateway-client/src/index.ts",
+    browser: "packages/gateway-client/src/browser.ts",
     readiness: "packages/gateway-client/src/readiness.ts",
     timeouts: "packages/gateway-client/src/timeouts.ts",
   };
@@ -441,37 +442,15 @@ function buildMarkdownCoreDistEntries(): Record<string, string> {
 }
 
 function buildNormalizationCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/normalization-core/src/index.ts",
-    "boolean-coercion": "packages/normalization-core/src/boolean-coercion.ts",
-    "error-coercion": "packages/normalization-core/src/error-coercion.ts",
-    "number-coercion": "packages/normalization-core/src/number-coercion.ts",
-    "record-coerce": "packages/normalization-core/src/record-coerce.ts",
-    "string-coerce": "packages/normalization-core/src/string-coerce.ts",
-    "string-normalization": "packages/normalization-core/src/string-normalization.ts",
-    "utf16-slice": "packages/normalization-core/src/utf16-slice.ts",
-  };
+  return buildPackageDistEntriesFromExports("normalization-core");
 }
 
 function buildRetryDistEntries(): Record<string, string> {
-  return {
-    index: "packages/retry/src/index.ts",
-  };
+  return buildPackageDistEntriesFromExports("retry");
 }
 
 function buildMediaCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/media-core/src/index.ts",
-    base64: "packages/media-core/src/base64.ts",
-    constants: "packages/media-core/src/constants.ts",
-    "content-length": "packages/media-core/src/content-length.ts",
-    "file-name": "packages/media-core/src/file-name.ts",
-    "inbound-path-policy": "packages/media-core/src/inbound-path-policy.ts",
-    "inline-image-data-url": "packages/media-core/src/inline-image-data-url.ts",
-    "media-source-url": "packages/media-core/src/media-source-url.ts",
-    mime: "packages/media-core/src/mime.ts",
-    "read-byte-stream-with-limit": "packages/media-core/src/read-byte-stream-with-limit.ts",
-  };
+  return buildPackageDistEntriesFromExports("media-core");
 }
 
 function buildPackageDistEntriesFromExports(packageDir: string): Record<string, string> {
@@ -588,11 +567,8 @@ function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
 }
 
 function shouldExternalizeGatewayClientDependency(id: string): boolean {
-  return (
-    id === "ws" ||
-    id.startsWith("ws/") ||
-    id === "@openclaw/gateway-protocol" ||
-    id.startsWith("@openclaw/gateway-protocol/")
+  return ["ws", "@openclaw/net-policy", "@openclaw/gateway-protocol"].some(
+    (dependency) => id === dependency || id.startsWith(`${dependency}/`),
   );
 }
 

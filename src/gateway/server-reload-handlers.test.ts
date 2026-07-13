@@ -64,7 +64,7 @@ import {
   createGatewayReloadHandlers as createGatewayReloadHandlersImpl,
   startManagedGatewayConfigReloader as startManagedGatewayConfigReloaderImpl,
 } from "./server-reload-handlers.js";
-import { setCurrentSharedGatewaySessionGeneration } from "./server-shared-auth-generation.js";
+import { enforceSharedGatewaySessionGenerationForConfigWrite } from "./server-shared-auth-generation.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
 
 type ReloadHandlerParams = Parameters<typeof createGatewayReloadHandlersImpl>[0];
@@ -587,10 +587,12 @@ function createManagedRestartSequenceHarness(
     reconcileTerminalSessions: vi.fn(() => {
       if (options.invalidateGenerationOnReconcile && !generationInvalidated) {
         generationInvalidated = true;
-        setCurrentSharedGatewaySessionGeneration(
-          sharedGatewaySessionGenerationState,
-          "concurrent-generation",
-        );
+        enforceSharedGatewaySessionGenerationForConfigWrite({
+          state: sharedGatewaySessionGenerationState,
+          nextConfig: {},
+          resolveRuntimeSnapshotGeneration: () => "concurrent-generation",
+          clients: [],
+        });
       }
     }),
     commitTerminalConfig: terminalPolicy.commitConfig,
@@ -4043,8 +4045,8 @@ describe("gateway Gmail hot reload handlers", () => {
 
     expect(harness.requestRecoveryRestart).not.toHaveBeenCalled();
     expect(harness.promoteSnapshot).not.toHaveBeenCalled();
-    expect(harness.logReload.error).toHaveBeenCalledWith(
-      "config restart failed: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
+    expect(harness.logReload.info).toHaveBeenCalledWith(
+      "config restart superseded: GatewayConfigReloadSupersededError: config reload superseded by a newer runtime config source",
     );
   });
 

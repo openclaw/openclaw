@@ -7,10 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import {
-  registerExecApprovalFollowupRuntimeHandoff,
-  resetExecApprovalFollowupRuntimeHandoffsForTests,
-} from "../../agents/bash-tools.exec-approval-followup-state.js";
+import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import {
   createAgentRunRestartAbortError,
@@ -36,6 +33,8 @@ import {
 } from "../../infra/gateway-suspend-coordinator.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import {
+  beginSessionWorkAdmission,
+  cancelSessionWorkAdmissionHandoff,
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
@@ -964,7 +963,6 @@ describe("gateway agent handler", () => {
     mocks.lifecycleGeneration = "test-generation";
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
-    resetExecApprovalFollowupRuntimeHandoffsForTests();
   });
 
   it("passes resolved maintenance config to the gateway admission store write", async () => {
@@ -1801,6 +1799,79 @@ describe("gateway agent handler", () => {
     });
 
     expect(mocks.agentCommand).toHaveBeenCalledOnce();
+  });
+
+  it("adopts a recovery admission when a lifecycle mutation interposes before the RPC", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionId = "existing-session-id";
+    const runId = "idem-recovery-admission-handoff";
+    const scope = "/tmp/sessions.json";
+    primeMainAgentRun({ sessionId });
+    mocks.agentCommand.mockClear();
+    const admission = await beginSessionWorkAdmission({
+      scope,
+      identities: [sessionKey, sessionId],
+      assertAllowed: () => {},
+    });
+    const handoffId = admission.createHandoff();
+    let markMutationStarted = () => {};
+    const mutationStarted = new Promise<void>((resolve) => {
+      markMutationStarted = resolve;
+    });
+    let mutationRan = false;
+    const mutation = runExclusiveSessionLifecycleMutation({
+      scope,
+      identities: [sessionKey, sessionId],
+      prepare: async () => {
+        markMutationStarted();
+        expect(
+          await interruptSessionWorkAdmissions({
+            scope,
+            identities: [sessionKey, sessionId],
+            timeoutMs: 1_000,
+          }),
+        ).toBe(true);
+      },
+      run: async () => {
+        mutationRan = true;
+      },
+    });
+    await mutationStarted;
+    const respond = vi.fn();
+
+    try {
+      await invokeAgent(
+        {
+          message: "resume the admitted turn",
+          agentId: "main",
+          sessionKey,
+          expectedExistingSessionId: sessionId,
+          internalRuntimeHandoffId: handoffId,
+          idempotencyKey: runId,
+        },
+        {
+          client: backendGatewayClient(),
+          flushDispatch: false,
+          reqId: runId,
+          respond,
+        },
+      );
+      await mutation;
+
+      expect(cancelSessionWorkAdmissionHandoff(handoffId)).toBe(false);
+      expect(mutationRan).toBe(true);
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, status: "timeout", stopReason: "restart" }),
+        undefined,
+        expect.objectContaining({ cached: true, runId }),
+      );
+    } finally {
+      cancelSessionWorkAdmissionHandoff(handoffId);
+      admission.release();
+      await mutation;
+    }
   });
 
   it("classifies gateway lifecycle interruption as restart", async () => {
@@ -4549,6 +4620,10 @@ describe("gateway agent handler", () => {
       { sessionEffects: "internal" as const, idempotencyKey: "test-public-internal-effects" },
       { suppressPromptPersistence: true, idempotencyKey: "test-public-prompt-suppress" },
       {
+        expectedExistingSessionId: "existing-session-id",
+        idempotencyKey: "test-public-expected-session",
+      },
+      {
         modelRun: true,
         suppressPromptPersistence: true,
         idempotencyKey: "test-model-run-public-prompt-suppress",
@@ -4565,7 +4640,10 @@ describe("gateway agent handler", () => {
       );
 
       expectRespondError(respond, {
-        message: "internal session-effect controls are reserved for backend callers.",
+        message:
+          "expectedExistingSessionId" in params
+            ? "expectedExistingSessionId is reserved for backend callers."
+            : "internal session-effect controls are reserved for backend callers.",
       });
     }
     expect(mocks.agentCommand).not.toHaveBeenCalled();
@@ -6943,6 +7021,71 @@ describe("gateway agent handler", () => {
     }
   });
 
+  it("pins a backend continuation to its expected stale session", async () => {
+    const now = Date.parse("2026-04-25T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry(
+        {
+          sessionId: "expected-stale-session-id",
+          updatedAt: now,
+          sessionStartedAt: now - 25 * 60 * 60_000,
+          lastInteractionAt: now - 25 * 60 * 60_000,
+        },
+        {
+          session: {
+            reset: {
+              mode: "daily",
+              atHour: 4,
+            },
+          },
+        },
+      );
+      const loaded = mocks.loadSessionEntry();
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "resume exact stale session",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          expectedExistingSessionId: "expected-stale-session-id",
+          idempotencyKey: "expected-stale-agent-session",
+        },
+        {
+          reqId: "expected-stale-agent-session",
+          client: backendGatewayClient(),
+        },
+      );
+
+      const call = await waitForAgentCommandCall<{
+        sessionId?: string;
+        sessionKey?: string;
+      }>();
+      expect(call.sessionKey).toBe("agent:main:main");
+      expect(call.sessionId).toBe("expected-stale-session-id");
+      expect(capturedEntry?.sessionId).toBe("expected-stale-session-id");
+      expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
+      expect(mocks.emitGatewaySessionStartPluginHook).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("forwards the selected agent id with canonical global session keys", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:ops:main");
@@ -8857,7 +9000,6 @@ describe("gateway agent handler chat.abort integration", () => {
     mocks.lifecycleGeneration = "test-generation";
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
-    resetExecApprovalFollowupRuntimeHandoffsForTests();
   }
 
   beforeEach(() => {

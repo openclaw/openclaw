@@ -212,6 +212,9 @@ describe("renderSkills", () => {
         (toggle) => toggle.disabled,
       ),
     ).toBe(true);
+    expect(container.querySelector<HTMLInputElement>(".skill-toggle")?.ariaLabel).toBe(
+      "Repo Skill enabled",
+    );
     expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.disabled).toBe(
       true,
     );
@@ -399,16 +402,20 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     const resultItem = container.querySelector<HTMLElement>(".list-item");
+    const detailButton = container.querySelector<HTMLButtonElement>(".list-item__detail-button");
     const installButton = container.querySelector<HTMLButtonElement>(".list-item .btn.btn--sm");
     expect(resultItem).toBeInstanceOf(HTMLElement);
     expect(installButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailButton?.getAttribute("aria-label")).toBe("Open GitHub details");
+    expect(detailButton?.contains(installButton)).toBe(false);
     expect(resultItem?.querySelector(".list-title")?.textContent?.trim()).toBe("GitHub");
     expect(resultItem?.querySelector(".list-sub")?.textContent?.trim()).toBe(
       "GitHub integration for OpenClaw",
     );
     expect(resultItem?.querySelector(".list-meta .muted")?.textContent?.trim()).toBe("v1.2.3");
     expect(installButton?.textContent?.trim()).toBe("Install");
-    resultItem!.click();
+    detailButton!.click();
     installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubDetailOpen).toHaveBeenCalledTimes(1);

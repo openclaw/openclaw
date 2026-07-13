@@ -10,6 +10,7 @@ type SearchImpl = (opts?: {
   qmdSearchModeOverride?: "query" | "search" | "vsearch";
   onDebug?: (debug: MemorySearchRuntimeDebug) => void;
   signal?: AbortSignal;
+  [key: symbol]: ((action: "pause" | "resume" | "handoff") => void) | undefined;
 }) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
 type MemoryReadResult = {
@@ -24,9 +25,11 @@ type MemoryBackend = "builtin" | "qmd";
 type MemoryManagerDebug = Awaited<ReturnType<typeof getMemorySearchManager>>["debug"];
 
 let backend: MemoryBackend = "builtin";
+let resolvedBackend: MemoryBackend | undefined;
 let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
+let closeImpl: () => Promise<void> = async () => {};
 let getManagerImpl:
   | ((params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
       manager?: unknown;
@@ -60,7 +63,7 @@ const stubManager = {
   }),
   sync: vi.fn(),
   probeVectorAvailability: vi.fn(async () => true),
-  close: vi.fn(),
+  close: vi.fn(async () => await closeImpl()),
 };
 
 const getMemorySearchManagerMock = vi.fn(
@@ -77,7 +80,7 @@ vi.mock("./tools.runtime.js", () => ({
   }: {
     cfg?: { memory?: { backend?: string; qmd?: unknown } };
   }) => ({
-    backend,
+    backend: resolvedBackend ?? backend,
     qmd: cfg?.memory?.qmd,
   }),
   getMemorySearchManager: getMemorySearchManagerMock,
@@ -86,6 +89,10 @@ vi.mock("./tools.runtime.js", () => ({
 
 export function setMemoryBackend(next: MemoryBackend): void {
   backend = next;
+}
+
+export function setResolvedMemoryBackend(next: MemoryBackend | undefined): void {
+  resolvedBackend = next;
 }
 
 export function setMemoryWorkspaceDir(next: string): void {
@@ -98,6 +105,10 @@ export function setMemoryCustomStatus(next: Record<string, unknown> | undefined)
 
 export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
+}
+
+export function setMemoryCloseImpl(next: () => Promise<void>): void {
+  closeImpl = next;
 }
 
 export function setMemorySearchManagerImpl(
@@ -122,10 +133,12 @@ export function resetMemoryToolMockState(overrides?: {
   readFileImpl?: (params: MemoryReadParams) => Promise<MemoryReadResult>;
 }): void {
   backend = overrides?.backend ?? "builtin";
+  resolvedBackend = undefined;
   workspaceDir = "/workspace";
   customStatus = undefined;
   getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
+  closeImpl = async () => {};
   readFileImpl =
     overrides?.readFileImpl ??
     (async (params: MemoryReadParams) => ({

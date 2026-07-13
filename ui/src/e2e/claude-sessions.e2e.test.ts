@@ -273,7 +273,7 @@ suite("Claude native session catalog", () => {
     await thread.evaluate((element) => {
       element.scrollTop = 0;
     });
-    await page.waitForTimeout(300);
+    await page.clock.runFor(300);
     expect(await page.locator(".chat-history-loading").count()).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(exhaustedRequestCount);
     await page.close();

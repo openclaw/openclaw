@@ -2,6 +2,7 @@
 // Schedules warmups, sentinels, update checks, memory backend, and plugin services.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
+import pMap from "p-map";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -26,6 +27,7 @@ import {
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
+import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
   createGatewayStartupOutcomeRecorder,
@@ -45,7 +47,6 @@ const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
-
 type Awaitable<T> = T | Promise<T>;
 
 type GatewayStartupTrace = {
@@ -75,9 +76,7 @@ const loadGatewayRestartSentinelModule = createLazyRuntimeModule(
   () => import("./server-restart-sentinel.js"),
 );
 
-export type GatewayPostReadySidecarHandle = {
-  stop: () => Awaitable<void>;
-};
+export type GatewayPostReadySidecarHandle = { stop: () => Awaitable<void> };
 
 /** Stop sidecars immediately when shutdown has already started before they are reported. */
 export function stopPostReadySidecarsAfterCloseStarted(params: {
@@ -450,7 +449,6 @@ async function cleanupStaleSessionLocks(params: {
       Math.floor(params.concurrency ?? SESSION_LOCK_CLEANUP_CONCURRENCY),
     ),
   );
-  let nextIndex = 0;
   let markRestartAbortedMainSessionsFromLocks =
     params.markRestartAbortedMainSessionsFromLocks ?? null;
   const getMarker = async () => {
@@ -458,11 +456,10 @@ async function cleanupStaleSessionLocks(params: {
       .markRestartAbortedMainSessionsFromLocks;
     return markRestartAbortedMainSessionsFromLocks;
   };
-  const worker = async () => {
-    while (!params.isStopped()) {
-      const sessionsDir = params.sessionDirs[nextIndex];
-      nextIndex += 1;
-      if (!sessionsDir) {
+  await pMap(
+    params.sessionDirs,
+    async (sessionsDir) => {
+      if (params.isStopped()) {
         return;
       }
       const result = await params.cleanStaleLockFiles({
@@ -472,16 +469,16 @@ async function cleanupStaleSessionLocks(params: {
         log: { warn: (message) => params.log.warn(message) },
       });
       if (result.cleaned.length === 0) {
-        continue;
+        return;
       }
       const markRestartAbortedMainSessionsFromLocksLocal = await getMarker();
       await markRestartAbortedMainSessionsFromLocksLocal({
         sessionsDir,
         cleanedLocks: result.cleaned,
       });
-    }
-  };
-  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    },
+    { concurrency, stopOnError: true },
+  );
 }
 
 function scheduleTranscriptsAutoStartSidecar(params: {
@@ -1328,7 +1325,7 @@ export async function startGatewayPostAttachRuntime(
           reportPluginServices(result.pluginServices);
         }
         const postReadySidecars = [...result.postReadySidecars];
-        const gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[] = [];
+        const gatewayLifetimeSidecars = [scheduleContextCachePrewarm(params)];
         if (workerEnvironmentSidecar) {
           gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
         }

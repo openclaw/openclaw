@@ -82,6 +82,7 @@ export const pt_BR: TranslationMap = {
     relink: "Vincular novamente",
     waitForScan: "Aguardar leitura",
     logout: "Sair",
+    skipToMainContent: "Ir para o conteúdo principal",
   },
   nativeLinkMenu: {
     label: "Ações de link",
@@ -218,10 +219,11 @@ export const pt_BR: TranslationMap = {
   lazyView: {
     loadingTitle: "Carregando painel",
     errorTitle: "Falha ao carregar o painel",
-    errorSubtitle:
-      "Recarregue a página para carregar o pacote mais recente do Control UI ou tente novamente se a solicitação de rede falhou.",
+    genericSubtitle: "Algo deu errado ao carregar este painel.",
+    staleTitle: "Uma nova versão está disponível",
+    staleSubtitle:
+      "O OpenClaw foi atualizado em segundo plano. Recarregue para obter o painel mais recente.",
     retry: "Tentar novamente",
-    unknownError: "Erro desconhecido ao carregar módulo.",
   },
   nodes: {
     pairing: {
@@ -230,6 +232,16 @@ export const pt_BR: TranslationMap = {
       title: "OpenClaw mobile",
       subtitle: "Escaneie este código QR no app móvel para conectar um novo telefone.",
       generating: "Criando um código de configuração seguro…",
+      accessTitle: "Acesso móvel",
+      fullAccess: "Acesso completo (recomendado)",
+      fullAccessHint:
+        "Nó e controles completos do Gateway, incluindo configurações e atualizações.",
+      limitedAccess: "Acesso limitado",
+      limitedAccessHint: "Nó, chat e aprovações sem controles administrativos.",
+      generateCode: "Criar código de configuração",
+      transportLimitedTitle: "Limitado para segurança da rede",
+      transportLimitedHint:
+        "Esta URL do Gateway usa ws:// sem criptografia. Use wss:// ou Tailscale Serve e crie um novo código para acesso completo.",
       failed: "Não foi possível criar um código de configuração.",
       qrAlt: "Código QR de pareamento do OpenClaw mobile",
       qrUnavailable: "QR indisponível. Copie o código de configuração em vez disso.",
@@ -263,7 +275,8 @@ export const pt_BR: TranslationMap = {
     },
     inventory: {
       title: "Dispositivos",
-      subtitle: "Uma linha por cliente pareado: status, funções, tokens.",
+      summaryConnected: "{connected} de {total} conectados",
+      summaryPending: "{count} aguardando aprovação",
       cleanupStale: "Limpar {count} obsoletos",
       pendingApproval: "Aprovação pendente",
       paired: "Pareado",
@@ -378,6 +391,18 @@ export const pt_BR: TranslationMap = {
     title: "Worktrees gerenciadas",
     subtitle: "Checkouts isolados de repositórios pertencentes ao OpenClaw.",
     cleanNow: "Limpar agora",
+    cleanupTitle: "Limpeza",
+    cleanupSubtitle:
+      "O OpenClaw remove periodicamente worktrees antigos para liberar espaço em disco. Ajuste o nível de agressividade da limpeza.",
+    cleanupMaxCount: "Máximo de worktrees",
+    cleanupMaxCountHelp:
+      "Número máximo de worktrees gerenciados a serem mantidos em todos os repositórios. Os worktrees mais antigos são salvos como snapshots e removidos primeiro. Defina como 0 para desativar o limite de quantidade.",
+    cleanupMaxSize: "Tamanho total máximo (GB)",
+    cleanupMaxSizeHelp:
+      "Tamanho total máximo em GB de todos os worktrees gerenciados. Defina como 0 para desativar o limite de tamanho.",
+    cleanupDecrease: "Diminuir {label}",
+    cleanupIncrease: "Aumentar {label}",
+    cleanupSaveFailed: "Falha ao salvar os limites de limpeza.",
     name: "Nome",
     repo: "Repositório",
     branch: "Branch",
@@ -396,6 +421,17 @@ export const pt_BR: TranslationMap = {
     working: "Trabalhando…",
     ready: "Pronto para conversar",
     whatCanAgentDo: "O que {name} pode fazer?",
+    help: "Ajuda",
+    getHelp: "Obter ajuda",
+    discord: "Comunidade do Discord",
+    viewChangelog: "Ver registro de alterações",
+    agentSettings: "Configurações do agente",
+    filterAgents: "Encontrar agente…",
+    noAgentMatches: "Nenhum agente correspondente",
+  },
+  agentScope: {
+    label: "Escopo do agente",
+    allAgents: "Todos os agentes",
   },
   newSession: {
     title: "Nova sessão",
@@ -564,6 +600,7 @@ export const pt_BR: TranslationMap = {
     groupBy: "Agrupar por",
     groupByNone: "Nenhum",
     groupByCategory: "Grupos personalizados",
+    showCronSessions: "Mostrar sessões cron",
     groupByChannel: "Canal",
     groupByKind: "Tipo",
     groupByAgent: "Agente",
@@ -603,6 +640,8 @@ export const pt_BR: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Fixar no seletor",
+    unpinFromSwitcher: "Desafixar do seletor",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -627,6 +666,18 @@ export const pt_BR: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identidade",
+      subtitle: "Nome, emoji e avatar exibidos nas conversas e na barra lateral.",
+      name: "Nome de exibição",
+      namePlaceholder: "Nome do agente",
+      emoji: "Emoji",
+      chooseImage: "Escolher imagem…",
+      replaceImage: "Substituir imagem…",
+      imageUnusable: "Essa imagem não pode ser usada. Escolha um arquivo de imagem de até 2 MB.",
+      fileHint:
+        "Os agentes podem definir isso por conta própria editando IDENTITY.md no workspace deles.",
     },
     overview: {
       title: "Visão geral",
@@ -1072,6 +1123,7 @@ export const pt_BR: TranslationMap = {
     settingsView: "Visualização de configurações",
     simple: "Simples",
     advanced: "Avançado",
+    content: "Conteúdo das configurações",
     themeImported: "{name} importado.",
     themeRemoved: "Tema personalizado removido.",
     channels: {
@@ -1199,6 +1251,10 @@ export const pt_BR: TranslationMap = {
       inlineHintAfter:
         "para adicionar um tema tweakcn local do navegador. No tweakcn, use Share e cole o link copiado aqui.",
       textSize: "Tamanho do texto",
+    },
+    chatPrefs: {
+      title: "Chat",
+      hint: "Preferências de chat locais do navegador.",
     },
     connection: {
       title: "Conexão",
@@ -1422,6 +1478,8 @@ export const pt_BR: TranslationMap = {
     platforms: "Plataformas: {platforms}",
     installNamed: "Instalar {name}",
     notFound: "Skill não encontrada.",
+    openDetails: "Abrir detalhes de {name}",
+    enabledNamed: "{name} habilitado",
     invalidLink: "Link do ClawHub inválido",
     overview: "Visão geral",
     skillCard: "Cartão de Skill",
@@ -1727,8 +1785,6 @@ export const pt_BR: TranslationMap = {
     cancel: "Cancelar",
     removedRestart: "{name} removido. É necessário reiniciar o Gateway para aplicar a alteração.",
     verifiedSource: "Fonte verificada",
-    menuLabel: "Ações de {name}",
-    menuDetails: "Ver detalhes",
     enableAction: "Ativar",
     disableAction: "Desativar",
     working: "Trabalhando…",
@@ -1865,6 +1921,10 @@ export const pt_BR: TranslationMap = {
       useCurrentChatAria: "Usar conversa atual para solicitações de revisão",
       useCurrentChatTooltip:
         "Enviar solicitações de revisão para a sessão de conversa atual em vez da sessão de workshop da proposta.",
+      selfLearning: "Autoaprendizado",
+      selfLearningAria: "Ativar ou desativar propostas de Skills por autoaprendizado",
+      selfLearningTooltip:
+        "Capture correções e revise trabalhos substanciais concluídos para criar propostas de skills pendentes. Consome tokens adicionais em segundo plano; os rascunhos chegam a este quadro como propostas pendentes.",
       view: "Visualização da oficina",
       board: "Quadro",
       today: "Hoje",
@@ -1944,6 +2004,14 @@ export const pt_BR: TranslationMap = {
       noProposalsTitle: "Nenhuma proposta ainda",
       noProposalsBody: "{agent} não elaborou nenhuma proposta de skill.",
       noProposalsFooter: "Novas propostas aparecerão aqui para revisão.",
+    },
+    selfLearning: {
+      pitchTitle: "Ativar o autoaprendizado",
+      pitchBody:
+        "O OpenClaw revisa correções e execuções substanciais concluídas e, em seguida, cria rascunhos de propostas de skills para este quadro. Ele consome tokens adicionais em segundo plano, e os rascunhos chegam como propostas pendentes.",
+      enable: "Ativar autoaprendizado",
+      enabling: "Ativando…",
+      updateError: "Não foi possível atualizar a configuração de autoaprendizado.",
     },
     today: {
       emptyTitle: "Nada aguardando hoje",
@@ -3080,24 +3148,16 @@ export const pt_BR: TranslationMap = {
       rateLimited:
         "Limite de taxa da API do GitHub atingido. O status do pull request pode ficar desatualizado até que o limite seja redefinido.",
     },
-    refreshTitle: "Atualizar dados do chat",
-    settings: "Configurações do chat",
     usageRemaining: "Uso restante",
-    voiceSettings: "Voz",
-    thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
-    toolCallsToggle: "Alternar chamadas de ferramenta e resultados de ferramenta",
-    commentaryToggle: "Manter comentários após a resposta final",
-    commentaryLabel: "Comentários",
-    autoScrollMode: "Modo de rolagem automática",
-    autoScrollAlways: "Sempre",
-    autoScrollNearBottom: "Próximo ao final",
-    autoScrollOff: "Desativado",
+    view: {
+      menu: "Visualizar",
+      reasoning: "Raciocínio",
+      toolCalls: "Chamadas de ferramentas",
+      commentary: "Manter comentários",
+    },
     sendShortcut: "Atalho de envio",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Ocultar sessões de cron",
-    showCronSessions: "Mostrar sessões de cron",
-    showCronSessionsHidden: "Mostrar sessões de cron ({count} ocultas)",
     onboardingDisabled: "Desativado durante a integração",
     gatewayStatus: "Status do Gateway: {status}",
     commandPaletteTitle: "Pesquisar ou ir para… (⌘K)",
@@ -3287,7 +3347,6 @@ export const pt_BR: TranslationMap = {
       },
       takePhoto: "Tirar foto",
       dismissVoiceInputError: "Dispensar erro de entrada de voz",
-      loadingMicrophones: "Carregando microfones…",
       microphoneAccessFailed: "Não foi possível acessar as entradas de microfone.",
       microphoneBusy: "As entradas de microfone estão ocupadas ou indisponíveis para o navegador.",
       microphoneFallback: "Microfone {number}",
@@ -3307,20 +3366,6 @@ export const pt_BR: TranslationMap = {
       stillListening: "Ainda ouvindo",
       stopVoiceInput: "Parar entrada de voz",
       systemDefaultMicrophone: "Padrão do sistema",
-      talkAdvancedSettingsRequiresAdmin:
-        "As configurações avançadas exigem acesso de administrador",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "As configurações avançadas do Talk exigem acesso operator.admin.",
-      talkDefault: "Padrão",
-      talkModel: "Modelo",
-      talkModelAuto: "Automático",
-      talkMoreInSettings: "Mais em Configurações",
-      talkSensitivity: "Sensibilidade",
-      talkSensitivityHigh: "Alta",
-      talkSensitivityLow: "Baixa",
-      talkSensitivityMedium: "Média",
-      talkVoice: "Voz",
-      voiceOptions: "Opções de voz",
       voiceTranscript: "Transcrição de voz",
     },
     selectors: {
@@ -3405,6 +3450,8 @@ export const pt_BR: TranslationMap = {
       empty: "Ainda não há tarefas em segundo plano para este agente.",
       running: "Em execução ({count})",
       finished: "Concluídas ({count})",
+      statusRunningOne: "1 tarefa em execução",
+      statusRunningMany: "{count} tarefas em execução",
       stopTask: "Parar {title}",
       viewTranscript: "Ver transcrição",
       toolUseOne: "1 uso de ferramenta",
@@ -3493,11 +3540,13 @@ export const pt_BR: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Status da automação",
       all: "Todos",
       active: "Ativa",
       paused: "Pausados",
     },
     list: {
+      viewLabel: "Visualizações de automação",
       searchPlaceholder: "Buscar tarefas agendadas",
       newTask: "Nova tarefa",
       filters: "Filtros",
@@ -3564,12 +3613,12 @@ export const pt_BR: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "Agendador",
       tasks: "Tarefas",
       failing: "Com falha",
       nextWake: "Próximo despertar",
     },
     detail: {
+      tabsLabel: "Detalhes da automação",
       newTitle: "Nova tarefa agendada",
       newSubtitle: "Descreva o que o OpenClaw deve fazer e escolha quando será executado.",
       back: "Todas as automações",
@@ -3589,7 +3638,6 @@ export const pt_BR: TranslationMap = {
       clone: "Clonar",
       remove: "Remover",
       more: "Mais ações",
-      history: "Histórico",
     },
     runNotStarted: {
       notDue: "Esta automação ainda não está programada para ser executada.",

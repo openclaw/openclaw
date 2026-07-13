@@ -82,6 +82,7 @@ export const ja_JP: TranslationMap = {
     relink: "再リンク",
     waitForScan: "スキャンを待機",
     logout: "ログアウト",
+    skipToMainContent: "メインコンテンツにスキップ",
   },
   nativeLinkMenu: {
     label: "リンクのアクション",
@@ -219,10 +220,11 @@ export const ja_JP: TranslationMap = {
   lazyView: {
     loadingTitle: "パネルを読み込み中",
     errorTitle: "パネルの読み込みに失敗しました",
-    errorSubtitle:
-      "最新の Control UI バンドルを読み込むにはページを再読み込みしてください。ネットワークリクエストに失敗した場合は再試行してください。",
+    genericSubtitle: "このパネルの読み込み中に問題が発生しました。",
+    staleTitle: "新しいバージョンが利用可能です",
+    staleSubtitle:
+      "OpenClaw がバックグラウンドで更新されました。最新のパネルを表示するには再読み込みしてください。",
     retry: "再試行",
-    unknownError: "不明なモジュール読み込みエラーです。",
   },
   nodes: {
     pairing: {
@@ -232,6 +234,15 @@ export const ja_JP: TranslationMap = {
       subtitle:
         "新しいスマートフォンを接続するには、モバイルアプリでこのQRコードをスキャンしてください。",
       generating: "安全なセットアップコードを作成しています…",
+      accessTitle: "モバイルアクセス",
+      fullAccess: "フルアクセス（推奨）",
+      fullAccessHint: "ノードに加え、設定やアップグレードを含むGatewayのすべての操作が可能です。",
+      limitedAccess: "制限付きアクセス",
+      limitedAccessHint: "管理操作を除き、ノード、チャット、承認を利用できます。",
+      generateCode: "セットアップコードを作成",
+      transportLimitedTitle: "ネットワークの安全性のため制限されています",
+      transportLimitedHint:
+        "このGateway URLは平文のws://を使用しています。wss://またはTailscale Serveを使用してから、フルアクセス用の新しいコードを作成してください。",
       failed: "セットアップコードを作成できませんでした。",
       qrAlt: "OpenClaw mobile ペアリングQRコード",
       qrUnavailable: "QRを利用できません。代わりにセットアップコードをコピーしてください。",
@@ -267,7 +278,8 @@ export const ja_JP: TranslationMap = {
     },
     inventory: {
       title: "デバイス",
-      subtitle: "ペア設定済みクライアントごとに1行: ステータス、ロール、トークン。",
+      summaryConnected: "{total}台中{connected}台が接続済み",
+      summaryPending: "{count}件が承認待ち",
       cleanupStale: "{count} 件の古い項目をクリーンアップ",
       pendingApproval: "承認待ち",
       paired: "ペア設定済み",
@@ -383,6 +395,18 @@ export const ja_JP: TranslationMap = {
     title: "管理対象ワークツリー",
     subtitle: "OpenClaw が所有する分離されたリポジトリのチェックアウト。",
     cleanNow: "今すぐクリーンアップ",
+    cleanupTitle: "クリーンアップ",
+    cleanupSubtitle:
+      "OpenClaw は、ディスク容量を確保するために古い worktree を定期的に削除します。クリーンアップの実行基準を調整できます。",
+    cleanupMaxCount: "worktree の最大数",
+    cleanupMaxCountHelp:
+      "すべてのリポジトリで保持する管理対象 worktree の最大数です。古い worktree から順にスナップショットが作成され、削除されます。件数制限を無効にするには 0 に設定します。",
+    cleanupMaxSize: "合計最大サイズ（GB）",
+    cleanupMaxSizeHelp:
+      "すべての管理対象 worktree の合計最大サイズ（GB）です。サイズ制限を無効にするには 0 に設定します。",
+    cleanupDecrease: "{label}を減らす",
+    cleanupIncrease: "{label}を増やす",
+    cleanupSaveFailed: "クリーンアップ制限の保存に失敗しました。",
     name: "名前",
     repo: "リポジトリ",
     branch: "ブランチ",
@@ -402,6 +426,17 @@ export const ja_JP: TranslationMap = {
     working: "作業中…",
     ready: "チャットできます",
     whatCanAgentDo: "{name}には何ができますか？",
+    help: "ヘルプ",
+    getHelp: "ヘルプを表示",
+    discord: "Discord コミュニティ",
+    viewChangelog: "変更履歴を表示",
+    agentSettings: "エージェント設定",
+    filterAgents: "エージェントを検索…",
+    noAgentMatches: "一致するエージェントはありません",
+  },
+  agentScope: {
+    label: "エージェントの範囲",
+    allAgents: "すべてのエージェント",
   },
   newSession: {
     title: "新しいセッション",
@@ -570,6 +605,7 @@ export const ja_JP: TranslationMap = {
     groupBy: "グループ化",
     groupByNone: "なし",
     groupByCategory: "カスタムグループ",
+    showCronSessions: "cronセッションを表示",
     groupByChannel: "チャンネル",
     groupByKind: "種類",
     groupByAgent: "エージェント",
@@ -610,6 +646,8 @@ export const ja_JP: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "切り替えメニューにピン留め",
+    unpinFromSwitcher: "切り替えメニューからピン留めを解除",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -634,6 +672,17 @@ export const ja_JP: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "アイデンティティ",
+      subtitle: "チャットとサイドバーに表示される名前、絵文字、アバター。",
+      name: "表示名",
+      namePlaceholder: "エージェント名",
+      emoji: "絵文字",
+      chooseImage: "画像を選択…",
+      replaceImage: "画像を置き換え…",
+      imageUnusable: "この画像は使用できません。2 MB以下の画像ファイルを選択してください。",
+      fileHint: "エージェントは、ワークスペース内のIDENTITY.mdを編集して自身で設定できます。",
     },
     overview: {
       title: "概要",
@@ -1079,6 +1128,7 @@ export const ja_JP: TranslationMap = {
     settingsView: "設定ビュー",
     simple: "シンプル",
     advanced: "詳細",
+    content: "設定内容",
     themeImported: "{name} をインポートしました。",
     themeRemoved: "カスタムテーマを削除しました。",
     channels: {
@@ -1206,6 +1256,10 @@ export const ja_JP: TranslationMap = {
       inlineHintAfter:
         "して、ブラウザローカルの tweakcn テーマを1つ追加します。tweakcn で Share を使い、コピーしたリンクをここに貼り付けてください。",
       textSize: "文字サイズ",
+    },
+    chatPrefs: {
+      title: "チャット",
+      hint: "ブラウザ内に保存されるチャット設定。",
     },
     connection: {
       title: "接続",
@@ -1430,6 +1484,8 @@ export const ja_JP: TranslationMap = {
     platforms: "プラットフォーム: {platforms}",
     installNamed: "{name} をインストール",
     notFound: "Skill が見つかりません。",
+    openDetails: "{name}の詳細を開く",
+    enabledNamed: "{name}が有効",
     invalidLink: "ClawHub リンクが無効です",
     overview: "概要",
     skillCard: "Skill カード",
@@ -1735,8 +1791,6 @@ export const ja_JP: TranslationMap = {
     cancel: "キャンセル",
     removedRestart: "{name}を削除しました。変更を適用するにはGatewayの再起動が必要です。",
     verifiedSource: "確認済みのソース",
-    menuLabel: "{name} のアクション",
-    menuDetails: "詳細を表示",
     enableAction: "有効にする",
     disableAction: "無効にする",
     working: "処理中…",
@@ -1872,6 +1926,10 @@ export const ja_JP: TranslationMap = {
       useCurrentChatAria: "修正リクエストに現在のチャットを使用",
       useCurrentChatTooltip:
         "修正リクエストを提案のワークショップセッションではなく現在のチャットセッションに送信します。",
+      selfLearning: "自己学習",
+      selfLearningAria: "自己学習によるスキル提案を切り替える",
+      selfLearningTooltip:
+        "修正内容や完了した重要な作業を取り込み、レビューして、保留中のスキル提案を作成します。追加のバックグラウンドトークンを消費し、下書きは保留中の提案としてこのボードに追加されます。",
       view: "ワークショップビュー",
       board: "ボード",
       today: "今日",
@@ -1951,6 +2009,14 @@ export const ja_JP: TranslationMap = {
       noProposalsTitle: "まだ提案はありません",
       noProposalsBody: "{agent}はまだスキル提案をドラフトしていません。",
       noProposalsFooter: "新しい提案はレビューのためにここに表示されます。",
+    },
+    selfLearning: {
+      pitchTitle: "自己学習を有効にする",
+      pitchBody:
+        "OpenClaw は修正内容や完了した重要な実行をレビューし、このボード向けのスキル提案の下書きを作成します。追加のバックグラウンドトークンを消費し、下書きは保留中の提案として追加されます。",
+      enable: "自己学習を有効にする",
+      enabling: "有効化中…",
+      updateError: "自己学習の設定を更新できませんでした。",
     },
     today: {
       emptyTitle: "今日は待機中のものはありません",
@@ -3084,24 +3150,16 @@ export const ja_JP: TranslationMap = {
       rateLimited:
         "GitHub API のレート制限に達しました。制限がリセットされるまで、プルリクエストのステータスが最新でない可能性があります。",
     },
-    refreshTitle: "チャットデータを更新",
-    settings: "チャット設定",
     usageRemaining: "残りの使用量",
-    voiceSettings: "音声",
-    thinkingToggle: "アシスタントの思考 / 作業出力の表示を切り替え",
-    toolCallsToggle: "ツール呼び出しとツール結果の表示を切り替え",
-    commentaryToggle: "最終回答の後にコメントを残す",
-    commentaryLabel: "コメント",
-    autoScrollMode: "自動スクロールモード",
-    autoScrollAlways: "常に",
-    autoScrollNearBottom: "下部付近",
-    autoScrollOff: "オフ",
+    view: {
+      menu: "表示",
+      reasoning: "推論",
+      toolCalls: "ツール呼び出し",
+      commentary: "解説を保持",
+    },
     sendShortcut: "送信ショートカット",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Cron セッションを非表示",
-    showCronSessions: "Cron セッションを表示",
-    showCronSessionsHidden: "Cron セッションを表示（{count} 件を非表示中）",
     onboardingDisabled: "セットアップ中は無効",
     gatewayStatus: "Gateway ステータス: {status}",
     commandPaletteTitle: "検索または移動… (⌘K)",
@@ -3291,7 +3349,6 @@ export const ja_JP: TranslationMap = {
       },
       takePhoto: "写真を撮る",
       dismissVoiceInputError: "音声入力エラーを閉じる",
-      loadingMicrophones: "マイクを読み込み中…",
       microphoneAccessFailed: "マイク入力にアクセスできません。",
       microphoneBusy: "マイク入力は使用中、またはブラウザで利用できません。",
       microphoneFallback: "マイク {number}",
@@ -3310,18 +3367,6 @@ export const ja_JP: TranslationMap = {
       stillListening: "まだ聞いています",
       stopVoiceInput: "音声入力を停止",
       systemDefaultMicrophone: "システムデフォルト",
-      talkAdvancedSettingsRequiresAdmin: "詳細設定には管理者権限が必要です",
-      talkAdvancedSettingsRequiresAdminTitle: "Talk の詳細設定には operator.admin 権限が必要です。",
-      talkDefault: "デフォルト",
-      talkModel: "モデル",
-      talkModelAuto: "自動",
-      talkMoreInSettings: "設定でさらに表示",
-      talkSensitivity: "感度",
-      talkSensitivityHigh: "高",
-      talkSensitivityLow: "低",
-      talkSensitivityMedium: "中",
-      talkVoice: "音声",
-      voiceOptions: "音声オプション",
       voiceTranscript: "音声文字起こし",
     },
     selectors: {
@@ -3406,6 +3451,8 @@ export const ja_JP: TranslationMap = {
       empty: "このエージェントにはまだバックグラウンドタスクがありません。",
       running: "実行中（{count}）",
       finished: "完了（{count}）",
+      statusRunningOne: "1 件のタスクを実行中",
+      statusRunningMany: "{count} 件のタスクを実行中",
       stopTask: "{title}を停止",
       viewTranscript: "トランスクリプトを表示",
       toolUseOne: "ツール使用 1 回",
@@ -3494,11 +3541,13 @@ export const ja_JP: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "自動化ステータス",
       all: "すべて",
       active: "アクティブ",
       paused: "一時停止中",
     },
     list: {
+      viewLabel: "自動化ビュー",
       searchPlaceholder: "スケジュールされたタスクを検索",
       newTask: "新規タスク",
       filters: "フィルター",
@@ -3564,12 +3613,12 @@ export const ja_JP: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "スケジューラー",
       tasks: "タスク",
       failing: "失敗中",
       nextWake: "次回の起動",
     },
     detail: {
+      tabsLabel: "自動化の詳細",
       newTitle: "新規スケジュールタスク",
       newSubtitle: "OpenClaw に何をさせるかを記述し、実行するタイミングを選択します。",
       back: "すべての自動化",
@@ -3589,7 +3638,6 @@ export const ja_JP: TranslationMap = {
       clone: "複製",
       remove: "削除",
       more: "その他の操作",
-      history: "履歴",
     },
     runNotStarted: {
       notDue: "この自動化はまだ実行時刻になっていません。",

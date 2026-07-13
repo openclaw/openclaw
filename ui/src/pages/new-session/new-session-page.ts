@@ -1,5 +1,4 @@
-// Full-page new-session draft: pick agent, exec host, folder, and branch/worktree,
-// then the first message creates the session in one sessions.create call.
+// Full-page draft: pick agent, host, folder, and worktree, then create on first message.
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -17,6 +16,8 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../styles/chat.css";
+import "../../styles/new-session.css";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
@@ -42,8 +43,7 @@ type BrowserTarget = { nodeId: string; label: string };
 
 const WORKTREE_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-/** Last path segment for the folder trigger label; handles both separators.
-    Falls back to the raw path so filesystem roots ("/", "C:\") stay visible. */
+/** Last path segment for the label; raw-path fallback keeps filesystem roots visible. */
 function folderDisplayName(path: string): string {
   return path.split(/[\\/]/).findLast((segment) => segment.length > 0) ?? path;
 }
@@ -79,8 +79,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private browserError: string | null = null;
   @state() private browserListing: FsListDirResult | null = null;
   @state() private browserTarget: BrowserTarget | null = null;
-  // The head input's live value; a typed absolute path stays applicable via
-  // "Use this folder" even when the host cannot list it (no fs.listDir).
+  // Live head input; absolute paths stay applicable even without fs.listDir.
   @state() private browserPathDraft = "";
 
   private openedFor: string | null = null;
@@ -528,7 +527,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.isAdmin();
   }
 
-  /** Grayed-out device rows must say why: offline vs. node lacks browse support. */
+  /** Unavailable device rows say why; exec-only nodes remain selectable for manual paths. */
   private nodeBrowseBlockedReason(node: DraftNode): string | undefined {
     if (node.canBrowse) {
       return undefined;
@@ -563,12 +562,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     this.browserPathDraft = "";
   }
 
-  /** "Use this folder" applies exactly what the head input shows. The draft
-      syncs to every listed directory, covers hosts that cannot list
-      (fs.listDir missing/failing), and an edited path always wins over a
-      stale listing. A cleared input applies "" — the host's default
-      directory (workspace on the Gateway, home on a node) — matching the
-      clearable folder textbox this browser replaced. Null disables Use. */
+  /** Use applies the live path; empty means host default, null disables. */
   private usableBrowserPath(): string | null {
     const draft = this.browserPathDraft.trim();
     if (draft.length === 0) {
@@ -589,6 +583,14 @@ class NewSessionPage extends OpenClawLightDomElement {
     const client = this.context?.gateway.snapshot.client;
     const target = this.browserTarget;
     if (!client || !target) {
+      return;
+    }
+    // Exec-only nodes still accept a typed cwd; never probe an unsupported fs.listDir.
+    const targetNode = this.nodes.find((node) => node.nodeId === target.nodeId);
+    if (targetNode?.canExec && !targetNode.canBrowse) {
+      this.showBrowserRoot();
+      this.browserTarget = target;
+      this.browserPathDraft = path ?? "";
       return;
     }
     const requestId = ++this.browserRequestToken;
@@ -722,7 +724,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                     <button
                       type="button"
                       class="new-session-page__browser-entry"
-                      ?disabled=${!node.canBrowse}
+                      ?disabled=${!node.canExec}
                       title=${this.nodeBrowseBlockedReason(node) ?? nothing}
                       @click=${() =>
                         this.selectBrowserTarget({
@@ -1177,7 +1179,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                 aria-label=${startLabel}
                 @click=${() => void this.submit()}
               >
-                ${this.submitting ? icons.loader : icons.send}
+                ${this.submitting ? icons.loader : icons.arrowUp}
               </button>
             </openclaw-tooltip>
           </div>

@@ -61,6 +61,8 @@ describe("config view", () => {
     onOpenCustomThemeImport: vi.fn(),
     textScale: 100,
     setTextScale: vi.fn(),
+    chatSendShortcut: "enter" as const,
+    setChatSendShortcut: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
   });
@@ -377,6 +379,17 @@ describe("config view", () => {
     const btn = findButtonByText(container, "Gateway");
     btn.click();
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
+
+    onSectionChange.mockClear();
+    const settings = findButtonByText(container, "Settings");
+    expect(settings.tabIndex).toBe(0);
+    expect(btn.tabIndex).toBe(-1);
+    expect(btn.getAttribute("aria-controls")).toBe("config-section-panel");
+    settings.focus();
+    settings.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+    );
+    expect(onSectionChange).toHaveBeenCalledWith("agents");
   });
 
   it("renders the virtual Notifications tab in Communication settings", () => {

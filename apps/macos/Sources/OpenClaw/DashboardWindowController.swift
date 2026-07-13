@@ -8,6 +8,20 @@ private final class DashboardWindowContentView: NSView {
     }
 }
 
+/// The dashboard's empty unified toolbar exists only to grow the titlebar to
+/// 52pt so the traffic lights align with the hosted web chrome. `View > Hide
+/// Toolbar` (and ⌥⌘T) would collapse the titlebar while the web inset stays
+/// pinned at `--openclaw-native-titlebar-height`, resurrecting the traffic-light
+/// misalignment. Refusing the toggle keeps the two heights in lockstep.
+private final class DashboardWindow: NSWindow {
+    override func toggleToolbarShown(_: Any?) {}
+
+    override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(NSWindow.toggleToolbarShown(_:)) { return false }
+        return super.validateUserInterfaceItem(item)
+    }
+}
+
 private final class DashboardWindowDragRegionView: NSView {
     override var mouseDownCanMoveWindow: Bool {
         true
@@ -513,7 +527,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private static func makeWindow(contentView: NSView) -> NSWindow {
-        let window = NSWindow(
+        let window = DashboardWindow(
             contentRect: NSRect(origin: .zero, size: DashboardWindowLayout.windowSize),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
@@ -548,6 +562,12 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         window.title = "OpenClaw"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
+        // An empty unified toolbar grows the transparent titlebar to 52pt so the
+        // traffic lights sit vertically centered against the web titlebar row
+        // (--openclaw-native-titlebar-height); without it they hug the top edge.
+        window.toolbar = NSToolbar(identifier: "DashboardWindowTitlebar")
+        window.toolbarStyle = .unified
+        window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.hasShadow = true
@@ -575,7 +595,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // !important selectors also outrank the rules older app builds inject.
         let css = """
         html.openclaw-native-macos {
-          --openclaw-native-titlebar-height: 50px;
+          /* Matches the 52pt unified-toolbar titlebar so the web buttons and the
+             traffic lights share one vertical center. */
+          --openclaw-native-titlebar-height: 52px;
         }
         @media (min-width: 700px) {
           /* Both desktop navigation surfaces must clear AppKit's window controls

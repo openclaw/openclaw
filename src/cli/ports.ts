@@ -12,7 +12,7 @@ import { sleep } from "../utils.js";
 
 export type PortProcess = { pid: number; command?: string };
 
-export type ForceFreePortResult = {
+type ForceFreePortResult = {
   killed: PortProcess[];
   waitedMs: number;
   escalatedToSigkill: boolean;

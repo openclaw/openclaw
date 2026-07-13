@@ -4,7 +4,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { registerReplyDispatcherSettledTask } from "./dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
-import type { ReplyDispatchBeforeDeliver, ReplyDispatcher } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
 type DispatchReplyFromConfigFn =

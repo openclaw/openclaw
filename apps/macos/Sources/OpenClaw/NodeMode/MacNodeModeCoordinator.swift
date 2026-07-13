@@ -105,6 +105,7 @@ final class MacNodeModeCoordinator: NSObject {
     private let session: GatewayNodeSession
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private let presenceReporter: MacNodePresenceReporter
+    private let notificationCenter: NotificationCenter
     private let routeInvalidationHook: (@Sendable () async -> Void)?
     private let refreshEvents: AsyncStream<Void>
     private let refreshContinuation: AsyncStream<Void>.Continuation
@@ -135,6 +136,7 @@ final class MacNodeModeCoordinator: NSObject {
         runtime: MacNodeRuntime,
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
         presenceReporter: MacNodePresenceReporter = MacNodePresenceReporter(),
+        notificationCenter: NotificationCenter = .default,
         observeNotifications: Bool = false,
         initialPaused: Bool? = nil,
         initialComputerControlEnabled: Bool? = nil,
@@ -145,6 +147,7 @@ final class MacNodeModeCoordinator: NSObject {
         self.runtime = runtime
         self.nodeHostWorker = nodeHostWorker
         self.presenceReporter = presenceReporter
+        self.notificationCenter = notificationCenter
         self.routeInvalidationHook = routeInvalidationHook
         self.refreshEvents = refreshEvents.stream
         self.refreshContinuation = refreshEvents.continuation
@@ -154,32 +157,32 @@ final class MacNodeModeCoordinator: NSObject {
         super.init()
 
         guard observeNotifications else { return }
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.refreshNodeConfiguration),
             name: UserDefaults.didChangeNotification,
             object: UserDefaults.standard)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.refreshNodeConfiguration),
             name: NSApplication.didBecomeActiveNotification,
             object: nil)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.refreshNodeConfiguration),
             name: .openclawPermissionsChanged,
             object: nil)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.nodeHostWorkerFailed),
             name: .openclawNodeHostWorkerFailed,
             object: nil)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.nodeHostConfigurationChanged),
             name: .openclawConfigDidChange,
             object: nil)
-        NotificationCenter.default.addObserver(
+        self.notificationCenter.addObserver(
             self,
             selector: #selector(self.nodeHostConfigurationChanged),
             name: .openclawCLIInstalled,
@@ -187,7 +190,7 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self)
+        self.notificationCenter.removeObserver(self)
         self.refreshContinuation.finish()
     }
 

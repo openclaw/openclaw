@@ -1793,8 +1793,9 @@ describe("thread binding lifecycle", () => {
       },
     });
 
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(probeCallCount).toBe(2);
+    });
     const observedParallelStart = secondProbeStartedBeforeFirstResolved;
 
     resolveFirstProbe?.({ status: "healthy" });

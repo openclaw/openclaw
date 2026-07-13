@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
+import { RetrySupervisor } from "../../../packages/retry/src/index.js";
+import { sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
 import {
@@ -23,13 +24,7 @@ import type {
   WorkerTunnelStatus,
 } from "./tunnel-contract.js";
 
-export type {
-  WorkerTunnelHandle,
-  WorkerTunnelRequest,
-  WorkerTunnelStatus,
-  WorkerWorkspaceCommand,
-} from "./tunnel-contract.js";
-
+export type { WorkerTunnelHandle } from "./tunnel-contract.js";
 const READY_MARKER = "OPENCLAW_WORKER_TUNNEL_READY";
 const REMOTE_SOCKET_NAME = "gateway.sock";
 const REMOTE_SETUP_TIMEOUT_MS = 20_000;
@@ -68,23 +63,23 @@ rm -f -- "$socket"
 rmdir -- "$directory" 2>/dev/null || true
 `;
 
-export type WorkerSshProcessExit = {
+type WorkerSshProcessExit = {
   code: number | null;
   signal: NodeJS.Signals | null;
 };
 
-export type WorkerSshProcess = {
+type WorkerSshProcess = {
   ready: Promise<void>;
   exited: Promise<WorkerSshProcessExit>;
   stop(): Promise<void>;
 };
 
-export type WorkerSshRunner = {
+type WorkerSshRunner = {
   start(argv: string[], options: CommandOptions): WorkerSshProcess;
   run(argv: string[], options: CommandOptions): Promise<SpawnResult>;
 };
 
-export type WorkerTunnelStartRequest = WorkerTunnelRequest & {
+type WorkerTunnelStartRequest = WorkerTunnelRequest & {
   gateway: { host: "127.0.0.1" | "::1"; port: number };
   ssh: WorkerSshEndpoint;
   resolveIdentity: WorkerSshIdentityResolver;
@@ -110,7 +105,7 @@ type TunnelEntry = {
   workspaceTasks: Set<Promise<unknown>>;
 };
 
-export type WorkerTunnelManagerOptions = {
+type WorkerTunnelManagerOptions = {
   runner?: WorkerSshRunner;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   backoff?: BackoffPolicy;
@@ -124,7 +119,7 @@ function processError(stderr: string): Error {
 }
 
 /** Production runner that treats the remote post-forward marker as connection readiness. */
-export function createWorkerSshRunner(): WorkerSshRunner {
+function createWorkerSshRunner(): WorkerSshRunner {
   return {
     run: runCommandWithTimeout,
     start(argv, options) {
@@ -384,9 +379,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
   };
 
   const reconnectLoop = async (entry: TunnelEntry) => {
-    let retryAttempt = 0;
+    const reconnectSupervisor = new RetrySupervisor(backoff);
     while (isCurrent(entry)) {
-      entry.status = retryAttempt === 0 ? "connecting" : "reconnecting";
+      entry.status = reconnectSupervisor.attempts === 0 ? "connecting" : "reconnecting";
       let child: WorkerSshProcess | undefined;
       try {
         child = await connect(entry);
@@ -404,7 +399,7 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         const connectedAtMs = now();
         await child.exited;
         if (now() - connectedAtMs >= stableConnectionMs) {
-          retryAttempt = 0;
+          reconnectSupervisor.reset();
         }
       } catch {
         await child?.stop().catch(() => undefined);
@@ -417,9 +412,9 @@ export function createWorkerTunnelManager(options: WorkerTunnelManagerOptions = 
         return;
       }
       entry.status = "reconnecting";
-      retryAttempt += 1;
       try {
-        await sleep(computeBackoff(backoff, retryAttempt), entry.abortController.signal);
+        const retry = reconnectSupervisor.next(entry.abortController.signal)!;
+        await sleep(retry.delayMs, retry.signal);
       } catch {
         return;
       }

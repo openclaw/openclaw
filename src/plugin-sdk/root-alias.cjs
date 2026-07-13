@@ -96,6 +96,7 @@ const workspacePackageAliasEntries = {
         srcFile: "src/record-coerce.ts",
         distFile: "dist/record-coerce.mjs",
       },
+      result: { srcFile: "src/result.ts", distFile: "dist/result.mjs" },
       "string-coerce": {
         srcFile: "src/string-coerce.ts",
         distFile: "dist/string-coerce.mjs",

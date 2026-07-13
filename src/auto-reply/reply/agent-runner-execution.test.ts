@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import { formatBillingErrorMessage } from "../../agents/embedded-agent-helpers.js";
+import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/embedded-agent-helpers/errors.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
@@ -35,15 +36,16 @@ import {
   resolveRunAfterAutoFallbackPrimaryProbeRecheck,
 } from "./agent-runner-execution.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
-import {
-  PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
-  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-  PROVIDER_INTERNAL_ERROR_USER_MESSAGE,
-  PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE,
-} from "./provider-request-error-classifier.js";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import type { FollowupRun } from "./queue.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
+
+const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
+  "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
+const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
+  "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 
 const state = vi.hoisted(() => ({
   runEmbeddedAgentMock: vi.fn(),
@@ -402,7 +404,6 @@ type EmbeddedAgentParams = {
     tool?: string;
     toolCallId?: string;
     itemId?: string;
-    firstModelCallStarted?: boolean;
   }) => void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
@@ -1718,7 +1719,6 @@ describe("runAgentTurnWithFallback", () => {
         phase: "model_call_started",
         provider: "openai",
         model: "gpt-5.4",
-        firstModelCallStarted: true,
       });
       return { payloads: [{ text: "final" }], meta: {} };
     });

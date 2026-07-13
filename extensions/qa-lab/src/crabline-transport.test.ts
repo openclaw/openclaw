@@ -836,9 +836,9 @@ describe("crabline transport", () => {
       });
 
       try {
-        await transport.state.addInboundMessage({
+        const inbound = await transport.state.addInboundMessage({
           conversation: {
-            id: "-1001234567890",
+            id: "telegram-command-room",
             kind: "channel",
           },
           senderId: "100001",
@@ -856,7 +856,7 @@ describe("crabline transport", () => {
           url: `${telegram?.apiRoot}/bot${telegram?.botToken}/sendMessage`,
           init: {
             body: JSON.stringify({
-              chat_id: -1001234567890,
+              chat_id: inbound.conversation.id,
               text: "assistant via fake telegram",
             }),
             headers: { "content-type": "application/json" },
@@ -870,14 +870,14 @@ describe("crabline transport", () => {
 
         await expect(
           transport.waitForOutbound({
-            conversation: { id: "-1001234567890", kind: "group" },
+            conversation: { id: "telegram-command-room", kind: "channel" },
             textIncludes: "assistant via fake telegram",
             timeoutMs: 1_000,
           }),
         ).resolves.toMatchObject({
           conversation: {
-            id: "-1001234567890",
-            kind: "group",
+            id: "telegram-command-room",
+            kind: "channel",
           },
           direction: "outbound",
           text: "assistant via fake telegram",

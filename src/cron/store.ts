@@ -29,7 +29,6 @@ import type {
 } from "./store/types.js";
 export type {
   CronConfigJobRuntimeEntry,
-  CronQuarantineFile,
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";

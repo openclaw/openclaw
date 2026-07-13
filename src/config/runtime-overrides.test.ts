@@ -46,8 +46,7 @@ describe("runtime overrides", () => {
   it("unsets overrides and prunes empty branches", () => {
     setConfigOverride("channels.whatsapp.dmPolicy", "open");
     const removed = unsetConfigOverride("channels.whatsapp.dmPolicy");
-    expect(removed.ok).toBe(true);
-    expect(removed.removed).toBe(true);
+    expect(removed).toEqual({ ok: true, value: true });
     expect(Object.keys(getConfigOverrides()).length).toBe(0);
   });
 

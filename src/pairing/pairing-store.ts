@@ -210,28 +210,12 @@ async function updateAllowFromStoreEntry(params: {
   }, sqliteOptionsForEnv(env));
 }
 
-/** @deprecated Reads the canonical default-account SQLite rows. */
-export async function readLegacyChannelAllowFromStore(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<string[]> {
-  return readAllowFromState(channel, env, DEFAULT_ACCOUNT_ID);
-}
-
 export async function readChannelAllowFromStore(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
 ): Promise<string[]> {
   return readAllowFromState(channel, env, accountId);
-}
-
-/** @deprecated Reads the canonical default-account SQLite rows. */
-export function readLegacyChannelAllowFromStoreSync(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  return readAllowFromState(channel, env, DEFAULT_ACCOUNT_ID);
 }
 
 export function readChannelAllowFromStoreSync(
@@ -241,9 +225,6 @@ export function readChannelAllowFromStoreSync(
 ): string[] {
   return readAllowFromState(channel, env, accountId);
 }
-
-/** @deprecated SQLite reads are uncached; retained for the shipped SDK test surface. */
-export function clearPairingAllowFromReadCacheForTest(): void {}
 
 type AllowFromStoreEntryUpdateParams = {
   channel: PairingChannel;

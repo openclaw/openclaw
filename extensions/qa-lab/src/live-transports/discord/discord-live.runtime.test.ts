@@ -184,6 +184,7 @@ describe("discord live qa runtime", () => {
 
     expect(next.channels?.discord?.voice).toEqual({
       enabled: true,
+      mode: "stt-tts",
       autoJoin: [
         {
           guildId: "123456789012345678",
@@ -359,7 +360,7 @@ describe("discord live qa runtime", () => {
 
   it("renders a human-readable status reaction timeline artifact", () => {
     const html = testing.renderDiscordStatusReactionHtml({
-      scenarioTitle: "Discord status reactions",
+      scenarioTitle: "Discord's status reactions",
       expectedSequence: ["👀", "🤔", "👍"],
       seenSequence: ["👀", "🤔"],
       snapshots: [
@@ -371,7 +372,7 @@ describe("discord live qa runtime", () => {
       ],
     });
 
-    expect(html).toContain("Discord status reactions");
+    expect(html).toContain("Discord&#39;s status reactions");
     expect(html).toContain("Expected: 👀 → 🤔 → 👍");
     expect(html).toContain("Seen: 👀 → 🤔");
   });
@@ -380,13 +381,14 @@ describe("discord live qa runtime", () => {
     const html = testing.renderDiscordThreadReplyAttachmentHtml({
       attachmentFilenames: [],
       expectedAttachmentFilename: "mantis-thread-report.md",
-      messageContent: "Mantis thread attachment reply",
+      messageContent: "Mantis' thread attachment reply",
       scenarioTitle: "Discord thread reply preserves filePath attachment",
       status: "fail",
       threadName: "mantis-thread-filepath-1234",
     });
 
     expect(html).toContain("Attachment missing");
+    expect(html).toContain("Mantis&#39; thread attachment reply");
     expect(html).toContain("No attachments on the SUT thread reply");
     expect(html).toContain("mantis-thread-report.md");
   });

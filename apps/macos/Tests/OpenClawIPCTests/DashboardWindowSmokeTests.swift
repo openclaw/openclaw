@@ -44,6 +44,15 @@ struct DashboardWindowSmokeTests {
         #expect(controller.window?.styleMask.contains(.closable) == true)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
+        // The empty unified toolbar is what grows the titlebar to 52pt so the
+        // traffic lights center against the web titlebar row; without it they
+        // hug the top edge and misalign with the hosted web buttons.
+        #expect(controller.window?.toolbar != nil)
+        #expect(controller.window?.toolbarStyle == .unified)
+        // The toolbar only exists to size the titlebar, so View > Hide Toolbar
+        // (⌥⌘T) must be refused; otherwise hiding it desyncs the 52pt web inset.
+        controller.window?.toggleToolbarShown(nil)
+        #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
         controller.closeDashboard()
@@ -485,7 +494,10 @@ struct DashboardWindowSmokeTests {
         #expect(chromeScript.source.contains(".sidebar-shell"))
         #expect(chromeScript.source.contains(".settings-sidebar__header"))
         #expect(chromeScript.source.contains("min-width: 700px"))
-        #expect(chromeScript.source.contains("--openclaw-native-titlebar-height"))
+        // Keep the injected titlebar height in lockstep with the 52pt unified
+        // toolbar in makeWindow(); the two must match for the traffic lights and
+        // the hosted web buttons to share one vertical center.
+        #expect(chromeScript.source.contains("--openclaw-native-titlebar-height: 52px"))
         #expect(!chromeScript.source.contains("max-width: 1100px"))
         #expect(chromeScript.source.contains("openclaw-native-web-chrome"))
         #expect(!chromeScript.source.contains("openclaw-native-nav"))

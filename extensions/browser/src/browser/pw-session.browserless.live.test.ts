@@ -1,7 +1,6 @@
 // Browser tests cover pw sessionless plugin behavior.
 import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "../../test-support.js";
-import { closePlaywrightBrowserConnection } from "./pw-session.js";
 
 const LIVE = isLiveTestEnabled();
 const CDP_URL = process.env.OPENCLAW_LIVE_BROWSER_CDP_URL?.trim() || "";
@@ -16,8 +15,8 @@ async function waitFor(
 
 describeLive("browser (live): remote CDP tab persistence", () => {
   it("creates, lists, focuses, and closes tabs via Playwright", { timeout: 60_000 }, async () => {
-    const pw = await import("./pw-ai.js");
-    await closePlaywrightBrowserConnection().catch(() => {});
+    const { pwAi: pw } = await import("./pw-ai.js");
+    await pw.closePlaywrightBrowserConnection().catch(() => {});
 
     const created = await pw.createPageViaPlaywright({ cdpUrl: CDP_URL, url: "about:blank" });
     expect(created.targetId).toBeTypeOf("string");
@@ -43,7 +42,7 @@ describeLive("browser (live): remote CDP tab persistence", () => {
         { timeoutMs: 10_000, intervalMs: 250 },
       );
     } finally {
-      await closePlaywrightBrowserConnection().catch(() => {});
+      await pw.closePlaywrightBrowserConnection().catch(() => {});
     }
   });
 });

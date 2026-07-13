@@ -71,7 +71,7 @@ async function openSidebarTestPage() {
   });
   const page = await context.newPage();
   await installMockGateway(page);
-  await page.goto(`${server.baseUrl}sessions`);
+  await page.goto(`${server.baseUrl}chat`);
   return { context, page };
 }
 
@@ -136,7 +136,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     });
 
     try {
-      await page.goto(`${server.baseUrl}sessions`);
+      await page.goto(`${server.baseUrl}chat`);
 
       const sidebar = page.locator("openclaw-app-sidebar");
       const pinnedItems = sidebar.locator(
@@ -187,10 +187,15 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await page.keyboard.press("End");
       await expect.poll(() => roundedWidth(shellNav)).toBe(400);
       // Settings takes over the whole app: the regular sidebar yields to the
-      // settings sidebar until "Back to app" (or Escape) exits.
-      const settingsLink = sidebar.getByRole("link", { name: "Settings" });
-      await expect.poll(() => settingsLink.isVisible()).toBe(true);
-      await settingsLink.click();
+      // settings sidebar until "Back to app" (or Escape) exits. Settings opens
+      // through the footer agent chip's utility menu.
+      const agentChip = sidebar.getByRole("button", { name: /Agent menu/ });
+      const openSettingsFromChip = async () => {
+        await agentChip.click();
+        await sidebar.getByRole("menuitem", { name: "Settings" }).click();
+      };
+      await expect.poll(() => agentChip.isVisible()).toBe(true);
+      await openSettingsFromChip();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
       const settingsSidebar = page.locator(".settings-sidebar");
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
@@ -317,15 +322,15 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await captureSettingsSidebarProof(settingsSidebar, "01f-settings-search-navigated.png");
       await holdUiProof(page);
       await page.keyboard.press("Escape");
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/sessions");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
       await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await settingsLink.click();
+      await openSettingsFromChip();
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
       await expect.poll(() => settingsSearch.inputValue()).toBe("");
       await captureSettingsSidebarProof(settingsSidebar, "01g-settings-search-reset.png");
       await holdUiProof(page);
       await settingsSidebar.getByRole("button", { name: "Back to app" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/sessions");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
       await captureUiProof(page, "01-default-pinned.png");
 
       const moreButton = sidebar.getByRole("button", { exact: true, name: "More" });
@@ -349,25 +354,25 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect
         .poll(() => trimmedTextContents(menu.getByRole("menuitemcheckbox")))
         .not.toContain("Workboard");
-      const sessionsItem = menu.getByRole("menuitemcheckbox", { name: "Sessions" });
-      await expect.poll(() => sessionsItem.getAttribute("aria-checked")).toBe("false");
+      const tasksItem = menu.getByRole("menuitemcheckbox", { name: "Tasks" });
+      await expect.poll(() => tasksItem.getAttribute("aria-checked")).toBe("false");
       const usageItem = menu.getByRole("menuitemcheckbox", { name: "Usage" });
       await expect.poll(() => usageItem.getAttribute("aria-checked")).toBe("true");
       await expect
-        .poll(() => sessionsItem.evaluate((element) => element === document.activeElement))
+        .poll(() => usageItem.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await captureUiProof(page, "02-customize-menu.png");
 
       await usageItem.click();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Automations", "Plugins"]);
-      await sessionsItem.click();
+      await tasksItem.click();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Sessions"]);
+        .toEqual(["Automations", "Plugins", "Tasks"]);
       await page.reload();
       await expect
         .poll(() => trimmedTextContents(pinnedItems))
-        .toEqual(["Automations", "Plugins", "Sessions"]);
+        .toEqual(["Automations", "Plugins", "Tasks"]);
       // The More menu is transient: closed after reload, unpinned routes inside.
       await expect.poll(() => moreButton.getAttribute("aria-expanded")).toBe("false");
       await moreButton.click();
@@ -505,7 +510,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     });
 
     try {
-      await page.goto(`${server.baseUrl}sessions`);
+      await page.goto(`${server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
       await sidebar.getByRole("button", { exact: true, name: "More" }).click();
       await expect
@@ -580,7 +585,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       locator.evaluate((element) => (element as HTMLElement & { runOutcome: string }).runOutcome);
 
     try {
-      await page.goto(`${server.baseUrl}sessions`);
+      await page.goto(`${server.baseUrl}chat`);
       const sidebar = page.locator("openclaw-app-sidebar");
       const pet = sidebar.locator(".sidebar-shell openclaw-lobster-pet");
       await expect.poll(() => pet.count()).toBe(1);

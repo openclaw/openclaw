@@ -57,18 +57,6 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         WCSession.isSupported()
     }
 
-    nonisolated static func currentStatusSnapshot() -> WatchMessagingStatus {
-        guard WCSession.isSupported() else {
-            return WatchMessagingStatus(
-                supported: false,
-                paired: false,
-                appInstalled: false,
-                reachable: false,
-                activationState: "unsupported")
-        }
-        return self.status(for: WCSession.default)
-    }
-
     func status() async -> WatchMessagingStatus {
         try? await self.ensureActivated()
         return self.currentStatusSnapshot()

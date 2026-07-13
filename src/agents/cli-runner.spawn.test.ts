@@ -4969,7 +4969,7 @@ ${JSON.stringify({
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
   });
 
-  it("clears claude-cli provider-routing, auth, telemetry, and host-managed env", async () => {
+  it("clears claude-cli provider-routing, auth, telemetry, compaction, and host-managed env", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example.com/v1");
     vi.stubEnv("ANTHROPIC_API_TOKEN", "env-api-token");
     vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "x-test-header: env");
@@ -4977,6 +4977,7 @@ ${JSON.stringify({
     vi.stubEnv("CLAUDE_CODE_USE_BEDROCK", "1");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "env-auth-token");
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "env-oauth-token");
+    vi.stubEnv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", "1048576");
     vi.stubEnv("CLAUDE_CODE_REMOTE", "1");
     vi.stubEnv("ANTHROPIC_UNIX_SOCKET", "/tmp/anthropic.sock");
     vi.stubEnv("OTEL_LOGS_EXPORTER", "none");
@@ -4992,6 +4993,9 @@ ${JSON.stringify({
         provider: "claude-cli",
         model: "claude-sonnet-4-6",
         runId: "run-claude-env-hardened",
+        preparedEnv: {
+          CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000",
+        },
         backend: {
           env: {
             SAFE_KEEP: "ok",
@@ -5007,6 +5011,7 @@ ${JSON.stringify({
             "CLAUDE_CODE_USE_BEDROCK",
             "ANTHROPIC_AUTH_TOKEN",
             "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
             "CLAUDE_CODE_REMOTE",
             "ANTHROPIC_UNIX_SOCKET",
             "OTEL_LOGS_EXPORTER",
@@ -5031,6 +5036,7 @@ ${JSON.stringify({
     expect(input.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
     expect(input.env?.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
     expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("override-oauth-token");
+    expect(input.env?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("100000");
     expect(input.env?.CLAUDE_CODE_REMOTE).toBeUndefined();
     expect(input.env?.ANTHROPIC_UNIX_SOCKET).toBeUndefined();
     expect(input.env?.OTEL_LOGS_EXPORTER).toBeUndefined();

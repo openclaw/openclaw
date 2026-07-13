@@ -1,6 +1,3 @@
-/**
- * OpenAI Chat Completions streaming transport.
- */
 import { randomUUID } from "node:crypto";
 import {
   convertMessages,
@@ -1904,7 +1901,7 @@ export function buildOpenAICompletionsParams(
   return params;
 }
 
-export function parseTransportChunkUsage(
+function parseTransportChunkUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & { cost?: unknown },
   model: Model,
 ): MutableAssistantOutput["usage"] {
@@ -1943,6 +1940,7 @@ export const completionsTesting = {
   createSseDoneDetector,
   createOpenAICompletionsClient,
   buildOpenAICompletionsClientConfig,
+  parseTransportChunkUsage,
   processOpenAICompletionsStream,
   shouldEmitOpenAICompletionsReasoningForModel,
 };

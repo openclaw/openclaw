@@ -332,6 +332,27 @@ struct RootTabsSourceGuardTests {
             "SettingsDetailRow(\"Model\", value: .verbatim(DeviceInfoHelper.modelIdentifier()))"))
     }
 
+    @Test func `settings exposes guarded installed and ClawHub skill management`() throws {
+        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let skillsSource = try String(contentsOf: Self.settingsSkillsSourceURL(), encoding: .utf8)
+
+        #expect(settingsSource.contains("title: \"Skills\""))
+        #expect(settingsSource.contains("route: .skills"))
+        #expect(skillsSource.contains("case installed"))
+        #expect(skillsSource.contains("case browse"))
+        #expect(skillsSource.contains("case setup"))
+        #expect(skillsSource.contains("case off"))
+        #expect(skillsSource.contains("method: \"skills.status\""))
+        #expect(skillsSource.contains("method: \"skills.search\""))
+        #expect(skillsSource.contains("method: \"skills.detail\""))
+        #expect(skillsSource.contains("method: \"skills.install\""))
+        #expect(skillsSource.contains("method: \"skills.update\""))
+        #expect(skillsSource.contains(".disabled(!self.warningExpanded || self.isInstalling)"))
+        #expect(skillsSource.contains("SkillManagementContract.installed"))
+        #expect(skillsSource.contains("ifCurrentRoute: route"))
+        #expect(skillsSource.contains("distinguishPreDispatchRouteChange: true"))
+    }
+
     @Test func `routed headers use shared adaptive layout`() throws {
         let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
         let featureChromeSource = try String(contentsOf: Self.iPadSidebarScreenChromeSourceURL(), encoding: .utf8)
@@ -1750,6 +1771,13 @@ extension RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/SettingsChannelsDestination.swift")
+    }
+
+    private static func settingsSkillsSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/SettingsSkillsDestination.swift")
     }
 
     private static func sharedChatPreviewSourceURL() -> URL {

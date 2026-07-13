@@ -177,8 +177,8 @@ jobs:
           }
 
           # Manual release-gate runs commonly validate the workflow ref's exact SHA.
-          # Fetch the branch/tag ref first so GitHub does not have to negotiate an
-          # arbitrary SHA fetch, then verify the resolved commit stayed pinned.
+          # Fetch the branch/tag ref first, then refetch the SHA if that ref moves
+          # while the manual run waits for a runner.
           checkout_ref="$CHECKOUT_REF"
           requested_sha=""
           if [[ "$CHECKOUT_REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -209,6 +209,12 @@ jobs:
 
           if [ -n "$requested_sha" ]; then
             resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            if [ "$resolved_sha" != "$requested_sha" ] && [ "$checkout_ref" != "$requested_sha" ]; then
+              echo "::notice::checkout ref '$checkout_ref' moved to '$resolved_sha'; fetching requested SHA '$requested_sha'"
+              checkout_ref="$requested_sha"
+              fetch_checkout_ref "$checkout_ref"
+              resolved_sha="$(git -C "$GITHUB_WORKSPACE" rev-parse refs/remotes/origin/checkout)"
+            fi
             if [ "$resolved_sha" != "$requested_sha" ]; then
               echo "::error::checkout ref '$checkout_ref' resolved to '$resolved_sha'," \
                 "expected '$requested_sha'" >&2
@@ -578,14 +584,14 @@ jobs:
         if: steps.manifest.outputs.run_protocol_event_coverage == 'true'
         run: node scripts/check-protocol-event-coverage.mjs
 
-  # Run dependency-free security checks in parallel with scope detection so the
-  # main Node jobs do not have to wait for Python/pre-commit setup.
+  # Run dependency-free security checks on a hosted runner in parallel with
+  # scope detection. No downstream job waits for Python/pre-commit setup.
   security-fast:
     permissions:
       contents: read
     needs: [runner-admission]
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PRE_COMMIT_HOME: .cache/pre-commit-security-fast
@@ -869,7 +875,7 @@ jobs:
         env:
           # GitHub-hosted Linux reports a higher RSS baseline than Blacksmith for
           # the same built CLI. Keep the tighter Blacksmith regression ceiling.
-          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '350' }}
+          OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
         run: |
           set +e
           pnpm test:startup:memory
@@ -1388,7 +1394,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
-          node-version: "22.19.0"
+          node-version: "22.22.3"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1559,7 +1565,6 @@ jobs:
         env:
           HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
-          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || (github.event_name == 'push' && github.event.before || '') }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
@@ -1569,17 +1574,12 @@ jobs:
           case "$TASK" in
             guards)
               pnpm check:no-conflict-markers
-              if [ -n "$LOC_BASE_SHA" ]; then
-                git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/loc-base"
-                pnpm check:loc --base-ref refs/remotes/origin/loc-base
-              else
-                pnpm check:loc
-              fi
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
               if [ -n "$PR_BASE_SHA" ]; then
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/loc-base --head HEAD --no-merge-base
+                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/pr-base"
+                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/pr-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read

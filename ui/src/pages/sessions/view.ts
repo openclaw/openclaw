@@ -10,6 +10,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
+import "../../styles/sessions.css";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
@@ -21,6 +22,7 @@ import {
   normalizeThinkingOptionValue,
 } from "../../lib/chat/thinking.ts";
 import {
+  formatDurationCompact,
   formatMs,
   formatRelativeTimestamp,
   formatTokens,
@@ -741,18 +743,7 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   if (typeof runtimeMs !== "number" || !Number.isFinite(runtimeMs) || runtimeMs < 0) {
     return null;
   }
-  const totalSeconds = Math.round(runtimeMs / 1000);
-  if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  if (minutes < 60) {
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+  return formatDurationCompact(runtimeMs, { spaced: true }) ?? "0ms";
 }
 
 function renderSessionGoalChip(goal: GatewaySessionRow["goal"]) {

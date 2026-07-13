@@ -12,17 +12,11 @@ import {
 import { responsesTesting } from "./openai-responses-transport.js";
 import type { OpenAICompletionsOptions, OpenAIModeModel } from "./openai-transport-shared.js";
 
+export { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 export {
-  createOpenAICompletionsTransportStreamFn,
-  parseTransportChunkUsage,
-} from "./openai-completions-transport.js";
-export {
-  buildOpenAIResponsesParams,
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
-  resolveAzureOpenAIApiVersion,
 } from "./openai-responses-transport.js";
-export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 // Keep this SDK-exported declaration anchored to the long-lived facade while the
 // completions implementation remains independently owned.

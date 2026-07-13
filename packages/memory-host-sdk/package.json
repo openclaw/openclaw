@@ -5,7 +5,8 @@
   "type": "module",
   "dependencies": {
     "@openclaw/normalization-core": "workspace:*",
-    "@openclaw/retry": "workspace:*"
+    "@openclaw/retry": "workspace:*",
+    "p-map": "7.0.5"
   },
   "exports": {
     "./runtime-core": "./src/runtime-core.ts",

@@ -82,6 +82,7 @@ export const ko: TranslationMap = {
     relink: "다시 연결",
     waitForScan: "스캔 대기",
     logout: "로그아웃",
+    skipToMainContent: "주요 콘텐츠로 건너뛰기",
   },
   nativeLinkMenu: {
     label: "링크 작업",
@@ -217,10 +218,11 @@ export const ko: TranslationMap = {
   lazyView: {
     loadingTitle: "패널 로드 중",
     errorTitle: "패널을 로드하지 못했습니다",
-    errorSubtitle:
-      "최신 Control UI 번들을 로드하려면 페이지를 새로고침하거나, 네트워크 요청이 실패한 경우 다시 시도하세요.",
+    genericSubtitle: "이 패널을 불러오는 중에 문제가 발생했습니다.",
+    staleTitle: "새 버전을 사용할 수 있습니다",
+    staleSubtitle:
+      "OpenClaw가 백그라운드에서 업데이트되었습니다. 최신 패널을 사용하려면 새로고침하세요.",
     retry: "다시 시도",
-    unknownError: "알 수 없는 모듈 로드 오류입니다.",
   },
   nodes: {
     pairing: {
@@ -229,6 +231,15 @@ export const ko: TranslationMap = {
       title: "OpenClaw 모바일",
       subtitle: "새 휴대폰을 연결하려면 모바일 앱에서 이 QR 코드를 스캔하세요.",
       generating: "보안 설정 코드를 생성하는 중…",
+      accessTitle: "모바일 액세스",
+      fullAccess: "전체 액세스(권장)",
+      fullAccessHint: "Node와 설정 및 업그레이드를 포함한 모든 Gateway 제어 기능을 제공합니다.",
+      limitedAccess: "제한된 액세스",
+      limitedAccessHint: "관리 제어 기능 없이 Node, 채팅 및 승인을 사용할 수 있습니다.",
+      generateCode: "설정 코드 생성",
+      transportLimitedTitle: "네트워크 안전을 위해 제한됨",
+      transportLimitedHint:
+        "이 Gateway URL은 암호화되지 않은 ws://를 사용합니다. wss:// 또는 Tailscale Serve를 사용한 다음, 전체 액세스를 위한 새 코드를 생성하세요.",
       failed: "설정 코드를 생성할 수 없습니다.",
       qrAlt: "OpenClaw 모바일 페어링 QR 코드",
       qrUnavailable: "QR을 사용할 수 없습니다. 대신 설정 코드를 복사하세요.",
@@ -262,7 +273,8 @@ export const ko: TranslationMap = {
     },
     inventory: {
       title: "장치",
-      subtitle: "페어링된 클라이언트당 한 행: 상태, 역할, 토큰.",
+      summaryConnected: "{total}개 중 {connected}개 연결됨",
+      summaryPending: "{count}개 승인 대기 중",
       cleanupStale: "오래된 항목 {count}개 정리",
       pendingApproval: "승인 대기 중",
       paired: "페어링됨",
@@ -377,6 +389,18 @@ export const ko: TranslationMap = {
     title: "관리되는 Worktree",
     subtitle: "OpenClaw가 소유한 격리된 저장소 체크아웃입니다.",
     cleanNow: "지금 정리",
+    cleanupTitle: "정리",
+    cleanupSubtitle:
+      "OpenClaw는 디스크 공간을 확보하기 위해 오래된 worktree를 주기적으로 제거합니다. 정리 수준을 조정하세요.",
+    cleanupMaxCount: "최대 worktree 수",
+    cleanupMaxCountHelp:
+      "모든 저장소에서 유지할 관리 대상 worktree의 최대 개수입니다. 오래된 worktree부터 스냅샷을 생성한 후 제거합니다. 개수 제한을 비활성화하려면 0으로 설정하세요.",
+    cleanupMaxSize: "최대 총크기(GB)",
+    cleanupMaxSizeHelp:
+      "관리되는 모든 worktree의 최대 총크기(GB)입니다. 크기 제한을 비활성화하려면 0으로 설정하세요.",
+    cleanupDecrease: "{label} 줄이기",
+    cleanupIncrease: "{label} 늘리기",
+    cleanupSaveFailed: "정리 한도를 저장하지 못했습니다.",
     name: "이름",
     repo: "저장소",
     branch: "브랜치",
@@ -395,6 +419,17 @@ export const ko: TranslationMap = {
     working: "작업 중…",
     ready: "채팅할 준비가 되었습니다",
     whatCanAgentDo: "{name}님은 무엇을 할 수 있나요?",
+    help: "도움말",
+    getHelp: "도움말 보기",
+    discord: "Discord 커뮤니티",
+    viewChangelog: "변경 로그 보기",
+    agentSettings: "에이전트 설정",
+    filterAgents: "에이전트 찾기…",
+    noAgentMatches: "일치하는 에이전트 없음",
+  },
+  agentScope: {
+    label: "에이전트 범위",
+    allAgents: "모든 에이전트",
   },
   newSession: {
     title: "새 세션",
@@ -563,6 +598,7 @@ export const ko: TranslationMap = {
     groupBy: "그룹화 기준",
     groupByNone: "없음",
     groupByCategory: "사용자 지정 그룹",
+    showCronSessions: "cron 세션 표시",
     groupByChannel: "채널",
     groupByKind: "종류",
     groupByAgent: "에이전트",
@@ -602,6 +638,8 @@ export const ko: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "전환기에 고정",
+    unpinFromSwitcher: "전환기에서 고정 해제",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -626,6 +664,17 @@ export const ko: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "ID",
+      subtitle: "채팅과 사이드바에 표시되는 이름, 이모지 및 아바타입니다.",
+      name: "표시 이름",
+      namePlaceholder: "에이전트 이름",
+      emoji: "이모지",
+      chooseImage: "이미지 선택…",
+      replaceImage: "이미지 교체…",
+      imageUnusable: "해당 이미지는 사용할 수 없습니다. 최대 2MB의 이미지 파일을 선택하세요.",
+      fileHint: "에이전트는 작업 공간의 IDENTITY.md를 편집하여 직접 설정할 수 있습니다.",
     },
     overview: {
       title: "개요",
@@ -1069,6 +1118,7 @@ export const ko: TranslationMap = {
     settingsView: "설정 보기",
     simple: "간단",
     advanced: "고급",
+    content: "설정 콘텐츠",
     themeImported: "{name}을(를) 가져왔습니다.",
     themeRemoved: "사용자 지정 테마가 제거되었습니다.",
     channels: {
@@ -1196,6 +1246,10 @@ export const ko: TranslationMap = {
       inlineHintAfter:
         "하여 브라우저 로컬 tweakcn 테마를 하나 추가하세요. tweakcn에서 Share를 사용하고 복사된 링크를 여기에 붙여넣으세요.",
       textSize: "텍스트 크기",
+    },
+    chatPrefs: {
+      title: "채팅",
+      hint: "브라우저 로컬 채팅 환경설정입니다.",
     },
     connection: {
       title: "연결",
@@ -1418,6 +1472,8 @@ export const ko: TranslationMap = {
     platforms: "플랫폼: {platforms}",
     installNamed: "{name} 설치",
     notFound: "Skill을 찾을 수 없습니다.",
+    openDetails: "{name} 세부 정보 열기",
+    enabledNamed: "{name} 활성화됨",
     invalidLink: "ClawHub 링크가 잘못되었습니다",
     overview: "개요",
     skillCard: "Skill Card",
@@ -1721,8 +1777,6 @@ export const ko: TranslationMap = {
     removedRestart:
       "{name}이(가) 제거되었습니다. 변경 사항을 적용하려면 Gateway를 다시 시작해야 합니다.",
     verifiedSource: "인증된 출처",
-    menuLabel: "{name} 작업",
-    menuDetails: "세부 정보 보기",
     enableAction: "활성화",
     disableAction: "비활성화",
     working: "작업 중…",
@@ -1858,6 +1912,10 @@ export const ko: TranslationMap = {
       useCurrentChat: "현재 채팅 사용",
       useCurrentChatAria: "수정 요청에 현재 채팅 사용",
       useCurrentChatTooltip: "수정 요청을 제안의 워크숍 세션 대신 현재 채팅 세션으로 보냅니다.",
+      selfLearning: "자기 학습",
+      selfLearningAria: "자기 학습 스킬 제안 전환",
+      selfLearningTooltip:
+        "수정 사항과 완료된 주요 작업을 포착하고 검토하여 보류 중인 Skill 제안으로 만듭니다. 추가 백그라운드 토큰을 사용하며, 초안은 이 보드에 보류 중인 제안으로 등록됩니다.",
       view: "워크숍 보기",
       board: "보드",
       today: "오늘",
@@ -1936,6 +1994,14 @@ export const ko: TranslationMap = {
       noProposalsTitle: "아직 제안이 없습니다",
       noProposalsBody: "{agent}이(가) 아직 스킬 제안을 작성하지 않았습니다.",
       noProposalsFooter: "새 제안은 검토를 위해 여기에 표시됩니다.",
+    },
+    selfLearning: {
+      pitchTitle: "자기 학습 켜기",
+      pitchBody:
+        "OpenClaw는 수정 사항과 완료된 주요 실행을 검토한 후 이 보드에 게시할 Skill 제안 초안을 작성합니다. 추가 백그라운드 토큰을 사용하며, 초안은 보류 중인 제안으로 등록됩니다.",
+      enable: "자기 학습 활성화",
+      enabling: "활성화 중…",
+      updateError: "자기 학습 설정을 업데이트할 수 없습니다.",
     },
     today: {
       emptyTitle: "오늘 대기 중인 항목이 없습니다",
@@ -3060,24 +3126,16 @@ export const ko: TranslationMap = {
       rateLimited:
         "GitHub API 속도 제한에 도달했습니다. 제한이 재설정될 때까지 Pull request 상태가 최신이 아닐 수 있습니다.",
     },
-    refreshTitle: "채팅 데이터 새로고침",
-    settings: "채팅 설정",
     usageRemaining: "남은 사용량",
-    voiceSettings: "음성",
-    thinkingToggle: "어시스턴트 생각/작업 출력 전환",
-    toolCallsToggle: "도구 호출 및 도구 결과 전환",
-    commentaryToggle: "최종 답변 후에도 해설 유지",
-    commentaryLabel: "해설",
-    autoScrollMode: "자동 스크롤 모드",
-    autoScrollAlways: "항상",
-    autoScrollNearBottom: "하단 근처",
-    autoScrollOff: "끔",
+    view: {
+      menu: "보기",
+      reasoning: "추론",
+      toolCalls: "도구 호출",
+      commentary: "해설 유지",
+    },
     sendShortcut: "전송 단축키",
     sendShortcutEnter: "Enter",
     sendShortcutModifierEnter: "⌘/Ctrl+Enter",
-    hideCronSessions: "Cron 세션 숨기기",
-    showCronSessions: "Cron 세션 표시",
-    showCronSessionsHidden: "Cron 세션 표시({count}개 숨김)",
     onboardingDisabled: "설정 중에는 비활성화됨",
     gatewayStatus: "Gateway 상태: {status}",
     commandPaletteTitle: "검색하거나 이동… (⌘K)",
@@ -3267,7 +3325,6 @@ export const ko: TranslationMap = {
       },
       takePhoto: "사진 촬영",
       dismissVoiceInputError: "음성 입력 오류 닫기",
-      loadingMicrophones: "마이크를 불러오는 중…",
       microphoneAccessFailed: "마이크 입력에 액세스할 수 없습니다.",
       microphoneBusy: "마이크 입력이 사용 중이거나 브라우저에서 사용할 수 없습니다.",
       microphoneFallback: "마이크 {number}",
@@ -3287,19 +3344,6 @@ export const ko: TranslationMap = {
       stillListening: "계속 듣는 중",
       stopVoiceInput: "음성 입력 중지",
       systemDefaultMicrophone: "시스템 기본값",
-      talkAdvancedSettingsRequiresAdmin: "고급 설정에는 관리자 권한이 필요합니다",
-      talkAdvancedSettingsRequiresAdminTitle:
-        "고급 Talk 설정에는 operator.admin 권한이 필요합니다.",
-      talkDefault: "기본값",
-      talkModel: "모델",
-      talkModelAuto: "자동",
-      talkMoreInSettings: "설정에서 더 보기",
-      talkSensitivity: "민감도",
-      talkSensitivityHigh: "높음",
-      talkSensitivityLow: "낮음",
-      talkSensitivityMedium: "보통",
-      talkVoice: "음성",
-      voiceOptions: "음성 옵션",
       voiceTranscript: "음성 기록",
     },
     selectors: {
@@ -3384,6 +3428,8 @@ export const ko: TranslationMap = {
       empty: "이 에이전트에는 아직 백그라운드 작업이 없습니다.",
       running: "실행 중({count})",
       finished: "완료됨({count})",
+      statusRunningOne: "실행 중인 작업 1개",
+      statusRunningMany: "실행 중인 작업 {count}개",
       stopTask: "{title} 중지",
       viewTranscript: "트랜스크립트 보기",
       toolUseOne: "도구 사용 1회",
@@ -3471,11 +3517,13 @@ export const ko: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "자동화 상태",
       all: "전체",
       active: "활성",
       paused: "일시중지됨",
     },
     list: {
+      viewLabel: "자동화 보기",
       searchPlaceholder: "예약된 작업 검색",
       newTask: "새 작업",
       filters: "필터",
@@ -3541,12 +3589,12 @@ export const ko: TranslationMap = {
       },
     },
     stats: {
-      scheduler: "스케줄러",
       tasks: "작업",
       failing: "실패 중",
       nextWake: "다음 실행",
     },
     detail: {
+      tabsLabel: "자동화 세부 정보",
       newTitle: "새 예약 작업",
       newSubtitle: "OpenClaw가 수행할 작업을 설명한 후 실행 시점을 선택하세요.",
       back: "모든 자동화",
@@ -3566,7 +3614,6 @@ export const ko: TranslationMap = {
       clone: "복제",
       remove: "제거",
       more: "추가 작업",
-      history: "기록",
     },
     runNotStarted: {
       notDue: "이 자동화는 아직 실행할 시간이 아닙니다.",

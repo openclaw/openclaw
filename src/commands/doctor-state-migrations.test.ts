@@ -9,12 +9,12 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.js";
+import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import {
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "../plugin-state/plugin-state-store.js";
+import { setMaxPluginStateEntriesPerPluginForTests } from "../plugin-state/plugin-state-store.sqlite.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import {
   readPersistedInstalledPluginIndex,

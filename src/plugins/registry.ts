@@ -17,43 +17,7 @@ export type PluginHttpRouteRegistration = RegistryTypesPluginHttpRouteRegistrati
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
 };
 
-export type {
-  PluginChannelRegistration,
-  PluginChannelSetupRegistration,
-  PluginCliBackendRegistration,
-  PluginCliRegistration,
-  PluginCommandRegistration,
-  PluginConversationBindingResolvedHandlerRegistration,
-  PluginHookRegistration,
-  PluginAgentHarnessRegistration,
-  PluginMemoryEmbeddingProviderRegistration,
-  PluginNodeHostCommandRegistration,
-  PluginProviderRegistration,
-  PluginWorkerProviderRegistration,
-  PluginControlUiDescriptorRegistryRegistration,
-  PluginHostedMediaResolverRegistration,
-  PluginRecord,
-  PluginRegistry,
-  PluginRegistryParams,
-  PluginTextTransformsRegistration,
-  PluginToolMetadataRegistryRegistration,
-  PluginTrustedToolPolicyRegistryRegistration,
-  PluginToolRegistration,
-  PluginSpeechProviderRegistration,
-  PluginRealtimeTranscriptionProviderRegistration,
-  PluginRealtimeVoiceProviderRegistration,
-  PluginMediaUnderstandingProviderRegistration,
-  PluginImageGenerationProviderRegistration,
-  PluginVideoGenerationProviderRegistration,
-  PluginMusicGenerationProviderRegistration,
-  PluginWebFetchProviderRegistration,
-  PluginWebSearchProviderRegistration,
-  PluginReloadRegistration,
-  PluginRuntimeLifecycleRegistryRegistration,
-  PluginSecurityAuditCollectorRegistration,
-  PluginServiceRegistration,
-  PluginSessionExtensionRegistryRegistration,
-} from "./registry-types.js";
+export type { PluginRecord, PluginRegistry } from "./registry-types.js";
 export { createEmptyPluginRegistry } from "./registry-empty.js";
 
 /**

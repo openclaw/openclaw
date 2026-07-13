@@ -34,7 +34,7 @@ type CliProcessDiagnostics = {
   useResume: boolean;
 };
 
-export type CliTerminalFailure = {
+type CliTerminalFailure = {
   reason: "max_turns";
   limit?: number;
 };
@@ -1294,12 +1294,28 @@ export function createCliJsonlStreamingParser(params: {
       usage,
     });
     if (result) {
-      // The terminal result can be empty after Claude already streamed text.
-      // Keep that delivered text; a genuinely empty turn still remains empty.
-      output =
-        result.text || result.errorText
-          ? result
-          : { ...result, text: assistantText.trim() || texts.join("\n").trim() };
+      if (result.errorText) {
+        output = result;
+        return;
+      }
+      // Empty terminal result can follow already-streamed text; keep that text.
+      const nextText = (result.text || assistantText.trim() || texts.join("\n").trim()).trim();
+      const previousText = output?.text?.trim() ?? "";
+      // Claude Code may emit an interim result while background agents run, then
+      // a second result after task-notification. Preserve earlier result text
+      // when the later envelope does not already include it.
+      let text = nextText;
+      if (
+        previousText &&
+        nextText &&
+        previousText !== nextText &&
+        !nextText.startsWith(previousText)
+      ) {
+        text = `${previousText}\n${nextText}`;
+      } else if (!nextText) {
+        text = previousText;
+      }
+      output = { ...result, text };
       return;
     }
 

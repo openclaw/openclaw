@@ -245,11 +245,17 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
     "Text(verbatim: primaryActionTitle)",
   ],
   "apps/ios/Sources/Settings/PrivacyAccessSectionView.swift": [
-    "title: LocalizedStringResource",
-    "status: PrivacyPermissionStatus",
     "detail: LocalizedStringResource",
+    "statusLabel: LocalizedStringResource? = nil",
     "actionTitle: LocalizedStringResource?",
-    "String(localized: status.resource)",
+  ],
+  "apps/ios/Sources/Permissions/DevicePermissionRow.swift": [
+    "title: LocalizedStringResource",
+    "detail: LocalizedStringResource",
+    "statusLabel: LocalizedStringResource?",
+    "actionTitle: LocalizedStringResource?",
+    "Text(self.title)",
+    "Text(actionTitle)",
   ],
   "apps/ios/Sources/LiveActivity/LiveActivityManager.swift": [
     'String(localized: "Connecting...")',

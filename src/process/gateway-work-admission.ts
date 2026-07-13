@@ -2,7 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type GatewaySuspendAdmissionPhase = "accepting" | "preparing" | "prepared";
+type GatewaySuspendAdmissionPhase = "accepting" | "preparing" | "prepared";
 
 export class GatewayDrainingError extends Error {
   constructor() {
@@ -44,13 +44,13 @@ const GATEWAY_WORK_ADMISSION_STATE = resolveGlobalSingleton(
   }),
 );
 
-export type GatewayRootWorkAdmissionLease = {
+type GatewayRootWorkAdmissionLease = {
   ownsRoot: boolean;
   release: () => void;
   run: <T>(run: () => Promise<T>) => Promise<T>;
 };
 
-export type GatewaySuspendAdmissionLease = {
+type GatewaySuspendAdmissionLease = {
   commit: () => boolean;
   rollback: () => boolean;
   release: () => boolean;
@@ -241,15 +241,6 @@ export async function beginGatewayRootWorkAdmissionWhenOpen(): Promise<GatewayRo
     await new Promise<void>((resolve) => {
       GATEWAY_WORK_ADMISSION_STATE.suspendOpenWaiters.add(resolve);
     });
-  }
-}
-
-export async function runWithGatewayRootWorkAdmission<T>(run: () => Promise<T>): Promise<T> {
-  const admission = await beginGatewayRootWorkAdmissionWhenOpen();
-  try {
-    return await admission.run(run);
-  } finally {
-    admission.release();
   }
 }
 
