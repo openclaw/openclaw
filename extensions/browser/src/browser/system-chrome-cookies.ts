@@ -90,6 +90,7 @@ async function readKeychainSecret(entry: KeychainEntry, signal?: AbortSignal): P
     }
     throw new Error(
       `could not read ${entry.service} from macOS Keychain; approve the prompt and retry`,
+      { cause: error },
     );
   }
   const raw = stdout;

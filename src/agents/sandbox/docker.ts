@@ -4,6 +4,7 @@
  * Wraps Docker spawn, environment sanitization, container inspection, creation, and exec behavior.
  */
 import { createAbortError } from "../../infra/abort-signal.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import {
@@ -69,7 +70,7 @@ export async function execDockerRaw(
         { code: "INVALID_CONFIG", cause: result },
       );
     }
-    throw result;
+    throw toErrorObject(result, "Docker command execution failed");
   }
   const stdout = Buffer.from(result.stdout);
   const stderr = Buffer.from(result.stderr);

@@ -73,7 +73,7 @@ async function listTarOutputLines<T>(input: {
       maxOutputBytes: { stderr: TAR_STDERR_TAIL_CHARS },
       onOutputChunk: (chunk, stream) => {
         if (stream !== "stdout") {
-          return;
+          return true;
         }
         outputBytes += chunk.byteLength;
         if (outputBytes > TAR_LIST_OUTPUT_MAX_CHARS) {
@@ -255,7 +255,7 @@ export async function validateTarUncompressedBudget(
       maxOutputBytes: { stderr: TAR_STDERR_TAIL_CHARS },
       onOutputChunk: (chunk, stream) => {
         if (stream !== "stdout") {
-          return;
+          return true;
         }
         totalBytes += chunk.byteLength;
         budgetExceeded = totalBytes > maxBytes;

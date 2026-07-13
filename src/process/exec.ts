@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { StringDecoder } from "node:string_decoder";
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { execa, type Options as ExecaOptions, type ResultPromise } from "execa";
 import { danger, shouldLogVerbose } from "../globals.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
@@ -827,7 +828,7 @@ export async function runCommandWithTimeout(
       return undefined;
     }
   };
-  const startWindowsTermination = (childPid: number, graceful: boolean): Promise<void> => {
+  const startWindowsTermination = (childPid: number, graceful: boolean): void => {
     const taskkills: Promise<unknown>[] = [];
     const startTaskkill = (args: string[]) => {
       const taskkill = spawnTaskkillOrFallback(args, killDirectChild);
@@ -856,9 +857,8 @@ export async function runCommandWithTimeout(
       }
     })();
     windowsTerminationPromise = terminationPromise;
-    return terminationPromise;
   };
-  const terminateChild = (): Promise<void> | undefined => {
+  const terminateChild = (): void => {
     const childPid = child.pid;
     const directChildAlive = !childExited && child.exitCode == null && child.signalCode == null;
     if (process.platform === "win32" && !directChildAlive) {
@@ -869,19 +869,18 @@ export async function runCommandWithTimeout(
     if (killProcessTree && typeof childPid === "number") {
       processTreeSettleAt ??= Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
       if (process.platform === "win32") {
-        return startWindowsTermination(childPid, true);
-      } else {
-        terminateProcessTree(childPid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+        startWindowsTermination(childPid, true);
+        return;
       }
+      terminateProcessTree(childPid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
       return;
     }
     if (!directChildAlive) {
       return;
     }
     if (process.platform === "win32" && typeof childPid === "number") {
-      return startWindowsTermination(childPid, false);
+      startWindowsTermination(childPid, false);
     }
-    return undefined;
   };
   const settleTerminatedProcessTree = async () => {
     if (windowsTerminationPromise) {
@@ -908,10 +907,10 @@ export async function runCommandWithTimeout(
       return;
     }
     termination = reason;
-    const terminationPromise = terminateChild();
+    terminateChild();
     // A live Windows PID stays owned by taskkill until enumeration finishes.
     // Other platforms, and an already-dead Windows root, can abort immediately.
-    if (!terminationPromise) {
+    if (!windowsTerminationPromise) {
       cancelController.abort();
     }
   };
@@ -987,8 +986,10 @@ export async function runCommandWithTimeout(
         }
         removeCapturedBytes(index, combinedCapturedBytesByStream[stream] - maxBytes);
       }
-      while (combinedCapturedBytes > maxCombinedOutputBytes) {
-        removeCapturedBytes(0, combinedCapturedBytes - maxCombinedOutputBytes);
+      let combinedOverflow = combinedCapturedBytes - maxCombinedOutputBytes;
+      while (combinedOverflow > 0) {
+        removeCapturedBytes(0, combinedOverflow);
+        combinedOverflow = combinedCapturedBytes - maxCombinedOutputBytes;
       }
     } else {
       const remaining = Math.max(0, maxCombinedOutputBytes - combinedBytesBeforeChunk);
@@ -1067,7 +1068,7 @@ export async function runCommandWithTimeout(
   });
   await settleTerminatedProcessTree();
   if (outputObserverError !== undefined) {
-    throw outputObserverError;
+    throw toErrorObject(outputObserverError, "Command output observer failed");
   }
   // Patched Node can report null/null after a cmd.exe shim exits. Execa turns
   // that into a cause-less failure; preserve the shim fallback only post-spawn.

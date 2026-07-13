@@ -7,9 +7,8 @@ export const IMESSAGE_CLI_STDERR_TAIL_BYTES = 64 * 1024;
 function parseLastJsonObject(stdout: string): Record<string, unknown> | null {
   const last = stdout
     .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .at(-1);
+    .findLast((line) => line.trim().length > 0)
+    ?.trim();
   if (!last) {
     return null;
   }

@@ -372,7 +372,7 @@ describe("runCommandWithTimeout", () => {
       {
         onOutputChunk: (chunk, stream) => {
           if (stream !== "stdout") {
-            return;
+            return true;
           }
           observedBytes += chunk.byteLength;
           return observedBytes < 32 * 1024;
@@ -504,7 +504,9 @@ describe("runCommandBuffered", () => {
             descendantExited = true;
             break;
           }
-          await new Promise<void>((resolve) => setTimeout(resolve, 25));
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 25);
+          });
         }
         expect(descendantExited).toBe(true);
       } finally {

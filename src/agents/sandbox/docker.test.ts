@@ -44,9 +44,7 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     stderr = spawnState.imageExists
       ? ""
       : spawnState.inspectError || `Error response from daemon: No such image: ${args[2]}`;
-  } else if (args[0] === "pull" || args[0] === "tag") {
-    code = 0;
-  } else {
+  } else if (args[0] !== "pull" && args[0] !== "tag") {
     code = 1;
     stderr = `unexpected docker args: ${args.join(" ")}`;
   }

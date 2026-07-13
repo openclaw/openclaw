@@ -384,7 +384,7 @@ async function listDirFetchArchiveEntries(
     maxOutputBytes: { stderr: DIR_FETCH_ARCHIVE_LIST_STDERR_TAIL_CHARS },
     onOutputChunk: (chunk, stream) => {
       if (stream !== "stdout") {
-        return;
+        return true;
       }
       outputBytes += chunk.byteLength;
       if (outputBytes > DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES) {

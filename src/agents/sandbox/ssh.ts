@@ -695,7 +695,7 @@ export async function runSshSandboxCommand(
     throw createAbortError("Aborted");
   }
   if (result.failed && !isPlainCommandExitFailure(result)) {
-    throw result;
+    throw toErrorObject(result, "SSH command execution failed");
   }
   const stdout = Buffer.from(result.stdout);
   const stderr = Buffer.from(result.stderr);
