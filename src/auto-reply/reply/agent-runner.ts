@@ -12,9 +12,11 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import {
+  hasCompletedSourceReplyDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
+  resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import { hasDeliberateSilentTerminalReply } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import {
@@ -2008,22 +2010,22 @@ export async function runReplyAgent(params: {
     });
     const committedMessagingToolSourceReplyDelivery =
       hasCommittedSourceReplyDeliveryEvidence(runResult);
-    // #85714: the stranded-retry diagnostic gates on committed source-reply
-    // evidence. `committedMessagingToolSourceReplyDelivery` is that exact signal
-    // after the delivery-evidence refactor extracted it into a shared helper.
-    const committedSourceReplyDelivery = committedMessagingToolSourceReplyDelivery;
+    const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
+    const hasExplicitSourceReplyCompletion =
+      resolveExplicitFinalSourceReplyDeliveryEvidence(runResult) !== undefined;
+    const visibleOutboundDelivery = hasVisibleOutboundDeliveryEvidence(runResult);
     const successfulSideEffectDelivery =
       successfulSourceReplyDelivery ||
       committedMessagingToolSourceReplyDelivery ||
-      hasVisibleOutboundDeliveryEvidence(runResult) ||
+      visibleOutboundDelivery ||
       runResult.didSendDeterministicApprovalPrompt === true;
     const successfulTerminalDelivery =
       hasSuccessfulTerminalSourceReplyDelivery({
         blockReplyPipeline,
         directlySentBlockPayloads,
       }) ||
-      committedMessagingToolSourceReplyDelivery ||
-      hasVisibleOutboundDeliveryEvidence(runResult) ||
+      completedSourceReplyDelivery ||
+      (!hasExplicitSourceReplyCompletion && visibleOutboundDelivery) ||
       runResult.didSendDeterministicApprovalPrompt === true;
     // Compaction notices are progress, not a terminal reply. Dispatcher-backed
     // delivery settles after this run returns, so it cannot prove turn completion here.
@@ -2057,7 +2059,7 @@ export async function runReplyAgent(params: {
       if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
         return undefined;
       }
-      if (sessionCtx.InboundEventKind === "room_event" || committedSourceReplyDelivery) {
+      if (sessionCtx.InboundEventKind === "room_event" || completedSourceReplyDelivery) {
         return undefined;
       }
       const sourceReplyPolicy = resolveSourceReplyPolicy({
@@ -2076,7 +2078,7 @@ export async function runReplyAgent(params: {
       }
       return buildStrandedReplyDeliveryFailurePayload();
     };
-    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && committedSourceReplyDelivery) {
+    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyDelivery) {
       await opts.onObservedReplyDelivery?.();
     }
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
@@ -2664,7 +2666,7 @@ export async function runReplyAgent(params: {
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery: committedSourceReplyDelivery,
+          successfulSourceReplyDelivery: completedSourceReplyDelivery,
           finalText: assistantFinalText,
         });
       const retryMissingSourceDelivery =
@@ -2673,7 +2675,7 @@ export async function runReplyAgent(params: {
         !isRoomEvent &&
         sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
         !sourceReplyPolicy.sendPolicyDenied &&
-        !committedSourceReplyDelivery;
+        !completedSourceReplyDelivery;
       if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,
