@@ -103,7 +103,6 @@ const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-sourc
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
-const SLACK_STARTUP_AUTH_TEST_TIMEOUT_MS = 10_000;
 
 function resolveStableSlackUserIdEntry(raw: string): string | undefined {
   const trimmed = raw.trim();
@@ -383,7 +382,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let authIdentityWarning: string | undefined;
   let authTestIdentity: SlackAuthTestIdentity | undefined;
   try {
-    const auth = await withTimeout(app.client.auth.test(), SLACK_STARTUP_AUTH_TEST_TIMEOUT_MS, {
+    const auth = await withTimeout(app.client.auth.test(), 10_000, {
       message: "slack startup auth.test timed out",
     });
     const authUserId = normalizeOptionalString(auth.user_id) ?? "";
