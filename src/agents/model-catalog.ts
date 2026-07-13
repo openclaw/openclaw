@@ -900,43 +900,6 @@ export async function loadModelCatalogSnapshot(
             workspaceDir,
             env: process.env,
             resolveProviderApiKey,
-            resolveProviderAuth: (providerId, options) => {
-              const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-                allowKeychainPrompt: false,
-              });
-              const provider = providerId?.trim() ? providerId : undefined;
-              const order = provider ? cfg.auth?.order?.[provider] : undefined;
-              if (!provider || !order?.length) {
-                return {
-                  apiKey: undefined,
-                  discoveryApiKey: undefined,
-                  mode: "none" as const,
-                  source: "none" as const,
-                  profileId: undefined,
-                };
-              }
-              const profiles = cfg.auth?.profiles ?? {};
-              for (const profileId of order) {
-                const credential = store.profiles[profileId];
-                if (credential) {
-                  const profile = profiles[profileId];
-                  return {
-                    apiKey: credential.apiKey,
-                    discoveryApiKey: undefined,
-                    mode: profile?.mode ?? "api_key" as const,
-                    source: "profile" as const,
-                    profileId,
-                  };
-                }
-              }
-              return {
-                apiKey: undefined,
-                discoveryApiKey: undefined,
-                mode: "none" as const,
-                source: "none" as const,
-                profileId: undefined,
-              };
-            },
             entries: augmentEntries ?? [...models],
           },
         });

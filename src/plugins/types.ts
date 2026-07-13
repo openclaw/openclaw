@@ -1140,8 +1140,6 @@ export type ProviderAugmentModelCatalogContext = {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   resolveProviderApiKey?: ProviderCatalogContext["resolveProviderApiKey"];
-  /** Resolve auth for one provider. Plugins can call this for each profile to augment per-profile entries. */
-  resolveProviderAuth?: ProviderCatalogContext["resolveProviderAuth"];
   entries: ModelCatalogEntry[];
 };
 
