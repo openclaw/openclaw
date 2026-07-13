@@ -180,11 +180,11 @@ function isBlockElement(char: string): boolean {
 }
 
 function hasAnyBraille(text: string): boolean {
-  return [...text].some(isBraille);
+  return Array.from(text).some(isBraille);
 }
 
 function hasAnyBlockElement(text: string): boolean {
-  return [...text].some(isBlockElement);
+  return Array.from(text).some(isBlockElement);
 }
 
 /**
@@ -229,7 +229,7 @@ describe("webchat surface — braille-free rendering", () => {
     const contract = { ...usageState(), surface: "webchat" };
     const output = renderUsageBar(DEFAULT_USAGE_BAR_TEMPLATE, contract);
     // The block scale meter produces 5 contiguous block-element glyphs.
-    const blockChars = [...output].filter(isBlockElement);
+    const blockChars = Array.from(output).filter(isBlockElement);
     expect(blockChars.length).toBe(5);
   });
 
@@ -297,8 +297,14 @@ describe("braille U+2800–U+28FF — evidence for markdown-it misdetection", ()
    * 2. Every glyph in the block scale is OUTSIDE the braille range
    * 3. WebChat surface output contains zero U+2800-U+28FF characters
    */
+
+  // Narrow the template scales to a usable index type (UsageBarTemplate is Record<string, unknown>).
+  const TPL_SCALES = DEFAULT_USAGE_BAR_TEMPLATE.scales as
+    | Record<string, string | string[]>
+    | undefined;
+
   it("every braille-scale glyph falls in the reported U+2800–U+28FF range", () => {
-    const brailleScale = DEFAULT_USAGE_BAR_TEMPLATE.scales?.["braille"];
+    const brailleScale = TPL_SCALES?.["braille"];
     expect(brailleScale).toBeDefined();
     const chars = String(brailleScale ?? "");
     expect(chars.length).toBeGreaterThan(0);
@@ -308,7 +314,7 @@ describe("braille U+2800–U+28FF — evidence for markdown-it misdetection", ()
       expect(cp).toBeLessThanOrEqual(BRAILLE_BLOCK_END);
     }
     // Document the exact code points for the review record.
-    const codePoints = [...chars].map(
+    const codePoints = Array.from(chars).map(
       (ch) => `U+${(ch.codePointAt(0) ?? 0).toString(16).toUpperCase()}`,
     );
     expect(codePoints).toEqual([
@@ -325,7 +331,7 @@ describe("braille U+2800–U+28FF — evidence for markdown-it misdetection", ()
   });
 
   it("no block-scale glyph falls in the braille U+2800–U+28FF range", () => {
-    const blockScale = DEFAULT_USAGE_BAR_TEMPLATE.scales?.["block"];
+    const blockScale = TPL_SCALES?.["block"];
     expect(blockScale).toBeDefined();
     const chars = String(blockScale ?? "");
     expect(chars.length).toBeGreaterThan(0);
@@ -336,7 +342,7 @@ describe("braille U+2800–U+28FF — evidence for markdown-it misdetection", ()
   });
 
   it("every block-scale glyph falls in the Block Elements U+2580–U+259F range", () => {
-    const blockScale = DEFAULT_USAGE_BAR_TEMPLATE.scales?.["block"];
+    const blockScale = TPL_SCALES?.["block"];
     expect(blockScale).toBeDefined();
     const chars = String(blockScale ?? "");
     for (const ch of chars) {
@@ -348,11 +354,9 @@ describe("braille U+2800–U+28FF — evidence for markdown-it misdetection", ()
 
   it("braille and block scales share zero overlapping code points", () => {
     const brailleChars = new Set(
-      [...String(DEFAULT_USAGE_BAR_TEMPLATE.scales?.["braille"] ?? "")].map(
-        (ch) => ch.codePointAt(0) ?? 0,
-      ),
+      Array.from(String(TPL_SCALES?.["braille"] ?? "")).map((ch) => ch.codePointAt(0) ?? 0),
     );
-    const blockChars = [...String(DEFAULT_USAGE_BAR_TEMPLATE.scales?.["block"] ?? "")].map(
+    const blockChars = Array.from(String(TPL_SCALES?.["block"] ?? "")).map(
       (ch) => ch.codePointAt(0) ?? 0,
     );
     for (const cp of blockChars) {
