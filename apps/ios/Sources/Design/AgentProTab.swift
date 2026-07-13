@@ -1,4 +1,5 @@
 import OpenClawKit
+import OpenClawProtocol
 import SwiftUI
 
 struct AgentProTab: View {
@@ -134,8 +135,13 @@ struct AgentProTab: View {
     }
 
     struct AutomationEditorSelection: Identifiable {
-        let id: String
+        let initialJob: CronJob
+        let sourceGatewayID: String
         let pendingRunID: String?
+
+        var id: String {
+            self.initialJob.id
+        }
     }
 
     struct SkillEditorMessage {
@@ -179,16 +185,12 @@ struct AgentProTab: View {
             }
         }
         .sheet(item: self.$automationEditorSelection) { selection in
-            if let overview = self.overview,
-               let job = overview.cronJobs.first(where: { $0.id == selection.id })
+            AgentAutomationDetailScreen(
+                initialJob: selection.initialJob,
+                sourceGatewayID: selection.sourceGatewayID,
+                initialPendingRunID: selection.pendingRunID)
             {
-                AgentAutomationDetailScreen(
-                    initialJob: job,
-                    sourceGatewayID: overview.gatewayID,
-                    initialPendingRunID: selection.pendingRunID)
-                {
-                    Task { await self.refreshOverview(force: true) }
-                }
+                Task { await self.refreshOverview(force: true) }
             }
         }
     }

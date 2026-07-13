@@ -160,7 +160,11 @@ extension AgentProTab {
                     .lineLimit(1)
                 HStack(spacing: 8) {
                     Button {
-                        self.automationEditorSelection = AutomationEditorSelection(id: job.id, pendingRunID: nil)
+                        guard let sourceGatewayID = self.overview?.gatewayID else { return }
+                        self.presentAutomationEditor(
+                            job: job,
+                            sourceGatewayID: sourceGatewayID,
+                            pendingRunID: nil)
                     } label: {
                         Label("Edit", systemImage: "slider.horizontal.3")
                             .font(OpenClawType.captionSemiBold)
@@ -203,10 +207,12 @@ extension AgentProTab {
 
     @MainActor
     func runCronJob(_ job: CronJob) async {
+        guard let sourceGatewayID = self.overview?.gatewayID else { return }
         await self.runCronAction(job) {
             let data = try await self.requestAutomationGateway(
                 method: "cron.run",
-                paramsJSON: Self.automationParams(["id": job.id, "mode": "force"]))
+                paramsJSON: Self.automationParams(["id": job.id, "mode": "force"]),
+                sourceGatewayID: sourceGatewayID)
             let result = try JSONDecoder().decode(AgentAutomationRunResult.self, from: data)
             guard result.ok else { throw AgentAutomationEditError.invalidResponse }
             if result.ran == false, result.enqueued != true {
@@ -219,7 +225,10 @@ extension AgentProTab {
                 throw AgentAutomationEditError.invalidResponse
             }
             if let runID = result.runId {
-                self.automationEditorSelection = AutomationEditorSelection(id: job.id, pendingRunID: runID)
+                self.presentAutomationEditor(
+                    job: job,
+                    sourceGatewayID: sourceGatewayID,
+                    pendingRunID: runID)
                 return String(
                     format: String(localized: "Tracking %@ in run history."),
                     job.name)
@@ -229,11 +238,23 @@ extension AgentProTab {
     }
 
     @MainActor
+    func presentAutomationEditor(job: CronJob, sourceGatewayID: String, pendingRunID: String?) {
+        // Keep the tapped snapshot while the sheet is open. Overview refreshes may
+        // temporarily omit cron jobs, but must not blank an active editor or lose run tracking.
+        self.automationEditorSelection = AutomationEditorSelection(
+            initialJob: job,
+            sourceGatewayID: sourceGatewayID,
+            pendingRunID: pendingRunID)
+    }
+
+    @MainActor
     func setCronJob(_ job: CronJob, enabled: Bool) async {
+        guard let sourceGatewayID = self.overview?.gatewayID else { return }
         await self.runCronAction(job) {
             _ = try await self.requestAutomationGateway(
                 method: "cron.update",
-                paramsJSON: buildAgentAutomationEnabledParams(job: job, enabled: enabled))
+                paramsJSON: buildAgentAutomationEnabledParams(job: job, enabled: enabled),
+                sourceGatewayID: sourceGatewayID)
             return String(
                 format: enabled
                     ? String(localized: "Enabled %@.")
@@ -260,9 +281,12 @@ extension AgentProTab {
     }
 
     @MainActor
-    func requestAutomationGateway(method: String, paramsJSON: String) async throws -> Data {
-        guard let sourceGatewayID = self.overview?.gatewayID,
-              let route = await appModel.operatorSession.currentRoute(ifGatewayID: sourceGatewayID),
+    func requestAutomationGateway(
+        method: String,
+        paramsJSON: String,
+        sourceGatewayID: String) async throws -> Data
+    {
+        guard let route = await appModel.operatorSession.currentRoute(ifGatewayID: sourceGatewayID),
               appModel.connectedGatewayID == sourceGatewayID
         else {
             throw AgentAutomationEditError.gatewayChanged

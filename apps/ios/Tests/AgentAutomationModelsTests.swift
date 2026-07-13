@@ -105,6 +105,19 @@ struct AgentAutomationModelsTests {
         #expect(page.nextOffset == nil)
     }
 
+    @Test func `automation editor selection preserves tapped snapshot`() {
+        let job = Self.job()
+        let selection = AgentProTab.AutomationEditorSelection(
+            initialJob: job,
+            sourceGatewayID: "gateway-a",
+            pendingRunID: "run-123")
+
+        #expect(selection.id == job.id)
+        #expect(selection.initialJob.name == job.name)
+        #expect(selection.sourceGatewayID == "gateway-a")
+        #expect(selection.pendingRunID == "run-123")
+    }
+
     @Test func `detail source guards route and exact queued run`() throws {
         let source = try String(
             contentsOf: Self.sourceURL("Design/AgentAutomationDetailScreen.swift"),
@@ -123,6 +136,17 @@ struct AgentAutomationModelsTests {
         #expect(source.contains("Delete Automation"))
         #expect(source.contains("OpenClawType.subheadSemiBold"))
         #expect(source.contains("!self.hasUnsavedChanges"))
+
+        let tabSource = try String(
+            contentsOf: Self.sourceURL("Design/AgentProTab.swift"),
+            encoding: .utf8)
+        let cronSource = try String(
+            contentsOf: Self.sourceURL("Design/AgentProTab+Cron.swift"),
+            encoding: .utf8)
+        #expect(tabSource.contains("initialJob: selection.initialJob"))
+        #expect(!tabSource.contains("overview.cronJobs.first(where:"))
+        #expect(cronSource.contains("sourceGatewayID: sourceGatewayID"))
+        #expect(cronSource.contains("presentAutomationEditor(\n                    job: job,\n                    sourceGatewayID: sourceGatewayID"))
     }
 
     private static func job(
