@@ -3161,8 +3161,9 @@ async function dispatchReplyFromConfigInner(
         await markOperationalReplyPolicyDelivered(policyResult, delivered);
       } else {
         markInboundDedupeReplayUnsafe();
-        const delivered = dispatcher.sendToolResult(payload);
-        await markOperationalReplyPolicyDelivered(policyResult, delivered);
+        await settleDirectOperationalPolicyAfterDispatch(payload, policyResult, () =>
+          dispatcher.sendToolResult(payload),
+        );
       }
     };
     const flushPendingCommentaryProgress = async () => {
@@ -3231,6 +3232,39 @@ async function dispatchReplyFromConfigInner(
         operationalReplyPolicyIntentionalSilence = true;
       }
       return result;
+    };
+    const settleDirectOperationalPolicyAfterDispatch = async (
+      payload: ReplyPayload,
+      policyResult: Awaited<ReturnType<typeof applyOperationalReplyPolicyFromConfig>>,
+      dispatch: () => boolean,
+    ): Promise<boolean> => {
+      const deliveryOutcome = captureReplyDispatchDeliveryOutcome(payload);
+      let delivered: boolean;
+      try {
+        delivered = dispatch();
+      } catch (error) {
+        await markOperationalReplyPolicyDelivered(policyResult, false);
+        throw error;
+      }
+      if (!delivered) {
+        await markOperationalReplyPolicyDelivered(policyResult, false);
+        return false;
+      }
+      if (deliveryOutcome.isTracked()) {
+        const settleOperationalPolicy = deliveryOutcome.promise
+          .then(async (outcome) => {
+            await markOperationalReplyPolicyDelivered(policyResult, outcome === "delivered");
+          })
+          .catch((error: unknown) => {
+            logVerbose(
+              `dispatch-from-config: direct operational policy settlement failed: ${formatErrorMessage(error)}`,
+            );
+          });
+        registerReplyDispatcherSettledTask(dispatcher, () => settleOperationalPolicy);
+      } else {
+        await markOperationalReplyPolicyDelivered(policyResult, true);
+      }
+      return true;
     };
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) => {
       const metadata = getReplyPayloadMetadata(reply);
@@ -3589,8 +3623,9 @@ async function dispatchReplyFromConfigInner(
         return;
       }
       markInboundDedupeReplayUnsafe();
-      const delivered = dispatcher.sendToolResult(payload);
-      await markOperationalReplyPolicyDelivered(policyResult, delivered);
+      await settleDirectOperationalPolicyAfterDispatch(payload, policyResult, () =>
+        dispatcher.sendToolResult(payload),
+      );
     };
     const sendPlanUpdate = async (payload: {
       explanation?: string;
@@ -3618,8 +3653,9 @@ async function dispatchReplyFromConfigInner(
         return;
       }
       markInboundDedupeReplayUnsafe();
-      const delivered = dispatcher.sendToolResult(replyPayload);
-      await markOperationalReplyPolicyDelivered(policyResult, delivered);
+      await settleDirectOperationalPolicyAfterDispatch(replyPayload, policyResult, () =>
+        dispatcher.sendToolResult(replyPayload),
+      );
     };
     const summarizeApprovalLabel = (payload: {
       status?: string;
@@ -4161,8 +4197,12 @@ async function dispatchReplyFromConfigInner(
                           await settleProgressCallbackPolicy(delivered);
                         } else {
                           markInboundDedupeReplayUnsafe();
-                          const delivered = dispatcher.sendToolResult(deliveryPayload);
-                          await settleProgressCallbackPolicy(delivered);
+                          progressCallbackPolicySettled = true;
+                          await settleDirectOperationalPolicyAfterDispatch(
+                            deliveryPayload,
+                            progressCallbackPolicyResult,
+                            () => dispatcher.sendToolResult(deliveryPayload),
+                          );
                         }
                       } finally {
                         if (!progressCallbackPolicySettled) {
@@ -4399,8 +4439,11 @@ async function dispatchReplyFromConfigInner(
                         await markOperationalReplyPolicyDelivered(policyResult, delivered);
                       } else {
                         markInboundDedupeReplayUnsafe();
-                        const delivered = dispatcher.sendBlockReply(normalizedPayload);
-                        await markOperationalReplyPolicyDelivered(policyResult, delivered);
+                        const delivered = await settleDirectOperationalPolicyAfterDispatch(
+                          normalizedPayload,
+                          policyResult,
+                          () => dispatcher.sendBlockReply(normalizedPayload),
+                        );
                         if (delivered) {
                           hasPendingDirectBlockReplyDelivery = true;
                         }

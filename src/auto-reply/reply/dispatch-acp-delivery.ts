@@ -14,6 +14,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
+import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -24,7 +25,10 @@ import {
   markOperationalReplyPolicyDelivered,
   resolveOperationalReplyPolicy,
 } from "./operational-reply-policy.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import {
+  captureReplyDispatchDeliveryOutcome,
+  waitForReplyDispatcherIdle,
+} from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 import {
@@ -569,6 +573,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         text: ttsPayload.text,
         routed: false,
       });
+      const deliveryOutcome = captureReplyDispatchDeliveryOutcome(ttsPayload);
       const delivered =
         kind === "tool"
           ? params.dispatcher.sendToolResult(ttsPayload)
@@ -578,9 +583,26 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       if (kind === "final" && delivered) {
         state.deliveredFinalReply = true;
       }
-      const policySettle = settleOperationalPolicy(delivered);
-      if (policySettle) {
-        await policySettle;
+      if (delivered && deliveryOutcome.isTracked()) {
+        policySettled = true;
+        const settleOperationalPolicyFromOutcome = deliveryOutcome.promise
+          .then(async (outcome) => {
+            await markOperationalReplyPolicyDelivered(policyResult, outcome === "delivered");
+          })
+          .catch((error: unknown) => {
+            logVerbose(
+              `dispatch-acp: direct operational policy settlement failed: ${formatErrorMessage(error)}`,
+            );
+          });
+        registerReplyDispatcherSettledTask(
+          params.dispatcher,
+          () => settleOperationalPolicyFromOutcome,
+        );
+      } else {
+        const policySettle = settleOperationalPolicy(delivered);
+        if (policySettle) {
+          await policySettle;
+        }
       }
       if (delivered && tracksVisibleText) {
         state.queuedDirectVisibleTextDeliveries += 1;

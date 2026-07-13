@@ -11900,6 +11900,67 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(sessionStoreMocks.currentEntry?.operationalReplyOnceKeys).toEqual([expect.any(String)]);
   });
 
+  it("does not consume once policy when forced direct tool progress delivery fails after queue admission", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s-once-tool-progress-failure",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const payload = {
+      text: "tool status notice failed once",
+      isStatusNotice: true,
+    } satisfies ReplyPayload;
+    const cfg = {
+      messages: {
+        operationalReplies: { policy: "once" },
+      },
+    } satisfies OpenClawConfig;
+    const buildResolver = () =>
+      vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+        await opts?.onToolResult?.(payload);
+        return { text: "NO_REPLY" } satisfies ReplyPayload;
+      });
+    const failedDeliver = vi.fn(async () => {
+      throw new Error("tool delivery failed");
+    });
+    const failedDispatcher = createReplyDispatcher({ deliver: failedDeliver });
+
+    const first = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:once-tool-progress-failure", ChatType: "channel" }),
+      cfg,
+      dispatcher: failedDispatcher,
+      replyResolver: buildResolver(),
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
+      },
+    });
+    await failedDispatcher.waitForIdle();
+
+    expect(first.queuedFinal).toBe(false);
+    expect(failedDeliver).toHaveBeenCalledTimes(1);
+    expect(sessionStoreMocks.currentEntry?.operationalReplyOnceKeys).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.operationalReplyPendingOnceKeys).toBeUndefined();
+
+    const deliveredDispatcher = createReplyDispatcher({ deliver: vi.fn(async () => undefined) });
+    const retry = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:once-tool-progress-failure", ChatType: "channel" }),
+      cfg,
+      dispatcher: deliveredDispatcher,
+      replyResolver: buildResolver(),
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
+      },
+    });
+    await deliveredDispatcher.waitForIdle();
+
+    expect(retry.queuedFinal).toBe(false);
+    expect(sessionStoreMocks.currentEntry?.operationalReplyOnceKeys).toEqual([expect.any(String)]);
+    expect(sessionStoreMocks.currentEntry?.operationalReplyPendingOnceKeys).toBeUndefined();
+  });
+
   it("delivers verbose tool progress in message-tool-only mode", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {

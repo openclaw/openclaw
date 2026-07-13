@@ -607,6 +607,54 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await dispatcher.waitForIdle();
   });
 
+  it("does not consume once policy when direct ACP block delivery fails after queue admission", async () => {
+    clearOperationalReplyPolicyStateForTest();
+    const cfg = createAcpTestConfig({
+      messages: { operationalReplies: { policy: "once" } },
+    });
+    const ctx = buildTestCtx({
+      Provider: "visiblechat",
+      Surface: "visiblechat",
+      SessionKey: "agent:codex-acp:session-once-block",
+    });
+    const payload = createAcpErrorNotice("acp block failed once");
+    const failedDeliver = vi.fn(async () => {
+      throw new Error("acp block delivery failed");
+    });
+    const failedDispatcher = createReplyDispatcher({ deliver: failedDeliver });
+    const failedCoordinator = createAcpDispatchDeliveryCoordinator({
+      cfg,
+      ctx,
+      dispatcher: failedDispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await expect(failedCoordinator.deliver("block", payload, { skipTts: true })).resolves.toBe(
+      true,
+    );
+    await failedDispatcher.waitForIdle();
+
+    expect(failedDeliver).toHaveBeenCalledTimes(1);
+
+    const delivered = vi.fn(async () => undefined);
+    const deliveredDispatcher = createReplyDispatcher({ deliver: delivered });
+    const deliveredCoordinator = createAcpDispatchDeliveryCoordinator({
+      cfg,
+      ctx,
+      dispatcher: deliveredDispatcher,
+      inboundAudio: false,
+      shouldRouteToOriginating: false,
+    });
+
+    await expect(deliveredCoordinator.deliver("block", payload, { skipTts: true })).resolves.toBe(
+      true,
+    );
+    await deliveredDispatcher.waitForIdle();
+
+    expect(delivered).toHaveBeenCalledTimes(1);
+  });
+
   it("waits for pending direct block delivery before resolving tool delivery", async () => {
     const delivered: unknown[] = [];
     let releaseDelivery: (() => void) | undefined;
