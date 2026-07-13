@@ -559,6 +559,68 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
+  it("hides catalog groups that have no sessions", async () => {
+    vi.useFakeTimers();
+    try {
+      const codex = catalogPage([]);
+      const claude = catalogPage([], undefined, "claude");
+      const request = vi.fn().mockResolvedValue({
+        catalogs: [...codex.catalogs, ...claude.catalogs],
+      });
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).toBeNull();
+      expect(sidebar.querySelector('[data-session-section="catalog:claude"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an empty catalog reachable while a later page remains", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce(catalogPage([], "page-2"))
+        .mockResolvedValueOnce(catalogPage([{ threadId: "thread-1", name: "Later session" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(sidebar.querySelector('[data-session-section="catalog:codex"]')).not.toBeNull();
+      sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).toContain("Later session");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("appends host pages and keeps them through the next poll refresh", async () => {
     vi.useFakeTimers();
     try {

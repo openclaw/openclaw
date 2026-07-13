@@ -95,6 +95,9 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     );
     const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
     const hasMore = catalog.hosts.some((host) => Boolean(host.nextCursor));
+    if (rows.length === 0 && !hasMore) {
+      return nothing;
+    }
     return html`
       <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
         <div class="sidebar-recent-sessions__head">
