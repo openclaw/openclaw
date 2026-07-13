@@ -832,6 +832,47 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it.each(["0", "3", String(Number.MAX_SAFE_INTEGER)])(
+    "accepts canonical transcript cursors: %s",
+    async (since) => {
+      const callGatewayFromCli = vi.fn(async () => ({
+        found: true,
+        sessionId: "meet_gateway",
+        startIndex: Number(since),
+        nextIndex: Number(since),
+        lines: [],
+      }));
+
+      await setupCli({ callGatewayFromCli }).parseAsync(
+        ["googlemeet", "transcript", "meet_gateway", "--since", since],
+        { from: "user" },
+      );
+
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "googlemeet.transcript",
+        { json: true, timeout: "5000" },
+        { sessionId: "meet_gateway", sinceIndex: Number(since) },
+        { progress: false },
+      );
+    },
+  );
+
+  it.each(["0x10", "1e0", "1.5"])(
+    "rejects non-decimal transcript cursors before gateway delegation: %s",
+    async (since) => {
+      const callGatewayFromCli = vi.fn();
+
+      await expect(
+        setupCli({ callGatewayFromCli }).parseAsync(
+          ["googlemeet", "transcript", "meet_gateway", "--since", since],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("--since must be a non-negative safe integer");
+
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
   it("delegates join to the gateway-owned runtime when available", async () => {
     const callGatewayFromCli = vi.fn(async () => ({
       session: {
