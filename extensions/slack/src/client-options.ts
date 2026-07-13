@@ -15,6 +15,12 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
 
+export const SLACK_LOOKUP_TIMEOUT_MS = 10_000;
+
+export const SLACK_LOOKUP_RETRY_OPTIONS: RetryOptions = {
+  retries: 0,
+};
+
 /**
  * Build an HTTPS proxy agent from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
  * for use as the `agent` option in Slack WebClient and Socket Mode connections.
@@ -68,5 +74,13 @@ export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): 
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved);
   resolved.retryConfig ??= SLACK_WRITE_RETRY_OPTIONS;
+  return resolved;
+}
+
+export function resolveSlackLookupClientOptions(options: WebClientOptions = {}): WebClientOptions {
+  const resolved: WebClientOptions = Object.assign({}, options);
+  applySlackApiUrlAndProxyOptions(resolved);
+  resolved.retryConfig ??= SLACK_LOOKUP_RETRY_OPTIONS;
+  resolved.timeout ??= SLACK_LOOKUP_TIMEOUT_MS;
   return resolved;
 }

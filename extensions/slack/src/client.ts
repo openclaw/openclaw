@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { type WebClientOptions, WebClient } from "@slack/web-api";
 import {
+  resolveSlackLookupClientOptions,
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
   SLACK_WRITE_RETRY_OPTIONS,
@@ -17,14 +18,21 @@ let slackListenerUploadCompletionClientCache = new WeakMap<
 type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl">;
 
 export {
+  resolveSlackLookupClientOptions,
   resolveSlackWebClientOptions,
   resolveSlackWriteClientOptions,
   SLACK_DEFAULT_RETRY_OPTIONS,
+  SLACK_LOOKUP_RETRY_OPTIONS,
+  SLACK_LOOKUP_TIMEOUT_MS,
   SLACK_WRITE_RETRY_OPTIONS,
 } from "./client-options.js";
 
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
   return new WebClient(token, resolveSlackWebClientOptions(options));
+}
+
+export function createSlackLookupClient(token: string, options: WebClientOptions = {}) {
+  return new WebClient(token, resolveSlackLookupClientOptions(options));
 }
 
 export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {

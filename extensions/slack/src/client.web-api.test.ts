@@ -3,7 +3,11 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebClient } from "@slack/web-api";
 import { afterEach, describe, expect, it } from "vitest";
-import { createSlackWebClient, getSlackListenerUploadCompletionClient } from "./client.js";
+import {
+  createSlackLookupClient,
+  createSlackWebClient,
+  getSlackListenerUploadCompletionClient,
+} from "./client.js";
 
 const SLACK_API_URL_KEYS = ["SLACK_API_URL"] as const;
 const PROXY_KEYS = [
@@ -118,11 +122,65 @@ async function startDroppedResponseSlackApiServer(requests: SlackApiRequest[]): 
   };
 }
 
+async function startStalledHeadersSlackApiServer(requests: SlackApiRequest[]): Promise<{
+  baseUrl: string;
+  close(): Promise<void>;
+  socketClosed: Promise<void>;
+}> {
+  let resolveSocketClosed: () => void = () => {};
+  const socketClosed = new Promise<void>((resolve) => {
+    resolveSocketClosed = resolve;
+  });
+  const server = createServer((request) => {
+    requests.push({
+      authorization: request.headers.authorization,
+      method: request.method,
+      url: request.url,
+    });
+    request.resume();
+    request.socket.once("close", resolveSocketClosed);
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    baseUrl: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      server.closeAllConnections();
+      await closeServer(server);
+    },
+    socketClosed,
+  };
+}
+
 afterEach(() => {
   restoreTestEnv();
 });
 
 describe("Slack Web API routing", () => {
+  it("aborts a stalled-header lookup after one request", async () => {
+    for (const key of TEST_ENV_KEYS) {
+      delete process.env[key];
+    }
+    const requests: SlackApiRequest[] = [];
+    const server = await startStalledHeadersSlackApiServer(requests);
+    try {
+      const client = createSlackLookupClient("lookup-fixture", {
+        slackApiUrl: `${server.baseUrl}/api/`,
+        timeout: 50,
+      });
+
+      await expect(client.auth.test()).rejects.toThrow();
+      await server.socketClosed;
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({ method: "POST", url: "/api/auth.test" });
+    } finally {
+      await server.close();
+    }
+  });
+
   it("keeps dropped Enterprise upload completion responses to one team-scoped request", async () => {
     for (const key of TEST_ENV_KEYS) {
       delete process.env[key];

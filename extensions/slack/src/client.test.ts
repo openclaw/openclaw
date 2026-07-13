@@ -18,13 +18,17 @@ vi.mock("@slack/web-api", () => {
 });
 
 let createSlackWebClient: typeof import("./client.js").createSlackWebClient;
+let createSlackLookupClient: typeof import("./client.js").createSlackLookupClient;
 let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
 let createSlackTokenCacheKey: typeof import("./client.js").createSlackTokenCacheKey;
 let getSlackWriteClient: typeof import("./client.js").getSlackWriteClient;
 let clearSlackWriteClientCacheForTest: typeof import("./client.js").clearSlackWriteClientCacheForTest;
 let resolveSlackWebClientOptions: typeof import("./client.js").resolveSlackWebClientOptions;
+let resolveSlackLookupClientOptions: typeof import("./client.js").resolveSlackLookupClientOptions;
 let resolveSlackWriteClientOptions: typeof import("./client.js").resolveSlackWriteClientOptions;
 let SLACK_DEFAULT_RETRY_OPTIONS: typeof import("./client.js").SLACK_DEFAULT_RETRY_OPTIONS;
+let SLACK_LOOKUP_RETRY_OPTIONS: typeof import("./client.js").SLACK_LOOKUP_RETRY_OPTIONS;
+let SLACK_LOOKUP_TIMEOUT_MS: typeof import("./client.js").SLACK_LOOKUP_TIMEOUT_MS;
 let SLACK_WRITE_RETRY_OPTIONS: typeof import("./client.js").SLACK_WRITE_RETRY_OPTIONS;
 let WebClient: ReturnType<typeof vi.fn>;
 
@@ -93,13 +97,17 @@ beforeAll(async () => {
   const slackWebApi = await import("@slack/web-api");
   ({
     createSlackWebClient,
+    createSlackLookupClient,
     createSlackWriteClient,
     createSlackTokenCacheKey,
     getSlackWriteClient,
     clearSlackWriteClientCacheForTest,
     resolveSlackWebClientOptions,
+    resolveSlackLookupClientOptions,
     resolveSlackWriteClientOptions,
     SLACK_DEFAULT_RETRY_OPTIONS,
+    SLACK_LOOKUP_RETRY_OPTIONS,
+    SLACK_LOOKUP_TIMEOUT_MS,
     SLACK_WRITE_RETRY_OPTIONS,
   } = await import("./client.js"));
   WebClient = slackWebApi.WebClient as unknown as ReturnType<typeof vi.fn>;
@@ -203,6 +211,27 @@ describe("slack web client config", () => {
     const options = resolveSlackWriteClientOptions();
 
     expect(options.retryConfig).toEqual(SLACK_WRITE_RETRY_OPTIONS);
+  });
+
+  it("applies the exact lookup deadline and no-retry policy", () => {
+    const options = resolveSlackLookupClientOptions();
+
+    expect(options.timeout).toBe(10_000);
+    expect(options.timeout).toBe(SLACK_LOOKUP_TIMEOUT_MS);
+    expect(options.retryConfig).toBe(SLACK_LOOKUP_RETRY_OPTIONS);
+    expect(options.retryConfig).toEqual({ retries: 0 });
+  });
+
+  it("passes the bounded lookup policy into WebClient", () => {
+    const customAgent = {} as never;
+
+    createSlackLookupClient("lookup-fixture", { agent: customAgent });
+
+    expect(WebClient).toHaveBeenCalledWith("lookup-fixture", {
+      agent: customAgent,
+      retryConfig: SLACK_LOOKUP_RETRY_OPTIONS,
+      timeout: SLACK_LOOKUP_TIMEOUT_MS,
+    });
   });
 
   it("respects explicit write client concurrency overrides", () => {
