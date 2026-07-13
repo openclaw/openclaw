@@ -51,7 +51,7 @@ Build a `.deb` and AppImage locally (the same command CI runs):
 
 ```bash
 cd apps/linux/src-tauri
-pnpm dlx @tauri-apps/cli@^2 build --bundles deb,appimage
+pnpm --config.minimum-release-age=0 dlx @tauri-apps/cli@^2 build --bundles deb,appimage
 ```
 
 Bundles land in `target/release/bundle/{deb,appimage}/`. The `Linux App` CI

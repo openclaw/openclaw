@@ -74,7 +74,7 @@ jobs:
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
-        run: pnpm dlx @tauri-apps/cli@^2 build --bundles deb,appimage
+        run: pnpm --config.minimum-release-age=0 dlx @tauri-apps/cli@^2 build --bundles deb,appimage
 
       - name: Upload bundles
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

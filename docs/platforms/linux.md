@@ -25,7 +25,7 @@ Hosted releases are not published yet. Build a `.deb` and AppImage from a source
 
 ```bash
 cd apps/linux/src-tauri
-pnpm dlx @tauri-apps/cli@^2 build --bundles deb,appimage
+pnpm --config.minimum-release-age=0 dlx @tauri-apps/cli@^2 build --bundles deb,appimage
 ```
 
 The `Linux App` CI workflow also uploads the same bundles as the `openclaw-linux-companion` artifact for pull requests touching the app and for manual runs. See `apps/linux/README.md` in the repository for Linux build dependencies and development commands.
