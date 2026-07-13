@@ -65,7 +65,6 @@ import { createCopilotToolBridge } from "./tool-bridge.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
 
-const SUPPORTED_PROVIDERS = new Set(["github-copilot"]);
 const BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS = 5_000;
 const COPILOT_ASK_USER_AVAILABLE_TOOLS = ["builtin:ask_user"] as const;
 
@@ -156,8 +155,6 @@ type ModelRefInputObject = {
   contextWindow?: number;
   maxTokens?: number;
 };
-
-export { SUPPORTED_PROVIDERS };
 
 type ResolveSandboxContextFn = typeof defaultResolveSandboxContext;
 
@@ -1633,7 +1630,7 @@ function readSessionId(session: SessionLike | undefined): string | undefined {
   return readString(session.sessionId) ?? readString(session.id);
 }
 
-export function readString(value: unknown): string | undefined {
+function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
@@ -1761,7 +1758,7 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
   };
 }
 
-export function toError(error: unknown): Error {
+function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 

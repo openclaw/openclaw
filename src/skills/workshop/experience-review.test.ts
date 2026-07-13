@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  buildSkillExperienceReviewPrompt,
   createSkillExperienceReviewScheduler,
-  formatSkillExperienceReviewTranscript,
   prepareSkillExperienceReviewCandidate,
   type SkillExperienceReviewParams,
 } from "./experience-review.js";
+import {
+  buildSkillExperienceReviewPrompt,
+  formatSkillExperienceReviewTranscript,
+} from "./experience-review-prompt.js";
 
 function completedRun(
   options: {

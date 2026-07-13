@@ -315,8 +315,11 @@ struct OpenClawTypographyTests {
 
         #expect(!privacyAccess.contains("DisclosureGroup(\"Privacy & Access\")"))
         #expect(privacyAccess.contains("Text(\"Privacy & Access\")"))
-        #expect(privacyAccess.contains("Text(actionTitle)"))
-        #expect(privacyAccess.contains(".font(OpenClawType.footnoteSemiBold)"))
+        let permissionRow = try String(
+            contentsOf: Self.sourceURL("Permissions/DevicePermissionRow.swift"),
+            encoding: .utf8)
+        #expect(permissionRow.contains("Text(actionTitle)"))
+        #expect(permissionRow.contains(".font(OpenClawType.footnoteSemiBold)"))
 
         #expect(!skillWorkshop.contains("Button(\"Done\")"))
         #expect(skillWorkshop.contains("Label(\"Refresh\", systemImage: \"arrow.clockwise\")"))
@@ -436,7 +439,8 @@ struct OpenClawTypographyTests {
 
     private static func unbrandedTextCallOffenders() throws -> [String] {
         let fontTokens = ["OpenClawType", "OpenClawChatTypography"]
-        let allowedFragments = [".navigationTitle(", ".alert(\"", ".tabItem { Label("]
+        // Accessibility-only Text is spoken, never rendered, so no branded font applies.
+        let allowedFragments = [".navigationTitle(", ".alert(\"", ".tabItem { Label(", ".accessibilityLabel(Text("]
         return try self.swiftSourcesForTypographyAudit().flatMap { url -> [String] in
             let source = try String(contentsOf: url, encoding: .utf8)
             let lines = source.components(separatedBy: .newlines)

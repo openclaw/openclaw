@@ -37,7 +37,7 @@ type AgentEndSideEffectsParams = Omit<BaseAgentEndSideEffectsParams, "ctx"> & {
 async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Promise<void> {
   try {
     const { scheduleSkillExperienceReview } =
-      await import("../../skills/workshop/experience-review.js");
+      await import("../../skills/workshop/experience-review-default.js");
     scheduleSkillExperienceReview({
       event: params.event,
       ctx: params.ctx,

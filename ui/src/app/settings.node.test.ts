@@ -386,11 +386,11 @@ describe("loadSettings default gateway URL derivation", () => {
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
-      sidebarPinnedRoutes: ["sessions", "cron"],
+      sidebarPinnedRoutes: ["tasks", "cron"],
       textScale: 100,
     });
 
-    expect(loadSettings().sidebarPinnedRoutes).toEqual(["sessions", "cron"]);
+    expect(loadSettings().sidebarPinnedRoutes).toEqual(["tasks", "cron"]);
     expect(loadSettings().navWidth).toBe(258);
 
     // Corrupt the persisted list; load falls back to the default pinned set.
@@ -399,7 +399,7 @@ describe("loadSettings default gateway URL derivation", () => {
       string,
       unknown
     >;
-    persisted.sidebarPinnedRoutes = "sessions";
+    persisted.sidebarPinnedRoutes = "tasks";
     persisted.navWidth = 220;
     localStorage.setItem(scopedKey, JSON.stringify(persisted));
 

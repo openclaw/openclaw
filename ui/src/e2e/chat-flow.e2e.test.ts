@@ -1303,10 +1303,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".markdown-plain-text-fallback").getByText("working **tail").waitFor({
+      await page.locator(".chat-bubble.streaming strong").getByText("tail").waitFor({
         timeout: 10_000,
       });
-      expect(await page.locator(".markdown-plain-text-fallback strong").count()).toBe(0);
+      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       await page.locator(".chat-thread h2").getByText("Streaming heading").waitFor({
@@ -1362,9 +1362,10 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.locator(".chat-thread h2").getByText("Unicode stream").waitFor({
         timeout: 10_000,
       });
-      await page.locator(".markdown-plain-text-fallback").getByText("working **tail").waitFor({
+      await page.locator(".chat-bubble.streaming strong").getByText("tail").waitFor({
         timeout: 10_000,
       });
+      expect(await page.locator(".markdown-plain-text-fallback").count()).toBe(0);
 
       await gateway.resolveDeferred("chat.send", { runId, status: "started" });
       await gateway.emitChatFinal({
@@ -1446,9 +1447,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      const newSessionButton = page
-        .locator("openclaw-app-sidebar")
-        .getByRole("button", { name: "New session" });
+      const newSessionButton = page.locator("openclaw-app-sidebar .sidebar-session-new");
       await newSessionButton.waitFor({ state: "visible", timeout: 10_000 });
       await newSessionButton.click();
 
@@ -2660,6 +2659,7 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.clock.install();
     const sessions = chatSessionListResponse();
     const firstSession = expectDefined(sessions.sessions[0], "first chat session fixture");
     const secondSession = expectDefined(sessions.sessions[1], "second chat session fixture");
@@ -2690,12 +2690,12 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
 
       await recentRow.dispatchEvent("mouseenter");
-      await page.waitForTimeout(250);
+      await page.clock.runFor(250);
       expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
         "hover-marquee--scrolling",
       );
       await recentRow.dispatchEvent("mouseleave");
-      await page.waitForTimeout(300);
+      await page.clock.runFor(300);
       expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
         "hover-marquee--scrolling",
       );

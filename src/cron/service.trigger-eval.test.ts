@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { appendCronRunLog, readCronRunLogEntriesSync } from "./run-log.js";
-import type { CronEvent, CronServiceDeps } from "./service.js";
+import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
+import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import type { CronJobCreate } from "./types.js";
 

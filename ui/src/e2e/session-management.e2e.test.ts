@@ -154,6 +154,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    await page.clock.install();
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.list": {
@@ -333,7 +334,7 @@ describeControlUiE2e("Control UI session management mocked Gateway E2E", () => {
             .length;
         })
         .toBe(4);
-      await page.waitForTimeout(400);
+      await page.clock.runFor(400);
       const boundedSearchRequests = await gateway.getRequests("sessions.list");
       expect(
         boundedSearchRequests.filter(
