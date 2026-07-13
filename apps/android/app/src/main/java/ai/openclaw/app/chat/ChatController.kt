@@ -1442,7 +1442,9 @@ class ChatController internal constructor(
       put("sessionKey", JsonPrimitive(sessionKey))
       put("message", JsonPrimitive(text))
       put("thinking", JsonPrimitive(thinking))
-      put("timeoutMs", JsonPrimitive(30_000))
+      // No timeoutMs override: it becomes the server-side run expiry, and agent
+      // turns can legitimately run for many minutes. Omitting it applies the
+      // gateway's configured default, same as other channels.
       put("idempotencyKey", JsonPrimitive(idempotencyKey))
       if (attachments.isNotEmpty()) {
         put(
@@ -2977,11 +2979,17 @@ class ChatController internal constructor(
         )
         val runStillInFlight = synchronized(gatewayScopeApplyLock) { latestAppliedInFlightRunId == runId }
         val replyStillUnresolved = unresolvedRepliesByRunId.containsKey(runId)
-        if (!runStillInFlight) {
-          clearPendingRun(runId)
-          clearTransientRunUiIfIdle()
-          if (!replyStillUnresolved) return@launch
+        if (runStillInFlight) {
+          // The refreshed snapshot confirms the run is still executing; long agent
+          // turns can outlast one timeout window, so keep waiting instead of
+          // surfacing a false timeout and dropping the optimistic bubble. Terminal
+          // events and the server-side expiry remain the liveness backstop.
+          armPendingRunTimeout(runId)
+          return@launch
         }
+        clearPendingRun(runId)
+        clearTransientRunUiIfIdle()
+        if (!replyStillUnresolved) return@launch
         val stillPending =
           synchronized(pendingRuns) {
             pendingRuns.contains(runId)
