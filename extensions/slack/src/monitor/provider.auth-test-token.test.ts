@@ -132,9 +132,11 @@ describe("auth.test boot call", () => {
     vi.useFakeTimers();
     const runtimeLog = vi.fn();
     const { appStartMock } = getSlackTestState();
-    getSlackClient().auth.test.mockImplementationOnce(
-      () => new Promise<Record<string, unknown>>(() => {}),
-    );
+    let releaseAuthTest = () => {};
+    const stalledAuthTest = new Promise<Record<string, unknown>>((resolve) => {
+      releaseAuthTest = () => resolve({});
+    });
+    getSlackClient().auth.test.mockReturnValueOnce(stalledAuthTest);
 
     const monitor = startSlackMonitor(monitorSlackProvider, {
       runtime: {
@@ -161,6 +163,7 @@ describe("auth.test boot call", () => {
         expect.stringContaining("slack startup auth.test timed out"),
       );
     } finally {
+      releaseAuthTest();
       monitor.controller.abort();
       await monitor.run;
       vi.useRealTimers();
