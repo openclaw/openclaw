@@ -39,7 +39,6 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { editorOpenUrl } from "../lib/editor-links.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
@@ -85,6 +84,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   isSidebarRouteActive,
+  renderSidebarAgentMenuLinks,
   renderSidebarCustomizeMenu,
   renderSidebarMoreMenu,
   renderSidebarMoreRow,
@@ -203,23 +203,6 @@ const SIDEBAR_SESSION_SORT_OPTIONS = [
   mode: SidebarSessionSortMode;
   labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
 }>;
-
-// External rows of the footer agent menu. Docs-first: public docs pages over
-// raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
-const AGENT_MENU_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () => string }> = [
-  { href: "https://docs.openclaw.ai", icon: "book", label: () => t("common.docs") },
-  {
-    href: "https://docs.openclaw.ai/help",
-    icon: "messageSquare",
-    label: () => t("agentChip.getHelp"),
-  },
-  { href: "https://discord.gg/clawd", icon: "users", label: () => t("agentChip.discord") },
-  {
-    href: "https://docs.openclaw.ai/releases",
-    icon: "scrollText",
-    label: () => t("agentChip.viewChangelog"),
-  },
-];
 
 function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
@@ -2015,22 +1998,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             <span class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
             <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
           </button>
-          ${AGENT_MENU_LINKS.map(
-            (link) => html`
-              <a
-                class="sidebar-customize-menu__item"
-                role="menuitem"
-                tabindex="-1"
-                href=${link.href}
-                target=${EXTERNAL_LINK_TARGET}
-                rel=${buildExternalLinkRel()}
-                @click=${() => this.closeAgentMenu()}
-              >
-                <span class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
-                <span class="sidebar-customize-menu__text">${link.label()}</span>
-              </a>
-            `,
-          )}
+          ${renderSidebarAgentMenuLinks({ onLinkClick: () => this.closeAgentMenu() })}
           <div class="sidebar-customize-menu__separator" role="separator"></div>
           <div class="sidebar-agent-menu__footer">
             <openclaw-sidebar-build-chip
