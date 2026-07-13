@@ -14,7 +14,6 @@ env:
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
   scope:
@@ -23,38 +22,53 @@ jobs:
     outputs:
       should-scan: ${{ steps.scope.outputs.should-scan }}
     steps:
+      - name: Checkout
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Ensure base commit
+        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+
       - name: Detect changed paths
         id: scope
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            if (context.eventName === "workflow_dispatch") {
-              core.setOutput("should-scan", "true");
-              return;
-            }
-            if (context.payload.pull_request?.draft) {
-              core.setOutput("should-scan", "false");
-              return;
-            }
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_DRAFT: ${{ github.event.pull_request.draft && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "should-scan=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$PR_DRAFT" = "true" ]; then
+            echo "should-scan=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-            const files = await github.paginate(github.rest.pulls.listFiles, {
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number,
-              per_page: 100,
-            });
-            const isScanPath = (filename) =>
-              typeof filename === "string" && (
-                filename.startsWith("apps/macos/") ||
-                filename === ".github/workflows/macos-periphery.yml" ||
-                filename === ".github/workflows/ios-periphery-comment.yml" ||
-                filename === "apps/macos/.periphery.yml"
-              );
-            const shouldScan = files.some(
-              ({ filename, previous_filename: previousFilename }) =>
-                isScanPath(filename) || isScanPath(previousFilename)
-            );
-            core.setOutput("should-scan", String(shouldScan));
+          if git diff --quiet "$BASE_SHA" HEAD -- \
+            apps/macos/ \
+            .github/workflows/macos-periphery.yml \
+            .github/workflows/ios-periphery-comment.yml \
+            apps/macos/.periphery.yml; then
+            echo "should-scan=false" >> "$GITHUB_OUTPUT"
+          else
+            diff_status="$?"
+            if [ "$diff_status" -ne 1 ]; then
+              exit "$diff_status"
+            fi
+            echo "should-scan=true" >> "$GITHUB_OUTPUT"
+          fi
 
   scan:
     name: Scan macOS dead code
