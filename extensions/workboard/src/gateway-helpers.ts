@@ -5,8 +5,13 @@ import type { OpenClawPluginApi } from "../api.js";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
+import {
+  canMaterializeWorkboardWorktree,
+  resolveConfiguredWorkboardWorkspaceAccess,
+  type WorkboardWorkspaceAccess,
+} from "./workspace-access.js";
 
-type GatewayMethodContext = Parameters<
+export type GatewayMethodContext = Parameters<
   Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]
 >[0];
 type GatewayRespond = GatewayMethodContext["respond"];
@@ -51,13 +56,32 @@ export function assertNoCursorAdvance(params: Record<string, unknown>) {
   }
 }
 
+export function resolveGatewayWorkboardWorkspaceAccess(params: {
+  context: GatewayMethodContext["context"];
+  client: GatewayMethodContext["client"];
+}): WorkboardWorkspaceAccess {
+  // In-process plugin dispatch has no remote client and already runs with host
+  // authority. Connected write-scope clients stay within configured workspaces.
+  if (!params.client) {
+    return { unrestricted: true };
+  }
+  const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
+  if (scopes.includes("operator.admin")) {
+    return { unrestricted: true };
+  }
+  return resolveConfiguredWorkboardWorkspaceAccess({
+    config: params.context.getRuntimeConfig(),
+    unrestricted: false,
+  });
+}
+
 export function createWorkboardDispatchHandler(params: {
   api: OpenClawPluginApi;
   store: WorkboardStore;
   redactCard: (card: WorkboardCard) => WorkboardCard;
 }) {
   return async (
-    { params: requestParams, respond, client }: GatewayMethodContext,
+    { params: requestParams, respond, client, context }: GatewayMethodContext,
     options: { supportsMaxStarts: boolean },
   ) => {
     try {
@@ -82,9 +106,13 @@ export function createWorkboardDispatchHandler(params: {
         options: {
           boardId: typeof boardId === "string" ? boardId : undefined,
           ...(maxStarts !== undefined ? { maxStarts } : {}),
-          allowManagedWorktrees:
-            Array.isArray(client?.connect?.scopes) &&
-            client.connect.scopes.includes("operator.admin"),
+          materializeWorktree: canMaterializeWorkboardWorktree(
+            Array.isArray(client?.connect?.scopes) ? client.connect.scopes : undefined,
+          ),
+          workspaceAccess: resolveGatewayWorkboardWorkspaceAccess({
+            context,
+            client,
+          }),
         },
       });
       respond(true, {

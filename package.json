@@ -555,6 +555,10 @@
       "types": "./dist/plugin-sdk/text-chunking.d.ts",
       "default": "./dist/plugin-sdk/text-chunking.js"
     },
+    "./plugin-sdk/agent-workspace-runtime": {
+      "types": "./dist/plugin-sdk/agent-workspace-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-workspace-runtime.js"
+    },
     "./plugin-sdk/agent-runtime": {
       "types": "./dist/plugin-sdk/agent-runtime.d.ts",
       "default": "./dist/plugin-sdk/agent-runtime.js"
@@ -606,6 +610,10 @@
     "./plugin-sdk/security-runtime": {
       "types": "./dist/plugin-sdk/security-runtime.d.ts",
       "default": "./dist/plugin-sdk/security-runtime.js"
+    },
+    "./plugin-sdk/path-security-runtime": {
+      "types": "./dist/plugin-sdk/path-security-runtime.d.ts",
+      "default": "./dist/plugin-sdk/path-security-runtime.js"
     },
     "./plugin-sdk/gateway-method-runtime": {
       "types": "./dist/plugin-sdk/gateway-method-runtime.d.ts",

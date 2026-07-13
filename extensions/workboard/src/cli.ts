@@ -14,6 +14,7 @@ type JsonOptions = {
 };
 
 type GatewayOptions = JsonOptions & {
+  admin?: boolean;
   url?: string;
   token?: string;
   timeout?: string;
@@ -106,7 +107,9 @@ async function callWorkboardGateway(
 ): Promise<unknown> {
   return await callGatewayFromCli(method, options, params, {
     mode: "cli",
-    scopes: ["operator.write", "operator.read"],
+    scopes: options.admin
+      ? ["operator.admin", "operator.write", "operator.read"]
+      : ["operator.write", "operator.read"],
   });
 }
 
@@ -247,6 +250,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
         "Maximum new worker runs to start in this pass (default 3)",
         (value: string) => parsePositiveIntegerOption(value, "--max-starts"),
       )
+      .option("--admin", "Request full-host workspace access", false)
       .option("--json", "Print JSON", false),
   ).action(async (options: DispatchOptions) => {
     try {

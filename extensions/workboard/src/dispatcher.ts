@@ -1,9 +1,18 @@
 // Workboard plugin module implements dispatcher behavior.
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/path-security-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { WorkboardStore, type WorkboardDispatchResult } from "./store.js";
 import type { WorkboardCard, WorkboardExecution, WorkboardWorkspace } from "./types.js";
+import {
+  assertCanonicalWorkboardPathAccess,
+  assertWorkboardWorkspaceSourceAccess,
+  type WorkboardWorkspaceAccess,
+} from "./workspace-access.js";
 
 const DEFAULT_DISPATCH_MAX_STARTS = 3;
 const DEFAULT_DISPATCH_OWNER = "workboard-dispatcher";
@@ -19,7 +28,8 @@ type WorkboardDispatchStartOptions = {
   ownerId?: string;
   boardId?: string;
   now?: number;
-  allowManagedWorktrees?: boolean;
+  materializeWorktree?: boolean;
+  workspaceAccess?: WorkboardWorkspaceAccess;
 };
 
 type WorkboardStartedRun = {
@@ -102,32 +112,78 @@ function managedWorktreeName(cardId: string): string {
 async function materializeWorkspace(params: {
   card: WorkboardCard;
   worktrees?: WorkboardWorktreeRuntime;
-  allowManagedWorktrees: boolean;
+  materializeWorktree: boolean;
+  workspaceAccess: WorkboardWorkspaceAccess;
 }): Promise<{ workspace?: WorkboardWorkspace; cwd?: string }> {
   const workspace = params.card.metadata?.automation?.workspace;
-  if (workspace?.kind !== "worktree") {
+  if (!workspace || workspace.kind === "scratch") {
     return {};
-  }
-  if (!params.allowManagedWorktrees) {
-    throw new Error("managed worktree dispatch requires operator.admin");
   }
   const sourcePath = workspace.sourcePath ?? workspace.path;
   const sourceBranch = workspace.sourcePath ? workspace.sourceBranch : workspace.branch;
   if (!sourcePath || !path.isAbsolute(sourcePath)) {
     throw new Error("worktree workspace path must be an absolute git checkout path");
   }
+  // Persisted cards can outlive the caller that created them. Keep the exact
+  // canonical path that passes this dispatcher's current boundary check.
+  const canonicalSourcePath = await assertWorkboardWorkspaceSourceAccess(
+    workspace,
+    params.workspaceAccess,
+  );
+  if (!canonicalSourcePath) {
+    throw new Error("worktree workspace path is required");
+  }
+  if (workspace.kind === "dir" || !params.materializeWorktree) {
+    return { cwd: canonicalSourcePath };
+  }
   if (!params.worktrees) {
     throw new Error("managed worktree runtime is unavailable");
   }
+  const repository = await params.worktrees.resolveRepositoryPaths({
+    repoRoot: canonicalSourcePath,
+  });
+  await assertCanonicalWorkboardPathAccess(repository.requestedPath, params.workspaceAccess);
+  const relativeWorkspacePath = path.relative(repository.sourceRoot, repository.requestedPath);
+  if (
+    path.isAbsolute(relativeWorkspacePath) ||
+    relativeWorkspacePath === ".." ||
+    relativeWorkspacePath.startsWith(`..${path.sep}`)
+  ) {
+    throw new Error("worktree workspace path is outside its resolved git checkout");
+  }
   const worktree = await params.worktrees.create({
-    repoRoot: sourcePath,
+    repoRoot: repository.requestedPath,
     name: managedWorktreeName(params.card.id),
     ...(sourceBranch ? { baseRef: sourceBranch } : {}),
     ownerKind: "workboard",
     ownerId: params.card.id,
+    expectedSourcePath: repository.requestedPath,
+    expectedSourceRoot: repository.sourceRoot,
   });
+  let cwd: string;
+  try {
+    const canonicalWorktreeRoot = await canonicalPathFromExistingAncestor(worktree.path);
+    cwd = await canonicalPathFromExistingAncestor(path.join(worktree.path, relativeWorkspacePath));
+    if (!isPathInside(canonicalWorktreeRoot, cwd)) {
+      throw new Error("materialized workspace path escapes its managed worktree");
+    }
+  } catch (error) {
+    const removed = await params.worktrees
+      .removeIfLossless({
+        path: worktree.path,
+        ownerKind: "workboard",
+        ownerId: params.card.id,
+      })
+      .catch(() => false);
+    if (!removed) {
+      throw new Error(`${formatErrorMessage(error)}; managed worktree cleanup failed`, {
+        cause: error,
+      });
+    }
+    throw error;
+  }
   return {
-    cwd: worktree.path,
+    cwd,
     workspace: {
       kind: "worktree",
       path: worktree.path,
@@ -236,16 +292,21 @@ export async function dispatchAndStartWorkboardCards(params: {
     let token = "";
     let materializedWorkspace: WorkboardWorkspace | undefined;
     let runStarted = false;
-    if (
-      card.metadata?.automation?.workspace?.kind === "worktree" &&
-      params.options?.allowManagedWorktrees === false
-    ) {
-      startFailures.push({
-        cardId: card.id,
-        title: card.title,
-        error: "managed worktree dispatch requires operator.admin",
-      });
-      continue;
+    const requestedWorkspace = card.metadata?.automation?.workspace;
+    if (requestedWorkspace && requestedWorkspace.kind !== "scratch") {
+      try {
+        await assertWorkboardWorkspaceSourceAccess(
+          requestedWorkspace,
+          params.options?.workspaceAccess ?? { unrestricted: true },
+        );
+      } catch (error) {
+        startFailures.push({
+          cardId: card.id,
+          title: card.title,
+          error: formatErrorMessage(error),
+        });
+        continue;
+      }
     }
     try {
       const claimed = await params.store.claim(card.id, {
@@ -257,7 +318,8 @@ export async function dispatchAndStartWorkboardCards(params: {
       const materialized = await materializeWorkspace({
         card: claimed.card,
         worktrees: params.worktrees,
-        allowManagedWorktrees: params.options?.allowManagedWorktrees !== false,
+        materializeWorktree: params.options?.materializeWorktree !== false,
+        workspaceAccess: params.options?.workspaceAccess ?? { unrestricted: true },
       });
       materializedWorkspace = materialized.workspace;
       if (materializedWorkspace) {
@@ -311,7 +373,11 @@ export async function dispatchAndStartWorkboardCards(params: {
     } catch (error) {
       if (!runStarted && materializedWorkspace?.path && params.worktrees) {
         await params.worktrees
-          .removeIfLossless({ path: materializedWorkspace.path })
+          .removeIfLossless({
+            path: materializedWorkspace.path,
+            ownerKind: "workboard",
+            ownerId: card.id,
+          })
           .catch(() => undefined);
         const sourceWorkspace = card.metadata?.automation?.workspace;
         if (sourceWorkspace) {
@@ -357,5 +423,9 @@ export async function cleanupWorkboardRunWorktree(params: {
   if (workspace?.kind !== "worktree" || !workspace.path) {
     return;
   }
-  await params.worktrees.removeIfLossless({ path: workspace.path });
+  await params.worktrees.removeIfLossless({
+    path: workspace.path,
+    ownerKind: "workboard",
+    ownerId: card.id,
+  });
 }

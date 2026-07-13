@@ -192,6 +192,24 @@ describe("registerWorkboardCli", () => {
     );
   });
 
+  it("requests minimum scopes unless full-host access is explicit", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const program = createProgram(store);
+    gatewayRuntime.callGatewayFromCli.mockResolvedValue({ started: [], startFailures: [] });
+
+    await program.parseAsync(["workboard", "dispatch"], { from: "user" });
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[0]?.[3]).toEqual({
+      mode: "cli",
+      scopes: ["operator.write", "operator.read"],
+    });
+
+    await program.parseAsync(["workboard", "dispatch", "--admin"], { from: "user" });
+    expect(gatewayRuntime.callGatewayFromCli.mock.calls[1]?.[3]).toEqual({
+      mode: "cli",
+      scopes: ["operator.admin", "operator.write", "operator.read"],
+    });
+  });
+
   it("omits maxStarts from the dispatch gateway call when the flag is absent", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const program = createProgram(store);

@@ -103,6 +103,35 @@ describe("ManagedWorktreeService", () => {
     expect(repeated).toEqual(created);
   });
 
+  it("rejects repository path changes after caller authorization", async () => {
+    const resolved = await service.resolveRepositoryPaths(repo);
+    expect(resolved).toMatchObject({ requestedPath: repo, sourceRoot: repo });
+
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "pinned-source",
+        expectedSourcePath: path.join(root, "other"),
+        expectedSourceRoot: resolved.sourceRoot,
+      }),
+    ).rejects.toThrow("repository path changed after authorization");
+    expect(await git(repo, "branch", "--list", "openclaw/pinned-source")).toBe("");
+  });
+
+  it("does not remove a worktree owned by another caller", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "session-owned",
+      ownerKind: "session",
+      ownerId: "session-1",
+    });
+
+    await expect(
+      service.removeIfLosslessByPathForOwner(created.path, "workboard", "card-1"),
+    ).resolves.toBe(false);
+    await expect(fs.stat(created.path)).resolves.toBeDefined();
+  });
+
   it("lists repository branches default-first with deterministic ordering", async () => {
     await addRemote(root, repo);
     await git(repo, "branch", "feature-a");

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { handleWorkboardCommand } from "./command.js";
 import type { WorkboardSubagentRuntime, WorkboardWorktreeRuntime } from "./dispatcher.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
+import { resolveCommandWorkboardWorkspaceAccess } from "./workspace-access.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -30,6 +31,11 @@ function createApi(run = vi.fn().mockResolvedValue({ runId: "run-1" })): {
     runtime: {
       subagent: { run },
       worktrees: {
+        resolveRepositoryPaths: vi.fn(async ({ repoRoot }) => ({
+          canonicalRoot: repoRoot,
+          requestedPath: repoRoot,
+          sourceRoot: repoRoot,
+        })),
         create: vi.fn(),
         release: vi.fn(),
         removeIfLossless: vi.fn(),
@@ -52,6 +58,26 @@ async function createAmbiguousPrefix(store: WorkboardStore): Promise<string> {
 }
 
 describe("handleWorkboardCommand", () => {
+  it("uses the configured default agent workspace for unscoped local commands", () => {
+    expect(
+      resolveCommandWorkboardWorkspaceAccess({
+        config: {
+          tools: { fs: { workspaceOnly: true } },
+          agents: {
+            list: [
+              {
+                id: "first",
+                workspace: "/first",
+                tools: { fs: { workspaceOnly: false } },
+              },
+              { id: "chosen", default: true, workspace: "/chosen" },
+            ],
+          },
+        },
+      }),
+    ).toEqual({ unrestricted: false, roots: ["/chosen"] });
+  });
+
   it("creates, lists, and dispatches workboard cards", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const api = createApi();
@@ -106,7 +132,7 @@ describe("handleWorkboardCommand", () => {
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
-  it("requires admin scope for slash-command worktree materialization", async () => {
+  it("uses the slash caller's workspace access for worktree materialization", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const api = createApi();
     const createWorktree = vi.mocked(api.runtime.worktrees.create);
@@ -127,9 +153,10 @@ describe("handleWorkboardCommand", () => {
         store,
         args: "dispatch",
         gatewayClientScopes: ["operator.write"],
+        workspaceAccess: { unrestricted: false, roots: ["/workspace"] },
       }),
     ).resolves.toEqual(
-      expect.objectContaining({ text: expect.stringContaining("operator.admin") }),
+      expect.objectContaining({ text: expect.stringContaining("outside the caller") }),
     );
     expect(createWorktree).not.toHaveBeenCalled();
     const denied = (await store.list()).find((card) => card.title === "Denied checkout");
@@ -146,10 +173,14 @@ describe("handleWorkboardCommand", () => {
       store,
       args: "dispatch",
       gatewayClientScopes: ["operator.admin"],
+      workspaceAccess: { unrestricted: true },
     });
 
     expect(createWorktree).toHaveBeenCalledWith(
-      expect.objectContaining({ repoRoot: "/repo-allowed", ownerId: allowed.id }),
+      expect.objectContaining({
+        repoRoot: "/repo-allowed",
+        ownerId: allowed.id,
+      }),
     );
   });
 

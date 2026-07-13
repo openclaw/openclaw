@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID, createHash } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -28,6 +28,7 @@ import {
   listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
+import { resolveWorktreeRepository } from "./repository.js";
 import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
@@ -116,36 +117,6 @@ function recordOwnerMatches(
     record.ownerKind === (params.ownerKind ?? "manual") &&
     (record.ownerId ?? undefined) === (params.ownerId ?? undefined)
   );
-}
-
-async function resolveRepository(repoRoot: string): Promise<{
-  repoRoot: string;
-  sourceRoot: string;
-  commonDir: string;
-  originUrl: string;
-  fingerprint: string;
-}> {
-  const requested = await fs.realpath(repoRoot).catch(() => {
-    throw new Error(`repository does not exist: ${repoRoot}`);
-  });
-  const rootResult = await runGit(requested, ["rev-parse", "--show-toplevel"]);
-  if (rootResult.code !== 0) {
-    throw new Error(`not a git checkout: ${repoRoot}`);
-  }
-  const sourceRoot = await fs.realpath(rootResult.stdout.trim());
-  const commonRaw = await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"]);
-  const commonDir = await fs.realpath(
-    path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
-  );
-  const primary = (await listGitWorktrees(sourceRoot))[0]?.path ?? sourceRoot;
-  const canonicalRoot = await fs.realpath(primary);
-  const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
-  const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
-  const fingerprint = createHash("sha256")
-    .update(`${commonDir}\n${originUrl}`)
-    .digest("hex")
-    .slice(0, 16);
-  return { repoRoot: canonicalRoot, sourceRoot, commonDir, originUrl, fingerprint };
 }
 
 async function ensureNoSymlinkDirectory(root: string, relativePath: string): Promise<boolean> {
@@ -386,7 +357,13 @@ export class ManagedWorktreeService {
   }
 
   async create(params: CreateManagedWorktreeParams): Promise<ManagedWorktreeRecord> {
-    const repository = await resolveRepository(params.repoRoot);
+    const repository = await resolveWorktreeRepository(params.repoRoot);
+    if (
+      (params.expectedSourcePath && repository.requestedPath !== params.expectedSourcePath) ||
+      (params.expectedSourceRoot && repository.sourceRoot !== params.expectedSourceRoot)
+    ) {
+      throw new Error("repository path changed after authorization");
+    }
     const name = validateName(params.name ?? generateName());
     const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
     const worktreePath = path.join(root, name);
@@ -512,9 +489,13 @@ export class ManagedWorktreeService {
   /** Resolves the canonical registry root and the caller's own checkout root. */
   async resolveRepositoryPaths(
     repoRoot: string,
-  ): Promise<{ canonicalRoot: string; sourceRoot: string }> {
-    const resolved = await resolveRepository(repoRoot);
-    return { canonicalRoot: resolved.repoRoot, sourceRoot: resolved.sourceRoot };
+  ): Promise<{ canonicalRoot: string; requestedPath: string; sourceRoot: string }> {
+    const resolved = await resolveWorktreeRepository(repoRoot);
+    return {
+      canonicalRoot: resolved.repoRoot,
+      requestedPath: resolved.requestedPath,
+      sourceRoot: resolved.sourceRoot,
+    };
   }
 
   /**
@@ -523,7 +504,7 @@ export class ManagedWorktreeService {
    * when no explicit ref is chosen.
    */
   async listRepositoryBranches(repoRoot: string): Promise<ManagedWorktreeBranchesResult> {
-    const repository = await resolveRepository(repoRoot);
+    const repository = await resolveWorktreeRepository(repoRoot);
     // Keyed by short branch name; the stored name is always a resolvable base
     // ref, so remote-only branches keep their remote-qualified form
     // (origin/feature-a) instead of a bare name git cannot resolve.
@@ -772,6 +753,18 @@ export class ManagedWorktreeService {
     return await this.removeIfLossless(record.id);
   }
 
+  async removeIfLosslessByPathForOwner(
+    worktreePath: string,
+    ownerKind: ManagedWorktreeOwnerKind,
+    ownerId: string,
+  ): Promise<boolean> {
+    const record = findLiveRegistryWorktreeByPath(this.env, worktreePath);
+    if (!record || !recordOwnerMatches(record, { ownerKind, ownerId })) {
+      return false;
+    }
+    return await this.removeIfLossless(record.id);
+  }
+
   async releaseByPath(worktreePath: string): Promise<void> {
     const record = findLiveRegistryWorktreeByPath(this.env, worktreePath);
     if (record) {
@@ -970,7 +963,7 @@ export class ManagedWorktreeService {
         if (managedPaths.has(path.resolve(candidate))) {
           continue;
         }
-        const repository = await resolveRepository(candidate).catch(() => undefined);
+        const repository = await resolveWorktreeRepository(candidate).catch(() => undefined);
         if (repository) {
           const listed = await listGitWorktrees(repository.repoRoot).catch(() => []);
           if (listed.some((entry) => path.resolve(entry.path) === path.resolve(candidate))) {

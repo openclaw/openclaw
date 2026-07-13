@@ -140,6 +140,89 @@ describe("workboard gateway methods", () => {
     expect(eventsRespond.mock.calls[0]?.[2]?.message).toContain("workboard.notifications.advance");
   });
 
+  it("applies connected client workspace access when accepting card paths", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const store = new WorkboardStore(createMemoryStore());
+    const api = {
+      runtime: {
+        agent: {
+          listAgentIds: vi.fn(() => ["main"]),
+          resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
+        },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    registerWorkboardGatewayMethods({ api, store });
+    const create = methods.get("workboard.cards.create")?.handler;
+    const context = {
+      getRuntimeConfig: () => ({ agents: { defaults: { workspace: "/workspace" } } }),
+    };
+
+    const deniedRespond = vi.fn();
+    await create?.({
+      params: {
+        title: "Outside",
+        workspace: { kind: "worktree", sourcePath: "/outside/repo" },
+      },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: deniedRespond,
+    } as never);
+    expect(deniedRespond.mock.calls[0]?.[0]).toBe(false);
+    expect(deniedRespond.mock.calls[0]?.[2]?.message).toContain("outside the caller");
+
+    const insideRespond = vi.fn();
+    await create?.({
+      params: {
+        title: "Inside",
+        workspace: { kind: "worktree", sourcePath: "/workspace/repo" },
+      },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: insideRespond,
+    } as never);
+    expect(insideRespond.mock.calls[0]?.[0]).toBe(true);
+
+    const adminRespond = vi.fn();
+    await create?.({
+      params: {
+        title: "Admin outside",
+        workspace: { kind: "worktree", sourcePath: "/outside/repo" },
+      },
+      client: { connect: { scopes: ["operator.admin"] } },
+      respond: adminRespond,
+    } as never);
+    expect(adminRespond.mock.calls[0]?.[0]).toBe(true);
+
+    await methods.get("workboard.boards.upsert")?.handler({
+      params: {
+        id: "outside-default",
+        defaultWorkspace: { kind: "worktree", sourcePath: "/outside/repo" },
+      },
+      client: { connect: { scopes: ["operator.admin"] } },
+      respond: vi.fn(),
+    } as never);
+    const inheritedRespond = vi.fn();
+    await create?.({
+      params: { title: "No implicit workspace", boardId: "outside-default" },
+      client: { connect: { scopes: ["operator.write"] } },
+      context,
+      respond: inheritedRespond,
+    } as never);
+    expect(inheritedRespond.mock.calls[0]?.[0]).toBe(true);
+    expect(
+      inheritedRespond.mock.calls[0]?.[1]?.card.metadata?.automation?.workspace,
+    ).toBeUndefined();
+  });
+
   it("stores metadata updates through dedicated card methods", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
@@ -339,7 +422,7 @@ describe("workboard gateway methods", () => {
     }
   });
 
-  it("requires admin scope for managed-worktree dispatch", async () => {
+  it("keeps write-scope worktree dispatch within configured agent workspaces", async () => {
     type RegisteredMethod = {
       handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
       opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
@@ -353,8 +436,17 @@ describe("workboard gateway methods", () => {
     });
     const api = {
       runtime: {
+        agent: {
+          listAgentIds: vi.fn(() => ["main"]),
+          resolveAgentWorkspaceDir: vi.fn(() => "/workspace"),
+        },
         subagent: { run },
         worktrees: {
+          resolveRepositoryPaths: vi.fn(async ({ repoRoot }) => ({
+            canonicalRoot: repoRoot,
+            requestedPath: repoRoot,
+            sourceRoot: repoRoot,
+          })),
           create: createWorktree,
           release: vi.fn(),
           removeIfLossless: vi.fn(),
@@ -378,6 +470,9 @@ describe("workboard gateway methods", () => {
     const deniedRespond = vi.fn();
     await handler?.({
       client: { connect: { scopes: ["operator.write"] } },
+      context: {
+        getRuntimeConfig: () => ({ agents: { defaults: { workspace: "/workspace" } } }),
+      },
       respond: deniedRespond,
     } as never);
 
@@ -386,7 +481,7 @@ describe("workboard gateway methods", () => {
       startFailures: [
         expect.objectContaining({
           cardId: denied.id,
-          error: "managed worktree dispatch requires operator.admin",
+          error: "workspace path is outside the caller's allowed workspaces.",
         }),
       ],
     });
@@ -396,16 +491,18 @@ describe("workboard gateway methods", () => {
     const allowed = await store.create({
       title: "Allowed checkout",
       status: "ready",
-      workspace: { kind: "worktree", path: "/repo-allowed" },
+      workspace: { kind: "worktree", path: "/workspace/repo-allowed" },
     });
     await handler?.({
-      client: { connect: { scopes: ["operator.admin"] } },
+      client: { connect: { scopes: ["operator.write"] } },
+      context: {
+        getRuntimeConfig: () => ({ agents: { defaults: { workspace: "/workspace" } } }),
+      },
       respond: vi.fn(),
     } as never);
 
-    expect(createWorktree).toHaveBeenCalledWith(
-      expect.objectContaining({ repoRoot: "/repo-allowed", ownerId: allowed.id }),
-    );
+    expect(createWorktree).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/workspace/repo-allowed" }));
     expect(run).toHaveBeenCalledOnce();
   });
 

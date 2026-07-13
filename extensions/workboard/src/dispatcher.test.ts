@@ -1,4 +1,7 @@
 // Workboard tests cover dispatcher plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { cleanupWorkboardRunWorktree, dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
@@ -31,6 +34,11 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
     const run = vi.fn().mockResolvedValue({ runId: "run-worktree" });
     const worktrees = {
+      resolveRepositoryPaths: vi.fn(async ({ repoRoot }) => ({
+        canonicalRoot: repoRoot,
+        requestedPath: repoRoot,
+        sourceRoot: repoRoot,
+      })),
       create: vi.fn().mockResolvedValue({
         id: "managed-id",
         path: "/state/worktrees/fingerprint/wb-card",
@@ -75,10 +83,12 @@ describe("dispatchAndStartWorkboardCards", () => {
     await cleanupWorkboardRunWorktree({ store, worktrees, runId: "run-worktree" });
     expect(worktrees.removeIfLossless).toHaveBeenCalledWith({
       path: "/state/worktrees/fingerprint/wb-card",
+      ownerKind: "workboard",
+      ownerId: card.id,
     });
   });
 
-  it("requires gateway admin authorization before materializing a worktree", async () => {
+  it("rejects worktree sources outside the dispatcher's workspace boundary", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
       title: "Protected checkout",
@@ -86,6 +96,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       workspace: { kind: "worktree", path: "/repo" },
     });
     const worktrees = {
+      resolveRepositoryPaths: vi.fn(),
       create: vi.fn(),
       release: vi.fn(),
       removeIfLossless: vi.fn(),
@@ -95,17 +106,145 @@ describe("dispatchAndStartWorkboardCards", () => {
       store,
       subagent: { run: vi.fn() },
       worktrees,
-      options: { maxStarts: 1, allowManagedWorktrees: false },
+      options: {
+        maxStarts: 1,
+        workspaceAccess: { unrestricted: false, roots: ["/workspace"] },
+      },
     });
 
     expect(result.startFailures).toEqual([
       expect.objectContaining({
         cardId: card.id,
-        error: "managed worktree dispatch requires operator.admin",
+        error: "workspace path is outside the caller's allowed workspaces.",
       }),
     ]);
     expect(worktrees.create).not.toHaveBeenCalled();
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+  });
+
+  it("leaves inaccessible directory workspaces ready and unclaimed", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Protected directory",
+      status: "ready",
+      workspace: { kind: "dir", path: "/outside" },
+    });
+    const run = vi.fn();
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: {
+        maxStarts: 1,
+        materializeWorktree: false,
+        workspaceAccess: { unrestricted: false, roots: ["/workspace"] },
+      },
+    });
+
+    expect(result.startFailures).toEqual([
+      expect.objectContaining({
+        cardId: card.id,
+        error: "workspace path is outside the caller's allowed workspaces.",
+      }),
+    ]);
+    expect(run).not.toHaveBeenCalled();
+    await expect(store.get(card.id)).resolves.toMatchObject({
+      status: "ready",
+      metadata: { automation: { workspace: { kind: "dir", path: "/outside" } } },
+    });
+  });
+
+  it("preserves an authorized repository subdirectory as the worker cwd", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.create({
+      title: "Scoped package worker",
+      status: "ready",
+      workspace: { kind: "worktree", path: "/repo/packages/app" },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-package" });
+    const worktrees = {
+      resolveRepositoryPaths: vi.fn().mockResolvedValue({
+        canonicalRoot: "/repo",
+        requestedPath: "/repo/packages/app",
+        sourceRoot: "/repo",
+      }),
+      create: vi.fn().mockResolvedValue({
+        id: "managed-id",
+        path: "/state/worktrees/fingerprint/wb-card",
+        branch: "openclaw/wb-card",
+      }),
+      release: vi.fn(),
+      removeIfLossless: vi.fn(),
+    };
+
+    await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      worktrees,
+      options: {
+        maxStarts: 1,
+        workspaceAccess: { unrestricted: false, roots: ["/repo/packages/app"] },
+      },
+    });
+
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: "/state/worktrees/fingerprint/wb-card/packages/app" }),
+    );
+    expect(worktrees.create).toHaveBeenCalledWith(
+      expect.objectContaining({ repoRoot: "/repo/packages/app" }),
+    );
+  });
+
+  it("removes a new worktree when its materialized subdirectory escapes", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "workboard-wt-"));
+    try {
+      const worktreeRoot = path.join(tempRoot, "worktree");
+      const outsideRoot = path.join(tempRoot, "outside");
+      await fs.mkdir(worktreeRoot, { recursive: true });
+      await fs.mkdir(outsideRoot, { recursive: true });
+      await fs.symlink(outsideRoot, path.join(worktreeRoot, "packages"));
+
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: "Escaping package worker",
+        status: "ready",
+        workspace: { kind: "worktree", path: "/repo/packages/app" },
+      });
+      const removeIfLossless = vi.fn().mockResolvedValue(true);
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run: vi.fn() },
+        worktrees: {
+          resolveRepositoryPaths: vi.fn().mockResolvedValue({
+            canonicalRoot: "/repo",
+            requestedPath: "/repo/packages/app",
+            sourceRoot: "/repo",
+          }),
+          create: vi.fn().mockResolvedValue({
+            id: "managed-id",
+            path: worktreeRoot,
+            branch: "openclaw/wb-card",
+          }),
+          release: vi.fn(),
+          removeIfLossless,
+        },
+        options: { maxStarts: 1 },
+      });
+
+      expect(result.startFailures).toEqual([
+        expect.objectContaining({
+          cardId: card.id,
+          error: "materialized workspace path escapes its managed worktree",
+        }),
+      ]);
+      expect(removeIfLossless).toHaveBeenCalledWith({
+        path: worktreeRoot,
+        ownerKind: "workboard",
+        ownerId: card.id,
+      });
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("does not reuse a generated branch as an omitted source base", async () => {
@@ -129,7 +268,16 @@ describe("dispatchAndStartWorkboardCards", () => {
     await dispatchAndStartWorkboardCards({
       store,
       subagent: { run: vi.fn().mockResolvedValue({ runId: "run-retry" }) },
-      worktrees: { create, release: vi.fn(), removeIfLossless: vi.fn() },
+      worktrees: {
+        resolveRepositoryPaths: vi.fn(async ({ repoRoot }) => ({
+          canonicalRoot: repoRoot,
+          requestedPath: repoRoot,
+          sourceRoot: repoRoot,
+        })),
+        create,
+        release: vi.fn(),
+        removeIfLossless: vi.fn(),
+      },
       options: { maxStarts: 1 },
     });
 

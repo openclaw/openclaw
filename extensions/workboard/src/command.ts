@@ -8,6 +8,11 @@ import {
 } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
+import {
+  canMaterializeWorkboardWorktree,
+  resolveCommandWorkboardWorkspaceAccess,
+  type WorkboardWorkspaceAccess,
+} from "./workspace-access.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const WRITE_SCOPE = "operator.write";
@@ -86,6 +91,7 @@ export async function handleWorkboardCommand(params: {
   args?: string;
   senderIsOwner?: boolean;
   gatewayClientScopes?: readonly string[];
+  workspaceAccess?: WorkboardWorkspaceAccess;
 }): Promise<{ text: string; isError?: boolean }> {
   const [action = "list", ...rest] = splitArgs(params.args);
   if (action === "help") {
@@ -134,9 +140,8 @@ export async function handleWorkboardCommand(params: {
       subagent: params.api.runtime.subagent,
       worktrees: params.api.runtime.worktrees,
       options: {
-        allowManagedWorktrees: params.gatewayClientScopes
-          ? params.gatewayClientScopes.includes(ADMIN_SCOPE)
-          : params.senderIsOwner === true,
+        materializeWorktree: canMaterializeWorkboardWorktree(params.gatewayClientScopes),
+        workspaceAccess: params.workspaceAccess ?? { unrestricted: true },
       },
     });
     return {
@@ -168,6 +173,11 @@ export function registerWorkboardCommand(params: {
         args: ctx.args,
         senderIsOwner: ctx.senderIsOwner,
         gatewayClientScopes: ctx.gatewayClientScopes,
+        workspaceAccess: resolveCommandWorkboardWorkspaceAccess({
+          config: ctx.config,
+          agentId: ctx.agentId,
+          gatewayClientScopes: ctx.gatewayClientScopes,
+        }),
       }),
   });
 }

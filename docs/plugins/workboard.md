@@ -162,6 +162,17 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 Workers get bounded card context plus the claim token needed to heartbeat,
 complete, or block the card through the Workboard tools.
 
+Worktree workspace paths follow the caller's existing filesystem authority.
+Gateway clients with `operator.write` can use configured agent workspaces;
+`operator.admin` clients can use other host checkouts. Agent tools follow the
+active agent's `tools.fs.workspaceOnly` policy and workspace root. Dispatch
+rechecks the current caller boundary before materializing a persisted worktree,
+so a card created through one surface cannot widen a later dispatch. Write-scoped
+dispatch runs directly in the authorized source workspace; it does not invoke Git
+checkout hooks or repository setup scripts. Admin and trusted local dispatch may
+create a managed worktree. When an allowed workspace is a repository subdirectory,
+the generated worker keeps that same subdirectory as its workspace root.
+
 ### Worker selection
 
 Each pass starts **at most 3 workers by default**. Ready cards are ordered by
@@ -229,6 +240,8 @@ troubleshooting.
 and `/workboard dispatch` mirror the CLI. List and show are read operations
 for any authorized command sender. Create and dispatch require owner status on
 chat surfaces, or a Gateway client with `operator.write`/`operator.admin`.
+Their worktree access still follows the same workspace boundary described
+above.
 
 ## Session lifecycle sync
 
@@ -302,7 +315,8 @@ Gateway RPC methods live under `workboard.*`:
 | `operator.write` | `cards.diagnostics.refresh`, create/update/move/delete/comment/link/linkDependency/proof/artifact, attachment add/delete, worker log, protocol violation, claim/heartbeat/release/promote/reassign/reclaim/complete/block/unblock, `cards.dispatch`, `cards.bulk`, archive, `boards.upsert`/`archive`/`delete`, `cards.specify`/`decompose`, notification subscribe/delete/advance |
 
 No RPC method requires `operator.admin`. Browsers connected with read-only
-operator access can inspect the board but cannot mutate cards.
+operator access can inspect the board but cannot mutate cards. An admin scope
+widens accepted Workboard host paths; it does not change the methods available.
 
 ## Storage
 

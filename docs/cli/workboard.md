@@ -22,7 +22,7 @@ openclaw gateway restart
 openclaw workboard list [--board <id>] [--status <status>] [--include-archived] [--json]
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
-openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
+openclaw workboard dispatch [--board <id>] [--max-starts <count>] [--admin] [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
 The command reads and writes the same plugin-owned SQLite database used by the dashboard and Workboard agent tools. Card ids are UUIDs; commands that accept a card id also accept an unambiguous id prefix (the compact text output shows the first 8 characters).
@@ -88,6 +88,7 @@ Text output prints the compact card line and notes. JSON output returns the full
 openclaw workboard dispatch
 openclaw workboard dispatch --json
 openclaw workboard dispatch --max-starts 10
+openclaw workboard dispatch --admin
 openclaw workboard dispatch --url http://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
@@ -142,7 +143,7 @@ Slash command dispatch also uses the Gateway subagent runtime, so it follows the
 
 ## Permissions
 
-The CLI dispatch path calls Gateway RPC with `operator.read` and `operator.write` scopes. A read-only Gateway token can inspect Workboard data through read methods, but it cannot create cards or dispatch workers.
+The CLI dispatch path normally requests Gateway `operator.write` and `operator.read` scopes, running workers directly inside configured agent workspaces without creating a Git worktree. Pass `--admin` to explicitly request `operator.admin`, allow another host checkout, and enable managed-worktree creation; the connection fails if that scope is not approved for the client. A read-only Gateway token can inspect Workboard data through read methods, but it cannot create cards or dispatch workers.
 
 Local `list`, `create`, and `show` commands operate on the local OpenClaw state directory used by the current profile. Use `--dev` or `--profile <name>` on the top-level `openclaw` command when you need a different state root.
 

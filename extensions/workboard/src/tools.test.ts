@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "../api.js";
 import { WorkboardStore, type PersistedWorkboardCard, type WorkboardKeyedStore } from "./store.js";
 import { createWorkboardTools } from "./tools.js";
+import { guardWorkboardToolsForWorkspaceAccess } from "./workspace-access.js";
 
 function createMemoryStore<T = PersistedWorkboardCard>(): WorkboardKeyedStore<T> {
   const entries = new Map<string, T>();
@@ -28,6 +29,72 @@ function readPayload(result: unknown): Record<string, unknown> {
 }
 
 describe("workboard tools", () => {
+  it("inherits the active tool filesystem boundary for workspace metadata", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = { runtime: {} } as unknown as OpenClawPluginApi;
+    const restrictedContext = {
+      agentId: "main",
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: true },
+    } as const;
+    const restricted = new Map(
+      guardWorkboardToolsForWorkspaceAccess(
+        createWorkboardTools({ api, store, context: restrictedContext }),
+        restrictedContext,
+      ).map((tool) => [tool.name, tool]),
+    );
+
+    await expect(
+      restricted.get("workboard_create")?.execute("outside", {
+        title: "Outside",
+        workspace: { kind: "worktree", path: "/outside/repo" },
+      }),
+    ).rejects.toThrow(/outside the caller/);
+    await expect(
+      restricted.get("workboard_create")?.execute("inside", {
+        title: "Inside",
+        workspace: { kind: "worktree", path: "/workspace/repo" },
+      }),
+    ).resolves.toBeDefined();
+
+    const unrestrictedContext = {
+      agentId: "main",
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: false },
+    } as const;
+    const unrestricted = new Map(
+      guardWorkboardToolsForWorkspaceAccess(
+        createWorkboardTools({ api, store, context: unrestrictedContext }),
+        unrestrictedContext,
+      ).map((tool) => [tool.name, tool]),
+    );
+    await expect(
+      unrestricted.get("workboard_create")?.execute("unrestricted", {
+        title: "Unrestricted",
+        workspace: { kind: "worktree", path: "/outside/repo" },
+      }),
+    ).resolves.toBeDefined();
+
+    const sandboxContext = {
+      agentId: "main",
+      workspaceDir: "/workspace",
+      fsPolicy: { workspaceOnly: false },
+      sandboxed: true,
+    } as const;
+    const sandboxed = new Map(
+      guardWorkboardToolsForWorkspaceAccess(
+        createWorkboardTools({ api, store, context: sandboxContext }),
+        sandboxContext,
+      ).map((tool) => [tool.name, tool]),
+    );
+    await expect(
+      sandboxed.get("workboard_create")?.execute("sandbox-outside", {
+        title: "Sandbox outside",
+        workspace: { kind: "worktree", path: "/outside/repo" },
+      }),
+    ).rejects.toThrow(/outside the caller/);
+  });
+
   it("lists, claims, heartbeats, and reads worker context", async () => {
     const keyed = createMemoryStore();
     const api = {

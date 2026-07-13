@@ -240,6 +240,10 @@ function createLateBindingNodes(allowGatewayBinding = false): PluginRuntime["nod
 function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
   const loadService = () => import("../../agents/worktrees/service.js");
   return {
+    async resolveRepositoryPaths(params) {
+      const { managedWorktrees } = await loadService();
+      return await managedWorktrees.resolveRepositoryPaths(params.repoRoot);
+    },
     async create(params) {
       const { managedWorktrees } = await loadService();
       const record = await managedWorktrees.create(params);
@@ -252,7 +256,11 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
     },
     async removeIfLossless(params) {
       const { managedWorktrees } = await loadService();
-      return managedWorktrees.removeIfLosslessByPath(params.path);
+      return managedWorktrees.removeIfLosslessByPathForOwner(
+        params.path,
+        params.ownerKind,
+        params.ownerId,
+      );
     },
   };
 }
