@@ -42,7 +42,7 @@ describe("normalizeReplyPayloadDirectives warns once at the delivery boundary (#
     logWarn.mockClear();
     normalizeReplyPayloadDirectives({ payload: { text: FENCED } });
     expect(logWarn).toHaveBeenCalledTimes(1);
-    expect(logWarn.mock.calls[0][0]).toMatch(/fenced code block and will not be delivered/);
+    expect(logWarn.mock.calls[0]?.[0]).toMatch(/fenced code block and will not be delivered/);
   });
 
   it("does not warn when there is no fenced MEDIA token", () => {

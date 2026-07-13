@@ -151,7 +151,7 @@ describe("splitMediaFromOutput", () => {
         { onFencedMediaTokenSkipped },
       );
       expect(onFencedMediaTokenSkipped).toHaveBeenCalledOnce();
-      expect(onFencedMediaTokenSkipped.mock.calls[0][0]).toMatch(
+      expect(onFencedMediaTokenSkipped.mock.calls[0]?.[0]).toMatch(
         /MEDIA:\/home\/user\/screenshot\.png/,
       );
     });
