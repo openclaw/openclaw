@@ -3154,6 +3154,174 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "محدود"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Limited",
+      "translations": [
+        "Eingeschränkt",
+        "Limited"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Limited",
+      "translations": [
+        "Limitado",
+        "Limited"
+      ]
+    },
+    {
+      "locale": "fa",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "محدود"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "Limité"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "सीमित"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "Terbatas"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Limited",
+      "translations": [
+        "Limitato",
+        "Limited"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "制限付き"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "제한됨"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Limited",
+      "translations": [
+        "Beperkt",
+        "Limited"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "Ograniczony"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Limited",
+      "translations": [
+        "Limitado",
+        "Limited"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "Ограниченный доступ"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Limited",
+      "translations": [
+        "Begränsad",
+        "Limited"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "จำกัด"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "Sınırlı"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "Обмежено"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Limited",
+      "translations": [
+        "Giới hạn",
+        "Limited"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "受限"
+      ]
+    },
+    {
+      "locale": "zh-TW",
+      "source": "Limited",
+      "translations": [
+        "Limited",
+        "有限"
+      ]
+    },
+    {
       "locale": "ja-JP",
       "source": "Listening",
       "translations": [

@@ -8,7 +8,7 @@ type GatewayRequestClient = {
 export type DevicePairSetup = DevicePairSetupCodeResult;
 export type DevicePairSetupAccess = "full" | "limited";
 
-export type DevicePairSetupState = {
+type DevicePairSetupState = {
   client: GatewayRequestClient | null;
   connected: boolean;
   devicePairSetupOpen: boolean;
@@ -18,7 +18,7 @@ export type DevicePairSetupState = {
   devicePairSetupAccess: DevicePairSetupAccess;
 };
 
-export type DevicePairSetupOverlayState = DevicePairSetupState & { pendingCount: number };
+type DevicePairSetupOverlayState = DevicePairSetupState & { pendingCount: number };
 
 export function createDevicePairSetupState(params: {
   client: DevicePairSetupState["client"];

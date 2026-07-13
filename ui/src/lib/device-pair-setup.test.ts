@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   closeDevicePairSetup,
+  createDevicePairSetupState,
   refreshDevicePairSetup,
   setDevicePairSetupAccess,
   type DevicePairSetup,
-  type DevicePairSetupState,
 } from "./device-pair-setup.ts";
+
+type DevicePairSetupState = ReturnType<typeof createDevicePairSetupState>;
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -25,15 +27,9 @@ function setupResult(setupCode: string): DevicePairSetup {
 }
 
 function stateWithClient(client: DevicePairSetupState["client"]): DevicePairSetupState {
-  return {
-    client,
-    connected: true,
-    devicePairSetupOpen: true,
-    devicePairSetupLoading: false,
-    devicePairSetupError: null,
-    devicePairSetup: null,
-    devicePairSetupAccess: "full",
-  };
+  const state = createDevicePairSetupState({ client, connected: true });
+  state.devicePairSetupOpen = true;
+  return state;
 }
 
 describe("device pairing setup state", () => {

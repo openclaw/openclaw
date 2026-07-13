@@ -29,7 +29,7 @@ export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
 const BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET = new Set<string>(BOOTSTRAP_HANDOFF_OPERATOR_SCOPES);
 
 /** Full native-mobile operator scopes allowed only by the closed mobile setup profile. */
-export const MOBILE_FULL_ACCESS_OPERATOR_SCOPES = [
+const MOBILE_FULL_ACCESS_OPERATOR_SCOPES = [
   "operator.admin",
   ...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES,
 ] as const;
@@ -82,7 +82,7 @@ function matchesBootstrapProfile(
 }
 
 /** Return whether an input exactly matches the limited mobile setup profile. */
-export function isLimitedPairingSetupBootstrapProfile(
+function isLimitedPairingSetupBootstrapProfile(
   input: DeviceBootstrapProfileInput | undefined,
 ): boolean {
   return matchesBootstrapProfile(input, LIMITED_PAIRING_SETUP_BOOTSTRAP_PROFILE);
@@ -96,9 +96,7 @@ export function isMobilePairingSetupBootstrapProfile(
 }
 
 /** Return whether an input exactly matches the current setup-code bootstrap profile. */
-export function isPairingSetupBootstrapProfile(
-  input: DeviceBootstrapProfileInput | undefined,
-): boolean {
+function isPairingSetupBootstrapProfile(input: DeviceBootstrapProfileInput | undefined): boolean {
   return matchesBootstrapProfile(input, PAIRING_SETUP_BOOTSTRAP_PROFILE);
 }
 

@@ -1,5 +1,6 @@
 // Control UI English locale strings are the i18n source bundle.
 import type { TranslationMap } from "../lib/types.ts";
+
 export const en: TranslationMap = {
   common: {
     health: "Health",
@@ -215,7 +216,8 @@ export const en: TranslationMap = {
   lazyView: {
     loadingTitle: "Loading panel",
     errorTitle: "Panel failed to load",
-    errorSubtitle: "Reload for the latest Control UI, or retry after a network failure.",
+    errorSubtitle:
+      "Reload the page to load the latest Control UI bundle, or retry if the network request failed.",
     retry: "Retry",
     unknownError: "Unknown module load error.",
   },
@@ -274,9 +276,11 @@ export const en: TranslationMap = {
       olderPairings: "{count} older pairings of {name}",
       autoPaired: "auto-paired",
       versionDrift: "version drift",
-      versionDriftTitle: "Node {nodeVersion}; Gateway {gatewayVersion}. Update the older one.",
+      versionDriftTitle:
+        "Node {nodeVersion}; Gateway {gatewayVersion}. Update the older component to align the fleet.",
       manualWake: "manual wake required",
-      manualWakeTitle: "The Gateway cannot wake an offline Windows node. Start or reconnect it.",
+      manualWakeTitle:
+        "The Gateway cannot wake an offline Windows node. Start the machine or restore its network connection.",
       approvalNeeded: "approval needed",
       inputAgo: "input {time} ago",
       seen: "seen {time}",
@@ -459,7 +463,8 @@ export const en: TranslationMap = {
     transcriptSearchSearching: "Searching transcripts…",
     transcriptSearchUnavailable: "Transcript search requires a newer Gateway.",
     transcriptSearchError: "Transcript search failed",
-    transcriptSearchIndexing: "Transcript indexing is still running. Retry for recent messages.",
+    transcriptSearchIndexing:
+      "The transcript index is still updating. Retry to include recent messages.",
     transcriptSearchEmpty: "No transcript messages match that search.",
     transcriptSearchMatches: "Transcript matches: {count}",
     transcriptSearchTruncated: "Showing the first 25 matches.",
