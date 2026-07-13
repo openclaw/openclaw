@@ -9,7 +9,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { validateWidgetManifest } from "./manifest.js";
 
-export type WorkspaceScaffoldOptions = {
+type WorkspaceScaffoldOptions = {
   name: string;
   title?: string;
   stateDir?: string;
@@ -17,7 +17,7 @@ export type WorkspaceScaffoldOptions = {
   createdBy?: string;
 };
 
-export type WorkspaceScaffoldResult = {
+type WorkspaceScaffoldResult = {
   name: string;
   title: string;
   dir: string;

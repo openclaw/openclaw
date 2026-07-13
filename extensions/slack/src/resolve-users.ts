@@ -1,14 +1,12 @@
 // Slack plugin module implements resolve users behavior.
 import type { WebClient } from "@slack/web-api";
+import { resolveDirectoryAllowlistEntries } from "openclaw/plugin-sdk/directory-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createSlackWebClient } from "./client.js";
-import {
-  collectSlackCursorItems,
-  resolveSlackAllowlistEntries,
-} from "./resolve-allowlist-common.js";
+import { collectSlackCursorPages } from "./cursor-pages.js";
 
 export type SlackUserLookup = {
   id: string;
@@ -70,7 +68,7 @@ function parseSlackUserInput(raw: string): { id?: string; name?: string; email?:
 }
 
 async function listSlackUsers(client: WebClient): Promise<SlackUserLookup[]> {
-  return collectSlackCursorItems({
+  return collectSlackCursorPages({
     fetchPage: async (cursor) =>
       (await client.users.list({
         limit: 200,
@@ -159,7 +157,7 @@ export async function resolveSlackUserAllowlist(params: {
 }): Promise<SlackUserResolution[]> {
   const client = params.client ?? createSlackWebClient(params.token);
   const users = await listSlackUsers(client);
-  return resolveSlackAllowlistEntries<
+  return resolveDirectoryAllowlistEntries<
     { id?: string; name?: string; email?: string },
     SlackUserLookup,
     SlackUserResolution

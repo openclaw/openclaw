@@ -10,16 +10,11 @@ import type {
 } from "../../plugin-sdk/tts-runtime.types.js";
 import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-tasks.types.js";
 
-export type { HeartbeatRunResult };
-
-export type RuntimeRequestHeartbeatOptions = Parameters<
+type RuntimeRequestHeartbeatOptions = Parameters<
   typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
 >[0];
 
-export type RuntimeRequestHeartbeatNowOptions = Omit<
-  RuntimeRequestHeartbeatOptions,
-  "source" | "intent"
-> &
+type RuntimeRequestHeartbeatNowOptions = Omit<RuntimeRequestHeartbeatOptions, "source" | "intent"> &
   Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
 
 type RuntimeWriteConfigOptions = {
@@ -28,7 +23,7 @@ type RuntimeWriteConfigOptions = {
   unsetPaths?: string[][];
 };
 
-export type DeepReadonly<T> = T extends (...args: never[]) => unknown
+type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
   : T extends readonly (infer U)[]
     ? ReadonlyArray<DeepReadonly<U>>

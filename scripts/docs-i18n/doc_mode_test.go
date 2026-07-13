@@ -2191,8 +2191,8 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 19") {
-		t.Fatalf("expected prompt version 19 in output metadata:\n%s", text)
+	if !strings.Contains(text, "prompt_version: 20") {
+		t.Fatalf("expected prompt version 20 in output metadata:\n%s", text)
 	}
 }
 

@@ -4159,6 +4159,11 @@
       "translated": "दर सीमा"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "पहुँच"
+    },
+    {
       "id": "native.android.ebeec52e498bc128",
       "source": "Granted",
       "translated": "अनुमति दी गई"
@@ -4424,19 +4429,14 @@
       "translated": "ऑनलाइन"
     },
     {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "पहुँच"
-    },
-    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "पता"
     },
     {
-      "id": "native.android.6926684139f297b5",
-      "source": "Limited Gateway access",
-      "translated": "Limited Gateway access"
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "उपलब्ध नहीं"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4547,26 +4547,6 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "मान्य सेटअप कोड या gateway पता दर्ज करें।"
-    },
-    {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "उपलब्ध नहीं"
-    },
-    {
-      "id": "native.android.feac408f68bedd1c",
-      "source": "Full",
-      "translated": "Full"
-    },
-    {
-      "id": "native.android.c39ba12c18acb958",
-      "source": "Limited",
-      "translated": "Limited"
-    },
-    {
-      "id": "native.android.f6ab96d066bd583c",
-      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
-      "translated": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades."
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -11339,11 +11319,6 @@
       "translated": "लाइसेंस"
     },
     {
-      "id": "native.apple.5c4427c5a67068d6",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
       "id": "native.apple.800b6502b5b49941",
       "source": "Address",
       "translated": "पता"
@@ -11364,39 +11339,14 @@
       "translated": "एजेंट"
     },
     {
-      "id": "native.apple.412973e8b46051ca",
-      "source": "Access",
-      "translated": "Access"
+      "id": "native.apple.5c4427c5a67068d6",
+      "source": "Gateway",
+      "translated": "Gateway"
     },
     {
-      "id": "native.apple.77609c6953ae454f",
-      "source": "Full",
-      "translated": "Full"
-    },
-    {
-      "id": "native.apple.5dd76b852cf24f49",
-      "source": "Limited",
-      "translated": "Limited"
-    },
-    {
-      "id": "native.apple.5b56380d4922e78b",
-      "source": "Upgrade access",
-      "translated": "Upgrade access"
-    },
-    {
-      "id": "native.apple.7221013549a7c1b3",
-      "source": "This phone has limited Gateway access.",
-      "translated": "This phone has limited Gateway access."
-    },
-    {
-      "id": "native.apple.7793f5de6975faef",
-      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
-      "translated": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades."
-    },
-    {
-      "id": "native.apple.666cea428e126188",
-      "source": "Scan Full-Access Code",
-      "translated": "Scan Full-Access Code"
+      "id": "native.apple.34444b9c6d74f472",
+      "source": "Scan QR to Pair",
+      "translated": "पेयर करने के लिए QR स्कैन करें"
     },
     {
       "id": "native.apple.88835de05348122a",
@@ -11699,14 +11649,14 @@
       "translated": "नए Chat और Talk सत्रों के लिए उपयोग किया जाता है।"
     },
     {
-      "id": "native.apple.313eb24efcb8d4a0",
-      "source": "Paste setup code",
-      "translated": "Setup Code पेस्ट करें"
-    },
-    {
       "id": "native.apple.19552e71de246322",
       "source": "Scan QR",
       "translated": "QR स्कैन करें"
+    },
+    {
+      "id": "native.apple.313eb24efcb8d4a0",
+      "source": "Paste setup code",
+      "translated": "Setup Code पेस्ट करें"
     },
     {
       "id": "native.apple.f4afcfbe4e4a72f8",
@@ -11714,19 +11664,14 @@
       "translated": "कनेक्ट करें"
     },
     {
-      "id": "native.apple.d8a5510f1a2e1701",
-      "source": "Setup Code",
-      "translated": "Setup Code"
-    },
-    {
-      "id": "native.apple.adb22453596f1d78",
-      "source": "Discovered Gateways",
-      "translated": "खोजे गए Gateways"
-    },
-    {
       "id": "native.apple.64b89f4aa3a81aef",
       "source": "No gateways found yet. Use manual setup if Bonjour is blocked.",
       "translated": "अभी तक कोई gateway नहीं मिला। यदि Bonjour ब्लॉक है, तो मैनुअल सेटअप का उपयोग करें।"
+    },
+    {
+      "id": "native.apple.784220b48f5c4af8",
+      "source": "Add Gateway",
+      "translated": "Gateway जोड़ें"
     },
     {
       "id": "native.apple.75c61c4ee1ecc6d8",
@@ -13374,6 +13319,46 @@
       "translated": "\\(urlText.prefix(500))…"
     },
     {
+      "id": "native.apple.9dcd64ab340a6c15",
+      "source": "Allow access",
+      "translated": "ऐक्सेस की अनुमति दें"
+    },
+    {
+      "id": "native.apple.933a2ac28d1d2aec",
+      "source": "Choose what your agent can use on this iPhone. Nothing is on until you allow it.",
+      "translated": "चुनें कि आपका एजेंट इस iPhone पर किन चीज़ों का उपयोग कर सकता है। आपकी अनुमति के बिना कुछ भी चालू नहीं होगा।"
+    },
+    {
+      "id": "native.apple.47114a39f7a71c3b",
+      "source": "You can change any of these later in Settings.",
+      "translated": "आप बाद में Settings में इनमें से किसी को भी बदल सकते हैं।"
+    },
+    {
+      "id": "native.apple.eabf54e2b640a4a1",
+      "source": "Continue",
+      "translated": "जारी रखें"
+    },
+    {
+      "id": "native.apple.5f425282ece878eb",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.apple.c5db9e6eae115f7a",
+      "source": "Allow",
+      "translated": "अनुमति दें"
+    },
+    {
+      "id": "native.apple.f591e16105268e99",
+      "source": "Open Settings",
+      "translated": "Settings खोलें"
+    },
+    {
+      "id": "native.apple.12ed416835c36555",
+      "source": "Manage",
+      "translated": "प्रबंधित करें"
+    },
+    {
       "id": "native.apple.11687a3d87afd0d7",
       "source": "Home Network",
       "translated": "होम नेटवर्क"
@@ -13554,24 +13539,24 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.c9419426ba8c2a2e",
-      "source": "Securely connect this iPhone to your gateway.",
-      "translated": "इस iPhone को अपने gateway से सुरक्षित रूप से कनेक्ट करें।"
+      "id": "native.apple.9b414850baa618da",
+      "source": "Your agent, in your pocket. Pair this iPhone with your gateway to get started.",
+      "translated": "आपका एजेंट, आपकी जेब में। शुरू करने के लिए इस iPhone को अपने Gateway के साथ पेयर करें।"
     },
     {
-      "id": "native.apple.3e233ba3ed3181d4",
-      "source": "Connect to your gateway",
-      "translated": "अपने gateway से कनेक्ट करें"
+      "id": "native.apple.7248e67848beebd9",
+      "source": "Your agent runs on your own computer",
+      "translated": "आपका एजेंट आपके अपने कंप्यूटर पर चलता है"
     },
     {
-      "id": "native.apple.b6978424ac0a4d14",
-      "source": "Choose device permissions",
-      "translated": "डिवाइस अनुमतियाँ चुनें"
+      "id": "native.apple.acbdc9332988fa64",
+      "source": "Pair this iPhone by scanning a setup code",
+      "translated": "सेटअप कोड स्कैन करके इस iPhone को पेयर करें"
     },
     {
-      "id": "native.apple.4109460a5b8927d8",
-      "source": "Use OpenClaw from your phone",
-      "translated": "अपने फ़ोन से OpenClaw का उपयोग करें"
+      "id": "native.apple.feb3e155748c2f05",
+      "source": "Chat, talk, and approve actions from anywhere",
+      "translated": "कहीं से भी चैट करें, बात करें और कार्रवाइयों को मंज़ूरी दें"
     },
     {
       "id": "native.apple.cae311a6e975c879",
@@ -13839,6 +13824,101 @@
       "translated": "OpenClaw"
     },
     {
+      "id": "native.apple.0e07e7044608f954",
+      "source": "Allowed",
+      "translated": "अनुमति है"
+    },
+    {
+      "id": "native.apple.86796a6df9d0ff63",
+      "source": "Limited",
+      "translated": "सीमित"
+    },
+    {
+      "id": "native.apple.4c7f5404e9c42402",
+      "source": "Off in Settings",
+      "translated": "Settings में बंद"
+    },
+    {
+      "id": "native.apple.96d65a5563690719",
+      "source": "Notifications",
+      "translated": "सूचनाएँ"
+    },
+    {
+      "id": "native.apple.d290a46515add091",
+      "source": "Camera",
+      "translated": "कैमरा"
+    },
+    {
+      "id": "native.apple.0eeedbc8aaafcd2c",
+      "source": "Microphone",
+      "translated": "माइक्रोफ़ोन"
+    },
+    {
+      "id": "native.apple.14fadad23dd36e44",
+      "source": "Photos",
+      "translated": "फ़ोटो"
+    },
+    {
+      "id": "native.apple.f0cfa9dcc57133b7",
+      "source": "Contacts",
+      "translated": "संपर्क"
+    },
+    {
+      "id": "native.apple.5ec2597d0b4a06fb",
+      "source": "Calendar",
+      "translated": "कैलेंडर"
+    },
+    {
+      "id": "native.apple.9ed5c19cf1e84490",
+      "source": "Reminders",
+      "translated": "रिमाइंडर"
+    },
+    {
+      "id": "native.apple.866b9df8afcadf07",
+      "source": "Location",
+      "translated": "स्थान"
+    },
+    {
+      "id": "native.apple.f205ac6778705a7d",
+      "source": "Pairing approvals and replies from your agent.",
+      "translated": "आपके एजेंट से पेयरिंग की स्वीकृतियाँ और जवाब।"
+    },
+    {
+      "id": "native.apple.061a17077ee3be94",
+      "source": "Scan setup codes and take photos on request.",
+      "translated": "सेटअप कोड स्कैन करें और अनुरोध पर फ़ोटो लें।"
+    },
+    {
+      "id": "native.apple.c735ac6b282765f9",
+      "source": "Talk with your agent using voice.",
+      "translated": "आवाज़ का उपयोग करके अपने एजेंट से बात करें।"
+    },
+    {
+      "id": "native.apple.ebe8aadcf512ecdb",
+      "source": "Share recent photos when you ask.",
+      "translated": "आपके कहने पर हाल की फ़ोटो साझा करें।"
+    },
+    {
+      "id": "native.apple.4c4bc12c0787383c",
+      "source": "Look up and add people you mention.",
+      "translated": "आपके द्वारा उल्लेखित लोगों को खोजें और जोड़ें।"
+    },
+    {
+      "id": "native.apple.5a4006fbb9b23db1",
+      "source": "Check and add calendar events.",
+      "translated": "कैलेंडर ईवेंट जाँचें और जोड़ें।"
+    },
+    {
+      "id": "native.apple.2b2a4f1aab6a12ec",
+      "source": "List, add, and complete reminders.",
+      "translated": "रिमाइंडर सूचीबद्ध करें, जोड़ें और पूर्ण करें।"
+    },
+    {
+      "id": "native.apple.3854ae1f0606bafe",
+      "source": "Answer location and nearby questions.",
+      "translated": "स्थान और आस-पास से जुड़े प्रश्नों के उत्तर दें।"
+    },
+    {
       "id": "native.apple.e5f6435b9cb5a2d8",
       "source": "unknown relay error",
       "translated": "unknown relay error"
@@ -14104,94 +14184,14 @@
       "translated": "कस्टम हेडर"
     },
     {
-      "id": "native.apple.e5a601c8fe47e9ed",
-      "source": "Add-Only",
-      "translated": "केवल जोड़ें"
-    },
-    {
-      "id": "native.apple.32aabe66f916a809",
-      "source": "Allowed",
-      "translated": "अनुमति है"
-    },
-    {
-      "id": "native.apple.7b551f40d1a6148c",
-      "source": "Enabled",
-      "translated": "चालू"
-    },
-    {
-      "id": "native.apple.94208c3068dae5b9",
-      "source": "Limited",
-      "translated": "सीमित"
-    },
-    {
-      "id": "native.apple.92223852c90e286d",
-      "source": "Not Allowed",
-      "translated": "अनुमति नहीं है"
-    },
-    {
-      "id": "native.apple.aa6ff8becab99fdc",
-      "source": "Not Set",
-      "translated": "सेट नहीं है"
-    },
-    {
-      "id": "native.apple.03e2f7265119d263",
-      "source": "Unknown",
-      "translated": "अज्ञात"
-    },
-    {
-      "id": "native.apple.4dac301c7e0c921c",
-      "source": "Contacts",
-      "translated": "संपर्क"
+      "id": "native.apple.bb572eab08269809",
+      "source": "Privacy & Access",
+      "translated": "गोपनीयता और एक्सेस"
     },
     {
       "id": "native.apple.01f362d70f6ddb4e",
       "source": "Search and add contacts from the assistant.",
       "translated": "असिस्टेंट से संपर्क खोजें और जोड़ें।"
-    },
-    {
-      "id": "native.apple.eda8d96e40bcc36a",
-      "source": "Photos",
-      "translated": "फ़ोटो"
-    },
-    {
-      "id": "native.apple.df0159ff34744870",
-      "source": "Calendar (Add Events)",
-      "translated": "कैलेंडर (इवेंट जोड़ें)"
-    },
-    {
-      "id": "native.apple.c6db4240083c0435",
-      "source": "Add events with least privilege.",
-      "translated": "न्यूनतम विशेषाधिकार के साथ इवेंट जोड़ें।"
-    },
-    {
-      "id": "native.apple.dc62e22f0b2726c5",
-      "source": "Calendar (View Events)",
-      "translated": "कैलेंडर (इवेंट देखें)"
-    },
-    {
-      "id": "native.apple.650091bc632b3120",
-      "source": "List and read calendar events.",
-      "translated": "कैलेंडर इवेंट की सूची देखें और उन्हें पढ़ें।"
-    },
-    {
-      "id": "native.apple.7a81d1f17d9d90c0",
-      "source": "Reminders",
-      "translated": "रिमाइंडर"
-    },
-    {
-      "id": "native.apple.d6fd5e9f85b0e298",
-      "source": "List, add, and complete reminders.",
-      "translated": "रिमाइंडर की सूची देखें, जोड़ें और पूरा करें।"
-    },
-    {
-      "id": "native.apple.33df187e4402065a",
-      "source": "Health Summaries",
-      "translated": "स्वास्थ्य सारांश"
-    },
-    {
-      "id": "native.apple.bb572eab08269809",
-      "source": "Privacy & Access",
-      "translated": "गोपनीयता और एक्सेस"
     },
     {
       "id": "native.apple.ab998419291361da",
@@ -14204,24 +14204,44 @@
       "translated": "असिस्टेंट के लिए हाल की फ़ोटो पढ़ें।"
     },
     {
-      "id": "native.apple.ac3ff8e4c6df7a2a",
-      "source": "Manage Access",
-      "translated": "ऐक्सेस प्रबंधित करें"
+      "id": "native.apple.94208c3068dae5b9",
+      "source": "Limited",
+      "translated": "सीमित"
     },
     {
-      "id": "native.apple.c557c95fa2789089",
-      "source": "Request Full Access",
-      "translated": "पूर्ण ऐक्सेस का अनुरोध करें"
+      "id": "native.apple.df0159ff34744870",
+      "source": "Calendar (Add Events)",
+      "translated": "कैलेंडर (इवेंट जोड़ें)"
     },
     {
-      "id": "native.apple.4e50e2ab4c869464",
-      "source": "Request Access",
-      "translated": "ऐक्सेस का अनुरोध करें"
+      "id": "native.apple.c6db4240083c0435",
+      "source": "Add events with least privilege.",
+      "translated": "न्यूनतम विशेषाधिकार के साथ इवेंट जोड़ें।"
     },
     {
-      "id": "native.apple.a9f30d4e86060dca",
-      "source": "Upgrade to Full Access",
-      "translated": "पूर्ण ऐक्सेस में अपग्रेड करें"
+      "id": "native.apple.650091bc632b3120",
+      "source": "List and read calendar events.",
+      "translated": "कैलेंडर इवेंट की सूची देखें और उन्हें पढ़ें।"
+    },
+    {
+      "id": "native.apple.d6fd5e9f85b0e298",
+      "source": "List, add, and complete reminders.",
+      "translated": "रिमाइंडर की सूची देखें, जोड़ें और पूरा करें।"
+    },
+    {
+      "id": "native.apple.e5a601c8fe47e9ed",
+      "source": "Add-Only",
+      "translated": "केवल जोड़ें"
+    },
+    {
+      "id": "native.apple.33df187e4402065a",
+      "source": "Health Summaries",
+      "translated": "स्वास्थ्य सारांश"
+    },
+    {
+      "id": "native.apple.0b10201d7e452dc4",
+      "source": "Allow",
+      "translated": "अनुमति दें"
     },
     {
       "id": "native.apple.3cb9ed2ae352f95c",

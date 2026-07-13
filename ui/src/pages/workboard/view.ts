@@ -9,6 +9,7 @@ import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
+import "../../styles/workboard.css";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,

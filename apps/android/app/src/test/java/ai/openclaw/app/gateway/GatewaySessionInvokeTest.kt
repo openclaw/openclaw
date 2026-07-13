@@ -301,6 +301,46 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
+  fun explicitNullPayloadsRemainPresentForResponsesAndEvents() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val eventPayload = CompletableDeferred<String?>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, _ ->
+          when (method) {
+            "connect" -> {
+              webSocket.send(connectResponseFrame(id))
+              webSocket.send("""{"type":"event","event":"health","payload":null}""")
+            }
+            "test.null-payload" ->
+              webSocket.send("""{"type":"res","id":"$id","ok":true,"payload":null}""")
+          }
+        }
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+          onEvent = { event, payload ->
+            if (event == GatewayEvent.Health.rawValue) eventPayload.complete(payload)
+          },
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val response = harness.session.requestDetailed("test.null-payload", null)
+
+        assertEquals("null", response.payloadJson)
+        assertEquals("null", withTimeout(TEST_TIMEOUT_MS) { eventPayload.await() })
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
   fun connect_usesBootstrapTokenWhenSharedAndDeviceTokensAreAbsent() =
     runBlocking {
       val json = testJson()

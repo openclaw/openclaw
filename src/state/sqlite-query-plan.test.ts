@@ -205,6 +205,16 @@ describe("sqlite hot query plans", () => {
          LIMIT 1
       `,
     });
+    expectPlanUsesIndex({
+      db: database.db,
+      indexName: "idx_agent_session_entries_status",
+      params: ["running"],
+      sql: `
+        SELECT session_key, entry_json
+          FROM session_entries
+         WHERE status = ?
+      `,
+    });
     const latestMessagePlan = explainQueryPlan(
       database.db,
       `

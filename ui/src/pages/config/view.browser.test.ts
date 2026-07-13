@@ -61,6 +61,8 @@ describe("config view", () => {
     onOpenCustomThemeImport: vi.fn(),
     textScale: 100,
     setTextScale: vi.fn(),
+    chatSendShortcut: "enter" as const,
+    setChatSendShortcut: vi.fn(),
     gatewayUrl: "",
     assistantName: "OpenClaw",
   });

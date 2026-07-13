@@ -14,6 +14,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import { buildRestartRecoveryClaimCleanupPatch } from "../config/sessions/restart-recovery-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withLocalGatewayRequestScope } from "../gateway/local-request-context.js";
@@ -87,6 +88,12 @@ import {
   resolveMessageChannel,
 } from "../utils/message-channel.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
+import {
+  buildCurrentRunRestartRecoveryClaim,
+  shouldPersistCurrentRunSessionCleanup,
+  shouldPersistRestartRecoveryCleanup,
+  shouldPersistRestartRecoveryContextClaim,
+} from "./agent-command-restart-recovery.js";
 import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
@@ -540,44 +547,6 @@ async function resolveCurrentRunDeliveryContext(params: {
     accountId: effectivePlan.resolvedAccountId,
     threadId,
   });
-}
-
-function shouldPersistCurrentRunSessionCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-): boolean {
-  return (
-    current !== undefined && current.sessionId === sessionId && current.abortedLastRun !== true
-  );
-}
-
-function shouldPersistRestartRecoveryContextClaim(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-  allowCreate: boolean,
-): boolean {
-  if (!current) {
-    return allowCreate;
-  }
-  if (!shouldPersistCurrentRunSessionCleanup(current, sessionId)) {
-    return false;
-  }
-  return (
-    current.restartRecoveryDeliveryRunId === undefined ||
-    current.restartRecoveryDeliveryRunId === runId
-  );
-}
-
-function shouldPersistRestartRecoveryCleanup(
-  current: SessionEntry | undefined,
-  sessionId: string,
-  runId: string,
-): boolean {
-  return (
-    shouldPersistCurrentRunSessionCleanup(current, sessionId) &&
-    current?.restartRecoveryDeliveryRunId === runId
-  );
 }
 
 function containsControlCharacters(value: string): boolean {
@@ -1043,7 +1012,7 @@ async function agentCommandInternal(
   // the parent a human interjected on every spawn, for embedded and ACP children alike.
   const isSubagentLaneTurn = normalizeOptionalString(opts.lane) === AGENT_LANE_SUBAGENT;
   let sessionReboundDuringRun = false;
-  let trackedRestartRecoveryDeliveryContext = false;
+  let trackedRestartRecoveryDeliveryClaim = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
   const preparedSessionId = sessionEntry?.sessionId;
   const internalModelRunTargets =
@@ -1156,8 +1125,11 @@ async function agentCommandInternal(
           updatedAt: now,
           sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
           lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
-          restartRecoveryDeliveryContext: currentRunDeliveryContext,
-          restartRecoveryDeliveryRunId: currentRunDeliveryContext ? runId : undefined,
+          ...buildCurrentRunRestartRecoveryClaim({
+            deliveryContext: currentRunDeliveryContext,
+            entry,
+            runId,
+          }),
         };
         const persisted = await persistSessionEntry({
           sessionStore,
@@ -1176,9 +1148,7 @@ async function agentCommandInternal(
                 ),
         });
         sessionEntry = persisted;
-        trackedRestartRecoveryDeliveryContext =
-          Boolean(persisted?.restartRecoveryDeliveryContext) &&
-          persisted?.restartRecoveryDeliveryRunId === runId;
+        trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
       }
 
       if (!isRawModelRun && acpResolution?.kind === "ready" && sessionKey) {
@@ -2871,17 +2841,19 @@ async function agentCommandInternal(
     }
     if (
       !sessionReboundDuringRun &&
-      trackedRestartRecoveryDeliveryContext &&
+      trackedRestartRecoveryDeliveryClaim &&
       sessionStore &&
       sessionKey
     ) {
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
-        if (entry?.restartRecoveryDeliveryContext && entry.restartRecoveryDeliveryRunId === runId) {
+        if (entry?.restartRecoveryDeliveryRunId === runId) {
           const next: SessionEntry = {
             ...entry,
-            restartRecoveryDeliveryContext: undefined,
-            restartRecoveryDeliveryRunId: undefined,
+            ...buildRestartRecoveryClaimCleanupPatch({
+              entry,
+              recordTerminalSource: true,
+            }),
             updatedAt: Date.now(),
           };
           const persisted = await persistSessionEntry({

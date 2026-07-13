@@ -65,7 +65,6 @@ const bundledMocks = vi.hoisted(() => ({
 
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: catalogMocks.getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
 

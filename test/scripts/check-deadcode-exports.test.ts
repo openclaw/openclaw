@@ -20,6 +20,10 @@ describe("check-deadcode-exports", () => {
     expect(knipConfig.ignoreFiles).toContain("**/live-*.ts");
   });
 
+  it("tracks production script consumers of plugin exports", () => {
+    expect(knipConfig.workspaces["."].entry).toContain("scripts/qa/render-maturity-docs.ts!");
+  });
+
   it("parses all compact export sections and expands symbol lists", () => {
     expect(
       parseKnipCompactUnusedExports(`

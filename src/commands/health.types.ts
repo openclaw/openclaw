@@ -69,7 +69,7 @@ type ModelPricingHealthSummary =
   import("../gateway/model-pricing-cache-state.js").GatewayModelPricingHealth;
 
 /** Config hot-reload watcher status, present only when a reloader is running. */
-export type ConfigReloadHealthSummary = {
+type ConfigReloadHealthSummary = {
   hotReloadStatus: import("../gateway/config-reload-status.types.js").GatewayHotReloadStatus;
 };
 
