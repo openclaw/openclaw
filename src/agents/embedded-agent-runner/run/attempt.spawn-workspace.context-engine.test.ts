@@ -15,6 +15,7 @@ import {
   clearMemoryPluginState,
   registerMemoryPromptSection,
 } from "../../../plugins/memory-state.test-fixtures.js";
+import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import {
   addSubagentRunForTests,
   leasePendingAgentSteeringItems,
@@ -3445,6 +3446,70 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
       mockParams(hoisted.installToolResultContextGuardMock, 0, "tool-result guard params")
         .contextWindowTokens,
     ).toBe(1_000_000);
+  });
+
+  it("submits a pre-persisted current user turn exactly once to the provider", async () => {
+    const admittedMessage = {
+      role: "user" as const,
+      content: "durable current turn",
+      idempotencyKey: "restart-safe-run:user",
+      timestamp: 1,
+    };
+    const recorder = createUserTurnTranscriptRecorder({
+      message: admittedMessage,
+      target: () => undefined,
+    });
+    recorder.markRuntimePersisted(admittedMessage);
+    let submittedMessages: AgentMessage[] = [];
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [admittedMessage],
+      attemptOverrides: {
+        prompt: admittedMessage.content,
+        transcriptPrompt: admittedMessage.content,
+        suppressNextUserMessagePersistence: true,
+        userTurnTranscriptRecorder: recorder,
+      },
+      createSession: () => {
+        const session = createDefaultEmbeddedSession({ initialMessages: [admittedMessage] });
+        const baseStreamFn = session.agent.streamFn;
+        session.agent.streamFn = async (...args: unknown[]) => {
+          const context = args[1] as { messages?: AgentMessage[] } | undefined;
+          submittedMessages = context?.messages ?? [];
+          return await baseStreamFn?.(...args);
+        };
+        session.prompt = async (prompt, options) => {
+          session.messages = [
+            ...session.messages,
+            {
+              role: "user",
+              content: prompt,
+              idempotencyKey: admittedMessage.idempotencyKey,
+              timestamp: admittedMessage.timestamp,
+            },
+          ];
+          options?.preflightResult?.(true);
+          await session.agent.streamFn?.(
+            {} as never,
+            { messages: session.messages } as never,
+            {} as never,
+          );
+          session.messages = [...session.messages, doneMessage];
+        };
+        return session;
+      },
+    });
+
+    expect(
+      submittedMessages.filter(
+        (message) =>
+          (message as { idempotencyKey?: unknown }).idempotencyKey ===
+          admittedMessage.idempotencyKey,
+      ),
+    ).toEqual([expect.objectContaining({ content: admittedMessage.content, role: "user" })]);
   });
 
   it("passes context engines the message budget after reserve and rendered prompt pressure", async () => {

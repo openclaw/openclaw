@@ -1643,6 +1643,9 @@ export async function runPreparedReply(
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance,
+      ...(opts?.suppressNextUserMessagePersistence
+        ? { suppressNextUserMessagePersistence: true }
+        : {}),
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
       sourceReplyDeliveryMode,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,

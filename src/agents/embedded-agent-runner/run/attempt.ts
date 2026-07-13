@@ -608,6 +608,32 @@ function sessionMessagesContainIdempotencyKey(
   );
 }
 
+function detachPrePersistedCurrentUserTurn(params: {
+  activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  preparedUserTurnMessage: AgentMessage | undefined;
+  suppressNextUserMessagePersistence: boolean | undefined;
+  userTurnAlreadyPersisted: boolean;
+}): boolean {
+  if (!params.suppressNextUserMessagePersistence || !params.userTurnAlreadyPersisted) {
+    return false;
+  }
+  const idempotencyKey = (
+    params.preparedUserTurnMessage as { idempotencyKey?: unknown } | undefined
+  )?.idempotencyKey;
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length === 0) {
+    return false;
+  }
+  const messages = params.activeSession.agent.state.messages;
+  const tail = messages.at(-1) as (AgentMessage & { idempotencyKey?: unknown }) | undefined;
+  if (tail?.role !== "user" || tail.idempotencyKey !== idempotencyKey) {
+    return false;
+  }
+  // The durable transcript remains authoritative. Remove only its exact active
+  // tail copy so Agent.prompt() submits the current user turn once to the model.
+  params.activeSession.agent.state.messages = messages.slice(0, -1);
+  return true;
+}
+
 function flushSessionManagerTranscript(
   sessionManager: ReturnType<typeof guardSessionManager>,
 ): void {
@@ -2818,6 +2844,12 @@ export async function runEmbeddedAttempt(
         params.onUserMessagePersistenceInvalidated?.();
         activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
       }
+      detachPrePersistedCurrentUserTurn({
+        activeSession,
+        preparedUserTurnMessage,
+        suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
+        userTurnAlreadyPersisted: params.userTurnTranscriptRecorder?.hasPersisted() === true,
+      });
       // Single source for the per-message timestamp prefix (issue #3658):
       // normal embedded runs stamp every user message from its own timestamp.
       // Raw model probes must keep the requested prompt text exact.

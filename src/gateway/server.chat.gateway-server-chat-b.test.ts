@@ -2366,6 +2366,10 @@ describe("gateway server chat", () => {
           }),
         ]),
       );
+      const dispatchOptions = (
+        dispatchInboundMessageMock.mock.calls[0]?.[0] as { replyOptions?: GetReplyOptions }
+      )?.replyOptions;
+      expect(dispatchOptions?.suppressNextUserMessagePersistence).toBe(true);
       dispatchRelease.resolve(undefined);
       await vi.waitFor(
         () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
