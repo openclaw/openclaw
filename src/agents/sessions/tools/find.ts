@@ -40,12 +40,12 @@ function isInsideGitRepository(searchPath: string): boolean {
   }
 }
 
-const findSchema = Type.Object({
+export const findSchema = Type.Object({
   pattern: Type.String({
     description: "File glob, e.g. **/*.ts.",
   }),
   path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
-  limit: Type.Optional(Type.Number({ description: "Max results; default 1000." })),
+  limit: Type.Optional(Type.Integer({ description: "Max results; default 1000." })),
 });
 export type { FindToolDetails, FindToolInput } from "./tool-contracts.js";
 
