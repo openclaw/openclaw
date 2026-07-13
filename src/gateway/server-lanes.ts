@@ -10,7 +10,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 
-export type GatewayLaneConcurrency = {
+type GatewayLaneConcurrency = {
   cron: number;
   main: number;
   subagent: number;
@@ -28,11 +28,11 @@ export function applyGatewayLaneConcurrency(
   concurrency: GatewayLaneConcurrency,
   opts: { gatewayStart?: boolean } = {},
 ): void {
-  let suspendedLaneIds: ReadonlySet<string> = new Set<string>();
-  if (opts.gatewayStart) {
-    suspendedLaneIds = enableSessionSuspensionTimersForGatewayStart(
-      (laneId, savedResumeConcurrency) => {
-        switch (laneId) {
+  // Lane ids are open strings (plugins mint their own); narrow once so the
+  // gateway-managed cases compare within the enum.
+  const suspendedLaneIds: ReadonlySet<string> = opts.gatewayStart
+    ? enableSessionSuspensionTimersForGatewayStart((laneId, savedResumeConcurrency) => {
+        switch (laneId as CommandLane) {
           case CommandLane.Cron:
           case CommandLane.CronNested:
             return concurrency.cron;
@@ -45,11 +45,8 @@ export function applyGatewayLaneConcurrency(
           default:
             return savedResumeConcurrency;
         }
-      },
-    );
-  } else {
-    suspendedLaneIds = getCleanupSuspendedLaneIdsForGatewayPublication();
-  }
+      })
+    : getCleanupSuspendedLaneIdsForGatewayPublication();
   // Resolution is deliberately separate: this commit-edge applier only updates
   // live queue state and cannot reject a config midway through publication.
   if (!suspendedLaneIds.has(CommandLane.Cron)) {
