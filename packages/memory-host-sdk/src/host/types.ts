@@ -52,7 +52,7 @@ export type MemorySyncParams = {
 };
 
 /** Runtime backend/mode diagnostics for memory search. */
-export type MemorySearchRuntimeQmdCollectionValidationDebug = {
+type MemorySearchRuntimeQmdCollectionValidationDebug = {
   cacheState?: "hit" | "miss" | "write" | "bypass-force" | "error";
   elapsedMs: number;
   collectionCount: number;
@@ -60,20 +60,20 @@ export type MemorySearchRuntimeQmdCollectionValidationDebug = {
   showCalls?: number;
 };
 
-export type MemorySearchRuntimeQmdMultiCollectionProbeDebug = {
+type MemorySearchRuntimeQmdMultiCollectionProbeDebug = {
   cacheState?: "hit" | "miss" | "write" | "error";
   elapsedMs: number;
   supported: boolean;
 };
 
-export type MemorySearchRuntimeQmdSearchPlanDebug = {
+type MemorySearchRuntimeQmdSearchPlanDebug = {
   command?: "query" | "search" | "vsearch";
   collectionCount?: number;
   groupCount?: number;
   sources?: MemorySource[];
 };
 
-export type MemorySearchRuntimeQmdDebug = {
+type MemorySearchRuntimeQmdDebug = {
   collectionValidation?: MemorySearchRuntimeQmdCollectionValidationDebug;
   multiCollectionProbe?: MemorySearchRuntimeQmdMultiCollectionProbeDebug;
   searchPlan?: MemorySearchRuntimeQmdSearchPlanDebug;

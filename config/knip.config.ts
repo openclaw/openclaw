@@ -240,7 +240,7 @@ const config = {
       project: ["src/**/*.ts!"],
     },
     "packages/memory-host-sdk": {
-      entry: ["src/*.ts!"],
+      entry: ["src/*.ts!", "src/host/embeddings-worker-child.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/speech-core": {
