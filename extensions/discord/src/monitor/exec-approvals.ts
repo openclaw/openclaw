@@ -26,9 +26,6 @@ import {
   type MessagePayloadObject,
 } from "../internal/discord.js";
 
-export { buildExecApprovalCustomId, parseExecApprovalData };
-export { extractDiscordChannelId } from "../approval-native.js";
-
 type ExecApprovalButtonContext = {
   getApprovers: () => string[];
   resolveApproval: (
