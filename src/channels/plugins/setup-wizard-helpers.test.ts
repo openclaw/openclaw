@@ -37,7 +37,6 @@ import {
   parseSetupEntriesAllowingWildcard,
   patchChannelConfigForAccount,
   patchNestedChannelConfigSection,
-  patchLegacyDmChannelConfig,
   patchTopLevelChannelConfigSection,
   promptLegacyChannelAllowFrom,
   promptLegacyChannelAllowFromForAccount,
@@ -45,7 +44,6 @@ import {
   parseSetupEntriesWithParser,
   promptParsedAllowFromForScopedChannel,
   promptSingleChannelSecretInput,
-  promptSingleChannelToken,
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
   resolveEntriesWithOptionalToken,
@@ -61,7 +59,6 @@ import {
   setTopLevelChannelGroupPolicy,
   setNestedChannelAllowFrom,
   setNestedChannelDmPolicyWithAllowFrom,
-  setLegacyChannelAllowFrom,
   setLegacyChannelDmPolicyWithAllowFrom,
   setSetupChannelEnabled,
   splitSetupEntries,
@@ -159,17 +156,6 @@ function createPrompter(inputs: string[]) {
   };
 }
 
-function createTokenPrompter(params: { confirms: boolean[]; texts: string[] }) {
-  const confirms = [...params.confirms];
-  const texts = [...params.texts];
-  return {
-    confirm: vi.fn(async () => confirms.shift() ?? true),
-    text: vi.fn<(textParams: { sensitive?: boolean }) => Promise<string>>(
-      async () => texts.shift() ?? "",
-    ),
-  };
-}
-
 function parseCsvInputs(value: string): string[] {
   const entries: string[] = [];
   for (const part of value.split(",")) {
@@ -204,23 +190,6 @@ async function runPromptResolvedAllowFromWithToken(params: {
     parseId: () => null,
     invalidWithoutTokenNote: "ids only",
     resolveEntries: params.resolveEntries,
-  });
-}
-
-async function runPromptSingleToken(params: {
-  prompter: ReturnType<typeof createTokenPrompter>;
-  accountConfigured: boolean;
-  canUseEnv: boolean;
-  hasConfigToken: boolean;
-}) {
-  return await promptSingleChannelToken({
-    prompter: params.prompter,
-    accountConfigured: params.accountConfigured,
-    canUseEnv: params.canUseEnv,
-    hasConfigToken: params.hasConfigToken,
-    envPrompt: "use env",
-    keepPrompt: "keep",
-    inputPrompt: "token",
   });
 }
 
@@ -475,72 +444,6 @@ describe("promptLegacyChannelAllowFromForAccount", () => {
 
     expect(next.channels?.slack?.allowFrom).toEqual(["U0", "ALICE"]);
     expect(prompter.note).toHaveBeenCalledWith("line", "Slack allowlist");
-  });
-});
-
-describe("promptSingleChannelToken", () => {
-  it.each([
-    {
-      name: "uses env tokens when confirmed",
-      confirms: [true],
-      texts: [],
-      state: {
-        accountConfigured: false,
-        canUseEnv: true,
-        hasConfigToken: false,
-      },
-      expected: { useEnv: true, token: null },
-      expectTextCalls: 0,
-    },
-    {
-      name: "prompts for token when env exists but user declines env",
-      confirms: [false],
-      texts: ["abc"],
-      state: {
-        accountConfigured: false,
-        canUseEnv: true,
-        hasConfigToken: false,
-      },
-      expected: { useEnv: false, token: "abc" },
-      expectTextCalls: 1,
-    },
-    {
-      name: "keeps existing configured token when confirmed",
-      confirms: [true],
-      texts: [],
-      state: {
-        accountConfigured: true,
-        canUseEnv: false,
-        hasConfigToken: true,
-      },
-      expected: { useEnv: false, token: null },
-      expectTextCalls: 0,
-    },
-    {
-      name: "prompts for token when no env/config token is used",
-      confirms: [false],
-      texts: ["xyz"],
-      state: {
-        accountConfigured: true,
-        canUseEnv: false,
-        hasConfigToken: false,
-      },
-      expected: { useEnv: false, token: "xyz" },
-      expectTextCalls: 1,
-    },
-  ])("$name", async ({ confirms, texts, state, expected, expectTextCalls }) => {
-    const prompter = createTokenPrompter({ confirms, texts });
-    const result = await runPromptSingleToken({
-      prompter,
-      ...state,
-    });
-    expect(result).toEqual(expected);
-    expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
-    // Token entry is a credential: masked in terminals, and the Crestodian
-    // chat bridge refuses plain-text secrets based on this flag.
-    for (const call of prompter.text.mock.calls) {
-      expect(call[0]).toMatchObject({ sensitive: true });
-    }
   });
 });
 
@@ -1114,46 +1017,6 @@ describe("setSetupChannelEnabled", () => {
   });
 });
 
-describe("patchLegacyDmChannelConfig", () => {
-  it("patches discord root config and defaults dm.enabled to true", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        discord: {
-          dmPolicy: "pairing",
-        },
-      },
-    };
-
-    const next = patchLegacyDmChannelConfig({
-      cfg,
-      channel: "discord",
-      patch: { allowFrom: ["123"] },
-    });
-    expect(next.channels?.discord?.allowFrom).toEqual(["123"]);
-    expect(next.channels?.discord?.dm?.enabled).toBe(true);
-  });
-
-  it("preserves explicit dm.enabled=false for slack", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        slack: {
-          dm: {
-            enabled: false,
-          },
-        },
-      },
-    };
-
-    const next = patchLegacyDmChannelConfig({
-      cfg,
-      channel: "slack",
-      patch: { dmPolicy: "open" },
-    });
-    expect(next.channels?.slack?.dmPolicy).toBe("open");
-    expect(next.channels?.slack?.dm?.enabled).toBe(false);
-  });
-});
-
 describe("setLegacyChannelDmPolicyWithAllowFrom", () => {
   it("adds wildcard allowFrom for open policy using legacy dm allowFrom fallback", () => {
     const cfg: OpenClawConfig = {
@@ -1193,18 +1056,6 @@ describe("setLegacyChannelDmPolicyWithAllowFrom", () => {
     });
     expect(next.channels?.slack?.dmPolicy).toBe("pairing");
     expect(next.channels?.slack?.allowFrom).toEqual(["U1"]);
-  });
-});
-
-describe("setLegacyChannelAllowFrom", () => {
-  it("writes allowFrom through legacy dm patching", () => {
-    const next = setLegacyChannelAllowFrom({
-      cfg: {},
-      channel: "slack",
-      allowFrom: ["U123"],
-    });
-    expect(next.channels?.slack?.allowFrom).toEqual(["U123"]);
-    expect(next.channels?.slack?.dm?.enabled).toBe(true);
   });
 });
 

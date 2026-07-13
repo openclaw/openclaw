@@ -194,6 +194,10 @@ export const sharedVitestConfig = {
         replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
       },
       {
+        find: "@openclaw/gateway-client/browser",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "browser.ts"),
+      },
+      {
         find: "@openclaw/gateway-client/readiness",
         replacement: path.join(repoRoot, "packages", "gateway-client", "src", "readiness.ts"),
       },
@@ -390,6 +394,10 @@ export const sharedVitestConfig = {
       {
         find: "@openclaw/net-policy",
         replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/normalization-core/agent-id",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "agent-id.ts"),
       },
       {
         find: "@openclaw/normalization-core/boolean-coercion",

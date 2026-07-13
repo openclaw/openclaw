@@ -847,11 +847,13 @@ class PluginsPage extends OpenClawLightDomElement {
         </div>
       </section>
       ${renderSettingsWorkspace(html`
-        ${renderPluginsHubTabs({
-          active: this.activeTab,
-          installedCount: this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
-          onSelect: (tab) => this.selectHubTab(tab),
-        })}
+        <div class="plugins-hub-tabs-row">
+          ${renderPluginsHubTabs({
+            active: this.activeTab,
+            installedCount: this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
+            onSelect: (tab) => this.selectHubTab(tab),
+          })}
+        </div>
         ${renderPlugins({
           connected: this.connected,
           loading: this.loading,

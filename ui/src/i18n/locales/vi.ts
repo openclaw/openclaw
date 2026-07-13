@@ -82,6 +82,7 @@ export const vi: TranslationMap = {
     relink: "Liên kết lại",
     waitForScan: "Chờ quét",
     logout: "Đăng xuất",
+    skipToMainContent: "Chuyển đến nội dung chính",
   },
   nativeLinkMenu: {
     label: "Hành động liên kết",
@@ -231,6 +232,17 @@ export const vi: TranslationMap = {
       title: "OpenClaw di động",
       subtitle: "Quét mã QR này trong ứng dụng di động để kết nối điện thoại mới.",
       generating: "Đang tạo mã thiết lập bảo mật…",
+      accessTitle: "Truy cập trên thiết bị di động",
+      fullAccess: "Toàn quyền truy cập (khuyên dùng)",
+      fullAccessHint:
+        "Quyền truy cập Node cùng toàn bộ tính năng điều khiển Gateway, bao gồm cài đặt và nâng cấp.",
+      limitedAccess: "Quyền truy cập hạn chế",
+      limitedAccessHint:
+        "Quyền truy cập Node, trò chuyện và phê duyệt, không bao gồm các tính năng quản trị.",
+      generateCode: "Tạo mã thiết lập",
+      transportLimitedTitle: "Bị giới hạn để đảm bảo an toàn mạng",
+      transportLimitedHint:
+        "URL Gateway này sử dụng ws:// dạng văn bản thuần. Hãy sử dụng wss:// hoặc Tailscale Serve, sau đó tạo mã mới để có toàn quyền truy cập.",
       failed: "Không thể tạo mã thiết lập.",
       qrAlt: "Mã QR ghép nối OpenClaw di động",
       qrUnavailable: "Không có mã QR. Hãy sao chép mã thiết lập thay thế.",
@@ -264,7 +276,8 @@ export const vi: TranslationMap = {
     },
     inventory: {
       title: "Thiết bị",
-      subtitle: "Mỗi hàng là một client đã ghép nối: trạng thái, vai trò, token.",
+      summaryConnected: "{connected} trong tổng số {total} đã kết nối",
+      summaryPending: "{count} đang chờ phê duyệt",
       cleanupStale: "Dọn dẹp {count} mục cũ",
       pendingApproval: "Chờ phê duyệt",
       paired: "Đã ghép nối",
@@ -379,6 +392,18 @@ export const vi: TranslationMap = {
     title: "Worktree được quản lý",
     subtitle: "Các bản checkout kho lưu trữ được cô lập do OpenClaw sở hữu.",
     cleanNow: "Dọn dẹp ngay",
+    cleanupTitle: "Dọn dẹp",
+    cleanupSubtitle:
+      "OpenClaw định kỳ xóa các worktree cũ để giải phóng dung lượng ổ đĩa. Điều chỉnh mức độ dọn dẹp.",
+    cleanupMaxCount: "Số worktree tối đa",
+    cleanupMaxCountHelp:
+      "Số lượng worktree được quản lý tối đa cần giữ lại trên tất cả kho lưu trữ. Các worktree cũ hơn sẽ được tạo bản chụp nhanh và xóa trước. Đặt thành 0 để tắt giới hạn số lượng.",
+    cleanupMaxSize: "Tổng kích thước tối đa (GB)",
+    cleanupMaxSizeHelp:
+      "Tổng kích thước tối đa tính bằng GB trên tất cả worktree được quản lý. Đặt thành 0 để tắt giới hạn kích thước.",
+    cleanupDecrease: "Giảm {label}",
+    cleanupIncrease: "Tăng {label}",
+    cleanupSaveFailed: "Không thể lưu các giới hạn dọn dẹp.",
     name: "Tên",
     repo: "Kho lưu trữ",
     branch: "Nhánh",
@@ -397,9 +422,17 @@ export const vi: TranslationMap = {
     working: "Đang làm việc…",
     ready: "Sẵn sàng trò chuyện",
     whatCanAgentDo: "{name} có thể làm gì?",
+    help: "Trợ giúp",
     getHelp: "Nhận trợ giúp",
     discord: "Cộng đồng Discord",
     viewChangelog: "Xem nhật ký thay đổi",
+    agentSettings: "Cài đặt agent",
+    filterAgents: "Tìm agent…",
+    noAgentMatches: "Không có agent phù hợp",
+  },
+  agentScope: {
+    label: "Phạm vi agent",
+    allAgents: "Tất cả agent",
   },
   newSession: {
     title: "Phiên mới",
@@ -608,6 +641,8 @@ export const vi: TranslationMap = {
     setDefault: "Đặt làm mặc định",
     alreadyDefaultTitle: "Đã là agent mặc định",
     setDefaultTitle: "Đặt làm agent mặc định",
+    pinToSwitcher: "Ghim vào trình chuyển đổi",
+    unpinFromSwitcher: "Bỏ ghim khỏi trình chuyển đổi",
     selectTitle: "Chọn một agent",
     selectSubtitle: "Chọn một agent để kiểm tra workspace và công cụ của agent đó.",
     tabs: {
@@ -632,6 +667,19 @@ export const vi: TranslationMap = {
       default: "Mặc định",
       configurationSubtitle: "Cấu hình workspace, danh tính và mô hình.",
       schedulingSubtitle: "Workspace và mục tiêu lập lịch.",
+    },
+    identity: {
+      title: "Danh tính",
+      subtitle: "Tên, emoji và ảnh đại diện hiển thị trong cuộc trò chuyện và thanh bên.",
+      name: "Tên hiển thị",
+      namePlaceholder: "Tên agent",
+      emoji: "Emoji",
+      chooseImage: "Chọn hình ảnh…",
+      replaceImage: "Thay thế hình ảnh…",
+      imageUnusable:
+        "Không thể sử dụng hình ảnh đó. Hãy chọn tệp hình ảnh có dung lượng tối đa 2 MB.",
+      fileHint:
+        "Agent có thể tự thiết lập bằng cách chỉnh sửa IDENTITY.md trong workspace của mình.",
     },
     overview: {
       title: "Tổng quan",
@@ -1075,6 +1123,7 @@ export const vi: TranslationMap = {
     settingsView: "Chế độ xem cài đặt",
     simple: "Đơn giản",
     advanced: "Nâng cao",
+    content: "Nội dung cài đặt",
     themeImported: "Đã nhập {name}.",
     themeRemoved: "Đã xóa chủ đề tùy chỉnh.",
     channels: {
@@ -1429,6 +1478,8 @@ export const vi: TranslationMap = {
     platforms: "Nền tảng: {platforms}",
     installNamed: "Cài đặt {name}",
     notFound: "Không tìm thấy skill.",
+    openDetails: "Mở thông tin chi tiết về {name}",
+    enabledNamed: "Đã bật {name}",
     invalidLink: "Liên kết ClawHub không hợp lệ",
     overview: "Tổng quan",
     skillCard: "Thẻ Skill",
@@ -1703,7 +1754,6 @@ export const vi: TranslationMap = {
     filterAll: "Tất cả",
     filterIssues: "Sự cố",
     filterLabel: "Lọc plugin đã cài đặt",
-    pulseLabel: "{enabled} đã bật, {disabled} đã tắt, {issues} có sự cố",
     categoryChannels: "Kênh",
     categoryProviders: "Nhà cung cấp mô hình",
     categoryMemory: "Bộ nhớ",
@@ -3475,11 +3525,13 @@ export const vi: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Trạng thái tự động hóa",
       all: "Tất cả",
       active: "Đang hoạt động",
       paused: "Đã tạm dừng",
     },
     list: {
+      viewLabel: "Chế độ xem tự động hóa",
       searchPlaceholder: "Tìm kiếm tác vụ theo lịch",
       newTask: "Tác vụ mới",
       filters: "Bộ lọc",
@@ -3550,6 +3602,7 @@ export const vi: TranslationMap = {
       nextWake: "Lần chạy tiếp theo",
     },
     detail: {
+      tabsLabel: "Chi tiết tự động hóa",
       newTitle: "Tác vụ theo lịch mới",
       newSubtitle: "Mô tả những gì OpenClaw nên làm, sau đó chọn thời điểm chạy.",
       back: "Tất cả tác vụ tự động",

@@ -40,8 +40,9 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
   };
 }
 
-function fieldLabels(container: HTMLElement): string[] {
-  return [...container.querySelectorAll(".field > span")].map(
+function accessRowTitles(container: HTMLElement): string[] {
+  const accessGroup = container.querySelectorAll(".settings-group")[0];
+  return [...(accessGroup?.querySelectorAll(".settings-row__title") ?? [])].map(
     (node) => node.textContent?.trim() ?? "",
   );
 }
@@ -52,13 +53,13 @@ describe("connection view rendering", () => {
     render(renderConnection(createConnectionProps()), container);
     await Promise.resolve();
 
-    expect(fieldLabels(container)).toEqual([
+    expect(accessRowTitles(container)).toEqual([
       "WebSocket URL",
       "Gateway Token",
       "Password (not stored)",
       "Default Session Key",
     ]);
-    expect(container.querySelector(".callout.danger")).toBeNull();
+    expect(container.textContent).not.toContain("Last error");
   });
 
   it("hides token and password fields for trusted-proxy auth", async () => {
@@ -70,12 +71,12 @@ describe("connection view rendering", () => {
     render(renderConnection(createConnectionProps({ connected: true, hello })), container);
     await Promise.resolve();
 
-    expect(fieldLabels(container)).toEqual(["WebSocket URL", "Default Session Key"]);
+    expect(accessRowTitles(container)).toEqual(["WebSocket URL", "Default Session Key"]);
     expect(container.textContent).toContain("Authenticated via trusted proxy.");
     expect(container.textContent).toContain("30s");
   });
 
-  it("surfaces the last connection error as a callout", async () => {
+  it("surfaces the last connection error as a snapshot row", async () => {
     const container = document.createElement("div");
     render(
       renderConnection(createConnectionProps({ lastError: "connect failed: unauthorized" })),
@@ -83,7 +84,9 @@ describe("connection view rendering", () => {
     );
     await Promise.resolve();
 
-    expect(container.querySelector(".callout.danger")?.textContent).toContain(
+    const errorStatus = container.querySelector(".settings-status--danger");
+    expect(errorStatus?.textContent).toContain("Last error");
+    expect(errorStatus?.closest(".settings-row")?.textContent).toContain(
       "connect failed: unauthorized",
     );
   });

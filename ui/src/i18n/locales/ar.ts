@@ -82,6 +82,7 @@ export const ar: TranslationMap = {
     relink: "إعادة الربط",
     waitForScan: "انتظار المسح",
     logout: "تسجيل الخروج",
+    skipToMainContent: "تخطَّ إلى المحتوى الرئيسي",
   },
   nativeLinkMenu: {
     label: "إجراءات الرابط",
@@ -228,6 +229,16 @@ export const ar: TranslationMap = {
       title: "OpenClaw للأجهزة المحمولة",
       subtitle: "امسح رمز QR هذا في تطبيق الهاتف المحمول لتوصيل هاتف جديد.",
       generating: "جارٍ إنشاء رمز إعداد آمن…",
+      accessTitle: "الوصول عبر الهاتف المحمول",
+      fullAccess: "وصول كامل (موصى به)",
+      fullAccessHint:
+        "العقدة بالإضافة إلى عناصر التحكم الكاملة في Gateway، بما في ذلك الإعدادات والترقيات.",
+      limitedAccess: "وصول محدود",
+      limitedAccessHint: "العقدة والدردشة والموافقات من دون عناصر التحكم الإدارية.",
+      generateCode: "إنشاء رمز الإعداد",
+      transportLimitedTitle: "محدود لأمان الشبكة",
+      transportLimitedHint:
+        "يستخدم عنوان URL الخاص بـ Gateway اتصال ws:// بنص عادي. استخدم wss:// أو Tailscale Serve، ثم أنشئ رمزًا جديدًا للوصول الكامل.",
       failed: "تعذر إنشاء رمز إعداد.",
       qrAlt: "رمز QR لإقران OpenClaw للأجهزة المحمولة",
       qrUnavailable: "رمز QR غير متاح. انسخ رمز الإعداد بدلًا من ذلك.",
@@ -261,7 +272,8 @@ export const ar: TranslationMap = {
     },
     inventory: {
       title: "الأجهزة",
-      subtitle: "صف واحد لكل عميل مقترن: الحالة، والأدوار، والرموز المميزة.",
+      summaryConnected: "{connected} من أصل {total} متصلة",
+      summaryPending: "{count} بانتظار الموافقة",
       cleanupStale: "تنظيف {count} من عمليات الاقتران القديمة",
       pendingApproval: "في انتظار الموافقة",
       paired: "مقترن",
@@ -376,6 +388,18 @@ export const ar: TranslationMap = {
     title: "مساحات العمل المُدارة",
     subtitle: "نسخ مستودعات معزولة مملوكة لـ OpenClaw.",
     cleanNow: "تنظيف الآن",
+    cleanupTitle: "التنظيف",
+    cleanupSubtitle:
+      "يزيل OpenClaw دوريًا أشجار العمل القديمة لتوفير مساحة على القرص. اضبط مدى صرامة عملية التنظيف.",
+    cleanupMaxCount: "الحد الأقصى لأشجار العمل",
+    cleanupMaxCountHelp:
+      "الحد الأقصى لعدد أشجار العمل المُدارة التي سيتم الاحتفاظ بها عبر جميع المستودعات. تُؤخذ لقطات لأشجار العمل الأقدم وتُزال أولًا. اضبطه على 0 لتعطيل حد العدد.",
+    cleanupMaxSize: "الحد الأقصى للحجم الإجمالي (GB)",
+    cleanupMaxSizeHelp:
+      "الحد الأقصى للحجم الإجمالي بوحدة GB عبر جميع أشجار العمل المُدارة. اضبطه على 0 لتعطيل حد الحجم.",
+    cleanupDecrease: "تقليل {label}",
+    cleanupIncrease: "زيادة {label}",
+    cleanupSaveFailed: "فشل حفظ حدود التنظيف.",
     name: "الاسم",
     repo: "المستودع",
     branch: "الفرع",
@@ -394,9 +418,17 @@ export const ar: TranslationMap = {
     working: "جارٍ العمل…",
     ready: "جاهز للدردشة",
     whatCanAgentDo: "ما الذي يمكن لـ {name} فعله؟",
+    help: "مساعدة",
     getHelp: "الحصول على المساعدة",
     discord: "مجتمع Discord",
     viewChangelog: "عرض سجل التغييرات",
+    agentSettings: "إعدادات الوكيل",
+    filterAgents: "البحث عن وكيل…",
+    noAgentMatches: "لا توجد وكلاء مطابقة",
+  },
+  agentScope: {
+    label: "نطاق الوكيل",
+    allAgents: "جميع الوكلاء",
   },
   newSession: {
     title: "جلسة جديدة",
@@ -605,6 +637,8 @@ export const ar: TranslationMap = {
     setDefault: "تعيين كافتراضي",
     alreadyDefaultTitle: "الوكيل الافتراضي بالفعل",
     setDefaultTitle: "تعيينه كوكيل افتراضي",
+    pinToSwitcher: "تثبيت في مبدّل الوكلاء",
+    unpinFromSwitcher: "إلغاء التثبيت من مبدّل الوكلاء",
     selectTitle: "اختر وكيلاً",
     selectSubtitle: "اختر وكيلاً لفحص مساحة العمل والأدوات الخاصة به.",
     tabs: {
@@ -629,6 +663,17 @@ export const ar: TranslationMap = {
       default: "افتراضي",
       configurationSubtitle: "تكوين مساحة العمل والهوية والنموذج.",
       schedulingSubtitle: "مساحة العمل وأهداف الجدولة.",
+    },
+    identity: {
+      title: "الهوية",
+      subtitle: "الاسم والرمز التعبيري والصورة الرمزية التي تظهر في المحادثات والشريط الجانبي.",
+      name: "اسم العرض",
+      namePlaceholder: "اسم الوكيل",
+      emoji: "رمز تعبيري",
+      chooseImage: "اختيار صورة…",
+      replaceImage: "استبدال الصورة…",
+      imageUnusable: "لا يمكن استخدام هذه الصورة. اختر ملف صورة بحجم يصل إلى 2 MB.",
+      fileHint: "يمكن للوكلاء ضبط ذلك بأنفسهم من خلال تعديل IDENTITY.md في مساحة عملهم.",
     },
     overview: {
       title: "نظرة عامة",
@@ -1072,6 +1117,7 @@ export const ar: TranslationMap = {
     settingsView: "عرض الإعدادات",
     simple: "بسيط",
     advanced: "متقدم",
+    content: "محتوى الإعدادات",
     themeImported: "تم استيراد {name}.",
     themeRemoved: "تمت إزالة السمة المخصصة.",
     channels: {
@@ -1423,6 +1469,8 @@ export const ar: TranslationMap = {
     platforms: "المنصات: {platforms}",
     installNamed: "تثبيت {name}",
     notFound: "لم يتم العثور على المهارة.",
+    openDetails: "فتح تفاصيل {name}",
+    enabledNamed: "تم تفعيل {name}",
     invalidLink: "رابط ClawHub غير صالح",
     overview: "نظرة عامة",
     skillCard: "بطاقة المهارة",
@@ -1694,7 +1742,6 @@ export const ar: TranslationMap = {
     filterAll: "الكل",
     filterIssues: "المشكلات",
     filterLabel: "تصفية المكونات الإضافية المثبتة",
-    pulseLabel: "{enabled} مفعّل، {disabled} معطّل، {issues} به مشكلات",
     categoryChannels: "القنوات",
     categoryProviders: "موفرو النماذج",
     categoryMemory: "الذاكرة",
@@ -3456,11 +3503,13 @@ export const ar: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "حالة الأتمتة",
       all: "الكل",
       active: "نشط",
       paused: "متوقفة مؤقتًا",
     },
     list: {
+      viewLabel: "عروض الأتمتة",
       searchPlaceholder: "البحث في المهام المجدولة",
       newTask: "مهمة جديدة",
       filters: "عوامل التصفية",
@@ -3531,6 +3580,7 @@ export const ar: TranslationMap = {
       nextWake: "التشغيل التالي",
     },
     detail: {
+      tabsLabel: "تفاصيل الأتمتة",
       newTitle: "مهمة مجدولة جديدة",
       newSubtitle: "صِف ما ينبغي أن يفعله OpenClaw، ثم اختر وقت تشغيله.",
       back: "كل عمليات الأتمتة",

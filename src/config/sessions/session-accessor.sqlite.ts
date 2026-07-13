@@ -986,6 +986,7 @@ export async function resetSqliteSessionEntryLifecycle(
 async function deleteSqliteSessionEntryLifecycleInternal(
   params: DeleteSessionEntryLifecycleParams,
   allowLockedEntryRemoval: boolean,
+  expectedPluginOwnerId?: string,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.agentId });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
@@ -1002,30 +1003,46 @@ async function deleteSqliteSessionEntryLifecycleInternal(
     if (current.entry.modelSelectionLocked === true && !allowLockedEntryRemoval) {
       throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
     }
+    if (
+      expectedPluginOwnerId &&
+      targetSnapshot.rows.some(
+        ({ entry, sessionKey }) =>
+          isAgentHarnessSessionKey(sessionKey) ||
+          entry.agentHarnessId !== undefined ||
+          entry.modelSelectionLocked !== true ||
+          normalizeOptionalString(entry.pluginOwnerId) !== expectedPluginOwnerId,
+      )
+    ) {
+      throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+    }
     const referencedAfterDelete = readReferencedSqliteSessionIdsAfterTargetMutation(
       database,
       params.target,
     );
+    // SQLite transcript state is keyed by session id; sessionFile is only its
+    // marker. Materialization dedupes aliases that share the same state owner.
     const deletePlans = params.archiveTranscript
-      ? planSqliteSessionStateAfterEntryRemoval({
-          archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-          archiveTranscript: true,
-          database,
-          entry: current.entry,
-          reason: "deleted",
-          referencedSessionIds: referencedAfterDelete,
-        })
+      ? targetSnapshot.rows.flatMap(({ entry }) =>
+          planSqliteSessionStateAfterEntryRemoval({
+            archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+            archiveTranscript: true,
+            database,
+            entry,
+            reason: "deleted",
+            referencedSessionIds: referencedAfterDelete,
+          }),
+        )
       : [];
     const materializedPlans = materializeSqliteSessionStateDeletePlans(deletePlans);
     runOpenClawAgentWriteTransaction((transactionDb) => {
-      const transactionEntry = resolveSqliteLifecyclePrimaryEntry(
-        transactionDb,
-        params.target,
-      )?.entry;
-      if (
-        !sqliteSessionEntriesEqual(transactionEntry, current.entry) ||
-        !shouldDeleteSqliteSessionEntryLifecycle(transactionEntry, params)
-      ) {
+      const transactionSnapshot = readSqliteLifecycleTargetSnapshot(transactionDb, params.target);
+      assertSqliteLifecycleTargetSnapshotUnchanged(
+        targetSnapshot,
+        transactionSnapshot,
+        "delete session entry",
+      );
+      const transactionEntry = transactionSnapshot.primary?.entry;
+      if (!shouldDeleteSqliteSessionEntryLifecycle(transactionEntry, params)) {
         return;
       }
       deleteSqliteLifecycleTargetRows(transactionDb, params.target);
@@ -1090,14 +1107,10 @@ export async function rollbackSqlitePluginOwnedSessionEntryLifecycle(
     expectedPluginOwnerId: string;
   },
 ): Promise<DeleteSessionEntryLifecycleResult> {
-  const hasExactTarget =
-    params.target.storeKeys.length === 1 &&
-    params.target.storeKeys[0] === params.target.canonicalKey;
   const expectedEntry = params.expectedEntry;
   const validPluginOwner = normalizeOptionalString(expectedEntry.pluginOwnerId);
   const expectedPluginOwner = normalizeOptionalString(params.expectedPluginOwnerId);
   if (
-    !hasExactTarget ||
     isAgentHarnessSessionKey(params.target.canonicalKey) ||
     expectedEntry.agentHarnessId !== undefined ||
     expectedEntry.modelSelectionLocked !== true ||
@@ -1106,7 +1119,7 @@ export async function rollbackSqlitePluginOwnedSessionEntryLifecycle(
   ) {
     throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
   }
-  return await deleteSqliteSessionEntryLifecycleInternal(params, true);
+  return await deleteSqliteSessionEntryLifecycleInternal(params, true, expectedPluginOwner);
 }
 
 /** Applies prepared full-row replacements in one validated SQLite transaction. */

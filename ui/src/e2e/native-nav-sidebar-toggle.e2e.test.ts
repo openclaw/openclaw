@@ -238,6 +238,27 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       .not.toContain("shell--nav-collapsed");
   });
 
+  it("keeps only history controls in the Settings titlebar", async () => {
+    const page = await openPage({ webChrome: true });
+    const response = await page.goto(`${server.baseUrl}settings/general`);
+    expect(response?.status()).toBe(200);
+
+    const toolbar = page.locator(".macos-titlebar-controls");
+    await expect.poll(() => toolbar.isVisible()).toBe(true);
+    await expect.poll(() => toolbar.getByRole("button").count()).toBe(2);
+    await expect.poll(() => toolbar.getByRole("button", { name: "Back" }).isVisible()).toBe(true);
+    await expect
+      .poll(() => toolbar.getByRole("button", { name: "Forward" }).isVisible())
+      .toBe(true);
+    await expect
+      .poll(() => toolbar.getByRole("button", { name: "Expand sidebar" }).count())
+      .toBe(0);
+    await expect
+      .poll(() => toolbar.getByRole("button", { name: "Open command palette" }).count())
+      .toBe(0);
+    await expect.poll(() => toolbar.getByRole("button", { name: "New session" }).count()).toBe(0);
+  });
+
   it("keeps the drawer hamburger at narrow widths in plain browsers", async () => {
     const page = await openPage({ nativeNav: false, width: 900 });
     await expect.poll(() => page.locator(".topbar-nav-toggle").isVisible()).toBe(true);

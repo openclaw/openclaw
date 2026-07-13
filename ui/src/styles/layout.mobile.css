@@ -488,11 +488,6 @@
   }
 
   /* Stats */
-  .stat-grid {
-    gap: 8px;
-    grid-template-columns: repeat(2, 1fr);
-  }
-
   .stat {
     padding: 10px;
     border-radius: var(--radius-md);
@@ -504,12 +499,6 @@
 
   .stat-value {
     font-size: 18px;
-  }
-
-  /* Notes */
-  .note-grid {
-    grid-template-columns: 1fr;
-    gap: 8px;
   }
 
   /* Forms */

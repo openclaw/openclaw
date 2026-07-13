@@ -20,16 +20,6 @@ export type SlackChannelResolution = {
   archived?: boolean;
 };
 
-type SlackListResponse = {
-  channels?: Array<{
-    id?: string;
-    name?: string;
-    is_archived?: boolean;
-    is_private?: boolean;
-  }>;
-  response_metadata?: { next_cursor?: string };
-};
-
 function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -51,13 +41,13 @@ function parseSlackChannelMention(raw: string): { id?: string; name?: string } {
 
 async function listSlackChannels(client: WebClient): Promise<SlackChannelLookup[]> {
   return collectSlackCursorPages({
-    fetchPage: async (cursor) =>
-      (await client.conversations.list({
+    fetchPage: (cursor) =>
+      client.conversations.list({
         types: "public_channel,private_channel",
         exclude_archived: false,
         limit: 1000,
         cursor,
-      })) as SlackListResponse,
+      }),
     collectPageItems: (res) =>
       (res.channels ?? [])
         .map((channel) => {

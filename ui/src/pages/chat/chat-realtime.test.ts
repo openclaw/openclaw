@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { loadSettings, resetUnpersistedSettingsForTest, saveSettings } from "../../app/settings.ts";
+import { loadSettings, saveSettings } from "../../app/settings.ts";
 import {
   attachChatRealtimeActions,
   createInitialChatRealtimeState,
@@ -42,7 +42,6 @@ describe("chat realtime actions", () => {
   let startSpy: MockInstance<RealtimeTalkSession["start"]>;
 
   beforeEach(() => {
-    resetUnpersistedSettingsForTest();
     vi.stubGlobal("localStorage", window.localStorage);
     localStorage.clear();
     startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
@@ -50,8 +49,9 @@ describe("chat realtime actions", () => {
   });
 
   afterEach(() => {
-    resetUnpersistedSettingsForTest();
     vi.restoreAllMocks();
+    saveSettings(loadSettings());
+    localStorage.clear();
     vi.unstubAllGlobals();
   });
 

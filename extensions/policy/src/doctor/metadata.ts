@@ -135,7 +135,7 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyUnknownToolSensitivity,
 ] as const;
 
-export type PolicyStrictnessKind =
+type PolicyStrictnessKind =
   | "allowlist-subset"
   | "denylist-superset"
   | "ordered-string"
@@ -143,7 +143,7 @@ export type PolicyStrictnessKind =
   | "requires-false"
   | "exact-list";
 
-export type PolicyEmptyListSemantics = "disabled" | "meaningful";
+type PolicyEmptyListSemantics = "disabled" | "meaningful";
 
 export type PolicyScopeSelectorKind = "agentIds" | "channelIds";
 

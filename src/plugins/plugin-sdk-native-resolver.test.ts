@@ -382,6 +382,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "boolean-coercion.ts",
     );
     const resultSource = writeInternalCorePackageSource(root, "normalization-core", "result.ts");
+    const agentIdSource = writeInternalCorePackageSource(root, "normalization-core", "agent-id.ts");
     const mediaCoreSource = writeInternalCorePackageSource(root, "media-core", "mime.ts");
     const markdownCoreSource = writeInternalCorePackageSource(
       root,
@@ -418,6 +419,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(installedAliases).toContain("@openclaw/normalization-core/string-coerce");
     expect(installedAliases).toContain("@openclaw/normalization-core/boolean-coercion");
     expect(installedAliases).toContain("@openclaw/normalization-core/result");
+    expect(installedAliases).toContain("@openclaw/normalization-core/agent-id");
     expect(installedAliases).toContain("@openclaw/media-core/mime");
     expect(installedAliases).toContain("@openclaw/markdown-core/code-spans");
     expect(installedAliases).toContain("@openclaw/ai/internal/retry-after");
@@ -437,6 +439,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(
       fs.realpathSync(requireFromCoreSource.resolve("@openclaw/normalization-core/result")),
     ).toBe(fs.realpathSync(resultSource));
+    expect(
+      fs.realpathSync(requireFromCoreSource.resolve("@openclaw/normalization-core/agent-id")),
+    ).toBe(fs.realpathSync(agentIdSource));
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/media-core/mime"))).toBe(
       fs.realpathSync(mediaCoreSource),
     );

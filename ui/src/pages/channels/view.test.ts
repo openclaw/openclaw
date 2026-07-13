@@ -76,7 +76,7 @@ function renderWhatsAppButtons(params: {
   }
 
   const container = document.createElement("div");
-  render(renderWhatsAppCard({ props, whatsapp, accountCountLabel: null }), container);
+  render(renderWhatsAppCard({ props, whatsapp }), container);
   const buttons = Array.from(container.querySelectorAll("button"));
   return {
     buttons,

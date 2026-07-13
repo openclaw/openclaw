@@ -82,6 +82,7 @@ export const id: TranslationMap = {
     relink: "Tautkan ulang",
     waitForScan: "Tunggu pemindaian",
     logout: "Keluar",
+    skipToMainContent: "Lewati ke konten utama",
   },
   nativeLinkMenu: {
     label: "Tindakan tautan",
@@ -231,6 +232,15 @@ export const id: TranslationMap = {
       title: "OpenClaw seluler",
       subtitle: "Pindai kode QR ini di aplikasi seluler untuk menghubungkan ponsel baru.",
       generating: "Membuat kode penyiapan yang aman…",
+      accessTitle: "Akses seluler",
+      fullAccess: "Akses penuh (disarankan)",
+      fullAccessHint: "Node beserta kontrol Gateway lengkap, termasuk pengaturan dan peningkatan.",
+      limitedAccess: "Akses terbatas",
+      limitedAccessHint: "Node, chat, dan persetujuan tanpa kontrol administratif.",
+      generateCode: "Buat kode penyiapan",
+      transportLimitedTitle: "Dibatasi demi keamanan jaringan",
+      transportLimitedHint:
+        "URL Gateway ini menggunakan ws:// tanpa enkripsi. Gunakan wss:// atau Tailscale Serve, lalu buat kode baru untuk akses penuh.",
       failed: "Tidak dapat membuat kode penyiapan.",
       qrAlt: "Kode QR pemasangan OpenClaw seluler",
       qrUnavailable: "QR tidak tersedia. Salin kode penyiapan sebagai gantinya.",
@@ -264,7 +274,8 @@ export const id: TranslationMap = {
     },
     inventory: {
       title: "Perangkat",
-      subtitle: "Satu baris per klien yang dipasangkan: status, peran, token.",
+      summaryConnected: "{connected} dari {total} terhubung",
+      summaryPending: "{count} menunggu persetujuan",
       cleanupStale: "Bersihkan {count} usang",
       pendingApproval: "Menunggu persetujuan",
       paired: "Dipasangkan",
@@ -379,6 +390,18 @@ export const id: TranslationMap = {
     title: "Worktree Terkelola",
     subtitle: "Checkout repositori terisolasi yang dimiliki oleh OpenClaw.",
     cleanNow: "Bersihkan sekarang",
+    cleanupTitle: "Pembersihan",
+    cleanupSubtitle:
+      "OpenClaw secara berkala menghapus worktree lama untuk mengosongkan ruang disk. Atur seberapa agresif pembersihan dijalankan.",
+    cleanupMaxCount: "Worktree maksimum",
+    cleanupMaxCountHelp:
+      "Jumlah maksimum worktree terkelola yang dipertahankan di seluruh repositori. Worktree yang lebih lama dibuatkan snapshot dan dihapus terlebih dahulu. Atur ke 0 untuk menonaktifkan batas jumlah.",
+    cleanupMaxSize: "Ukuran total maksimum (GB)",
+    cleanupMaxSizeHelp:
+      "Ukuran total maksimum dalam GB di seluruh worktree terkelola. Atur ke 0 untuk menonaktifkan batas ukuran.",
+    cleanupDecrease: "Kurangi {label}",
+    cleanupIncrease: "Tambah {label}",
+    cleanupSaveFailed: "Gagal menyimpan batas pembersihan.",
     name: "Nama",
     repo: "Repositori",
     branch: "Branch",
@@ -397,9 +420,17 @@ export const id: TranslationMap = {
     working: "Sedang bekerja…",
     ready: "Siap mengobrol",
     whatCanAgentDo: "Apa yang dapat dilakukan {name}?",
+    help: "Bantuan",
     getHelp: "Dapatkan bantuan",
     discord: "Komunitas Discord",
     viewChangelog: "Lihat log perubahan",
+    agentSettings: "Pengaturan agen",
+    filterAgents: "Cari agen…",
+    noAgentMatches: "Tidak ada agen yang cocok",
+  },
+  agentScope: {
+    label: "Cakupan agen",
+    allAgents: "Semua agen",
   },
   newSession: {
     title: "Sesi baru",
@@ -609,6 +640,8 @@ export const id: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Sematkan ke pengalih",
+    unpinFromSwitcher: "Lepaskan sematan dari pengalih",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -633,6 +666,18 @@ export const id: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identitas",
+      subtitle: "Nama, emoji, dan avatar yang ditampilkan di obrolan dan bilah samping.",
+      name: "Nama tampilan",
+      namePlaceholder: "Nama agen",
+      emoji: "Emoji",
+      chooseImage: "Pilih gambar…",
+      replaceImage: "Ganti gambar…",
+      imageUnusable:
+        "Gambar tersebut tidak dapat digunakan. Pilih file gambar berukuran hingga 2 MB.",
+      fileHint: "Agen dapat mengaturnya sendiri dengan mengedit IDENTITY.md di ruang kerja mereka.",
     },
     overview: {
       title: "Ikhtisar",
@@ -1077,6 +1122,7 @@ export const id: TranslationMap = {
     settingsView: "Tampilan pengaturan",
     simple: "Sederhana",
     advanced: "Lanjutan",
+    content: "Konten pengaturan",
     themeImported: "Mengimpor {name}.",
     themeRemoved: "Tema kustom dihapus.",
     channels: {
@@ -1432,6 +1478,8 @@ export const id: TranslationMap = {
     platforms: "Platform: {platforms}",
     installNamed: "Pasang {name}",
     notFound: "Skill tidak ditemukan.",
+    openDetails: "Buka detail {name}",
+    enabledNamed: "{name} diaktifkan",
     invalidLink: "Tautan ClawHub tidak valid",
     overview: "Ikhtisar",
     skillCard: "Kartu Skill",
@@ -1704,7 +1752,6 @@ export const id: TranslationMap = {
     filterAll: "Semua",
     filterIssues: "Masalah",
     filterLabel: "Filter plugin terinstal",
-    pulseLabel: "{enabled} diaktifkan, {disabled} dinonaktifkan, {issues} bermasalah",
     categoryChannels: "Saluran",
     categoryProviders: "Penyedia model",
     categoryMemory: "Memori",
@@ -3486,11 +3533,13 @@ export const id: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Status otomatisasi",
       all: "Semua",
       active: "Aktif",
       paused: "Dijeda",
     },
     list: {
+      viewLabel: "Tampilan otomatisasi",
       searchPlaceholder: "Cari tugas terjadwal",
       newTask: "Tugas baru",
       filters: "Filter",
@@ -3562,6 +3611,7 @@ export const id: TranslationMap = {
       nextWake: "Bangun berikutnya",
     },
     detail: {
+      tabsLabel: "Detail otomatisasi",
       newTitle: "Tugas terjadwal baru",
       newSubtitle: "Jelaskan apa yang harus dilakukan OpenClaw, lalu pilih kapan ia berjalan.",
       back: "Semua otomatisasi",

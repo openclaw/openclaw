@@ -46,7 +46,10 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 const log = createSubsystemLogger("models-auth-status");
 const apiKeyUsageStatusProviders = new Set<UsageProviderId>(["clawrouter", "deepseek"]);
 
-type ProviderUsageStatus = Pick<ProviderUsageSnapshot, "windows" | "summary" | "plan" | "billing">;
+type ProviderUsageStatus = Pick<
+  ProviderUsageSnapshot,
+  "windows" | "summary" | "plan" | "billing" | "accountEmail"
+>;
 
 /**
  * Models-auth status wire types. Mirrored in ui/src/ui/types.ts via an
@@ -89,6 +92,8 @@ export type ModelAuthStatusProvider = {
     summary?: string;
     plan?: string;
     billing?: ProviderUsageBilling[];
+    /** Account email the usage was fetched under, when known. */
+    accountEmail?: string;
   };
 };
 
@@ -301,6 +306,7 @@ function mapProvider(
             ...(usage.summary ? { summary: usage.summary } : {}),
             ...(usage.plan ? { plan: usage.plan } : {}),
             ...(usage.billing?.length ? { billing: usage.billing } : {}),
+            ...(usage.accountEmail ? { accountEmail: usage.accountEmail } : {}),
           }
         : undefined,
   };
@@ -520,6 +526,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               ...(snap.summary ? { summary: snap.summary } : {}),
               ...(snap.plan ? { plan: snap.plan } : {}),
               ...(snap.billing?.length ? { billing: snap.billing } : {}),
+              ...(snap.accountEmail ? { accountEmail: snap.accountEmail } : {}),
             });
           }
         } catch (err) {

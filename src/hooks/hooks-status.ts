@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
-import { hasBinary, isConfigPathTruthy } from "./config.js";
+import { hasBinary, isHookConfigPathTruthy } from "./config.js";
 import { isKnownInternalHookEventKey } from "./internal-hook-types.js";
 import {
   resolveHookConfig,
@@ -102,7 +102,7 @@ function buildHookStatus(
   const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));
   const isEnvSatisfied = (envName: string) =>
     Boolean(process.env[envName] || hookConfig?.env?.[envName]);
-  const isConfigSatisfied = (pathStr: string) => isConfigPathTruthy(config, pathStr);
+  const isConfigSatisfied = (pathStr: string) => isHookConfigPathTruthy(config, pathStr);
 
   const { emoji, homepage, required, missing, requirementsSatisfied, configChecks } =
     evaluateEntryRequirementsForCurrentPlatform({

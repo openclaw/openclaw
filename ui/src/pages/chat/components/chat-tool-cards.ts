@@ -2,10 +2,10 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
+import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
 import { icons, type IconName } from "../../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
-import "../../../components/mcp-app-view.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
@@ -228,6 +228,27 @@ function renderPreviewFrame(params: {
   );
 }
 
+const loadMcpAppView = () => import("../../../components/mcp-app-view.ts");
+
+function renderMcpAppView(params: {
+  sessionKey: string;
+  viewId: string;
+  height: number;
+  title: string;
+}) {
+  // Insert the tag before its chunk arrives. Native custom-element upgrade
+  // preserves these bound fields, so the first preview initializes after registration.
+  void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch((error: unknown) => {
+    console.error("[openclaw] failed to load MCP App view", error);
+  });
+  return html`<mcp-app-view
+    .sessionKey=${params.sessionKey}
+    .viewId=${params.viewId}
+    .height=${params.height}
+    .title=${params.title}
+  ></mcp-app-view>`;
+}
+
 export function renderToolPreview(
   preview: ToolPreview | undefined,
   surface: "chat_tool" | "chat_message" | "sidebar",
@@ -262,12 +283,12 @@ export function renderToolPreview(
       </div>
       <div class="chat-tool-card__preview-panel" data-side="canvas">
         ${preview.mcpApp
-          ? html`<mcp-app-view
-              .sessionKey=${options?.sessionKey ?? ""}
-              .viewId=${preview.mcpApp.viewId}
-              .height=${preview.preferredHeight ?? 600}
-              .title=${preview.title?.trim() || t("mcpApp.title")}
-            ></mcp-app-view>`
+          ? renderMcpAppView({
+              sessionKey: options?.sessionKey ?? "",
+              viewId: preview.mcpApp.viewId,
+              height: preview.preferredHeight ?? 600,
+              title: preview.title?.trim() || t("mcpApp.title"),
+            })
           : renderPreviewFrame({
               title: preview.title?.trim() || t("chat.toolCards.canvas"),
               src: resolveCanvasIframeUrl(

@@ -184,6 +184,7 @@ describe("discord live qa runtime", () => {
 
     expect(next.channels?.discord?.voice).toEqual({
       enabled: true,
+      mode: "stt-tts",
       autoJoin: [
         {
           guildId: "123456789012345678",

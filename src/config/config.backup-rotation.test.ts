@@ -235,4 +235,42 @@ describe("config backup rotation", () => {
       await expectPathMissing(`${configPath}.pre-update`);
     });
   });
+
+  it("retries snapshot after transient read and write errors (#105431)", async () => {
+    await withTempHome(async () => {
+      const content = JSON.stringify({ plugins: { installs: ["slack"] } });
+      const { existsSync } = await import("node:fs");
+      const rejectingReadFile = (async () => {
+        throw new Error("EIO: transient read error");
+      }) as typeof fs.readFile;
+      const rejectingWriteFile = (async () => {
+        throw new Error("ENOSPC: transient write error");
+      }) as typeof fs.writeFile;
+
+      for (const failingOperation of ["read", "write"] as const) {
+        const configPath = `${resolveConfigPathFromTempState()}.${failingOperation}`;
+        await fs.writeFile(configPath, content, { mode: 0o600 });
+
+        await createPreUpdateConfigSnapshot({
+          configPath,
+          fs: {
+            readFile: failingOperation === "read" ? rejectingReadFile : fs.readFile,
+            writeFile: failingOperation === "write" ? rejectingWriteFile : fs.writeFile,
+            existsSync,
+          },
+        });
+        await expectPathMissing(`${configPath}.pre-update`);
+
+        // The failed attempt must not suppress the next snapshot pass.
+        await createPreUpdateConfigSnapshot({
+          configPath,
+          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        });
+
+        const snapshotPath = `${configPath}.pre-update`;
+        await expectRegularFile(snapshotPath);
+        await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(content);
+      }
+    });
+  });
 });

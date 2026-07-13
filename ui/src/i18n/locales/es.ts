@@ -82,6 +82,7 @@ export const es: TranslationMap = {
     relink: "Volver a vincular",
     waitForScan: "Esperar escaneo",
     logout: "Cerrar sesión",
+    skipToMainContent: "Ir al contenido principal",
   },
   nativeLinkMenu: {
     label: "Acciones del enlace",
@@ -231,6 +232,16 @@ export const es: TranslationMap = {
       title: "OpenClaw móvil",
       subtitle: "Escanea este código QR en la app móvil para conectar un teléfono nuevo.",
       generating: "Creando un código de configuración seguro…",
+      accessTitle: "Acceso móvil",
+      fullAccess: "Acceso completo (recomendado)",
+      fullAccessHint:
+        "Nodo y controles completos del Gateway, incluidos los ajustes y las actualizaciones.",
+      limitedAccess: "Acceso limitado",
+      limitedAccessHint: "Nodo, chat y aprobaciones sin controles administrativos.",
+      generateCode: "Crear código de configuración",
+      transportLimitedTitle: "Limitado por seguridad de la red",
+      transportLimitedHint:
+        "Esta URL del Gateway usa texto sin cifrar mediante ws://. Usa wss:// o Tailscale Serve y, a continuación, crea un código nuevo para obtener acceso completo.",
       failed: "No se pudo crear un código de configuración.",
       qrAlt: "Código QR de vinculación de OpenClaw móvil",
       qrUnavailable: "QR no disponible. Copia el código de configuración en su lugar.",
@@ -265,7 +276,8 @@ export const es: TranslationMap = {
     },
     inventory: {
       title: "Dispositivos",
-      subtitle: "Una fila por cliente emparejado: estado, roles, tokens.",
+      summaryConnected: "{connected} de {total} conectados",
+      summaryPending: "{count} pendientes de aprobación",
       cleanupStale: "Limpiar {count} obsoletos",
       pendingApproval: "Pendiente de aprobación",
       paired: "Emparejado",
@@ -380,6 +392,18 @@ export const es: TranslationMap = {
     title: "Worktrees administrados",
     subtitle: "Checkouts de repositorios aislados propiedad de OpenClaw.",
     cleanNow: "Limpiar ahora",
+    cleanupTitle: "Limpieza",
+    cleanupSubtitle:
+      "OpenClaw elimina periódicamente los worktrees antiguos para liberar espacio en disco. Ajusta la intensidad de la limpieza.",
+    cleanupMaxCount: "Máximo de worktrees",
+    cleanupMaxCountHelp:
+      "Número máximo de worktrees administrados que se conservarán en todos los repositorios. Primero se crean instantáneas de los worktrees más antiguos y luego se eliminan. Establécelo en 0 para desactivar el límite de cantidad.",
+    cleanupMaxSize: "Tamaño total máximo (GB)",
+    cleanupMaxSizeHelp:
+      "Tamaño total máximo en GB de todos los worktrees administrados. Establécelo en 0 para desactivar el límite de tamaño.",
+    cleanupDecrease: "Reducir {label}",
+    cleanupIncrease: "Aumentar {label}",
+    cleanupSaveFailed: "No se pudieron guardar los límites de limpieza.",
     name: "Nombre",
     repo: "Repositorio",
     branch: "Rama",
@@ -398,9 +422,17 @@ export const es: TranslationMap = {
     working: "Procesando…",
     ready: "Listo para chatear",
     whatCanAgentDo: "¿Qué puede hacer {name}?",
+    help: "Ayuda",
     getHelp: "Obtener ayuda",
     discord: "Comunidad de Discord",
     viewChangelog: "Ver registro de cambios",
+    agentSettings: "Configuración del agente",
+    filterAgents: "Buscar agente…",
+    noAgentMatches: "No hay agentes coincidentes",
+  },
+  agentScope: {
+    label: "Ámbito del agente",
+    allAgents: "Todos los agentes",
   },
   newSession: {
     title: "Nueva sesión",
@@ -610,6 +642,8 @@ export const es: TranslationMap = {
     setDefault: "Set Default",
     alreadyDefaultTitle: "Already the default agent",
     setDefaultTitle: "Set as the default agent",
+    pinToSwitcher: "Fijar en el selector",
+    unpinFromSwitcher: "Desfijar del selector",
     selectTitle: "Select an agent",
     selectSubtitle: "Pick an agent to inspect its workspace and tools.",
     tabs: {
@@ -634,6 +668,18 @@ export const es: TranslationMap = {
       default: "Default",
       configurationSubtitle: "Workspace, identity, and model configuration.",
       schedulingSubtitle: "Workspace and scheduling targets.",
+    },
+    identity: {
+      title: "Identidad",
+      subtitle: "Nombre, emoji y avatar que se muestran en los chats y en la barra lateral.",
+      name: "Nombre para mostrar",
+      namePlaceholder: "Nombre del agente",
+      emoji: "Emoji",
+      chooseImage: "Elegir imagen…",
+      replaceImage: "Reemplazar imagen…",
+      imageUnusable: "No se puede usar esa imagen. Elige un archivo de imagen de hasta 2 MB.",
+      fileHint:
+        "Los agentes pueden configurar esto por sí mismos editando IDENTITY.md en su espacio de trabajo.",
     },
     overview: {
       title: "Resumen",
@@ -1082,6 +1128,7 @@ export const es: TranslationMap = {
     settingsView: "Vista de ajustes",
     simple: "Simple",
     advanced: "Avanzado",
+    content: "Contenido de la configuración",
     themeImported: "{name} importado.",
     themeRemoved: "Tema personalizado eliminado.",
     channels: {
@@ -1438,6 +1485,8 @@ export const es: TranslationMap = {
     platforms: "Plataformas: {platforms}",
     installNamed: "Instalar {name}",
     notFound: "Skill no encontrada.",
+    openDetails: "Abrir los detalles de {name}",
+    enabledNamed: "{name} habilitada",
     invalidLink: "Enlace de ClawHub no válido",
     overview: "Descripción general",
     skillCard: "Ficha de Skill",
@@ -1721,7 +1770,6 @@ export const es: TranslationMap = {
     filterAll: "Todos",
     filterIssues: "Problemas",
     filterLabel: "Filtrar plugins instalados",
-    pulseLabel: "{enabled} habilitados, {disabled} deshabilitados, {issues} con problemas",
     categoryChannels: "Canales",
     categoryProviders: "Proveedores de modelos",
     categoryMemory: "Memoria",
@@ -3514,11 +3562,13 @@ export const es: TranslationMap = {
   },
   cron: {
     tabs: {
+      filterLabel: "Estado de la automatización",
       all: "Todos",
       active: "Activa",
       paused: "En pausa",
     },
     list: {
+      viewLabel: "Vistas de automatización",
       searchPlaceholder: "Buscar tareas programadas",
       newTask: "Nueva tarea",
       filters: "Filtros",
@@ -3589,6 +3639,7 @@ export const es: TranslationMap = {
       nextWake: "Próxima activación",
     },
     detail: {
+      tabsLabel: "Detalles de la automatización",
       newTitle: "Nueva tarea programada",
       newSubtitle: "Describe lo que OpenClaw debe hacer y luego elige cuándo se ejecuta.",
       back: "Todas las automatizaciones",
