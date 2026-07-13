@@ -1,5 +1,6 @@
 // Packed Plugin Sdk Type Smoke script supports OpenClaw repository automation.
 import type { NodeSession } from "openclaw/plugin-sdk/gateway-runtime";
+import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 
 type PublicPluginSdkModules = [
   typeof import("openclaw/plugin-sdk"),
@@ -23,3 +24,15 @@ nodeSession.caps satisfies string[];
 nodeSession.declaredCommands satisfies string[];
 nodeSession.commands satisfies string[];
 nodeSession.connectedAtMs satisfies number;
+
+const unavailableCode = ErrorCodes.UNAVAILABLE;
+unavailableCode satisfies (typeof ErrorCodes)[keyof typeof ErrorCodes];
+
+const unavailable = errorShape(unavailableCode, "gateway unavailable", {
+  retryable: true,
+  retryAfterMs: 250,
+});
+
+unavailable.code satisfies string;
+unavailable.message satisfies string;
+unavailable.retryable satisfies boolean | undefined;
