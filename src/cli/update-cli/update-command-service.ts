@@ -253,7 +253,7 @@ export type PreManagedServiceStop = {
   windowsTaskAutoStartRecovery?: WindowsTaskAutoStartRecovery;
 };
 
-export type WindowsTaskAutoStartRecovery = {
+type WindowsTaskAutoStartRecovery = {
   suspended: Promise<boolean>;
   restore: () => Promise<void>;
   complete: () => void;

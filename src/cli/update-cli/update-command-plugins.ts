@@ -53,7 +53,7 @@ export type PostCorePluginUpdateResult = NonNullable<
   NonNullable<UpdateRunResult["postUpdate"]>["plugins"]
 >;
 
-export type MissingPluginInstallPayload = {
+type MissingPluginInstallPayload = {
   pluginId: string;
   installPath?: string;
   reason: "missing-install-path" | "missing-package-dir" | "missing-package-json";
