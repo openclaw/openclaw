@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AuditRow } from "./broker.js";
-import { buildStatus, readAuditRows } from "./cli.js";
+import { registerOnePasswordCommands } from "./cli.js";
 import type { OnePasswordConfig } from "./config.js";
 import { MemoryKeyedStore } from "./memory-store.test-support.js";
 
@@ -17,12 +17,70 @@ const config: OnePasswordConfig = {
   },
 };
 
-describe("1Password CLI output", () => {
-  it("status contains readiness and counts without token or item values", async () => {
-    const status = await buildStatus(config, {
+type CommandAction = (options: Record<string, unknown>) => void | Promise<void>;
+
+class TestCommand {
+  private readonly children = new Map<string, TestCommand>();
+  private handler: CommandAction | undefined;
+
+  command(name: string): TestCommand {
+    const key = name.split(/[ <]/u)[0] ?? name;
+    const child = new TestCommand();
+    this.children.set(key, child);
+    return child;
+  }
+
+  description(_value: string): TestCommand {
+    return this;
+  }
+
+  option(_flags: string, _description: string, _defaultValue?: string): TestCommand {
+    return this;
+  }
+
+  action<TOptions>(fn: (options: TOptions) => void | Promise<void>): TestCommand {
+    this.handler = fn as CommandAction;
+    return this;
+  }
+
+  child(name: string): TestCommand {
+    const child = this.children.get(name);
+    if (!child) {
+      throw new Error(`Missing test command: ${name}`);
+    }
+    return child;
+  }
+
+  async run(options: Record<string, unknown> = {}): Promise<void> {
+    if (!this.handler) {
+      throw new Error("Missing test command action");
+    }
+    await this.handler(options);
+  }
+}
+
+function setupCommands(auditStore = new MemoryKeyedStore<AuditRow>()) {
+  const program = new TestCommand();
+  const write = vi.fn<(message: string) => void>();
+  registerOnePasswordCommands({
+    program,
+    resolveConfig: () => config,
+    resolveOpClient: () => ({
       opBin: "/usr/local/bin/op",
       tokenFilePresent: async () => true,
-    });
+    }),
+    auditStore,
+    write,
+  });
+  return { onepassword: program.child("onepassword"), write };
+}
+
+describe("1Password CLI output", () => {
+  it("status contains readiness and counts without token or item values", async () => {
+    const { onepassword, write } = setupCommands();
+    await onepassword.child("status").run();
+    const status = JSON.parse(String(write.mock.calls[0]?.[0])) as Record<string, unknown>;
+
     expect(status).toEqual({
       tokenFilePresent: true,
       opBinaryResolved: true,
@@ -53,7 +111,10 @@ describe("1Password CLI output", () => {
       reason: `prefix-${"x".repeat(100)}`,
       outcome: "approved",
     });
-    const rows = await readAuditRows(store, 1);
+    const { onepassword, write } = setupCommands(store);
+    await onepassword.child("audit").run({ limit: "1" });
+    const rows = JSON.parse(String(write.mock.calls[0]?.[0])) as Array<Record<string, unknown>>;
+
     expect(rows).toEqual([
       {
         timestamp: "1970-01-01T00:00:02.000Z",

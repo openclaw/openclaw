@@ -14,7 +14,7 @@ import {
 import { OnePasswordError, type OnePasswordErrorCode } from "./errors.js";
 import type { OpClient, ResolvedSecret } from "./op-client.js";
 
-export type AuditOutcome =
+type AuditOutcome =
   | "auto"
   | "approved"
   | "grant"
@@ -57,12 +57,12 @@ type AuditInternalErrorCode =
 
 type AuditErrorCode = OnePasswordErrorCode | AuditInternalErrorCode;
 
-export type BrokerStores = {
+type BrokerStores = {
   audit: PluginStateKeyedStore<AuditRow>;
   grants: PluginStateKeyedStore<StandingGrant>;
 };
 
-export type BrokerOptions = {
+type BrokerOptions = {
   resolveConfig: () => OnePasswordConfig | undefined;
   opClient: Pick<OpClient, "getItem">;
   stores: BrokerStores;
@@ -97,7 +97,7 @@ type ParsedGet = {
   reason: string;
 };
 
-export type ToolInvocationContext = {
+type ToolInvocationContext = {
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
@@ -107,9 +107,9 @@ type ParsedList = {
   action: "list";
 };
 
-export type ParsedToolInput = ParsedGet | ParsedList;
+type ParsedToolInput = ParsedGet | ParsedList;
 
-export type ListedItem = {
+type ListedItem = {
   slug: string;
   description: string;
   policy: OnePasswordPolicy;
@@ -138,7 +138,7 @@ function internalError(code: AuditInternalErrorCode, message: string): BrokerErr
   return new BrokerError(code, message);
 }
 
-export function fingerprintOnePasswordTarget(item: OnePasswordItemConfig): string {
+function fingerprintOnePasswordTarget(item: OnePasswordItemConfig): string {
   return createHash("sha256")
     .update(JSON.stringify([item.vault, item.item, item.field]))
     .digest("hex");

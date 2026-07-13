@@ -7,18 +7,18 @@ import { OnePasswordError } from "./errors.js";
 
 const MAX_STDOUT_BYTES = 1024 * 1024;
 
-export type OpProcessResult = {
+type OpProcessResult = {
   stdout: string;
   stderr: string;
 };
 
-export type OpProcessOptions = {
+type OpProcessOptions = {
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
   maxBufferBytes: number;
 };
 
-export type OpProcessRunner = (
+type OpProcessRunner = (
   file: string,
   args: string[],
   options: OpProcessOptions,
@@ -30,7 +30,7 @@ export type ResolvedSecret = {
   fieldLabel: string;
 };
 
-export type OpClientOptions = {
+type OpClientOptions = {
   opBin?: string;
   tokenFile: string;
   timeoutMs: number;
@@ -89,10 +89,7 @@ function isExecutable(filePath: string): boolean {
   }
 }
 
-export function resolveOpBinary(
-  configuredPath: string | undefined,
-  pathEnv: string,
-): string | undefined {
+function resolveOpBinary(configuredPath: string | undefined, pathEnv: string): string | undefined {
   if (configuredPath) {
     return isExecutable(configuredPath) ? configuredPath : undefined;
   }

@@ -2,7 +2,7 @@ import path from "node:path";
 
 export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const MAX_REGISTERED_ITEMS = 32;
-export const MAX_DESCRIPTION_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 200;
 
 export type OnePasswordPolicy = "auto" | "approve" | "deny";
 

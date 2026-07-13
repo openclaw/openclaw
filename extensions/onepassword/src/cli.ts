@@ -10,7 +10,7 @@ type CommandLike = {
   action<TOptions>(fn: (options: TOptions) => void | Promise<void>): CommandLike;
 };
 
-export type OnePasswordCliContext = {
+type OnePasswordCliContext = {
   program: CommandLike;
   resolveConfig: () => OnePasswordConfig | undefined;
   resolveOpClient: () => Pick<OpClient, "opBin" | "tokenFilePresent">;
@@ -33,7 +33,7 @@ function truncateReason(reason: string): string {
   return reason.length <= 80 ? reason : `${reason.slice(0, 77)}...`;
 }
 
-export async function buildStatus(
+async function buildStatus(
   config: OnePasswordConfig | undefined,
   opClient: Pick<OpClient, "opBin" | "tokenFilePresent">,
 ) {
@@ -50,7 +50,7 @@ export async function buildStatus(
   };
 }
 
-export async function readAuditRows(auditStore: PluginStateKeyedStore<AuditRow>, limit: number) {
+async function readAuditRows(auditStore: PluginStateKeyedStore<AuditRow>, limit: number) {
   return (await auditStore.entries())
     .toSorted(
       (left, right) =>

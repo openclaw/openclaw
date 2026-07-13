@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_DESCRIPTION_LENGTH, MAX_REGISTERED_ITEMS, parseOnePasswordConfig } from "./config.js";
+import { MAX_REGISTERED_ITEMS, parseOnePasswordConfig } from "./config.js";
 
 describe("parseOnePasswordConfig", () => {
   it("rejects invalid slug grammar", () => {
@@ -61,9 +61,9 @@ describe("parseOnePasswordConfig", () => {
       parseOnePasswordConfig({
         vault: "Automation",
         items: {
-          token: { item: "Token", description: "x".repeat(MAX_DESCRIPTION_LENGTH + 1) },
+          token: { item: "Token", description: "x".repeat(201) },
         },
       }),
-    ).toThrow(`at most ${MAX_DESCRIPTION_LENGTH}`);
+    ).toThrow("at most 200");
   });
 });

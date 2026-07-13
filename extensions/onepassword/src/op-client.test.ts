@@ -3,7 +3,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OnePasswordError } from "./errors.js";
-import { OpClient, type OpProcessRunner } from "./op-client.js";
+import { OpClient } from "./op-client.js";
+
+type OpProcessRunner = NonNullable<ConstructorParameters<typeof OpClient>[0]["runner"]>;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
