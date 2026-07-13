@@ -161,6 +161,33 @@ describe("ensureTool", () => {
     expect(existsSync(destination)).toBe(false);
   });
 
+  it("rejects downloads with large Content-Length that would lose precision with Number()", async () => {
+    // "9007199254740993" is > Number.MAX_SAFE_INTEGER; Number() rounds it to
+    // 9007199254740992, losing precision. BigInt() preserves the exact value
+    // so the cap check is always correct.
+    const response = new Response("body", {
+      status: 200,
+      headers: { "content-length": "9007199254740993" },
+    });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://example.com/archive.tar.gz",
+    });
+    const destination = join(tempAgentDir!, "archive.tar.gz");
+    const { testing } = await import("./tools-manager.js");
+
+    await expect(
+      testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
+    ).rejects.toThrow("Download exceeds the 10-byte archive limit");
+
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(existsSync(destination)).toBe(false);
+  });
+
   it("rejects streamed bytes above the cap and removes the partial file", async () => {
     const response = new Response(
       new ReadableStream<Uint8Array>({

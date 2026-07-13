@@ -185,8 +185,7 @@ async function downloadFile(url: string, dest: string, maxBytes: number): Promis
     if (rawContentLength !== null) {
       const contentLength = rawContentLength.trim();
       if (CONTENT_LENGTH_RE.test(contentLength)) {
-        const declaredBytes = Number(contentLength);
-        if (!Number.isSafeInteger(declaredBytes) || declaredBytes > maxBytes) {
+        if (BigInt(contentLength) > BigInt(maxBytes)) {
           await cancelUnreadResponseBody(response);
           throw new Error(`Download exceeds the ${maxBytes}-byte archive limit`);
         }
