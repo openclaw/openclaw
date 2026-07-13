@@ -163,6 +163,26 @@ describe("downloadInboundMedia", () => {
       };
     }
 
+    it("negative control: never-yielding stream without idle wrap stays pending", async () => {
+      // Pre-fix shape: saveMediaStream's unbounded `for await` on a stalled
+      // Baileys stream never settles. Prove the hang before asserting the wrap.
+      const consume = (async () => {
+        for await (const _chunk of neverYieldingStream()) {
+          void _chunk;
+        }
+      })();
+      const outcome = await Promise.race([
+        consume.then(() => "resolved" as const),
+        new Promise<"still-pending">((resolve) => {
+          setTimeout(() => resolve("still-pending"), 150);
+        }),
+      ]);
+      expect(outcome).toBe("still-pending");
+      console.log(
+        `[whatsapp media idle negative control] outcome=${outcome} wait_ms=150 without_idle_wrap=true`,
+      );
+    });
+
     function delayedStream(payload: Buffer, delayMs: number): AsyncIterable<Buffer> {
       let yielded = false;
       return {
