@@ -523,6 +523,25 @@ describe("models.authStatus", () => {
     });
   });
 
+  it("does not report a local no-auth marker as a configured API key", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      models: {
+        providers: {
+          ollama: { ...Object.fromEntries([["apiKey", "ollama-local"]]) },
+        },
+      },
+    });
+    mocks.buildAuthHealthSummary.mockReturnValue({
+      now: 0,
+      warnAfterMs: 0,
+      profiles: [],
+      providers: [{ provider: "ollama", status: "missing", profiles: [] }],
+    });
+
+    const provider = await firstAuthStatusProvider();
+    expect(provider?.apiKey).toBeUndefined();
+  });
+
   it("does not duplicate profile references as config API keys", async () => {
     const profileId = "anthropic:saved";
     mocks.getRuntimeConfig.mockReturnValue({

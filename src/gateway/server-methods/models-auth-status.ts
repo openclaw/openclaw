@@ -31,7 +31,10 @@ import {
   resolveProviderEnvAuthLookupMaps,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveProviderEnvAuthEvidence } from "../../agents/model-auth-env.js";
-import { isKnownEnvApiKeyMarker } from "../../agents/model-auth-markers.js";
+import {
+  isKnownEnvApiKeyMarker,
+  listKnownNonSecretApiKeyMarkers,
+} from "../../agents/model-auth-markers.js";
 import {
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
@@ -445,6 +448,12 @@ function resolveProviderApiKeys(
         if (available) {
           const rawKey =
             typeof providerConfig?.apiKey === "string" ? providerConfig.apiKey.trim() : "";
+          // Local no-auth placeholders (e.g. the ollama-local marker) resolve to
+          // a usable value but represent no credential; do not advertise them as
+          // a configured API key or the provider would render as static.
+          if (rawKey && listKnownNonSecretApiKeyMarkers().includes(rawKey)) {
+            continue;
+          }
           const envVar =
             ref?.source === "env"
               ? ref.id
