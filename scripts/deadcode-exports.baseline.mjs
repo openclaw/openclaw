@@ -939,7 +939,6 @@ export const KNIP_UNUSED_EXPORT_BASELINE = [
   "src/auto-reply/reply/queue/cleanup.ts: testing",
   "src/auto-reply/reply/queue/drain.ts: resolveFollowupAuthorizationKey",
   "src/auto-reply/reply/queue/enqueue.ts: resetRecentQueuedMessageIdDedupe",
-  "src/auto-reply/reply/reply-run-finalization-lease.ts: REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS (replyRunSettle)",
   "src/auto-reply/reply/reply-run-registry.ts: testing",
   "src/auto-reply/reply/stage-sandbox-media.ts: appendScpStderrTail",
   "src/auto-reply/reply/stage-sandbox-media.ts: SCP_STDERR_TAIL_CHARS",
