@@ -11,6 +11,7 @@
 
 import type { TemplateResult } from "lit";
 import type { ApplicationConfigCapability } from "../../../app/config.ts";
+import type { PromptDispatchOutcome } from "../bridge.ts";
 import type { WorkspaceWidget } from "../types.ts";
 
 /** Ambient context a builtin may need beyond its own binding value. */
@@ -22,6 +23,7 @@ export type BuiltinWidgetContext = {
     ApplicationConfigCapability["current"],
     "embedSandboxMode" | "allowExternalEmbedUrls"
   >;
+  dispatchPrompt?: (params: { widgetKey: string; text: string }) => Promise<PromptDispatchOutcome>;
 };
 
 /** A builtin widget renderer: pure, side-effect-free, throws only on real bugs. */

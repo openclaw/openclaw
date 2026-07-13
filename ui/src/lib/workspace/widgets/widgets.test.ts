@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { WorkspaceWidget } from "../types.ts";
+import { renderActionForm } from "./action-form.ts";
 import { mapActivity, renderActivity } from "./activity.ts";
 import { mapCron, renderCron } from "./cron.ts";
 import { evaluateEmbedUrl, renderIframeEmbed } from "./iframe-embed.ts";
@@ -27,6 +28,44 @@ function widget(overrides: Partial<WorkspaceWidget> = {}): WorkspaceWidget {
     ...overrides,
   };
 }
+
+describe("action-form", () => {
+  it("interpolates declared slots once and bounds typed values", async () => {
+    const sent: string[] = [];
+    const container = renderToContainer(
+      renderActionForm(
+        widget({
+          kind: "builtin:action-form",
+          props: {
+            template: "Run {topic} {count}",
+            fields: [
+              { name: "topic", label: "Topic", type: "text", maxLength: 8 },
+              { name: "count", label: "Count", type: "number" },
+            ],
+          },
+        }),
+        undefined,
+        {
+          ...STRICT_EMBED,
+          dispatchPrompt: async ({ text }) => {
+            sent.push(text);
+            return "sent";
+          },
+        },
+      ),
+    );
+    const topic = container.querySelector<HTMLInputElement>('input[name="topic"]')!;
+    const count = container.querySelector<HTMLInputElement>('input[name="count"]')!;
+    topic.value = "{count}!!";
+    count.value = "3";
+    container
+      .querySelector<HTMLFormElement>("form")!
+      .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    expect(sent).toEqual(["Run {count}! 3"]);
+    expect(topic.maxLength).toBe(8);
+  });
+});
 
 function renderToContainer(template: unknown): HTMLElement {
   const container = document.createElement("div");

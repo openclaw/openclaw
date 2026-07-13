@@ -42,6 +42,25 @@ const DIR_MODE = 0o700;
 const FILE_MODE = 0o600;
 const BUSY_TIMEOUT_MS = 5000;
 
+function sweepExpiredEphemeral(doc: WorkspaceDoc, nowMs: number): WorkspaceDoc | null {
+  let removed = false;
+  const tabs = doc.tabs.map((tab) => {
+    const widgets = tab.widgets.filter((widget) => {
+      if (!widget.ephemeral) {
+        return true;
+      }
+      const expiry = Date.parse(widget.ephemeral.expiresAt);
+      if (Number.isNaN(expiry) || expiry > nowMs) {
+        return true;
+      }
+      removed = true;
+      return false;
+    });
+    return widgets.length === tab.widgets.length ? tab : { ...tab, widgets };
+  });
+  return removed ? { ...doc, tabs } : null;
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS workspace (
   id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -120,8 +139,12 @@ export class WorkspaceStore {
    * every request without re-parsing a 256 KB document.
    */
   private cached: WorkspaceDoc | null = null;
+  private suppressSweep = false;
 
-  constructor(options: { stateDir?: string } = {}) {
+  private readonly now: () => number;
+
+  constructor(options: { stateDir?: string; now?: () => number } = {}) {
+    this.now = options.now ?? Date.now;
     this.stateDir = options.stateDir ?? resolveStateDir();
     this.workspaceDir = path.join(this.stateDir, "workspaces");
     this.dbPath = path.join(this.workspaceDir, "workspaces.sqlite");
@@ -142,9 +165,22 @@ export class WorkspaceStore {
     this.db.close();
   }
 
+  private sweepOnRead(doc: WorkspaceDoc): WorkspaceDoc {
+    const swept = this.suppressSweep ? null : sweepExpiredEphemeral(doc, this.now());
+    if (!swept) {
+      return structuredClone(doc);
+    }
+    this.suppressSweep = true;
+    try {
+      return this.transact((current) => sweepExpiredEphemeral(current, this.now()) ?? current).doc;
+    } finally {
+      this.suppressSweep = false;
+    }
+  }
+
   read(): WorkspaceDoc {
     if (this.cached) {
-      return structuredClone(this.cached);
+      return this.sweepOnRead(this.cached);
     }
     const row = this.db.prepare("SELECT doc FROM workspace WHERE id = 1").get() as
       | { doc: string }
@@ -156,7 +192,7 @@ export class WorkspaceStore {
     }
     const doc = validateWorkspaceDoc(JSON.parse(row.doc));
     this.cached = doc;
-    return structuredClone(doc);
+    return this.sweepOnRead(doc);
   }
 
   /** Registry entry for one custom widget, or null when it was never scaffolded. */

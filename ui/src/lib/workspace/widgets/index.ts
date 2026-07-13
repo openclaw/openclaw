@@ -4,6 +4,7 @@
 // one entry here; the plugin schema's BUILTIN_KIND_PATTERN must list the same
 // names (extensions/workspaces/src/schema.ts).
 
+import { renderActionForm } from "./action-form.ts";
 import { renderActivity } from "./activity.ts";
 import { renderCron } from "./cron.ts";
 import { renderIframeEmbed } from "./iframe-embed.ts";
@@ -25,6 +26,7 @@ export const BUILTIN_WIDGET_RENDERERS: Record<string, BuiltinWidgetRenderer> = {
   cron: (widget, value) => renderCron(widget, value),
   instances: (widget, value) => renderInstances(widget, value),
   activity: (widget, value) => renderActivity(widget, value),
+  "action-form": renderActionForm,
 };
 
 export function getBuiltinRenderer(kind: string): BuiltinWidgetRenderer | undefined {

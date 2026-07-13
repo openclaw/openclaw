@@ -16,6 +16,8 @@ import {
   type WorkspaceWidgetCellCallbacks,
 } from "../../components/workspace-widget-cell.ts";
 import { t } from "../../i18n/index.ts";
+import { generateUUID } from "../../lib/uuid.ts";
+import { dispatchRateLimitedPrompt } from "../../lib/workspace/bridge.ts";
 import {
   beginDrag,
   collides,
@@ -42,6 +44,7 @@ import {
   moveWidgetToTab,
   orderedTabs,
   removeWidgetFromTab,
+  pinWidget,
   resolveActiveSlug,
   registerActiveDrag,
   resolveBinding,
@@ -568,6 +571,23 @@ function renderGrid(
   const builtinContext: BuiltinWidgetContext = {
     basePath: props.basePath ?? "",
     embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
+    dispatchPrompt: ({ widgetKey, text }) =>
+      dispatchRateLimitedPrompt({
+        widgetKey,
+        text,
+        confirmPrompt: async (prompt) => typeof window !== "undefined" && window.confirm(prompt),
+        sendPrompt: async (message) => {
+          if (!props.client) {
+            throw new Error("Not connected.");
+          }
+          await props.client.request("chat.send", {
+            sessionKey: props.sessionKey ?? "main",
+            message,
+            deliver: false,
+            idempotencyKey: generateUUID(),
+          });
+        },
+      }),
   };
   const rows = gridRowCount(tab.widgets);
   const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;
@@ -712,6 +732,10 @@ function makeCallbacks(
     onRemove: (widget) => {
       viewState.openMenuWidgetId = null;
       void removeWidgetFromTab(state, props.client, { slug: tab.slug, widgetId: widget.id });
+    },
+    onPin: (widget) => {
+      viewState.openMenuWidgetId = null;
+      void pinWidget(state, props.client, { slug: tab.slug, widgetId: widget.id });
     },
     onEditTitle: (widget) => {
       viewState.openMenuWidgetId = null;

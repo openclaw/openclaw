@@ -108,6 +108,36 @@ export function resetPromptRateStatesForTest(): void {
   promptRateStates.clear();
 }
 
+export type PromptDispatchOutcome = "sent" | "declined" | "rate_limited";
+
+export async function dispatchRateLimitedPrompt(params: {
+  widgetKey: string;
+  text: string;
+  confirmPrompt: (text: string) => Promise<boolean>;
+  sendPrompt: (text: string) => Promise<void>;
+  now?: () => number;
+}): Promise<PromptDispatchOutcome> {
+  const now = params.now ?? Date.now;
+  const state = getPromptRateState(params.widgetKey);
+  state.timestamps = state.timestamps.filter(
+    (timestamp) => timestamp > now() - PROMPT_RATE_WINDOW_MS,
+  );
+  if (state.inFlight || state.timestamps.length >= PROMPT_RATE_MAX) {
+    return "rate_limited";
+  }
+  state.inFlight = true;
+  try {
+    if (!(await params.confirmPrompt(params.text))) {
+      return "declined";
+    }
+    state.timestamps.push(now());
+    await params.sendPrompt(params.text);
+    return "sent";
+  } finally {
+    state.inFlight = false;
+  }
+}
+
 const INBOUND_TYPES = new Set<WidgetInboundType>([
   "workspace:ready",
   "workspace:getData",
@@ -145,7 +175,6 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
   let disposed = false;
   // Rate-limit state is keyed by the widget NAME (stable identity), so it persists
   // across bridge re-instantiation when the iframe is recreated.
-  const rateState = getPromptRateState(deps.manifest.name);
   const pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
   function error(code: WidgetErrorCode, message: string, requestId?: string): void {
@@ -217,31 +246,26 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
     }
     // Rate limit: at most one in-flight prompt and 10 per rolling minute, keyed by
     // widget name so a remount cannot reset the budget.
-    const cutoff = now() - PROMPT_RATE_WINDOW_MS;
-    rateState.timestamps = rateState.timestamps.filter((ts) => ts > cutoff);
-    if (rateState.inFlight || rateState.timestamps.length >= PROMPT_RATE_MAX) {
-      error("rate_limited", "prompt send rate limit exceeded", requestId);
-      return;
-    }
-    rateState.inFlight = true;
     try {
-      const confirmed = await deps.confirmPrompt(text);
+      const outcome = await dispatchRateLimitedPrompt({
+        widgetKey: deps.manifest.name,
+        text,
+        confirmPrompt: async (prompt) => (await deps.confirmPrompt(prompt)) && !disposed,
+        sendPrompt: deps.sendPrompt,
+        now,
+      });
       if (disposed) {
         return;
       }
-      if (!confirmed) {
-        // Deny path sends NOTHING.
+      if (outcome === "rate_limited") {
+        error("rate_limited", "prompt send rate limit exceeded", requestId);
+      } else if (outcome === "declined") {
         error("prompt_declined", "operator declined the prompt", requestId);
-        return;
       }
-      rateState.timestamps.push(now());
-      await deps.sendPrompt(text);
     } catch (err) {
       if (!disposed) {
         error("resolve_failed", err instanceof Error ? err.message : String(err), requestId);
       }
-    } finally {
-      rateState.inFlight = false;
     }
   }
 
@@ -326,7 +350,7 @@ export function createWidgetBridge(deps: WidgetBridgeDeps): WidgetBridge {
       // Release the in-flight lock so a remount can send again, but PRESERVE the
       // rolling-window timestamps — clearing them would reopen the very reset hole
       // this state exists to close.
-      rateState.inFlight = false;
+      getPromptRateState(deps.manifest.name).inFlight = false;
     },
   };
 }

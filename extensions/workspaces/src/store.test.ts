@@ -16,6 +16,20 @@ async function withStore<T>(run: (store: WorkspaceStore) => Promise<T> | T): Pro
   }
 }
 
+async function withTimedStore<T>(
+  now: () => number,
+  run: (store: WorkspaceStore) => Promise<T> | T,
+): Promise<T> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-"));
+  const store = new WorkspaceStore({ stateDir, now });
+  try {
+    return await run(store);
+  } finally {
+    store.close();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
+
 /** A doc carrying one scaffolded (pending) custom widget in the registry. */
 function docWithPendingWidget(store: WorkspaceStore): WorkspaceDoc {
   return store.mutate(
@@ -27,6 +41,59 @@ function docWithPendingWidget(store: WorkspaceStore): WorkspaceDoc {
 }
 
 describe("WorkspaceStore", () => {
+  it("sweeps a widget after it expires even when the document was cached", async () => {
+    let now = Date.parse("2026-07-13T00:00:00Z");
+    await withTimedStore(
+      () => now,
+      (store) => {
+        store.mutate(
+          (draft) => {
+            draft.tabs[0]!.widgets.push(
+              {
+                id: "temporary",
+                kind: "builtin:markdown",
+                grid: { x: 0, y: 2, w: 4, h: 2 },
+                collapsed: false,
+                hidden: false,
+                createdBy: "agent:main",
+                ephemeral: { expiresAt: "2026-07-14T00:00:00Z" },
+              },
+              {
+                id: "future",
+                kind: "builtin:markdown",
+                grid: { x: 4, y: 2, w: 4, h: 2 },
+                collapsed: false,
+                hidden: false,
+                createdBy: "agent:main",
+                ephemeral: { expiresAt: "2026-08-01T00:00:00Z" },
+              },
+              {
+                id: "pinned",
+                kind: "builtin:markdown",
+                grid: { x: 8, y: 2, w: 4, h: 2 },
+                collapsed: false,
+                hidden: false,
+                createdBy: "agent:main",
+              },
+            );
+          },
+          { actor: "agent:main" },
+        );
+        expect(store.read().tabs[0]?.widgets.some((widget) => widget.id === "temporary")).toBe(
+          true,
+        );
+        now = Date.parse("2026-07-15T00:00:00Z");
+        expect(
+          store
+            .read()
+            .tabs[0]?.widgets.filter((widget) =>
+              ["temporary", "future", "pinned"].includes(widget.id),
+            )
+            .map((widget) => widget.id),
+        ).toEqual(["future", "pinned"]);
+      },
+    );
+  });
   it("seeds the default workspace on first read", async () => {
     await withStore((store) => {
       const doc = store.read();

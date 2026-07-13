@@ -14,6 +14,23 @@ function expectInvalid(mutator: (doc: WorkspaceDoc) => void, message: string) {
 }
 
 describe("Workspaces document schema", () => {
+  it("validates temporary expiry and bounded action-form slots", () => {
+    const doc = validDoc();
+    doc.tabs[0]!.widgets[0] = {
+      ...doc.tabs[0]!.widgets[0]!,
+      kind: "builtin:action-form",
+      props: {
+        template: "Summarize {topic}",
+        fields: [{ name: "topic", label: "Topic", type: "text" }],
+      },
+      ephemeral: { expiresAt: "2026-07-14T00:00:00Z" },
+    };
+    expect(validateWorkspaceDoc(doc).tabs[0]?.widgets[0]?.ephemeral?.expiresAt).toBe(
+      "2026-07-14T00:00:00Z",
+    );
+    (doc.tabs[0]!.widgets[0]!.props as { template: string }).template = "Use {undeclared}";
+    expect(() => validateWorkspaceDoc(doc)).toThrow("unknown field");
+  });
   it("accepts the default workspace seed", () => {
     expect(validateWorkspaceDoc(validDoc())).toEqual(validDoc());
   });

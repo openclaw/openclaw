@@ -26,6 +26,7 @@ export type WorkspaceWidgetCellCallbacks = {
   onRemove: (widget: WorkspaceWidget) => void;
   onEditTitle: (widget: WorkspaceWidget) => void;
   onMoveToTab: (widget: WorkspaceWidget) => void;
+  onPin: (widget: WorkspaceWidget) => void;
   onMovePointerDown: (widget: WorkspaceWidget, event: PointerEvent) => void;
   onResizePointerDown: (widget: WorkspaceWidget, event: PointerEvent) => void;
   onKeyboardNudge: (
@@ -94,6 +95,17 @@ function renderMenu(
 ): TemplateResult {
   return html`
     <div class="workspace-widget__menu" role="menu">
+      ${widget.ephemeral
+        ? html`<button
+            class="workspace-widget__menu-item"
+            type="button"
+            role="menuitem"
+            data-test-id="workspace-widget-pin"
+            @click=${() => callbacks.onPin(widget)}
+          >
+            Pin
+          </button>`
+        : nothing}
       <button
         class="workspace-widget__menu-item"
         type="button"
@@ -308,6 +320,11 @@ export function renderWidgetCell(props: WorkspaceWidgetCellProps): TemplateResul
           >${displayWidgetTitle(widget.title)}</span
         >
         ${renderProvenanceChip(widget)}
+        ${widget.ephemeral
+          ? html`<span class="workspace-widget__ephemeral" data-test-id="workspace-widget-ephemeral"
+              >Temporary</span
+            >`
+          : nothing}
         <span
           class="workspace-widget__handle"
           role="button"
