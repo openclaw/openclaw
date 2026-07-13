@@ -86,7 +86,7 @@ export function renderActionForm(
     const values: Record<string, string> = {};
     for (const field of model.fields) {
       const control = form.elements.namedItem(field.name);
-      values[field.name] = control && "value" in control ? String(control.value) : "";
+      values[field.name] = control && "value" in control ? control.value : "";
     }
     const text = buildActionFormPrompt(model, values);
     if (text.trim()) {
