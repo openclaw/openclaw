@@ -1,8 +1,8 @@
 /** Test-only plugin status and registry fixture builders. */
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
-import { createPluginRecord } from "./status.test-helpers.js";
 import type { PluginCompatibilityNotice } from "./status.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 import type { PluginHookName } from "./types.js";
 
 export { createPluginRecord };

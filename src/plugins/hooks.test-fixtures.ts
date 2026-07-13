@@ -1,9 +1,6 @@
 /** Test-only helpers for exercising plugin hook behavior. */
 import { createHookRunner } from "./hooks.js";
-import {
-  addTestHook,
-  createMockPluginRegistry,
-} from "./hooks.test-helpers.js";
+import { addTestHook, createMockPluginRegistry } from "./hooks.test-helpers.js";
 import type { PluginRegistry } from "./registry.js";
 import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
 
