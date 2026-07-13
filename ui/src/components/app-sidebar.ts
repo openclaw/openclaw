@@ -939,7 +939,10 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private visibleSessionRowsInOrder(): SidebarRecentSession[] {
     const navigationState = this.getSessionNavigationState();
     const sections = groupSidebarSessionRows(
-      limitSidebarSessionRows(navigationState.visibleSessions, this.visibleSessionLimit),
+      limitSidebarSessionRows(
+        this.selectedAgentSessionRows(navigationState),
+        this.visibleSessionLimit,
+      ),
       {
         grouping: this.sessionsGrouping,
         knownGroups: this.sessionsGrouping === "category" ? this.knownSessionGroups() : undefined,
@@ -2600,6 +2603,29 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     `;
   }
 
+  /** While a chip switch's refresh is in flight, the loaded result still holds
+      the previous agent; render the target agent's cached rows instead of
+      flashing an empty list. Converges once the refreshed list publishes. */
+  private selectedAgentSessionRows(
+    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
+  ): SidebarRecentSession[] {
+    const selected = normalizeAgentId(navigationState.selectedAgentId);
+    if (normalizeAgentId(this.sessionsAgentId ?? "") === selected) {
+      return navigationState.visibleSessions;
+    }
+    const cached = this.sessionRowsByAgent[selected] ?? [];
+    return filterVisibleSessionRows(cached, {
+      agentId: selected,
+      defaultAgentId: resolveUiDefaultAgentId({
+        agentsList: this.context?.agents.state.agentsList,
+        hello: this.context?.gateway.snapshot.hello,
+      }),
+      filterByAgent: true,
+    })
+      .toSorted(this.compareSidebarSessionRows)
+      .map(navigationState.toSidebarSession);
+  }
+
   private agentUnreadCount(agentId: string): number {
     const rows = this.sessionRowsByAgent[normalizeAgentId(agentId)] ?? [];
     return rows.filter((row) => row.unread === true && row.archived !== true).length;
@@ -2680,7 +2706,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private renderSessions() {
     const navigationState = this.getSessionNavigationState();
-    const { visibleSessions, newSessionDisabled, newSessionTitle } = navigationState;
+    const { newSessionDisabled, newSessionTitle } = navigationState;
+    const visibleSessions = this.selectedAgentSessionRows(navigationState);
     const expandedAgentId = this.expandedAgentId();
     return html`
       <section class="sidebar-sessions">

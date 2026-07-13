@@ -49,6 +49,7 @@ if (!customElements.get(PROVIDER_ELEMENT_NAME)) {
 type SidebarLifecycleState = HTMLElement & {
   connected: boolean;
   canPairDevice: boolean;
+  sessionKey: string;
   onNavigate: (routeId: string, options?: { search?: string }) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
@@ -343,7 +344,15 @@ describe("AppSidebar agent chip", () => {
         path: "",
         count: 1,
         defaults,
-        sessions: [{ key: "agent:research:one", kind: "direct", updatedAt: 3, unread: true }],
+        sessions: [
+          {
+            key: "agent:research:one",
+            kind: "direct",
+            label: "Research task",
+            updatedAt: 3,
+            unread: true,
+          },
+        ],
       },
       agentId: "research",
     });
@@ -363,6 +372,14 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(1);
     expect(sidebar.querySelector(".sidebar-agent-chip__menu-unread")).not.toBeNull();
+
+    // Mid-switch (route agent != loaded result agent) the list renders the
+    // target agent's cached rows instead of flashing empty until refresh.
+    sidebar.sessionKey = "agent:research:one";
+    await sidebar.updateComplete;
+    const rows = [...sidebar.querySelectorAll(".sidebar-recent-session")];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.textContent).toContain("Research task");
   });
 
   it("opens the footer menu with agent switching and folded-in utilities", async () => {
