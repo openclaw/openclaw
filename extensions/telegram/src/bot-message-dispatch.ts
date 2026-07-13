@@ -1018,7 +1018,6 @@ export const dispatchTelegramMessage = async ({
   const progressSummaryStartedAt = Date.now();
   const progressSummary = createTelegramProgressSummaryTracker();
   let progressSummaryDelivered = false;
-  let progressHeadlineActive = false;
   const progressDraft = createChannelProgressDraftCompositor({
     entry: telegramCfg,
     mode: streamMode,
@@ -1026,8 +1025,9 @@ export const dispatchTelegramMessage = async ({
     seed: progressSeed,
     formatLine: (text) => {
       // Status headlines carry model Markdown. Tool lines keep their compact
-      // code formatting when no headline owns the status slot.
-      return progressHeadlineActive ? text : formatTelegramProgressLine(text);
+      // code formatting when no headline owns the status slot. Read compositor
+      // state at render time so the first preamble renders as a headline.
+      return progressDraft.hasStatusHeadline ? text : formatTelegramProgressLine(text);
     },
     reasoningGate: streamReasoningInProgressDraft,
     // Distinguish the streamed lanes in the window the way Discord does: 🧠
@@ -1047,7 +1047,7 @@ export const dispatchTelegramMessage = async ({
           streamText,
           options?.lines ?? [],
           telegramCfg.richMessages === true,
-          progressHeadlineActive,
+          progressDraft.hasStatusHeadline,
         ),
       );
       if (options?.flush) {
@@ -1116,11 +1116,9 @@ export const dispatchTelegramMessage = async ({
     progressDraft.markFinalReplyDelivered();
   };
   const resetProgressDraftState = () => {
-    progressHeadlineActive = false;
     progressDraft.reset();
   };
   const suppressProgressDraftState = () => {
-    progressHeadlineActive = false;
     progressDraft.suppress();
   };
   let splitReasoningOnNextStream = false;
@@ -2722,7 +2720,6 @@ export const dispatchTelegramMessage = async ({
                       }
                       if (streamMode === "progress") {
                         await progressDraft.pushPreambleHeadline(payload.progressText);
-                        progressHeadlineActive = progressDraft.hasStatusHeadline;
                       }
                       if (streamMode === "progress" && progressDraft.commentaryProgressEnabled) {
                         // Only the opt-in commentary lane contributes receipt notes;

@@ -5454,6 +5454,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("renders the headline immediately when the preamble arrives after tool progress", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      // The first valid preamble after the draft opened must render as the
+      // status headline in the same push, not wait for another progress event.
+      await replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "preamble-1",
+        progressText: "Checking recent context",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: { mode: "progress", progress: { label: "Shelling" } },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\nChecking recent context",
+        "<b>Shelling</b>\nChecking recent context",
+      ),
+    );
+  });
+
   it("keeps the progress draft label when tool progress lines are hidden", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
