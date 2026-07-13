@@ -493,9 +493,17 @@ export async function runWorkerEmbeddedTurn(
       pendingTranscriptMessages.splice(0, batch.length);
     }
   };
-  const withSessionWriteLock = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-    const result = await operation();
-    await flushTranscript();
+  let sessionWriteQueue: Promise<unknown> = Promise.resolve();
+  const withSessionWriteLock = <T>(operation: () => Promise<T> | T): Promise<T> => {
+    const result = sessionWriteQueue.then(async () => {
+      const value = await operation();
+      await flushTranscript();
+      return value;
+    });
+    sessionWriteQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
     return result;
   };
 
@@ -785,9 +793,14 @@ export async function runWorkerEmbeddedTurn(
     }
   }
 
+  let finalTranscriptFailure: Error | undefined;
   try {
     if (!params.signal?.aborted) {
-      await flushTranscript();
+      try {
+        await withSessionWriteLock(() => undefined);
+      } catch (error) {
+        finalTranscriptFailure = toError(error, "Worker transcript flush failed.");
+      }
       await flushLive();
     }
   } finally {
@@ -799,8 +812,8 @@ export async function runWorkerEmbeddedTurn(
   if (runFailure !== undefined) {
     throw runFailure;
   }
-  if (liveFailure !== undefined) {
-    throw liveFailure;
+  if (finalTranscriptFailure !== undefined) {
+    throw finalTranscriptFailure;
   }
 
   return {
