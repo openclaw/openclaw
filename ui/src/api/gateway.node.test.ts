@@ -1566,11 +1566,13 @@ describe("GatewayBrowserClient", () => {
   it("reports willRetry=false on credential rejections so the UI can fall back to the login gate", async () => {
     useNodeFakeTimers();
     const onClose = vi.fn();
+    const onConnectTiming = vi.fn();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       password: "wrong-password",
       onClose,
+      onConnectTiming,
     });
 
     const { ws, connectFrame } = await startConnect(client);
@@ -1589,6 +1591,10 @@ describe("GatewayBrowserClient", () => {
 
     const close = requireFirstMockArg(onClose, "close");
     expect(close.willRetry).toBe(false);
+    expect(connectTimingPayloads(onConnectTiming).at(-1)).toMatchObject({
+      phase: "failed",
+      errorCode: "INVALID_REQUEST",
+    });
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 

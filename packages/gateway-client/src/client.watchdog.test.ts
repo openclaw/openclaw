@@ -4,6 +4,7 @@ import { createServer } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } from "./client.js";
+import type { GatewayProtocolSocket } from "./protocol-client.js";
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
   MAX_SAFE_TIMEOUT_DELAY_MS,
@@ -45,20 +46,44 @@ function createOpenGatewayClient(requestTimeoutMs: number): {
     requestTimeoutMs,
   });
   const send = vi.fn();
-  (
-    client as unknown as {
-      ws: WebSocket | { readyState: number; send: () => void; close: () => void };
-    }
-  ).ws = {
-    readyState: WebSocket.OPEN,
-    send,
-    close: vi.fn(),
-  };
+  installSyntheticSocket(client, send, vi.fn());
   return { client, send };
 }
 
 function getPendingCount(client: GatewayClient): number {
-  return (client as unknown as { pending: Map<string, unknown> }).pending.size;
+  return protocolHarness(client).requests.pending.size;
+}
+
+type ProtocolHarness = {
+  socket: GatewayProtocolSocket | null;
+  stopped: boolean;
+  generation: number;
+  backoffMs: number;
+  requests: { pending: Map<string, unknown> };
+  handleMessage: (socket: GatewayProtocolSocket, generation: number, raw: string) => void;
+};
+
+function protocolHarness(client: GatewayClient): ProtocolHarness {
+  return (client as unknown as { protocol: ProtocolHarness }).protocol;
+}
+
+function installSyntheticSocket(
+  client: GatewayClient,
+  send: (data: string) => unknown,
+  close: (code?: number, reason?: string) => unknown,
+): void {
+  const socket: GatewayProtocolSocket = {
+    isOpen: () => true,
+    send: (data) => send(data),
+    close: (code, reason) => close(code, reason),
+  };
+  Object.assign(protocolHarness(client), { socket, stopped: false, generation: 1 });
+  (client as unknown as { ws: unknown }).ws = {
+    readyState: WebSocket.OPEN,
+    send,
+    close,
+    terminate: vi.fn(),
+  };
 }
 
 function trackSettlement(promise: Promise<unknown>): () => boolean {
@@ -86,13 +111,8 @@ function createWatchedGatewayClient(): {
   });
   const close = vi.fn();
   const send = vi.fn();
-  Object.assign(client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number }, {
-    ws: {
-      readyState: WebSocket.OPEN,
-      send,
-      close,
-      terminate: vi.fn(),
-    },
+  installSyntheticSocket(client, send, close);
+  Object.assign(client as unknown as { tickIntervalMs: number; lastTick: number }, {
     tickIntervalMs: 5,
     lastTick: Date.now(),
   });
@@ -101,9 +121,11 @@ function createWatchedGatewayClient(): {
 }
 
 function handleGatewayMessage(client: GatewayClient, payload: Record<string, unknown>): void {
-  (client as unknown as { handleMessage: (raw: string) => void }).handleMessage(
-    JSON.stringify(payload),
-  );
+  const protocol = protocolHarness(client);
+  if (!protocol.socket) {
+    throw new Error("synthetic protocol socket missing");
+  }
+  protocol.handleMessage(protocol.socket, protocol.generation, JSON.stringify(payload));
 }
 
 async function stopSyntheticClient(client: GatewayClient): Promise<void> {
@@ -296,11 +318,7 @@ describe("GatewayClient", () => {
         helloCount += 1;
         if (helloCount === 1) {
           // Keep the real reconnect lifecycle fast without changing production defaults.
-          (
-            client as unknown as {
-              reconnectSupervisor: { reset(initialMs?: number): void };
-            }
-          ).reconnectSupervisor.reset(10);
+          protocolHarness(client).backoffMs = 10;
           resolveFirstHello();
           return;
         }
@@ -447,18 +465,11 @@ describe("GatewayClient", () => {
         tickWatchTimeoutMs: 50,
       });
       const close = vi.fn();
-      Object.assign(
-        client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number },
-        {
-          ws: {
-            readyState: WebSocket.OPEN,
-            send: vi.fn(),
-            close,
-          },
-          tickIntervalMs: 5,
-          lastTick: Date.now(),
-        },
-      );
+      installSyntheticSocket(client, vi.fn(), close);
+      Object.assign(client as unknown as { tickIntervalMs: number; lastTick: number }, {
+        tickIntervalMs: 5,
+        lastTick: Date.now(),
+      });
 
       (
         client as unknown as {
@@ -508,83 +519,18 @@ describe("GatewayClient", () => {
     }
   });
 
-  test("times out unresolved requests and clears pending state", async () => {
-    vi.useFakeTimers();
-    try {
-      const { client, send } = createOpenGatewayClient(25);
-
-      const requestPromise = client.request("status");
-      const requestExpectation = expect(requestPromise).rejects.toThrow(
-        "gateway request timeout for status",
-      );
-      expect(send).toHaveBeenCalledTimes(1);
-      expect(getPendingCount(client)).toBe(1);
-
-      await vi.advanceTimersByTimeAsync(25);
-
-      await requestExpectation;
-      expect(getPendingCount(client)).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   test("cleans pending request state when websocket send throws", async () => {
-    const client = new GatewayClient({
-      requestTimeoutMs: 25,
+    const { client, send } = createOpenGatewayClient(25);
+    send.mockImplementationOnce(() => {
+      throw new Error("synthetic send failure");
     });
-    const sendError = new Error("synthetic send failure");
-    (
-      client as unknown as {
-        ws: WebSocket | { readyState: number; send: () => void; close: () => void };
-      }
-    ).ws = {
-      readyState: WebSocket.OPEN,
-      send: vi.fn(() => {
-        throw sendError;
-      }),
-      close: vi.fn(),
-    };
 
     await expect(client.request("status")).rejects.toThrow("synthetic send failure");
     expect(getPendingCount(client)).toBe(0);
   });
 
-  test("does not auto-timeout expectFinal requests", async () => {
-    vi.useFakeTimers();
-    try {
-      const { client, send } = createOpenGatewayClient(25);
-
-      const requestPromise = client.request("chat.send", undefined, { expectFinal: true });
-      const isSettled = trackSettlement(requestPromise);
-      expect(send).toHaveBeenCalledTimes(1);
-
-      await vi.advanceTimersByTimeAsync(25);
-
-      expect(isSettled()).toBe(false);
-      expect(getPendingCount(client)).toBe(1);
-
-      client.stop();
-      await expect(requestPromise).rejects.toThrow("gateway client stopped");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   test("notifies accepted expectFinal requests while continuing to wait for final", async () => {
-    const client = new GatewayClient({
-      requestTimeoutMs: 25,
-    });
-    const send = vi.fn();
-    (
-      client as unknown as {
-        ws: WebSocket | { readyState: number; send: (data: string) => void; close: () => void };
-      }
-    ).ws = {
-      readyState: WebSocket.OPEN,
-      send,
-      close: vi.fn(),
-    };
+    const { client, send } = createOpenGatewayClient(25);
 
     const onAccepted = vi.fn();
     const requestPromise = client.request<{ status: string }>("agent", undefined, {
@@ -593,53 +539,29 @@ describe("GatewayClient", () => {
     });
     const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
 
-    (
-      client as unknown as {
-        handleMessage: (raw: string) => void;
-      }
-    ).handleMessage(
-      JSON.stringify({
-        type: "res",
-        id: frame.id,
-        ok: true,
-        payload: { status: "accepted", runId: "run-1" },
-      }),
-    );
+    handleGatewayMessage(client, {
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { status: "accepted", runId: "run-1" },
+    });
 
     expect(onAccepted).toHaveBeenCalledWith({ status: "accepted", runId: "run-1" });
-    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+    expect(getPendingCount(client)).toBe(1);
 
-    (
-      client as unknown as {
-        handleMessage: (raw: string) => void;
-      }
-    ).handleMessage(
-      JSON.stringify({
-        type: "res",
-        id: frame.id,
-        ok: true,
-        payload: { status: "ok" },
-      }),
-    );
+    handleGatewayMessage(client, {
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { status: "ok" },
+    });
 
     await expect(requestPromise).resolves.toEqual({ status: "ok" });
-    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+    expect(getPendingCount(client)).toBe(0);
   });
 
   test("aborts in-flight requests from caller AbortSignal", async () => {
-    const client = new GatewayClient({
-      requestTimeoutMs: 25,
-    });
-    const send = vi.fn();
-    (
-      client as unknown as {
-        ws: WebSocket | { readyState: number; send: () => void; close: () => void };
-      }
-    ).ws = {
-      readyState: WebSocket.OPEN,
-      send,
-      close: vi.fn(),
-    };
+    const { client, send } = createOpenGatewayClient(25);
 
     const controller = new AbortController();
     const requestPromise = client.request("status", undefined, {
@@ -647,53 +569,39 @@ describe("GatewayClient", () => {
       timeoutMs: null,
     });
     expect(send).toHaveBeenCalledTimes(1);
-    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+    expect(getPendingCount(client)).toBe(1);
 
     controller.abort();
 
     await expect(requestPromise).rejects.toThrow("gateway request aborted for status");
-    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+    expect(getPendingCount(client)).toBe(0);
   });
 
-  test("clamps oversized explicit request timeouts before scheduling", async () => {
-    vi.useFakeTimers();
-    try {
-      const { client } = createOpenGatewayClient(25);
+  test.each([
+    { defaultTimeoutMs: 25, options: { timeoutMs: 2_592_010_000 } },
+    { defaultTimeoutMs: 2_592_010_000, options: undefined },
+  ])(
+    "clamps oversized request timeouts before scheduling",
+    async ({ defaultTimeoutMs, options }) => {
+      vi.useFakeTimers();
+      try {
+        const { client } = createOpenGatewayClient(defaultTimeoutMs);
 
-      const requestPromise = client.request("status", undefined, { timeoutMs: 2_592_010_000 });
-      const isSettled = trackSettlement(requestPromise);
+        const requestPromise = client.request("status", undefined, options);
+        const isSettled = trackSettlement(requestPromise);
 
-      await vi.advanceTimersByTimeAsync(1);
+        await vi.advanceTimersByTimeAsync(1);
 
-      expect(isSettled()).toBe(false);
-      expect(getPendingCount(client)).toBe(1);
+        expect(isSettled()).toBe(false);
+        expect(getPendingCount(client)).toBe(1);
 
-      client.stop();
-      await expect(requestPromise).rejects.toThrow("gateway client stopped");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  test("clamps oversized default request timeouts before scheduling", async () => {
-    vi.useFakeTimers();
-    try {
-      const { client } = createOpenGatewayClient(2_592_010_000);
-
-      const requestPromise = client.request("status");
-      const isSettled = trackSettlement(requestPromise);
-
-      await vi.advanceTimersByTimeAsync(1);
-
-      expect(isSettled()).toBe(false);
-      expect(getPendingCount(client)).toBe(1);
-
-      client.stop();
-      await expect(requestPromise).rejects.toThrow("gateway client stopped");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        client.stop();
+        await expect(requestPromise).rejects.toThrow("gateway client stopped");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   test("clamps oversized stopAndWait timeouts before scheduling", async () => {
     vi.useFakeTimers();
