@@ -4159,11 +4159,6 @@
       "translated": "Ограничение частоты"
     },
     {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "Доступ"
-    },
-    {
       "id": "native.android.ebeec52e498bc128",
       "source": "Granted",
       "translated": "Предоставлено"
@@ -4429,14 +4424,19 @@
       "translated": "В сети"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "Доступ"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "Адрес"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "Недоступно"
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "Ограниченный доступ к Gateway"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4547,6 +4547,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "Введите действительный код настройки или адрес Gateway."
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "Недоступно"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "Полный"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "Ограниченный"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "Используйте защищённый wss:// или Tailscale Serve Gateway, создайте код настройки с полным доступом в Control UI или с помощью openclaw qr, затем отсканируйте или вставьте его ниже и переподключитесь, чтобы включить настройки и обновления."
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -11337,6 +11357,41 @@
       "id": "native.apple.8e3656d85f092897",
       "source": "Agents",
       "translated": "Агенты"
+    },
+    {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "Доступ"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "Полный"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "Ограниченный"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "Расширить доступ"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "У этого телефона ограниченный доступ к Gateway."
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "Используйте защищённый wss:// или Tailscale Serve Gateway, затем отсканируйте код настройки с полным доступом из Control UI или openclaw qr и переподключитесь, чтобы включить настройки и обновления."
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "Сканировать код полного доступа"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",

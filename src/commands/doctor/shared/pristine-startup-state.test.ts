@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { canSkipPristineStartupStateMigrations } from "./pristine-startup-state.js";
+import {
+  canSkipPristineStartupStateMigrations,
+  planPristineStartupConfigMigrations,
+  planPristineStartupStateMigrations,
+} from "./pristine-startup-state.js";
 
 const roots: string[] = [];
 
@@ -101,6 +105,51 @@ describe("pristine startup state", () => {
     );
 
     expect(canSkipPristineStartupStateMigrations(env)).toBe(false);
+  });
+
+  it("retains plugin migrations while skipping absent core state for load paths", () => {
+    const env = createFixture({
+      gateway: { mode: "local" },
+      plugins: { allow: ["example"], load: { paths: ["/plugins/example"] } },
+    });
+
+    expect(planPristineStartupStateMigrations(env)).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: true,
+    });
+  });
+
+  it("retains core migrations for config that can point outside the state root", () => {
+    const env = createFixture({ session: { store: "/tmp/sessions.json" } });
+
+    expect(planPristineStartupStateMigrations(env)).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
+  });
+
+  it("revalidates guarded config without depending on post-guard state files", () => {
+    const env = createFixture({});
+
+    expect(
+      planPristineStartupConfigMigrations(
+        { gateway: { mode: "local" }, plugins: { load: { paths: ["/plugins/example"] } } },
+        env,
+      ),
+    ).toEqual({ skipAllStateMigrations: false, skipCoreStateMigrations: true });
+    expect(
+      planPristineStartupConfigMigrations({ session: { store: "/tmp/sessions.json" } }, env),
+    ).toEqual({ skipAllStateMigrations: false, skipCoreStateMigrations: false });
+    expect(planPristineStartupConfigMigrations({ $include: "base.json" }, env)).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
+    expect(
+      planPristineStartupConfigMigrations({ agents: { $include: "agents.json" } }, env),
+    ).toEqual({
+      skipAllStateMigrations: false,
+      skipCoreStateMigrations: false,
+    });
   });
 
   it("rejects enabled plugin entries and includes", () => {

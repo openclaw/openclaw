@@ -4159,11 +4159,6 @@
       "translated": "사용량 제한"
     },
     {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "접근 권한"
-    },
-    {
       "id": "native.android.ebeec52e498bc128",
       "source": "Granted",
       "translated": "허용됨"
@@ -4429,14 +4424,19 @@
       "translated": "온라인"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "접근 권한"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "주소"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "사용할 수 없음"
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "제한된 Gateway 접근"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4547,6 +4547,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "유효한 설정 코드 또는 Gateway 주소를 입력하세요."
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "사용할 수 없음"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "전체"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "제한됨"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "보안 wss:// 또는 Tailscale Serve Gateway를 사용하고, Control UI 또는 openclaw qr로 전체 접근 설정 코드를 생성한 다음, 아래에서 스캔하거나 붙여넣고 다시 연결하여 설정 및 업그레이드를 활성화하세요."
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -11337,6 +11357,41 @@
       "id": "native.apple.8e3656d85f092897",
       "source": "Agents",
       "translated": "에이전트"
+    },
+    {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "접근"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "전체"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "제한됨"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "접근 업그레이드"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "이 휴대폰은 Gateway 접근이 제한되어 있습니다."
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "보안 wss:// 또는 Tailscale Serve Gateway를 사용한 다음, Control UI 또는 openclaw qr에서 전체 접근 설정 코드를 스캔하고 다시 연결하여 설정 및 업그레이드를 활성화하세요."
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "전체 접근 코드 스캔"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",

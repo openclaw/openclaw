@@ -784,6 +784,14 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   min-width: 0;
   overflow: hidden;
   background: var(--sidebar-bg);
+  /* Sidebar chrome is controls, not copy; drag-selecting row labels reads as
+     broken. Editable fields inside (menu filters) re-enable selection below. */
+  user-select: none;
+}
+
+.sidebar input,
+.sidebar textarea {
+  user-select: text;
 }
 
 :root[data-theme-mode="light"] .sidebar {
@@ -950,16 +958,57 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 .sidebar-attention__item {
   display: flex;
   align-items: center;
-  gap: 8px;
   width: 100%;
-  padding: 6px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-hover);
   color: var(--text);
   font-size: 12px;
+}
+
+/* Navigate + dismiss are sibling buttons inside the pill (buttons can't nest);
+   the open button carries the click padding so the whole pill stays a target. */
+.sidebar-attention__open {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 6px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.sidebar-attention__dismiss {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 8px 6px 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.6;
+}
+
+.sidebar-attention__dismiss:hover {
+  color: var(--text);
+  opacity: 1;
+}
+
+.sidebar-attention__dismiss svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-attention__item--warning {
@@ -1308,6 +1357,21 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
   text-align: center;
+}
+
+.sidebar-session-group-count--error {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--warning);
+}
+
+.sidebar-session-group-count--error svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
 }
 
 .sidebar-session-catalog-load-more {
@@ -2087,6 +2151,111 @@ openclaw-session-menu[popover] {
   text-decoration: none;
 }
 
+/* The help flyout must escape the menu box, so the root stays
+   overflow-visible; the viewport bound moves to a flex column where only
+   the switcher list shrinks and scrolls (the action rows always fit). */
+.sidebar-agent-menu {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  max-height: calc(100vh - 16px);
+}
+
+/* Large rosters: the switcher list scrolls; the utility rows below stay put. */
+.sidebar-agent-menu__list {
+  flex: 0 1 auto;
+  min-height: 30px;
+  max-height: 264px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sidebar-customize-menu__submenu-host {
+  position: relative;
+}
+
+/* Bottom-aligned like the parent menu: both grow upward from the footer.
+   Fixed link list, no scrolling: overflow stays visible so the ::before
+   hover bridge below is not clipped away. */
+.sidebar-agent-menu .sidebar-customize-menu__submenu {
+  position: absolute;
+  bottom: -6px;
+  left: calc(100% + 4px);
+  overflow: visible;
+}
+
+.sidebar-agent-menu .sidebar-customize-menu__submenu--left {
+  right: calc(100% + 4px);
+  left: auto;
+}
+
+/* Viewports too narrow for side-by-side menus: cover the parent instead. */
+.sidebar-agent-menu .sidebar-customize-menu__submenu--overlay {
+  right: -6px;
+  left: -6px;
+}
+
+/* Invisible bridge over the 4px visual gap so a slow pointer crossing it
+   never leaves the submenu host (which would close the flyout mid-travel). */
+.sidebar-agent-menu .sidebar-customize-menu__submenu::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  width: 8px;
+}
+
+.sidebar-agent-menu .sidebar-customize-menu__submenu--left::before {
+  right: -8px;
+  left: auto;
+}
+
+.sidebar-agent-menu .sidebar-customize-menu__submenu--overlay::before {
+  content: none;
+}
+
+.sidebar-customize-menu__chevron {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.sidebar-customize-menu__chevron svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-agent-menu__filter {
+  padding: 2px 8px 6px;
+}
+
+.sidebar-agent-menu__filter input {
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+}
+
+.sidebar-agent-menu__empty {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
 /* Footer menu row: build identity left, theme switch right. */
 .sidebar-agent-menu__footer {
   display: flex;
@@ -2340,6 +2509,14 @@ openclaw-session-menu[popover] {
 
 .content-header--page + * {
   margin-top: 20px;
+}
+
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-width: 0;
 }
 
 .content--chat .content-header.content-header--chat-hidden {

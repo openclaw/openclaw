@@ -24,6 +24,7 @@
     <string name="native_002a6fcb30b2def4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"No se pudo preparar un archivo adjunto para enviarlo."</string>
     <string name="native_003aaf9e0a0e6b9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Micrófono apagado"</string>
     <string name="native_0060cbfdd3cf13ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mostrar alertas de OpenClaw"</string>
+    <string name="native_008dacb6d1e85bd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Completo"</string>
     <string name="native_009506aeb0484b2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Aprobación permitida y guardada."</string>
     <string name="native_00d108e2e6466940" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mostrar el historial de llamadas recientes"</string>
     <string name="native_00e8aeba41d79ce3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 pendiente"</string>
@@ -483,6 +484,7 @@
     <string name="native_572739b05d138f8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mostrando el fragmento de registro más reciente."</string>
     <string name="native_57666930af1af35e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Usar código de configuración"</string>
     <string name="native_57c4b13a4c7335e7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker"</string>
+    <string name="native_57efc4ebe625cab5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Usa un Gateway seguro wss:// o Tailscale Serve, genera un código de configuración de acceso completo en la Control UI o con openclaw qr, luego escanéalo o pégalo abajo y vuelve a conectarte para habilitar los ajustes y las actualizaciones."</string>
     <string name="native_57fce44d7c6df51a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"steer"</string>
     <string name="native_57fd7a0cf33f2666" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Seleccionado"</string>
     <string name="native_58268edca12a81a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android puede escanear o pegar un código de configuración existente, pero este gateway aún no expone la generación de códigos de configuración a la app. Genera el QR/código en el host del gateway con openclaw qr y luego escanéalo aquí o pega el código de configuración a continuación."</string>
@@ -695,6 +697,7 @@
     <string name="native_7bda957a27b2f876" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"En cola — se enviará al volver a conectar"</string>
     <string name="native_7c55b5030e55a687" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"hace %1$s min"</string>
     <string name="native_7c5c9a83536e33d2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Comprobando el acceso de emparejamiento"</string>
+    <string name="native_7c79875c4f9d1990" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Acceso limitado al Gateway"</string>
     <string name="native_7cc20d4753b8fd45" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ejecutando herramientas..."</string>
     <string name="native_7d2227b96bc40069" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Comprobando aprobación…"</string>
     <string name="native_7d3951124ae2ca1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Captura fotos y clips desde este teléfono"</string>
@@ -1251,6 +1254,7 @@
     <string name="native_e4582b6fb1f57494" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Reconectar Gateway"</string>
     <string name="native_e4696640127b9126" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"De terceros"</string>
     <string name="native_e482357257d6c2fd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Revisar preparación"</string>
+    <string name="native_e5125d9f63d2947b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Limitado"</string>
     <string name="native_e51aa2de89dcd71a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Logotipo de OpenClaw"</string>
     <string name="native_e52b3044724b9f4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Dejar de fijar modelo"</string>
     <string name="native_e5584bc5057284ae" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Superficies de mensajería conectadas a este Gateway."</string>

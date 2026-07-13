@@ -85,7 +85,7 @@ deprecated for new code; see the per-row notes below.
   <Accordion title="Channel subpaths">
     | Subpath | Key exports |
     | --- | --- |
-    | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
+    | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `createChannelConfigUiHints` |
     | `plugin-sdk/json-schema-runtime` | Cached JSON Schema validation helper for plugin-owned schemas |
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, setup translator, allowlist prompts, setup status builders |
@@ -226,7 +226,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
     | `plugin-sdk/provider-auth-login-flow-runtime` | Lazy provider auth login flow helpers for private channel and Web UI device-code pairing |
     | `plugin-sdk/channel-secret-runtime` | Deprecated broad secret-contract surface (`collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, secret target types); prefer the focused subpaths below |
-    | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports for non-TTS channel/plugin secret surfaces |
+    | `plugin-sdk/channel-secret-basic-runtime` | Narrow secret-contract exports and target-registry builders for non-TTS channel/plugin secret surfaces |
     | `plugin-sdk/channel-secret-tts-runtime` | Narrow nested channel TTS secret assignment helpers |
     | `plugin-sdk/secret-ref-runtime` | Narrow SecretRef typing, resolution, and plan-target path lookup for secret-contract/config parsing |
     | `plugin-sdk/secret-provider-integration` | Type-only SecretRef provider integration manifest and preset contracts for plugins that publish external secret provider presets |

@@ -9,6 +9,7 @@ import {
 } from "../../../components/lobster-pet.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
+import "../../../styles/dreams.css";
 import type { DreamingEntry, WikiImportInsights, WikiMemoryPalace } from "./dreaming.ts";
 
 // ── Diary entry parser ─────────────────────────────────────────────────

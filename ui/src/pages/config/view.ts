@@ -3,7 +3,12 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../../api/types.ts";
-import { TEXT_SCALE_STOPS, type TextScaleStop } from "../../app/settings.ts";
+import {
+  normalizeChatSendShortcut,
+  TEXT_SCALE_STOPS,
+  type ChatSendShortcut,
+  type TextScaleStop,
+} from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import {
@@ -25,6 +30,7 @@ import {
 } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import {
   APPEARANCE_SETTINGS_TARGET_IDS,
   COMMUNICATION_SETTINGS_TARGET_IDS,
@@ -44,6 +50,13 @@ type WebPushUiState = {
   subscribed: boolean;
   loading: boolean;
   error?: string | null;
+};
+
+type SettingsMicrophoneState = {
+  devices: RealtimeTalkInputDevice[];
+  selectedDeviceId: string;
+  loading: boolean;
+  error: string | null;
 };
 
 type ConfigFormMode = "form" | "raw";
@@ -142,6 +155,11 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   textScale: number;
   setTextScale: (value: number) => void;
+  chatSendShortcut: ChatSendShortcut;
+  setChatSendShortcut: (value: ChatSendShortcut) => void;
+  microphone?: SettingsMicrophoneState;
+  onMicrophoneRefresh?: () => void;
+  onMicrophoneSelect?: (deviceId: string) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -1009,6 +1027,103 @@ function renderNotificationsSection(props: ConfigProps) {
   `;
 }
 
+function renderSettingsMicrophoneField(props: ConfigProps) {
+  const microphone = props.microphone;
+  if (!microphone || !props.onMicrophoneSelect) {
+    return nothing;
+  }
+  const selectedDeviceId = microphone.selectedDeviceId.trim();
+  const selectedDeviceKnown = microphone.devices.some(
+    (device) => device.deviceId === selectedDeviceId,
+  );
+  const options = [
+    { label: t("chat.composer.systemDefaultMicrophone"), value: "" },
+    ...microphone.devices.map((device) => ({ label: device.label, value: device.deviceId })),
+    // A remembered device that is unplugged right now stays selectable so the
+    // choice survives until the user picks something else.
+    ...(selectedDeviceId && !selectedDeviceKnown
+      ? [
+          {
+            label: t("chat.composer.microphoneFallback", {
+              number: String(microphone.devices.length + 1),
+            }),
+            value: selectedDeviceId,
+          },
+        ]
+      : []),
+  ];
+  const refreshLabel = `${t("common.refresh")}: ${t("chat.composer.microphoneInput")}`;
+  return html`
+    <label class="settings-chat-prefs__field">
+      <span class="settings-chat-prefs__label">${t("chat.composer.microphoneInput")}</span>
+      <span class="settings-chat-prefs__control">
+        <select
+          class="cfg-select"
+          data-settings-microphone
+          .value=${selectedDeviceId}
+          @change=${(event: Event) =>
+            props.onMicrophoneSelect?.((event.currentTarget as HTMLSelectElement).value)}
+        >
+          ${options.map(
+            (option) => html`
+              <option value=${option.value} ?selected=${option.value === selectedDeviceId}>
+                ${option.label}
+              </option>
+            `,
+          )}
+        </select>
+        <button
+          type="button"
+          class="btn btn--sm btn--icon"
+          aria-label=${refreshLabel}
+          ?disabled=${microphone.loading}
+          @click=${() => props.onMicrophoneRefresh?.()}
+        >
+          ${microphone.loading ? icons.loader : icons.refresh}
+        </button>
+      </span>
+      ${microphone.error
+        ? html`<span class="settings-chat-prefs__note settings-chat-prefs__note--error" role="alert"
+            >${microphone.error}</span
+          >`
+        : !microphone.loading && microphone.devices.length === 0
+          ? html`<span class="settings-chat-prefs__note">${t("chat.composer.noMicrophones")}</span>`
+          : nothing}
+    </label>
+  `;
+}
+
+function renderChatPreferencesSection(props: ConfigProps) {
+  return html`
+    <div id=${APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-appearance__section">
+      <h3 class="settings-appearance__heading">${t("configView.chatPrefs.title")}</h3>
+      <p class="settings-appearance__hint">${t("configView.chatPrefs.hint")}</p>
+      <div class="settings-chat-prefs">
+        <label class="settings-chat-prefs__field">
+          <span class="settings-chat-prefs__label">${t("chat.sendShortcut")}</span>
+          <select
+            class="cfg-select"
+            data-settings-send-shortcut
+            .value=${props.chatSendShortcut}
+            @change=${(event: Event) =>
+              props.setChatSendShortcut(
+                normalizeChatSendShortcut((event.currentTarget as HTMLSelectElement).value),
+              )}
+          >
+            <option value="enter" ?selected=${props.chatSendShortcut === "enter"}>
+              ${t("chat.sendShortcutEnter")}
+            </option>
+            <option value="modifier-enter" ?selected=${props.chatSendShortcut === "modifier-enter"}>
+              ${t("chat.sendShortcutModifierEnter")}
+            </option>
+          </select>
+        </label>
+        ${renderSettingsMicrophoneField(props)}
+      </div>
+    </div>
+  `;
+}
+
 function renderAppearanceSection(props: ConfigProps) {
   const viewState = props.viewState;
   const showCustomThemeImport = props.hasCustomTheme || props.customThemeImportExpanded === true;
@@ -1188,6 +1303,8 @@ function renderAppearanceSection(props: ConfigProps) {
           </div>
         </div>
       </div>
+
+      ${renderChatPreferencesSection(props)}
 
       <div id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-appearance__section">
         <h3 class="settings-appearance__heading">${t("configView.connection.title")}</h3>

@@ -6,6 +6,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { EXTERNAL_LINK_TARGET, buildExternalLinkRel } from "../../lib/external-link.ts";
+import "../../styles/plugins.css";
 import {
   CLAWHUB_BROWSE_URL,
   type PluginCatalogItem,

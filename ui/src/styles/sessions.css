@@ -492,16 +492,6 @@
 }
 
 /* Session identity cell */
-.session-link {
-  color: var(--accent);
-  font-weight: 500;
-  text-decoration: none;
-}
-
-.session-link:hover {
-  text-decoration: underline;
-}
-
 .session-key-cell {
   display: flex;
   align-items: center;

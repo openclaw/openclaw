@@ -53,5 +53,6 @@ describe("isSlackApprovalAuthorizedSender", () => {
         senderId: "U123OWNER",
       }),
     ).toBe(true);
+    expect(isSlackApprovalAuthorizedSender({ cfg })).toBe(false);
   });
 });

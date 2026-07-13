@@ -12,6 +12,7 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { normalizeRestartRecoveryEntryFields } from "./restart-recovery-state.js";
 import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
@@ -74,10 +75,6 @@ function normalizeOptionalStringOrNull(value: unknown): string | null | undefine
     return value;
   }
   return undefined;
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeRecordKey(value: string): string | undefined {
@@ -167,10 +164,7 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
   if (!sameDeliveryContext(entry.restartRecoveryDeliveryContext, restartRecoveryDeliveryContext)) {
     assign("restartRecoveryDeliveryContext", restartRecoveryDeliveryContext);
   }
-  assign(
-    "restartRecoveryDeliveryRunId",
-    normalizeOptionalString(entry.restartRecoveryDeliveryRunId),
-  );
+  normalizeRestartRecoveryEntryFields(entry, assign);
 
   return next;
 }

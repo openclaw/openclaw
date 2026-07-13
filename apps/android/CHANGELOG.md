@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+Allows Android to connect to Gateway protocol v3 or v4 while preserving the current v4 chat stream behavior.
 Creates or adopts Android's existing per-device chat session before loading connected history, preserving prior conversations while isolating each device. Thanks @snowzlmbot.
 Adds polished Installed/Browse skill management on Android with readiness filters, enable/disable controls, and readable Gateway-enforced ClawHub risk review. Thanks @snowzlmbot.
 Marks already installed ClawHub slugs in Browse and prevents fresh-install retries from overwriting or failing against existing skill directories. (#105741)

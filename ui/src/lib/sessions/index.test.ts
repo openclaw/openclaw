@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventFrame,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability, reconcileSessionRunTerminal } from "./index.ts";
 
@@ -15,13 +20,15 @@ function sessionsResult(sessions: SessionsListResult["sessions"], ts: number): S
 
 function deferred<T>() {
   let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => {
+  let reject: (error: unknown) => void = () => undefined;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, reject, resolve };
 }
 
-function createGatewayHarness(client: GatewayBrowserClient) {
+function createGatewayHarness(client: GatewayBrowserClient, featureMethods?: string[]) {
   let snapshot: {
     client: GatewayBrowserClient | null;
     connected: boolean;
@@ -33,7 +40,10 @@ function createGatewayHarness(client: GatewayBrowserClient) {
     connected: true,
     sessionKey: "agent:main:main",
     assistantAgentId: "main",
-    hello: null,
+    hello:
+      featureMethods === undefined
+        ? null
+        : ({ features: { methods: featureMethods } } as GatewayHelloOk),
   };
   const listeners = new Set<(next: typeof snapshot) => void>();
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
@@ -82,6 +92,121 @@ function sessionChangedEvent(key: string): GatewayEventFrame {
 }
 
 describe("createSessionCapability", () => {
+  it("allows an advertised group catalog load to be retried after failure", async () => {
+    let groupsCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.groups.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      groupsCalls += 1;
+      if (groupsCalls === 1) {
+        throw new Error("temporary catalog failure");
+      }
+      return { groups: [{ name: "Research" }] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsLoad();
+    expect(sessions.state.groups).toEqual([]);
+    await sessions.groupsLoad();
+
+    expect(groupsCalls).toBe(2);
+    expect(sessions.state.groups).toEqual(["Research"]);
+    sessions.dispose();
+  });
+
+  it("automatically retries an explicitly retryable group catalog failure", async () => {
+    let groupsCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.groups.list") {
+        throw new Error(`Unexpected request: ${method}`);
+      }
+      groupsCalls += 1;
+      if (groupsCalls === 1) {
+        throw new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "temporary catalog failure",
+          retryable: true,
+          retryAfterMs: 100,
+        });
+      }
+      return { groups: [{ name: "Recovered" }] };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, ["sessions.groups.list"]);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsLoad();
+
+    await vi.waitFor(() => expect(sessions.state.groups).toEqual(["Recovered"]));
+    expect(groupsCalls).toBe(2);
+    sessions.dispose();
+  });
+
+  it("keeps the legacy group catalog probe one-shot without feature metadata", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("unknown method");
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsLoad();
+    await sessions.groupsLoad();
+
+    expect(request).toHaveBeenCalledOnce();
+    sessions.dispose();
+  });
+
+  it("does not probe for a group catalog when the method is explicitly absent", async () => {
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client, []);
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.groupsLoad();
+    await sessions.groupsLoad();
+
+    expect(request).not.toHaveBeenCalled();
+    expect(sessions.state.groups).toEqual([]);
+    sessions.dispose();
+  });
+
+  it("ignores an older group load failure after an event-driven load succeeds", async () => {
+    const firstGroups = deferred<{ groups: Array<{ name: string }> }>();
+    const currentGroups = deferred<{ groups: Array<{ name: string }> }>();
+    let groupsCalls = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.groups.list") {
+        groupsCalls += 1;
+        return await (groupsCalls === 1 ? firstGroups.promise : currentGroups.promise);
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([], 1);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway, emitEvent } = createGatewayHarness(client, ["sessions.groups.list"]);
+    const sessions = createSessionCapability(gateway);
+
+    const firstLoad = sessions.groupsLoad();
+    await vi.waitFor(() => expect(groupsCalls).toBe(1));
+    emitEvent({ type: "event", event: "sessions.changed", payload: { reason: "groups" } });
+    await vi.waitFor(() => expect(groupsCalls).toBe(2));
+    currentGroups.resolve({ groups: [{ name: "Current" }] });
+    await vi.waitFor(() => expect(sessions.state.groups).toEqual(["Current"]));
+    firstGroups.reject(new Error("stale catalog failure"));
+    await firstLoad;
+
+    await sessions.groupsLoad();
+    expect(groupsCalls).toBe(2);
+    expect(sessions.state.groups).toEqual(["Current"]);
+    sessions.dispose();
+  });
+
   it("keeps a session when sessions.delete reports no deletion", async () => {
     const key = "agent:main:missing";
     const request = vi.fn(async (method: string) => {

@@ -9,6 +9,7 @@ import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs, formatDateTimeMs, formatDurationCompact } from "../../lib/format.ts";
+import "../../styles/workboard.css";
 import {
   addWorkboardCardComment,
   archiveWorkboardCard,
@@ -45,18 +46,17 @@ import {
   type WorkboardTemplateId,
   type WorkboardUiState,
 } from "../../lib/workboard/index.ts";
+import {
+  agentDisplayName,
+  buildAgentFilterOptions,
+  buildAssignableAgentOptions,
+  cardAgentLabel,
+  findCardAgent,
+  matchesAgentFilter,
+  matchesAgentScope,
+  normalizeActiveAgentFilter,
+} from "./agent-filter.ts";
 
-type WorkboardAgentRow = AgentsListResult["agents"][number];
-type WorkboardConfiguredAgentOption = {
-  id: string;
-  label: string;
-  isDefault: boolean;
-};
-type WorkboardAgentFilterOption = {
-  id: WorkboardUiState["agentFilter"];
-  label: string;
-  description?: string;
-};
 type WorkboardSelectOption<Value extends string = string> = {
   value: Value;
   label: string;
@@ -74,6 +74,8 @@ type WorkboardProps = {
   pluginEnablementError?: string | null;
   agentsList: AgentsListResult | null;
   sessions: GatewaySessionRow[];
+  scopeAgentId?: string | null;
+  showAgentFilter?: boolean;
   onOpenSession: (sessionKey: string) => void;
   onReloadConfig?: () => void;
   onRequestUpdate?: () => void;
@@ -588,148 +590,6 @@ function isCardActionTarget(event: Event): boolean {
   return event.target instanceof Element
     ? Boolean(event.target.closest("button, a, input, select, textarea"))
     : false;
-}
-
-function agentDisplayName(agent: WorkboardAgentRow | undefined, fallback: string): string {
-  return agent?.name ?? agent?.identity?.name ?? agent?.id ?? fallback;
-}
-
-function cardAgentId(card: WorkboardCard, agentsList: AgentsListResult | null): string {
-  return card.agentId?.trim() || agentsList?.defaultId || "";
-}
-
-function findCardAgent(
-  card: WorkboardCard,
-  agentsList: AgentsListResult | null,
-): WorkboardAgentRow | undefined {
-  const id = cardAgentId(card, agentsList);
-  return id ? agentsList?.agents.find((agent) => agent.id === id) : undefined;
-}
-
-function cardAgentLabel(card: WorkboardCard, agentsList: AgentsListResult | null): string {
-  const fallback = card.agentId?.trim() || t("workboard.defaultAgent");
-  return agentDisplayName(findCardAgent(card, agentsList), fallback);
-}
-
-function matchesAgentFilter(
-  card: WorkboardCard,
-  agentsList: AgentsListResult | null,
-  filter: WorkboardUiState["agentFilter"],
-): boolean {
-  if (filter === "all") {
-    return true;
-  }
-  const explicitAgentId = card.agentId?.trim();
-  if (filter === "default") {
-    return !explicitAgentId;
-  }
-  void agentsList;
-  return explicitAgentId === filter;
-}
-
-function buildConfiguredAgentOptions(
-  agentsList: AgentsListResult | null,
-): WorkboardConfiguredAgentOption[] {
-  const seen = new Set<string>();
-  const defaultAgentId = normalizeAgentOptionId(agentsList?.defaultId);
-  const options: WorkboardConfiguredAgentOption[] = [];
-  for (const agent of agentsList?.agents ?? []) {
-    const id = normalizeAgentOptionId(agent.id);
-    if (!id || seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    options.push({
-      id,
-      label: agentDisplayName(agent, id),
-      isDefault: Boolean(defaultAgentId && id === defaultAgentId),
-    });
-  }
-  return options;
-}
-
-function normalizeAgentOptionId(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function defaultAgentFilterLabel(configuredAgents: readonly WorkboardConfiguredAgentOption[]) {
-  return configuredAgents.find((agent) => agent.isDefault)?.label ?? t("workboard.defaultAgent");
-}
-
-function buildAgentFilterOptions(
-  agentsList: AgentsListResult | null,
-  cards: readonly WorkboardCard[],
-) {
-  const configuredAgents = buildConfiguredAgentOptions(agentsList);
-  const configuredIds = new Set(configuredAgents.map((agent) => agent.id));
-  const cardAgentIds = [
-    ...new Set(
-      cards
-        .map((card) => normalizeAgentOptionId(card.agentId))
-        .filter((id) => id && !configuredIds.has(id)),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
-  const options: WorkboardAgentFilterOption[] = [
-    { id: "all", label: t("workboard.allAgents") },
-    {
-      id: "default",
-      label: t("workboard.agentFilterUnassigned", {
-        agent: defaultAgentFilterLabel(configuredAgents),
-      }),
-      description: t("workboard.agentFilterUnassignedHelp"),
-    },
-  ];
-  for (const agent of configuredAgents) {
-    options.push({
-      id: agent.id,
-      label: agent.isDefault
-        ? t("workboard.agentFilterConfiguredDefault", { agent: agent.label })
-        : agent.label,
-      ...(agent.isDefault ? { description: t("workboard.agentFilterConfiguredDefaultHelp") } : {}),
-    });
-  }
-  for (const id of cardAgentIds) {
-    options.push({
-      id,
-      label: t("workboard.agentCurrentUnconfigured", { agent: id }),
-    });
-  }
-  return options;
-}
-
-function buildAssignableAgentOptions(agentsList: AgentsListResult | null, currentAgentId: string) {
-  const configuredAgents = buildConfiguredAgentOptions(agentsList);
-  const currentId = normalizeAgentOptionId(currentAgentId);
-  const hasCurrent = currentId ? configuredAgents.some((agent) => agent.id === currentId) : true;
-  return [
-    {
-      id: "",
-      label: t("workboard.agentFilterUnassigned", {
-        agent: defaultAgentFilterLabel(configuredAgents),
-      }),
-    },
-    ...configuredAgents.map((agent) => ({
-      id: agent.id,
-      label: agent.isDefault
-        ? t("workboard.agentFilterConfiguredDefault", { agent: agent.label })
-        : agent.label,
-    })),
-    ...(hasCurrent
-      ? []
-      : [
-          {
-            id: currentId,
-            label: t("workboard.agentCurrentUnconfigured", { agent: currentId }),
-          },
-        ]),
-  ];
-}
-
-function normalizeActiveAgentFilter(
-  options: readonly WorkboardAgentFilterOption[],
-  filter: WorkboardUiState["agentFilter"],
-): WorkboardUiState["agentFilter"] {
-  return options.some((option) => option.id === filter) ? filter : "all";
 }
 
 let workboardSelectDocumentCloserInstalled = false;
@@ -2656,6 +2516,7 @@ export function renderWorkboard(props: WorkboardProps) {
   const applyNonViewFilters = (cards: readonly WorkboardCard[]) =>
     cards
       .filter((card) => state.showArchived || !card.metadata?.archivedAt)
+      .filter((card) => matchesAgentScope(card, props.agentsList, props.scopeAgentId))
       .filter((card) => matchesAgentFilter(card, props.agentsList, state.agentFilter))
       .filter((card) =>
         matchesFilter(card, { query: state.query, priority: state.priorityFilter }),
@@ -2769,17 +2630,19 @@ export function renderWorkboard(props: WorkboardProps) {
               className: "workboard-select--toolbar",
               showLabel: false,
             })}
-            ${renderWorkboardSelect({
-              value: state.agentFilter,
-              options: agentSelectOptions,
-              label: t("workboard.agentFilter"),
-              onChange: (value) => {
-                state.agentFilter = value;
-              },
-              requestUpdate: props.onRequestUpdate,
-              className: "workboard-select--toolbar workboard-select--toolbar-agent",
-              showLabel: false,
-            })}
+            ${props.showAgentFilter !== false
+              ? renderWorkboardSelect({
+                  value: state.agentFilter,
+                  options: agentSelectOptions,
+                  label: t("workboard.agentFilter"),
+                  onChange: (value) => {
+                    state.agentFilter = value;
+                  },
+                  requestUpdate: props.onRequestUpdate,
+                  className: "workboard-select--toolbar workboard-select--toolbar-agent",
+                  showLabel: false,
+                })
+              : nothing}
             <button
               class="btn workboard-archive-toggle ${state.showArchived ? "active" : ""}"
               type="button"

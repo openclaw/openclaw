@@ -14,6 +14,10 @@ import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { createDockPanelLayout, type DockPanelSide } from "../dock-panel-layout.ts";
 import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  type BrowserPanelToggleDetail,
+} from "../panel-toggle-contract.ts";
+import {
   buildAnnotationPrompt,
   composeAnnotatedImage,
   dispatchBrowserAnnotation,
@@ -57,12 +61,6 @@ const INSPECT_GLYPH = svg`<svg viewBox="0 0 16 16" width="13" height="13" fill="
 
 type BrowserDock = DockPanelSide;
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
-type BrowserToggleDetail = {
-  dock?: BrowserDock;
-  open?: boolean;
-  url?: string;
-};
-
 /** One rendered page snapshot plus the geometry needed to map pointer coords. */
 type BrowserPanelView = {
   targetId: string;
@@ -80,7 +78,6 @@ const panelLayout = createDockPanelLayout({
   defaultHeight: 420,
   defaultWidth: 560,
 });
-const TOGGLE_EVENT = "openclaw:browser-toggle";
 const INSPECT_THROTTLE_MS = 120;
 const ACTION_REFRESH_DELAY_MS = 350;
 const FORWARDED_KEYS = new Set([
@@ -203,7 +200,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
     this.height = layout.height;
     this.width = layout.width;
     this.open = layout.open && this.available;
-    window.addEventListener(TOGGLE_EVENT, this.onToggleRequest);
+    window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.addEventListener("resize", this.onViewportResize);
     if (this.open) {
       void this.refreshAll();
@@ -212,7 +209,7 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener(TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
     window.removeEventListener("resize", this.onViewportResize);
     this.clearTimers();
     this.resizeCleanup?.();
@@ -308,10 +305,10 @@ export class OpenClawBrowserPanel extends OpenClawLitElement {
     }
   }
 
-  private handleToggleRequest(event: Event): void {
+  handleToggleRequest(event: Event): void {
     const detail =
       event instanceof CustomEvent && typeof event.detail === "object" && event.detail !== null
-        ? (event.detail as BrowserToggleDetail)
+        ? (event.detail as BrowserPanelToggleDetail)
         : null;
     if (detail?.dock === "right" || detail?.dock === "bottom") {
       this.dock = detail.dock;

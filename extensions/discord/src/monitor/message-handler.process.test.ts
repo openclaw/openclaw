@@ -2097,6 +2097,21 @@ describe("processDiscordMessage draft streaming", () => {
     expectFreshFinalText("Hello\nWorld");
   });
 
+  it("retries stale preview cleanup at teardown after fresh final delivery", async () => {
+    const draftStream = createMockDraftStream();
+    draftStream.clear.mockImplementationOnce(async () => {});
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+
+    await runSingleChunkFinalScenario({
+      streaming: { mode: "partial" },
+      maxLinesPerMessage: 5,
+    });
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).toHaveBeenCalledTimes(2);
+    expect(draftStream.messageId()).toBeUndefined();
+  });
+
   it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });

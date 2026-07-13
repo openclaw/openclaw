@@ -608,6 +608,7 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
 /** Query params for cron run history. */
 export const CronRunsParamsSchema = Type.Object(
   {
+    agentId: Type.Optional(NonEmptyString),
     scope: Type.Optional(Type.Union([Type.Literal("job"), Type.Literal("all")])),
     id: Type.Optional(CronRunLogJobIdSchema),
     jobId: Type.Optional(CronRunLogJobIdSchema),
@@ -667,8 +668,7 @@ export const CronRunLogEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
-// Wire types derive directly from local schema consts so public d.ts graphs never
-// pull in the ProtocolSchemas registry.
+// Wire types derive from local schemas without importing the ProtocolSchemas registry.
 export type CronJob = Static<typeof CronJobSchema>;
 export type CronListParams = Static<typeof CronListParamsSchema>;
 export type CronStatusParams = Static<typeof CronStatusParamsSchema>;

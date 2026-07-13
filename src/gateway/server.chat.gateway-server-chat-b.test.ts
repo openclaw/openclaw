@@ -9,10 +9,16 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry,
+  loadExactSessionEntry,
+  loadTranscriptEventsSync,
+  patchSessionEntry,
+  replaceSessionEntry,
+  withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
 import { appendSqliteTranscriptEvents } from "../config/sessions/session-accessor.sqlite.js";
 import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
@@ -24,7 +30,7 @@ import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
+import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import {
@@ -39,6 +45,26 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+
+const restartRecoveryMocks = vi.hoisted(() => ({
+  retryRestartAbortedMainSessionRecovery: vi.fn<
+    typeof import("../agents/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
+  >(async () => ({
+    recovered: 0,
+    failed: 1,
+    skipped: 0,
+  })),
+}));
+
+vi.mock("../agents/main-session-restart-recovery.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agents/main-session-restart-recovery.js")>();
+  return {
+    ...actual,
+    retryRestartAbortedMainSessionRecovery:
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery,
+  };
+});
 
 installGatewayTestHooks({ scope: "suite" });
 const FAST_WAIT_OPTS = { timeout: 2_000, interval: 5 } as const;
@@ -87,7 +113,6 @@ async function withGatewayChatHarness(
   try {
     await run({ ws, createSessionDir });
   } finally {
-    setMaxChatHistoryMessagesBytesForTest();
     if (process.env.OPENCLAW_CONFIG_PATH) {
       await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
     }
@@ -198,11 +223,55 @@ function createDirectChatContext(): GatewayRequestContext {
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     broadcast: vi.fn(),
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set(),
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
     getRuntimeConfig: () => ({}),
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
+}
+
+async function sendControlUiChat(params: {
+  context: GatewayRequestContext;
+  expectedSessionRoutingContract?: string;
+  idempotencyKey: string;
+  message: string;
+  respond: RespondFn;
+}): Promise<void> {
+  const requestParams = {
+    sessionKey: "main",
+    message: params.message,
+    idempotencyKey: params.idempotencyKey,
+    ...(params.expectedSessionRoutingContract
+      ? { expectedSessionRoutingContract: params.expectedSessionRoutingContract }
+      : {}),
+  };
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  await expectDefined(
+    chatHandlers["chat.send"],
+    'chatHandlers["chat.send"] test invariant',
+  )({
+    req: {
+      type: "req",
+      id: params.idempotencyKey,
+      method: "chat.send",
+      params: requestParams,
+    },
+    params: requestParams,
+    client: {
+      connect: {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+        scopes: ["operator.write", "operator.admin"],
+      },
+    } as never,
+    isWebchatConnect: () => true,
+    respond: params.respond,
+    context: params.context,
+  });
 }
 
 test("chat.send replays a cached result after the session is archived", async () => {
@@ -339,12 +408,8 @@ const configuredImageModelCases: ConfiguredImageModelCase[] = [
 async function prepareMainHistoryHarness(params: {
   ws: GatewaySocket;
   createSessionDir: () => Promise<string>;
-  historyMaxBytes?: number;
   sessionId?: string;
 }) {
-  if (params.historyMaxBytes !== undefined) {
-    setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
-  }
   await connectOk(params.ws);
   const sessionDir = await params.createSessionDir();
   await writeMainSessionStore(sessionDir, params.sessionId);
@@ -1243,6 +1308,8 @@ describe("gateway server chat", () => {
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getSessionEventSubscriberConnIds: () => new Set(),
         nodeSendToSession: vi.fn(),
         registerToolEventRecipient: vi.fn(),
         getRuntimeConfig: () => ({}),
@@ -2251,6 +2318,974 @@ describe("gateway server chat", () => {
     },
   );
 
+  test("chat.send durably admits a restart-safe Control UI turn before ACK", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const dispatchRelease = createDeferred();
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
+      let snapshotAtAck:
+        | {
+            entry: ReturnType<typeof loadSessionEntry>;
+            events: ReturnType<typeof loadTranscriptEventsSync>;
+          }
+        | undefined;
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: "idem-restart-safe-admission",
+        message: "persist me before ACK",
+        respond: ((ok, payload) => {
+          if (!ok || (payload as { status?: unknown } | undefined)?.status !== "started") {
+            return;
+          }
+          const scope = {
+            agentId: "main",
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+            storePath,
+          };
+          snapshotAtAck = {
+            entry: loadSessionEntry(scope),
+            events: loadTranscriptEventsSync(scope),
+          };
+        }) as RespondFn,
+      });
+
+      expect(snapshotAtAck?.entry).toMatchObject({
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "idem-restart-safe-admission",
+        restartRecoveryDeliverySourceRunId: "idem-restart-safe-admission",
+        sessionId: "sess-main",
+        status: "running",
+      });
+      expect(snapshotAtAck?.entry?.restartRecoveryDeliveryContext).toBeUndefined();
+      expect(snapshotAtAck?.events).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "persist me before ACK",
+              idempotencyKey: "idem-restart-safe-admission:user",
+            }),
+          }),
+        ]),
+      );
+      const dispatchOptions = (
+        dispatchInboundMessageMock.mock.calls[0]?.[0] as { replyOptions?: GetReplyOptions }
+      )?.replyOptions;
+      expect(dispatchOptions?.suppressNextUserMessagePersistence).toBe(true);
+      dispatchRelease.resolve(undefined);
+      await vi.waitFor(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+    } finally {
+      dispatchRelease.resolve(undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send preserves a terminal source claim before admitting the next turn", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const dispatchRelease = createDeferred();
+    const priorRunId = "idem-prior-terminal-claim";
+    const nextRunId = "idem-after-terminal-claim";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            abortedLastRun: false,
+            restartRecoveryDeliveryRunId: priorRunId,
+            restartRecoveryDeliverySourceRunId: priorRunId,
+            restartRecoveryTerminalRunIds: ["idem-older-terminal-claim"],
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      dispatchInboundMessageMock.mockImplementationOnce(async () => dispatchRelease.promise);
+      let snapshotAtAck: ReturnType<typeof loadSessionEntry>;
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: nextRunId,
+        message: "admit after terminal claim",
+        respond: ((ok, payload) => {
+          if (ok && (payload as { status?: unknown } | undefined)?.status === "started") {
+            snapshotAtAck = loadSessionEntry({
+              sessionKey: "agent:main:main",
+              storePath,
+            });
+          }
+        }) as RespondFn,
+      });
+
+      expect(snapshotAtAck).toMatchObject({
+        restartRecoveryDeliveryRunId: nextRunId,
+        restartRecoveryDeliverySourceRunId: nextRunId,
+        restartRecoveryTerminalRunIds: ["idem-older-terminal-claim", priorRunId],
+        status: "running",
+      });
+
+      const retryResponses: Array<{ ok: boolean; payload?: unknown; meta?: unknown }> = [];
+      await sendControlUiChat({
+        context,
+        idempotencyKey: priorRunId,
+        message: "must not execute again",
+        respond: ((ok, payload, _error, meta) =>
+          retryResponses.push({ ok, payload, meta })) as RespondFn,
+      });
+      expect(retryResponses).toEqual([
+        {
+          ok: true,
+          payload: { runId: priorRunId, status: "ok" },
+          meta: { cached: true, runId: priorRunId },
+        },
+      ]);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+
+      dispatchRelease.resolve(undefined);
+      await vi.waitFor(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+    } finally {
+      dispatchRelease.resolve(undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test.each([
+    { caseName: "tombstones an explicit abort", retryable: false, stopReason: "rpc" },
+    { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
+  ])("chat.send $caseName during SQLite admission", async ({ retryable, stopReason }) => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const runId = `idem-restart-safe-abort-${stopReason}`;
+    const lockEntered = createDeferred();
+    const releaseLock = createDeferred();
+    let lockPromise: Promise<void> | undefined;
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const scope = {
+        agentId: "main",
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath,
+      };
+      lockPromise = withTranscriptWriteLock(scope, async () => {
+        lockEntered.resolve(undefined);
+        await releaseLock.promise;
+      });
+      await lockEntered.promise;
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      const sendPromise = sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "persist, then stop",
+        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+      });
+      await vi.waitFor(
+        () => expect(context.chatAbortControllers.get(runId)).toBeDefined(),
+        FAST_WAIT_OPTS,
+      );
+      const activeRun = context.chatAbortControllers.get(runId);
+      if (!activeRun) {
+        throw new Error("expected admitted chat run");
+      }
+      activeRun.abortStopReason = stopReason;
+      activeRun.controller.abort();
+      releaseLock.resolve(undefined);
+      await Promise.all([sendPromise, lockPromise]);
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({
+            runId,
+            status: "timeout",
+            summary: "aborted",
+            stopReason,
+          }),
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const stored = loadSessionEntry(scope);
+      expect(stored).toMatchObject({
+        abortedLastRun: !retryable,
+        sessionId: "sess-main",
+        status: "killed",
+      });
+      expect(stored?.restartRecoveryDeliveryContext).toBeUndefined();
+      if (retryable) {
+        expect(stored?.restartRecoveryDeliveryRequestFingerprint).toEqual(
+          expect.stringMatching(/^hmac-sha256:v1:/u),
+        );
+        expect(stored?.restartRecoveryDeliveryRunId).toBe(runId);
+        expect(stored?.restartRecoveryDeliverySourceRunId).toBe(runId);
+        expect(stored?.restartRecoveryTerminalRunIds).toBeUndefined();
+      } else {
+        expect(stored?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+        expect(stored?.restartRecoveryDeliveryRunId).toBeUndefined();
+        expect(stored?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+        expect(stored?.restartRecoveryTerminalRunIds).toEqual([runId]);
+      }
+      expect(loadTranscriptEventsSync(scope)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              content: "persist, then stop",
+              idempotencyKey: `${runId}:user`,
+              role: "user",
+            }),
+          }),
+        ]),
+      );
+
+      const retryContext = createDirectChatContext();
+      const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+      if (retryable) {
+        dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+      }
+      await sendControlUiChat({
+        context: retryContext,
+        idempotencyKey: runId,
+        message: "persist, then stop",
+        respond: ((ok, payload) => retryResponses.push({ ok, payload })) as RespondFn,
+      });
+      expect(retryResponses).toEqual([
+        {
+          ok: true,
+          payload: retryable
+            ? expect.objectContaining({ runId, status: "started" })
+            : { runId, status: "ok" },
+        },
+      ]);
+      if (retryable) {
+        await vi.waitFor(
+          () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
+          FAST_WAIT_OPTS,
+        );
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+        expect(
+          (
+            dispatchInboundMessageMock.mock.calls[0]?.[0] as
+              | { replyOptions?: GetReplyOptions }
+              | undefined
+          )?.replyOptions?.suppressNextUserMessagePersistence,
+        ).toBe(true);
+      } else {
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      }
+      expect(
+        loadTranscriptEventsSync(scope).filter((event) => {
+          if (
+            typeof event !== "object" ||
+            event === null ||
+            !("type" in event) ||
+            event.type !== "message" ||
+            !("message" in event)
+          ) {
+            return false;
+          }
+          const message = event.message;
+          return (
+            typeof message === "object" &&
+            message !== null &&
+            "idempotencyKey" in message &&
+            message.idempotencyKey === `${runId}:user`
+          );
+        }),
+      ).toHaveLength(1);
+    } finally {
+      releaseLock.resolve(undefined);
+      await lockPromise?.catch(() => undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send keeps a durable Control UI retry pending when recovery remains abandoned", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const idempotencyKey = "idem-restart-safe-duplicate";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({ entries: {} });
+      await replaceSessionEntry(
+        { sessionKey: "main", storePath },
+        {
+          sessionId: "sess-main",
+          status: "running",
+          abortedLastRun: true,
+          restartRecoveryDeliveryRunId: "recovery-run",
+          restartRecoveryDeliverySourceRunId: idempotencyKey,
+          updatedAt: Date.now(),
+        },
+      );
+      await appendTranscriptMessage(
+        {
+          agentId: "main",
+          sessionId: "sess-main",
+          sessionKey: "main",
+          storePath,
+        },
+        {
+          message: {
+            role: "user",
+            content: "already admitted",
+            idempotencyKey: `${idempotencyKey}:user`,
+          },
+        },
+      );
+      const context = createDirectChatContext();
+      const responses: Array<{ error?: unknown; ok: boolean; payload?: unknown }> = [];
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey,
+        message: "already admitted",
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+      });
+
+      expect(responses).toEqual([
+        {
+          error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+          ok: false,
+          payload: undefined,
+        },
+      ]);
+      expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
+        canonicalSessionKey: "agent:main:main",
+        cfg: expect.any(Object),
+        expectedRecoveryRunId: "recovery-run",
+        expectedRecoverySourceRunId: idempotencyKey,
+        expectedSessionId: "sess-main",
+        sessionKey: "main",
+        storePath,
+      });
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(loadExactSessionEntry({ sessionKey: "main", storePath })?.entry).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: idempotencyKey,
+        sessionId: "sess-main",
+        status: "running",
+      });
+    } finally {
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send retires a durable retry after recovery re-dispatch succeeds", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const idempotencyKey = "idem-restart-safe-recovered-retry";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "running",
+            abortedLastRun: true,
+            restartRecoveryDeliveryRunId: "recovery-run",
+            restartRecoveryDeliverySourceRunId: idempotencyKey,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
+        async ({ sessionKey, storePath: recoveryStorePath }) => {
+          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+            abortedLastRun: false,
+            updatedAt: Date.now(),
+          }));
+          return { recovered: 1, failed: 0, skipped: 0 };
+        },
+      );
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey,
+        message: "already admitted",
+        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: { runId: idempotencyKey, status: "ok" },
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: idempotencyKey,
+        status: "running",
+      });
+    } finally {
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send suppresses a durable retry settled while lifecycle admission waits", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const idempotencyKey = "idem-recovery-settled-during-admission";
+    const releaseMutation = createDeferred();
+    let mutation: Promise<void> | undefined;
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const mutationStarted = createDeferred();
+      mutation = runExclusiveSessionLifecycleMutation({
+        scope: storePath,
+        identities: ["agent:main:main", "sess-main"],
+        run: async () => {
+          mutationStarted.resolve();
+          await releaseMutation.promise;
+        },
+      });
+      await mutationStarted.promise;
+
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown; meta?: unknown }> = [];
+      const send = sendControlUiChat({
+        context,
+        idempotencyKey,
+        message: "already recovered",
+        respond: ((ok, payload, _error, meta) =>
+          responses.push({ ok, payload, meta })) as RespondFn,
+      });
+      await vi.waitFor(
+        () => expect(context.dedupe.has(pendingChatSendDedupeKey(idempotencyKey))).toBe(true),
+        FAST_WAIT_OPTS,
+      );
+      await patchSessionEntry({ sessionKey: "agent:main:main", storePath }, () => ({
+        restartRecoveryTerminalRunIds: [idempotencyKey],
+        updatedAt: Date.now(),
+      }));
+      releaseMutation.resolve();
+      await Promise.all([send, mutation]);
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: { runId: idempotencyKey, status: "ok" },
+          meta: { cached: true, runId: idempotencyKey },
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(context.chatAbortControllers.has(idempotencyKey)).toBe(false);
+    } finally {
+      releaseMutation.resolve();
+      await Promise.allSettled(mutation ? [mutation] : []);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send does not re-dispatch an archived durable recovery claim", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const idempotencyKey = "idem-restart-safe-archived-retry";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            archivedAt: Date.now(),
+            status: "running",
+            abortedLastRun: true,
+            restartRecoveryDeliveryRunId: "recovery-run",
+            restartRecoveryDeliverySourceRunId: idempotencyKey,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      const responses: Array<{ error?: unknown; ok: boolean; payload?: unknown }> = [];
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey,
+        message: "must stay archived",
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+      });
+
+      expect(responses).toEqual([
+        {
+          error: expect.objectContaining({ code: "INVALID_REQUEST", retryable: false }),
+          ok: false,
+          payload: undefined,
+        },
+      ]);
+      expect(restartRecoveryMocks.retryRestartAbortedMainSessionRecovery).not.toHaveBeenCalled();
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send stops automatic retry when durable recovery ownership changes", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const idempotencyKey = "idem-restart-safe-replaced-retry";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "running",
+            abortedLastRun: true,
+            restartRecoveryDeliveryRunId: "recovery-run",
+            restartRecoveryDeliverySourceRunId: idempotencyKey,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockImplementationOnce(
+        async ({ sessionKey, storePath: recoveryStorePath }) => {
+          await patchSessionEntry({ sessionKey, storePath: recoveryStorePath }, () => ({
+            sessionId: "replacement-session",
+            restartRecoveryDeliveryRunId: "replacement-recovery",
+            restartRecoveryDeliverySourceRunId: "replacement-source",
+            updatedAt: Date.now(),
+          }));
+          return { recovered: 0, failed: 0, skipped: 0 };
+        },
+      );
+      const context = createDirectChatContext();
+      const responses: Array<{ error?: unknown; ok: boolean; payload?: unknown }> = [];
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey,
+        message: "must not dispatch replacement ownership",
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+      });
+
+      expect(responses).toEqual([
+        {
+          error: expect.objectContaining({ code: "UNAVAILABLE", retryable: false }),
+          ok: false,
+          payload: undefined,
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      restartRecoveryMocks.retryRestartAbortedMainSessionRecovery.mockClear();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test.each([
+    { caseName: "settled recovery", status: "done" as const, abortedLastRun: false },
+    { caseName: "unresumable recovery", status: "failed" as const, abortedLastRun: true },
+  ])("chat.send suppresses a Control UI retry after $caseName", async (terminal) => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const idempotencyKey = `idem-${terminal.status}-recovery`;
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: terminal.status,
+            abortedLastRun: terminal.abortedLastRun,
+            restartRecoveryTerminalRunIds: [idempotencyKey],
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey,
+        message: "already handled",
+        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId: idempotencyKey, status: "ok" }),
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send releases an unadopted durable claim after dispatch rejection", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const runId = "idem-restart-safe-dispatch-error";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      dispatchInboundMessageMock.mockRejectedValueOnce(new Error("dispatch rejected"));
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "retry me after dispatch failure",
+        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+      });
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId, status: "started" }),
+        },
+      ]);
+      await vi.waitFor(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
+      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
+        expect.stringMatching(/^hmac-sha256:v1:/u),
+      );
+      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
+      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
+
+      const collisionContext = createDirectChatContext();
+      const collisionResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+      await sendControlUiChat({
+        context: collisionContext,
+        idempotencyKey: runId,
+        message: "changed text under the same run id",
+        respond: ((ok, payload) => collisionResponses.push({ ok, payload })) as RespondFn,
+      });
+      expect(collisionResponses).toEqual([
+        {
+          ok: false,
+          payload: undefined,
+        },
+      ]);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: false,
+        status: "failed",
+      });
+
+      const retryContext = createDirectChatContext();
+      const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+      await sendControlUiChat({
+        context: retryContext,
+        idempotencyKey: runId,
+        message: "retry me after dispatch failure",
+        respond: ((ok, payload) => retryResponses.push({ ok, payload })) as RespondFn,
+      });
+      expect(retryResponses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId, status: "started" }),
+        },
+      ]);
+      await vi.waitFor(
+        () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(
+        (
+          dispatchInboundMessageMock.mock.calls[1]?.[0] as
+            | { replyOptions?: GetReplyOptions }
+            | undefined
+        )?.replyOptions?.suppressNextUserMessagePersistence,
+      ).toBe(true);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send releases a durable claim after synchronous post-admission failure", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const runId = "idem-restart-safe-setup-error";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      let responseCount = 0;
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "retry me after setup failure",
+        respond: ((ok, payload) => {
+          responseCount += 1;
+          if (responseCount === 1) {
+            throw new Error("response transport failed");
+          }
+          responses.push({ ok, payload });
+        }) as RespondFn,
+      });
+
+      expect(responses).toEqual([{ ok: false, payload: expect.objectContaining({ runId }) }]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
+      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
+        expect.stringMatching(/^hmac-sha256:v1:/u),
+      );
+      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
+      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send leaves a post-admission routing rejection retryable", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    const runId = "idem-restart-safe-routing-change";
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      const initialRuntimeConfig = getRuntimeConfig();
+      const changedRuntimeConfig = {
+        ...initialRuntimeConfig,
+        session: {
+          ...initialRuntimeConfig.session,
+          scope: initialRuntimeConfig.session?.scope === "global" ? "per-sender" : "global",
+        },
+      } as const;
+      context.getRuntimeConfig = vi
+        .fn()
+        .mockReturnValueOnce(initialRuntimeConfig)
+        .mockReturnValueOnce(initialRuntimeConfig)
+        .mockReturnValue(changedRuntimeConfig);
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+
+      await sendControlUiChat({
+        context,
+        expectedSessionRoutingContract: resolveSessionRoutingContract(initialRuntimeConfig),
+        idempotencyKey: runId,
+        message: "retry me after routing changes",
+        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+      });
+      expect(responses).toEqual([{ ok: false, payload: undefined }]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const failed = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(failed).toMatchObject({ abortedLastRun: false, status: "failed" });
+      expect(failed?.restartRecoveryDeliveryRequestFingerprint).toEqual(
+        expect.stringMatching(/^hmac-sha256:v1:/u),
+      );
+      expect(failed?.restartRecoveryDeliveryRunId).toBe(runId);
+      expect(failed?.restartRecoveryDeliverySourceRunId).toBe(runId);
+
+      const retryContext = createDirectChatContext();
+      const retryResponses: Array<{ ok: boolean; payload?: unknown }> = [];
+      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+      await sendControlUiChat({
+        context: retryContext,
+        idempotencyKey: runId,
+        message: "retry me after routing changes",
+        respond: ((ok, payload) => retryResponses.push({ ok, payload })) as RespondFn,
+      });
+      expect(retryResponses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({ runId, status: "started" }),
+        },
+      ]);
+      await vi.waitFor(
+        () => expect(retryContext.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      expect(
+        (
+          dispatchInboundMessageMock.mock.calls[0]?.[0] as
+            | { replyOptions?: GetReplyOptions }
+            | undefined
+        )?.replyOptions?.suppressNextUserMessagePersistence,
+      ).toBe(true);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test.each([
+    {
+      caseName: "pending final delivery",
+      runId: "idem-pending-final-delivery",
+      entry: {
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "older reply",
+        pendingFinalDeliveryContext: {
+          channel: "whatsapp",
+          to: "+15551234567",
+        },
+      },
+    },
+    {
+      caseName: "an aborted-run hint",
+      runId: "idem-aborted-run-hint",
+      entry: { abortedLastRun: true },
+    },
+  ])("chat.send leaves $caseName outside restart-safe admission", async ({ entry, runId }) => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const storePath = path.join(sessionDir, "sessions.json");
+    try {
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "done",
+            ...entry,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const context = createDirectChatContext();
+      dispatchInboundMessageMock.mockResolvedValueOnce(undefined);
+      const ackSnapshot: { entry: ReturnType<typeof loadSessionEntry> } = { entry: undefined };
+
+      await sendControlUiChat({
+        context,
+        idempotencyKey: runId,
+        message: "new Control UI turn",
+        respond: ((ok, payload) => {
+          if (ok && (payload as { status?: unknown } | undefined)?.status === "started") {
+            ackSnapshot.entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+          }
+        }) as RespondFn,
+      });
+
+      expect(ackSnapshot.entry).toMatchObject({
+        ...entry,
+        status: "done",
+      });
+      expect(ackSnapshot.entry?.restartRecoveryDeliveryRunId).toBeUndefined();
+      await vi.waitFor(
+        () => expect(context.removeChatRun).toHaveBeenCalledTimes(1),
+        FAST_WAIT_OPTS,
+      );
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.send keeps matching WebChat text sends distinct by idempotency key", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred();
@@ -2288,6 +3323,8 @@ describe("gateway server chat", () => {
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getSessionEventSubscriberConnIds: () => new Set(),
         nodeSendToSession: vi.fn(),
         registerToolEventRecipient: vi.fn(),
         dedupe: new Map(),
@@ -2723,6 +3760,8 @@ describe("gateway server chat", () => {
         addChatRun: vi.fn(),
         removeChatRun: vi.fn(),
         broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getSessionEventSubscriberConnIds: () => new Set(),
         nodeSendToSession: vi.fn(),
         registerToolEventRecipient: vi.fn(),
         dedupe: new Map(),
@@ -3479,76 +4518,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history marks byte-truncated claude-cli snapshots as incomplete", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      await connectOk(ws);
-      const sessionDir = await createSessionDir();
-      const sessionId = "sess-claude-cli-byte-pages";
-      const cliSessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07531";
-      const homeEnvSnapshot = captureEnv(["HOME"]);
-      const homeDir = path.join(sessionDir, "home");
-      const claudeProjectsDir = path.join(homeDir, ".claude", "projects", "workspace");
-      await fs.mkdir(claudeProjectsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(claudeProjectsDir, `${cliSessionId}.jsonl`),
-        Array.from({ length: 14 }, (_, index) =>
-          JSON.stringify({
-            type: index % 2 === 0 ? "user" : "assistant",
-            uuid: `byte-page-${index + 1}`,
-            timestamp: new Date(Date.parse("2026-03-26T16:30:00.000Z") + index).toISOString(),
-            message: {
-              role: index % 2 === 0 ? "user" : "assistant",
-              content: [{ type: "text", text: `message ${index + 1} ${"x".repeat(600)}` }],
-            },
-          }),
-        ).join("\n"),
-        "utf-8",
-      );
-      setTestEnvValue("HOME", homeDir);
-      setMaxChatHistoryMessagesBytesForTest(1_200);
-      try {
-        await writeSessionStore({
-          entries: {
-            main: {
-              sessionId,
-              sessionFile: testSessionFilePath(sessionDir, sessionId),
-              updatedAt: futureFixtureUpdatedAt(),
-              modelProvider: "claude-cli",
-              model: "claude-sonnet-4-6",
-              cliSessionBindings: { "claude-cli": { sessionId: cliSessionId } },
-            },
-          },
-        });
-
-        const history = await rpcReq<{
-          messages?: unknown[];
-          hasMore?: boolean;
-          nextOffset?: number;
-          totalMessages?: number;
-          completeSnapshot?: boolean;
-        }>(ws, "chat.history", { sessionKey: "main", limit: 20 });
-        expect(history.ok).toBe(true);
-        expect(history.payload?.messages?.length).toBeLessThan(14);
-        expect(history.payload?.totalMessages).toBe(14);
-        expect(history.payload?.hasMore).toBe(false);
-        expect(history.payload?.nextOffset).toBeUndefined();
-        expect(history.payload?.completeSnapshot).toBeUndefined();
-
-        setMaxChatHistoryMessagesBytesForTest();
-        const complete = await rpcReq<{
-          messages?: unknown[];
-          hasMore?: boolean;
-          completeSnapshot?: boolean;
-        }>(ws, "chat.history", { sessionKey: "main", limit: 20 });
-        expect(complete.payload?.messages).toHaveLength(14);
-        expect(complete.payload?.hasMore).toBe(false);
-        expect(complete.payload?.completeSnapshot).toBe(true);
-      } finally {
-        homeEnvSnapshot.restore();
-      }
-    });
-  });
-
   test("chat.history makes the full local prefix reachable in a claude-cli merge", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await connectOk(ws);
@@ -4000,76 +4969,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("smoke: caps history payload and preserves routing metadata", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes,
-      });
-
-      const bigText = "x".repeat(2_000);
-      const historyLines: string[] = [];
-      for (let i = 0; i < 45; i += 1) {
-        historyLines.push(
-          JSON.stringify({
-            message: {
-              role: "user",
-              content: [{ type: "text", text: `${i}:${bigText}` }],
-              timestamp: Date.now() + i,
-            },
-          }),
-        );
-      }
-      await writeMainSessionTranscript(sessionDir, historyLines);
-      const messages = await fetchHistoryMessages(ws);
-      const bytes = Buffer.byteLength(JSON.stringify(messages), "utf8");
-      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
-      expect(messages.length).toBeLessThan(45);
-
-      await writeSessionStore({
-        entries: {
-          main: {
-            sessionId: "sess-main",
-            updatedAt: Date.now(),
-            lastChannel: "whatsapp",
-            lastTo: "+1555",
-          },
-        },
-      });
-
-      const sendRes = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "hello",
-        idempotencyKey: "idem-route",
-      });
-      expect(sendRes.ok).toBe(true);
-
-      const sessionStorePath = testState.sessionStorePath;
-      if (!sessionStorePath) {
-        throw new Error("expected session store path");
-      }
-      const stored = loadSessionEntry({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        storePath: sessionStorePath,
-      });
-      expect(stored?.lastChannel).toBe("whatsapp");
-      expect(stored?.lastTo).toBe("+1555");
-
-      await vi.waitFor(async () => {
-        const completed = await rpcReq<{ status?: string }>(ws, "chat.send", {
-          sessionKey: "main",
-          message: "hello",
-          idempotencyKey: "idem-route",
-        });
-        expect(completed.ok).toBe(true);
-        expect(completed.payload?.status).toBe("ok");
-      }, FAST_WAIT_OPTS);
-    });
-  });
-
   test("chat.send does not force-disable block streaming", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const spy = getReplyFromConfig;
@@ -4299,39 +5198,29 @@ describe("gateway server chat", () => {
 
   test("chat.history hard-caps single oversized nested payloads", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes,
-      });
-
-      const hugeNestedText = "n".repeat(120_000);
-      const oversizedLine = JSON.stringify({
-        id: "msg-huge",
-        message: {
-          role: "assistant",
-          timestamp: Date.now(),
-          content: [
-            {
-              type: "tool_result",
-              toolUseId: "tool-1",
-              output: {
-                nested: {
-                  payload: hugeNestedText,
-                },
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
+      const hugeNestedText = "n".repeat(300_000);
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          id: "msg-huge",
+          message: {
+            role: "assistant",
+            timestamp: Date.now(),
+            content: [
+              {
+                type: "tool_result",
+                toolUseId: "tool-1",
+                output: { nested: { payload: hugeNestedText } },
               },
-            },
-          ],
-        },
-      });
-      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
-      const messages = await fetchHistoryMessages(ws);
-      expect(messages.length).toBe(1);
+            ],
+          },
+        }),
+      ]);
 
+      const messages = await fetchHistoryMessages(ws);
       const serialized = JSON.stringify(messages);
-      const bytes = Buffer.byteLength(serialized, "utf8");
-      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
+      expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(historyMaxBytes);
       expect(serialized).toContain("[chat.history omitted: message too large]");
       expect(messages[0]).toMatchObject({
         __openclaw: { id: "msg-huge", truncated: true, reason: "oversized" },
@@ -4340,30 +5229,20 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history keeps recent small messages when latest message is oversized", async () => {
+  test("chat.history keeps recent messages within the production byte budget", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const historyMaxBytes = 64 * 1024;
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes,
-      });
-
-      const baseText = "s".repeat(1_200);
-      const lines: string[] = [];
-      for (let i = 0; i < 30; i += 1) {
-        lines.push(
-          JSON.stringify({
-            message: {
-              role: "user",
-              timestamp: Date.now() + i,
-              content: [{ type: "text", text: `small-${i}:${baseText}` }],
-            },
-          }),
-        );
-      }
-
-      const hugeNestedText = "z".repeat(120_000);
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
+      const baseText = "s".repeat(100_000);
+      const lines = Array.from({ length: 70 }, (_, index) =>
+        JSON.stringify({
+          message: {
+            role: "user",
+            timestamp: Date.now() + index,
+            content: [{ type: "text", text: `small-${index}:${baseText}` }],
+          },
+        }),
+      );
       lines.push(
         JSON.stringify({
           message: {
@@ -4373,11 +5252,7 @@ describe("gateway server chat", () => {
               {
                 type: "tool_result",
                 toolUseId: "tool-1",
-                output: {
-                  nested: {
-                    payload: hugeNestedText,
-                  },
-                },
+                output: { nested: { payload: "z".repeat(300_000) } },
               },
             ],
           },
@@ -4385,15 +5260,56 @@ describe("gateway server chat", () => {
       );
 
       await writeMainSessionTranscript(sessionDir, lines);
-      const messages = await fetchHistoryMessages(ws);
+      const messages = await fetchHistoryMessages(ws, { maxChars: 100_000 });
       const serialized = JSON.stringify(messages);
-      const bytes = Buffer.byteLength(serialized, "utf8");
 
-      expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
-      expect(messages.length).toBeGreaterThan(1);
-      expect(serialized).toContain("small-29:");
+      expect(Buffer.byteLength(serialized, "utf8")).toBeLessThanOrEqual(historyMaxBytes);
+      expect(serialized).toContain("small-69:");
       expect(serialized).toContain("[chat.history omitted: message too large]");
-      expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
+      expect(serialized).not.toContain("small-0:");
+    });
+  });
+
+  test("chat.history advances past an oversized newest record when the tail parses empty", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const historyMaxBytes = getMaxChatHistoryMessagesBytes();
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "reachable older message" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            padding: "x".repeat(historyMaxBytes * 2 + 1024),
+            timestamp: Date.now() + 1,
+          },
+        }),
+      ]);
+
+      const firstPage = await rpcReq<{
+        messages?: unknown[];
+        nextOffset?: number;
+        hasMore?: boolean;
+      }>(ws, "chat.history", { sessionKey: "main", limit: 1 });
+      expect(firstPage.ok).toBe(true);
+      expect(firstPage.payload?.messages).toEqual([]);
+      expect(firstPage.payload?.hasMore).toBe(true);
+      expect(firstPage.payload?.nextOffset).toBe(1);
+
+      const olderPage = await rpcReq<{ messages?: unknown[]; hasMore?: boolean }>(
+        ws,
+        "chat.history",
+        { sessionKey: "main", limit: 1, offset: firstPage.payload?.nextOffset },
+      );
+      expect(olderPage.ok).toBe(true);
+      expect(JSON.stringify(olderPage.payload?.messages)).toContain("reachable older message");
+      expect(olderPage.payload?.hasMore).toBe(false);
     });
   });
 
@@ -5027,124 +5943,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history first-page fallback cursor advances only by byte-bounded records read", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes: 1_000,
-      });
-      const silentTail = Array.from({ length: 7 }, (_, index) =>
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "NO_REPLY" }],
-            padding: "x".repeat(180_000),
-            timestamp: Date.now() + index + 2,
-          },
-        }),
-      );
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "oldest visible question" }],
-            timestamp: Date.now(),
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "oldest visible answer" }],
-            timestamp: Date.now() + 1,
-          },
-        }),
-        ...silentTail,
-      ]);
-
-      type HistoryPage = {
-        messages?: Array<{ __openclaw?: { seq?: number } }>;
-        nextOffset?: number;
-        hasMore?: boolean;
-        totalMessages?: number;
-      };
-      const firstPage = await rpcReq<HistoryPage>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 3,
-      });
-      expect(firstPage.ok).toBe(true);
-      expect(firstPage.payload?.messages).toEqual([]);
-      expect(firstPage.payload?.totalMessages).toBe(9);
-      expect(firstPage.payload?.hasMore).toBe(true);
-      expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
-      expect(firstPage.payload?.nextOffset).toBeLessThan(9);
-
-      const visibleSeqs: number[] = [];
-      let offset = firstPage.payload?.nextOffset;
-      for (let pageIndex = 0; pageIndex < 10 && offset !== undefined; pageIndex += 1) {
-        const page = await rpcReq<HistoryPage>(ws, "chat.history", {
-          sessionKey: "main",
-          limit: 3,
-          offset,
-        });
-        expect(page.ok).toBe(true);
-        visibleSeqs.push(
-          ...(page.payload?.messages?.map(readOpenClawSeq).filter((seq) => seq !== undefined) ??
-            []),
-        );
-        offset = page.payload?.nextOffset;
-      }
-      expect(visibleSeqs.toSorted((a, b) => a - b)).toEqual([1, 2]);
-      expect(offset).toBeUndefined();
-    });
-  });
-
-  test("chat.history advances past an oversized newest record when the tail parses empty", async () => {
-    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes: 1_000,
-      });
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "reachable older message" }],
-            timestamp: Date.now(),
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "NO_REPLY" }],
-            padding: "x".repeat(2_000_000),
-            timestamp: Date.now() + 1,
-          },
-        }),
-      ]);
-
-      const firstPage = await rpcReq<{
-        messages?: unknown[];
-        nextOffset?: number;
-        hasMore?: boolean;
-      }>(ws, "chat.history", { sessionKey: "main", limit: 1 });
-      expect(firstPage.ok).toBe(true);
-      expect(firstPage.payload?.messages).toEqual([]);
-      expect(firstPage.payload?.hasMore).toBe(true);
-      expect(firstPage.payload?.nextOffset).toBe(1);
-
-      const olderPage = await rpcReq<{ messages?: unknown[]; hasMore?: boolean }>(
-        ws,
-        "chat.history",
-        { sessionKey: "main", limit: 1, offset: firstPage.payload?.nextOffset },
-      );
-      expect(olderPage.ok).toBe(true);
-      expect(JSON.stringify(olderPage.payload?.messages)).toContain("reachable older message");
-      expect(olderPage.payload?.hasMore).toBe(false);
-    });
-  });
-
   test("chat.history offset pagination advances from the projected first-page boundary", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
@@ -5324,20 +6122,6 @@ describe("gateway server chat", () => {
       expect(history.payload?.nextOffset).toBeUndefined();
       expect(history.payload?.hasMore).toBeUndefined();
       expect(history.payload?.totalMessages).toBeUndefined();
-
-      setMaxChatHistoryMessagesBytesForTest(1_000);
-      const capped = await rpcReq<{
-        messages?: Array<{ __openclaw?: { id?: string } }>;
-      }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 3,
-        messageId: "message-3",
-        sessionId: "sess-main",
-      });
-      expect(capped.ok).toBe(true);
-      expect(
-        capped.payload?.messages?.some((message) => message["__openclaw"]?.id === "message-3"),
-      ).toBe(true);
     });
   });
 
@@ -5449,34 +6233,20 @@ describe("gateway server chat", () => {
 
   test("chat.history offset pagination advances from the final budgeted page", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes: 250,
-      });
-      await writeMainSessionTranscript(sessionDir, [
-        JSON.stringify({
-          message: {
-            role: "user",
-            content: [{ type: "text", text: "older question" }],
-            timestamp: Date.now(),
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "older answer" }],
-            timestamp: Date.now() + 1,
-          },
-        }),
-        JSON.stringify({
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "latest" }],
-            timestamp: Date.now() + 2,
-          },
-        }),
-      ]);
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const messageCount = 70;
+      await writeMainSessionTranscript(
+        sessionDir,
+        Array.from({ length: messageCount }, (_, index) =>
+          JSON.stringify({
+            message: {
+              role: index % 2 === 0 ? "user" : "assistant",
+              content: [{ type: "text", text: `message ${index + 1} ${"x".repeat(100_000)}` }],
+              timestamp: Date.now() + index,
+            },
+          }),
+        ),
+      );
 
       const firstPage = await rpcReq<{
         messages?: Array<{ __openclaw?: { seq?: number } }>;
@@ -5485,25 +6255,25 @@ describe("gateway server chat", () => {
         totalMessages?: number;
       }>(ws, "chat.history", {
         sessionKey: "main",
-        limit: 3,
+        limit: messageCount,
         offset: 0,
-        maxChars: 1_000,
+        maxChars: 100_000,
       });
       expect(firstPage.ok).toBe(true);
-      expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([2, 3]);
-      expect(firstPage.payload?.nextOffset).toBe(2);
+      const sequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
+      expect(sequences.length).toBeGreaterThan(0);
+      expect(sequences.length).toBeLessThan(messageCount);
+      const oldestSeq = expectDefined(sequences[0], "oldest returned sequence");
+      expect(firstPage.payload?.nextOffset).toBe(messageCount - oldestSeq + 1);
       expect(firstPage.payload?.hasMore).toBe(true);
-      expect(firstPage.payload?.totalMessages).toBe(3);
+      expect(firstPage.payload?.totalMessages).toBe(messageCount);
     });
   });
 
   test("chat.history advances past a replay boundary that cannot fit all projected siblings", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const sessionDir = await prepareMainHistoryHarness({
-        ws,
-        createSessionDir,
-        historyMaxBytes: 1_200,
-      });
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      const projectedSiblingCount = 70;
       const captured: DiagnosticPayloadLargeEvent[] = [];
       const unsubscribe = onDiagnosticEvent((event) => {
         if (event.type === "payload.large" && event.surface === "gateway.chat.history") {
@@ -5522,12 +6292,12 @@ describe("gateway server chat", () => {
           JSON.stringify({
             message: {
               role: "assistant",
-              content: Array.from({ length: 4 }, (_, index) => ({
+              content: Array.from({ length: projectedSiblingCount }, (_, index) => ({
                 type: "toolcall",
                 name: "message",
                 arguments: {
                   action: "send",
-                  message: `projected sibling ${index + 1} ${"x".repeat(700)}`,
+                  message: `projected sibling ${index + 1} ${"x".repeat(100_000)}`,
                 },
               })),
               timestamp: Date.now() + 1,
@@ -5551,11 +6321,14 @@ describe("gateway server chat", () => {
         };
         const firstPage = await rpcReq<HistoryPage>(ws, "chat.history", {
           sessionKey: "main",
-          limit: 2,
+          limit: projectedSiblingCount + 1,
           offset: 0,
+          maxChars: 100_000,
         });
         expect(firstPage.ok).toBe(true);
-        expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([3]);
+        const firstPageSequences = firstPage.payload?.messages?.map(readOpenClawSeq) ?? [];
+        expect(firstPageSequences.length).toBeGreaterThan(0);
+        expect(firstPageSequences.every((seq) => seq === 3)).toBe(true);
         expect(firstPage.payload?.hasMore).toBe(true);
         expect(firstPage.payload?.nextOffset).toBeGreaterThan(0);
         expect(

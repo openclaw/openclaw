@@ -8,7 +8,7 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 const DOCTOR_CONTRACT_BASENAMES = ["doctor-contract-api", "contract-api"] as const;
 const MODULE_EXTENSIONS = ["js", "cjs", "mjs", "ts", "cts", "mts"] as const;
 
-export type BundledPluginStartupMetadata = {
+type BundledPluginStartupMetadata = {
   hasDoctorContract: boolean;
 };
 

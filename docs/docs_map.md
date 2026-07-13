@@ -1427,6 +1427,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/dashboard
 - Headings:
   - H1: openclaw dashboard
+  - H2: Machine-readable output
   - H2: Related
 
 ## cli/devices.md
@@ -2158,6 +2159,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Dispatch says data-only
   - H3: Dispatch starts nothing
   - H2: Related
+
+## cli/worker.md
+
+- Route: /cli/worker
+- Headings:
+  - H1: openclaw worker
+  - H2: Launch contract
+  - H2: Runtime boundary
 
 ## concepts/active-memory.md
 
@@ -3429,8 +3438,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /gateway/gateway-lock
 - Headings:
   - H2: Why
-  - H2: Two layers
-  - H3: File lock
+  - H2: Three layers
+  - H3: State and config locks
   - H3: Socket bind
   - H2: Operational notes
   - H2: Related
@@ -5122,7 +5131,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/linux
 - Headings:
-  - H2: Quick path (VPS)
+  - H2: Desktop companion
+  - H2: CLI and SSH alternative
   - H2: Install
   - H2: Gateway service (systemd)
   - H2: Memory pressure and OOM kills
@@ -5919,6 +5929,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Safety
   - H2: Related
 
+## plugins/onepassword.md
+
+- Route: /plugins/onepassword
+- Headings:
+  - H1: 1Password secrets broker
+  - H2: Security model
+  - H2: Before you begin
+  - H2: Configure registered secrets
+  - H2: Use the agent tool
+  - H2: Policy tiers and approvals
+  - H2: Inspect status and audit history
+  - H2: 1Password CLI behavior
+
 ## plugins/plugin-inventory.md
 
 - Route: /plugins/plugin-inventory
@@ -6698,6 +6721,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /plugins/reference/ollama
 - Headings:
   - H1: Ollama plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
+## plugins/reference/onepassword.md
+
+- Route: /plugins/reference/onepassword
+- Headings:
+  - H1: Onepassword plugin
   - H2: Distribution
   - H2: Surface
   - H2: Related docs

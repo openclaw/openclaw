@@ -6,6 +6,8 @@ import { styleMap } from "lit/directives/style-map.js";
 import "../../components/file-preview-modal.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import "../../styles/plugins.css";
+import "../../styles/skill-workshop.css";
 import {
   filterSkillWorkshopProposals,
   type SkillWorkshopActionBusy,

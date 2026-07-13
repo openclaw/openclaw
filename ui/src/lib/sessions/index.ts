@@ -1,4 +1,9 @@
-import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  type GatewayBrowserClient,
+  type GatewayEventFrame,
+  type GatewayHelloOk,
+} from "../../api/gateway.ts";
 import type {
   FastMode,
   GatewaySessionRow,
@@ -14,6 +19,7 @@ import type {
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
+import { isGatewayMethodAdvertised } from "../gateway-methods.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import {
   requestSessionCreate,
@@ -230,7 +236,7 @@ export type SessionCapability = {
     checkpointId: string,
     options?: { agentId?: string | null },
   ) => Promise<SessionsCompactionRestoreResult>;
-  /** Loads the gateway-owned group catalog once per connection. */
+  /** Loads the gateway-owned group catalog, coalescing successful connection attempts. */
   groupsLoad: () => Promise<void>;
   /** Replaces the gateway-owned group catalog (order included). */
   groupsPut: (names: readonly string[]) => Promise<void>;
@@ -839,7 +845,37 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     (await createResult(params))?.key ?? null;
 
   const LEGACY_GROUPS_STORAGE_KEY = "openclaw:sessions:custom-groups";
+  const GROUPS_LIST_METHOD = "sessions.groups.list";
+  const GROUPS_RETRY_DEFAULT_MS = 500;
+  const GROUPS_RETRY_MIN_MS = 100;
+  const GROUPS_RETRY_MAX_MS = 30_000;
   let groupsLoadedEpoch = -1;
+  let groupsLoadGeneration = 0;
+  let groupsRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+  const clearGroupsRetry = () => {
+    if (groupsRetryTimer !== null) {
+      globalThis.clearTimeout(groupsRetryTimer);
+      groupsRetryTimer = null;
+    }
+  };
+
+  const invalidateGroupsLoad = () => {
+    groupsLoadedEpoch = -1;
+    groupsLoadGeneration += 1;
+    clearGroupsRetry();
+  };
+
+  const groupsRetryDelayMs = (error: unknown): number | null => {
+    if (!(error instanceof GatewayRequestError) || !error.retryable) {
+      return null;
+    }
+    const requested =
+      typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
+        ? error.retryAfterMs
+        : GROUPS_RETRY_DEFAULT_MS;
+    return Math.min(Math.max(requested, GROUPS_RETRY_MIN_MS), GROUPS_RETRY_MAX_MS);
+  };
 
   const readGroupNames = (payload: unknown): string[] => {
     const groups = (payload as { groups?: Array<{ name?: unknown }> } | null)?.groups;
@@ -877,10 +913,14 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
-  const loadGroups = async (scope: SessionConnectionScope) => {
+  const loadGroups = async (
+    scope: SessionConnectionScope,
+    generation: number,
+    advertised: boolean | null,
+  ) => {
     try {
-      const listed = await scope.client.request("sessions.groups.list", {});
-      if (!isCurrentConnection(scope)) {
+      const listed = await scope.client.request(GROUPS_LIST_METHOD, {});
+      if (!isCurrentConnection(scope) || generation !== groupsLoadGeneration) {
         return;
       }
       let names = readGroupNames(listed);
@@ -888,7 +928,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       const legacy = readLegacyStoredGroups();
       if (names.length === 0 && legacy.length > 0) {
         const put = await scope.client.request("sessions.groups.put", { names: legacy });
-        if (!isCurrentConnection(scope)) {
+        if (!isCurrentConnection(scope) || generation !== groupsLoadGeneration) {
           return;
         }
         names = readGroupNames(put);
@@ -901,8 +941,28 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         }
       }
       publishGroups(names);
-    } catch {
-      // Older gateways without the groups RPC keep observed-category grouping.
+    } catch (error) {
+      if (
+        !isCurrentConnection(scope) ||
+        generation !== groupsLoadGeneration ||
+        advertised !== true
+      ) {
+        // Gateways without feature metadata retain the legacy one-shot probe.
+        return;
+      }
+      groupsLoadedEpoch = -1;
+      const retryDelayMs = groupsRetryDelayMs(error);
+      if (retryDelayMs === null) {
+        return;
+      }
+      // The attempt token prevents an older rejection from reviving a retry
+      // after a newer event-driven catalog load has already succeeded.
+      groupsRetryTimer = globalThis.setTimeout(() => {
+        groupsRetryTimer = null;
+        if (isCurrentConnection(scope) && generation === groupsLoadGeneration) {
+          void groupsLoad();
+        }
+      }, retryDelayMs);
     }
   };
 
@@ -912,8 +972,15 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (!scope || groupsLoadedEpoch === scope.epoch) {
       return;
     }
+    const advertised = isGatewayMethodAdvertised(gateway.snapshot, GROUPS_LIST_METHOD);
+    clearGroupsRetry();
+    const generation = ++groupsLoadGeneration;
     groupsLoadedEpoch = scope.epoch;
-    await loadGroups(scope);
+    if (advertised === false) {
+      publishGroups([]);
+      return;
+    }
+    await loadGroups(scope, generation, advertised);
   };
 
   const groupsPut = async (names: readonly string[]) => {
@@ -1316,6 +1383,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connectionConnected = next.connected;
     if (connectionChanged) {
       connectionEpoch += 1;
+      invalidateGroupsLoad();
       inFlight = null;
       queuedRefresh = null;
       rollbackPendingModelPatches();
@@ -1373,7 +1441,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       // reason straight off the payload instead of the parsed row info.
       const eventReason = (event.payload as { reason?: unknown } | null)?.reason;
       if (eventReason === "groups") {
-        groupsLoadedEpoch = -1;
+        invalidateGroupsLoad();
         void groupsLoad();
       }
       const hasActiveRun = reconciled.hasActiveRun ?? eventInfo?.hasActiveRun;
@@ -1443,6 +1511,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     dispose() {
       disposed = true;
       connectionEpoch += 1;
+      invalidateGroupsLoad();
       connectionConnected = false;
       inFlight = null;
       queuedRefresh = null;

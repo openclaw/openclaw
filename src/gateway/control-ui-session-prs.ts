@@ -20,6 +20,7 @@ import {
   optionalNumber,
   optionalString,
 } from "./control-ui-github-api.js";
+import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 const SUCCESS_CACHE_MS = 60_000;
@@ -36,7 +37,7 @@ export type ControlUiSessionPullRequestsParams = {
 };
 
 /** GitHub repo + branch resolved from a session's git checkout. */
-export type SessionPullRequestGitContext = {
+type SessionPullRequestGitContext = {
   owner: string;
   repo: string;
   branch: string;
@@ -66,10 +67,6 @@ type CacheEntry = {
 
 const branchCache = new Map<string, CacheEntry>();
 
-export function resetControlUiSessionPullRequestCacheForTests(): void {
-  branchCache.clear();
-}
-
 export function parseControlUiSessionPullRequestsParams(
   value: unknown,
 ): ControlUiSessionPullRequestsParams | null {
@@ -96,35 +93,6 @@ async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
   }
 }
 
-/** Parses a GitHub `origin` remote (https, ssh, or scp-like) to owner/repo. */
-export function parseGitHubRemoteUrl(raw: string): { owner: string; repo: string } | null {
-  const trimmed = raw.trim();
-  let path: string | undefined;
-  const scpMatch = /^git@github\.com:(.+)$/i.exec(trimmed);
-  if (scpMatch) {
-    path = scpMatch[1];
-  } else {
-    try {
-      const url = new URL(trimmed);
-      const protocolOk =
-        url.protocol === "https:" || url.protocol === "http:" || url.protocol === "ssh:";
-      if (!protocolOk || url.hostname.toLowerCase() !== "github.com") {
-        return null;
-      }
-      path = url.pathname;
-    } catch {
-      return null;
-    }
-  }
-  const segments = (path ?? "").split("/").filter(Boolean);
-  const owner = segments[0];
-  const repo = segments[1]?.replace(/\.git$/i, "");
-  if (segments.length !== 2 || !owner || !repo) {
-    return null;
-  }
-  return { owner, repo };
-}
-
 /**
  * Resolves the GitHub repo + branch a session works on. Returns null for
  * unknown sessions, non-git roots, detached HEADs, non-GitHub remotes, and
@@ -132,7 +100,7 @@ export function parseGitHubRemoteUrl(raw: string): { owner: string; repo: string
  * the same checkout, and skipping it protects the anonymous GitHub quota for
  * plain sessions).
  */
-export async function resolveSessionPullRequestGitContext(
+async function resolveSessionPullRequestGitContext(
   params: ControlUiSessionPullRequestsParams,
 ): Promise<SessionPullRequestGitContext | null> {
   const { cfg, entry, storePath, canonicalKey } = loadSessionEntry(params.sessionKey, {
@@ -590,7 +558,7 @@ async function refreshBranchPullRequests(
   }
 }
 
-export type LoadSessionPullRequestDeps = {
+type LoadSessionPullRequestDeps = {
   fetchImpl?: typeof fetch;
   resolveGitContext?: (
     params: ControlUiSessionPullRequestsParams,

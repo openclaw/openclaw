@@ -449,7 +449,6 @@ function buildDiscordQaConfig(
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },
   };
-  const requireMention = !options.statusReactionsToolOnly;
   const messages = options.statusReactionsToolOnly
     ? {
         ...baseCfg.messages,
@@ -479,6 +478,7 @@ function buildDiscordQaConfig(
     ? {
         ...baseCfg.channels?.discord?.voice,
         enabled: true,
+        mode: "stt-tts" as const,
         autoJoin: [options.voiceAutoJoin],
       }
     : undefined;
@@ -504,12 +504,12 @@ function buildDiscordQaConfig(
             groupPolicy: "allowlist",
             guilds: {
               [params.guildId]: {
-                requireMention,
+                requireMention: !options.statusReactionsToolOnly,
                 users: [params.driverBotId],
                 channels: {
                   [params.channelId]: {
                     enabled: true,
-                    requireMention,
+                    requireMention: !options.statusReactionsToolOnly,
                     users: [params.driverBotId],
                   },
                 },

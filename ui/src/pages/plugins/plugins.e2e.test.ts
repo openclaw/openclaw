@@ -515,7 +515,11 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       if ((await moreButton.getAttribute("aria-expanded")) !== "true") {
         await moreButton.click();
       }
-      await sidebar.getByRole("link", { name: "Workboard" }).waitFor({ state: "visible" });
+      const workboardMenuItem = sidebar
+        .getByRole("menu", { exact: true, name: "More" })
+        .getByRole("menuitem", { exact: true, name: "Workboard" });
+      await workboardMenuItem.waitFor({ state: "visible" });
+      expect(await workboardMenuItem.getAttribute("href")).toBe("/workboard");
     } finally {
       await context.close();
     }

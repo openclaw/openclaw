@@ -4159,11 +4159,6 @@
       "translated": "速率限制"
     },
     {
-      "id": "native.android.62fe76eb7c0dbddc",
-      "source": "Access",
-      "translated": "访问权限"
-    },
-    {
       "id": "native.android.ebeec52e498bc128",
       "source": "Granted",
       "translated": "已授予"
@@ -4429,14 +4424,19 @@
       "translated": "在线"
     },
     {
+      "id": "native.android.62fe76eb7c0dbddc",
+      "source": "Access",
+      "translated": "访问权限"
+    },
+    {
       "id": "native.android.a8958b5432344ded",
       "source": "Address",
       "translated": "地址"
     },
     {
-      "id": "native.android.573f216f8bc83d12",
-      "source": "Not available",
-      "translated": "不可用"
+      "id": "native.android.6926684139f297b5",
+      "source": "Limited Gateway access",
+      "translated": "Gateway 访问受限"
     },
     {
       "id": "native.android.7b12195e02ebcc34",
@@ -4547,6 +4547,26 @@
       "id": "native.android.633d0dcf4b6d6ed8",
       "source": "Enter a valid setup code or gateway address.",
       "translated": "输入有效的设置代码或 Gateway 地址。"
+    },
+    {
+      "id": "native.android.573f216f8bc83d12",
+      "source": "Not available",
+      "translated": "不可用"
+    },
+    {
+      "id": "native.android.feac408f68bedd1c",
+      "source": "Full",
+      "translated": "完全"
+    },
+    {
+      "id": "native.android.c39ba12c18acb958",
+      "source": "Limited",
+      "translated": "受限"
+    },
+    {
+      "id": "native.android.f6ab96d066bd583c",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, generate a full-access setup code in the Control UI or with openclaw qr, then scan or paste it below and reconnect to enable settings and upgrades.",
+      "translated": "使用安全的 wss:// 或 Tailscale Serve Gateway，在 Control UI 中或使用 openclaw qr 生成完全访问的设置代码，然后在下方扫描或粘贴并重新连接，以启用设置和升级。"
     },
     {
       "id": "native.android.5311e446ce2bf857",
@@ -11337,6 +11357,41 @@
       "id": "native.apple.8e3656d85f092897",
       "source": "Agents",
       "translated": "代理"
+    },
+    {
+      "id": "native.apple.412973e8b46051ca",
+      "source": "Access",
+      "translated": "访问"
+    },
+    {
+      "id": "native.apple.77609c6953ae454f",
+      "source": "Full",
+      "translated": "完全"
+    },
+    {
+      "id": "native.apple.5dd76b852cf24f49",
+      "source": "Limited",
+      "translated": "受限"
+    },
+    {
+      "id": "native.apple.5b56380d4922e78b",
+      "source": "Upgrade access",
+      "translated": "升级访问权限"
+    },
+    {
+      "id": "native.apple.7221013549a7c1b3",
+      "source": "This phone has limited Gateway access.",
+      "translated": "此手机对 Gateway 的访问受限。"
+    },
+    {
+      "id": "native.apple.7793f5de6975faef",
+      "source": "Use a secure wss:// or Tailscale Serve Gateway, then scan a full-access setup code from the Control UI or openclaw qr and reconnect to enable settings and upgrades.",
+      "translated": "使用安全的 wss:// 或 Tailscale Serve Gateway，然后从 Control UI 或 openclaw qr 扫描完全访问的设置代码并重新连接，以启用设置和升级。"
+    },
+    {
+      "id": "native.apple.666cea428e126188",
+      "source": "Scan Full-Access Code",
+      "translated": "扫描完全访问代码"
     },
     {
       "id": "native.apple.5c4427c5a67068d6",

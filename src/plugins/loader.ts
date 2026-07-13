@@ -51,7 +51,7 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import { clearPluginInteractiveHandlers } from "./interactive-registry.js";
-import { PluginLoaderCacheState } from "./loader-cache-state.js";
+import { pluginLoaderCacheInstances, type CachedPluginState } from "./loader-cache-instances.js";
 import {
   channelPluginIdBelongsToManifest,
   loadBundledRuntimeChannelPlugin,
@@ -100,7 +100,6 @@ import {
 } from "./plugin-module-loader-cache.js";
 import {
   createPluginRegistrationTransaction,
-  type PluginProcessGlobalState,
   restorePluginProcessGlobalState,
   snapshotPluginProcessGlobalState,
 } from "./plugin-registration-transaction.js";
@@ -114,7 +113,6 @@ import {
   normalizePluginIdScope,
   serializePluginIdScope,
 } from "./plugin-scope.js";
-import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistryParams } from "./registry-types.js";
@@ -131,18 +129,9 @@ import type { PluginRuntime } from "./runtime/types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import {
   buildPluginLoaderAliasMap,
-  buildPluginLoaderJitiOptions,
-  listPluginSdkAliasCandidates,
-  listPluginSdkExportedSubpaths,
   type PluginRuntimeModuleResolution,
   type PluginSdkResolutionPreference,
-  resolveExtensionApiAlias,
-  resolvePluginSdkAliasCandidateOrder,
-  resolvePluginSdkAliasFile,
-  resolvePluginRuntimeModulePath,
   resolvePluginRuntimeModulePathWithDiagnostics,
-  resolvePluginSdkScopedAliasMap,
-  shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
@@ -153,9 +142,6 @@ import type {
   PluginLogger,
   PluginRegistrationMode,
 } from "./types.js";
-
-export type PluginLoadResult = PluginRegistry;
-export { PluginLoadReentryError } from "./loader-cache-state.js";
 
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
@@ -340,18 +326,8 @@ class PluginLoadFailureError extends Error {
   }
 }
 
-type CachedPluginState = {
-  registry: PluginRegistry;
-  processGlobalState: PluginProcessGlobalState;
-};
-
-const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
-const pluginLoaderCacheState = new PluginLoaderCacheState<CachedPluginState>(
-  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
-);
-const fullWorkspacePluginLoaderCacheState = new PluginLoaderCacheState<CachedPluginState>(
-  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
-);
+const { scoped: pluginLoaderCacheState, fullWorkspace: fullWorkspacePluginLoaderCacheState } =
+  pluginLoaderCacheInstances;
 const LAZY_RUNTIME_REFLECTION_KEYS = [
   "version",
   "gateway",
@@ -389,13 +365,6 @@ function createPluginCandidatesFromManifestRegistry(
     ...(record.packageManifest !== undefined ? { packageManifest: record.packageManifest } : {}),
   }));
 }
-
-export function clearPluginLoaderCache(): void {
-  pluginLoaderCacheState.clear();
-  fullWorkspacePluginLoaderCacheState.clear();
-  clearActivatedPluginRuntimeState();
-}
-
 export function clearActivatedPluginRuntimeState(): void {
   clearAgentHarnesses();
   clearPluginCommands();
@@ -520,34 +489,6 @@ function formatPluginRuntimeModuleResolutionError(params: {
     ...(resolution.error ? [`resolverError=${resolution.error}`] : []),
   ].join("; ");
 }
-
-export const testing = {
-  buildPluginLoaderJitiOptions,
-  buildPluginLoaderAliasMap,
-  listPluginSdkAliasCandidates,
-  listPluginSdkExportedSubpaths,
-  resolveExtensionApiAlias,
-  resolvePluginSdkScopedAliasMap,
-  resolvePluginSdkAliasCandidateOrder,
-  resolvePluginSdkAliasFile,
-  resolvePluginRuntimeModulePath,
-  ensureOpenClawPluginSdkAlias,
-  shouldLoadChannelPluginInSetupRuntime,
-  shouldPreferNativeModuleLoad,
-  toSafeImportPath,
-  createGuardedPluginRegistrationApi,
-  runPluginRegisterSync,
-  getCompatibleActivePluginRegistry,
-  resolvePluginLoadCacheContext,
-  get maxPluginRegistryCacheEntries() {
-    return pluginLoaderCacheState.maxEntries;
-  },
-  setMaxPluginRegistryCacheEntriesForTest(value?: number) {
-    pluginLoaderCacheState.setMaxEntriesForTest(value);
-    fullWorkspacePluginLoaderCacheState.setMaxEntriesForTest(value);
-  },
-};
-
 function getPluginRegistryCache(onlyPluginIds?: string[]) {
   return onlyPluginIds ? pluginLoaderCacheState : fullWorkspacePluginLoaderCacheState;
 }
@@ -3054,4 +2995,3 @@ function resolveCliMetadataEntrySource(rootDir: string): string | null {
   }
   return null;
 }
-export { testing as __testing };

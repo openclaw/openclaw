@@ -7,6 +7,8 @@
   "dependencies": {
     "@copilotkit/aimock": "1.35.0",
     "@modelcontextprotocol/sdk": "1.29.0",
+    "p-limit": "7.3.0",
+    "p-map": "7.0.5",
     "playwright-core": "1.61.1",
     "pretty-ms": "9.3.0",
     "semver": "7.8.5",

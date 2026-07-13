@@ -348,9 +348,12 @@ function assertCompactionProof(proof: {
   };
 }
 
-function compactTargetDatabase(target: TargetDatabase, env: NodeJS.ProcessEnv): CompactionProof {
+async function compactTargetDatabase(
+  target: TargetDatabase,
+  env: NodeJS.ProcessEnv,
+): Promise<CompactionProof> {
   if (target.identity.role === "global") {
-    const report = runDoctorStateSqliteCompact({ env });
+    const report = await runDoctorStateSqliteCompact({ env });
     if (report.skipped) {
       throw new Error(`global compaction unexpectedly skipped ${target.path}`);
     }
@@ -406,7 +409,7 @@ async function runMaintenanceRoundTrip(params: {
     rowsPerBatch: params.rowsPerBatch,
     uncommittedBatch: null,
   });
-  const compaction = compactTargetDatabase(params.target, params.env);
+  const compaction = await compactTargetDatabase(params.target, params.env);
   verifyRestoredDatabase({
     expectedState,
     identity: params.target.identity,

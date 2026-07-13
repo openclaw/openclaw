@@ -16,6 +16,8 @@ import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import "../../styles/chat.css";
+import "../../styles/new-session.css";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
@@ -1177,7 +1179,7 @@ class NewSessionPage extends OpenClawLightDomElement {
                 aria-label=${startLabel}
                 @click=${() => void this.submit()}
               >
-                ${this.submitting ? icons.loader : icons.send}
+                ${this.submitting ? icons.loader : icons.arrowUp}
               </button>
             </openclaw-tooltip>
           </div>

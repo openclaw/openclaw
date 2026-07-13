@@ -274,6 +274,24 @@ function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotific
   } as ProjectorNotification;
 }
 
+function pendingCommandStarted(id: string): ProjectorNotification {
+  return forCurrentTurn("item/started", {
+    item: {
+      type: "commandExecution",
+      id,
+      command: "/bin/bash -lc 'sleep 600'",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "inProgress",
+      commandActions: [],
+      aggregatedOutput: null,
+      exitCode: null,
+      durationMs: null,
+    },
+  });
+}
+
 describe("CodexAppServerEventProjector", () => {
   it("projects assistant deltas and usage into embedded attempt results", async () => {
     const { onAssistantMessageStart, onPartialReply, projector } =
@@ -1649,6 +1667,38 @@ describe("CodexAppServerEventProjector", () => {
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.aborted).toBe(true);
     expect(result.assistantTexts).toEqual([]);
+  });
+
+  it("keeps missing tool detail without overriding an explicit abort", async () => {
+    const projector = await createProjector();
+    projector.markAborted();
+
+    await projector.handleNotification(pendingCommandStarted("cmd-aborted"));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(true);
+    expect(result.promptError).toBeNull();
+    expect(result.promptErrorSource).toBeNull();
+    expect(result.lastToolError).toMatchObject({
+      toolName: "bash",
+      error: expect.stringContaining("without a matching tool.result"),
+    });
+  });
+
+  it("fails closed when interrupted status has no abort marker", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification(pendingCommandStarted("cmd-interrupted"));
+    await projector.handleNotification(turnWithStatus("interrupted"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.aborted).toBe(false);
+    expect(result.promptError).toContain("without a matching tool.result");
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastToolError).toBeUndefined();
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {

@@ -229,6 +229,16 @@ describe("shouldStartProxyForCli", () => {
     expect(shouldStartProxyForCli(["node", "openclaw", "devices"])).toBe(false);
     expect(shouldStartProxyForCli(["node", "openclaw", "mcp"])).toBe(false);
   });
+
+  it("skips managed proxy routing before shared-state SQLite maintenance", () => {
+    expect(
+      shouldStartProxyForCli(["node", "openclaw", "doctor", "--state-sqlite", "compact", "--json"]),
+    ).toBe(false);
+    expect(
+      shouldStartProxyForCli(["node", "openclaw", "doctor", "--state-sqlite=compact", "--json"]),
+    ).toBe(false);
+    expect(shouldStartProxyForCli(["node", "openclaw", "doctor", "--lint"])).toBe(true);
+  });
 });
 
 describe("shouldUseRootHelpFastPath", () => {

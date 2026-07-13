@@ -9,6 +9,8 @@ import { t } from "../../i18n/index.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { groupSkills } from "../../lib/skills-grouping.ts";
+import "../../styles/plugins.css";
+import "../../styles/sidebar-markdown.css";
 import {
   computeSkillMissing,
   computeSkillReasons,

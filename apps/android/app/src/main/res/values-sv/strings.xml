@@ -24,6 +24,7 @@
     <string name="native_002a6fcb30b2def4" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Det gick inte att förbereda en bilaga för att skickas."</string>
     <string name="native_003aaf9e0a0e6b9f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Mikrofon av"</string>
     <string name="native_0060cbfdd3cf13ba" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Visa aviseringar från OpenClaw"</string>
+    <string name="native_008dacb6d1e85bd8" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Fullständig"</string>
     <string name="native_009506aeb0484b2a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Godkännande tillåtet och sparat."</string>
     <string name="native_00d108e2e6466940" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Visa senaste samtalshistoriken"</string>
     <string name="native_00e8aeba41d79ce3" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"1 väntande"</string>
@@ -483,6 +484,7 @@
     <string name="native_572739b05d138f8a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Visar det senaste loggavsnittet."</string>
     <string name="native_57666930af1af35e" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Använd konfigurationskod"</string>
     <string name="native_57c4b13a4c7335e7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"sticker"</string>
+    <string name="native_57efc4ebe625cab5" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Använd en säker wss:// eller Tailscale Serve Gateway, generera en konfigurationskod med fullständig åtkomst i Control UI eller med openclaw qr, skanna eller klistra sedan in den nedan och återanslut för att aktivera inställningar och uppgraderingar."</string>
     <string name="native_57fce44d7c6df51a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"steer"</string>
     <string name="native_57fd7a0cf33f2666" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Vald"</string>
     <string name="native_58268edca12a81a1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Android kan skanna eller klistra in en befintlig konfigurationskod, men denna gateway exponerar ännu inte generering av konfigurationskoder för appen. Generera QR-koden/koden på gateway-värden med openclaw qr och skanna den sedan här eller klistra in konfigurationskoden nedan."</string>
@@ -695,6 +697,7 @@
     <string name="native_7bda957a27b2f876" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"I kö — skickas när anslutningen återupprättas"</string>
     <string name="native_7c55b5030e55a687" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"%1$s min sedan"</string>
     <string name="native_7c5c9a83536e33d2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kontrollerar parkopplingsåtkomst"</string>
+    <string name="native_7c79875c4f9d1990" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Begränsad Gateway-åtkomst"</string>
     <string name="native_7cc20d4753b8fd45" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kör verktyg..."</string>
     <string name="native_7d2227b96bc40069" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Kontrollerar godkännande…"</string>
     <string name="native_7d3951124ae2ca1d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Ta foton och spela in klipp med den här telefonen"</string>
@@ -1251,6 +1254,7 @@
     <string name="native_e4582b6fb1f57494" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Återanslut Gateway"</string>
     <string name="native_e4696640127b9126" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Tredjepart"</string>
     <string name="native_e482357257d6c2fd" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Granska beredskap"</string>
+    <string name="native_e5125d9f63d2947b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Begränsad"</string>
     <string name="native_e51aa2de89dcd71a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"OpenClaw-logotyp"</string>
     <string name="native_e52b3044724b9f4d" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lossa modell"</string>
     <string name="native_e5584bc5057284ae" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Meddelandeytor anslutna till denna Gateway."</string>

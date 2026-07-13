@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 const val GATEWAY_PROTOCOL_VERSION = 4
-const val GATEWAY_MIN_PROTOCOL_VERSION = 4
+const val GATEWAY_MIN_PROTOCOL_VERSION = 3
 
 @Serializable
 data class GatewayProtocolError(
@@ -155,6 +155,7 @@ enum class GatewayMethod(
   TalkSessionEndTurn("talk.session.endTurn"),
   TalkSessionCancelTurn("talk.session.cancelTurn"),
   TalkSessionCancelOutput("talk.session.cancelOutput"),
+  TalkSessionAcknowledgeMark("talk.session.acknowledgeMark"),
   TalkSessionSubmitToolResult("talk.session.submitToolResult"),
   TalkSessionSteer("talk.session.steer"),
   TalkSessionClose("talk.session.close"),

@@ -144,14 +144,16 @@ class WorktreesPage extends OpenClawLightDomElement {
     return this.loading || this.busyId !== null || this.creating;
   }
 
-  private async load() {
+  private async load(options: { preserveError?: boolean } = {}) {
     const client = this.client;
     if (!client || !this.gatewayConnected || this.operationPending) {
       return;
     }
     const generation = ++this.loadGeneration;
     this.loading = true;
-    this.error = null;
+    if (!options.preserveError) {
+      this.error = null;
+    }
     try {
       const result = await client.request<WorktreesListResult>("worktrees.list", {});
       if (generation === this.loadGeneration && client === this.client) {
@@ -212,7 +214,7 @@ class WorktreesPage extends OpenClawLightDomElement {
     } finally {
       if (this.isOperationScopeCurrent(scope)) {
         this.busyId = null;
-        await this.load();
+        await this.load({ preserveError: true });
       }
     }
   }
@@ -233,7 +235,7 @@ class WorktreesPage extends OpenClawLightDomElement {
     } finally {
       if (this.isOperationScopeCurrent(scope)) {
         this.busyId = null;
-        await this.load();
+        await this.load({ preserveError: true });
       }
     }
   }
@@ -254,7 +256,7 @@ class WorktreesPage extends OpenClawLightDomElement {
     } finally {
       if (this.isOperationScopeCurrent(scope)) {
         this.loading = false;
-        await this.load();
+        await this.load({ preserveError: true });
       }
     }
   }
@@ -325,7 +327,7 @@ class WorktreesPage extends OpenClawLightDomElement {
     } finally {
       if (this.isOperationScopeCurrent(scope)) {
         this.creating = false;
-        await this.load();
+        await this.load({ preserveError: true });
       }
     }
   }

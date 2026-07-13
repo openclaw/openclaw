@@ -383,6 +383,7 @@ function buildGatewayClientDistEntries(): Record<string, string> {
     // Keep package entrypoints explicit so package.json exports and root build
     // config cannot drift when client internals are split again.
     index: "packages/gateway-client/src/index.ts",
+    browser: "packages/gateway-client/src/browser.ts",
     readiness: "packages/gateway-client/src/readiness.ts",
     timeouts: "packages/gateway-client/src/timeouts.ts",
   };
@@ -566,11 +567,8 @@ function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
 }
 
 function shouldExternalizeGatewayClientDependency(id: string): boolean {
-  return (
-    id === "ws" ||
-    id.startsWith("ws/") ||
-    id === "@openclaw/gateway-protocol" ||
-    id.startsWith("@openclaw/gateway-protocol/")
+  return ["ws", "@openclaw/net-policy", "@openclaw/gateway-protocol"].some(
+    (dependency) => id === dependency || id.startsWith(`${dependency}/`),
   );
 }
 

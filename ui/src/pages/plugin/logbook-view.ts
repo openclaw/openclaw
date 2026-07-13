@@ -6,6 +6,7 @@ import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
+import "../../styles/logbook.css";
 import {
   askLogbook,
   configureLogbookPolling,

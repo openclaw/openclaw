@@ -532,9 +532,14 @@ describe("qa suite", () => {
       "generation-11111111-1111-4111-8111-111111111111",
       "smoke.json",
     );
+    const providerReadinessArtifactPath = path.join(
+      path.dirname(smokeArtifactPath),
+      "provider-readiness.json",
+    );
     await fs.mkdir(path.dirname(capabilityMatrixPath), { recursive: true });
     await fs.writeFile(capabilityMatrixPath, "authoritative capabilities\n", "utf8");
     await fs.writeFile(smokeArtifactPath, "authoritative smoke\n", "utf8");
+    await fs.writeFile(providerReadinessArtifactPath, "authoritative provider readiness\n", "utf8");
 
     const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
       outputDir,
@@ -579,7 +584,7 @@ describe("qa suite", () => {
           "manifest.json",
         ),
         providerReadiness: {},
-        providerReadinessArtifactPath: smokeArtifactPath,
+        providerReadinessArtifactPath,
         smoke: {},
         smokeArtifactPath,
       })),
@@ -589,6 +594,9 @@ describe("qa suite", () => {
       "authoritative capabilities\n",
     );
     await expect(fs.readFile(smokeArtifactPath, "utf8")).resolves.toBe("authoritative smoke\n");
+    await expect(fs.readFile(providerReadinessArtifactPath, "utf8")).resolves.toBe(
+      "authoritative provider readiness\n",
+    );
     await expect(
       fs.access(path.join(outputDir, "crabline-fake-provider-capabilities.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -617,7 +625,7 @@ describe("qa suite", () => {
     });
     expect(artifacts.report).toContain(`Generation capability filename: ${capabilityMatrixPath}.`);
     expect(artifacts.report).toContain(
-      `Generation provider-readiness filename: ${smokeArtifactPath}.`,
+      `Generation provider-readiness filename: ${providerReadinessArtifactPath}.`,
     );
     expect(artifacts.report).not.toContain("crabline-fake-provider-capabilities.json");
     expect(artifacts.report).not.toContain("crabline-fake-provider-smoke.json");

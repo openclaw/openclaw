@@ -7,10 +7,10 @@ import {
   loadSettings,
   persistSessionToken,
   resolvePageGatewaySettings,
-  resolveApplicationStartupSettings,
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 
 function setTestLocation(params: { protocol: string; host: string; pathname: string }) {
   vi.stubGlobal("location", {
@@ -115,6 +115,11 @@ describe("loadSettings default gateway URL derivation", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.stubGlobal("localStorage", createStorageMock());
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
+    setTestLocation({ protocol: "https:", host: "gateway.example", pathname: "/" });
+    saveSettings(loadSettings());
     setControlUiBasePath(undefined);
     vi.unstubAllGlobals();
   });
@@ -156,14 +161,13 @@ describe("loadSettings default gateway URL derivation", () => {
     );
   });
 
-  it("defaults chat auto-scroll to near-bottom", () => {
+  it("defaults the chat send shortcut to enter", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
       pathname: "/",
     });
 
-    expect(loadSettings().chatAutoScroll).toBe("near-bottom");
     expect(loadSettings().chatSendShortcut).toBe("enter");
   });
 
@@ -256,7 +260,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
@@ -287,7 +290,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
@@ -303,7 +305,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
@@ -349,7 +350,6 @@ describe("loadSettings default gateway URL derivation", () => {
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatPersistCommentary: false,
-      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
@@ -382,7 +382,6 @@ describe("loadSettings default gateway URL derivation", () => {
       themeMode: "system",
       chatShowThinking: true,
       chatShowToolCalls: true,
-      chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 258,
@@ -407,6 +406,41 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().navWidth).toBe(258);
   });
 
+  it("persists pinned agents and drops malformed or duplicate entries", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 258,
+      sidebarPinnedRoutes: [],
+      pinnedAgentIds: ["main", "research"],
+    });
+    expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
+
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    persisted.pinnedAgentIds = ["main", "main", 7, "  ", " research "];
+    localStorage.setItem(scopedKey, JSON.stringify(persisted));
+    expect(loadSettings().pinnedAgentIds).toEqual(["main", "research"]);
+  });
+
   it("normalizes persisted text scale to the nearest supported stop", () => {
     setTestLocation({
       protocol: "https:",
@@ -426,31 +460,25 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().textScale).toBe(125);
   });
 
-  it("loads valid chat auto-scroll modes and normalizes invalid values", () => {
+  it("keeps the last written settings in memory when persistence fails", () => {
     setTestLocation({
       protocol: "https:",
       host: "gateway.example:8443",
       pathname: "/",
     });
 
-    const gwUrl = expectedGatewayUrl("");
-    localStorage.setItem(
-      `openclaw.control.settings.v1:${gwUrl}`,
-      JSON.stringify({
-        gatewayUrl: gwUrl,
-        chatAutoScroll: "off",
-      }),
-    );
-    expect(loadSettings().chatAutoScroll).toBe("off");
+    const setItem = vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+      throw new DOMException("blocked", "SecurityError");
+    });
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
 
-    localStorage.setItem(
-      `openclaw.control.settings.v1:${gwUrl}`,
-      JSON.stringify({
-        gatewayUrl: gwUrl,
-        chatAutoScroll: "disabled",
-      }),
-    );
-    expect(loadSettings().chatAutoScroll).toBe("near-bottom");
+    // Same-tab reads (e.g. a talk session launched from chat) must observe
+    // the selection even though localStorage rejected the write.
+    expect(loadSettings().realtimeTalkInputDeviceId).toBe("usb-mic");
+
+    setItem.mockRestore();
+    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: undefined });
+    expect(loadSettings().realtimeTalkInputDeviceId).toBeUndefined();
   });
 
   it("persists only the non-default chat send shortcut", () => {
