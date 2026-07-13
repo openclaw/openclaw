@@ -1,5 +1,38 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 4b52add319b755d7fc69ee1b660e6b8cde4ae770..317b5ee136b22765ce3c5e0fbbdb1b257136f1cd 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -1,5 +1,5 @@
+ export { FsSafeError, categorizeFsSafeError, type FsSafeErrorCategory, type FsSafeErrorCode, } from "./errors.js";
+-export { DEFAULT_ROOT_MAX_BYTES, root, type DenyMutationPolicy, type HardlinkPolicy, type RenameIdentityPolicy, type OpenResult, type ReadResult, type Root, type RootAppendOptions, type RootCopyOptions, type RootCreateJsonOptions, type RootCreateOptions, type RootDefaults, type RootMkdirOptions, type RootMoveOptions, type RootOpenOptions, type RootOpenWritableOptions, type RootOptions, type RootReadOptions, type RootRemoveOptions, type RootWriteJsonOptions, type RootWriteOptions, type SymlinkPolicy, type WritableOpenMode, type WritableOpenResult, } from "./root.js";
++export { DEFAULT_ROOT_MAX_BYTES, root, type DenyMutationPolicy, type HardlinkPolicy, type RenameIdentityPolicy, type OpenResult, type ReadResult, type Root, type RootAppendOptions, type RootCopyOptions, type RootCreateJsonOptions, type RootCreateOptions, type RootDefaults, type RootMkdirExclusiveOptions, type RootMkdirOptions, type RootMoveOptions, type RootOpenOptions, type RootOpenWritableOptions, type RootOptions, type RootReadOptions, type RootRemoveOptions, type RootWriteJsonOptions, type RootWriteOptions, type SymlinkPolicy, type WritableOpenMode, type WritableOpenResult, } from "./root.js";
+ export { configureFsSafePython, getFsSafePythonConfig, type FsSafePythonConfig, type FsSafePythonMode, } from "./pinned-python-config.js";
+ export { writeExternalFileWithinRoot, type ExternalFileWriteOptions, type ExternalFileWriteResult, } from "./output.js";
+ export { configureFsSafeLocks, getFsSafeLockConfig, type FsSafeLockConfig, } from "./lock-config.js";
+diff --git a/dist/pinned-helper.d.ts b/dist/pinned-helper.d.ts
+index 2829103e159292259822c816825fe7e20ceed919..401baa28e1696527b39d16a45ad648a7dd6c6280 100644
+--- a/dist/pinned-helper.d.ts
++++ b/dist/pinned-helper.d.ts
+@@ -1,6 +1,6 @@
+ import type { DirEntry, PathStat } from "./types.js";
+ import { isPinnedHelperUnavailable } from "./pinned-python.js";
+-type HelperOperation = "stat" | "readdir" | "mkdirp" | "remove" | "rename";
++type HelperOperation = "stat" | "readdir" | "mkdir" | "mkdirp" | "remove" | "rename";
+ export { isPinnedHelperUnavailable };
+ export declare function runPinnedHelper<T>(operation: HelperOperation, rootDir: string, payload: Record<string, unknown>): Promise<T>;
+ export declare function helperStat(rootDir: string, relativePath: string): Promise<PathStat>;
+diff --git a/dist/pinned-python.d.ts b/dist/pinned-python.d.ts
+index a67ef0c27278372fe4369f9e98ce494d95c33ea7..fc1bfff0daffdebeac193aeda1e8a70e258aed0b 100644
+--- a/dist/pinned-python.d.ts
++++ b/dist/pinned-python.d.ts
+@@ -1,4 +1,4 @@
+-type PinnedPythonOperation = "copy" | "stat" | "readdir" | "mkdirp" | "remove" | "rename" | "write";
++type PinnedPythonOperation = "copy" | "stat" | "readdir" | "mkdir" | "mkdirp" | "remove" | "rename" | "write";
+ export declare function __resetPinnedPythonWorkerForTest(): void;
+ export declare function runPinnedPythonOperation<T>(params: {
+     operation: PinnedPythonOperation;
 diff --git a/dist/pinned-python.js b/dist/pinned-python.js
-index c6177eaf56295780ef2edba47ca8bee02cdcdbf2..f6f361974d48f8f4abd3f1e47f1fdb10bc3f2f77 100644
+index c6177eaf56295780ef2edba47ca8bee02cdcdbf2..b44bcc50ec3a000ebb9700fd227ec295d255fae3 100644
 --- a/dist/pinned-python.js
 +++ b/dist/pinned-python.js
 @@ -93,6 +93,12 @@ def write_all(fd, data):
@@ -15,7 +48,22 @@ index c6177eaf56295780ef2edba47ca8bee02cdcdbf2..f6f361974d48f8f4abd3f1e47f1fdb10
  def link_unsupported(exc):
      unsupported = (errno.EPERM, errno.EOPNOTSUPP, getattr(errno, "ENOTSUP", errno.EOPNOTSUPP))
      return getattr(exc, "errno", None) in unsupported
-@@ -298,13 +304,13 @@ def write_path(root_fd, payload):
+@@ -202,6 +208,14 @@ def readdir_path(root_fd, payload):
+ def mkdirp_path(root_fd, payload):
+     dir_fd = walk_dir(root_fd, split_relative(payload.get("relativePath", "")), mkdir_enabled=True)
+     os.close(dir_fd); return None
++def mkdir_exclusive_path(root_fd, payload):
++    parent_fd, basename = parent_and_basename(root_fd, payload.get("relativePath", ""))
++    try:
++        os.mkdir(basename, int(payload.get("mode", 0o777)), dir_fd=parent_fd)
++        fsync_best_effort(parent_fd)
++        return None
++    finally:
++        os.close(parent_fd)
+ def remove_tree(parent_fd, basename):
+     st = os.lstat(basename, dir_fd=parent_fd)
+     if stat.S_ISDIR(st.st_mode) and not stat.S_ISLNK(st.st_mode):
+@@ -298,13 +312,13 @@ def write_path(root_fd, payload):
          temp_name, temp_fd = create_temp_file(parent_fd, basename, mode)
          os.fchmod(temp_fd, mode)
          write_all(temp_fd, data)
@@ -31,6 +79,15 @@ index c6177eaf56295780ef2edba47ca8bee02cdcdbf2..f6f361974d48f8f4abd3f1e47f1fdb10
          return {"dev": result_stat.st_dev, "ino": result_stat.st_ino}
      finally:
          if temp_fd is not None:
+@@ -380,6 +394,8 @@ def run_operation(operation, root_path, payload):
+             return readdir_path(root_fd, payload)
+         if operation == "mkdirp":
+             return mkdirp_path(root_fd, payload)
++        if operation == "mkdir":
++            return mkdir_exclusive_path(root_fd, payload)
+         if operation == "remove":
+             return remove_path(root_fd, payload)
+         if operation == "rename":
 diff --git a/dist/pinned-write.js b/dist/pinned-write.js
 index 77d0ddfa5a1df2de0449c806d19781daaed4910b..09dd77aef95659865b93ce29e15f26e874dd0c25 100644
 --- a/dist/pinned-write.js
@@ -70,3 +127,101 @@ index 77d0ddfa5a1df2de0449c806d19781daaed4910b..09dd77aef95659865b93ce29e15f26e8
          await handle.close().catch(() => undefined);
          handle = undefined;
          await withAsyncDirectoryGuards([parentGuard], async () => {
+diff --git a/dist/root-impl.d.ts b/dist/root-impl.d.ts
+index 78f546373828b46d920f287ed5a8dcfd3dde2e4f..e8b13dccd35388da5483cd35b9320583ad602eb0 100644
+--- a/dist/root-impl.d.ts
++++ b/dist/root-impl.d.ts
+@@ -58,6 +58,7 @@ export type RootMoveOptions = Pick<RootDefaults, "denyMutations"> & {
+ };
+ export type RootRemoveOptions = Pick<RootDefaults, "denyMutations">;
+ export type RootMkdirOptions = Pick<RootDefaults, "denyMutations">;
++export type RootMkdirExclusiveOptions = Pick<RootDefaults, "denyMutations" | "mode">;
+ export declare const DEFAULT_ROOT_MAX_BYTES: number;
+ export interface Root {
+     readonly rootDir: string;
+@@ -80,6 +81,7 @@ export interface Root {
+     append(relativePath: string, data: string | Buffer, options?: RootAppendOptions): Promise<void>;
+     remove(relativePath: string, options?: RootRemoveOptions): Promise<void>;
+     mkdir(relativePath: string, options?: RootMkdirOptions): Promise<void>;
++    mkdirExclusive(relativePath: string, options?: RootMkdirExclusiveOptions): Promise<void>;
+     ensureRoot(options?: RootMkdirOptions): Promise<void>;
+     write(relativePath: string, data: string | Buffer, options?: RootWriteOptions): Promise<void>;
+     create(relativePath: string, data: string | Buffer, options?: RootCreateOptions): Promise<void>;
+diff --git a/dist/root-impl.js b/dist/root-impl.js
+index 3ef768b31fa0961eb6567c5027dedb4ce9e47b6d..1775ade32e10a079133ed1e3377d8475ca4618dc 100644
+--- a/dist/root-impl.js
++++ b/dist/root-impl.js
+@@ -246,6 +246,14 @@ class RootHandle {
+             denyMutations: mergeDenyMutationPolicies(this.defaults.denyMutations, options.denyMutations),
+         });
+     }
++    async mkdirExclusive(relativePath, options = {}) {
++        assertValidRootRelativePath(relativePath);
++        await mkdirExclusivePathInRoot(this.context, {
++            relativePath,
++            mode: options.mode ?? this.defaults.mode,
++            denyMutations: mergeDenyMutationPolicies(this.defaults.denyMutations, options.denyMutations),
++        });
++    }
+     async ensureRoot(options = {}) {
+         await mkdirPathInRoot(this.context, {
+             relativePath: "",
+@@ -679,6 +687,26 @@ async function mkdirPathInRoot(root, params) {
+         throw normalizePinnedPathError(error);
+     }
+ }
++async function mkdirExclusivePathInRoot(root, params) {
++    const resolved = await resolvePinnedPathInRoot(root, params);
++    if (process.platform === "win32") {
++        await mkdirExclusivePathFallback(resolved, params.mode);
++        return;
++    }
++    try {
++        await runPinnedHelper("mkdir", resolved.rootReal, {
++            relativePath: resolved.relativePosix,
++            mode: params.mode ?? 0o700,
++        });
++    }
++    catch (error) {
++        if (isPinnedPathHelperSpawnError(error)) {
++            await mkdirExclusivePathFallback(resolved, params.mode);
++            return;
++        }
++        throw normalizePinnedPathError(error);
++    }
++}
+ async function writeFileInRoot(root, params) {
+     if (process.platform === "win32") {
+         await serializePathWrite(rootWriteQueueKey(root, params.relativePath), async () => {
+@@ -925,6 +953,23 @@ async function mkdirPathFallback(resolved) {
+         beforeComponent: async (componentPath) => await getFsSafeTestHooks()?.beforeRootFallbackMutation?.("mkdir", componentPath),
+     });
+ }
++async function mkdirExclusivePathFallback(resolved, mode) {
++    const parentGuard = await createAsyncDirectoryGuard(path.dirname(resolved.resolved));
++    await getFsSafeTestHooks()?.beforeRootFallbackMutation?.("mkdir", resolved.resolved);
++    await withAsyncDirectoryGuards([parentGuard], async () => {
++        try {
++            await fs.mkdir(resolved.resolved, { mode: mode ?? 0o700 });
++        }
++        catch (error) {
++            if (hasNodeErrorCode(error, "EEXIST")) {
++                throw new FsSafeError("already-exists", "directory already exists", {
++                    cause: error instanceof Error ? error : undefined,
++                });
++            }
++            throw error;
++        }
++    });
++}
+ async function statPathFallback(root, relativePath) {
+     const resolved = await resolvePinnedPathInRoot(root, { relativePath, allowRoot: true });
+     try {
+diff --git a/dist/root.d.ts b/dist/root.d.ts
+index fdc09a90afc5fd9e3479b7070c503cc06bf786de..3c9feb3db39ba7a0aef0c8ca5dd105d25c180d0c 100644
+--- a/dist/root.d.ts
++++ b/dist/root.d.ts
+@@ -1,2 +1,2 @@
+-export { DEFAULT_ROOT_MAX_BYTES, openLocalFileSafely, readLocalFileSafely, resolveOpenedFileRealPathForHandle, root, type DenyMutationPolicy, type HardlinkPolicy, type RenameIdentityPolicy, type OpenResult, type ReadResult, type Root, type RootAppendOptions, type RootCopyOptions, type RootCreateJsonOptions, type RootCreateOptions, type RootDefaults, type RootMkdirOptions, type RootMoveOptions, type RootOpenOptions, type RootOpenWritableOptions, type RootOptions, type RootReadOptions, type RootRemoveOptions, type RootWriteJsonOptions, type RootWriteOptions, type SymlinkPolicy, type WritableOpenMode, type WritableOpenResult, } from "./root-impl.js";
++export { DEFAULT_ROOT_MAX_BYTES, openLocalFileSafely, readLocalFileSafely, resolveOpenedFileRealPathForHandle, root, type DenyMutationPolicy, type HardlinkPolicy, type RenameIdentityPolicy, type OpenResult, type ReadResult, type Root, type RootAppendOptions, type RootCopyOptions, type RootCreateJsonOptions, type RootCreateOptions, type RootDefaults, type RootMkdirExclusiveOptions, type RootMkdirOptions, type RootMoveOptions, type RootOpenOptions, type RootOpenWritableOptions, type RootOptions, type RootReadOptions, type RootRemoveOptions, type RootWriteJsonOptions, type RootWriteOptions, type SymlinkPolicy, type WritableOpenMode, type WritableOpenResult, } from "./root-impl.js";
+ //# sourceMappingURL=root.d.ts.map

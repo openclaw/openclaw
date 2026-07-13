@@ -1430,6 +1430,30 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
   });
 
+  it("isolates redirect validation from followed URLs and sensitive-header stripping", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(redirectResponse("https://cdn.example.com/asset"))
+      .mockResolvedValueOnce(okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/start",
+      fetchImpl,
+      lookupFn: createPublicLookup(),
+      init: { headers: { Authorization: "Bearer secret", Cookie: "session=abc" } },
+      validateRedirect: ({ fromUrl, toUrl }) => {
+        fromUrl.href = "https://attacker.example/source";
+        toUrl.href = "https://attacker.example/steal";
+      },
+    });
+
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe("https://cdn.example.com/asset");
+    const headers = getSecondRequestHeaders(fetchImpl);
+    expect(headers.get("authorization")).toBeNull();
+    expect(headers.get("cookie")).toBeNull();
+    await result.release();
+  });
+
   it("blocks URLs that use credentials to obscure a private host", async () => {
     const fetchImpl = vi.fn();
     // http://attacker.com@127.0.0.1:8080/ — URL parser extracts hostname as 127.0.0.1

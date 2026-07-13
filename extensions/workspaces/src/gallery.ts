@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -355,7 +354,6 @@ async function installBundle(
   const targetDir = path.posix.join(widgetsRoot, bundle.name);
   const stagedDir = path.posix.join(widgetsRoot, `.gallery-install-${randomUUID()}`);
   await root.mkdir(widgetsRoot);
-  const widgetDir = await root.resolve(targetDir);
   const files = new Map(bundle.files);
   files.set("widget.json", `${JSON.stringify(bundle.manifest, null, 2)}\n`);
   const installedPaths = [...files.keys()].map((logicalPath) =>
@@ -366,10 +364,10 @@ async function installBundle(
     let reservationOwned = false;
     try {
       try {
-        await fs.mkdir(widgetDir, { mode: 0o700 });
+        await root.mkdirExclusive(targetDir, { mode: 0o700 });
         reservationOwned = true;
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        if (["already-exists", "EEXIST"].includes((error as NodeJS.ErrnoException).code ?? "")) {
           throw new Error(`workspace widget already exists: ${bundle.name}`, { cause: error });
         }
         throw error;

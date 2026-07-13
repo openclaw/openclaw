@@ -684,8 +684,8 @@ async function fetchWithSsrFGuardInternal(
         }
         const nextParsedUrl = new URL(location, parsedUrl);
         params.validateRedirect?.({
-          fromUrl: parsedUrl,
-          toUrl: nextParsedUrl,
+          fromUrl: new URL(parsedUrl),
+          toUrl: new URL(nextParsedUrl),
           status: response.status,
           redirectCount,
         });

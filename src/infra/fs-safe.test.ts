@@ -413,6 +413,43 @@ describe("fs-safe", () => {
     expect(stat.isDirectory()).toBe(true);
   });
 
+  it("creates directory reservations exclusively", async () => {
+    const root = await tempDirs.make("openclaw-fs-safe-root-");
+    const rootHandle = await openRoot(root);
+    await rootHandle.mkdir("nested");
+
+    await rootHandle.mkdirExclusive("nested/reserved", { mode: 0o700 });
+
+    await expectRejectCode(rootHandle.mkdirExclusive("nested/reserved"), "already-exists");
+    expect((await fs.stat(path.join(root, "nested", "reserved"))).isDirectory()).toBe(true);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "pins exclusive directory reservations against a parent symlink swap",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const outside = await tempDirs.make("openclaw-fs-safe-outside-");
+      const widgetsDir = path.join(root, "workspaces", "widgets");
+      const rootHandle = await openRoot(root);
+      await rootHandle.mkdir(path.join("workspaces", "widgets"));
+
+      await withRealpathSymlinkRebindRace({
+        shouldFlip: (realpathInput) => realpathInput.endsWith(path.join("workspaces", "widgets")),
+        symlinkPath: widgetsDir,
+        symlinkTarget: outside,
+        timing: "after-realpath",
+        run: async () => {
+          await expectRejectCode(
+            rootHandle.mkdirExclusive(path.join("workspaces", "widgets", "weather")),
+            /path-alias|not-file/,
+          );
+        },
+      });
+
+      await expectRejectCode(fs.stat(path.join(outside, "weather")), "ENOENT");
+    },
+  );
+
   it.runIf(process.platform !== "win32")(
     "creates directories through in-root symlink parents",
     async () => {
