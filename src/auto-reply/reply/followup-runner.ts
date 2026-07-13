@@ -1312,6 +1312,15 @@ export function createFollowupRunner(params: {
                     ownerNumbers: run.ownerNumbers,
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
+                    onBeforeFreshCliSessionRetry: ({ provider: retryProvider, sessionId }) =>
+                      clearDroppedCliSessionBinding({
+                        provider: retryProvider,
+                        sessionKey: replySessionKey,
+                        sessionStore,
+                        storePath,
+                        activeSessionEntry,
+                        expectedSessionId: sessionId,
+                      }),
                     bootstrapPromptWarningSignaturesSeen,
                     bootstrapPromptWarningSignature:
                       bootstrapPromptWarningSignaturesSeen[

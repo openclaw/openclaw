@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import { clearCliSession } from "../../agents/cli-session.js";
+import { clearCliSession, getCliSessionId } from "../../agents/cli-session.js";
 import { extractToolResultText } from "../../agents/embedded-agent-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "../../agents/embedded-agent-utils.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
@@ -298,8 +298,22 @@ export async function clearDroppedCliSessionBinding(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   activeSessionEntry?: SessionEntry;
-}): Promise<void> {
+  expectedSessionId?: string;
+}): Promise<boolean> {
   const updatedAt = Date.now();
+  const expectedSessionId = normalizeOptionalString(params.expectedSessionId);
+  const sessionStoreEntry = params.sessionKey
+    ? params.sessionStore?.[params.sessionKey]
+    : undefined;
+  const memoryEntries = Array.from(
+    new Set([params.activeSessionEntry, sessionStoreEntry].filter((entry) => entry !== undefined)),
+  );
+  const stillHasExpectedBinding = (entry: SessionEntry | undefined) => {
+    const sessionId = getCliSessionId(entry, params.provider);
+    return (
+      sessionId === undefined || expectedSessionId === undefined || sessionId === expectedSessionId
+    );
+  };
   const clearEntry = (entry: SessionEntry | undefined) => {
     if (!entry) {
       return;
@@ -307,18 +321,36 @@ export async function clearDroppedCliSessionBinding(params: {
     clearCliSession(entry, params.provider);
     entry.updatedAt = updatedAt;
   };
-  clearEntry(params.activeSessionEntry);
-  clearEntry(params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
-  if (!params.storePath || !params.sessionKey) {
-    return;
+  if (!memoryEntries.every(stillHasExpectedBinding)) {
+    return false;
   }
+  if (!params.storePath || !params.sessionKey) {
+    memoryEntries.forEach(clearEntry);
+    return true;
+  }
+  let persistedEntryObserved = false;
+  let persistedClearApplied = false;
   await updateSessionEntry(
     { storePath: params.storePath, sessionKey: params.sessionKey },
     (entry) => {
+      persistedEntryObserved = true;
+      if (!stillHasExpectedBinding(entry)) {
+        return null;
+      }
+      persistedClearApplied = true;
       clearEntry(entry);
       return entry;
     },
   );
+  if (!persistedEntryObserved) {
+    memoryEntries.forEach(clearEntry);
+    return false;
+  }
+  if (!persistedClearApplied || !memoryEntries.every(stillHasExpectedBinding)) {
+    return false;
+  }
+  memoryEntries.forEach(clearEntry);
+  return true;
 }
 
 function createToolEventBridge(params: {
