@@ -767,7 +767,7 @@ extension SettingsProTab {
 
     /// Native inset-grouped action row (plain tinted text, no pill chrome).
     func gatewayActionButton(
-        title: String,
+        title: LocalizedStringKey,
         icon: String,
         color: Color,
         isBusy: Bool,
@@ -788,7 +788,7 @@ extension SettingsProTab {
         .buttonStyle(.plain)
         .foregroundStyle(color)
         .disabled(isBusy || isDisabled)
-        .accessibilityLabel(title)
+        .accessibilityLabel(Text(title))
     }
 
     var aboutDestination: some View {
@@ -874,7 +874,7 @@ extension SettingsProTab {
             }
             .contentShape(Rectangle())
         }
-        .accessibilityLabel(title)
+        .accessibilityLabel(Text(title))
     }
 
     func toggleCard(title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
@@ -1400,7 +1400,7 @@ extension SettingsProTab {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel(title)
+        .accessibilityLabel(Text(title))
         .accessibilityValue(isOn.wrappedValue
             ? String(localized: "On")
             : String(localized: "Off"))
