@@ -387,9 +387,7 @@ describe("createChannelProgressDraftCompositor", () => {
     const calls = update.mock.calls.length;
     expect(await progress.pushPreambleHeadline("[[reply_to_current]]")).toBe(false);
     expect(
-      await progress.pushPreambleHeadline(
-        "[[reply_to_current]] ~~NO_REPLY~~ [[audio_as_voice]]",
-      ),
+      await progress.pushPreambleHeadline("[[reply_to_current]] ~~NO_REPLY~~ [[audio_as_voice]]"),
     ).toBe(false);
     expect(progress.hasStatusHeadline).toBe(true);
     expect(update).toHaveBeenCalledTimes(calls);

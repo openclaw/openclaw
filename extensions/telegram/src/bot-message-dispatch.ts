@@ -404,7 +404,6 @@ function buildTelegramThinkingProgressLine(progressTokens: number): ChannelProgr
   };
 }
 
-
 function normalizeTelegramThreadId(value: unknown): number | undefined {
   return parseStrictPositiveInteger(value);
 }

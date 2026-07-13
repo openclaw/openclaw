@@ -301,10 +301,13 @@ export function createProgressNarrator(params: {
     if (disabled || params.abortSignal?.aborted) {
       return;
     }
-    retryTimer = setTimeoutFn(() => {
-      retryTimer = undefined;
-      maybeRun(false);
-    }, Math.max(1, delayMs));
+    retryTimer = setTimeoutFn(
+      () => {
+        retryTimer = undefined;
+        maybeRun(false);
+      },
+      Math.max(1, delayMs),
+    );
   };
 
   function maybeRun(immediate: boolean) {
@@ -321,9 +324,7 @@ export function createProgressNarrator(params: {
     }
     const preambleAge = lastPreambleAt === undefined ? undefined : now() - lastPreambleAt;
     if (preambleAge !== undefined && preambleAge < PROGRESS_STATUS_PREAMBLE_FRESH_MS) {
-      scheduleRetry(
-        PROGRESS_STATUS_PREAMBLE_FRESH_MS - preambleAge + PREAMBLE_RETRY_EPSILON_MS,
-      );
+      scheduleRetry(PROGRESS_STATUS_PREAMBLE_FRESH_MS - preambleAge + PREAMBLE_RETRY_EPSILON_MS);
       return;
     }
     clearRetryTimer();

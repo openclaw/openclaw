@@ -321,7 +321,9 @@ export function createChannelProgressDraftCompositor(params: {
       if (finalReplyStarted || finalReplyDelivered) {
         return false;
       }
-      const normalized = sanitizeProgressStatusText(text ?? "").replace(/\s+/g, " ").trim();
+      const normalized = sanitizeProgressStatusText(text ?? "")
+        .replace(/\s+/g, " ")
+        .trim();
       if (!normalized) {
         return false;
       }
