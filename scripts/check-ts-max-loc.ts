@@ -97,6 +97,10 @@ export function countPhysicalLines(content: string): number {
   return content.endsWith("\n") ? splitCount - 1 : splitCount;
 }
 
+export function splitNullDelimitedPaths(output: string): string[] {
+  return output.split("\0").filter(Boolean);
+}
+
 async function countLines(filePath: string): Promise<number> {
   const content = await readFile(filePath, "utf8");
   return countPhysicalLines(content);
@@ -151,39 +155,23 @@ export function findLocRatchetViolations(params: {
   );
 }
 
-export function findLocBaselineUpdateViolations(params: {
-  baseline: LocBaseline;
-  maxLines: number;
-  results: LocResult[];
-}): LocRatchetViolation[] {
-  const violations: LocRatchetViolation[] = [];
-  for (const result of params.results) {
-    if (result.lines <= params.maxLines) {
-      continue;
-    }
-    const baselineLines = params.baseline[result.filePath];
-    if (baselineLines === undefined) {
-      violations.push({ ...result, reason: "baseline-missing" });
-    } else if (result.lines > baselineLines) {
-      violations.push({ ...result, baselineLines, reason: "grew" });
-    }
-  }
-  return violations.toSorted(
-    (left, right) => right.lines - left.lines || left.filePath.localeCompare(right.filePath),
-  );
-}
-
 export function findVersionedBaselineViolations(params: {
   baseline: LocBaseline;
   baseBaseline: LocBaseline;
+  baseLinesByChangedPath: ReadonlyMap<string, number | undefined>;
 }): LocRatchetViolation[] {
   const violations: LocRatchetViolation[] = [];
   for (const [filePath, lines] of Object.entries(params.baseline)) {
-    const baselineLines = params.baseBaseline[filePath];
-    if (baselineLines === undefined) {
+    if (!params.baseLinesByChangedPath.has(filePath)) {
+      // Unchanged source may reconcile base drift; the current-tree check below still requires
+      // this baseline to equal the file's actual LOC, so arbitrary inflation remains stale.
+      continue;
+    }
+    const baseLines = params.baseLinesByChangedPath.get(filePath);
+    if (baseLines === undefined && params.baseBaseline[filePath] === undefined) {
       violations.push({ filePath, lines, reason: "baseline-missing" });
-    } else if (lines > baselineLines) {
-      violations.push({ filePath, lines, baselineLines, reason: "grew" });
+    } else if (baseLines === undefined || lines > baseLines) {
+      violations.push({ filePath, lines, baselineLines: baseLines ?? 0, reason: "grew" });
     }
   }
   return violations.toSorted(
@@ -254,6 +242,50 @@ function readBaselineAtRef(
   return content === undefined ? undefined : parseBaseline(content, `${baseRef}:${baselinePath}`);
 }
 
+function readFileAtRef(baseRef: string, filePath: string): string | undefined {
+  try {
+    return execFileSync("git", ["show", `${baseRef}:${filePath}`], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+function readBaseLinesForChangedBaselinePaths(
+  baseRef: string,
+  baseline: LocBaseline,
+): ReadonlyMap<string, number | undefined> {
+  const changedPaths = new Set(
+    splitNullDelimitedPaths(
+      execFileSync("git", ["diff", "--name-only", "-z", baseRef, "--"], {
+        encoding: "utf8",
+      }),
+    ),
+  );
+  for (const filePath of splitNullDelimitedPaths(
+    execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
+      encoding: "utf8",
+    }),
+  )) {
+    changedPaths.add(filePath);
+  }
+
+  const baseLinesByChangedPath = new Map<string, number | undefined>();
+  for (const filePath of Object.keys(baseline)) {
+    if (!changedPaths.has(filePath)) {
+      continue;
+    }
+    const baseContent = readFileAtRef(baseRef, filePath);
+    baseLinesByChangedPath.set(
+      filePath,
+      baseContent === undefined ? undefined : countPhysicalLines(baseContent),
+    );
+  }
+  return baseLinesByChangedPath;
+}
+
 function buildBaseline(results: LocResult[], maxLines: number): LocBaseline {
   return Object.fromEntries(
     results
@@ -288,34 +320,43 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   );
 
   if (writeBaseline) {
-    const baseline = await readBaseline(baselinePath);
     const comparisonBaseRef = resolveComparisonBaseRef(baselinePath, baseRef);
     if (!comparisonBaseRef) {
       throw new Error("Unable to resolve a comparison ref for the TypeScript LOC baseline update");
     }
     const baseBaseline = readBaselineAtRef(comparisonBaseRef, baselinePath);
+    const updatedBaseline = buildBaseline(results, maxLines);
     // A missing baseline at a valid base ref is the one-time initialization path.
-    const violations = [
-      ...(baseBaseline ? findVersionedBaselineViolations({ baseline, baseBaseline }) : []),
-      ...findLocBaselineUpdateViolations({ baseline, maxLines, results }),
-    ];
+    const violations = baseBaseline
+      ? findVersionedBaselineViolations({
+          baseline: updatedBaseline,
+          baseBaseline,
+          baseLinesByChangedPath: readBaseLinesForChangedBaselinePaths(
+            comparisonBaseRef,
+            updatedBaseline,
+          ),
+        })
+      : [];
     reportViolations(violations);
     if (violations.length > 0) {
       return 1;
     }
-    const updatedBaseline = buildBaseline(results, maxLines);
     await writeFile(baselinePath, `${JSON.stringify(updatedBaseline, null, 2)}\n`, "utf8");
     writeStdoutLine(`updated ${baselinePath} (${Object.keys(updatedBaseline).length} files)`);
     return 0;
   }
 
   const baseline = await readBaseline(baselinePath);
-  const baseBaseline = readBaselineAtRef(
-    resolveComparisonBaseRef(baselinePath, baseRef),
-    baselinePath,
-  );
+  const comparisonBaseRef = resolveComparisonBaseRef(baselinePath, baseRef);
+  const baseBaseline = readBaselineAtRef(comparisonBaseRef, baselinePath);
   const violations = [
-    ...(baseBaseline ? findVersionedBaselineViolations({ baseline, baseBaseline }) : []),
+    ...(baseBaseline && comparisonBaseRef
+      ? findVersionedBaselineViolations({
+          baseline,
+          baseBaseline,
+          baseLinesByChangedPath: readBaseLinesForChangedBaselinePaths(comparisonBaseRef, baseline),
+        })
+      : []),
     ...findLocRatchetViolations({ baseline, maxLines, results }),
   ];
   reportViolations(violations);
