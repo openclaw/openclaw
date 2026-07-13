@@ -44,7 +44,9 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   buildCatalogSessionKey,
+  CATALOG_SESSION_CONTINUED_EVENT,
   parseCatalogSessionKey,
+  type CatalogSessionContinuedDetail,
   type CatalogSessionKey,
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -1149,6 +1151,11 @@ class ChatPane extends OpenClawLightDomElement {
         "sessions.catalog.continue",
         key,
       );
+      document.dispatchEvent(
+        new CustomEvent<CatalogSessionContinuedDetail>(CATALOG_SESSION_CONTINUED_EVENT, {
+          detail: { ...key, sessionKey: result.sessionKey },
+        }),
+      );
       this.onPaneSessionChange?.(this.paneId, result.sessionKey);
       this.switchPaneSession(result.sessionKey);
       state.handleChatDraftChange(draft);
@@ -1842,13 +1849,15 @@ class ChatPane extends OpenClawLightDomElement {
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
     const disabledReason = selectedSessionArchived ? t("chat.archivedSessionDisabled") : null;
-    const catalogDisabledReason = catalogKey
-      ? this.catalogSession?.canContinue
-        ? null
-        : this.catalogHost?.kind === "node"
+    // Claim view-only only once catalog metadata proves it; while loading (or
+    // after a failed lookup) the composer stays disabled without a banner so a
+    // continuable session never flashes a wrong "view-only" message.
+    const catalogDisabledReason =
+      catalogKey && !this.catalogLoading && this.catalogSession?.canContinue === false
+        ? this.catalogHost?.kind === "node"
           ? t("chat.catalog.remoteViewOnly")
           : t("chat.catalog.unsupportedViewOnly")
-      : null;
+        : null;
     const canOpenRealtimeTalkSettings = hasOperatorAdminAccess(
       this.context.gateway.snapshot.hello?.auth ?? null,
     );

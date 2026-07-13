@@ -51,6 +51,13 @@ const CLAUDE_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 
 type ClaudeSessionSource = "claude-cli" | "claude-desktop";
 
+// Desktop-app sessions live in the same ~/.claude/projects store as CLI
+// sessions (records without a projects JSONL are dropped during discovery),
+// so `claude --resume --fork-session` continues both alike.
+function isResumableClaudeSource(source: string | undefined): boolean {
+  return source === "claude-cli" || source === "claude-desktop";
+}
+
 export type ClaudeSessionCatalogSession = {
   threadId: string;
   name?: string | null;
@@ -1342,8 +1349,8 @@ async function continueClaudeSession(
     const record = (await listClaudeSessions()).find(
       (candidate) => candidate.threadId === threadId,
     );
-    if (!record || record.source !== "claude-cli") {
-      throw new ClaudeCatalogParamsError("only local Claude CLI sessions can be continued");
+    if (!record || !isResumableClaudeSource(record.source)) {
+      throw new ClaudeCatalogParamsError("only local Claude Code sessions can be continued");
     }
     const source = await fs.stat(record.filePath).catch(() => undefined);
     if (!source?.isFile()) {
@@ -1439,9 +1446,9 @@ function toGenericClaudeHost(
     connected: host.connected,
     ...(host.nodeId ? { nodeId: host.nodeId } : {}),
     sessions: host.sessions.map((session) => {
-      const localCli =
-        host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && session.source === "claude-cli";
-      const openClawSessionKey = localCli ? adopted.get(session.threadId) : undefined;
+      const localResumable =
+        host.hostId === CLAUDE_LOCAL_SESSION_HOST_ID && isResumableClaudeSource(session.source);
+      const openClawSessionKey = localResumable ? adopted.get(session.threadId) : undefined;
       return {
         threadId: session.threadId,
         ...(session.name ? { name: session.name } : {}),
@@ -1456,7 +1463,7 @@ function toGenericClaudeHost(
         ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
         archived: session.archived,
         ...(openClawSessionKey ? { openClawSessionKey } : {}),
-        canContinue: localCli,
+        canContinue: localResumable,
         canArchive: false,
       };
     }),

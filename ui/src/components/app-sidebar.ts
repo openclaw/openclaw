@@ -49,7 +49,11 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
-import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import {
+  buildCatalogSessionKey,
+  CATALOG_SESSION_CONTINUED_EVENT,
+  type CatalogSessionContinuedDetail,
+} from "../lib/sessions/catalog-key.ts";
 import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
 import {
   readSessionDragData,
@@ -376,7 +380,21 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       );
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    // Document listener: the chat pane announces catalog adoptions so the
+    // catalog row binds to the new session key before the next catalog poll.
+    document.addEventListener(
+      CATALOG_SESSION_CONTINUED_EVENT,
+      this.handleCatalogSessionContinued as EventListener,
+    );
+  }
+
   override disconnectedCallback() {
+    document.removeEventListener(
+      CATALOG_SESSION_CONTINUED_EVENT,
+      this.handleCatalogSessionContinued as EventListener,
+    );
     this.dismissTransientMenus();
     this.gatewaySource = null;
     this.gatewayClient = null;
@@ -409,6 +427,41 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     void this.refreshSessionCatalogs();
   }
+
+  private readonly handleCatalogSessionContinued = (
+    event: CustomEvent<CatalogSessionContinuedDetail>,
+  ) => {
+    const detail = event.detail;
+    if (!detail?.sessionKey) {
+      return;
+    }
+    this.sessionCatalogs = this.sessionCatalogs.map((catalog) =>
+      catalog.id === detail.catalogId
+        ? {
+            ...catalog,
+            hosts: catalog.hosts.map((host) =>
+              host.hostId === detail.hostId
+                ? {
+                    ...host,
+                    sessions: host.sessions.map((session) =>
+                      session.threadId === detail.threadId
+                        ? { ...session, openClawSessionKey: detail.sessionKey }
+                        : session,
+                    ),
+                  }
+                : host,
+            ),
+          }
+        : catalog,
+    );
+    // Invalidate in-flight polls and load-more merges so a pre-adoption
+    // snapshot cannot clobber the patched rows; the 30s poll reconfirms.
+    this.sessionCatalogRevision += 1;
+    this.sessionCatalogRevisions.set(
+      detail.catalogId,
+      (this.sessionCatalogRevisions.get(detail.catalogId) ?? 0) + 1,
+    );
+  };
 
   private async refreshSessionCatalogs() {
     const client = this.context?.gateway.snapshot.client;
@@ -2573,11 +2626,15 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private selectedAgentSessionRows(
     navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
   ): SidebarRecentSession[] {
+    // Adopted catalog sessions render inside their catalog group; hiding them
+    // here keeps one selectable row per session instead of a duplicate that
+    // jumps to the top of the regular list.
+    const adopted = this.adoptedCatalogSessionKeys();
     const selected = this.expandedAgentId();
     const loadedAgentId = normalizeAgentId(this.sessionsAgentId ?? "");
     const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);
     if (selected === routeAgentId && selected === loadedAgentId) {
-      return navigationState.visibleSessions;
+      return navigationState.visibleSessions.filter((row) => !adopted.has(row.key));
     }
     const rows =
       selected === loadedAgentId
@@ -2592,7 +2649,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       filterByAgent: true,
     })
       .toSorted(this.compareSidebarSessionRows)
+      .filter((row) => !adopted.has(row.key))
       .map(navigationState.toSidebarSession);
+  }
+
+  private adoptedCatalogSessionKeys(): ReadonlySet<string> {
+    const keys = new Set<string>();
+    for (const catalog of this.sessionCatalogs) {
+      for (const host of catalog.hosts) {
+        for (const session of host.sessions) {
+          if (session.openClawSessionKey) {
+            keys.add(session.openClawSessionKey);
+          }
+        }
+      }
+    }
+    return keys;
   }
 
   private agentUnreadCount(agentId: string): number {
@@ -2720,7 +2792,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
             showFallback: true,
           })}
-          ${this.renderSessionCatalogs()}
+          ${this.renderSessionCatalogs(navigationState)}
         </div>
       </section>
     `;
@@ -2730,7 +2802,21 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   // .sidebar-sessions sections would form a second scroll-less region that
   // flex-squeezes under the shell body's overflow clip and paints rows over
   // the following section.
-  private renderSessionCatalogs() {
+  private renderSessionCatalogs(
+    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
+  ) {
+    // Adopted rows reuse the live session row so activity, unread state, and
+    // the session menu behave exactly like the regular list.
+    const liveRows = new Map<string, SessionsListResult["sessions"][number]>();
+    for (const row of [
+      ...(this.sessionsResult?.sessions ?? []),
+      ...Object.values(this.sessionRowsByAgent).flat(),
+    ]) {
+      if (!liveRows.has(row.key)) {
+        liveRows.set(row.key, row);
+      }
+    }
+    const routeSessionKey = this.activeRouteId === "chat" ? this.getRouteSessionKey() : "";
     return this.sessionCatalogs.map((catalog) => {
       const sectionId = `catalog:${catalog.id}`;
       const collapsed = this.collapsedSessionSections.has(sectionId);
@@ -2759,7 +2845,11 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             ? nothing
             : html`<div class="sidebar-recent-sessions__list">
                   ${rows.map(({ host, session }) =>
-                    this.renderCatalogSession(catalog, host, session),
+                    this.renderCatalogSession(catalog, host, session, {
+                      navigationState,
+                      liveRows,
+                      routeSessionKey,
+                    }),
                   )}
                 </div>
                 ${hasMore
@@ -2783,7 +2873,18 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     catalog: SessionCatalog,
     host: SessionCatalogHost,
     session: SessionCatalogSession,
+    context: {
+      navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>;
+      liveRows: ReadonlyMap<string, SessionsListResult["sessions"][number]>;
+      routeSessionKey: string;
+    },
   ) {
+    const adoptedRow = session.openClawSessionKey
+      ? context.liveRows.get(session.openClawSessionKey)
+      : undefined;
+    if (adoptedRow) {
+      return this.renderRecentSession(context.navigationState.toSidebarSession(adoptedRow));
+    }
     const key =
       session.openClawSessionKey ??
       buildCatalogSessionKey({
@@ -2792,18 +2893,28 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         threadId: session.threadId,
       });
     const href = `${pathForRoute("chat", this.basePath)}${searchForSession(key)}`;
-    const hostSubtitle = catalog.hosts.length > 1 || host.kind === "node" ? host.label : undefined;
+    // The catalog header already names the source; only a paired node's
+    // machine name adds signal on the row itself.
+    const hostSubtitle = host.kind === "node" ? host.label : undefined;
+    const active = context.routeSessionKey !== "" && key === context.routeSessionKey;
     const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
     const timestamp =
       typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
         ? rawTimestamp * 1000
         : rawTimestamp;
     return html`
-      <div class="sidebar-recent-session session-row-host" data-session-key=${key}>
+      <div
+        class="sidebar-recent-session session-row-host ${active
+          ? "sidebar-recent-session--active"
+          : ""}"
+        data-session-key=${key}
+      >
         <a
           href=${href}
           class="sidebar-recent-session__link"
-          title=${`${session.name || session.threadId} · ${host.label}`}
+          title=${hostSubtitle
+            ? `${session.name || session.threadId} · ${hostSubtitle}`
+            : session.name || session.threadId}
           @click=${(event: MouseEvent) => {
             if (!shouldHandleNavigationClick(event)) {
               return;
