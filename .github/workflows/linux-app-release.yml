@@ -87,17 +87,29 @@ jobs:
         env:
           # appimagetool strips fail on CI runners; Tauri documents NO_STRIP for Actions.
           NO_STRIP: "true"
-        run: pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_TAG#v}"
+          # Stamp the release version into the bundles; the committed manifests
+          # keep a placeholder 0.1.0 so releases stay tag-driven.
+          pnpm dlx @tauri-apps/cli@2.11.4 build --bundles deb,appimage \
+            --config "{\"version\":\"${version}\"}"
 
-      - name: Rename bundles for the release tag
+      - name: Verify and rename bundles for the release tag
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           version="${RELEASE_TAG#v}"
+          deb=$(ls apps/linux/src-tauri/target/release/bundle/deb/*.deb)
+          deb_version=$(dpkg-deb -f "${deb}" Version)
+          if [[ "${deb_version}" != "${version}"* ]]; then
+            echo "Debian package version '${deb_version}' does not match release version '${version}'"
+            exit 1
+          fi
           mkdir -p dist/linux-app
-          cp apps/linux/src-tauri/target/release/bundle/deb/*.deb \
-            "dist/linux-app/OpenClaw-${version}-amd64.deb"
+          cp "${deb}" "dist/linux-app/OpenClaw-${version}-amd64.deb"
           cp apps/linux/src-tauri/target/release/bundle/appimage/*.AppImage \
             "dist/linux-app/OpenClaw-${version}-amd64.AppImage"
           (cd dist/linux-app && sha256sum ./* > SHA256SUMS.linux-app.txt)
