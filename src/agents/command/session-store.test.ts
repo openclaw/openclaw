@@ -493,20 +493,13 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("reconciles an existing claude-cli session to its prepared context budget", async () => {
+  it("persists the prepared claude-cli context budget", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {
         agents: {
           defaults: {
             cliBackends: {
               "claude-cli": { command: "claude" },
-            },
-          },
-        },
-        models: {
-          providers: {
-            anthropic: {
-              models: [{ id: "claude-opus-4-7", contextTokens: 100_000 }],
             },
           },
         },

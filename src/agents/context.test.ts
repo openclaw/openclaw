@@ -395,59 +395,35 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("uses Anthropic configured contextTokens for claude-cli runtime provider", () => {
-    const result = resolveContextTokensForModel({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com",
-              models: [
-                {
-                  ...testModelContextWindow("claude-opus-4-7", 200_000),
-                  contextTokens: 100_000,
-                },
-              ],
+  it.each(["claude-cli", "fixture-cli"])(
+    "uses the caller-supplied model provider for the %s runtime",
+    (provider) => {
+      const result = resolveContextTokensForModel({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.com",
+                models: [
+                  {
+                    ...testModelContextWindow("claude-opus-4-7", 200_000),
+                    contextTokens: 100_000,
+                  },
+                ],
+              },
             },
           },
         },
-      },
-      provider: "claude-cli",
-      configuredProvider: "anthropic",
-      model: "claude-opus-4-7",
-      fallbackContextTokens: 200_000,
-      allowAsyncLoad: false,
-    });
+        provider,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-7",
+        fallbackContextTokens: 200_000,
+        allowAsyncLoad: false,
+      });
 
-    expect(result).toBe(100_000);
-  });
-
-  it("uses the caller-supplied configured provider for a CLI runtime", () => {
-    const result = resolveContextTokensForModel({
-      cfg: {
-        models: {
-          providers: {
-            anthropic: {
-              baseUrl: "https://api.anthropic.com",
-              models: [
-                {
-                  ...testModelContextWindow("claude-opus-4-7", 200_000),
-                  contextTokens: 100_000,
-                },
-              ],
-            },
-          },
-        },
-      },
-      provider: "fixture-cli",
-      configuredProvider: "anthropic",
-      model: "claude-opus-4-7",
-      fallbackContextTokens: 200_000,
-      allowAsyncLoad: false,
-    });
-
-    expect(result).toBe(100_000);
-  });
+      expect(result).toBe(100_000);
+    },
+  );
 
   it("returns 1M context for GA-capable Anthropic 4.x models even without context1m", () => {
     const result = resolveContextTokensForModel({

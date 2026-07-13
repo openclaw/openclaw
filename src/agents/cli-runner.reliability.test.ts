@@ -2229,6 +2229,28 @@ describe("runCliAgent reliability", () => {
     expect(completion.finishReason).toBe("stop");
     expect(completion.stopReason).toBe("completed");
     expect(completion.refusal).toBe(false);
+    expect(result.meta.agentMeta?.contextTokens).toBeUndefined();
+  });
+
+  it("reports the prepared context budget for successful claude-cli runs", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from claude",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const result = await runPreparedCliAgent(
+      buildPreparedContext({ provider: "claude-cli", model: "claude-opus-4-7" }),
+    );
+
+    expect(result.meta.agentMeta?.contextTokens).toBe(150_000);
   });
 
   it("marks CLI runs as paused after sessions_yield", async () => {

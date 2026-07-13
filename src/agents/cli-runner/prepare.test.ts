@@ -21,6 +21,7 @@ import type {
   McpLoopbackClientGrant,
   McpLoopbackRequestContext,
 } from "../../gateway/mcp-grant-store.js";
+import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -183,6 +184,7 @@ function setClaudeCliBackendForPrepareTest(
   params: {
     liveSession?: boolean;
     modelProvider?: string;
+    prepareExecution?: CliBackendPlugin["prepareExecution"];
     sessionMode?: "always" | "existing" | "none";
     reseedFromRawTranscriptWhenUncompacted?: boolean;
   } = {},
@@ -197,6 +199,7 @@ function setClaudeCliBackendForPrepareTest(
         pluginId: "anthropic",
         modelProvider: params.modelProvider ?? "anthropic",
         bundleMcp: false,
+        ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
         config: {
           command: "claude",
           args: ["--print"],
@@ -261,8 +264,12 @@ function appendTranscriptEntry(
 describe("shouldSkipLocalCliCredentialEpoch", () => {
   it("uses the prepared backend model provider for Claude CLI context tokens", async () => {
     const { dir, sessionFile } = createSessionFile();
+    const prepareExecution = vi.fn(async () => undefined);
     try {
-      setClaudeCliBackendForPrepareTest({ modelProvider: "fixture-anthropic" });
+      setClaudeCliBackendForPrepareTest({
+        modelProvider: "fixture-anthropic",
+        prepareExecution,
+      });
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionFile,
@@ -298,6 +305,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(context.backendResolved.modelProvider).toBe("fixture-anthropic");
       expect(context.contextWindowInfo?.tokens).toBe(100_000);
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({ contextTokenBudget: 100_000 }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

@@ -13,7 +13,6 @@ import {
   runCliTurnCompactionLifecycle,
   setCliCompactionTestDeps,
 } from "./cli-compaction.js";
-import { updateSessionStoreAfterAgentRun } from "./session-store.js";
 
 function buildContextEngine(params: {
   compactCalls: Array<Parameters<ContextEngine["compact"]>[0]>;
@@ -306,123 +305,6 @@ describe("runCliTurnCompactionLifecycle", () => {
         tokensAfter: 100,
       }),
     );
-  });
-
-  it("persists the configured Anthropic budget before ordinary claude-cli compaction defers to its backend", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
-        },
-      },
-      models: {
-        providers: {
-          anthropic: {
-            models: [{ id: "claude-opus-4-7", contextTokens: 100_000 }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const sessionKey = "agent:main:cli-configured-budget";
-    const sessionId = "session-cli-configured-budget";
-    const sessionFile = path.join(tmpDir, "session-configured-budget.jsonl");
-    const storePath = path.join(tmpDir, "sessions-configured-budget.json");
-    await writeSessionFile({ sessionFile, sessionId });
-
-    const sessionEntry: SessionEntry = {
-      sessionId,
-      updatedAt: 1,
-      sessionFile,
-      contextTokens: 1_048_576,
-      totalTokens: 90_000,
-      totalTokensFresh: true,
-    };
-    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
-    await persistSessionEntry({
-      sessionKey,
-      storePath,
-      entry: sessionEntry,
-    });
-
-    await updateSessionStoreAfterAgentRun({
-      cfg,
-      sessionId,
-      sessionKey,
-      storePath,
-      sessionStore,
-      defaultProvider: "claude-cli",
-      defaultModel: "claude-opus-4-7",
-      result: {
-        meta: {
-          durationMs: 1,
-          executionTrace: { runner: "cli" },
-          agentMeta: {
-            sessionId,
-            provider: "claude-cli",
-            model: "claude-opus-4-7",
-            contextTokens: 100_000,
-          },
-        },
-      } as never,
-    });
-
-    const ensureContextEnginesInitialized = vi.fn();
-    const resolveContextEngine = vi.fn(async () => buildContextEngine({ compactCalls: [] }));
-    const compactAgentHarnessSession = vi.fn();
-    const recordCliCompactionInStore = vi.fn();
-    setCliCompactionTestDeps({
-      ensureContextEnginesInitialized,
-      resolveContextEngine,
-      maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
-      resolveCliBackendConfig: () => ({
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: true,
-        ownsNativeCompaction: true,
-      }),
-      createPreparedEmbeddedAgentSettingsManager: async () => ({
-        getCompactionReserveTokens: () => 10_000,
-        getCompactionKeepRecentTokens: () => 0,
-        applyOverrides: () => {},
-      }),
-      shouldPreemptivelyCompactBeforePrompt: (params) => ({
-        route: "fits",
-        shouldCompact: false,
-        estimatedPromptTokens: 90_000,
-        promptBudgetBeforeReserve: Math.floor(params.contextTokenBudget * 0.8),
-        overflowTokens: Math.max(0, 90_000 - Math.floor(params.contextTokenBudget * 0.8)),
-        toolResultReducibleChars: 0,
-        effectiveReserveTokens: 10_000,
-      }),
-      resolveLiveToolResultMaxChars: () => 20_000,
-      recordCliCompactionInStore,
-    });
-
-    const ordinarySessionEntry = sessionStore[sessionKey];
-    const updatedEntry = await runCliTurnCompactionLifecycle({
-      cfg,
-      sessionId,
-      sessionKey,
-      sessionEntry: ordinarySessionEntry,
-      sessionStore,
-      storePath,
-      sessionAgentId: "main",
-      workspaceDir: tmpDir,
-      agentDir: tmpDir,
-      provider: "claude-cli",
-      model: "claude-opus-4-7",
-    });
-
-    expect(ordinarySessionEntry?.contextTokens).toBe(100_000);
-    expect(ordinarySessionEntry?.agentHarnessId).toBeUndefined();
-    expect(updatedEntry).toBe(ordinarySessionEntry);
-    expect(ensureContextEnginesInitialized).not.toHaveBeenCalled();
-    expect(resolveContextEngine).not.toHaveBeenCalled();
-    expect(compactAgentHarnessSession).not.toHaveBeenCalled();
-    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
   });
 
   it("treats below-target CLI transcript compaction as a no-op", async () => {

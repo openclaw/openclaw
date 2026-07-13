@@ -649,7 +649,7 @@ export async function prepareCliRunContext(
     ? resolveContextTokensForModel({
         cfg: params.config,
         provider: params.provider,
-        configuredProvider: backendResolved.modelProvider,
+        modelProvider: backendResolved.modelProvider,
         model: resolveClaudeCliContextModelId(modelId),
         fallbackContextTokens: 200_000,
         allowAsyncLoad: false,
@@ -859,6 +859,7 @@ export async function prepareCliRunContext(
       agentDir,
       provider: params.provider,
       modelId,
+      contextTokenBudget: contextWindowInfo.tokens,
       authProfileId: effectiveAuthProfileId,
       executionMode,
       env: preparedBackend.env,
