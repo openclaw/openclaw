@@ -1,3 +1,5 @@
+import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+
 const EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS = 60_000;
 
 type ExperienceReviewPromptCandidate = {
@@ -61,9 +63,10 @@ export function formatSkillExperienceReviewTranscript(messages: readonly unknown
   if (full.length <= EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS) {
     return full;
   }
-  const first = rendered[0]?.slice(0, 6_000) ?? "";
+  const first = rendered[0] ? truncateUtf16Safe(rendered[0], 6_000) : "";
   const tailBudget = EXPERIENCE_REVIEW_MAX_TRANSCRIPT_CHARS - first.length - 80;
-  return `${first}\n\n[older trajectory omitted]\n\n${full.slice(-tailBudget)}`;
+  const tailStart = Math.max(0, full.length - tailBudget);
+  return `${first}\n\n[older trajectory omitted]\n\n${sliceUtf16Safe(full, tailStart)}`;
 }
 
 export function buildSkillExperienceReviewPrompt(

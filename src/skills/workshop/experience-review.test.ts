@@ -341,3 +341,32 @@ describe("skill experience review scheduler", () => {
     expect(prompt).toContain("[tool call: exec]");
   });
 });
+
+function hasDanglingSurrogate(value: string): boolean {
+  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+}
+
+describe("formatSkillExperienceReviewTranscript", () => {
+  it("keeps first-message truncation UTF-16 safe at the 6 000-char boundary", () => {
+    // [user]\n is 7 chars; 5 992 padding chars reach position 5 999 where 😀 starts.
+    // Without UTF-16 safety, .slice(0, 6_000) would split the surrogate pair.
+    const content = "a".repeat(5_992) + "😀rest";
+    const messages = [{ role: "user", content }];
+    const transcript = formatSkillExperienceReviewTranscript(messages);
+
+    expect(hasDanglingSurrogate(transcript)).toBe(false);
+  });
+
+  it("keeps tail-end truncation UTF-16 safe for transcripts exceeding the limit", () => {
+    // Two long messages to trigger tail truncation (total > 60 000 chars).
+    const content = "b".repeat(35_000);
+    const messages = [
+      { role: "user", content: "a".repeat(5_992) + "🎉more" },
+      { role: "user", content: content + "🦞after" },
+    ];
+    const transcript = formatSkillExperienceReviewTranscript(messages);
+
+    expect(transcript.length).toBeLessThan(70_000);
+    expect(hasDanglingSurrogate(transcript)).toBe(false);
+  });
+});

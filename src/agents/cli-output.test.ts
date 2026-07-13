@@ -2592,4 +2592,33 @@ describe("createCliJsonlStreamingParser", () => {
     expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
   });
 });
+
+function hasDanglingSurrogate(value: string): boolean {
+  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
+}
+
+describe("formatCliOutputError", () => {
+  it("keeps session identity truncation UTF-16 safe near emoji boundaries", () => {
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        session_id: "s".repeat(199) + "😀tail",
+        terminal_reason: "max_turns",
+      }),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    const error = formatCliOutputError(result!, {
+      runId: "r".repeat(199) + "🎉extra",
+      sessionId: "openclaw-" + "o".repeat(199) + "🦞end",
+    });
+
+    expect(hasDanglingSurrogate(error)).toBe(false);
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
