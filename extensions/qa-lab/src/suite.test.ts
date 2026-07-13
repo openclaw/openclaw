@@ -37,24 +37,24 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 }
 
 describe("qa suite", () => {
-  it("continues ordered cleanup after a resource reports failure", async () => {
+  it("continues transport-before-gateway cleanup after a resource reports failure", async () => {
     const calls: string[] = [];
-    const failure = new Error("gateway pipe failed");
+    const failure = new Error("transport close failed");
 
     const errors = await qaSuiteProgressTesting.runQaSuiteCleanupSteps([
       async () => {
-        calls.push("gateway");
+        calls.push("transport");
         throw failure;
       },
       async () => {
-        calls.push("transport");
+        calls.push("gateway");
       },
       async () => {
         calls.push("lab");
       },
     ]);
 
-    expect(calls).toEqual(["gateway", "transport", "lab"]);
+    expect(calls).toEqual(["transport", "gateway", "lab"]);
     expect(errors).toEqual([failure]);
   });
 

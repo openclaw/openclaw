@@ -2005,6 +2005,9 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
     if (activeEnv) {
       cleanupSteps.push(() => closeQaWebSessions(activeEnv.webSessionIds));
     }
+    // Drain transport HTTP work before stopping the gateway; otherwise a completed suite can
+    // emit an unhandled response-close rejection during delivery.
+    cleanupSteps.push(() => transportFactoryResult.cleanup());
     const keepTemp = process.env.OPENCLAW_QA_KEEP_TEMP === "1" || false;
     const activeGateway = gateway;
     if (activeGateway) {
@@ -2015,10 +2018,7 @@ export async function runQaFlowSuite(params?: QaSuiteRunParams): Promise<QaSuite
         }),
       );
     }
-    cleanupSteps.push(
-      () => transportFactoryResult.cleanup(),
-      () => disposeRegisteredAgentHarnesses(),
-    );
+    cleanupSteps.push(() => disposeRegisteredAgentHarnesses());
     const activeMock = mock;
     if (activeMock) {
       cleanupSteps.push(() => activeMock.stop());
