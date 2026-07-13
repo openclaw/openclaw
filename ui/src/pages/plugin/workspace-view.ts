@@ -60,6 +60,7 @@ import type {
   WorkspaceDocument,
   WidgetManifestView,
 } from "../../lib/workspace/types.ts";
+import { buildBuiltinContext } from "../../lib/workspace/widgets/context.ts";
 import type { BuiltinWidgetContext } from "../../lib/workspace/widgets/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import "../../styles/workspace.css";
@@ -76,11 +77,6 @@ export type WorkspaceProps = {
   basePath?: string;
   /** Session key for custom-widget prompt dispatch (L5). */
   sessionKey?: string;
-};
-
-const DEFAULT_EMBED_CONTEXT: BuiltinWidgetContext["embed"] = {
-  embedSandboxMode: "strict",
-  allowExternalEmbedUrls: false,
 };
 
 // Per-host transient view state (menu, live drag) kept outside the data model so a
@@ -565,10 +561,6 @@ function renderGrid(
     `;
   }
   const callbacks = makeCallbacks(props, state, viewState, tab);
-  const builtinContext: BuiltinWidgetContext = {
-    basePath: props.basePath ?? "",
-    embed: props.embed ?? DEFAULT_EMBED_CONTEXT,
-  };
   const rows = gridRowCount(tab.widgets);
   const minHeight = rows * WORKSPACE_ROW_HEIGHT + Math.max(0, rows - 1) * WORKSPACE_GRID_GAP;
   return html`
@@ -581,7 +573,7 @@ function renderGrid(
           menuOpen: viewState.openMenuWidgetId === widget.id,
           pending: state.pendingWidgetIds.has(widget.id),
           dragging: viewState.drag?.widgetId === widget.id,
-          builtinContext,
+          builtinContext: buildBuiltinContext(props, widget),
           callbacks,
           ...(custom ? { custom } : {}),
         });

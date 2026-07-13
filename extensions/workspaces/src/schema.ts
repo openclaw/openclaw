@@ -70,6 +70,7 @@ export const BUILTIN_WIDGET_KINDS = [
   "builtin:cron",
   "builtin:instances",
   "builtin:activity",
+  "builtin:notes",
 ] as const;
 
 const BUILTIN_KINDS = new Set<string>(BUILTIN_WIDGET_KINDS);
