@@ -3669,6 +3669,36 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
   });
 
+  it("resolves and caches the native stream recipient team per enterprise client", async () => {
+    mockedNativeStreaming = true;
+    const usersInfo = vi.fn(async () => ({ user: { team_id: "T_RECIPIENT" } }));
+    const eventClient = {
+      chat: { postMessage: postMessageMock, update: chatUpdateMock },
+      users: { info: usersInfo },
+    };
+    const eventScope = {
+      apiAppId: "A_TEST",
+      enterpriseId: "E_TEST",
+      isEnterpriseInstall: true as const,
+      teamId: "T_ENTERPRISE",
+      client: eventClient,
+    };
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ eventScope }));
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ eventScope }));
+
+    expect(usersInfo).toHaveBeenCalledTimes(1);
+    expect(usersInfo).toHaveBeenCalledWith({ token: "xoxb-test", user: "U123" });
+    expectMockCallArgFields(startSlackStreamMock, 0, "first enterprise Slack stream start", {
+      client: eventClient,
+      teamId: "T_RECIPIENT",
+    });
+    expectMockCallArgFields(startSlackStreamMock, 1, "cached enterprise Slack stream start", {
+      client: eventClient,
+      teamId: "T_RECIPIENT",
+    });
+  });
+
   it("suppresses reasoning payloads before Slack native streaming delivery", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [
