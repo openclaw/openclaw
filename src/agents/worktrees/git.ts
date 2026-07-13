@@ -14,6 +14,9 @@ export type GitResult = {
 type WorktreeListEntry = {
   path: string;
   lockedReason?: string;
+  // `refs/heads/<name>` from the porcelain `branch` field; undefined for detached HEAD.
+  // Adoption checks compare this against the managed `openclaw/<name>` scheme.
+  branch?: string;
 };
 
 export async function runGit(
@@ -73,6 +76,8 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {
       current.lockedReason = field.slice("locked ".length);
+    } else if (current && field.startsWith("branch ")) {
+      current.branch = field.slice("branch ".length);
     }
   }
   if (current) {

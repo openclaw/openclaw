@@ -8,7 +8,7 @@ import {
   findRegistryWorktreeByPath,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
-  insertRegistryWorktree,
+  insertRegistryWorktreeIfPathFree,
   listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
@@ -40,11 +40,12 @@ describe("managed worktree registry", () => {
       baseRef: "HEAD",
       ownerKind: "workboard",
       ownerId: "card-1",
+      readiness: "ready",
       createdAt: 10,
       lastActiveAt: 10,
     };
-    insertRegistryWorktree(env, record);
-    insertRegistryWorktree(env, {
+    expect(insertRegistryWorktreeIfPathFree(env, record)).toBe(true);
+    insertRegistryWorktreeIfPathFree(env, {
       ...record,
       id: "second",
       name: "task-2",
@@ -75,5 +76,39 @@ describe("managed worktree registry", () => {
 
     deleteRegistryWorktree(env, "first");
     expect(getRegistryWorktree(env, "first")).toBeUndefined();
+  });
+
+  it("claims a path atomically only while no live row exists", () => {
+    const record: ManagedWorktreeRecord = {
+      id: "claimant",
+      name: "task",
+      repoFingerprint: "0123456789abcdef",
+      repoRoot: path.join(root, "repo"),
+      path: path.join(root, "worktrees", "task"),
+      branch: "openclaw/task",
+      baseRef: "HEAD",
+      ownerKind: "manual",
+      readiness: "provisioning",
+      createdAt: 10,
+      lastActiveAt: 10,
+    };
+
+    expect(insertRegistryWorktreeIfPathFree(env, record)).toBe(true);
+    // The claim persists the provisioning marker until the holder flips it to ready.
+    expect(getRegistryWorktree(env, "claimant")?.readiness).toBe("provisioning");
+    expect(insertRegistryWorktreeIfPathFree(env, { ...record, id: "rival" })).toBe(false);
+    expect(listRegistryWorktrees(env).map((entry) => entry.id)).toEqual(["claimant"]);
+
+    updateRegistryWorktree(env, "claimant", { readiness: "ready" });
+    expect(getRegistryWorktree(env, "claimant")?.readiness).toBe("ready");
+
+    // A removed row no longer blocks the path; the next claim wins again.
+    updateRegistryWorktree(env, "claimant", { removedAt: 50 });
+    expect(insertRegistryWorktreeIfPathFree(env, { ...record, id: "rival" })).toBe(true);
+    expect(
+      listRegistryWorktrees(env)
+        .map((entry) => entry.id)
+        .toSorted(),
+    ).toEqual(["claimant", "rival"]);
   });
 });

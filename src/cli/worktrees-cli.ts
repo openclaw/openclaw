@@ -53,7 +53,12 @@ export function registerWorktreesCli(program: Command): void {
             ID: record.id,
             Repo: record.repoRoot,
             Branch: record.branch,
-            Status: record.removedAt ? "restorable" : "active",
+            // Surfaces claimed-but-not-ready rows so operators can spot crashed provisioning.
+            Status: record.removedAt
+              ? "restorable"
+              : record.readiness === "provisioning"
+                ? "provisioning"
+                : "active",
           })),
         }).trimEnd(),
       );

@@ -1186,6 +1186,7 @@ export interface Worktrees {
   owner_id: string | null;
   owner_kind: string;
   path: string;
+  readiness: Generated<string>;
   removed_at: number | null;
   repo_fingerprint: string;
   repo_root: string;

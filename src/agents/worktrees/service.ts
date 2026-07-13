@@ -24,7 +24,7 @@ import {
   findLiveRegistryWorktreeByOwner,
   findLiveRegistryWorktreeByPath,
   getRegistryWorktree,
-  insertRegistryWorktree,
+  insertRegistryWorktreeIfPathFree,
   listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
@@ -47,6 +47,14 @@ import type {
 export const IDLE_GC_MS = 7 * 24 * 60 * 60 * 1000; // Idle worktrees remain restorable after automatic cleanup.
 export const SNAPSHOT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000; // Snapshot refs expire with their registry affordance.
 export const WORKTREE_GC_INTERVAL_MS = 60 * 60 * 1000;
+const SETUP_SCRIPT_TIMEOUT_MS = 120_000;
+// Provisioning heartbeat contract (distinct from run leases in run-lease.ts): a provisioning
+// holder bumps lastActiveAt on a wall-clock interval for the whole provisioning phase, so no
+// stall class (large include-file copy, slow setup, ...) leaves a silence gap while the
+// process lives. A claim silent for PROVISIONING_STALE_MS has a dead holder and gc may
+// reclaim the path and branch.
+export const PROVISIONING_HEARTBEAT_MS = 30_000; // 40x inside the stale threshold.
+export const PROVISIONING_STALE_MS = 10 * SETUP_SCRIPT_TIMEOUT_MS;
 
 const NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -56,6 +64,27 @@ export class WorktreeSnapshotError extends Error {
   constructor(snapshotError: string, options?: ErrorOptions) {
     super(`worktree snapshot failed; removal aborted: ${snapshotError}`, options);
     this.snapshotError = snapshotError;
+  }
+}
+
+/** Name reuse hit a same-path row still provisioning; retry after it settles or gc reaps it. */
+export class WorktreeProvisioningError extends Error {
+  constructor(name: string) {
+    super(`worktree provisioning in progress: ${name}`);
+  }
+}
+
+/** Provisioning outlived PROVISIONING_STALE_MS and gc reclaimed the path mid-create. */
+export class WorktreeProvisioningReapedError extends Error {
+  constructor(name: string) {
+    super(`worktree provisioning exceeded its window and was reclaimed: ${name}`);
+  }
+}
+
+/** Snapshot restore refused: a provisioning-origin snapshot has no usable checkout. */
+export class WorktreeUnprovisionedRestoreError extends Error {
+  constructor(name: string) {
+    super(`cannot restore a worktree that never finished provisioning: ${name}; create it again`);
   }
 }
 const SNAPSHOT_REF_PREFIX = "refs/openclaw/snapshots";
@@ -92,6 +121,12 @@ function recordOwnerMatches(
   return (
     record.ownerKind === (params.ownerKind ?? "manual") &&
     (record.ownerId ?? undefined) === (params.ownerId ?? undefined)
+  );
+}
+
+function worktreeNameInUseError(record: ManagedWorktreeRecord, name: string): Error {
+  return new Error(
+    `worktree name is already in use by ${record.ownerKind}${record.ownerId ? ` ${record.ownerId}` : ""}: ${name}`,
   );
 }
 
@@ -261,6 +296,24 @@ async function canResetFailedWorktreeAdd(
   return branchExists.code === 1;
 }
 
+/**
+ * A create() that crashed between `git worktree add` and its registry insert leaves a live
+ * git worktree + managed branch with no registry row. Adoption requires an exact match on
+ * both path and branch so foreign or detached worktrees are never silently claimed.
+ */
+async function findAdoptableOrphan(
+  repoRoot: string,
+  worktreePath: string,
+  branch: string,
+): Promise<boolean> {
+  const listed = await listGitWorktrees(repoRoot).catch(() => []);
+  return listed.some(
+    (entry) =>
+      path.resolve(entry.path) === path.resolve(worktreePath) &&
+      entry.branch === `refs/heads/${branch}`,
+  );
+}
+
 async function runSetupScript(repoRoot: string, worktreePath: string): Promise<void> {
   const setupScript = path.join(repoRoot, ".openclaw", "worktree-setup.sh");
   const stat = await fs.stat(setupScript).catch(() => undefined);
@@ -268,7 +321,7 @@ async function runSetupScript(repoRoot: string, worktreePath: string): Promise<v
     return;
   }
   const result = await runCommandWithTimeout([setupScript], {
-    timeoutMs: 120_000,
+    timeoutMs: SETUP_SCRIPT_TIMEOUT_MS,
     cwd: worktreePath,
     env: {
       OPENCLAW_SOURCE_TREE_PATH: repoRoot,
@@ -331,13 +384,17 @@ export class ManagedWorktreeService {
     const root = path.join(resolveStateDir(this.env), "worktrees", repository.fingerprint);
     const worktreePath = path.join(root, name);
     const existing = findRegistryWorktreeByPath(this.env, worktreePath);
+    // Usable records are 'ready' only: a live 'provisioning' row means another create()
+    // holds the claim (or crashed mid-setup, which gc reaps after PROVISIONING_STALE_MS).
+    // Returning it would hand out a checkout whose copy/setup never finished.
+    if (existing?.name === name && !existing.removedAt && existing.readiness === "provisioning") {
+      throw new WorktreeProvisioningError(name);
+    }
     // Name reuse only ever adopts the caller's own record. Without this guard a
     // caller-chosen name could bind a new owner to another session's or a
     // manual checkout and run inside it.
     if (existing?.name === name && !existing.removedAt && !recordOwnerMatches(existing, params)) {
-      throw new Error(
-        `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
-      );
+      throw worktreeNameInUseError(existing, name);
     }
     if (existing?.name === name && existing.removedAt === undefined) {
       if (await pathExists(existing.path)) {
@@ -347,11 +404,19 @@ export class ManagedWorktreeService {
     }
     if (existing?.name === name && existing.removedAt !== undefined && existing.snapshotRef) {
       if (!recordOwnerMatches(existing, params)) {
-        throw new Error(
-          `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${name}`,
-        );
+        throw worktreeNameInUseError(existing, name);
       }
-      return await this.restore({ id: existing.id });
+      if (existing.readiness === "provisioning") {
+        // A provisioning-origin snapshot has no completed provisioning and no user work
+        // (same rationale as the missing-path heal); drop the row and its snapshot ref so
+        // the fresh create below provisions from scratch instead of restoring a stub.
+        await runGit(existing.repoRoot, ["update-ref", "-d", existing.snapshotRef]);
+        deleteRegistryWorktree(this.env, existing.id);
+      } else {
+        // restore() re-activates this EXISTING row via updateRegistryWorktree — it operates on
+        // the row that already owns the path, so it cannot create a duplicate live row.
+        return await this.restore({ id: existing.id });
+      }
     }
     const branch = `openclaw/${name}`;
     const branchExists = await runGit(repository.repoRoot, [
@@ -361,6 +426,29 @@ export class ManagedWorktreeService {
       `refs/heads/${branch}`,
     ]);
     if (branchExists.code === 0) {
+      // No registry row was found above for this exact path, yet the managed branch already
+      // exists: this is the crashed-create() signature. Adopt only on an exact live-worktree +
+      // branch match; a bare branch collision (no worktree) keeps the throw below.
+      if (
+        existing === undefined &&
+        (await findAdoptableOrphan(repository.repoRoot, worktreePath, branch))
+      ) {
+        // The crash may have hit before provisioning finished; claimThenProvision re-runs
+        // copy + setup as the claim holder, or defers to a concurrent winner untouched.
+        const adoptedBase = await resolveWorktreeBase(repository.repoRoot, params.baseRef);
+        const adopted = await this.claimThenProvision({
+          repository,
+          params,
+          name,
+          worktreePath,
+          branch,
+          baseRef: adoptedBase.recordRef,
+        });
+        if (adopted) {
+          return adopted;
+        }
+        // Winner vanished between claim and lookup; fall through to the collision error.
+      }
       throw new Error(`branch already exists: ${branch}`);
     }
     if (branchExists.code !== 1) {
@@ -399,47 +487,78 @@ export class ManagedWorktreeService {
     if (added.code !== 0) {
       throw commandError("git worktree add", added);
     }
-    try {
-      await copyIncludedFiles(repository.sourceRoot, worktreePath);
-      if (params.runSetupScript !== false) {
-        await runSetupScript(repository.sourceRoot, worktreePath);
-      }
-    } catch (error) {
-      try {
-        await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
-      } catch (cleanupError) {
-        throw new Error(`${String(error)}\n${String(cleanupError)}`, { cause: cleanupError });
-      }
-      throw error;
-    }
-    const createdAt = this.now();
-    const record: ManagedWorktreeRecord = {
-      id: randomUUID(),
+    // Claim immediately after the add so the in-flight create is registered before any user
+    // code (copy/setup) runs; the only no-row window left is add -> claim, which runs no
+    // user code and is what the adoption path above recovers.
+    const record = await this.claimThenProvision({
+      repository,
+      params,
       name,
-      repoFingerprint: repository.fingerprint,
-      repoRoot: repository.repoRoot,
-      path: worktreePath,
+      worktreePath,
       branch,
       baseRef: recordBase,
-      ownerKind: params.ownerKind ?? "manual",
-      ...(params.ownerId ? { ownerId: params.ownerId } : {}),
-      createdAt,
-      lastActiveAt: createdAt,
-    };
-    insertRegistryWorktree(this.env, record);
+    });
+    if (!record) {
+      throw new Error(`worktree registration raced and lost: ${worktreePath}`);
+    }
     return record;
   }
 
   async list(): Promise<ManagedWorktreeRecord[]> {
     const records = listRegistryWorktrees(this.env);
+    const listed: ManagedWorktreeRecord[] = [];
     for (const record of records) {
       if (record.removedAt === undefined && !(await pathExists(record.path))) {
-        const removedAt = this.now();
-        updateRegistryWorktree(this.env, record.id, { removedAt });
-        record.removedAt = removedAt;
+        try {
+          if (await this.healMissingPathRecord(record)) {
+            continue;
+          }
+        } catch (error) {
+          log.warn(`missing-path cleanup failed for ${record.id}: ${String(error)}`);
+        }
       }
+      listed.push(record);
     }
-    return records.filter((record) => record.removedAt === undefined || record.snapshotRef);
+    return listed.filter((record) => record.removedAt === undefined || record.snapshotRef);
+  }
+
+  /**
+   * Missing-path self-heal shared by list() and gc(). Provisioning rows carry no snapshot
+   * and no user work — retiring one would hide the row while its branch survives and
+   * permanently block the name, so row AND branch are hard-deleted. Ready rows retire
+   * restorably. Returns true when the row was hard-deleted.
+   */
+  private async healMissingPathRecord(record: ManagedWorktreeRecord): Promise<boolean> {
+    if (record.readiness === "provisioning") {
+      await this.reapProvisioningRecord(record);
+      return true;
+    }
+    const removedAt = this.now();
+    updateRegistryWorktree(this.env, record.id, { removedAt });
+    record.removedAt = removedAt;
+    return false;
+  }
+
+  /**
+   * Destroys a dead provisioning claim (worktree, branch, row). Every remover — this reap
+   * included — serializes through the removal claim: a provisioning row cannot hold a run
+   * lease by construction (sessions are only ever handed 'ready' records), but the uniform
+   * claim keeps one serialization point with remove()/removeIfLossless() and excludes
+   * competing removers; a live run lease rejects the claim and the caller skips the record.
+   */
+  private async reapProvisioningRecord(record: ManagedWorktreeRecord): Promise<void> {
+    const claimToken = randomUUID();
+    claimWorktreeRemoval(this.env, { worktreeId: record.id, token: claimToken, force: false });
+    try {
+      // resetFailedWorktreeAdd tolerates the partial states a dead holder leaves
+      // (unlisted dir, missing branch), unlike the happy-path cleanupFailedCreate.
+      await resetFailedWorktreeAdd(record.repoRoot, record.path, record.branch);
+      deleteRegistryWorktree(this.env, record.id);
+      finalizeWorktreeRemoval(this.env, record.id);
+    } catch (error) {
+      abortWorktreeRemoval(this.env, record.id, claimToken);
+      throw error;
+    }
   }
 
   findLiveByOwner(
@@ -629,6 +748,11 @@ export class ManagedWorktreeService {
     if (!record?.snapshotRef || record.removedAt === undefined) {
       throw new Error(`worktree ${params.id} is not restorable`);
     }
+    // A provisioning-origin snapshot contains no completed provisioning and no user work;
+    // restoring it as ready would hand out an unusable checkout. Fresh create is the recovery.
+    if (record.readiness === "provisioning") {
+      throw new WorktreeUnprovisionedRestoreError(record.name);
+    }
     if (!(await pathExists(record.repoRoot))) {
       throw new Error(`source repository no longer exists: ${record.repoRoot}`);
     }
@@ -663,11 +787,18 @@ export class ManagedWorktreeService {
       throw error;
     }
     const lastActiveAt = this.now();
-    updateRegistryWorktree(this.env, params.id, { removedAt: undefined, lastActiveAt });
+    // Restore fully rematerializes the checkout, so the row is ready regardless of the
+    // readiness it was removed with; reviving a stale 'provisioning' row would let the next
+    // gc reap the freshly restored worktree and strand its snapshot ref.
+    updateRegistryWorktree(this.env, params.id, {
+      removedAt: undefined,
+      lastActiveAt,
+      readiness: "ready",
+    });
     // Clear any lease rows or removal marker stranded by a crash between git removal
     // and finalize so the restored worktree admits runs again.
     finalizeWorktreeRemoval(this.env, params.id);
-    const restored = { ...record, lastActiveAt };
+    const restored: ManagedWorktreeRecord = { ...record, lastActiveAt, readiness: "ready" };
     delete restored.removedAt;
     return restored;
   }
@@ -726,8 +857,20 @@ export class ManagedWorktreeService {
     for (const record of records) {
       try {
         if (record.removedAt === undefined && !(await pathExists(record.path))) {
-          updateRegistryWorktree(this.env, record.id, { removedAt: now });
-          record.removedAt = now;
+          if (await this.healMissingPathRecord(record)) {
+            continue;
+          }
+        }
+        // A provisioning claim whose heartbeat is silent past PROVISIONING_STALE_MS has a
+        // dead holder; reap worktree+branch+row so the next create() — including auto-named
+        // orphans no retry will ever reach — starts fresh. Heartbeating claims stay untouched.
+        if (
+          record.removedAt === undefined &&
+          record.readiness === "provisioning" &&
+          now - record.lastActiveAt > PROVISIONING_STALE_MS
+        ) {
+          await this.reapProvisioningRecord(record);
+          continue;
         }
         // Manual worktrees remain until explicit removal; only run-owned worktrees expire.
         const expiresWhenIdle = record.ownerKind === "workboard" || record.ownerKind === "session";
@@ -778,6 +921,96 @@ export class ManagedWorktreeService {
     return { removed, orphansDeleted, snapshotsPruned };
   }
 
+  /**
+   * Shared post-`git worktree add` sequence for normal create and orphan adoption: claim the
+   * path atomically FIRST, then only the claim holder provisions; on provisioning failure the
+   * holder removes worktree+branch and drops its own row, so failed creates leave no row.
+   * Invariant: an in-flight create holds a live row from claim-time onward, so a live worktree
+   * with NO row genuinely means a crashed create — an in-flight worktree can never be adopted,
+   * re-provisioned, or destroyed by a concurrent same-name call. A lost claim mirrors the
+   * live-row-at-path shortcut; undefined means the claim lost and no live winner row exists.
+   */
+  private async claimThenProvision(args: {
+    repository: { fingerprint: string; repoRoot: string; sourceRoot: string };
+    params: CreateManagedWorktreeParams;
+    name: string;
+    worktreePath: string;
+    branch: string;
+    baseRef: string;
+  }): Promise<ManagedWorktreeRecord | undefined> {
+    const { repository, params, name, worktreePath, branch, baseRef } = args;
+    const createdAt = this.now();
+    const record: ManagedWorktreeRecord = {
+      id: randomUUID(),
+      name,
+      repoFingerprint: repository.fingerprint,
+      repoRoot: repository.repoRoot,
+      path: worktreePath,
+      branch,
+      baseRef,
+      ownerKind: params.ownerKind ?? "manual",
+      ...(params.ownerId ? { ownerId: params.ownerId } : {}),
+      readiness: "provisioning",
+      createdAt,
+      lastActiveAt: createdAt,
+    };
+    if (!insertRegistryWorktreeIfPathFree(this.env, record)) {
+      // Claim lost: a concurrent create() owns the path; this call runs no setup, no copy,
+      // no cleanup.
+      const winner = findLiveRegistryWorktreeByPath(this.env, worktreePath);
+      if (!winner) {
+        return undefined;
+      }
+      // Only 'ready' rows are usable records; the winner is still provisioning its checkout.
+      if (winner.readiness === "provisioning") {
+        throw new WorktreeProvisioningError(name);
+      }
+      if (!recordOwnerMatches(winner, params)) {
+        throw worktreeNameInUseError(winner, name);
+      }
+      return winner;
+    }
+    // The row is visible as 'provisioning' (list()) while copy/setup run; that is what makes
+    // in-flight creates unadoptable and observable. Failed creates still end with no row.
+    // Wall-clock provisioning heartbeat for the whole phase: any stall class (a single large
+    // include-file copy, a slow setup) keeps proving a live holder, so gc never reaps a
+    // claim whose process is still alive. Always cleared below; a leaked interval would
+    // keep bumping a dead claim forever.
+    const heartbeat = setInterval(() => {
+      updateRegistryWorktree(this.env, record.id, { lastActiveAt: this.now() });
+    }, PROVISIONING_HEARTBEAT_MS);
+    try {
+      await copyIncludedFiles(repository.sourceRoot, worktreePath);
+      if (params.runSetupScript !== false) {
+        await runSetupScript(repository.sourceRoot, worktreePath);
+      }
+    } catch (error) {
+      // Claim-holder-only destruction: the row is held while the worktree is removed, then
+      // dropped so no registration outlives the path.
+      try {
+        await cleanupFailedCreate(repository.repoRoot, worktreePath, branch);
+      } catch (cleanupError) {
+        throw new Error(`${String(error)}\n${String(cleanupError)}`, { cause: cleanupError });
+      }
+      deleteRegistryWorktree(this.env, record.id);
+      throw error;
+    } finally {
+      clearInterval(heartbeat);
+    }
+    // Readiness flips only after provisioning fully succeeded; every usable-record path
+    // (entry shortcut, findLiveByOwner) filters on it. The flip is also the final heartbeat.
+    const readyAt = this.now();
+    updateRegistryWorktree(this.env, record.id, { readiness: "ready", lastActiveAt: readyAt });
+    // Backstop for the pathological suspended holder: heartbeats can stall long enough for
+    // gc to reap the claim mid-create; the flip above then updated zero rows. Never hand
+    // back a record whose path was already reclaimed.
+    const flipped = getRegistryWorktree(this.env, record.id);
+    if (!flipped || flipped.removedAt !== undefined) {
+      throw new WorktreeProvisioningReapedError(name);
+    }
+    return { ...record, readiness: "ready", lastActiveAt: readyAt };
+  }
+
   private requireLiveRecord(id: string): ManagedWorktreeRecord {
     const record = getRegistryWorktree(this.env, id);
     if (!record || record.removedAt !== undefined) {
@@ -809,6 +1042,9 @@ export class ManagedWorktreeService {
         if (repository) {
           const listed = await listGitWorktrees(repository.repoRoot).catch(() => []);
           if (listed.some((entry) => path.resolve(entry.path) === path.resolve(candidate))) {
+            // Live git worktrees are preserved, never adopted: background gc cannot tell a
+            // crash orphan from a legitimate manual worktree without an owner-safe recovery
+            // marker (schema-backed). Retried create() is the supported crash-recovery path.
             continue;
           }
         }

@@ -5,8 +5,23 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { getRegistryWorktree } from "./registry.js";
-import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
+import {
+  deleteRegistryWorktree,
+  findRegistryWorktreeByPath,
+  getRegistryWorktree,
+  insertRegistryWorktreeIfPathFree,
+  listRegistryWorktrees,
+  updateRegistryWorktree,
+} from "./registry.js";
+import { acquireWorktreeRunLease } from "./run-lease.js";
+import {
+  IDLE_GC_MS,
+  ManagedWorktreeService,
+  PROVISIONING_HEARTBEAT_MS,
+  PROVISIONING_STALE_MS,
+  SNAPSHOT_RETENTION_MS,
+} from "./service.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -677,6 +692,471 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(debris)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await fs.stat(foreign)).toBeTruthy();
     await git(repo, "worktree", "remove", "--force", foreign);
+  });
+
+  it("adopts an orphaned worktree instead of throwing on a retried create() with the same name", async () => {
+    const created = await service.create({
+      repoRoot: repo,
+      name: "orphan-retry",
+      ownerKind: "workboard",
+      ownerId: "card-42",
+    });
+    // Deleting the row reproduces the only remaining no-row crash window (between
+    // `git worktree add` and the claim, which runs no user code) and pre-fix orphans.
+    deleteRegistryWorktree(env, created.id);
+
+    const retried = await service.create({
+      repoRoot: repo,
+      name: "orphan-retry",
+      ownerKind: "workboard",
+      ownerId: "card-42",
+    });
+
+    expect(retried.path).toBe(created.path);
+    expect(retried.branch).toBe(created.branch);
+    expect(retried.id).not.toBe(created.id);
+    // The retry's owner must survive adoption so findLiveByOwner() and idle-gc still apply.
+    expect(retried.ownerKind).toBe("workboard");
+    expect(retried.ownerId).toBe("card-42");
+    expect(getRegistryWorktree(env, retried.id)).toMatchObject({
+      ownerKind: "workboard",
+      ownerId: "card-42",
+    });
+    expect(service.findLiveByOwner("workboard", "card-42")?.id).toBe(retried.id);
+    expect(await git(created.path, "branch", "--show-current")).toBe(created.branch);
+  });
+
+  it("re-runs provisioning when a retried create() adopts a pre-setup crash orphan", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "included.env\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "included.env\n");
+    await fs.writeFile(path.join(repo, "included.env"), "provisioned\n");
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      "#!/bin/sh\necho ran > setup-marker.txt\n",
+      { mode: 0o755 },
+    );
+    const created = await service.create({ repoRoot: repo, name: "orphan-setup", baseRef: "main" });
+    // Simulates a crash after `git worktree add` but before copy/setup and the registry insert:
+    // undo the provisioning artifacts the initial create() produced and drop its registry row.
+    deleteRegistryWorktree(env, created.id);
+    await fs.rm(path.join(created.path, "included.env"));
+    await fs.rm(path.join(created.path, "setup-marker.txt"));
+
+    const retried = await service.create({ repoRoot: repo, name: "orphan-setup", baseRef: "main" });
+
+    expect(retried.path).toBe(created.path);
+    expect(retried.baseRef).toBe("main");
+    expect(await fs.readFile(path.join(retried.path, "included.env"), "utf8")).toBe(
+      "provisioned\n",
+    );
+    expect(await fs.readFile(path.join(retried.path, "setup-marker.txt"), "utf8")).toBe("ran\n");
+  });
+
+  it("cleans up instead of adopting when provisioning fails on the retried create()", async () => {
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      '#!/bin/sh\nif [ -f "$OPENCLAW_SOURCE_TREE_PATH/fail-setup" ]; then\n  echo setup-broke >&2\n  exit 9\nfi\nexit 0\n',
+      { mode: 0o755 },
+    );
+    const created = await service.create({ repoRoot: repo, name: "orphan-refail" });
+    deleteRegistryWorktree(env, created.id);
+    await fs.writeFile(path.join(repo, "fail-setup"), "");
+
+    await expect(service.create({ repoRoot: repo, name: "orphan-refail" })).rejects.toThrow(
+      "setup-broke",
+    );
+
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain(created.path);
+    expect(await git(repo, "branch", "--list", "openclaw/orphan-refail")).toBe("");
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(findRegistryWorktreeByPath(env, created.path)).toBeUndefined();
+  });
+
+  it("retried create() returns the concurrent winner's record instead of double-registering", async () => {
+    const created = await service.create({ repoRoot: repo, name: "race-retry" });
+    deleteRegistryWorktree(env, created.id);
+    const winner: ManagedWorktreeRecord = { ...created, id: "race-winner" };
+    let raced = false;
+    // The first now() read inside the retried create() is adoptOrphan's createdAt, taken
+    // right before the atomic claim (which precedes provisioning); the trapdoor inserts the
+    // competing row there, deterministically simulating a concurrent create() winning the
+    // path after this call's registry lookup.
+    const racingService = new ManagedWorktreeService({
+      env,
+      now: () => {
+        if (!raced) {
+          raced = true;
+          insertRegistryWorktreeIfPathFree(env, winner);
+        }
+        return now;
+      },
+    });
+
+    const retried = await racingService.create({ repoRoot: repo, name: "race-retry" });
+
+    expect(retried.id).toBe("race-winner");
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === created.path);
+    expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
+  });
+
+  it("a losing retried create() does not provision or destroy the winner's worktree", async () => {
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      "#!/bin/sh\necho ran >> setup-marker.txt\n",
+      { mode: 0o755 },
+    );
+    const created = await service.create({ repoRoot: repo, name: "race-loser" });
+    deleteRegistryWorktree(env, created.id);
+    // Pre-setup crash signature: the marker the initial create() wrote is gone.
+    await fs.rm(path.join(created.path, "setup-marker.txt"));
+    const winner: ManagedWorktreeRecord = { ...created, id: "race-winner" };
+    let raced = false;
+    const racingService = new ManagedWorktreeService({
+      env,
+      now: () => {
+        if (!raced) {
+          raced = true;
+          insertRegistryWorktreeIfPathFree(env, winner);
+        }
+        return now;
+      },
+    });
+
+    const retried = await racingService.create({ repoRoot: repo, name: "race-loser" });
+
+    expect(retried.id).toBe("race-winner");
+    // Claim-before-provision: the loser ran no setup, no copy, and no cleanup on the
+    // winner's path, and left the registry row set untouched.
+    await expect(fs.stat(path.join(created.path, "setup-marker.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await fs.stat(created.path)).toBeTruthy();
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === created.path);
+    expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
+  });
+
+  it("gc during a normal create() preserves the in-flight worktree and leaves one live row", async () => {
+    const syncDir = path.join(root, "sync");
+    await fs.mkdir(syncDir, { recursive: true });
+    const startedFlag = path.join(syncDir, "setup-started");
+    const releaseFlag = path.join(syncDir, "setup-release");
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    // The setup script parks create() mid-provisioning until released, so gc deterministically
+    // observes an in-flight create (live worktree + live claim-time row) and must preserve it.
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
+      { mode: 0o755 },
+    );
+
+    const createPromise = service.create({ repoRoot: repo, name: "during-gc" });
+    while (!(await fs.stat(startedFlag).catch(() => undefined))) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+    const result = await service.gc();
+    await fs.writeFile(releaseFlag, "");
+    const created = await createPromise;
+
+    expect(result.orphansDeleted).toBe(0);
+    expect(await fs.stat(created.path)).toBeTruthy();
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === created.path);
+    expect(rows.map((entry) => entry.id)).toEqual([created.id]);
+  });
+
+  it("normal create() returns the concurrent winner's record instead of double-registering", async () => {
+    const sibling = await service.create({ repoRoot: repo, name: "sibling" });
+    const winner: ManagedWorktreeRecord = {
+      ...sibling,
+      id: "race-winner",
+      name: "race-normal",
+      path: path.join(path.dirname(sibling.path), "race-normal"),
+      branch: "openclaw/race-normal",
+    };
+    let raced = false;
+    // Normal create()'s first now() read is the record's createdAt, taken right after
+    // `git worktree add` and before the claim; the trapdoor inserts the competing row there,
+    // simulating a concurrent registration winning the tiny post-add window.
+    const racingService = new ManagedWorktreeService({
+      env,
+      now: () => {
+        if (!raced) {
+          raced = true;
+          insertRegistryWorktreeIfPathFree(env, winner);
+        }
+        return now;
+      },
+    });
+
+    const created = await racingService.create({ repoRoot: repo, name: "race-normal" });
+
+    expect(created.id).toBe("race-winner");
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === winner.path);
+    expect(rows.map((entry) => entry.id)).toEqual(["race-winner"]);
+  });
+
+  it("a parked in-flight create() is invisible as a usable record and untouchable by retries", async () => {
+    const syncDir = path.join(root, "sync");
+    await fs.mkdir(syncDir, { recursive: true });
+    const startedFlag = path.join(syncDir, "setup-started");
+    const releaseFlag = path.join(syncDir, "setup-release");
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    // The marker counts setup executions; the park keeps create #1 in its provisioning
+    // window while same-name retries run against the live claim-time row.
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\necho ran >> setup-marker.txt\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
+      { mode: 0o755 },
+    );
+
+    const firstPromise = service.create({
+      repoRoot: repo,
+      name: "parked",
+      ownerKind: "session",
+      ownerId: "agent:parked",
+    });
+    while (!(await fs.stat(startedFlag).catch(() => undefined))) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+
+    // The claim-time row is observable but not usable: list() shows it provisioning, while
+    // usable-record acquisition (findLiveByOwner, same-name create) refuses to hand it out.
+    const parkedRows = listRegistryWorktrees(env).filter((entry) => entry.name === "parked");
+    expect(parkedRows.map((entry) => entry.readiness)).toEqual(["provisioning"]);
+    expect(service.findLiveByOwner("session", "agent:parked")).toBeUndefined();
+    await expect(
+      service.create({
+        repoRoot: repo,
+        name: "parked",
+        ownerKind: "session",
+        ownerId: "agent:parked",
+      }),
+    ).rejects.toThrow("worktree provisioning in progress: parked");
+    await expect(service.create({ repoRoot: repo, name: "parked" })).rejects.toThrow(
+      "worktree provisioning in progress: parked",
+    );
+    expect(listRegistryWorktrees(env).filter((entry) => entry.name === "parked")).toHaveLength(1);
+
+    await fs.writeFile(releaseFlag, "");
+    const first = await firstPromise;
+
+    expect(first.readiness).toBe("ready");
+    expect(service.findLiveByOwner("session", "agent:parked")?.id).toBe(first.id);
+    // Only #1's setup execution ever ran; no retry adopted, re-provisioned, or cleaned up.
+    expect(await fs.readFile(path.join(first.path, "setup-marker.txt"), "utf8")).toBe("ran\n");
+    expect(await fs.stat(first.path)).toBeTruthy();
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === first.path);
+    expect(rows.map((entry) => [entry.id, entry.readiness])).toEqual([[first.id, "ready"]]);
+  });
+
+  it("restore() refuses a snapshot taken from a provisioning row", async () => {
+    const created = await service.create({ repoRoot: repo, name: "restore-prov" });
+    // Constructed post-claim crash: the row is left 'provisioning' over a real checkout,
+    // then an operator removes it; its snapshot captured an unprovisioned tree.
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    await service.remove({ id: created.id, reason: "operator-recovery" });
+
+    await expect(service.restore({ id: created.id })).rejects.toThrow(
+      "cannot restore a worktree that never finished provisioning: restore-prov",
+    );
+    // The row keeps its removed state; nothing was rematerialized.
+    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeDefined();
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("create() after removing a provisioning row provisions fresh instead of restoring", async () => {
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    const script = path.join(repo, ".openclaw", "worktree-setup.sh");
+    await fs.writeFile(script, "#!/bin/sh\necho one > setup-marker.txt\n", { mode: 0o755 });
+    const created = await service.create({ repoRoot: repo, name: "prov-recreate" });
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    const removed = await service.remove({ id: created.id, reason: "operator-recovery" });
+    // A snapshot restore would resurrect the OLD marker; only a fresh full provision runs
+    // the updated setup script.
+    await fs.writeFile(script, "#!/bin/sh\necho two > setup-marker.txt\n", { mode: 0o755 });
+
+    const recreated = await service.create({ repoRoot: repo, name: "prov-recreate" });
+
+    expect(recreated.id).not.toBe(created.id);
+    expect(recreated.readiness).toBe("ready");
+    expect(await fs.readFile(path.join(recreated.path, "setup-marker.txt"), "utf8")).toBe("two\n");
+    // The stale removed provisioning row and its snapshot ref are gone.
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    await expect(git(repo, "show-ref", "--verify", removed.snapshotRef!)).rejects.toThrow();
+    const rows = listRegistryWorktrees(env).filter((entry) => entry.path === recreated.path);
+    expect(rows.map((entry) => entry.id)).toEqual([recreated.id]);
+  });
+
+  it("create() fails closed when its provisioning row is reaped mid-flight", async () => {
+    const syncDir = path.join(root, "sync-reap");
+    await fs.mkdir(syncDir, { recursive: true });
+    const startedFlag = path.join(syncDir, "setup-started");
+    const releaseFlag = path.join(syncDir, "setup-release");
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      `#!/bin/sh\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
+      { mode: 0o755 },
+    );
+
+    const firstPromise = service.create({ repoRoot: repo, name: "reaped" });
+    while (!(await fs.stat(startedFlag).catch(() => undefined))) {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
+    }
+    // Simulates gc reaping the claim while the (suspended/overlong) holder still runs:
+    // the ready flip then updates zero rows and create() must not return a dead record.
+    const parked = listRegistryWorktrees(env).find((entry) => entry.name === "reaped");
+    deleteRegistryWorktree(env, parked!.id);
+    await fs.writeFile(releaseFlag, "");
+
+    await expect(firstPromise).rejects.toThrow(
+      "worktree provisioning exceeded its window and was reclaimed: reaped",
+    );
+  });
+
+  it("the wall-clock provisioning heartbeat keeps any provisioning stall alive through gc", async () => {
+    // Fake only the interval APIs: the service's heartbeat timer becomes deterministically
+    // fireable while the test's own polling and the parked child process stay real.
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const syncDir = path.join(root, "sync");
+      await fs.mkdir(syncDir, { recursive: true });
+      const startedFlag = path.join(syncDir, "setup-started");
+      const releaseFlag = path.join(syncDir, "setup-release");
+      await fs.mkdir(path.join(repo, ".openclaw"));
+      // The parked setup script stands in for any provisioning stall (one huge include-file
+      // copy, a slow setup, ...): nothing but the timer proves the holder is alive.
+      await fs.writeFile(
+        path.join(repo, ".openclaw", "worktree-setup.sh"),
+        `#!/bin/sh\n: > "${startedFlag}"\ni=0\nwhile [ ! -f "${releaseFlag}" ]; do\n  i=$((i + 1))\n  [ "$i" -gt 400 ] && exit 9\n  sleep 0.1\ndone\nexit 0\n`,
+        { mode: 0o755 },
+      );
+
+      const createPromise = service.create({ repoRoot: repo, name: "stalled" });
+      while (!(await fs.stat(startedFlag).catch(() => undefined))) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+      }
+
+      // Far past the stale threshold relative to the claim (and to any pre-stall bump), a
+      // single timer tick re-proves liveness; gc must preserve the claim.
+      now += PROVISIONING_STALE_MS + 1;
+      vi.advanceTimersByTime(PROVISIONING_HEARTBEAT_MS);
+      const parked = listRegistryWorktrees(env).find((entry) => entry.name === "stalled");
+      expect(parked?.readiness).toBe("provisioning");
+      expect(now - parked!.createdAt).toBeGreaterThan(PROVISIONING_STALE_MS);
+      // Pins that the timer fired: only its bump can have written the advanced clock.
+      expect(parked?.lastActiveAt).toBe(now);
+      await service.gc();
+      expect(getRegistryWorktree(env, parked!.id)?.readiness).toBe("provisioning");
+      expect(await fs.stat(parked!.path)).toBeTruthy();
+
+      await fs.writeFile(releaseFlag, "");
+      const created = await createPromise;
+      expect(created.readiness).toBe("ready");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("list() hard-deletes a missing-path provisioning claim instead of retiring it", async () => {
+    const created = await service.create({ repoRoot: repo, name: "list-heal" });
+    // Constructed: a provisioning claim whose directory vanished, discovered via list()
+    // before any gc runs (the door that previously retired it into a permanent dead end).
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    await fs.rm(created.path, { recursive: true, force: true });
+
+    const listed = await service.list();
+
+    // Hard-deleted, not retired: no removed row lingers to collide with the surviving
+    // branch, and the branch itself is gone — the name is genuinely retriable.
+    expect(listed.find((entry) => entry.id === created.id)).toBeUndefined();
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
+    const recreated = await service.create({ repoRoot: repo, name: "list-heal" });
+    expect(recreated.readiness).toBe("ready");
+  });
+
+  it("gc reaps silent provisioning claims and preserves heartbeating ones", async () => {
+    await fs.mkdir(path.join(repo, ".openclaw"));
+    await fs.writeFile(
+      path.join(repo, ".openclaw", "worktree-setup.sh"),
+      "#!/bin/sh\necho ran > setup-marker.txt\n",
+      { mode: 0o755 },
+    );
+    const named = await service.create({ repoRoot: repo, name: "stale-prov" });
+    const autoNamed = await service.create({ repoRoot: repo });
+    // Constructed post-claim crash state: live worktree + branch with a row still marked
+    // 'provisioning' — exactly what a create() killed mid-setup leaves behind.
+    updateRegistryWorktree(env, named.id, { readiness: "provisioning" });
+    updateRegistryWorktree(env, autoNamed.id, { readiness: "provisioning" });
+
+    // Liveness, not claim age, decides: well past the original claim's age a recent
+    // heartbeat still proves a live holder, so gc must not touch the claim.
+    now += PROVISIONING_STALE_MS + 1;
+    updateRegistryWorktree(env, named.id, { lastActiveAt: now });
+    updateRegistryWorktree(env, autoNamed.id, { lastActiveAt: now });
+    await service.gc();
+    expect(getRegistryWorktree(env, named.id)?.readiness).toBe("provisioning");
+    expect(await fs.stat(named.path)).toBeTruthy();
+
+    // A claim silent past the threshold has a dead holder: row, worktree, and branch go away.
+    now += PROVISIONING_STALE_MS + 1;
+    await service.gc();
+    expect(getRegistryWorktree(env, named.id)).toBeUndefined();
+    expect(getRegistryWorktree(env, autoNamed.id)).toBeUndefined();
+    await expect(fs.stat(named.path)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(autoNamed.path)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await git(repo, "branch", "--list", named.branch)).toBe("");
+    expect(await git(repo, "branch", "--list", autoNamed.branch)).toBe("");
+
+    // Background recovery is complete: the same name (and any auto name) provisions fresh.
+    const recreated = await service.create({ repoRoot: repo, name: "stale-prov" });
+    expect(recreated.readiness).toBe("ready");
+    expect(await fs.readFile(path.join(recreated.path, "setup-marker.txt"), "utf8")).toBe("ran\n");
+  });
+
+  it("gc hard-deletes provisioning claims whose directory vanished, keeping the name retriable", async () => {
+    const created = await service.create({ repoRoot: repo, name: "gone-dir" });
+    // Constructed: a provisioning claim whose directory is gone (crash + manual cleanup).
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    await fs.rm(created.path, { recursive: true, force: true });
+
+    await service.gc();
+
+    // No hidden retired row and no surviving branch — retiring instead would strand the
+    // name forever (row invisible to adoption, branch collides with the next create).
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    expect(await git(repo, "branch", "--list", created.branch)).toBe("");
+    const recreated = await service.create({ repoRoot: repo, name: "gone-dir" });
+    expect(recreated.readiness).toBe("ready");
+  });
+
+  it("gc reap defers to a live run lease via the shared removal claim", async () => {
+    const created = await service.create({ repoRoot: repo, name: "leased-claim" });
+    const lease = await acquireWorktreeRunLease(created.id, { env });
+    // Constructed dead-holder state under a still-live run lease: the removal claim
+    // rejects, so reap must skip rather than destroy a checkout a run is using.
+    updateRegistryWorktree(env, created.id, { readiness: "provisioning" });
+    now += PROVISIONING_STALE_MS + 1;
+
+    await service.gc();
+    expect(getRegistryWorktree(env, created.id)?.readiness).toBe("provisioning");
+    expect(await fs.stat(created.path)).toBeTruthy();
+
+    await lease.release();
+    await service.gc();
+    expect(getRegistryWorktree(env, created.id)).toBeUndefined();
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("prunes expired snapshot refs and registry rows", async () => {

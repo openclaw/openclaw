@@ -16,6 +16,9 @@ export const WorktreeRecordSchema = Type.Object(
     ownerKind: Type.String({ enum: ["manual", "workboard", "session"] }),
     ownerId: Type.Optional(NonEmptyString),
     snapshotRef: Type.Optional(NonEmptyString),
+    // Additive/optional: older clients ignore it; 'provisioning' rows are claimed but not
+    // yet usable checkouts (copy/setup still running or crashed before completion).
+    readiness: Type.Optional(Type.String({ enum: ["provisioning", "ready"] })),
     createdAt: Type.Integer({ minimum: 0 }),
     lastActiveAt: Type.Integer({ minimum: 0 }),
     removedAt: Type.Optional(Type.Integer({ minimum: 0 })),

@@ -1516,7 +1516,8 @@ CREATE TABLE IF NOT EXISTS worktrees (
   snapshot_ref TEXT,
   created_at INTEGER NOT NULL,
   last_active_at INTEGER NOT NULL,
-  removed_at INTEGER
+  removed_at INTEGER,
+  readiness TEXT NOT NULL DEFAULT 'ready' CHECK (readiness IN ('provisioning', 'ready'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_worktrees_repo_fingerprint
