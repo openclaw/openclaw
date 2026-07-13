@@ -28,11 +28,17 @@ const DEFAULT_QUOTA_SUSPENSION_RESUME_MS = 30 * 60 * 1000; // 30 min
 type LaneResumeTimer = {
   timer: ReturnType<typeof setTimeout>;
   resumeConcurrency: number;
+  resumeAtMs: number;
+};
+
+type ClearedLaneResume = {
+  resumeConcurrency: number;
+  resumeAtMs: number;
 };
 
 type SessionSuspensionRuntimeState = {
   laneResumeTimers: Map<string, LaneResumeTimer>;
-  clearedLaneResumes: Map<string, number>;
+  clearedLaneResumes: Map<string, ClearedLaneResume>;
   cleanupGeneration: number;
   cleanupActive: boolean;
 };
@@ -48,13 +54,13 @@ function getSessionSuspensionState(): SessionSuspensionRuntimeState {
     SESSION_SUSPENSION_STATE_KEY,
     () => ({
       laneResumeTimers: new Map<string, LaneResumeTimer>(),
-      clearedLaneResumes: new Map<string, number>(),
+      clearedLaneResumes: new Map<string, ClearedLaneResume>(),
       cleanupGeneration: 0,
       cleanupActive: false,
     }),
   );
   if (!state.clearedLaneResumes) {
-    state.clearedLaneResumes = new Map<string, number>();
+    state.clearedLaneResumes = new Map<string, ClearedLaneResume>();
   }
   return state;
 }
@@ -132,7 +138,13 @@ export function resolveSessionSuspensionTarget(): SessionSuspensionTarget {
   return { mode: "defer", defer: (params) => scope.onDeferred?.(params) };
 }
 
-function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurrency: number) {
+function scheduleLaneAutoResume(
+  laneId: string,
+  delayMs: number,
+  resumeConcurrency: number,
+  opts: { nowMs?: number } = {},
+) {
+  const nowMs = opts.nowMs ?? Date.now();
   const state = getSessionSuspensionState();
   const existing = state.laneResumeTimers.get(laneId);
   if (existing) {
@@ -152,7 +164,7 @@ function scheduleLaneAutoResume(laneId: string, delayMs: number, resumeConcurren
   if (typeof timer.unref === "function") {
     timer.unref();
   }
-  state.laneResumeTimers.set(laneId, { timer, resumeConcurrency });
+  state.laneResumeTimers.set(laneId, { timer, resumeConcurrency, resumeAtMs: nowMs + delayMs });
 }
 
 export function clearSessionSuspensionTimers(): number {
@@ -162,27 +174,42 @@ export function clearSessionSuspensionTimers(): number {
   let cleared = 0;
   for (const [laneId, entry] of state.laneResumeTimers) {
     clearTimeout(entry.timer);
-    state.clearedLaneResumes.set(laneId, entry.resumeConcurrency);
+    state.clearedLaneResumes.set(laneId, {
+      resumeConcurrency: entry.resumeConcurrency,
+      resumeAtMs: entry.resumeAtMs,
+    });
     cleared += 1;
   }
   state.laneResumeTimers.clear();
   return cleared;
 }
 
-export function enableSessionSuspensionTimersForGatewayStart(): number {
+export function enableSessionSuspensionTimersForGatewayStart(
+  resolveResumeConcurrency: (laneId: string, savedResumeConcurrency: number) => number = (
+    _laneId,
+    savedResumeConcurrency,
+  ) => savedResumeConcurrency,
+): Set<string> {
   const state = getSessionSuspensionState();
   state.cleanupGeneration += 1;
   state.cleanupActive = false;
-  let restored = 0;
-  for (const [laneId, resumeConcurrency] of state.clearedLaneResumes) {
+  const suspendedLaneIds = new Set<string>();
+  const nowMs = Date.now();
+  for (const [laneId, cleared] of state.clearedLaneResumes) {
+    const resumeConcurrency = resolveResumeConcurrency(laneId, cleared.resumeConcurrency);
+    const remainingMs = Math.max(0, cleared.resumeAtMs - nowMs);
+    if (remainingMs > 0) {
+      scheduleLaneAutoResume(laneId, remainingMs, resumeConcurrency, { nowMs });
+      suspendedLaneIds.add(laneId);
+      continue;
+    }
     if (isGatewayManagedLane(laneId)) {
       continue;
     }
     setCommandLaneConcurrency(laneId, resumeConcurrency);
-    restored += 1;
   }
   state.clearedLaneResumes.clear();
-  return restored;
+  return suspendedLaneIds;
 }
 
 export async function suspendSession(params: SessionSuspensionParams) {
@@ -281,6 +308,14 @@ export const testing = {
     state.clearedLaneResumes.clear();
     state.cleanupGeneration = 0;
     state.cleanupActive = false;
+  },
+  seedClearedLaneResumeForTest: (
+    laneId: string,
+    cleared: { resumeConcurrency: number; resumeAtMs: number },
+  ) => {
+    const state = getSessionSuspensionState();
+    state.cleanupActive = true;
+    state.clearedLaneResumes.set(laneId, cleared);
   },
   resolveLaneResumeConcurrency,
   resolveSessionSuspensionReason,

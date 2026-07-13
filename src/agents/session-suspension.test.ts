@@ -179,9 +179,33 @@ describe("session suspension", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
-    expect(enableSessionSuspensionTimersForGatewayStart()).toBe(1);
+    expect(enableSessionSuspensionTimersForGatewayStart().size).toBe(0);
     expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(customLaneId, 1);
-    expect(enableSessionSuspensionTimersForGatewayStart()).toBe(0);
+    expect(enableSessionSuspensionTimersForGatewayStart().size).toBe(0);
+  });
+
+  it("reschedules unexpired custom lane suspensions when gateway startup re-enables timers", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { clearSessionSuspensionTimers, enableSessionSuspensionTimersForGatewayStart } =
+      await import("./session-suspension.js");
+    const customLaneId = "plugin:voice:room-2" as CommandLane;
+
+    await suspendLane(100, {} as OpenClawConfig, customLaneId);
+    expect(clearSessionSuspensionTimers()).toBe(1);
+    commandQueueMocks.setCommandLaneConcurrency.mockClear();
+
+    await vi.advanceTimersByTimeAsync(40);
+    const suspendedLaneIds = enableSessionSuspensionTimersForGatewayStart();
+
+    expect(suspendedLaneIds).toEqual(new Set([customLaneId]));
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(59);
+    expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(customLaneId, 1);
   });
 
   it("leaves built-in lane restoration to gateway startup concurrency", async () => {
@@ -198,7 +222,7 @@ describe("session suspension", () => {
     expect(clearSessionSuspensionTimers()).toBe(1);
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
 
-    expect(enableSessionSuspensionTimersForGatewayStart()).toBe(0);
+    expect(enableSessionSuspensionTimersForGatewayStart()).toEqual(new Set([CommandLane.Main]));
     expect(commandQueueMocks.setCommandLaneConcurrency).not.toHaveBeenCalled();
   });
 

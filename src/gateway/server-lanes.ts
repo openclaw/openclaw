@@ -25,19 +25,46 @@ export function applyGatewayLaneConcurrency(
   concurrency: GatewayLaneConcurrency,
   opts: { gatewayStart?: boolean } = {},
 ): void {
+  let suspendedLaneIds: ReadonlySet<string> = new Set<string>();
   if (opts.gatewayStart) {
-    enableSessionSuspensionTimersForGatewayStart();
+    suspendedLaneIds = enableSessionSuspensionTimersForGatewayStart(
+      (laneId, savedResumeConcurrency) => {
+        switch (laneId) {
+          case CommandLane.Cron:
+          case CommandLane.CronNested:
+            return concurrency.cron;
+          case CommandLane.Main:
+            return concurrency.main;
+          case CommandLane.Nested:
+            return 1;
+          case CommandLane.Subagent:
+            return concurrency.subagent;
+          default:
+            return savedResumeConcurrency;
+        }
+      },
+    );
   }
   // Resolution is deliberately separate: this commit-edge applier only updates
   // live queue state and cannot reject a config midway through publication.
-  setCommandLaneConcurrency(CommandLane.Cron, concurrency.cron);
+  if (!suspendedLaneIds.has(CommandLane.Cron)) {
+    setCommandLaneConcurrency(CommandLane.Cron, concurrency.cron);
+  }
   // Cron isolated agent turns remap inner LLM work to this lane.
-  setCommandLaneConcurrency(CommandLane.CronNested, concurrency.cron);
-  setCommandLaneConcurrency(CommandLane.Main, concurrency.main);
+  if (!suspendedLaneIds.has(CommandLane.CronNested)) {
+    setCommandLaneConcurrency(CommandLane.CronNested, concurrency.cron);
+  }
+  if (!suspendedLaneIds.has(CommandLane.Main)) {
+    setCommandLaneConcurrency(CommandLane.Main, concurrency.main);
+  }
   if (opts.gatewayStart) {
     // sessions.send work uses a shared nested lane with no config knob; live
     // reload must not resume a currently suspended nested lane before its TTL.
-    setCommandLaneConcurrency(CommandLane.Nested, 1);
+    if (!suspendedLaneIds.has(CommandLane.Nested)) {
+      setCommandLaneConcurrency(CommandLane.Nested, 1);
+    }
   }
-  setCommandLaneConcurrency(CommandLane.Subagent, concurrency.subagent);
+  if (!suspendedLaneIds.has(CommandLane.Subagent)) {
+    setCommandLaneConcurrency(CommandLane.Subagent, concurrency.subagent);
+  }
 }

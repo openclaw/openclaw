@@ -1,7 +1,7 @@
 /**
  * Gateway server lane configuration tests.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -22,6 +22,11 @@ function applyConfigLaneConcurrency(
 
 describe("applyGatewayLaneConcurrency", () => {
   afterEach(async () => {
+    if (vi.isFakeTimers()) {
+      await vi.runOnlyPendingTimersAsync();
+      vi.clearAllTimers();
+    }
+    vi.useRealTimers();
     // Gateway startup drains the process-global suspension cleanup state.
     // Reset between tests so lane assertions only see this test's setup.
     const { testing } = await import("../agents/session-suspension.js");
@@ -161,6 +166,38 @@ describe("applyGatewayLaneConcurrency", () => {
     expect(started).toBe(false);
 
     setCommandLaneConcurrency(CommandLane.Nested, 1);
+    await nestedRun;
+    expect(started).toBe(true);
+  });
+
+  it("does not resume an unexpired shared nested lane during gateway startup", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const { testing } = await import("../agents/session-suspension.js");
+    testing.seedClearedLaneResumeForTest(CommandLane.Nested, {
+      resumeConcurrency: 1,
+      resumeAtMs: 1_100,
+    });
+    setCommandLaneConcurrency(CommandLane.Nested, 0);
+
+    applyConfigLaneConcurrency({} as OpenClawConfig, { gatewayStart: true });
+
+    let started = false;
+    const nestedRun = enqueueCommandInLane(
+      CommandLane.Nested,
+      async () => {
+        started = true;
+      },
+      { warnAfterMs: 10_000 },
+    );
+    await Promise.resolve();
+
+    expect(started).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(99);
+    expect(started).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1);
     await nestedRun;
     expect(started).toBe(true);
   });
