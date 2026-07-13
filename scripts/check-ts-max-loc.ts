@@ -5,7 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_BASELINE_PATH = "scripts/ts-max-loc-baseline.json";
+const DEFAULT_BASELINE_PATH = "scripts/ts-max-loc-baseline-v2.json";
 
 function writeStdoutLine(message: string): void {
   process.stdout.write(`${message}\n`);

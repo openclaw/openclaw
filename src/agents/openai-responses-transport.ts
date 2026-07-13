@@ -145,8 +145,6 @@ type OpenAIResponsesReplayContext = {
   authProfileHash?: string;
 };
 
-export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
-
 function stringifyUnknown(value: unknown, fallback = ""): string {
   if (typeof value === "string") {
     return value;
@@ -1934,7 +1932,7 @@ function readResponsesOutputMessageText(item: Record<string, unknown>): string {
     .join("");
 }
 
-export function resolveProviderTransportTurnState(
+function resolveProviderTransportTurnState(
   model: Model,
   params: {
     sessionId?: string;
@@ -2551,7 +2549,7 @@ function buildAzureOpenAIResponsesParams(
   return params;
 }
 
-export type OpenAIResponsesRequestParams = {
+type OpenAIResponsesRequestParams = {
   model: string;
   input: ResponseInput;
   stream: true;
