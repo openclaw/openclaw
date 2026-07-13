@@ -385,6 +385,11 @@ const activeRecallCache = new Map<string, CachedActiveRecallResult>();
 type CircuitBreakerEntry = {
   consecutiveTimeouts: number;
   lastTimeoutAt: number;
+  // Timestamp of an in-flight half-open probe allowed through after a cooldown.
+  // Undefined while fully open (skipping) or closed. Retained across the cooldown
+  // so a probe timeout re-opens the breaker immediately instead of restarting the
+  // maxTimeouts count from zero.
+  halfOpenProbeAt?: number;
 };
 
 const timeoutCircuitBreaker = new Map<string, CircuitBreakerEntry>();
@@ -393,14 +398,42 @@ function buildCircuitBreakerKey(agentId: string, provider?: string, model?: stri
   return `${agentId}:${provider ?? "unknown"}/${model ?? "unknown"}`;
 }
 
-function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: number): boolean {
+function isCircuitBreakerOpen(
+  key: string,
+  maxTimeouts: number,
+  cooldownMs: number,
+  probeSettleMs = 0,
+): boolean {
   const entry = timeoutCircuitBreaker.get(key);
   if (!entry || entry.consecutiveTimeouts < maxTimeouts) {
     return false;
   }
-  if (Date.now() - entry.lastTimeoutAt >= cooldownMs) {
-    // Cooldown expired — reset and allow one attempt through.
-    timeoutCircuitBreaker.delete(key);
+  const now = Date.now();
+  // A half-open probe is already outstanding: keep skipping until it resolves.
+  // The probe clears halfOpenProbeAt only when the recall settles (records a
+  // timeout or a success), which can take up to the recall watchdog. Hold the
+  // breaker closed for at least that long — not just one cooldown — so a short
+  // cooldownMs (which may be below the recall timeout) cannot let a second
+  // concurrent probe start while the first is still running. Once a probe could
+  // no longer be in flight, allow another, which also self-heals a probe lost
+  // before it recorded (e.g. aborted without settling).
+  if (entry.halfOpenProbeAt !== undefined) {
+    const probeHoldMs = Math.max(cooldownMs, probeSettleMs);
+    if (now - entry.halfOpenProbeAt < probeHoldMs) {
+      return true;
+    }
+    entry.halfOpenProbeAt = now;
+    return false;
+  }
+  if (now - entry.lastTimeoutAt >= cooldownMs) {
+    // Cooldown expired — allow a single half-open probe through, but keep the
+    // tripped record. A probe timeout re-opens the breaker immediately (see
+    // recordCircuitBreakerTimeout); a successful recall clears it via
+    // resetCircuitBreaker. Previously the record was deleted here, so at normal
+    // turn cadence (turns spaced further apart than the cooldown) the
+    // consecutive-timeout count never accumulated back to maxTimeouts and the
+    // breaker never re-engaged — every turn paid the full recall timeout (#100167).
+    entry.halfOpenProbeAt = now;
     return false;
   }
   return true;
@@ -411,6 +444,9 @@ function recordCircuitBreakerTimeout(key: string): void {
   if (entry) {
     entry.consecutiveTimeouts++;
     entry.lastTimeoutAt = Date.now();
+    // The half-open probe (if any) timed out: return to fully open so the next
+    // turns within the cooldown are skipped instead of probing again.
+    entry.halfOpenProbeAt = undefined;
   } else {
     timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: Date.now() });
   }
@@ -3560,6 +3596,7 @@ async function maybeResolveActiveRecall(params: {
       cbKey,
       params.config.circuitBreakerMaxTimeouts,
       params.config.circuitBreakerCooldownMs,
+      params.config.timeoutMs + params.config.setupGraceTimeoutMs,
     )
   ) {
     const result: ActiveRecallResult = {
@@ -4151,6 +4188,8 @@ const testing = {
   getCachedResult,
   hasUsableMemoryResultInSessionRecord,
   isCircuitBreakerOpen,
+  recordCircuitBreakerTimeout,
+  resetCircuitBreaker,
   isMissingRegisteredMemoryToolsError,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
