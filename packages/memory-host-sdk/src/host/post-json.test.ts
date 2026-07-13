@@ -213,6 +213,28 @@ describe("postJson", () => {
     expect(canceled).toBe(true);
   });
 
+  it("accepts leading-zero content-length values on successful JSON responses", async () => {
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        new Response("{}", {
+          status: 200,
+          headers: { "content-length": "0002" },
+        }),
+      );
+    });
+
+    const result = await postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      errorPrefix: "post failed",
+      maxResponseBytes: 8,
+      parse: (payload) => payload,
+    });
+
+    expect(result).toEqual({});
+  });
+
   it("cancels successful JSON responses that exceed the streaming byte cap", async () => {
     let canceled = false;
     remoteHttpMock.mockImplementationOnce(async (params) => {
