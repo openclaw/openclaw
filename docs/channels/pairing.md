@@ -117,8 +117,11 @@ Use an already connected Control UI session with `operator.admin` access:
 
 1. Open the Control UI and select **Nodes**.
 2. On the **Devices** page, click **Pair mobile device**.
-3. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
-4. Scan the QR code or paste the setup code, then connect.
+3. Keep **Full access (recommended)**, or select **Limited access** to omit
+   administrative Gateway controls.
+4. Click **Create setup code**.
+5. On your phone, open the OpenClaw app → **Settings** → **Gateway**.
+6. Scan the QR code or paste the setup code, then connect.
 
 Official OpenClaw iOS and Android apps are approved automatically when their
 setup-code metadata matches. If **Pending approval** shows a request (for
@@ -150,23 +153,32 @@ Run `/pair cleanup` to invalidate unused setup codes once pairing finishes.
 
 That bootstrap token carries the built-in pairing bootstrap profile:
 
-- the built-in setup profile allows the fresh QR/setup-code baseline only:
-  `node` plus a bounded `operator` handoff
+- a secure `wss://` setup (or same-host loopback) defaults to `node` plus full
+  native-mobile `operator` access
 - the handed-off `node` token stays `scopes: []`
-- the handed-off `operator` token is limited to `operator.approvals`,
-  `operator.read`, `operator.talk.secrets`, and `operator.write`
-- `operator.admin` is not granted by QR/setup-code bootstrap; it requires a
-  separate approved operator pairing or token flow
+- the default handed-off `operator` token includes `operator.admin`,
+  `operator.approvals`, `operator.read`, `operator.talk.secrets`, and
+  `operator.write`
+- Control UI **Limited access** and `openclaw qr --limited` omit
+  `operator.admin` while keeping the other operator scopes
+- plaintext LAN `ws://` setup automatically uses the same limited profile;
+  configure `wss://` or Tailscale Serve and generate a new code for full access
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 
 Treat the setup code like a password while it is valid.
 
+The iOS and Android **Settings → Gateway** pages show **Full** or **Limited**
+access. To upgrade a limited phone, first configure a secure `wss://` or
+Tailscale Serve route, then generate a new full-access setup code, scan or paste
+it in that settings page, and reconnect.
+
 For Tailscale, public, or other remote mobile pairing, use Tailscale Serve/Funnel
 or another `wss://` Gateway URL. Plaintext `ws://` setup codes are accepted only
 for loopback, private LAN addresses, `.local` Bonjour hosts, and the Android
-emulator host. Tailnet CGNAT addresses, `.ts.net` names, and public hosts still
-fail closed before QR/setup-code issuance.
+emulator host. Non-loopback plaintext routes receive limited access. Tailnet
+CGNAT addresses, `.ts.net` names, and public hosts still fail closed before
+QR/setup-code issuance.
 
 For `gateway.bind=lan` setup URLs, OpenClaw detects persistent Tailscale Serve
 HTTPS roots that proxy the active Gateway's loopback port and advertises them

@@ -3600,14 +3600,6 @@ export const pl: TranslationMap = {
       more: "Więcej akcji",
     },
     runNotStarted: {
-      notDue: "Nie nadszedł jeszcze termin uruchomienia tej automatyzacji.",
-      alreadyRunning: "Ta automatyzacja jest już uruchomiona.",
-      recoveryPending: "Nadal trwa odzyskiwanie harmonogramu.",
-      invalidSpec: "Ta automatyzacja ma nieprawidłowy harmonogram lub ładunek.",
-      stopped: "Harmonogram jest zatrzymany.",
-      unknown: "Nie udało się uruchomić tej automatyzacji.",
-    },
-    runNotStarted: {
       notDue: "Termin uruchomienia tej automatyzacji jeszcze nie nadszedł.",
       alreadyRunning: "Ta automatyzacja jest już uruchomiona.",
       recoveryPending: "Przywracanie harmonogramu jest nadal w toku.",

@@ -1292,7 +1292,7 @@ async function deleteSessionEntryLifecycleInternal(
         ? { allowedLockedEntryRemovals }
         : undefined,
     );
-    let archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
+    const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     if (params.archiveTranscript) {
       const { archiveFileOnDisk, resolveSessionTranscriptCandidates } =
         await loadSessionArchiveRuntime();

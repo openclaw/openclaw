@@ -2159,6 +2159,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Dispatch starts nothing
   - H2: Related
 
+## cli/worker.md
+
+- Route: /cli/worker
+- Headings:
+  - H1: openclaw worker
+  - H2: Launch contract
+  - H2: Runtime boundary
+
 ## concepts/active-memory.md
 
 - Route: /concepts/active-memory

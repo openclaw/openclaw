@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
@@ -24,7 +25,6 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   detectMime,
   estimateStringChars,
-  runTasksWithConcurrency,
   truncateUtf16Safe,
 } from "./openclaw-runtime-io.js";
 import {
@@ -539,17 +539,6 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-export async function runWithConcurrency<T>(
-  tasks: Array<() => Promise<T>>,
-  limit: number,
-): Promise<T[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
-    tasks,
-    limit,
-    errorMode: "stop",
-  });
-  if (hasError) {
-    throw firstError;
-  }
-  return results;
+export function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> {
+  return runWithConcurrencyImpl(tasks, limit);
 }
