@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveModelRuntimePolicy } from "openclaw/plugin-sdk/model-session-runtime";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
@@ -1207,7 +1208,7 @@ function adoptedSessionKey(threadId: string): string {
 }
 
 function currentConfig(api: OpenClawPluginApi): OpenClawConfig {
-  return (api.runtime.config?.current?.() as OpenClawConfig | undefined) ?? api.config;
+  return api.runtime.config?.current?.() ?? api.config ?? {};
 }
 
 function listBoundClaudeSessions(api: OpenClawPluginApi): Map<string, string> {
@@ -1475,10 +1476,21 @@ function toGenericClaudeHost(
 }
 
 export function registerClaudeSessionCatalog(api: OpenClawPluginApi): void {
+  const config = currentConfig(api);
+  const defaultAgentId = resolveDefaultAgentId(config);
+  const createSession =
+    resolveModelRuntimePolicy({
+      config,
+      provider: "anthropic",
+      modelId: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
+      agentId: defaultAgentId,
+    }).policy?.id?.trim() === CLAUDE_CLI_BACKEND_ID
+      ? { model: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF }
+      : undefined;
   const provider: SessionCatalogProvider = {
     id: "claude",
     label: "Claude Code",
-    createSession: { model: CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF },
+    ...(createSession ? { createSession } : {}),
     list: async (query) => {
       const adopted = listBoundClaudeSessions(api);
       const result = await listClaudeSessionCatalog({ runtime: api.runtime, query });

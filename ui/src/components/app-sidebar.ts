@@ -891,6 +891,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     );
   }
 
+  private catalogBackingSessionRow(
+    sessionKey: string,
+  ): SessionsListResult["sessions"][number] | undefined {
+    const current = this.sessionsResult?.sessions.find((row) => row.key === sessionKey);
+    if (current) {
+      return current;
+    }
+    for (const rows of Object.values(this.sessionRowsByAgent)) {
+      const row = rows.find((candidate) => candidate.key === sessionKey);
+      if (row) {
+        return row;
+      }
+    }
+    return undefined;
+  }
+
   private getSessionNavigationState() {
     const context = this.context;
     const routeSessionKey = this.getRouteSessionKey();
@@ -2654,10 +2670,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
 
   private agentUnreadCount(agentId: string): number {
     const rows = this.sessionRowsByAgent[normalizeAgentId(agentId)] ?? [];
-    const catalogOwnedKeys = this.catalogOwnedOpenClawSessionKeys();
-    return rows.filter(
-      (row) => !catalogOwnedKeys.has(row.key) && row.unread === true && row.archived !== true,
-    ).length;
+    return rows.filter((row) => row.unread === true && row.archived !== true).length;
   }
 
   private renderDraftSessionRow() {
@@ -2796,6 +2809,14 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       const collapsed = this.collapsedSessionSections.has(sectionId);
       const hosts = catalog.hosts;
       const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
+      const backingRows = rows.flatMap(({ session }) => {
+        const row = session.openClawSessionKey
+          ? this.catalogBackingSessionRow(session.openClawSessionKey)
+          : undefined;
+        return row ? [row] : [];
+      });
+      const hasActiveRun = backingRows.some((row) => row.hasActiveRun === true);
+      const hasUnread = backingRows.some((row) => row.unread === true);
       const loadingMore = this.loadingMoreSessionCatalogIds.has(catalog.id);
       const hasMore = hosts.some((host) => Boolean(host.nextCursor));
       return html`
@@ -2812,6 +2833,20 @@ class AppSidebar extends OpenClawLightDomContentsElement {
                 >${collapsed ? icons.chevronRight : icons.chevronDown}</span
               >
               <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
+              ${hasActiveRun
+                ? html`<span
+                    class="session-run-spinner"
+                    role="img"
+                    aria-label=${t("sessionsView.activeRun")}
+                    title=${t("sessionsView.activeRun")}
+                  ></span>`
+                : hasUnread
+                  ? html`<span
+                      class="session-unread-dot"
+                      role="img"
+                      aria-label=${t("sessionsView.unread")}
+                    ></span>`
+                  : nothing}
               <span class="sidebar-session-group-count">${rows.length}</span>
             </button>
             ${catalog.capabilities.createSession
@@ -2878,13 +2913,21 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         ? rawTimestamp * 1000
         : rawTimestamp;
     const visuallyActive = this.activeRouteId === "chat" && this.getRouteSessionKey() === key;
+    const backingRow = session.openClawSessionKey
+      ? this.catalogBackingSessionRow(session.openClawSessionKey)
+      : undefined;
+    const hasActiveRun = backingRow?.hasActiveRun === true;
+    const unread = backingRow?.unread === true;
+    const rowClass = [
+      "sidebar-recent-session",
+      "session-row-host",
+      visuallyActive ? "sidebar-recent-session--active" : "",
+      hasActiveRun ? "session-row-host--running" : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     return html`
-      <div
-        class="sidebar-recent-session session-row-host ${visuallyActive
-          ? "sidebar-recent-session--active"
-          : ""}"
-        data-session-key=${key}
-      >
+      <div class=${rowClass} data-session-key=${key}>
         <a
           href=${href}
           class="sidebar-recent-session__link"
@@ -2897,6 +2940,20 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             this.onNavigate?.("chat", { search: searchForSession(key) });
           }}
         >
+          ${hasActiveRun
+            ? html`<span
+                class="session-run-spinner sidebar-recent-session__state"
+                role="img"
+                aria-label=${t("sessionsView.activeRun")}
+                title=${t("sessionsView.activeRun")}
+              ></span>`
+            : unread
+              ? html`<span
+                  class="session-unread-dot sidebar-recent-session__unread"
+                  role="img"
+                  aria-label=${t("sessionsView.unread")}
+                ></span>`
+              : nothing}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee"
               >${session.name || session.threadId}</span

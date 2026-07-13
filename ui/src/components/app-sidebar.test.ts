@@ -604,6 +604,11 @@ describe("AppSidebar session catalog pagination", () => {
         ],
       },
     ];
+    const backingRows = (sidebar.sessionsResult?.sessions ?? []).map((row) =>
+      row.key === backingSessionKey ? Object.assign({}, row, { unread: true }) : row,
+    );
+    sidebar.sessionsResult = { ...sidebar.sessionsResult!, sessions: backingRows };
+    sidebar.sessionRowsByAgent = { main: backingRows };
     await sidebar.updateComplete;
 
     expect(
@@ -617,6 +622,34 @@ describe("AppSidebar session catalog pagination", () => {
       ),
     ).toHaveLength(1);
     expect(sidebar.querySelectorAll(`[data-session-key="${backingSessionKey}"]`)).toHaveLength(1);
+    const catalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+    expect(
+      catalogSection?.querySelector(
+        `[data-session-key="${backingSessionKey}"] .session-unread-dot`,
+      ),
+    ).not.toBeNull();
+    expect(
+      catalogSection?.querySelector(".sidebar-recent-sessions__head .session-unread-dot"),
+    ).not.toBeNull();
+
+    const runningRows = backingRows.map((row) =>
+      row.key === backingSessionKey
+        ? Object.assign({}, row, { unread: false, hasActiveRun: true })
+        : row,
+    );
+    sidebar.sessionsResult = { ...sidebar.sessionsResult, sessions: runningRows };
+    sidebar.sessionRowsByAgent = { main: runningRows };
+    await sidebar.updateComplete;
+
+    const runningCatalogSection = sidebar.querySelector('[data-session-section="catalog:claude"]');
+    expect(
+      runningCatalogSection?.querySelector(
+        `[data-session-key="${backingSessionKey}"].session-row-host--running .session-run-spinner`,
+      ),
+    ).not.toBeNull();
+    expect(
+      runningCatalogSection?.querySelector(".sidebar-recent-sessions__head .session-run-spinner"),
+    ).not.toBeNull();
   });
 
   it("renders catalog groups inside the shared sessions scroller", async () => {

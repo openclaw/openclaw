@@ -2602,18 +2602,22 @@ public struct SessionsListParams: Codable, Sendable {
 public struct SessionCatalogCapabilities: Codable, Sendable {
     public let continuesession: Bool
     public let archive: Bool
+    public let createsession: [String: AnyCodable]?
 
     public init(
         continuesession: Bool,
-        archive: Bool)
+        archive: Bool,
+        createsession: [String: AnyCodable]? = nil)
     {
         self.continuesession = continuesession
         self.archive = archive
+        self.createsession = createsession
     }
 
     private enum CodingKeys: String, CodingKey {
         case continuesession = "continueSession"
         case archive
+        case createsession = "createSession"
     }
 }
 
