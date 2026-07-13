@@ -65,7 +65,7 @@ export function bindAdoptedCatalogSession(
   );
 }
 
-export type SessionCatalogGroupsParams = {
+type SessionCatalogGroupsParams = {
   catalogs: readonly SessionCatalog[];
   basePath: string;
   routeSessionKey: string;

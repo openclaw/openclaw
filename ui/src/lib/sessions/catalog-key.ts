@@ -27,7 +27,7 @@ export function announceCatalogSessionContinued(detail: CatalogSessionContinuedD
 const CATALOG_SESSION_LOOKUP_PAGE_LIMIT = 100;
 const CATALOG_SESSION_LOOKUP_MAX_PAGES = 100;
 
-export type CatalogSessionLookup = {
+type CatalogSessionLookup = {
   host: SessionCatalogHost | null;
   session: SessionCatalogSession | null;
 };

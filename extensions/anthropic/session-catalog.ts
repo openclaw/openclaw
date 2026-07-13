@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,7 +20,6 @@ export const CLAUDE_SESSIONS_LIST_COMMAND = "anthropic.claude.sessions.list.v1";
 export const CLAUDE_SESSION_READ_COMMAND = "anthropic.claude.sessions.read.v1";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_MODEL_REF } from "./cli-constants.js";
 
-export const CLAUDE_SESSIONS_CAPABILITY = "claude-sessions";
 const CLAUDE_LOCAL_SESSION_HOST_ID = "gateway:local";
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
@@ -135,7 +133,7 @@ type CatalogRecord = ClaudeSessionCatalogSession & {
   filePath: string;
 };
 
-export class ClaudeCatalogParamsError extends Error {}
+class ClaudeCatalogParamsError extends Error {}
 
 function optionalString(value: unknown, maxLength = MAX_STRING_LENGTH): string | undefined {
   if (typeof value !== "string") {
@@ -210,15 +208,6 @@ function desktopSessionsDir(homeDir: string): string {
 
 function currentHomeDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
-}
-
-export function claudeProjectsAvailable(env: NodeJS.ProcessEnv): boolean {
-  const homeDir = currentHomeDir(env);
-  try {
-    return statSync(projectsDir(homeDir)).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 async function readDesktopMetadata(homeDir: string): Promise<{
