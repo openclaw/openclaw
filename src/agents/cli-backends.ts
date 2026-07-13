@@ -236,11 +236,17 @@ export function listCliRuntimeModelBackendBindings(
     const configured = params.config.agents?.defaults?.cliBackends ?? {};
     for (const key of Object.keys(configured)) {
       const backendKey = normalizeBackendKey(key);
-      if (!backendKey) continue;
+      if (!backendKey) {
+        continue;
+      }
       const bindingKey = `${backendKey}:${backendKey}`;
-      if (bindings.has(bindingKey)) continue;
+      if (bindings.has(bindingKey)) {
+        continue;
+      }
       const resolved = resolveCliBackendConfig(key, params.config);
-      if (!resolved) continue;
+      if (!resolved) {
+        continue;
+      }
       const provider = resolved.modelProvider ?? backendKey;
       bindings.set(bindingKey, { provider, runtime: backendKey });
     }
