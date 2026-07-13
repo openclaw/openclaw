@@ -24,12 +24,12 @@ import {
   readPartialTimeoutData,
 } from "./transcript-result.js";
 import { watchTerminalMemorySearchResult } from "./transcript-watch.js";
-import {
-  type ActiveMemorySearchDebug,
-  type ActiveMemoryTranscriptSource,
-  type ActiveRecallResult,
-  type ResolvedActiveRecallPluginConfig,
-  type TerminalMemorySearchWatch,
+import type {
+  ActiveMemorySearchDebug,
+  ActiveMemoryTranscriptSource,
+  ActiveRecallResult,
+  ResolvedActiveRecallPluginConfig,
+  TerminalMemorySearchWatch,
 } from "./types.js";
 
 async function maybeResolveActiveRecall(params: {
