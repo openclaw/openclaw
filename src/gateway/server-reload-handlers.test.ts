@@ -3014,9 +3014,9 @@ describe("gateway restart deferral preflight", () => {
         }),
       );
     } finally {
-      vi.useRealTimers();
       process.removeListener("SIGUSR1", signalSpy);
       restartTesting.resetSigusr1State();
+      vi.useRealTimers();
     }
   });
 
@@ -3092,9 +3092,9 @@ describe("gateway restart deferral preflight", () => {
     } finally {
       hoisted.activeTaskCount.value = 0;
       hoisted.activeTaskBlockers.length = 0;
-      vi.useRealTimers();
       process.removeListener("SIGUSR1", signalSpy);
       restartTesting.resetSigusr1State();
+      vi.useRealTimers();
     }
   });
 
@@ -3163,9 +3163,9 @@ describe("gateway restart deferral preflight", () => {
     } finally {
       hoisted.activeTaskCount.value = 0;
       hoisted.activeTaskBlockers.length = 0;
-      vi.useRealTimers();
       process.removeListener("SIGUSR1", signalSpy);
       restartTesting.resetSigusr1State();
+      vi.useRealTimers();
       closeOpenClawStateDatabase();
       rmSync(stateDir, { force: true, recursive: true });
     }
@@ -3750,7 +3750,7 @@ describe("gateway Gmail hot reload handlers", () => {
       sourceFingerprint: "source-hash-next",
       writtenAtMs: Date.now(),
     });
-    await vi.runAllTimersAsync();
+    await vi.runOnlyPendingTimersAsync();
 
     expect(activateRuntimeSecrets).toHaveBeenCalledTimes(1);
     expect(activateRuntimeSecrets).toHaveBeenCalledWith(nextConfig, {

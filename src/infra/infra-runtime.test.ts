@@ -1190,7 +1190,7 @@ describe("infra runtime", () => {
           reason: "update.run",
           skipDeferral: true,
         });
-        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
         expect(auditWriter).toHaveBeenCalledWith("bypassed_deferral");
       } finally {
         process.removeListener("SIGUSR1", handler);
