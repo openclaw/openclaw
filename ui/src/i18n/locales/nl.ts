@@ -393,7 +393,6 @@ export const nl: TranslationMap = {
     confirmForceDelete: "Snapshot mislukt: {error}\n\nVerwijderen zonder snapshot?",
   },
   agentChip: {
-    openConversation: "Open je gesprek met {name}",
     menuLabel: "Agentmenu",
     agents: "Agents",
     working: "Bezig…",

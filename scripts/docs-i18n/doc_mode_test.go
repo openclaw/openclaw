@@ -546,6 +546,44 @@ func TestValidateDocChunkTranslationRejectsInventedI18NPlaceholder(t *testing.T)
 	}
 }
 
+func TestValidateDocChunkTranslationRejectsAdditionalI18NPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	source := "```text\n__OC_I18N_900000__\n```\n"
+	translated := "```text\n__OC_I18N_900000__\n```\n__OC_I18N_900014__\n"
+
+	err := validateDocChunkTranslation(source, translated)
+	if err == nil {
+		t.Fatal("expected additional i18n placeholder to be rejected")
+	}
+	if !strings.Contains(err.Error(), "protocol token leaked: __OC_I18N_") {
+		t.Fatalf("expected i18n placeholder leakage error, got %v", err)
+	}
+}
+
+func TestValidateDocChunkTranslationRejectsMalformedI18NPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	for _, leaked := range []string{"__oc_i18n_900014__", "__OC_I18N_invalid__"} {
+		err := validateDocChunkTranslation("Regular paragraph.\n", "Обычный абзац.\n"+leaked+"\n")
+		if err == nil {
+			t.Fatalf("expected malformed i18n placeholder %q to be rejected", leaked)
+		}
+	}
+}
+
+func TestValidateDocBodyFencedLiteralsRejectsRestoredPlaceholderLeak(t *testing.T) {
+	t.Parallel()
+
+	source := "Before.\n\n```ts\nconst value = \"<user-id>\";\n```\n\nAfter.\n"
+	translated := "До.\n\n__OC_I18N_900014__\n\nПосле.\n"
+
+	err := validateDocBodyFencedLiterals(source, translated)
+	if err == nil {
+		t.Fatal("expected restored placeholder leak to be rejected")
+	}
+}
+
 func TestValidateDocChunkTranslationRejectsHeadingLoss(t *testing.T) {
 	t.Parallel()
 
@@ -2142,7 +2180,7 @@ func TestProcessFileDocUsesFieldLevelFrontmatterTranslation(t *testing.T) {
 	if !strings.Contains(text, "在 Fly.io 上部署 OpenClaw") {
 		t.Fatalf("expected translated read_when entry in output:\n%s", text)
 	}
-	if !strings.Contains(text, "prompt_version: 16") {
+	if !strings.Contains(text, "prompt_version: 17") {
 		t.Fatalf("expected prompt version 15 in output metadata:\n%s", text)
 	}
 }

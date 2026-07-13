@@ -1858,7 +1858,9 @@ openclaw-chat-pane:has(> .chat-pane__header) .chat-thread {
   gap: 8px;
   min-height: 44px;
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
-  padding: 0 var(--chat-box-inset) var(--chat-box-inset);
+  /* Split the inset evenly so the settings chip sits centered between the
+     divider and the card edge instead of hugging the divider. */
+  padding: calc(var(--chat-box-inset) / 2) var(--chat-box-inset);
 }
 
 .agent-chat__composer-meta,

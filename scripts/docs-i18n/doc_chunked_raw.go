@@ -78,6 +78,9 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	}
 	sourceStructure := summarizeDocChunkStructure(source)
 	translatedStructure := summarizeDocChunkStructure(translated)
+	if !sameI18NProtocolMarkers(source, translated) {
+		return fmt.Errorf("i18n placeholder mismatch")
+	}
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
 	}
@@ -236,6 +239,12 @@ func validateDocChunkTranslation(source, translated string) error {
 	sourceLower := strings.ToLower(source)
 	translatedLower := strings.ToLower(translated)
 	for _, token := range docsProtocolTokens {
+		if token == "__OC_I18N_" {
+			if !sameI18NProtocolMarkers(source, translated) {
+				return fmt.Errorf("protocol token leaked: %s", token)
+			}
+			continue
+		}
 		tokenLower := strings.ToLower(token)
 		if strings.Contains(sourceLower, tokenLower) {
 			continue
@@ -276,6 +285,16 @@ func validateDocChunkTranslation(source, translated string) error {
 		}
 	}
 	return nil
+}
+
+func sameI18NProtocolMarkers(source, translated string) bool {
+	if !sameStringMultiset(placeholderRe.FindAllString(source, -1), placeholderRe.FindAllString(translated, -1)) {
+		return false
+	}
+	sourceResidual := placeholderRe.ReplaceAllString(source, "")
+	translatedResidual := placeholderRe.ReplaceAllString(translated, "")
+	return strings.Count(strings.ToLower(sourceResidual), "__oc_i18n_") ==
+		strings.Count(strings.ToLower(translatedResidual), "__oc_i18n_")
 }
 
 func sameStringMultiset(left, right []string) bool {

@@ -389,7 +389,6 @@ export const en: TranslationMap = {
     confirmForceDelete: "Snapshot failed: {error}\n\nDelete without a snapshot?",
   },
   agentChip: {
-    openConversation: "Open your conversation with {name}",
     menuLabel: "Agent menu",
     agents: "Agents",
     working: "Working…",

@@ -387,7 +387,6 @@ export const zh_TW: TranslationMap = {
     confirmForceDelete: "快照失敗：{error}\n\n要在沒有快照的情況下刪除嗎？",
   },
   agentChip: {
-    openConversation: "開啟您與 {name} 的對話",
     menuLabel: "代理程式選單",
     agents: "代理程式",
     working: "處理中…",

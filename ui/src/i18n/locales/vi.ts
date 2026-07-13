@@ -391,7 +391,6 @@ export const vi: TranslationMap = {
     confirmForceDelete: "Tạo snapshot thất bại: {error}\n\nXóa mà không có snapshot?",
   },
   agentChip: {
-    openConversation: "Mở cuộc trò chuyện của bạn với {name}",
     menuLabel: "Menu tác nhân",
     agents: "Tác nhân",
     working: "Đang làm việc…",
