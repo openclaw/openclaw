@@ -248,11 +248,16 @@ it("selects a different agent and ignores the already-selected agent", async () 
     expect(onSelect).toHaveBeenCalledWith("beta");
 
     const alpha = element.querySelector('[data-agent-id="alpha"]');
-    dropdown?.dispatchEvent(
-      new CustomEvent("wa-select", { detail: { item: alpha }, bubbles: true }),
-    );
+    const repeatedSelection = new CustomEvent("wa-select", {
+      detail: { item: alpha },
+      bubbles: true,
+      cancelable: true,
+    });
+    dropdown?.dispatchEvent(repeatedSelection);
 
     expect(onSelect).toHaveBeenCalledOnce();
+    expect(repeatedSelection.defaultPrevented).toBe(true);
+    expect((alpha as HTMLElement & { checked: boolean }).checked).toBe(true);
   } finally {
     element.remove();
   }

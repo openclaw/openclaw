@@ -16,7 +16,7 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { pluginTabKey, pluginTabSearch } from "../pages/plugin/route.ts";
 import { icons, type IconName } from "./icons.ts";
-import "./web-awesome.ts";
+import { shouldRestoreDropdownTriggerFocus } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
 
@@ -130,7 +130,7 @@ type SidebarMoreMenuParams = SidebarMenuNavigationHandlers & {
   pluginTabs: readonly GatewayControlUiPluginTab[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onEditPinnedItems: () => void;
-  onClose: () => void;
+  onClose: (restoreFocus: boolean) => void;
 };
 
 function renderMoreMenuRoute(params: SidebarMoreMenuParams, routeId: SidebarNavRoute) {
@@ -203,7 +203,7 @@ export function renderSidebarMoreMenu(params: SidebarMoreMenuParams) {
         placement="bottom-start"
         .distance=${0}
         aria-label=${t("nav.more")}
-        @wa-after-hide=${params.onClose}
+        @wa-after-hide=${(event: Event) => params.onClose(shouldRestoreDropdownTriggerFocus(event))}
       >
         <button
           slot="trigger"
@@ -234,7 +234,7 @@ type SidebarCustomizeMenuParams = {
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
   onToggleRoute: (routeId: SidebarNavRoute) => void;
   onReset: () => void;
-  onClose: () => void;
+  onClose: (restoreFocus: boolean) => void;
 };
 
 export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
@@ -251,7 +251,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
         .distance=${0}
         aria-label=${t("nav.customize")}
         @wa-select=${(event: Event) => event.preventDefault()}
-        @wa-after-hide=${params.onClose}
+        @wa-after-hide=${(event: Event) => params.onClose(shouldRestoreDropdownTriggerFocus(event))}
       >
         <button
           slot="trigger"

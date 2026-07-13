@@ -484,8 +484,23 @@ describe("AppSidebar agent chip", () => {
       "https://discord.gg/clawd",
       "https://docs.openclaw.ai/releases",
     ]);
+    const openExternal = vi.spyOn(window, "open").mockReturnValue(null);
+    menu?.querySelector<HTMLElement>('wa-dropdown-item[slot="submenu"]')?.click();
+    expect(openExternal).toHaveBeenCalledWith(
+      "https://docs.openclaw.ai/",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    openExternal.mockRestore();
+    await sidebar.updateComplete;
 
-    const agentRows = [...(menu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? [])];
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-chip__main")?.click();
+    await sidebar.updateComplete;
+    const reopenedMenu = sidebar.querySelector(".sidebar-agent-menu");
+
+    const agentRows = [
+      ...(reopenedMenu?.querySelectorAll('wa-dropdown-item[type="checkbox"]') ?? []),
+    ];
     expect(agentRows).toHaveLength(2);
     const researchRow = agentRows.find((row) => row.textContent?.includes("research"));
     expect(researchRow).toBeDefined();

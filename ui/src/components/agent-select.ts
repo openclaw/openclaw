@@ -103,11 +103,18 @@ export class AgentSelect extends OpenClawLightDomElement {
   }
 
   private readonly handleSelect = (event: WebAwesomeSelectEvent) => {
-    const item = event.detail.item as HTMLElement & { value?: string };
+    const item = event.detail.item as HTMLElement & { checked?: boolean; value?: string };
     const agentId = item.value ?? item.getAttribute("value");
-    if (agentId && agentId !== this.selectedId) {
-      this.onSelect(agentId);
+    if (!agentId) {
+      return;
     }
+    if (agentId === this.selectedId) {
+      event.preventDefault();
+      item.checked = true;
+      (event.currentTarget as HTMLElement & { open: boolean }).open = false;
+      return;
+    }
+    this.onSelect(agentId);
   };
 
   override render() {

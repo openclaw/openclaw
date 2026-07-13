@@ -7,9 +7,10 @@ import type { ThemeMode } from "../app/theme.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
+import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { icons, type IconName } from "./icons.ts";
-import "./web-awesome.ts";
+import { shouldRestoreDropdownTriggerFocus } from "./web-awesome.ts";
 
 // External rows of the footer agent menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
@@ -49,7 +50,7 @@ type SidebarAgentMenuParams = {
   onFilterChange: (next: string) => void;
   onSwitchAgent: (agentId: string) => void;
   onAskCapabilities: (agentId: string) => void;
-  onClose: () => void;
+  onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
   onPairMobile: () => void;
 };
@@ -144,7 +145,12 @@ function renderAgentMenuHelpSubmenu(params: SidebarAgentMenuParams) {
           slot="submenu"
           class="sidebar-customize-menu__item"
           value=${link.href}
-          @click=${() => params.onClose()}
+          @click=${(event: MouseEvent) => {
+            if (!(event.target instanceof Element && event.target.closest("a"))) {
+              openExternalUrlSafe(link.href);
+            }
+            params.onClose();
+          }}
         >
           <a
             href=${link.href}
@@ -152,9 +158,7 @@ function renderAgentMenuHelpSubmenu(params: SidebarAgentMenuParams) {
             rel=${buildExternalLinkRel()}
             tabindex="-1"
           >
-            <span slot="icon" class="nav-item__icon" aria-hidden="true"
-              >${icons[link.icon]}</span
-            >
+            <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
             <span class="sidebar-customize-menu__text">${link.label()}</span>
           </a>
         </wa-dropdown-item>
@@ -185,7 +189,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
               ?.focus();
           }
         }}
-        @wa-after-hide=${params.onClose}
+        @wa-after-hide=${(event: Event) => params.onClose(shouldRestoreDropdownTriggerFocus(event))}
       >
         <button
           slot="trigger"
@@ -208,7 +212,11 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
                         @input=${(event: Event) =>
                           params.onFilterChange((event.target as HTMLInputElement).value)}
                         @keydown=${(event: KeyboardEvent) => {
-                          if (event.key.length === 1 || event.key === "Home" || event.key === "End") {
+                          if (
+                            event.key.length === 1 ||
+                            event.key === "Home" ||
+                            event.key === "End"
+                          ) {
                             event.stopPropagation();
                           }
                         }}
