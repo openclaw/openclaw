@@ -25,6 +25,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
+import { decodeVoiceCallMediaBase64 } from "./media-base64.js";
 
 /**
  * Configuration for the media stream handler.
@@ -251,8 +252,7 @@ export class MediaStreamHandler {
 
           case "media":
             if (session && message.media?.payload) {
-              // Forward audio to STT
-              const audioBuffer = Buffer.from(message.media.payload, "base64");
+              const audioBuffer = decodeVoiceCallMediaBase64(message.media.payload, "Twilio");
               const turnId = this.ensureActiveTurn(session);
               this.emitTalkEvent(session, {
                 type: "input.audio.delta",

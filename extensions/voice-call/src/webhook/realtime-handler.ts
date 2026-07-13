@@ -29,6 +29,7 @@ import { normalizeWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import WebSocket, { WebSocketServer } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
+import { decodeVoiceCallMediaBase64 } from "../media-base64.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
@@ -38,7 +39,6 @@ import {
   TelnyxStreamFrameAdapter,
   TwilioStreamFrameAdapter,
 } from "./stream-frame-adapter.js";
-
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
 };
@@ -445,7 +445,7 @@ export class RealtimeCallHandler {
             return;
           }
           if (frame.kind === "media") {
-            const audio = Buffer.from(frame.payloadBase64, "base64");
+            const audio = decodeVoiceCallMediaBase64(frame.payloadBase64, "Realtime voice bridge");
             bridge.sendAudio(audio);
             if (frame.timestampMs !== undefined) {
               if (lastMediaTimestamp !== undefined) {
