@@ -21,8 +21,8 @@ import {
   createOpenProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
+  createAttachedChannelResultAdapter,
   createEmptyChannelResult,
-  createRawChannelSendResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -82,19 +82,24 @@ const zaloSetupWizard = createZaloSetupWizardProxy(
 );
 const zaloTextChunkLimit = 2000;
 
-const zaloRawSendResultAdapter = createRawChannelSendResultAdapter({
+const zaloSendResultAdapter = createAttachedChannelResultAdapter({
   channel: "zalo",
-  sendText: async ({ to, text, accountId, cfg }) =>
-    await (
+  sendText: async ({ to, text, accountId, cfg }) => {
+    const result = await (
       await loadZaloChannelRuntime()
     ).sendZaloText({
       to,
       text,
       accountId: accountId ?? undefined,
       cfg,
-    }),
-  sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) =>
-    await (
+    });
+    if (!result.ok) {
+      throw new Error(result.error ?? "Failed to send Zalo message");
+    }
+    return { messageId: result.messageId ?? "", receipt: result.receipt };
+  },
+  sendMedia: async ({ to, text, mediaUrl, accountId, cfg }) => {
+    const result = await (
       await loadZaloChannelRuntime()
     ).sendZaloText({
       to,
@@ -102,7 +107,12 @@ const zaloRawSendResultAdapter = createRawChannelSendResultAdapter({
       accountId: accountId ?? undefined,
       mediaUrl,
       cfg,
-    }),
+    });
+    if (!result.ok) {
+      throw new Error(result.error ?? "Failed to send Zalo media");
+    }
+    return { messageId: result.messageId ?? "", receipt: result.receipt };
+  },
 });
 
 export const zaloMessageAdapter = defineChannelMessageAdapter({
@@ -303,11 +313,11 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
           ctx,
           textChunkLimit: zaloTextChunkLimit,
           chunker: chunkTextForOutbound,
-          sendText: (nextCtx) => zaloRawSendResultAdapter.sendText!(nextCtx),
-          sendMedia: (nextCtx) => zaloRawSendResultAdapter.sendMedia!(nextCtx),
+          sendText: (nextCtx) => zaloSendResultAdapter.sendText!(nextCtx),
+          sendMedia: (nextCtx) => zaloSendResultAdapter.sendMedia!(nextCtx),
           emptyResult: createEmptyChannelResult("zalo"),
           onResult: ctx.onDeliveryResult,
         }),
-      ...zaloRawSendResultAdapter,
+      ...zaloSendResultAdapter,
     },
   });

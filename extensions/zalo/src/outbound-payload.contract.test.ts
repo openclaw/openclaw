@@ -47,9 +47,21 @@ function requireZaloMediaSender(): NonNullable<ZaloMessageSender["media"]> {
   return media;
 }
 
+function requireZaloOutboundTextSender(): NonNullable<ZaloOutbound["sendText"]> {
+  const sendText = zaloPlugin.outbound?.sendText;
+  if (!sendText) {
+    throw new Error("Expected Zalo outbound text sender");
+  }
+  return sendText;
+}
+
 function createZaloHarness(params: OutboundPayloadHarnessParams) {
   const sendZalo = vi.fn();
-  primeChannelOutboundSendMock(sendZalo, { ok: true, messageId: "zl-1" }, params.sendResults);
+  primeChannelOutboundSendMock(
+    sendZalo,
+    { ok: true, messageId: "zl-1" },
+    params.sendResults?.map((result) => ({ ok: true, ...result })),
+  );
   sendZaloTextMock.mockReset().mockImplementation(
     async (nextCtx: { to: string; text: string; mediaUrl?: string }) =>
       await sendZalo(nextCtx.to, nextCtx.text, {
@@ -75,6 +87,18 @@ describe("Zalo outbound payload contract", () => {
     channel: "zalo",
     chunking: { mode: "split", longTextLength: 3000, maxChunkLength: 2000 },
     createHarness: createZaloHarness,
+  });
+
+  it("throws legacy raw send failures at the typed delivery boundary", async () => {
+    sendZaloTextMock.mockReset().mockResolvedValue({
+      ok: false,
+      error: "Zalo rejected the message",
+      receipt: createMessageReceiptFromOutboundResults({ results: [], kind: "text" }),
+    });
+
+    await expect(
+      requireZaloOutboundTextSender()({ cfg: {}, to: "123456789", text: "hello" }),
+    ).rejects.toThrow("Zalo rejected the message");
   });
 
   it("declares message adapter durable text and media with receipt proofs", async () => {
