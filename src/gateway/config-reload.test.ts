@@ -335,6 +335,16 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("channels.whatsapp.replyToMode");
   });
 
+  it("restarts when enabling a channel that is absent from the Gateway registry", () => {
+    setActivePluginRegistry(emptyRegistry);
+
+    const plan = buildGatewayReloadPlan(["channels.whatsapp.enabled"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["channels.whatsapp.enabled"]);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
   it("refreshes channel reload rules when only the tracked channel registry changes", () => {
     const activeOnlyRegistry = createTestRegistry([]);
     const channelOnlyRegistry = createTestRegistry([
