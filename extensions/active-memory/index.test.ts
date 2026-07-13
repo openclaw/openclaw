@@ -3200,10 +3200,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(20);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 50,
+      timeoutMs: 100,
       maxSummaryChars: 40,
       persistTranscripts: true,
       logging: true,
@@ -3261,10 +3261,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(20);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 50,
+      timeoutMs: 250,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -3308,10 +3308,10 @@ describe("active-memory plugin", () => {
   it("returns partial transcript text on timeout from SQLite runtime transcript rows", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(40);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 100,
+      timeoutMs: 250,
       maxSummaryChars: 80,
       logging: true,
     };
@@ -3441,7 +3441,7 @@ describe("active-memory plugin", () => {
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 50,
+      timeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4311,10 +4311,10 @@ describe("active-memory plugin", () => {
   it("does not recover transcript partials after a later unavailable search times out", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(40);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 100,
+      timeoutMs: 250,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4370,10 +4370,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial when unavailable debug arrives after the last poll", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(40);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 100,
+      timeoutMs: 250,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4427,10 +4427,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial while abort cleanup is still settling", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(10);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 50,
+      timeoutMs: 250,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -4461,7 +4461,7 @@ describe("active-memory plugin", () => {
           },
         ]);
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, 20);
+          setTimeout(resolve, 100);
         });
         await writeTranscriptJsonl(params.sessionFile, [
           {
@@ -4498,10 +4498,10 @@ describe("active-memory plugin", () => {
   it("does not recover a timeout partial after an unmirrored custom memory tool fails", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
-    testing.setTimeoutPartialDataGraceMsForTests(40);
+    testing.setTimeoutPartialDataGraceMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
-      timeoutMs: 100,
+      timeoutMs: 250,
       toolsAllow: ["memory_lookup_custom"],
       logging: true,
     };

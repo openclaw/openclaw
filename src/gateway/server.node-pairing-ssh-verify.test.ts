@@ -122,8 +122,11 @@ describe("gateway ssh-verified node pairing auto-approve", () => {
         const res = await connectNode();
         expect(res.ok).toBe(false);
 
-        // The scoped pending request disqualifies ssh-verify synchronously: no
-        // detached probe exists that could approve it after the response.
+        // The scoped pending request disqualifies ssh-verify entirely: no probe
+        // runs and the device is never auto-approved.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 250);
+        });
         expect(probeMock).not.toHaveBeenCalled();
         expect(await getPairedDevice(loaded.identity.deviceId)).toBeNull();
       },

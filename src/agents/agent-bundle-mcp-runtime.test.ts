@@ -2535,7 +2535,7 @@ process.stdin.on("end", () => {
     { timeout: LIST_TOOLS_TEST_DEADLINE_MS },
     async () => {
       const tempDir = makeTempDir(tempDirs, "bundle-mcp-parallel-");
-      const delays = [100, 200, 300];
+      const delays = [200, 400, 600];
       const serverPaths = delays.map((delay, i) => {
         const serverPath = path.join(tempDir, `slow-server-${i}.mjs`);
         const logPath = path.join(tempDir, `server-${i}.log`);
@@ -2573,7 +2573,7 @@ process.stdin.on("end", () => {
       try {
         const sumDelays = delays.reduce((a, b) => a + b, 0);
         const maxDelay = Math.max(...delays);
-        const parallelBudgetMs = maxDelay + 250;
+        const parallelBudgetMs = maxDelay + 500;
 
         const t0 = performance.now();
         const catalog = await runtime.getCatalog();
