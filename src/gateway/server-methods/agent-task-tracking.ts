@@ -78,7 +78,7 @@ export function requestGroupMatchesTrusted(params: {
   return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
 }
 
-export type GatewayAgentTaskTerminalStatus = Extract<
+type GatewayAgentTaskTerminalStatus = Extract<
   TaskStatus,
   "succeeded" | "failed" | "timed_out" | "cancelled"
 >;
