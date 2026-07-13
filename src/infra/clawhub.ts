@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -14,10 +15,7 @@ import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
-import {
-  parseStrictNonNegativeInteger,
-  parseStrictPositiveInteger,
-} from "./parse-finite-number.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareValidSemver } from "./semver.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -822,9 +820,9 @@ async function readClawHubResponseBytes(params: {
   const contentEncoding = normalizeOptionalString(params.response.headers.get("content-encoding"));
   const declaredSize =
     !contentEncoding || contentEncoding.toLowerCase() === "identity"
-      ? parseStrictNonNegativeInteger(params.response.headers.get("content-length"))
-      : undefined;
-  if (declaredSize !== undefined && declaredSize > maxBytes) {
+      ? parseMediaContentLength(params.response.headers.get("content-length"))
+      : null;
+  if (declaredSize !== null && declaredSize > maxBytes) {
     // Fetch may decode encoded bodies while retaining their wire length, so
     // only identity lengths can safely short-circuit the decoded stream cap.
     await params.response.body?.cancel().catch(() => undefined);
