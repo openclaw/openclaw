@@ -6,7 +6,6 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- **Control UI memory import:** preview and import consolidated Codex memory or Claude Code auto-memory into a selected agent workspace with conflict-safe replacement, verified backups, and migration reports. (#106215)
 - **SQLite snapshots:** add `openclaw backup sqlite create|list|verify|restore` for compact, verified global and per-agent database artifacts with fresh-target-only restore. (#94805) Thanks @giodl73-repo.
 - **GPT-5.6 Ultra and runtime switching:** support Sol, Terra, and Luna across OpenClaw and Codex engines; keep model, runtime, and thinking selection atomic through `/model` and fallback; and add live matrix coverage for both harnesses. (#98021) Thanks @anyech.
 - **OpenAI GPT-5.6 defaults:** use `openai/gpt-5.6` (Sol alias) for fresh API-key setup and exact `openai/gpt-5.6-sol` for fresh Codex/OAuth setup, while preserving existing primaries, fallbacks, aliases, and explicit GPT-5.5 selections. (#103234)
