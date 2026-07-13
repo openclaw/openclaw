@@ -236,6 +236,10 @@
     "target": "Skills 配置"
   },
   {
+    "source": "Self-learning",
+    "target": "自我学习"
+  },
+  {
     "source": "local loopback",
     "target": "local loopback"
   },

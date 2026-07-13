@@ -268,6 +268,82 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("creates a session while a canonical session refresh is pending", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:refresh-overlap-e2e";
+    const listResponse = {
+      count: 0,
+      path: "",
+      sessions: [],
+      ts: Date.now(),
+    };
+    const gateway = await installMockGateway(page, {
+      workspaceGit: true,
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "sessions.create": { key: sessionKey },
+        "sessions.list": listResponse,
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      const message = page.locator(".new-session-page__message");
+      await message.waitFor({ state: "visible", timeout: 10_000 });
+      const listCalls = (await gateway.getRequests("sessions.list")).length;
+
+      await gateway.deferNext("sessions.list");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        key: "agent:main:other-client",
+        kind: "direct",
+        reason: "update",
+        sessionKey: "agent:main:other-client",
+        updatedAt: Date.now(),
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBe(listCalls + 1);
+
+      await message.fill("create during refresh");
+      await page.getByRole("button", { name: "Start session" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        message: "create during refresh",
+      });
+      expect(new URL(page.url()).pathname).toBe("/new");
+
+      await gateway.resolveDeferred("sessions.list", listResponse);
+      await expect
+        .poll(() => new URL(page.url()).search)
+        .toContain(`session=${encodeURIComponent(sessionKey)}`);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("creates a catalog-targeted draft with its advertised model", async () => {
     const context = await browser.newContext({
       locale: "en-US",

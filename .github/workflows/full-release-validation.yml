@@ -525,14 +525,14 @@ jobs:
                 break
               fi
               poll_count=$((poll_count + 1))
-              if (( poll_count % 2 == 0 )); then
+              if (( poll_count % 5 == 0 )); then
                 fail_fast_failed_jobs
               fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
-              sleep 30
+              sleep 60
             done
             trap - EXIT INT TERM
 
@@ -715,14 +715,14 @@ jobs:
                 break
               fi
               poll_count=$((poll_count + 1))
-              if (( poll_count % 2 == 0 )); then
+              if (( poll_count % 5 == 0 )); then
                 fail_fast_failed_jobs
               fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
-              sleep 30
+              sleep 60
             done
             trap - EXIT INT TERM
 
@@ -966,14 +966,14 @@ jobs:
                 break
               fi
               poll_count=$((poll_count + 1))
-              if (( poll_count % 2 == 0 )); then
+              if (( poll_count % 5 == 0 )); then
                 fail_fast_failed_jobs
               fi
               if (( poll_count % 10 == 0 )); then
                 echo "Still waiting on ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
                 fetch_child_jobs | jq 'select(.status != "completed") | {name, status, url: .html_url}' || true
               fi
-              sleep 30
+              sleep 60
             done
             trap - EXIT INT TERM
 
@@ -1211,14 +1211,14 @@ jobs:
               break
             fi
             poll_count=$((poll_count + 1))
-            if (( poll_count % 2 == 0 )); then
+            if (( poll_count % 5 == 0 )); then
               fail_fast_failed_jobs
             fi
             if (( poll_count % 10 == 0 )); then
               echo "Still waiting on npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
               gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
             fi
-            sleep 30
+            sleep 60
           done
           trap - EXIT INT TERM
 
@@ -1381,7 +1381,7 @@ jobs:
               echo "Still waiting on openclaw-performance.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
               gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
             fi
-            sleep 30
+            sleep 60
           done
           trap - EXIT INT TERM
 

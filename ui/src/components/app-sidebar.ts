@@ -40,7 +40,6 @@ import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/displ
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { editorOpenUrl } from "../lib/editor-links.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
 import {
@@ -49,6 +48,10 @@ import {
   resolveSessionDisplayName,
   resolveSessionWorkSubtitle,
 } from "../lib/session-display.ts";
+import {
+  CATALOG_SESSION_CONTINUED_EVENT,
+  type CatalogSessionContinuedDetail,
+} from "../lib/sessions/catalog-key.ts";
 import { reorderSessionCustomGroups } from "../lib/sessions/custom-groups.ts";
 import {
   readSessionDragData,
@@ -93,10 +96,12 @@ import {
   sidebarPluginTabs,
 } from "./app-sidebar-nav-menus.ts";
 import {
-  catalogOwnedOpenClawSessionKeys,
-  renderSidebarSessionCatalogs,
-} from "./app-sidebar-session-catalog.ts";
-import { icons } from "./icons.ts";
+  adoptedCatalogSessionKeys,
+  bindAdoptedCatalogSession,
+  formatSidebarTimestamp,
+  renderSessionCatalogGroups,
+} from "./app-sidebar-session-catalogs.ts";
+import { icons, type IconName } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
   LOBSTER_PET_BUILD_MULS,
@@ -207,13 +212,22 @@ const SIDEBAR_SESSION_SORT_OPTIONS = [
   labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated";
 }>;
 
-function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
-  const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
-  if (value === "just now") {
-    return "now";
-  }
-  return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
-}
+// External rows of the footer agent menu. Docs-first: public docs pages over
+// raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
+const AGENT_MENU_LINKS: ReadonlyArray<{ href: string; icon: IconName; label: () => string }> = [
+  { href: "https://docs.openclaw.ai", icon: "book", label: () => t("common.docs") },
+  {
+    href: "https://docs.openclaw.ai/help",
+    icon: "messageSquare",
+    label: () => t("agentChip.getHelp"),
+  },
+  { href: "https://discord.gg/clawd", icon: "users", label: () => t("agentChip.discord") },
+  {
+    href: "https://docs.openclaw.ai/releases",
+    icon: "scrollText",
+    label: () => t("agentChip.viewChangelog"),
+  },
+];
 
 function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;
@@ -365,7 +379,21 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       );
   }
 
+  override connectedCallback() {
+    super.connectedCallback();
+    // Document listener: the chat pane announces catalog adoptions so the
+    // catalog row binds to the new session key before the next catalog poll.
+    document.addEventListener(
+      CATALOG_SESSION_CONTINUED_EVENT,
+      this.handleCatalogSessionContinued as EventListener,
+    );
+  }
+
   override disconnectedCallback() {
+    document.removeEventListener(
+      CATALOG_SESSION_CONTINUED_EVENT,
+      this.handleCatalogSessionContinued as EventListener,
+    );
     this.dismissTransientMenus();
     this.gatewaySource = null;
     this.gatewayClient = null;
@@ -398,6 +426,23 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     }
     void this.refreshSessionCatalogs();
   }
+
+  private readonly handleCatalogSessionContinued = (
+    event: CustomEvent<CatalogSessionContinuedDetail>,
+  ) => {
+    const detail = event.detail;
+    if (!detail?.sessionKey) {
+      return;
+    }
+    this.sessionCatalogs = bindAdoptedCatalogSession(this.sessionCatalogs, detail);
+    // Invalidate in-flight polls and load-more merges so a pre-adoption
+    // snapshot cannot clobber the patched rows; the 30s poll reconfirms.
+    this.sessionCatalogRevision += 1;
+    this.sessionCatalogRevisions.set(
+      detail.catalogId,
+      (this.sessionCatalogRevisions.get(detail.catalogId) ?? 0) + 1,
+    );
+  };
 
   private async refreshSessionCatalogs() {
     const client = this.context?.gateway.snapshot.client;
@@ -914,10 +959,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         unread: row.unread === true,
       };
     };
-    const catalogOwnedKeys = catalogOwnedOpenClawSessionKeys(this.sessionCatalogs);
-    const visibleSessions = navigation.visibleSessions
-      .filter((row) => !catalogOwnedKeys.has(row.key))
-      .map(toSidebarSession);
+    const visibleSessions = navigation.visibleSessions.map(toSidebarSession);
     // The dialog always creates a fresh session, so only connectivity gates it.
     const newSessionDisabled = !this.connected;
     return {
@@ -2024,18 +2066,22 @@ class AppSidebar extends OpenClawLightDomContentsElement {
             <span class="nav-item__icon" aria-hidden="true">${icons.smartphone}</span>
             <span class="sidebar-customize-menu__text">${t("nodes.pairing.button")}</span>
           </button>
-          <a
-            class="sidebar-customize-menu__item"
-            role="menuitem"
-            tabindex="-1"
-            href="https://docs.openclaw.ai"
-            target=${EXTERNAL_LINK_TARGET}
-            rel=${buildExternalLinkRel()}
-            @click=${() => this.closeAgentMenu()}
-          >
-            <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
-            <span class="sidebar-customize-menu__text">${t("common.docs")}</span>
-          </a>
+          ${AGENT_MENU_LINKS.map(
+            (link) => html`
+              <a
+                class="sidebar-customize-menu__item"
+                role="menuitem"
+                tabindex="-1"
+                href=${link.href}
+                target=${EXTERNAL_LINK_TARGET}
+                rel=${buildExternalLinkRel()}
+                @click=${() => this.closeAgentMenu()}
+              >
+                <span class="nav-item__icon" aria-hidden="true">${icons[link.icon]}</span>
+                <span class="sidebar-customize-menu__text">${link.label()}</span>
+              </a>
+            `,
+          )}
           <div class="sidebar-customize-menu__separator" role="separator"></div>
           <div class="sidebar-agent-menu__footer">
             <openclaw-sidebar-build-chip
@@ -2578,17 +2624,20 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private selectedAgentSessionRows(
     navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
   ): SidebarRecentSession[] {
+    // Adopted catalog sessions render inside their catalog group; hiding them
+    // here keeps one selectable row per session instead of a duplicate that
+    // jumps to the top of the regular list.
+    const adopted = adoptedCatalogSessionKeys(this.sessionCatalogs);
     const selected = this.expandedAgentId();
     const loadedAgentId = normalizeAgentId(this.sessionsAgentId ?? "");
     const routeAgentId = normalizeAgentId(navigationState.selectedAgentId);
     if (selected === routeAgentId && selected === loadedAgentId) {
-      return navigationState.visibleSessions;
+      return navigationState.visibleSessions.filter((row) => !adopted.has(row.key));
     }
     const rows =
       selected === loadedAgentId
         ? (this.sessionsResult?.sessions ?? [])
         : (this.sessionRowsByAgent[selected] ?? []);
-    const catalogOwnedKeys = catalogOwnedOpenClawSessionKeys(this.sessionCatalogs);
     return filterVisibleSessionRows(rows, {
       agentId: selected,
       defaultAgentId: resolveUiDefaultAgentId({
@@ -2597,8 +2646,8 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       }),
       filterByAgent: true,
     })
-      .filter((row) => !catalogOwnedKeys.has(row.key))
       .toSorted(this.compareSidebarSessionRows)
+      .filter((row) => !adopted.has(row.key))
       .map(navigationState.toSidebarSession);
   }
 
@@ -2727,27 +2776,38 @@ class AppSidebar extends OpenClawLightDomContentsElement {
               normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
             showFallback: true,
           })}
-          ${renderSidebarSessionCatalogs({
-            catalogs: this.sessionCatalogs,
-            collapsedSectionIds: this.collapsedSessionSections,
-            loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
-            connected: this.connected,
-            defaultAgentId:
-              this.context?.agents.state.agentsList?.defaultId ?? this.expandedAgentId(),
-            activeRouteId: this.activeRouteId,
-            routeSessionKey: this.getRouteSessionKey(),
-            basePath: this.basePath,
-            currentRows: this.sessionsResult?.sessions ?? [],
-            rowsByAgent: this.sessionRowsByAgent,
-            formatTimestamp: formatSidebarTimestamp,
-            onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),
-            onOpenNewSession: (agentId, target) => this.onOpenNewSession?.(agentId, target),
-            onNavigateSession: (search) => this.onNavigate?.("chat", { search }),
-            onLoadMore: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
-          })}
+          ${this.renderSessionCatalogs(navigationState)}
         </div>
       </section>
     `;
+  }
+
+  // Catalog groups render inside the shared sessions scroller. Sibling
+  // .sidebar-sessions sections would form a second scroll-less region that
+  // flex-squeezes under the shell body's overflow clip and paints rows over
+  // the following section.
+  private renderSessionCatalogs(
+    navigationState: ReturnType<AppSidebar["getSessionNavigationState"]>,
+  ) {
+    return renderSessionCatalogGroups({
+      catalogs: this.sessionCatalogs,
+      basePath: this.basePath,
+      routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
+      collapsedSections: this.collapsedSessionSections,
+      loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
+      connected: this.connected,
+      defaultAgentId:
+        this.context?.agents.state.agentsList?.defaultId ?? this.expandedAgentId(),
+      liveRows: [
+        ...(this.sessionsResult?.sessions ?? []),
+        ...Object.values(this.sessionRowsByAgent).flat(),
+      ],
+      renderLiveRow: (row) => this.renderRecentSession(navigationState.toSidebarSession(row)),
+      onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),
+      onLoadMore: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
+      onNavigate: (search) => this.onNavigate?.("chat", { search }),
+      onOpenNewSession: (agentId, target) => this.onOpenNewSession?.(agentId, target),
+    });
   }
 
   private renderMoreRow() {

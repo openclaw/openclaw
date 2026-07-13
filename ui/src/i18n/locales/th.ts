@@ -216,9 +216,10 @@ export const th: TranslationMap = {
   lazyView: {
     loadingTitle: "กำลังโหลดแผง",
     errorTitle: "โหลดแผงไม่สำเร็จ",
-    errorSubtitle: "โหลดหน้าใหม่เพื่อโหลดบันเดิล Control UI ล่าสุด หรือลองอีกครั้งหากคำขอเครือข่ายล้มเหลว",
+    genericSubtitle: "เกิดข้อผิดพลาดขณะโหลดแผงนี้",
+    staleTitle: "มีเวอร์ชันใหม่พร้อมใช้งาน",
+    staleSubtitle: "OpenClaw ได้รับการอัปเดตในเบื้องหลัง โหลดใหม่เพื่อใช้แผงเวอร์ชันล่าสุด",
     retry: "ลองอีกครั้ง",
-    unknownError: "ข้อผิดพลาดในการโหลดโมดูลที่ไม่ทราบสาเหตุ",
   },
   nodes: {
     pairing: {
@@ -392,6 +393,9 @@ export const th: TranslationMap = {
     working: "กำลังทำงาน…",
     ready: "พร้อมแชต",
     whatCanAgentDo: "{name} ทำอะไรได้บ้าง?",
+    getHelp: "ขอความช่วยเหลือ",
+    discord: "ชุมชน Discord",
+    viewChangelog: "ดูบันทึกการเปลี่ยนแปลง",
   },
   newSession: {
     title: "เซสชันใหม่",
@@ -1704,8 +1708,6 @@ export const th: TranslationMap = {
     cancel: "ยกเลิก",
     removedRestart: "ลบ {name} แล้ว ต้องรีสตาร์ท Gateway เพื่อใช้การเปลี่ยนแปลง",
     verifiedSource: "แหล่งที่มายืนยันแล้ว",
-    menuLabel: "การดำเนินการของ {name}",
-    menuDetails: "ดูรายละเอียด",
     enableAction: "เปิดใช้งาน",
     disableAction: "ปิดใช้งาน",
     working: "กำลังดำเนินการ…",
@@ -1837,6 +1839,10 @@ export const th: TranslationMap = {
       useCurrentChat: "ใช้แชทปัจจุบัน",
       useCurrentChatAria: "ใช้แชทปัจจุบันสำหรับคำขอแก้ไข",
       useCurrentChatTooltip: "ส่งคำขอแก้ไขไปยังเซสชันแชทปัจจุบันแทนเซสชัน workshop ของข้อเสนอ",
+      selfLearning: "การเรียนรู้ด้วยตนเอง",
+      selfLearningAria: "เปิดหรือปิดข้อเสนอ Skills จากการเรียนรู้ด้วยตนเอง",
+      selfLearningTooltip:
+        "รวบรวมการแก้ไขและทบทวนงานสำคัญที่เสร็จสมบูรณ์เพื่อนำมาสร้างข้อเสนอ Skills ที่รอดำเนินการ ใช้โทเค็นเบื้องหลังเพิ่มเติม โดยฉบับร่างจะปรากฏบนบอร์ดนี้ในรูปแบบข้อเสนอที่รอดำเนินการ",
       view: "มุมมอง Workshop",
       board: "บอร์ด",
       today: "วันนี้",
@@ -1915,6 +1921,14 @@ export const th: TranslationMap = {
       noProposalsTitle: "ยังไม่มีข้อเสนอ",
       noProposalsBody: "{agent} ยังไม่ได้ร่างข้อเสนอ skill ใดๆ",
       noProposalsFooter: "ข้อเสนอใหม่จะปรากฏที่นี่เพื่อการตรวจทาน",
+    },
+    selfLearning: {
+      pitchTitle: "เปิดการเรียนรู้ด้วยตนเอง",
+      pitchBody:
+        "OpenClaw จะทบทวนการแก้ไขและการดำเนินงานสำคัญที่เสร็จสมบูรณ์ จากนั้นสร้างฉบับร่างข้อเสนอ Skills สำหรับบอร์ดนี้ โดยจะใช้โทเค็นเบื้องหลังเพิ่มเติม และฉบับร่างจะปรากฏเป็นข้อเสนอที่รอดำเนินการ",
+      enable: "เปิดใช้การเรียนรู้ด้วยตนเอง",
+      enabling: "กำลังเปิดใช้…",
+      updateError: "ไม่สามารถอัปเดตการตั้งค่าการเรียนรู้ด้วยตนเองได้",
     },
     today: {
       emptyTitle: "วันนี้ไม่มีอะไรรออยู่",

@@ -23,13 +23,6 @@ export type {
   UserTurnInput,
   UserTurnTranscriptRecorder,
 } from "./user-turn-transcript.types.js";
-export {
-  attachRuntimeUserTurnTranscriptContext,
-  attachRuntimeUserTurnTranscriptRecorder,
-  takeRuntimeUserTurnTranscriptContext,
-  takeRuntimeUserTurnTranscriptRecorder,
-  type RuntimeUserTurnTranscriptContext,
-} from "./user-turn-transcript-runtime-context.js";
 
 type PersistedUserTurnMediaFields = {
   MediaPath?: string;

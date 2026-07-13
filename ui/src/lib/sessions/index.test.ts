@@ -229,6 +229,43 @@ describe("createSessionCapability", () => {
     sessions.dispose();
   });
 
+  it("creates a session while a list refresh is in flight", async () => {
+    const pendingList = deferred<SessionsListResult>();
+    let listCalls = 0;
+    const key = "agent:main:created";
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        listCalls += 1;
+        return listCalls === 1
+          ? await pendingList.promise
+          : sessionsResult([{ key, kind: "direct", updatedAt: 2 }], 2);
+      }
+      if (method === "sessions.create") {
+        return { key };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const sessions = createSessionCapability(gateway);
+
+    const refresh = sessions.refresh({ force: true });
+    expect(sessions.state.loading).toBe(true);
+
+    const created = sessions.create({ agentId: "main" });
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("sessions.create", { agentId: "main" }),
+    );
+
+    pendingList.resolve(sessionsResult([], 1));
+    await expect(created).resolves.toBe(key);
+    await refresh;
+
+    expect(listCalls).toBe(2);
+    expect(sessions.state.result?.sessions[0]?.key).toBe(key);
+    sessions.dispose();
+  });
+
   it("returns the initial-run rejection without discarding the created session key", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.create") {

@@ -25,6 +25,7 @@ import {
 } from "@openclaw/gateway-protocol/frame-guards";
 import { resolveGatewayStartupRetryAfterMs } from "@openclaw/gateway-protocol/startup-unavailable";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@openclaw/gateway-protocol/version";
+import { RetrySupervisor, sleepWithAbort, type BackoffPolicy } from "@openclaw/retry";
 import ipaddr from "ipaddr.js";
 import { WebSocket, type ClientOptions, type CertMeta } from "ws";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
@@ -457,6 +458,12 @@ export function resolveGatewayClientConnectChallengeTimeoutMs(
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
 const MAX_SUPPRESSED_TRANSIENT_PRE_HELLO_CLEAN_CLOSES = 1;
+const GATEWAY_RECONNECT_POLICY: BackoffPolicy = {
+  initialMs: 1_000,
+  maxMs: 30_000,
+  factor: 2,
+  jitter: 0,
+};
 
 type PendingStop = {
   ws: WebSocket;
@@ -470,18 +477,16 @@ export class GatewayClient {
   private opts: GatewayClientOptions;
   private deps: Required<GatewayClientHostDeps>;
   private pending = new Map<string, Pending>();
-  private backoffMs = 1000;
+  private readonly reconnectSupervisor = new RetrySupervisor(GATEWAY_RECONNECT_POLICY);
   private closed = false;
   private lastSeq: number | null = null;
   private connectNonce: string | null = null;
   private connectSent = false;
   private connectTimer: NodeJS.Timeout | null = null;
-  private reconnectTimer: NodeJS.Timeout | null = null;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
   private approvalRuntimeTokenCompatibilityDisabled = false;
   private approvalRuntimeTokenRetryBudgetUsed = false;
-  private pendingStartupReconnectDelayMs: number | null = null;
   private pendingConnectErrorDetailCode: string | null = null;
   private pendingConnectErrorDetails: unknown = null;
   // Track last tick to detect silent stalls.
@@ -547,7 +552,7 @@ export class GatewayClient {
     if (this.closed) {
       return;
     }
-    this.clearReconnectTimer();
+    this.reconnectSupervisor.cancel();
     this.clearConnectChallengeTimeout();
     this.connectNonce = null;
     this.connectSent = false;
@@ -663,7 +668,7 @@ export class GatewayClient {
       this.socketOpened = false;
       this.transportValidated = false;
       this.resolvePendingStop(ws);
-      if (this.pendingStartupReconnectDelayMs !== null) {
+      if (this.reconnectSupervisor.nextDelayOverrideMs !== undefined) {
         this.scheduleReconnect();
         return;
       }
@@ -762,10 +767,9 @@ export class GatewayClient {
     this.closed = true;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
-    this.pendingStartupReconnectDelayMs = null;
     this.pendingConnectErrorDetailCode = null;
     this.pendingConnectErrorDetails = null;
-    this.clearReconnectTimer();
+    this.reconnectSupervisor.reset();
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -860,7 +864,6 @@ export class GatewayClient {
         this.helloOkReceived = true;
         this.pendingDeviceTokenRetry = false;
         this.deviceTokenRetryBudgetUsed = false;
-        this.pendingStartupReconnectDelayMs = null;
         this.pendingConnectErrorDetailCode = null;
         this.pendingConnectErrorDetails = null;
         this.suppressedTransientPreHelloCleanCloses = 0;
@@ -874,7 +877,7 @@ export class GatewayClient {
             env: this.opts.env,
           });
         }
-        this.backoffMs = 1000;
+        this.reconnectSupervisor.reset();
         this.tickIntervalMs =
           typeof helloOk.policy?.tickIntervalMs === "number"
             ? helloOk.policy.tickIntervalMs
@@ -917,11 +920,13 @@ export class GatewayClient {
         if (shouldRetryWithDeviceToken) {
           this.pendingDeviceTokenRetry = true;
           this.deviceTokenRetryBudgetUsed = true;
-          this.backoffMs = Math.min(this.backoffMs, 250);
+          this.reconnectSupervisor.reset(250);
         }
         const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
         if (startupRetryAfterMs !== null) {
-          this.pendingStartupReconnectDelayMs = startupRetryAfterMs;
+          // Startup Retry-After is a floor for this wait, not a failed connect
+          // attempt. Preserve the exponential sequence for the next failure.
+          this.reconnectSupervisor.nextDelayOverrideMs = startupRetryAfterMs;
           this.logDebug(`gateway connect failed: ${formatGatewayClientErrorForLog(err)}`);
           this.ws?.close(1013, "gateway starting");
           return;
@@ -940,7 +945,7 @@ export class GatewayClient {
           // This identity scopes model-mediated cron calls. Retrying without it
           // would turn an old/new mismatch into an unscoped operator call.
           this.closed = true;
-          this.clearReconnectTimer();
+          this.reconnectSupervisor.cancel();
           this.ws?.close(1008, "connect failed");
           return;
         }
@@ -952,7 +957,7 @@ export class GatewayClient {
         ) {
           this.approvalRuntimeTokenCompatibilityDisabled = true;
           this.approvalRuntimeTokenRetryBudgetUsed = true;
-          this.backoffMs = Math.min(this.backoffMs, 250);
+          this.reconnectSupervisor.reset(250);
           this.logDebug("gateway rejected approval runtime auth field; retrying without it");
           this.ws?.close(1008, "connect retry");
           return;
@@ -1465,13 +1470,6 @@ export class GatewayClient {
     }
   }
 
-  private clearReconnectTimer() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-  }
-
   private armConnectChallengeTimeout() {
     const connectChallengeTimeoutMs = resolveGatewayClientConnectChallengeTimeoutMs(this.opts);
     const armedAt = Date.now();
@@ -1498,17 +1496,15 @@ export class GatewayClient {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
     }
-    this.clearReconnectTimer();
-    const startupDelay = this.pendingStartupReconnectDelayMs;
-    this.pendingStartupReconnectDelayMs = null;
-    const delay = startupDelay ?? this.backoffMs;
-    if (startupDelay === null) {
-      this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
+    const retry = this.reconnectSupervisor.next();
+    if (!retry) {
+      return;
     }
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.start();
-    }, delay);
+    // Ignore cancelled sleeps only; reconnect start failures must remain observable.
+    void sleepWithAbort(retry.delayMs, retry.signal).then(
+      () => this.start(),
+      () => {},
+    );
   }
 
   private flushPendingErrors(err: Error) {

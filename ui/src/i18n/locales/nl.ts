@@ -218,10 +218,11 @@ export const nl: TranslationMap = {
   lazyView: {
     loadingTitle: "Paneel laden",
     errorTitle: "Paneel kan niet worden geladen",
-    errorSubtitle:
-      "Laad de pagina opnieuw om de nieuwste Control UI-bundel te laden, of probeer het opnieuw als de netwerkaanvraag is mislukt.",
+    genericSubtitle: "Er is iets misgegaan bij het laden van dit paneel.",
+    staleTitle: "Er is een nieuwe versie beschikbaar",
+    staleSubtitle:
+      "OpenClaw is op de achtergrond bijgewerkt. Laad opnieuw om het nieuwste paneel te zien.",
     retry: "Opnieuw proberen",
-    unknownError: "Onbekende fout bij laden van module.",
   },
   nodes: {
     pairing: {
@@ -398,6 +399,9 @@ export const nl: TranslationMap = {
     working: "Bezig…",
     ready: "Klaar om te chatten",
     whatCanAgentDo: "Wat kan {name} doen?",
+    getHelp: "Hulp krijgen",
+    discord: "Discord-community",
+    viewChangelog: "Wijzigingslogboek bekijken",
   },
   newSession: {
     title: "Nieuwe sessie",
@@ -1733,8 +1737,6 @@ export const nl: TranslationMap = {
     removedRestart:
       "{name} verwijderd. Een herstart van de Gateway is vereist om de wijziging toe te passen.",
     verifiedSource: "Geverifieerde bron",
-    menuLabel: "{name}-acties",
-    menuDetails: "Details bekijken",
     enableAction: "Inschakelen",
     disableAction: "Uitschakelen",
     working: "Bezig…",
@@ -1871,6 +1873,10 @@ export const nl: TranslationMap = {
       useCurrentChatAria: "Huidige chat gebruiken voor revisieverzoeken",
       useCurrentChatTooltip:
         "Stuur revisieverzoeken naar de huidige chatsessie in plaats van de workshopsessie van het voorstel.",
+      selfLearning: "Zelflerend",
+      selfLearningAria: "Voorstellen voor zelflerende Skills in- of uitschakelen",
+      selfLearningTooltip:
+        "Leg correcties vast en zet omvangrijk voltooid werk na beoordeling om in openstaande skillvoorstellen. Verbruikt extra tokens op de achtergrond; concepten verschijnen op dit bord als openstaande voorstellen.",
       view: "Workshopweergave",
       board: "Bord",
       today: "Vandaag",
@@ -1951,6 +1957,14 @@ export const nl: TranslationMap = {
       noProposalsTitle: "Nog geen voorstellen",
       noProposalsBody: "{agent} heeft nog geen skill-voorstellen opgesteld.",
       noProposalsFooter: "Nieuwe voorstellen verschijnen hier ter beoordeling.",
+    },
+    selfLearning: {
+      pitchTitle: "Zelfleren inschakelen",
+      pitchBody:
+        "OpenClaw beoordeelt correcties en omvangrijke voltooide runs en stelt vervolgens skillvoorstellen op voor dit bord. Het verbruikt extra tokens op de achtergrond en concepten verschijnen als openstaande voorstellen.",
+      enable: "Zelfleren inschakelen",
+      enabling: "Inschakelen…",
+      updateError: "De instelling voor zelfleren kon niet worden bijgewerkt.",
     },
     today: {
       emptyTitle: "Vandaag niets in wachtrij",

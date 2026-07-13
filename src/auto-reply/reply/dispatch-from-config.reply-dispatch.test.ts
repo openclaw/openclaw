@@ -4,7 +4,8 @@ import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
-import { setReplyPayloadMetadata, type ReplyPayload } from "../types.js";
+import { setReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import {
   acpManagerRuntimeMocks,
   acpMocks,

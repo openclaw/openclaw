@@ -14,9 +14,9 @@ type NavigationItem = {
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
+// Session management lives in Settings (SETTINGS_NAVIGATION_GROUPS below).
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
-  "sessions",
   "usage",
   "cron",
   "tasks",
@@ -130,7 +130,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["ai-agents", "model-providers", "automation", "mcp"],
+    routes: ["ai-agents", "sessions", "model-providers", "automation", "mcp"],
   },
   {
     labelKey: "nav.settingsGroupSystem",

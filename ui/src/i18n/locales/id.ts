@@ -218,10 +218,11 @@ export const id: TranslationMap = {
   lazyView: {
     loadingTitle: "Memuat panel",
     errorTitle: "Panel gagal dimuat",
-    errorSubtitle:
-      "Muat ulang halaman untuk memuat bundel Control UI terbaru, atau coba lagi jika permintaan jaringan gagal.",
+    genericSubtitle: "Terjadi kesalahan saat memuat panel ini.",
+    staleTitle: "Versi baru tersedia",
+    staleSubtitle:
+      "OpenClaw telah diperbarui di latar belakang. Muat ulang untuk mendapatkan panel terbaru.",
     retry: "Coba lagi",
-    unknownError: "Kesalahan pemuatan modul yang tidak diketahui.",
   },
   nodes: {
     pairing: {
@@ -396,6 +397,9 @@ export const id: TranslationMap = {
     working: "Sedang bekerja…",
     ready: "Siap mengobrol",
     whatCanAgentDo: "Apa yang dapat dilakukan {name}?",
+    getHelp: "Dapatkan bantuan",
+    discord: "Komunitas Discord",
+    viewChangelog: "Lihat log perubahan",
   },
   newSession: {
     title: "Sesi baru",
@@ -1726,8 +1730,6 @@ export const id: TranslationMap = {
     cancel: "Batal",
     removedRestart: "{name} dihapus. Gateway perlu dimulai ulang untuk menerapkan perubahan.",
     verifiedSource: "Sumber terverifikasi",
-    menuLabel: "Tindakan {name}",
-    menuDetails: "Lihat detail",
     enableAction: "Aktifkan",
     disableAction: "Nonaktifkan",
     working: "Memproses…",
@@ -1864,6 +1866,10 @@ export const id: TranslationMap = {
       useCurrentChatAria: "Gunakan obrolan saat ini untuk permintaan revisi",
       useCurrentChatTooltip:
         "Kirim permintaan revisi ke sesi obrolan saat ini alih-alih sesi workshop proposal.",
+      selfLearning: "Pembelajaran mandiri",
+      selfLearningAria: "Aktifkan atau nonaktifkan usulan Skills dari pembelajaran mandiri",
+      selfLearningTooltip:
+        "Catat koreksi dan tinjau pekerjaan penting yang telah diselesaikan untuk dijadikan proposal skill yang tertunda. Menggunakan token latar belakang tambahan; draf muncul di papan ini sebagai proposal tertunda.",
       view: "Tampilan workshop",
       board: "Papan",
       today: "Hari ini",
@@ -1944,6 +1950,14 @@ export const id: TranslationMap = {
       noProposalsTitle: "Belum ada proposal",
       noProposalsBody: "{agent} belum membuat proposal skill apa pun.",
       noProposalsFooter: "Proposal baru akan muncul di sini untuk ditinjau.",
+    },
+    selfLearning: {
+      pitchTitle: "Aktifkan pembelajaran mandiri",
+      pitchBody:
+        "OpenClaw meninjau koreksi dan proses penting yang telah diselesaikan, lalu menyusun draf proposal skill untuk papan ini. Fitur ini menggunakan token latar belakang tambahan dan draf akan muncul sebagai proposal tertunda.",
+      enable: "Aktifkan pembelajaran mandiri",
+      enabling: "Mengaktifkan…",
+      updateError: "Tidak dapat memperbarui pengaturan pembelajaran mandiri.",
     },
     today: {
       emptyTitle: "Tidak ada yang menunggu hari ini",

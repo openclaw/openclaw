@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import prettyMilliseconds from "pretty-ms";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
 import {
@@ -261,17 +262,12 @@ function formatDuration(ms: number) {
   if (!Number.isFinite(ms) || ms < 0) {
     return "unknown";
   }
-  if (ms < 1_000) {
-    return `${Math.round(ms)}ms`;
-  }
-  if (ms < 60_000) {
-    const seconds = ms / 1_000;
-    return `${seconds >= 10 ? Math.round(seconds) : Number(seconds.toFixed(1))}s`;
-  }
-  const totalSeconds = Math.round(ms / 1_000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+  const roundedMs = ms < 1000 ? Math.round(ms) : Math.round(ms / 1000) * 1000;
+  return prettyMilliseconds(roundedMs, {
+    millisecondsDecimalDigits: 0,
+    secondsDecimalDigits: 0,
+    unitCount: 2,
+  });
 }
 
 function logCharacterEvalProgress(

@@ -805,7 +805,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const createResult = async (params: SessionCreateParams = {}) => {
     const scope = captureConnection();
-    if (!scope || state.loading) {
+    if (!scope) {
       return null;
     }
     try {
@@ -821,8 +821,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
-      // Creation can originate outside the sidebar. Notify presentation owners
-      // after refresh so they can reconcile the new row without guessing from list churn.
+      // Creation may overlap read-only list loading. Notify presentation owners
+      // after its queued refresh so they never guess from stale list churn.
       for (const listener of createdListeners) {
         listener(result.key);
       }

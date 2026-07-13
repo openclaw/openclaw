@@ -129,7 +129,9 @@ html.openclaw-native-web-chrome .sidebar-brand__collapse {
 .macos-titlebar-controls {
   position: fixed;
   top: 0;
-  left: 78px;
+  /* Clear the traffic lights (~74px cluster) with breathing room before the
+     first hosted button, so the two groups read as separate. */
+  left: 92px;
   /* Above app chrome (<=45), below dropdowns/dialogs (>=100). */
   z-index: 50;
   display: flex;
