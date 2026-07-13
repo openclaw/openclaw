@@ -598,10 +598,3 @@ export async function runClaudeCliNodeCommand(params: {
     }
   }
 }
-
-export const claudeCliNodeRunLimits = {
-  outputBytes: OUTPUT_CAP_BYTES,
-  progressChunkBytes: PROGRESS_CHUNK_BYTES,
-  stderrTailBytes: STDERR_TAIL_BYTES,
-  terminalEventBytes: TERMINAL_EVENT_MAX_BYTES,
-} as const;

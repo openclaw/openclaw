@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeHostClient } from "./client.js";
 import {
-  claudeCliNodeRunLimits,
   decodeClaudeCliNodeRunParams,
   runClaudeCliNodeCommand,
 } from "./invoke-agent-cli-claude.js";
@@ -271,9 +270,8 @@ writeChunk();`,
       .filter((call) => call.method === "node.invoke.progress")
       .map((call) => (call.params as { chunk: string }).chunk)
       .join("");
-    expect(progressBytes).toBeLessThanOrEqual(
-      claudeCliNodeRunLimits.outputBytes + claudeCliNodeRunLimits.terminalEventBytes,
-    );
+    // OUTPUT_CAP_BYTES + TERMINAL_EVENT_MAX_BYTES from invoke-agent-cli-claude.ts.
+    expect(progressBytes).toBeLessThanOrEqual(200_000 + 1024 * 1024);
     expect(progress).toContain('"session_id":"tail-session"');
     expect(result.truncated).toBe(true);
     expect(result.stderr).toContain("late failure diagnostic");

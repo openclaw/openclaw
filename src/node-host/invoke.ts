@@ -53,6 +53,7 @@ import type { NodeHostClient } from "./client.js";
 import {
   decodeClaudeCliNodeRunParams,
   runClaudeCliNodeCommand,
+  type ClaudeCliNodeRunParams,
   type ClaudeCliNodeRunResult,
 } from "./invoke-agent-cli-claude.js";
 import {
@@ -236,7 +237,7 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-export type NodeHostInvokeRuntime = {
+type NodeHostInvokeRuntime = {
   claudePath?: string;
   handleSystemRun?: typeof handleSystemRunInvoke;
   signal?: AbortSignal;
@@ -798,7 +799,7 @@ async function dispatchInvoke(
       return;
     }
     const claudePath = runtime.claudePath;
-    let request: Awaited<ReturnType<typeof decodeClaudeCliNodeRunParams>>;
+    let request: ClaudeCliNodeRunParams;
     try {
       request = await decodeClaudeCliNodeRunParams(frame.paramsJSON);
     } catch (error) {
