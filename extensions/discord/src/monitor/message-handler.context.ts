@@ -46,6 +46,24 @@ function isContextAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
 }
 
+function removeReplayedMessageFromPendingHistory(params: {
+  historyMap: DiscordMessagePreflightContext["guildHistories"];
+  historyKey: string;
+  messageId: string;
+}): void {
+  const history = params.historyMap.get(params.historyKey);
+  if (!history) {
+    return;
+  }
+  // An exhausted dispatch can release its replay claim after pending history
+  // was recorded. Remove that copy before rebuilding the same inbound turn.
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    if (history[index]?.messageId === params.messageId) {
+      history.splice(index, 1);
+    }
+  }
+}
+
 export async function buildDiscordMessageProcessContext(params: {
   ctx: DiscordMessagePreflightContext;
   text: string;
@@ -169,6 +187,11 @@ export async function buildDiscordMessageProcessContext(params: {
     !isDirectMessage &&
     (isRoomEvent || !(isGuildMessage && channelConfig?.autoThread && !threadChannel));
   if (shouldIncludeChannelHistory) {
+    removeReplayedMessageFromPendingHistory({
+      historyMap: guildHistories,
+      historyKey: messageChannelId,
+      messageId: message.id,
+    });
     combinedBody = channelHistory.buildPendingContext({
       historyKey: messageChannelId,
       limit: historyLimit,

@@ -57,6 +57,10 @@ import {
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { createDiscordDraftPreviewController } from "./message-handler.draft-preview.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
+import {
+  dispatchDiscordReplyWithSessionConflictRetry,
+  DiscordReplySessionConflictExhaustedError,
+} from "./message-handler.retry.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
 import { sanitizeDiscordFrontChannelReplyPayloads } from "./reply-safety.js";
 import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
@@ -65,6 +69,8 @@ const loadReplyRuntime = createLazyRuntimeModule(() => import("openclaw/plugin-s
 const TARGETED_ONLY_ALLOWED_MENTIONS = {
   parse: ["users", "roles"],
 } as APIAllowedMentions;
+const DISCORD_SESSION_CONFLICT_FAILURE_TEXT =
+  "⚠️ Couldn't process this message because the session stayed busy. Please try again in a moment.";
 
 function isProcessAborted(abortSignal?: AbortSignal): boolean {
   return Boolean(abortSignal?.aborted);
@@ -1040,7 +1046,16 @@ async function processDiscordMessageInner(
       ctxPayload,
       recordInboundSession,
       afterRecord: queueInitialAckReactionAfterRecord,
-      dispatchReplyWithBufferedBlockDispatcher,
+      dispatchReplyWithBufferedBlockDispatcher: (params) =>
+        dispatchDiscordReplyWithSessionConflictRetry({
+          dispatch: () => dispatchReplyWithBufferedBlockDispatcher(params),
+          abortSignal,
+          onRetry: (attempt, delayMs) => {
+            logVerbose(
+              `discord: reply session init conflict; retrying dispatch ${attempt} after ${delayMs}ms`,
+            );
+          },
+        }),
       dispatcherOptions: {
         ...replyPipeline,
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
@@ -1303,6 +1318,20 @@ async function processDiscordMessageInner(
       return;
     }
     dispatchError = true;
+    if (err instanceof DiscordReplySessionConflictExhaustedError) {
+      try {
+        await deliverDiscordPayload(
+          { text: DISCORD_SESSION_CONFLICT_FAILURE_TEXT, isError: true },
+          { kind: "final" },
+        );
+        // A visible terminal notice owns this event. Returning commits replay
+        // ownership so Discord redelivery cannot produce a second outcome.
+        return;
+      } catch (deliveryError) {
+        // Keep the conflict retryable even when its visible fallback cannot land.
+        onDiscordDeliveryError(deliveryError, { kind: "final" });
+      }
+    }
     throw err;
   } finally {
     endDiscordInboundEventDeliveryCorrelation();
