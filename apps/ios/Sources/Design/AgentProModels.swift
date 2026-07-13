@@ -195,6 +195,7 @@ struct SkillStatusEntryLite: Decodable {
     var hasMissingRequirements: Bool {
         guard let missing else { return false }
         return !missing.bins.isEmpty
+            || !missing.anyBins.isEmpty
             || !missing.env.isEmpty
             || !missing.config.isEmpty
             || !missing.os.isEmpty
@@ -204,6 +205,7 @@ struct SkillStatusEntryLite: Decodable {
         guard let missing else { return nil }
         let values = [
             missing.bins,
+            missing.anyBins,
             missing.env,
             missing.config,
             missing.os,
@@ -217,7 +219,8 @@ struct SkillStatusEntryLite: Decodable {
     }
 
     var missingBins: [String] {
-        self.missing?.bins ?? []
+        guard let missing else { return [] }
+        return missing.bins + missing.anyBins
     }
 
     var homepageURL: URL? {
@@ -272,9 +275,27 @@ struct ClawHubInstallParams: Encodable {
 
 struct SkillStatusMissingLite: Decodable {
     let bins: [String]
+    let anyBins: [String]
     let env: [String]
     let config: [String]
     let os: [String]
+
+    private enum CodingKeys: String, CodingKey {
+        case bins
+        case anyBins
+        case env
+        case config
+        case os
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.bins = try container.decode([String].self, forKey: .bins)
+        self.anyBins = try container.decodeIfPresent([String].self, forKey: .anyBins) ?? []
+        self.env = try container.decode([String].self, forKey: .env)
+        self.config = try container.decode([String].self, forKey: .config)
+        self.os = try container.decodeIfPresent([String].self, forKey: .os) ?? []
+    }
 }
 
 struct CronStatusLite: Decodable {
