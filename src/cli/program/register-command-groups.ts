@@ -12,7 +12,7 @@ export type CommandGroupPlaceholder = {
 };
 
 /** Commander option metadata attached to a lazy placeholder. */
-export type CommandGroupPlaceholderOption = {
+type CommandGroupPlaceholderOption = {
   flags: string;
   description: string;
 };

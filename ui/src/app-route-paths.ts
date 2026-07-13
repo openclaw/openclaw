@@ -20,7 +20,7 @@ const APP_ROUTE_DEFINITIONS = {
   "model-providers": { path: "/settings/model-providers", aliases: ["/model-providers"] },
   workboard: { path: "/workboard" },
   worktrees: { path: "/settings/worktrees", aliases: ["/worktrees"] },
-  sessions: { path: "/sessions" },
+  sessions: { path: "/settings/sessions", aliases: ["/sessions"] },
   usage: { path: "/usage" },
   debug: { path: "/debug" },
   logs: { path: "/logs" },
@@ -29,7 +29,7 @@ const APP_ROUTE_DEFINITIONS = {
   plugins: { path: "/settings/plugins" },
   cron: { path: "/cron" },
   tasks: { path: "/tasks" },
-  nodes: { path: "/nodes" },
+  nodes: { path: "/settings/devices", aliases: ["/nodes"] },
   plugin: { path: "/plugin" },
 } as const;
 

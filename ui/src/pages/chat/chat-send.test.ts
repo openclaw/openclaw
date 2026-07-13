@@ -283,7 +283,6 @@ function makeHost(overrides?: Partial<TestChatHost>): TestChatHost {
         chatShowThinking: next.chatShowThinking,
         chatShowToolCalls: next.chatShowToolCalls,
         chatPersistCommentary: next.chatPersistCommentary,
-        chatAutoScroll: next.chatAutoScroll,
         chatSendShortcut: next.chatSendShortcut,
         splitRatio: next.splitRatio,
       });

@@ -29,9 +29,14 @@ import {
   readLatestTranscriptAssistantText,
   updateSessionEntry,
   type SessionTranscriptTurnWriteContext,
+  type SessionTranscriptTurnExpectedState,
 } from "./session-accessor.js";
 import { parseSqliteSessionFileMarker, type SqliteSessionFileMarker } from "./sqlite-marker.js";
 import { resolveSessionStoreEntry } from "./store.js";
+import {
+  applyBeforeMessageWriteToAssistant,
+  type AssistantBeforeMessageWrite,
+} from "./transcript-assistant-message.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import {
@@ -63,36 +68,6 @@ export type SessionTranscriptDeliveryMirror =
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
 };
-
-type AssistantBeforeMessageWrite = (params: {
-  message: AgentMessage;
-  agentId?: string;
-  sessionKey?: string;
-}) => AgentMessage | null;
-
-function applyBeforeMessageWriteToAssistant(params: {
-  message: Parameters<SessionManager["appendMessage"]>[0];
-  beforeMessageWrite?: AssistantBeforeMessageWrite;
-  explicitIdempotencyKey?: string;
-  agentId?: string;
-  sessionKey: string;
-}): Parameters<SessionManager["appendMessage"]>[0] | undefined {
-  if (!params.beforeMessageWrite) {
-    return params.message;
-  }
-  const nextMessage = params.beforeMessageWrite({
-    message: params.message as AgentMessage,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionKey: params.sessionKey,
-  });
-  if (nextMessage?.role !== "assistant") {
-    return undefined;
-  }
-  return {
-    ...nextMessage,
-    ...(params.explicitIdempotencyKey ? { idempotencyKey: params.explicitIdempotencyKey } : {}),
-  } as Parameters<SessionManager["appendMessage"]>[0];
-}
 
 type AssistantTranscriptText = {
   id?: string;
@@ -457,6 +432,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  expectedSessionState?: SessionTranscriptTurnExpectedState;
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
@@ -487,6 +463,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     ...(params.expectedLifecycleRevision
       ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
       : {}),
+    ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
     storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
     updateMode: params.updateMode,
@@ -524,6 +501,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   sessionKey: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
+  expectedSessionState?: SessionTranscriptTurnExpectedState;
   message: SessionTranscriptAssistantMessage;
   idempotencyKey?: string;
   storePath?: string;
@@ -618,6 +596,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
         ...(params.expectedLifecycleRevision !== undefined
           ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+          : {}),
+        ...(params.expectedSessionState
+          ? { expectedSessionState: params.expectedSessionState }
           : {}),
         ...(params.config ? { config: params.config } : {}),
         updateMode: params.updateMode ?? "inline",
