@@ -187,10 +187,15 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await page.keyboard.press("End");
       await expect.poll(() => roundedWidth(shellNav)).toBe(400);
       // Settings takes over the whole app: the regular sidebar yields to the
-      // settings sidebar until "Back to app" (or Escape) exits.
-      const settingsLink = sidebar.getByRole("link", { name: "Settings" });
-      await expect.poll(() => settingsLink.isVisible()).toBe(true);
-      await settingsLink.click();
+      // settings sidebar until "Back to app" (or Escape) exits. Settings opens
+      // through the footer agent chip's utility menu.
+      const agentChip = sidebar.getByRole("button", { name: /Agent menu/ });
+      const openSettingsFromChip = async () => {
+        await agentChip.click();
+        await sidebar.getByRole("menuitem", { name: "Settings" }).click();
+      };
+      await expect.poll(() => agentChip.isVisible()).toBe(true);
+      await openSettingsFromChip();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
       const settingsSidebar = page.locator(".settings-sidebar");
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
@@ -319,7 +324,7 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/chat");
       await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await settingsLink.click();
+      await openSettingsFromChip();
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
       await expect.poll(() => settingsSearch.inputValue()).toBe("");
       await captureSettingsSidebarProof(settingsSidebar, "01g-settings-search-reset.png");
