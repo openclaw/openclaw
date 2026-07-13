@@ -622,10 +622,10 @@ opening or migrating durable runtime state.
     `500`.
   - Result: `{ "deliveryAttempts": DurableWakeDeliveryAttempt[] }`.
   - The wake must exist before attempts are listed.
-Durable wake Gateway RPCs are inspection-first in this release. Public
-`acknowledge`, `supersede`, and `mark` write controls are intentionally deferred
-until the lifecycle handoff contract includes explicit write authorization,
-transition semantics, idempotency, terminal-state rejection, and upgrade proof.
+    Durable wake Gateway RPCs are inspection-first in this release. Public
+    `acknowledge`, `supersede`, and `mark` write controls are intentionally deferred
+    until the lifecycle handoff contract includes explicit write authorization,
+    transition semantics, idempotency, terminal-state rejection, and upgrade proof.
 
 Invalid params return `INVALID_REQUEST` before opening durable state. Disabled
 durable runtime returns `INVALID_REQUEST`. Missing wakes return

@@ -44,24 +44,11 @@ export {
 } from "../gateway/operator-approvals-client.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 
-export const ErrorCodes = {
-  NOT_LINKED: "NOT_LINKED",
-  NOT_PAIRED: "NOT_PAIRED",
-  AGENT_TIMEOUT: "AGENT_TIMEOUT",
-  INVALID_REQUEST: "INVALID_REQUEST",
-  APPROVAL_NOT_FOUND: "APPROVAL_NOT_FOUND",
-  UNAVAILABLE: "UNAVAILABLE",
-} as const;
-
-export type GatewayRuntimeErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
-
-export type GatewayRuntimeErrorShape = {
-  code: string;
-  message: string;
-  details?: unknown;
-  retryable?: boolean;
-  retryAfterMs?: number;
-};
+export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+export type {
+  ErrorCode as GatewayRuntimeErrorCode,
+  ErrorShape as GatewayRuntimeErrorShape,
+} from "../../packages/gateway-protocol/src/index.js";
 
 export type NodeSession = {
   nodeId: string;
@@ -88,18 +75,6 @@ export type NodeSession = {
   pathEnv?: string;
   connectedAtMs: number;
 };
-
-export function errorShape(
-  code: GatewayRuntimeErrorCode,
-  message: string,
-  opts?: { details?: unknown; retryable?: boolean; retryAfterMs?: number },
-): GatewayRuntimeErrorShape {
-  return {
-    code,
-    message,
-    ...opts,
-  };
-}
 
 export type GatewayEventFrameStateVersion = {
   presence: number;
