@@ -417,7 +417,7 @@ describe("official external plugin catalog", () => {
     ],
     [
       "query-bearing URLs",
-      "https://clawhub.ai/v1/feeds/plugins?token=test-auth-token",
+      "https://clawhub.ai/v1/feeds/plugins?query=test-value",
       "must not include query strings or fragments",
     ],
     [
