@@ -110,7 +110,7 @@ export function renderAgentStatus(widget: WorkspaceWidget, value: unknown): Temp
             ${row.progress !== null
               ? html`<span class="workspace-list__meta"
                   >${t("workspaces.widget.agentStatus.progress", {
-                    percent: Math.round(row.progress * 100),
+                    percent: String(Math.round(row.progress * 100)),
                   })}</span
                 >`
               : nothing}
