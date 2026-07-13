@@ -669,38 +669,45 @@ describe("ci workflow guards", () => {
       "github.event_name == 'workflow_dispatch' && inputs.loc_base_ref != ''",
     );
     expect(manualLocBaseStep.run).toContain("loc_base_ref must be a full commit SHA");
-    const mergeBaseStep = preflightSteps.find(
-      (step: WorkflowStep) => step.name === "Validate release-gate PR base",
+    const mergeTreeStep = preflightSteps.find(
+      (step: WorkflowStep) => step.name === "Validate release-gate PR merge tree",
     );
-    expect(mergeBaseStep.id).toBe("release_gate_loc_base");
-    expect(mergeBaseStep.if).toBe(
+    expect(mergeTreeStep.id).toBe("release_gate_loc_tree");
+    expect(mergeTreeStep.if).toBe(
       "github.event_name == 'workflow_dispatch' && inputs.release_gate",
     );
-    expect(mergeBaseStep.env.PR_NUMBER).toBe("${{ inputs.pr_number }}");
-    expect(mergeBaseStep.env.TARGET_REF).toBe("${{ inputs.target_ref }}");
-    expect(mergeBaseStep.run).toContain(
+    expect(mergeTreeStep.env.PR_NUMBER).toBe("${{ inputs.pr_number }}");
+    expect(mergeTreeStep.env.TARGET_REF).toBe("${{ inputs.target_ref }}");
+    expect(mergeTreeStep.run).toContain(
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}"',
     );
-    expect(mergeBaseStep.run).toContain(".head.sha");
-    expect(mergeBaseStep.run).toContain(".base.sha");
-    expect(mergeBaseStep.run).toContain('[[ "$pr_head_sha" != "$TARGET_REF" ]]');
-    expect(mergeBaseStep.run).toContain(
-      'gh api --method GET "repos/${GITHUB_REPOSITORY}/compare/${comparison_ref}"',
-    );
-    expect(mergeBaseStep.run).toContain(".merge_base_commit.sha");
-    expect(mergeBaseStep.run).toContain('echo "sha=${merge_base}" >> "$GITHUB_OUTPUT"');
+    expect(mergeTreeStep.run).toContain(".head.sha");
+    expect(mergeTreeStep.run).toContain(".base.sha");
+    expect(mergeTreeStep.run).toContain('[[ "$pr_head_sha" != "$TARGET_REF" ]]');
+    expect(mergeTreeStep.run).toContain("for attempt in {1..12}");
+    expect(mergeTreeStep.run).toContain(".mergeable == null");
+    expect(mergeTreeStep.run).toContain(".merge_commit_sha");
+    expect(mergeTreeStep.run).toContain('[[ "$mergeable" == "false" ]]');
+    expect(mergeTreeStep.run).toContain("sleep 2");
+    expect(mergeTreeStep.run).toContain('"+refs/pull/${PR_NUMBER}/merge:${merge_ref}"');
+    expect(mergeTreeStep.run).toContain('[[ "$resolved_merge_sha" != "$merge_sha"');
+    expect(mergeTreeStep.run).toContain('git rev-parse "${merge_ref}^1"');
+    expect(mergeTreeStep.run).toContain('git rev-parse "${merge_ref}^2"');
+    expect(mergeTreeStep.run).toContain('echo "base_sha=${pr_base_sha}" >> "$GITHUB_OUTPUT"');
+    expect(mergeTreeStep.run).toContain('echo "head_sha=${merge_sha}" >> "$GITHUB_OUTPUT"');
     expect(workflow.jobs.preflight.permissions["pull-requests"]).toBe("read");
     expect(workflow.jobs.preflight.outputs.loc_base_sha).toContain(
-      "steps.release_gate_loc_base.outputs.sha",
+      "steps.release_gate_loc_tree.outputs.base_sha",
     );
     expect(workflow.jobs.preflight.outputs.loc_base_sha).toContain("inputs.loc_base_ref");
+    expect(workflow.jobs.preflight.outputs.loc_head_sha).toContain(
+      "steps.release_gate_loc_tree.outputs.head_sha",
+    );
     const ciDocs = readFileSync("docs/ci.md", "utf8");
     expect(ciDocs).toContain("`pr_number`");
-    expect(ciDocs).toContain("target-owned workflow revision");
-    expect(ciDocs).toContain("transitional revisions that declare `loc_base_ref`");
-    expect(ciDocs).toContain("valid for default-branch PRs only");
-    expect(ciDocs).toContain("must first update its head to the current `pr_number` workflow");
-    expect(ciDocs).toContain("legacy exact-SHA command");
+    expect(ciDocs).toContain("synthetic pull-request merge ref");
+    expect(ciDocs).toContain("same merged tree as automatic PR CI");
+    expect(ciDocs).toContain("cannot provide equivalent merge-tree evidence");
     expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
       "OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
     );
@@ -1966,12 +1973,20 @@ describe("ci workflow guards", () => {
     expect(checkShardRun.env.LOC_BASE_SHA).toContain("github.event.pull_request.base.sha");
     expect(checkShardRun.env.LOC_BASE_SHA).toContain("needs.preflight.outputs.loc_base_sha");
     expect(checkShardRun.env.LOC_BASE_SHA).not.toContain("github.event.repository.default_branch");
+    expect(checkShardRun.env.LOC_HEAD_SHA).toBe("${{ needs.preflight.outputs.loc_head_sha }}");
+    expect(checkShardRun.env.LOC_PR_NUMBER).toContain("inputs.pr_number");
     expect(checkShardRun.run).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
     expect(checkShardRun.run).toContain(
       'git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/ci-base"',
     );
     expect(checkShardRun.run).toContain(
-      "pnpm check:loc --base refs/remotes/origin/ci-base --head HEAD",
+      '"+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"',
+    );
+    expect(checkShardRun.run).toContain(
+      "Pull request ${LOC_PR_NUMBER} merge ref moved before the LOC check.",
+    );
+    expect(checkShardRun.run).toContain(
+      'pnpm check:loc --base refs/remotes/origin/ci-base --head "$loc_head_ref"',
     );
   });
 

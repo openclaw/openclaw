@@ -182,26 +182,10 @@ Stop watchers before ending the turn or switching strategy.
    `gh workflow run ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
 target_ref=<full-pr-sha> -f pr_number=<pr-number> -f include_android=true -f
 release_gate=true`.
-   The workflow authenticates that PR's head and derives its actual base.
-   If that workflow lacks `pr_number` but declares `loc_base_ref`, use it only
-   for a PR whose `.base.ref` from `gh api
-repos/openclaw/openclaw/pulls/<pr-number>` equals the repository
-   `.default_branch` from `gh api repos/openclaw/openclaw`. Resolve the PR base
-   SHA with the pull request's `.base.sha`, resolve `<full-pr-merge-base-sha>`
-   with `gh api
-repos/openclaw/openclaw/compare/<pr-base-sha>...<full-pr-sha> --jq
-.merge_base_commit.sha`, then use its transitional schema: `gh workflow run
-ci.yml --repo openclaw/openclaw --ref <pr-head-branch> -f
-target_ref=<full-pr-sha> -f loc_base_ref=<full-pr-merge-base-sha> -f
-include_android=true -f release_gate=true`.
-   For a non-default-base PR on that transitional schema, do not dispatch it;
-   update the head to contain the current `pr_number` workflow, then restart
-   exact-head proof on the new SHA.
-   For an oldest PR head whose target-owned workflow declares neither input,
-   use its legacy schema: `gh workflow run ci.yml --repo openclaw/openclaw --ref
-<pr-head-branch> -f target_ref=<full-pr-sha> -f include_android=true -f
-release_gate=true`. Do not pass a new input that the selected workflow revision
-   does not declare.
+   The workflow authenticates that PR's head/base and validates GitHub's current
+   synthetic merge tree. Older workflow schemas cannot provide equivalent LOC
+   evidence; update the head to contain the current `pr_number` workflow, then
+   restart exact-head proof on the new SHA instead of dispatching them.
    It runs on GitHub-hosted runners and is accepted only when its run title is
    `CI release gate <full-pr-sha>`. Record the stalled Blacksmith run and the
    fallback run in release evidence.

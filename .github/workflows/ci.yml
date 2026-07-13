@@ -98,7 +98,8 @@ jobs:
     timeout-minutes: 20
     outputs:
       checkout_revision: ${{ steps.checkout_ref.outputs.sha }}
-      loc_base_sha: ${{ steps.release_gate_loc_base.outputs.sha || inputs.loc_base_ref || '' }}
+      loc_base_sha: ${{ steps.release_gate_loc_tree.outputs.base_sha || inputs.loc_base_ref || '' }}
+      loc_head_sha: ${{ steps.release_gate_loc_tree.outputs.head_sha || '' }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_node: ${{ steps.manifest.outputs.run_node }}
@@ -256,8 +257,8 @@ jobs:
         id: checkout_ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate release-gate PR base
-        id: release_gate_loc_base
+      - name: Validate release-gate PR merge tree
+        id: release_gate_loc_tree
         if: github.event_name == 'workflow_dispatch' && inputs.release_gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -265,33 +266,57 @@ jobs:
           TARGET_REF: ${{ inputs.target_ref }}
         run: |
           set -euo pipefail
-          pr_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
-          pr_state="$(jq -r '.state // ""' <<<"$pr_json")"
-          pr_head_sha="$(jq -r '.head.sha // ""' <<<"$pr_json")"
-          pr_base_sha="$(jq -r '.base.sha // ""' <<<"$pr_json")"
-          pr_base_repo="$(jq -r '.base.repo.full_name // ""' <<<"$pr_json")"
-          if [[ "$pr_state" != "open" || "$pr_base_repo" != "$GITHUB_REPOSITORY" ]]; then
-            echo "release_gate pr_number must identify an open pull request in ${GITHUB_REPOSITORY}" >&2
+          merge_sha=""
+          pr_base_sha=""
+          for attempt in {1..12}; do
+            pr_json="$(gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+            pr_state="$(jq -r '.state // ""' <<<"$pr_json")"
+            pr_head_sha="$(jq -r '.head.sha // ""' <<<"$pr_json")"
+            pr_base_sha="$(jq -r '.base.sha // ""' <<<"$pr_json")"
+            pr_base_repo="$(jq -r '.base.repo.full_name // ""' <<<"$pr_json")"
+            if [[ "$pr_state" != "open" || "$pr_base_repo" != "$GITHUB_REPOSITORY" ]]; then
+              echo "release_gate pr_number must identify an open pull request in ${GITHUB_REPOSITORY}" >&2
+              exit 1
+            fi
+            if [[ "$pr_head_sha" != "$TARGET_REF" ]]; then
+              echo "release_gate target_ref must match pull request ${PR_NUMBER} head ${pr_head_sha}" >&2
+              exit 1
+            fi
+            if [[ ! "$pr_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Could not resolve pull request ${PR_NUMBER} base SHA." >&2
+              exit 1
+            fi
+            mergeable="$(jq -r 'if .mergeable == null then "pending" else (.mergeable | tostring) end' <<<"$pr_json")"
+            if [[ "$mergeable" == "true" ]]; then
+              merge_sha="$(jq -r '.merge_commit_sha // ""' <<<"$pr_json")"
+              if [[ ! "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                echo "Could not resolve pull request ${PR_NUMBER} test merge commit." >&2
+                exit 1
+              fi
+              break
+            fi
+            if [[ "$mergeable" == "false" ]]; then
+              echo "Pull request ${PR_NUMBER} is not mergeable with its current base." >&2
+              exit 1
+            fi
+            if [[ "$attempt" == "12" ]]; then
+              echo "Timed out waiting for pull request ${PR_NUMBER} mergeability." >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          merge_ref="refs/remotes/origin/release-gate-merge"
+          git fetch --no-tags --depth=2 origin \
+            "+refs/pull/${PR_NUMBER}/merge:${merge_ref}"
+          resolved_merge_sha="$(git rev-parse "$merge_ref")"
+          merge_base_parent="$(git rev-parse "${merge_ref}^1")"
+          merge_head_parent="$(git rev-parse "${merge_ref}^2")"
+          if [[ "$resolved_merge_sha" != "$merge_sha" || "$merge_base_parent" != "$pr_base_sha" || "$merge_head_parent" != "$TARGET_REF" ]]; then
+            echo "release_gate pull request merge ref does not match the current base and head" >&2
             exit 1
           fi
-          if [[ "$pr_head_sha" != "$TARGET_REF" ]]; then
-            echo "release_gate target_ref must match pull request ${PR_NUMBER} head ${pr_head_sha}" >&2
-            exit 1
-          fi
-          if [[ ! "$pr_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve pull request ${PR_NUMBER} base SHA." >&2
-            exit 1
-          fi
-          comparison_ref="$(jq -rn --arg value "${pr_base_sha}...${TARGET_REF}" '$value | @uri')"
-          merge_base="$(
-            gh api --method GET "repos/${GITHUB_REPOSITORY}/compare/${comparison_ref}" \
-              --jq '.merge_base_commit.sha // ""'
-          )"
-          if [[ ! "$merge_base" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "Could not resolve pull request ${PR_NUMBER} merge base." >&2
-            exit 1
-          fi
-          echo "sha=${merge_base}" >> "$GITHUB_OUTPUT"
+          echo "base_sha=${pr_base_sha}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${merge_sha}" >> "$GITHUB_OUTPUT"
 
       - name: Validate historical release target
         id: historical_target
@@ -1634,6 +1659,8 @@ jobs:
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
           LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || needs.preflight.outputs.loc_base_sha || '' }}
+          LOC_HEAD_SHA: ${{ needs.preflight.outputs.loc_head_sha }}
+          LOC_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && inputs.pr_number || '' }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
         shell: bash
         run: |
@@ -1654,8 +1681,23 @@ jobs:
               # them with moving main would turn unrelated branch drift into release failures.
               if [[ "$HISTORICAL_TARGET" != "true" ]] && [ -n "$LOC_BASE_SHA" ] && [[ ! "$LOC_BASE_SHA" =~ ^0+$ ]]; then
                 git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/ci-base"
+                loc_head_ref="HEAD"
+                if [ -n "$LOC_HEAD_SHA" ]; then
+                  if [[ ! "$LOC_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+                    echo "A release-gate LOC head requires a pull request number." >&2
+                    exit 1
+                  fi
+                  git fetch --no-tags --depth=2 origin \
+                    "+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"
+                  resolved_loc_head="$(git rev-parse refs/remotes/origin/ci-head)"
+                  if [[ "$resolved_loc_head" != "$LOC_HEAD_SHA" ]]; then
+                    echo "Pull request ${LOC_PR_NUMBER} merge ref moved before the LOC check." >&2
+                    exit 1
+                  fi
+                  loc_head_ref="refs/remotes/origin/ci-head"
+                fi
                 if has_package_script "check:loc"; then
-                  pnpm check:loc --base refs/remotes/origin/ci-base --head HEAD
+                  pnpm check:loc --base refs/remotes/origin/ci-base --head "$loc_head_ref"
                 else
                   echo "Current CI targets must provide the check:loc package script." >&2
                   exit 1
