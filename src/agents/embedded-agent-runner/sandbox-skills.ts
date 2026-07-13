@@ -169,7 +169,9 @@ export function resolveSandboxSkillRuntimeInputs(params: {
               0,
               limits.maxSkillsInPrompt,
             );
-            // Build name-only lines and respect the char limit
+            // Build name+location lines with canonical sandbox-accessible paths.
+            // Operator is expected to preinstall skills under
+            // <skillsPromptWorkspaceDir>/skills/<name>/SKILL.md.
             const lines: string[] = [];
             const remoteNote = params.sandbox?.skillsEligibility?.remote?.note?.trim();
             if (remoteNote) {
@@ -177,8 +179,10 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             }
             lines.push("<available_skills>");
             for (const s of skills) {
-              const line = `  <skill>\n    <name>${escapeXml(s.name)}</name>\n  </skill>`;
-              // Check if adding this line would exceed the limit
+              const location = `${skillsPromptWorkspaceDir}/skills/${s.name}/SKILL.md`;
+              const line =
+                `  <skill>\n    <name>${escapeXml(s.name)}</name>\n` +
+                `    <location>${escapeXml(location)}</location>\n  </skill>`;
               if (
                 [...lines, line, "</available_skills>"].join("\n").length >
                 limits.maxSkillsPromptChars
