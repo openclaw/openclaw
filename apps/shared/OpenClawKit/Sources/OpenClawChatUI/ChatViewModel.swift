@@ -216,8 +216,11 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
     var nextThinkingSelectionRequestID: UInt64 = 0
-    var latestThinkingSelectionRequestIDsBySession: [String: UInt64] = [:]
-    var latestThinkingLevelsBySession: [String: String] = [:]
+    var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
+    var acceptedSettingsPatchResultsByTarget: [ModelPatchTarget: OpenClawChatModelPatchResult] = [:]
+    var acceptedThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
+    var acceptedPreferredThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
+    var acceptedExplicitThinkingPreferencesByTarget: [ModelPatchTarget: Bool] = [:]
     private var isCompacting = false
     private var lastCompactAt: Date?
     private let compactCooldown: TimeInterval = 60
@@ -246,6 +249,7 @@ public final class OpenClawChatViewModel {
 
     private struct SettingsPatchTail {
         let requestID: UInt64
+        let routeLeaseTask: Task<OpenClawChatSessionSettingsRouteLease?, Never>
         let task: Task<Void, Never>
     }
 
@@ -523,9 +527,9 @@ public final class OpenClawChatViewModel {
 
     public func selectModel(_ selectionID: String) {
         guard let request = self.reserveModelSelection(selectionID) else { return }
-        self.enqueueSessionSettingsPatch(requestID: request.id, target: request.target) { [weak self] in
+        self.enqueueSessionSettingsPatch(requestID: request.id, target: request.target) { [weak self] routeLease in
             guard let self else { return }
-            await self.performSelectModel(request)
+            await self.performSelectModel(request, routeLease: routeLease)
         }
     }
 
@@ -1350,9 +1354,13 @@ extension OpenClawChatViewModel {
             modelRef: nextModelRef)
     }
 
-    private func performSelectModel(_ request: ModelSelectionRequest) async {
+    private func performSelectModel(
+        _ request: ModelSelectionRequest,
+        routeLease: OpenClawChatSessionSettingsRouteLease?) async
+    {
         do {
-            let patchResult = try await self.transport.patchSessionSettings(
+            guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
+            let patchResult = try await routeLease.patchSessionSettings(
                 sessionKey: request.target.canonicalSessionKey,
                 agentID: request.target.agentID,
                 patch: OpenClawChatSessionSettingsPatch(model: .some(request.modelRef)))
@@ -1412,18 +1420,28 @@ extension OpenClawChatViewModel {
     func enqueueSessionSettingsPatch(
         requestID: UInt64,
         target: ModelPatchTarget,
-        operation: @escaping @MainActor () async -> Void)
+        operation: @escaping @MainActor (OpenClawChatSessionSettingsRouteLease?) async -> Void)
     {
-        let previousTail = self.settingsPatchTailsByTarget[target]?.task
+        let previousPatchTail = self.settingsPatchTailsByTarget[target]
+        let previousTail = previousPatchTail?.task
+        let previousRouteLeaseTask = previousPatchTail?.routeLeaseTask
+        // Task scheduling is not FIFO. Chain lease capture separately so a
+        // reconnect cannot give an older mutation a newer route than its successor.
+        let routeLeaseTask = Task { [weak self] in
+            _ = await previousRouteLeaseTask?.value
+            return await self?.transport.acquireSessionSettingsRouteLease()
+        }
         let task = Task { [weak self] in
+            let routeLease = await routeLeaseTask.value
             await previousTail?.value
             guard let self else { return }
-            await operation()
+            await operation(routeLease)
             self.endSettingsPatch(for: target)
             self.finishSettingsPatchTail(requestID: requestID, target: target)
         }
         self.settingsPatchTailsByTarget[target] = SettingsPatchTail(
             requestID: requestID,
+            routeLeaseTask: routeLeaseTask,
             task: task)
     }
 
@@ -1437,6 +1455,13 @@ extension OpenClawChatViewModel {
         let remaining = max(0, (inFlightSettingsPatchCountsByTarget[target] ?? 0) - 1)
         if remaining == 0 {
             self.inFlightSettingsPatchCountsByTarget.removeValue(forKey: target)
+            // Rollback baselines belong to one contiguous settings lane. Once
+            // drained, the next authoritative session snapshot owns state.
+            self.acceptedSettingsPatchResultsByTarget.removeValue(forKey: target)
+            self.acceptedThinkingLevelsByTarget.removeValue(forKey: target)
+            self.acceptedPreferredThinkingLevelsByTarget.removeValue(forKey: target)
+            self.acceptedExplicitThinkingPreferencesByTarget.removeValue(forKey: target)
+            self.latestThinkingSelectionRequestIDsByTarget.removeValue(forKey: target)
             let waiters = self.settingsPatchWaitersByTarget.removeValue(forKey: target) ?? []
             for waiter in waiters {
                 waiter.resume()
@@ -1640,6 +1665,21 @@ extension OpenClawChatViewModel {
     {
         self.lastSuccessfulModelSelectionIDsByTarget[target] = selectionID
         self.lastSuccessfulSettingsPatchResultsByTarget[target] = patchResult
+        if let thinkingLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) {
+            self.acceptedThinkingLevelsByTarget[target] = thinkingLevel
+            if self.acceptedExplicitThinkingPreferencesByTarget[target] == false {
+                self.acceptedPreferredThinkingLevelsByTarget[target] = thinkingLevel
+            }
+        }
+        if let patchResult {
+            let previous = self.acceptedSettingsPatchResultsByTarget[target]
+            self.acceptedSettingsPatchResultsByTarget[target] = OpenClawChatModelPatchResult(
+                key: patchResult.key ?? previous?.key,
+                modelProvider: patchResult.modelProvider ?? previous?.modelProvider,
+                model: patchResult.model ?? previous?.model,
+                thinkingLevel: patchResult.thinkingLevel ?? previous?.thinkingLevel,
+                thinkingLevels: patchResult.thinkingLevels ?? previous?.thinkingLevels)
+        }
         self.completedModelPatchTargets.insert(target)
     }
 

@@ -6,70 +6,171 @@ import Foundation
 
 extension OpenClawChatViewModel {
     func applyAdvertisedThinkingLevel(_ level: String) {
-        guard level != self.thinkingLevel else { return }
-        self.thinkingLevel = level
-        self.updateCurrentSessionThinkingLevel(level, sessionKey: self.sessionKey)
+        guard level != thinkingLevel else { return }
+        thinkingLevel = level
+        self.updateCurrentSessionThinkingLevel(level, sessionKey: sessionKey)
     }
 
     func performSelectThinkingLevel(_ level: String) {
         let next = Self.normalizedThinkingLevel(level) ?? "off"
-        guard next != self.preferredThinkingLevel else { return }
+        guard next != preferredThinkingLevel else { return }
 
         let sessionKey = self.sessionKey
-        self.prefersExplicitThinkingLevel = true
-        self.preferredThinkingLevel = next
-        self.thinkingLevel = next
+        let acceptedBaseline = Self.normalizedThinkingLevel(currentSessionEntry()?.thinkingLevel)
+            ?? Self.normalizedThinkingLevel(thinkingLevel)
+            ?? "off"
+        let target = currentModelPatchTarget()
+        if acceptedThinkingLevelsByTarget[target] == nil {
+            // Preserve the gateway-confirmed value across the whole queued lane.
+            // Later optimistic selections must not become rollback truth.
+            acceptedThinkingLevelsByTarget[target] = acceptedBaseline
+            acceptedPreferredThinkingLevelsByTarget[target] = preferredThinkingLevel
+            let session = currentSessionEntry()
+            acceptedSettingsPatchResultsByTarget[target] = OpenClawChatModelPatchResult(
+                key: session?.key ?? target.canonicalSessionKey,
+                modelProvider: session?.modelProvider,
+                model: session?.model,
+                thinkingLevel: acceptedBaseline,
+                thinkingLevels: session?.thinkingLevels)
+        }
+        if acceptedExplicitThinkingPreferencesByTarget[target] == nil {
+            acceptedExplicitThinkingPreferencesByTarget[target] = prefersExplicitThinkingLevel
+        }
+        prefersExplicitThinkingLevel = true
+        preferredThinkingLevel = next
+        thinkingLevel = next
         self.syncThinkingLevelOptions()
         self.updateCurrentSessionThinkingLevel(next, sessionKey: sessionKey)
-        let target = self.currentModelPatchTarget()
-        let settingsRequestID = self.reserveSessionSettingsRequest(for: target)
-        self.onThinkingLevelChanged?(next)
-        self.nextThinkingSelectionRequestID &+= 1
-        let requestID = self.nextThinkingSelectionRequestID
-        self.latestThinkingSelectionRequestIDsBySession[sessionKey] = requestID
-        self.latestThinkingLevelsBySession[sessionKey] = next
-        self.enqueueSessionSettingsPatch(requestID: settingsRequestID, target: target) { [weak self] in
+        let settingsRequestID = reserveSessionSettingsRequest(for: target)
+        onThinkingLevelChanged?(next)
+        nextThinkingSelectionRequestID &+= 1
+        let requestID = nextThinkingSelectionRequestID
+        latestThinkingSelectionRequestIDsByTarget[target] = requestID
+        enqueueSessionSettingsPatch(requestID: settingsRequestID, target: target) { [weak self] routeLease in
             guard let self else { return }
             do {
-                let patchResult = try await self.transport.patchSessionSettings(
+                guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
+                let patchResult = try await routeLease.patchSessionSettings(
                     sessionKey: target.canonicalSessionKey,
                     agentID: target.agentID,
                     patch: OpenClawChatSessionSettingsPatch(thinkingLevel: .some(next)))
-                guard requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey] else { return }
-                let acceptedLevel = patchResult?.thinkingLevel ?? next
-                if let patchResult {
-                    self.lastSuccessfulSettingsPatchResultsByTarget[target] = patchResult
+                let previousResult = self.acceptedSettingsPatchResultsByTarget[target]
+                let acceptedLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) ?? next
+                let acceptedResult = OpenClawChatModelPatchResult(
+                    key: patchResult?.key ?? previousResult?.key ?? target.canonicalSessionKey,
+                    modelProvider: patchResult?.modelProvider ?? previousResult?.modelProvider,
+                    model: patchResult?.model ?? previousResult?.model,
+                    thinkingLevel: acceptedLevel,
+                    thinkingLevels: patchResult?.thinkingLevels ?? previousResult?.thinkingLevels)
+                // Older queued successes remain rollback truth, but never replace
+                // a newer optimistic selection in the session row or picker.
+                self.lastSuccessfulSettingsPatchResultsByTarget[target] = acceptedResult
+                self.acceptedSettingsPatchResultsByTarget[target] = acceptedResult
+                self.acceptedThinkingLevelsByTarget[target] = acceptedLevel
+                self.acceptedPreferredThinkingLevelsByTarget[target] = acceptedLevel
+                self.acceptedExplicitThinkingPreferencesByTarget[target] = true
+                guard requestID == self.latestThinkingSelectionRequestIDsByTarget[target] else { return }
+                let targetIsCurrent = target == self.currentModelPatchTarget()
+                let stateKey: String
+                let exactMatchOnly: Bool
+                if targetIsCurrent {
+                    stateKey = sessionKey
+                    exactMatchOnly = false
+                } else {
+                    guard let inactiveStateKey = self.inactiveSettingsStateKey(for: target) else { return }
+                    stateKey = inactiveStateKey
+                    exactMatchOnly = true
                 }
-                self.updateCurrentSessionThinkingLevel(acceptedLevel, sessionKey: sessionKey)
-                if let thinkingLevels = patchResult?.thinkingLevels {
-                    self.updateCurrentSessionThinkingLevels(thinkingLevels, sessionKey: sessionKey)
+                self.updateCurrentSessionThinkingLevel(
+                    acceptedLevel,
+                    sessionKey: stateKey,
+                    exactMatchOnly: exactMatchOnly)
+                if let thinkingLevels = acceptedResult.thinkingLevels {
+                    self.updateCurrentSessionThinkingLevels(
+                        thinkingLevels,
+                        sessionKey: stateKey,
+                        exactMatchOnly: exactMatchOnly)
                 }
-                guard sessionKey == self.sessionKey else { return }
+                guard targetIsCurrent else { return }
                 self.preferredThinkingLevel = acceptedLevel
                 self.thinkingLevel = acceptedLevel
                 self.syncThinkingLevelOptions()
             } catch {
-                guard sessionKey == self.sessionKey,
-                      requestID == self.latestThinkingSelectionRequestIDsBySession[sessionKey]
-                else { return }
-                // preferredThinkingLevel already retains the user's latest choice. Keep any
-                // authoritative model result visible so a failed patch is not reused by sends.
+                guard requestID == self.latestThinkingSelectionRequestIDsByTarget[target] else { return }
+                let targetIsCurrent = target == self.currentModelPatchTarget()
+                let stateKey: String
+                let exactMatchOnly: Bool
+                if targetIsCurrent {
+                    stateKey = sessionKey
+                    exactMatchOnly = false
+                } else {
+                    guard let inactiveStateKey = self.inactiveSettingsStateKey(for: target) else { return }
+                    stateKey = inactiveStateKey
+                    exactMatchOnly = true
+                }
+                let rollbackResult = self.acceptedSettingsPatchResultsByTarget[target]
+                let rollbackLevel = self.acceptedThinkingLevelsByTarget[target]
+                    ?? Self.normalizedThinkingLevel(rollbackResult?.thinkingLevel)
+                    ?? acceptedBaseline
+                let rollbackPreferredLevel = self.acceptedPreferredThinkingLevelsByTarget[target]
+                    ?? rollbackLevel
+                self.updateCurrentSessionThinkingLevel(
+                    rollbackLevel,
+                    sessionKey: stateKey,
+                    exactMatchOnly: exactMatchOnly)
+                if let thinkingLevels = rollbackResult?.thinkingLevels {
+                    self.updateCurrentSessionThinkingLevels(
+                        thinkingLevels,
+                        sessionKey: stateKey,
+                        exactMatchOnly: exactMatchOnly)
+                }
+                guard targetIsCurrent else { return }
+                self.prefersExplicitThinkingLevel = self.acceptedExplicitThinkingPreferencesByTarget[target] ?? false
+                self.preferredThinkingLevel = rollbackPreferredLevel
+                self.thinkingLevel = rollbackLevel
+                self.syncThinkingLevelOptions()
+                // Option resolution may project the preferred value when it is
+                // supported. A rejection must still leave the applied state at
+                // the gateway-confirmed rollback value.
+                self.thinkingLevel = rollbackLevel
+                self.updateCurrentSessionThinkingLevel(rollbackLevel, sessionKey: sessionKey)
+                self.onThinkingLevelChanged?(rollbackPreferredLevel)
             }
         }
     }
 
     func updateCurrentSessionThinkingLevels(
         _ thinkingLevels: [OpenClawChatThinkingLevelOption],
-        sessionKey: String)
+        sessionKey: String,
+        exactMatchOnly: Bool = false)
     {
-        guard let index = self.sessionIndexForModelState(sessionKey: sessionKey) else { return }
-        self.sessions[index].thinkingLevels = thinkingLevels
-        self.sessions[index].thinkingOptions = thinkingLevels.map(\.label)
+        let index = exactMatchOnly
+            ? sessions.firstIndex(where: { $0.key == sessionKey })
+            : sessionIndexForModelState(sessionKey: sessionKey)
+        guard let index else { return }
+        sessions[index].thinkingLevels = thinkingLevels
+        sessions[index].thinkingOptions = thinkingLevels.map(\.label)
     }
 
-    func updateCurrentSessionThinkingLevel(_ thinkingLevel: String?, sessionKey: String) {
-        guard let index = self.sessionIndexForModelState(sessionKey: sessionKey) else { return }
-        self.sessions[index].thinkingLevel = thinkingLevel
+    /// Agent-qualified keys keep an immutable owner even when their main-session
+    /// contract changes. Bare aliases cannot safely identify an inactive row.
+    private func inactiveSettingsStateKey(for target: ModelPatchTarget) -> String? {
+        if target.agentID != nil || target.sessionRoutingContract != nil {
+            guard Self.agentID(fromSessionKey: target.canonicalSessionKey) != nil else { return nil }
+        }
+        return target.canonicalSessionKey
+    }
+
+    func updateCurrentSessionThinkingLevel(
+        _ thinkingLevel: String?,
+        sessionKey: String,
+        exactMatchOnly: Bool = false)
+    {
+        let index = exactMatchOnly
+            ? sessions.firstIndex(where: { $0.key == sessionKey })
+            : sessionIndexForModelState(sessionKey: sessionKey)
+        guard let index else { return }
+        sessions[index].thinkingLevel = thinkingLevel
     }
 
     func effectiveThinkingLevelForSend(
@@ -85,7 +186,7 @@ extension OpenClawChatViewModel {
         let showsPicker: Bool
         let target: ModelPatchTarget
         if !usesCurrentSession, let sessionKey {
-            target = self.modelPatchTarget(
+            target = modelPatchTarget(
                 sessionKey: sessionKey,
                 canonicalSessionKey: canonicalSessionKey,
                 agentID: agentID,
@@ -93,7 +194,7 @@ extension OpenClawChatViewModel {
             // Sessions absent from the loaded list resolve to no metadata and fail
             // open for existing levels. Ultra is new enough that an older or
             // truncated list must use its shipped High meaning until advertised.
-            session = self.sessionEntryForThinking(
+            session = sessionEntryForThinking(
                 sessionKey: sessionKey,
                 canonicalSessionKey: canonicalSessionKey,
                 agentID: agentID)
@@ -108,9 +209,9 @@ extension OpenClawChatViewModel {
                 for: session,
                 modelChoice: self.sessionModelChoice(for: session))
         } else {
-            session = self.currentSessionEntry()
-            showsPicker = self.showsThinkingPicker
-            target = self.currentModelPatchTarget()
+            session = currentSessionEntry()
+            showsPicker = showsThinkingPicker
+            target = currentModelPatchTarget()
         }
         guard showsPicker else { return "off" }
         let resolved = self.resolvedThinkingLevelOptions(for: session)
@@ -127,22 +228,22 @@ extension OpenClawChatViewModel {
     }
 
     func syncThinkingLevelOptions() {
-        let currentSession = self.currentSessionEntry()
-        self.showsThinkingPicker = self.thinkingPickerIsAvailable(
+        let currentSession = currentSessionEntry()
+        showsThinkingPicker = self.thinkingPickerIsAvailable(
             for: currentSession,
             modelChoice: self.selectedModelChoice(for: currentSession))
 
         let resolved = self.resolvedThinkingLevelOptions(for: currentSession)
         var options = resolved.options
-        let target = self.currentModelPatchTarget()
+        let target = currentModelPatchTarget()
         let preferred: String? = if resolved.isGatewayMetadata {
             Self.normalizedThinkingLevel(
-                self.preferredThinkingLevel,
+                preferredThinkingLevel,
                 options: options,
                 fallback: currentSession?.thinkingLevel)
         } else {
             self.thinkingLevelWithoutGatewayMetadata(
-                self.preferredThinkingLevel,
+                preferredThinkingLevel,
                 target: target,
                 session: currentSession)
         }
@@ -151,7 +252,7 @@ extension OpenClawChatViewModel {
             self.applyAdvertisedThinkingLevel(current)
             options = Self.withCurrentThinkingOption(options, current: current)
         }
-        self.thinkingLevelOptions = options
+        thinkingLevelOptions = options
     }
 
     private func thinkingLevelWithoutGatewayMetadata(
@@ -162,13 +263,13 @@ extension OpenClawChatViewModel {
         let preferred = Self.normalizedThinkingLevel(level)
         guard preferred == "ultra" else { return preferred }
         if let patched = Self.normalizedThinkingLevel(
-            self.successfulModelPatchResult(for: target, session: session)?.thinkingLevel)
+            successfulModelPatchResult(for: target, session: session)?.thinkingLevel)
         {
             return patched
         }
         // Older gateways accept the legacy Ultra spelling as High but do not
         // return capability metadata. Never advertise/send more than they run.
-        if self.completedModelPatchTargets.contains(target) {
+        if completedModelPatchTargets.contains(target) {
             return "high"
         }
         return preferred
@@ -224,8 +325,8 @@ extension OpenClawChatViewModel {
     private func selectedModelChoice(
         for currentSession: OpenClawChatSessionEntry?) -> OpenClawChatModelChoice?
     {
-        if self.modelSelectionID != Self.defaultModelSelectionID {
-            return self.modelChoices.first(where: { $0.selectionID == self.modelSelectionID })
+        if modelSelectionID != Self.defaultModelSelectionID {
+            return modelChoices.first(where: { $0.selectionID == self.modelSelectionID })
         }
 
         return self.sessionModelChoice(for: currentSession)
@@ -237,7 +338,7 @@ extension OpenClawChatViewModel {
         if Self.normalizedModelID(currentSession?.model) != nil {
             return self.modelChoice(modelID: currentSession?.model, provider: currentSession?.modelProvider)
         }
-        return self.modelChoice(modelID: self.sessionDefaults?.model, provider: self.sessionDefaults?.modelProvider)
+        return self.modelChoice(modelID: sessionDefaults?.model, provider: sessionDefaults?.modelProvider)
     }
 
     private func modelChoice(modelID: String?, provider: String?) -> OpenClawChatModelChoice? {
@@ -246,13 +347,13 @@ extension OpenClawChatViewModel {
         if let provider, !provider.isEmpty {
             let prefix = "\(provider)/"
             let selectionID = modelID.hasPrefix(prefix) ? modelID : "\(prefix)\(modelID)"
-            return self.modelChoices.first(where: {
+            return modelChoices.first(where: {
                 $0.selectionID == selectionID ||
                     ($0.modelID == modelID && $0.provider == provider)
             })
         }
 
-        let matches = self.modelChoices.filter { $0.selectionID == modelID || $0.modelID == modelID }
+        let matches = modelChoices.filter { $0.selectionID == modelID || $0.modelID == modelID }
         return matches.count == 1 ? matches[0] : nil
     }
 
@@ -354,13 +455,13 @@ extension OpenClawChatViewModel {
         options: [OpenClawChatThinkingLevelOption],
         fallback: String? = nil) -> String?
     {
-        guard let normalized = self.normalizedThinkingLevel(level) else { return nil }
+        guard let normalized = normalizedThinkingLevel(level) else { return nil }
         guard normalized == "ultra" else { return normalized }
         let advertised = options.compactMap { self.normalizedThinkingLevel($0.id) }
         if advertised.contains("ultra") {
             return "ultra"
         }
-        if let fallback = self.normalizedThinkingLevel(fallback), advertised.contains(fallback) {
+        if let fallback = normalizedThinkingLevel(fallback), advertised.contains(fallback) {
             return fallback
         }
         return advertised

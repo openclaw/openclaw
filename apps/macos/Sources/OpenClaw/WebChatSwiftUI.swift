@@ -154,6 +154,19 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
         agentID: String?,
         patch: OpenClawChatSessionSettingsPatch) async throws -> OpenClawChatModelPatchResult?
     {
+        try await self.patchSessionSettings(
+            sessionKey: sessionKey,
+            agentID: agentID,
+            patch: patch,
+            serverLease: nil)
+    }
+
+    private func patchSessionSettings(
+        sessionKey: String,
+        agentID: String?,
+        patch: OpenClawChatSessionSettingsPatch,
+        serverLease: GatewayConnection.ServerLease?) async throws -> OpenClawChatModelPatchResult?
+    {
         let target = OpenClawChatSessionTarget.resolve(
             sessionKey,
             selectedAgentID: self.routingIdentity.currentAgentID(),
@@ -164,8 +177,35 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             agentID: target.agentID,
             model: patch.model,
             thinkingLevel: patch.thinkingLevel)
-        let data = try await GatewayConnection.shared.request(request)
+        let data: Data = if let serverLease {
+            try await GatewayConnection.shared.request(
+                method: request.method,
+                params: request.params,
+                timeoutMs: request.timeoutMs,
+                ifCurrentServerLease: serverLease)
+        } else {
+            try await GatewayConnection.shared.request(request)
+        }
         return try JSONDecoder().decode(OpenClawChatModelPatchResult.self, from: data)
+    }
+
+    func acquireSessionSettingsRouteLease() async -> OpenClawChatSessionSettingsRouteLease? {
+        if let outboxGatewayID {
+            let currentGatewayID = await MainActor.run { MacChatTranscriptCache.currentGatewayID() }
+            guard currentGatewayID == outboxGatewayID else { return nil }
+        }
+        guard let serverLease = await GatewayConnection.shared.captureServerLease() else { return nil }
+        let transport = self
+        return OpenClawChatSessionSettingsRouteLease { sessionKey, agentID, patch in
+            if let outboxGatewayID = transport.outboxGatewayID {
+                try await Self.requireGateway(outboxGatewayID)
+            }
+            return try await transport.patchSessionSettings(
+                sessionKey: sessionKey,
+                agentID: agentID,
+                patch: patch,
+                serverLease: serverLease)
+        }
     }
 
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws {
@@ -402,7 +442,9 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
 
                 let stream = await GatewayConnection.shared.subscribe()
                 for await push in stream {
-                    if Task.isCancelled { return }
+                    if Task.isCancelled {
+                        return
+                    }
                     if let evt = Self.mapPushToTransportEvent(push) {
                         continuation.yield(evt)
                     }
@@ -626,7 +668,9 @@ final class WebChatSwiftUIWindowController {
     }
 
     private func installDismissMonitor() {
-        if ProcessInfo.processInfo.isRunningTests { return }
+        if ProcessInfo.processInfo.isRunningTests {
+            return
+        }
         guard self.dismissMonitor == nil, self.window != nil else { return }
         self.dismissMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown])

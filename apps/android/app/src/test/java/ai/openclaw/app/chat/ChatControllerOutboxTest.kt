@@ -462,7 +462,12 @@ class ChatControllerOutboxTest {
       runCurrent()
 
       assertTrue(gateway.sentMessages.isEmpty())
-      assertEquals(ChatOutboxStatus.Queued, chat.outboxItems.value.single().status)
+      assertEquals(
+        ChatOutboxStatus.Queued,
+        chat.outboxItems.value
+          .single()
+          .status,
+      )
 
       gateway.settingsPatchGate?.complete(Unit)
       advanceUntilIdle()

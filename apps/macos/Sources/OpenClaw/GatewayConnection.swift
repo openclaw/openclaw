@@ -93,7 +93,7 @@ actor GatewayConnection {
 
     typealias EndpointProvider = @Sendable () async throws -> EndpointSnapshot
 
-    struct Route: Equatable {
+    struct Route: Equatable, Sendable {
         fileprivate let generation: UInt64
         fileprivate let authority: UInt64?
         fileprivate let url: URL
@@ -117,7 +117,7 @@ actor GatewayConnection {
 
     /// One connected Gateway server, not merely an endpoint configuration.
     /// A reconnect at the same URL creates a different lease.
-    struct ServerLease {
+    struct ServerLease: Sendable {
         fileprivate let route: Route
         fileprivate let socketGeneration: UInt64
         fileprivate let client: GatewayChannelActor
@@ -637,6 +637,18 @@ extension GatewayConnection {
     /// recover before onboarding freezes the successful physical connection.
     func acquireServerLease() async throws -> ServerLease {
         try await self.acquireServerLease(timeoutMs: 15000, retryTransportFailures: true)
+    }
+
+    /// Captures the currently connected physical socket without probing or
+    /// reconnecting. Queued mutations use this so waiting cannot retarget them.
+    func captureServerLease() async -> ServerLease? {
+        guard let route = await self.captureRoute(),
+              let client = self.client,
+              let socketGeneration = self.activeSocketGeneration
+        else { return nil }
+        let lease = ServerLease(route: route, socketGeneration: socketGeneration, client: client)
+        guard await self.isCurrentServerLease(lease) else { return nil }
+        return lease
     }
 
     private func acquireServerLease(

@@ -49,6 +49,12 @@ internal data class ChatCacheScope(
   val connectionGeneration: Long,
 )
 
+private fun normalizedChatCacheScope(scope: ChatCacheScope?): ChatCacheScope? {
+  val current = scope ?: return null
+  val gatewayId = current.gatewayId.trim().takeIf { it.isNotEmpty() } ?: return null
+  return if (gatewayId == current.gatewayId) current else current.copy(gatewayId = gatewayId)
+}
+
 internal data class MainSessionBinding(
   val key: String,
   val label: String,
@@ -68,6 +74,16 @@ class ChatController internal constructor(
   private val requestGateway: suspend (method: String, paramsJson: String?) -> String,
   private val requestGatewayForGateway: suspend (gatewayId: String, method: String, paramsJson: String?) -> String =
     { _, method, paramsJson -> requestGateway(method, paramsJson) },
+  private val captureSettingsRequestLease: (gatewayScope: ChatCacheScope?) -> GatewaySession.RequestLease? =
+    { gatewayScope ->
+      GatewaySession.RequestLease(endpointStableId = gatewayScope?.gatewayId.orEmpty()) { method, paramsJson, _ ->
+        if (gatewayScope == null) {
+          requestGateway(method, paramsJson)
+        } else {
+          requestGatewayForGateway(gatewayScope.gatewayId, method, paramsJson)
+        }
+      }
+    },
   private val transcriptCache: ChatTranscriptCache? = null,
   private val cacheScope: () -> ChatCacheScope? = { null },
   private val commandOutbox: ChatCommandOutbox? = null,
@@ -88,6 +104,9 @@ class ChatController internal constructor(
     requestGatewayForGateway = { gatewayId, method, paramsJson ->
       session.requestForEndpoint(gatewayId, method, paramsJson)
     },
+    captureSettingsRequestLease = { gatewayScope ->
+      session.captureRequestLease(gatewayScope?.gatewayId)
+    },
     transcriptCache = transcriptCache,
     cacheScope = cacheScope,
     commandOutbox = commandOutbox,
@@ -96,7 +115,27 @@ class ChatController internal constructor(
 
   private var appliedMainSessionKey = "main"
   private val cacheMutationMutex = Mutex()
-  private val pendingSettingsMutations = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
+
+  private data class SessionSettingsKey(
+    val gatewayScope: ChatCacheScope?,
+    val sessionKey: String,
+  )
+
+  private val pendingSettingsMutations = ConcurrentHashMap<SessionSettingsKey, CompletableDeferred<Boolean>>()
+
+  private data class ThinkingIntent(
+    val requestId: Long,
+    val level: String,
+  )
+
+  private data class AcceptedThinkingState(
+    val level: String,
+    val thinkingLevels: List<ChatThinkingLevelOption>?,
+  )
+
+  private val thinkingRequestSequence = AtomicLong(0)
+  private val latestThinkingIntents = ConcurrentHashMap<SessionSettingsKey, ThinkingIntent>()
+  private val latestAcceptedThinkingStates = ConcurrentHashMap<SessionSettingsKey, AcceptedThinkingState>()
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
 
@@ -765,18 +804,32 @@ class ChatController internal constructor(
     }
     if (normalized == _thinkingLevel.value) return
     val key = normalizeRequestedSessionKey(_sessionKey.value)
+    val rollbackEntry = _sessions.value.firstOrNull { it.key == key }
     val rollbackLevel =
-      _sessions.value
-        .firstOrNull { it.key == key }
+      rollbackEntry
         ?.thinkingLevel
         ?.let(::normalizeThinking)
         ?: _thinkingLevel.value
+    val settingsKey = sessionSettingsKey(key)
+    latestAcceptedThinkingStates.putIfAbsent(
+      settingsKey,
+      AcceptedThinkingState(
+        level = rollbackLevel,
+        thinkingLevels =
+          rollbackEntry?.thinkingLevels
+            ?: selection.options.takeIf { selection.isGatewayProvided },
+      ),
+    )
+    val intent = ThinkingIntent(requestId = thinkingRequestSequence.incrementAndGet(), level = normalized)
+    latestThinkingIntents[settingsKey] = intent
     _thinkingLevel.value = normalized
     scope.launch(start = CoroutineStart.UNDISPATCHED) {
       setSessionThinkingLevelAwait(
         sessionKey = key,
         thinkingLevel = normalized,
         fallbackRollbackLevel = rollbackLevel,
+        settingsKey = settingsKey,
+        intent = intent,
       )
     }
   }
@@ -798,20 +851,27 @@ class ChatController internal constructor(
     modelRef: String?,
   ): Boolean {
     val key = normalizeRequestedSessionKey(sessionKey)
+    val settingsKey = sessionSettingsKey(key)
     val normalizedModelRef = modelRef?.trim()?.takeIf { it.isNotEmpty() }
-    return runSessionSettingsMutation(key) {
-      updateErrorText(null)
+    return runSessionSettingsMutation(settingsKey) { requestLease ->
+      if (settingsKey == sessionSettingsKey(key)) updateErrorText(null)
       try {
+        val lease = requestLease ?: throw GatewayRequestNotEnqueued("not connected")
         val params =
           buildJsonObject {
             put("key", JsonPrimitive(key))
             put("model", normalizedModelRef?.let(::JsonPrimitive) ?: JsonNull)
           }
-        val response = requestGateway("sessions.patch", params.toString())
+        val response = lease.request("sessions.patch", params.toString())
         val resolution = parseSessionSettingsPatchResolution(response)
         normalizedModelRef?.let(recordModelRecent)
-        applyAcceptedModelPatch(key = key, modelRef = normalizedModelRef, resolution = resolution)
-        if (_sessionKey.value == key) {
+        applyAcceptedModelPatch(
+          key = key,
+          settingsKey = settingsKey,
+          modelRef = normalizedModelRef,
+          resolution = resolution,
+        )
+        if (_sessionKey.value == key && settingsKey == sessionSettingsKey(key)) {
           modelSelectionGeneration.incrementAndGet()
           _selectedModelRef.value = normalizedModelRef
         }
@@ -819,7 +879,9 @@ class ChatController internal constructor(
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
-        updateLocalizedErrorText(err.message?.let(::verbatimText) ?: nativeText("Could not update model."))
+        if (settingsKey == sessionSettingsKey(key)) {
+          updateLocalizedErrorText(err.message?.let(::verbatimText) ?: nativeText("Could not update model."))
+        }
         false
       }
     }
@@ -829,62 +891,105 @@ class ChatController internal constructor(
     sessionKey: String,
     thinkingLevel: String,
     fallbackRollbackLevel: String,
+    settingsKey: SessionSettingsKey,
+    intent: ThinkingIntent,
   ): Boolean =
-    runSessionSettingsMutation(sessionKey) {
-      val rollbackLevel =
-        _sessions.value
-          .firstOrNull { it.key == sessionKey }
-          ?.thinkingLevel
-          ?.let(::normalizeThinking)
-          ?: fallbackRollbackLevel
-      updateErrorText(null)
+    runSessionSettingsMutation(settingsKey) { requestLease ->
+      val rollbackEntry = _sessions.value.firstOrNull { it.key == sessionKey }
+      val rollbackState =
+        latestAcceptedThinkingStates[settingsKey]
+          ?: AcceptedThinkingState(
+            level = rollbackEntry?.thinkingLevel?.let(::normalizeThinking) ?: fallbackRollbackLevel,
+            thinkingLevels =
+              rollbackEntry?.thinkingLevels
+                ?: _thinkingLevelSelection.value.options.takeIf {
+                  _thinkingLevelSelection.value.isGatewayProvided
+                },
+          )
+      if (settingsKey == sessionSettingsKey(sessionKey)) updateErrorText(null)
       try {
+        val lease = requestLease ?: throw GatewayRequestNotEnqueued("not connected")
         val params =
           buildJsonObject {
             put("key", JsonPrimitive(sessionKey))
             put("thinkingLevel", JsonPrimitive(thinkingLevel))
           }
-        val response = requestGateway("sessions.patch", params.toString())
+        val response = lease.request("sessions.patch", params.toString())
         val resolution = parseSessionSettingsPatchResolution(response)
-        applyAcceptedThinkingPatch(sessionKey, thinkingLevel, resolution)
+        applyAcceptedThinkingPatch(sessionKey, settingsKey, thinkingLevel, intent, resolution)
         true
       } catch (err: CancellationException) {
+        latestThinkingIntents.remove(settingsKey, intent)
         throw err
       } catch (err: Throwable) {
-        if (_sessionKey.value == sessionKey && _thinkingLevel.value == thinkingLevel) {
-          _thinkingLevel.value = rollbackLevel
+        if (
+          _sessionKey.value == sessionKey &&
+          settingsKey == sessionSettingsKey(sessionKey) &&
+          latestThinkingIntents[settingsKey]?.requestId == intent.requestId
+        ) {
+          val current = _sessions.value
+          val index = current.indexOfFirst { it.key == sessionKey }
+          val applied =
+            (current.getOrNull(index) ?: ChatSessionEntry(key = sessionKey, updatedAtMs = null)).copy(
+              thinkingLevel = rollbackState.level,
+              thinkingLevels = rollbackState.thinkingLevels,
+            )
+          if (index >= 0) {
+            _sessions.value = current.toMutableList().also { it[index] = applied }
+          }
+          _thinkingLevel.value = rollbackState.level
+          applyThinkingMetadata(applied)
         }
-        updateLocalizedErrorText(
-          err.message?.let(::verbatimText) ?: nativeText("Could not update thinking level."),
-        )
+        latestThinkingIntents.remove(settingsKey, intent)
+        if (settingsKey == sessionSettingsKey(sessionKey)) {
+          updateLocalizedErrorText(
+            err.message?.let(::verbatimText) ?: nativeText("Could not update thinking level."),
+          )
+        }
         false
       }
     }
 
   private suspend fun runSessionSettingsMutation(
-    sessionKey: String,
-    operation: suspend () -> Boolean,
+    settingsKey: SessionSettingsKey,
+    operation: suspend (GatewaySession.RequestLease?) -> Boolean,
   ): Boolean {
+    // Capture the physical socket before waiting. A reconnect may retire this
+    // lease, but queued work can never resolve the replacement connection.
+    val requestLease = captureSettingsRequestLease(settingsKey.gatewayScope)
     val pending = CompletableDeferred<Boolean>()
-    val previous = pendingSettingsMutations.put(sessionKey, pending)
+    val previous = pendingSettingsMutations.put(settingsKey, pending)
     return try {
       previous?.await()
-      val succeeded = operation()
+      // A queued mutation captured a concrete gateway generation. Never let it
+      // fall through to the replacement connection after waiting its turn.
+      val succeeded =
+        if (settingsKey == sessionSettingsKey(settingsKey.sessionKey)) {
+          operation(requestLease)
+        } else {
+          false
+        }
       pending.complete(succeeded)
       succeeded
     } catch (err: CancellationException) {
       pending.complete(false)
       throw err
     } finally {
-      pendingSettingsMutations.remove(sessionKey, pending)
+      if (pendingSettingsMutations.remove(settingsKey, pending)) {
+        // These baselines bridge adjacent operations in one lane only. After
+        // drain, refreshed session metadata is authoritative rollback state.
+        latestAcceptedThinkingStates.remove(settingsKey)
+        latestThinkingIntents.remove(settingsKey)
+      }
     }
   }
 
   private suspend fun waitForPendingSessionSettings(sessionKey: String): Boolean {
-    var pending = pendingSettingsMutations[sessionKey] ?: return true
+    val settingsKey = sessionSettingsKey(sessionKey)
+    var pending = pendingSettingsMutations[settingsKey] ?: return true
     while (true) {
       if (!pending.await()) return false
-      val next = pendingSettingsMutations[sessionKey]
+      val next = pendingSettingsMutations[settingsKey]
       if (next == null || next === pending) return true
       pending = next
     }
@@ -3149,37 +3254,78 @@ class ChatController internal constructor(
 
   private fun applyAcceptedModelPatch(
     key: String,
+    settingsKey: SessionSettingsKey,
     modelRef: String?,
     resolution: SessionSettingsPatchResolution?,
   ) {
-    val fallbackProvider = modelRef?.substringBefore('/', missingDelimiterValue = "")?.takeIf { it.isNotEmpty() }
-    val fallbackModel =
-      modelRef?.let { ref -> ref.substringAfter('/', missingDelimiterValue = ref) }?.takeIf { it.isNotEmpty() }
     val current = _sessions.value
     val index = current.indexOfFirst { it.key == key }
     val existing = current.getOrNull(index)
+    val previousThinkingState =
+      latestAcceptedThinkingStates[settingsKey]
+        ?: AcceptedThinkingState(
+          level =
+            existing?.thinkingLevel?.let(::normalizeThinking)
+              ?: _thinkingLevel.value.takeIf { _sessionKey.value == key }
+              ?: "off",
+          thinkingLevels =
+            existing?.thinkingLevels
+              ?: _thinkingLevelSelection.value.options.takeIf {
+                _sessionKey.value == key && _thinkingLevelSelection.value.isGatewayProvided
+              },
+        )
+    if (resolution?.thinkingLevel != null || resolution?.thinkingLevels != null) {
+      latestAcceptedThinkingStates[settingsKey] =
+        AcceptedThinkingState(
+          level = resolution.thinkingLevel?.let(::normalizeThinking) ?: previousThinkingState.level,
+          thinkingLevels = resolution.thinkingLevels ?: previousThinkingState.thinkingLevels,
+        )
+    }
+    if (settingsKey != sessionSettingsKey(key)) return
+    val fallbackProvider = modelRef?.substringBefore('/', missingDelimiterValue = "")?.takeIf { it.isNotEmpty() }
+    val fallbackModel =
+      modelRef?.let { ref -> ref.substringAfter('/', missingDelimiterValue = ref) }?.takeIf { it.isNotEmpty() }
+    val acceptedThinkingState = latestAcceptedThinkingStates[settingsKey]
+    val hasResolvedThinkingMetadata = resolution?.thinkingLevel != null || resolution?.thinkingLevels != null
     val applied =
       (existing ?: ChatSessionEntry(key = key, updatedAtMs = null)).copy(
         modelProvider = resolution?.modelProvider ?: fallbackProvider ?: existing?.modelProvider,
         model = resolution?.model ?: fallbackModel ?: existing?.model,
-        thinkingLevel = resolution?.thinkingLevel,
-        thinkingLevels = resolution?.thinkingLevels,
+        thinkingLevel = acceptedThinkingState?.level.takeIf { hasResolvedThinkingMetadata },
+        thinkingLevels =
+          resolution?.thinkingLevels
+            ?: acceptedThinkingState?.thinkingLevels.takeIf { hasResolvedThinkingMetadata },
         thinkingDefault = null,
       )
     if (index >= 0) {
       _sessions.value = current.toMutableList().also { it[index] = applied }
     }
     if (_sessionKey.value == key) {
+      val pendingThinkingLevel = latestThinkingIntents[settingsKey]?.level
       applyThinkingMetadata(applied)
+      // A queued thinking patch owns the visible intent until it succeeds or
+      // rolls back; the preceding model response must not replace that intent.
+      pendingThinkingLevel?.let { _thinkingLevel.value = it }
     }
   }
 
   private fun applyAcceptedThinkingPatch(
     key: String,
+    settingsKey: SessionSettingsKey,
     requestedLevel: String,
+    intent: ThinkingIntent,
     resolution: SessionSettingsPatchResolution?,
   ) {
     val acceptedLevel = resolution?.thinkingLevel?.let(::normalizeThinking) ?: requestedLevel
+    latestAcceptedThinkingStates[settingsKey] =
+      AcceptedThinkingState(
+        level = acceptedLevel,
+        thinkingLevels = resolution?.thinkingLevels ?: latestAcceptedThinkingStates[settingsKey]?.thinkingLevels,
+      )
+    if (settingsKey != sessionSettingsKey(key)) {
+      latestThinkingIntents.remove(settingsKey, intent)
+      return
+    }
     val current = _sessions.value
     val index = current.indexOfFirst { it.key == key }
     if (index >= 0) {
@@ -3195,7 +3341,7 @@ class ChatController internal constructor(
             )
         }
     }
-    if (_sessionKey.value == key && _thinkingLevel.value == requestedLevel) {
+    if (_sessionKey.value == key && latestThinkingIntents[settingsKey]?.requestId == intent.requestId) {
       _thinkingLevel.value = acceptedLevel
       resolution?.thinkingLevels?.let { levels ->
         applyThinkingMetadata(
@@ -3206,6 +3352,7 @@ class ChatController internal constructor(
         )
       }
     }
+    latestThinkingIntents.remove(settingsKey, intent)
   }
 
   private fun applyThinkingMetadata(entry: ChatSessionEntry?) {
@@ -3356,11 +3503,9 @@ class ChatController internal constructor(
       requestGatewayForGateway(gatewayId, method, paramsJson)
     }
 
-  private fun currentCacheScope(): ChatCacheScope? {
-    val scope = cacheScope() ?: return null
-    val gatewayId = scope.gatewayId.trim().takeIf { it.isNotEmpty() } ?: return null
-    return if (gatewayId == scope.gatewayId) scope else scope.copy(gatewayId = gatewayId)
-  }
+  private fun currentCacheScope(): ChatCacheScope? = normalizedChatCacheScope(cacheScope())
+
+  private fun sessionSettingsKey(sessionKey: String): SessionSettingsKey = SessionSettingsKey(gatewayScope = currentCacheScope(), sessionKey = sessionKey)
 
   private fun normalizeThinking(raw: String): String = raw.trim().lowercase(Locale.US).ifEmpty { "off" }
 }

@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewaySession
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -55,23 +56,23 @@ class ChatControllerModelSelectionTest {
             val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
             val acceptedThinking = (params["thinkingLevel"] as? JsonPrimitive)?.content ?: "max"
             """
-              {
-                "resolved": {
-                  "modelProvider": "anthropic",
-                  "model": "claude-sonnet-5",
-                  "thinkingLevel": "$acceptedThinking",
-                  "thinkingLevels": [
-                    {"id": "off", "label": "off"},
-                    {"id": "minimal", "label": "minimal"},
-                    {"id": "low", "label": "low"},
-                    {"id": "medium", "label": "medium"},
-                    {"id": "high", "label": "high"},
-                    {"id": "xhigh", "label": "xhigh"},
-                    {"id": "adaptive", "label": "adaptive"},
-                    {"id": "max", "label": "max"}
-                  ]
-                }
+            {
+              "resolved": {
+                "modelProvider": "anthropic",
+                "model": "claude-sonnet-5",
+                "thinkingLevel": "$acceptedThinking",
+                "thinkingLevels": [
+                  {"id": "off", "label": "off"},
+                  {"id": "minimal", "label": "minimal"},
+                  {"id": "low", "label": "low"},
+                  {"id": "medium", "label": "medium"},
+                  {"id": "high", "label": "high"},
+                  {"id": "xhigh", "label": "xhigh"},
+                  {"id": "adaptive", "label": "adaptive"},
+                  {"id": "max", "label": "max"}
+                ]
               }
+            }
             """.trimIndent()
           },
         )
@@ -261,8 +262,10 @@ class ChatControllerModelSelectionTest {
                 if ("model" in params) {
                   modelPatchStarted.complete(Unit)
                   releaseModelPatch.await()
+                  """{"resolved":{"thinkingLevel":"high","thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"},{"id":"ultra","label":"ultra"}]}}"""
+                } else {
+                  """{"resolved":{"thinkingLevel":"ultra"}}"""
                 }
-                "{}"
               }
               "chat.send" -> """{"runId":"run-ok","status":"ok"}"""
               else -> "{}"
@@ -290,6 +293,7 @@ class ChatControllerModelSelectionTest {
       )
       releaseModelPatch.complete(Unit)
       assertTrue(send.await())
+      assertEquals("ultra", controller.thinkingLevel.value)
       assertEquals(
         listOf("sessions.patch", "sessions.patch", "chat.send"),
         requests.map { it.first }.filter { it == "sessions.patch" || it == "chat.send" },
@@ -299,6 +303,484 @@ class ChatControllerModelSelectionTest {
         "ultra",
         ((json.parseToJsonElement(thinkingPatch.second.orEmpty()) as JsonObject)["thinkingLevel"] as JsonPrimitive)
           .content,
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun failedThinkingPatchRollsBackToModelAcceptedLevelWithoutSessionRow() =
+    runTest {
+      val modelPatchStarted = CompletableDeferred<Unit>()
+      val releaseModelPatch = CompletableDeferred<Unit>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            if (method != "sessions.patch") {
+              "{}"
+            } else {
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              if ("model" in params) {
+                modelPatchStarted.complete(Unit)
+                releaseModelPatch.await()
+                """{"resolved":{"thinkingLevel":"high","thinkingLevels":[{"id":"off","label":"off"},{"id":"high","label":"high"},{"id":"ultra","label":"ultra"}]}}"""
+              } else {
+                error("thinking rejected")
+              }
+            }
+          },
+        )
+
+      controller.setSessionModel("main", "openai/gpt-5.6-sol")
+      modelPatchStarted.await()
+      controller.setThinkingLevel("ultra")
+      releaseModelPatch.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals("high", controller.thinkingLevel.value)
+      assertEquals("thinking rejected", controller.errorText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun thinkingRollbackStateIsScopedToGatewayConnection() =
+    runTest {
+      var gatewayScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          cacheScope = { gatewayScope },
+          requestGateway = { method, _ ->
+            when {
+              method == "sessions.list" ->
+                """{"sessions":[{"key":"main","thinkingLevel":"off"}]}"""
+              method == "sessions.patch" && gatewayScope.gatewayId == "gateway-a" ->
+                """{"resolved":{"thinkingLevel":"medium"}}"""
+              method == "sessions.patch" -> error("thinking rejected")
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.setThinkingLevel("medium")
+      advanceUntilIdle()
+      assertEquals("medium", controller.thinkingLevel.value)
+
+      gatewayScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      controller.refreshSessions()
+      advanceUntilIdle()
+      assertEquals("off", controller.thinkingLevel.value)
+
+      controller.setThinkingLevel("high")
+      advanceUntilIdle()
+
+      assertEquals("off", controller.thinkingLevel.value)
+      assertEquals("thinking rejected", controller.errorText.value)
+    }
+
+  @Test
+  fun settingsPatchUsesCapturedGatewayConnectionScope() =
+    runTest {
+      val capturedScopes = mutableListOf<ChatCacheScope>()
+      val gatewayScope = ChatCacheScope(gatewayId = " gateway-a ", connectionGeneration = 7)
+      val normalizedScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 7)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          cacheScope = { gatewayScope },
+          requestGateway = { _, _ -> error("unscoped request") },
+          captureSettingsRequestLease = { scope ->
+            scope ?: error("missing scope")
+            GatewaySession.RequestLease(scope.gatewayId) { _, _, _ ->
+              capturedScopes += scope
+              "{}"
+            }
+          },
+        )
+
+      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5.6-sol"))
+
+      assertEquals(listOf(normalizedScope), capturedScopes)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun staleGatewayThinkingFailureDoesNotReplaceCurrentError() =
+    runTest {
+      val oldPatchStarted = CompletableDeferred<Unit>()
+      val releaseOldPatch = CompletableDeferred<Unit>()
+      var gatewayScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          cacheScope = { gatewayScope },
+          requestGateway = { method, paramsJson ->
+            if (method != "sessions.patch") {
+              "{}"
+            } else {
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              val level = (params["thinkingLevel"] as? JsonPrimitive)?.content
+              if (level == "medium") {
+                oldPatchStarted.complete(Unit)
+                releaseOldPatch.await()
+                error("old gateway failure")
+              }
+              error("current gateway failure")
+            }
+          },
+        )
+
+      controller.setThinkingLevel("medium")
+      oldPatchStarted.await()
+
+      gatewayScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      controller.setThinkingLevel("high")
+      assertEquals("current gateway failure", controller.errorText.value)
+
+      releaseOldPatch.complete(Unit)
+      advanceUntilIdle()
+      assertEquals("current gateway failure", controller.errorText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun staleGatewayModelFailureDoesNotReplaceCurrentError() =
+    runTest {
+      val oldPatchStarted = CompletableDeferred<Unit>()
+      val releaseOldPatch = CompletableDeferred<Unit>()
+      var gatewayScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          cacheScope = { gatewayScope },
+          requestGateway = { method, paramsJson ->
+            if (method != "sessions.patch") {
+              "{}"
+            } else {
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              if ("model" in params) {
+                oldPatchStarted.complete(Unit)
+                releaseOldPatch.await()
+                error("old gateway failure")
+              }
+              error("current gateway failure")
+            }
+          },
+        )
+
+      controller.setSessionModel("main", "openai/gpt-old")
+      oldPatchStarted.await()
+
+      gatewayScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      controller.setThinkingLevel("high")
+      assertEquals("current gateway failure", controller.errorText.value)
+
+      releaseOldPatch.complete(Unit)
+      advanceUntilIdle()
+      assertEquals("current gateway failure", controller.errorText.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun queuedMutationDoesNotCrossGatewayConnection() =
+    runTest {
+      val oldModelPatchStarted = CompletableDeferred<Unit>()
+      val releaseOldModelPatch = CompletableDeferred<Unit>()
+      val patchedThinkingLevels = mutableListOf<String>()
+      var gatewayScope = ChatCacheScope(gatewayId = "gateway-a", connectionGeneration = 1)
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          cacheScope = { gatewayScope },
+          requestGateway = { method, paramsJson ->
+            if (method != "sessions.patch") {
+              "{}"
+            } else {
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              if ("model" in params) {
+                oldModelPatchStarted.complete(Unit)
+                releaseOldModelPatch.await()
+                "{}"
+              } else {
+                val level = (params["thinkingLevel"] as JsonPrimitive).content
+                patchedThinkingLevels += level
+                """{"resolved":{"thinkingLevel":"$level"}}"""
+              }
+            }
+          },
+        )
+
+      controller.setSessionModel("main", "openai/gpt-old")
+      oldModelPatchStarted.await()
+      controller.setThinkingLevel("high")
+
+      gatewayScope = ChatCacheScope(gatewayId = "gateway-b", connectionGeneration = 2)
+      controller.onGatewayScopeChanging()
+      controller.setThinkingLevel("max")
+      assertEquals(listOf("max"), patchedThinkingLevels)
+
+      releaseOldModelPatch.complete(Unit)
+      advanceUntilIdle()
+      assertEquals(listOf("max"), patchedThinkingLevels)
+      assertEquals("max", controller.thinkingLevel.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun failedThinkingPatchUsesRefreshedAuthoritativeLevel() =
+    runTest {
+      var sessionLevel = "off"
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "sessions.list" -> """{"sessions":[{"key":"main","thinkingLevel":"$sessionLevel"}]}"""
+              "sessions.patch" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                val level = (params["thinkingLevel"] as JsonPrimitive).content
+                if (level == "max") error("rejected")
+                """{"resolved":{"thinkingLevel":"$level"}}"""
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      controller.setThinkingLevel("medium")
+      advanceUntilIdle()
+
+      sessionLevel = "high"
+      controller.refreshSessions()
+      advanceUntilIdle()
+      assertEquals("high", controller.thinkingLevel.value)
+
+      controller.setThinkingLevel("max")
+      advanceUntilIdle()
+      assertEquals("high", controller.thinkingLevel.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun twoFailedQueuedThinkingPatchesWithoutSessionRowRestoreConfirmedLevel() =
+    runTest {
+      val firstPatchStarted = CompletableDeferred<Unit>()
+      val releaseFirstPatch = CompletableDeferred<Unit>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            if (method != "sessions.patch") {
+              "{}"
+            } else {
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              val level = (params["thinkingLevel"] as JsonPrimitive).content
+              if (level == "medium") {
+                firstPatchStarted.complete(Unit)
+                releaseFirstPatch.await()
+              }
+              error("rejected")
+            }
+          },
+        )
+
+      controller.setThinkingLevel("medium")
+      firstPatchStarted.await()
+      controller.setThinkingLevel("high")
+      releaseFirstPatch.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals("off", controller.thinkingLevel.value)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun failedLatestThinkingPatchRestoresOlderAcceptedOptionsWithoutSessionRow() =
+    runTest {
+      val firstPatchStarted = CompletableDeferred<Unit>()
+      val releaseFirstPatch = CompletableDeferred<Unit>()
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            if (method != "sessions.patch") {
+              "{}"
+            } else {
+              val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+              val level = (params["thinkingLevel"] as JsonPrimitive).content
+              if (level == "medium") {
+                firstPatchStarted.complete(Unit)
+                releaseFirstPatch.await()
+                """
+                {"resolved":{"thinkingLevel":"medium","thinkingLevels":[
+                  {"id":"off","label":"off"},{"id":"medium","label":"medium"}
+                ]}}
+                """.trimIndent()
+              } else {
+                error("rejected")
+              }
+            }
+          },
+        )
+
+      controller.setThinkingLevel("medium")
+      firstPatchStarted.await()
+      controller.setThinkingLevel("high")
+      releaseFirstPatch.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals("medium", controller.thinkingLevel.value)
+      assertTrue(controller.thinkingLevelSelection.value.isGatewayProvided)
+      assertEquals(
+        listOf("off", "medium"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun failedThinkingPatchPreservesGatewayOptionsWithoutSessionRow() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "sessions.patch" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                if ("model" in params) {
+                  """
+                  {"resolved":{"thinkingLevel":"off","thinkingLevels":[
+                    {"id":"off","label":"off"},{"id":"high","label":"high"}
+                  ]}}
+                  """.trimIndent()
+                } else {
+                  error("rejected")
+                }
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5.6-sol"))
+      controller.setThinkingLevel("high")
+      advanceUntilIdle()
+
+      assertEquals("off", controller.thinkingLevel.value)
+      assertTrue(controller.thinkingLevelSelection.value.isGatewayProvided)
+      assertEquals(
+        listOf("off", "high"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun modelPatchPreservesAcceptedOptionsWhenResolutionOmitsThem() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "sessions.list" ->
+                """
+                {"sessions":[{"key":"main","thinkingLevel":"off","thinkingLevels":[
+                  {"id":"off","label":"off"},{"id":"ultra","label":"ultra"}
+                ]}]}
+                """.trimIndent()
+              "sessions.patch" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                if ("model" in params) {
+                  """{"resolved":{"modelProvider":"openai","model":"gpt-5.6-sol","thinkingLevel":"off"}}"""
+                } else {
+                  error("rejected")
+                }
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5.6-sol"))
+      controller.setThinkingLevel("ultra")
+      advanceUntilIdle()
+
+      assertEquals("off", controller.thinkingLevel.value)
+      assertTrue(controller.thinkingLevelSelection.value.isGatewayProvided)
+      assertEquals(
+        listOf("off", "ultra"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun modelPatchUpdatesAcceptedOptionsWhenResolutionOmitsLevel() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, paramsJson ->
+            when (method) {
+              "sessions.list" ->
+                """
+                {"sessions":[{"key":"main","thinkingLevel":"off","thinkingLevels":[
+                  {"id":"off","label":"off"},{"id":"high","label":"high"}
+                ]}]}
+                """.trimIndent()
+              "sessions.patch" -> {
+                val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
+                if ("model" in params) {
+                  """
+                  {"resolved":{"modelProvider":"openai","model":"gpt-5.6-sol","thinkingLevels":[
+                    {"id":"off","label":"off"},{"id":"max","label":"max"}
+                  ]}}
+                  """.trimIndent()
+                } else {
+                  error("rejected")
+                }
+              }
+              else -> "{}"
+            }
+          },
+        )
+
+      controller.refreshSessions()
+      advanceUntilIdle()
+      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5.6-sol"))
+      controller.setThinkingLevel("max")
+      advanceUntilIdle()
+
+      assertEquals("off", controller.thinkingLevel.value)
+      assertTrue(controller.thinkingLevelSelection.value.isGatewayProvided)
+      assertEquals(
+        listOf("off", "max"),
+        controller.thinkingLevelSelection.value.options
+          .map { it.id },
       )
     }
 
@@ -360,6 +842,46 @@ class ChatControllerModelSelectionTest {
         "ultra",
         ((json.parseToJsonElement(sendParams) as JsonObject)["thinking"] as JsonPrimitive).content,
       )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun repeatedThinkingValueStillUsesLatestRequestIdentity() =
+    runTest {
+      val firstPatchStarted = CompletableDeferred<Unit>()
+      val releaseFirstPatch = CompletableDeferred<Unit>()
+      var patchIndex = 0
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method != "sessions.patch") {
+              "{}"
+            } else {
+              patchIndex += 1
+              when (patchIndex) {
+                1 -> {
+                  firstPatchStarted.complete(Unit)
+                  releaseFirstPatch.await()
+                  """{"resolved":{"thinkingLevel":"medium"}}"""
+                }
+                2 -> """{"resolved":{"thinkingLevel":"ultra"}}"""
+                else -> """{"resolved":{"thinkingLevel":"max"}}"""
+              }
+            }
+          },
+        )
+
+      controller.setThinkingLevel("high")
+      firstPatchStarted.await()
+      controller.setThinkingLevel("ultra")
+      controller.setThinkingLevel("high")
+      releaseFirstPatch.complete(Unit)
+      advanceUntilIdle()
+
+      assertEquals(3, patchIndex)
+      assertEquals("max", controller.thinkingLevel.value)
     }
 
   @Test
