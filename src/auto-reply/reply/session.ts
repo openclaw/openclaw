@@ -53,6 +53,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../../infra/backoff.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -349,9 +350,12 @@ export class ReplySessionInitConflictError extends Error {
 }
 
 const SESSION_INIT_CONFLICT_MAX_ATTEMPTS = 5;
-const SESSION_INIT_CONFLICT_BASE_BACKOFF_MS = 250;
-const SESSION_INIT_CONFLICT_MAX_BACKOFF_MS = 4000;
-const SESSION_INIT_CONFLICT_JITTER_MS = 100;
+const SESSION_INIT_CONFLICT_BACKOFF_POLICY = {
+  initialMs: 250,
+  maxMs: 4_000,
+  factor: 2,
+  jitter: 0.05,
+} satisfies BackoffPolicy;
 
 /**
  * Retries `attempt` on session-init CAS conflicts with jittered exponential
@@ -367,16 +371,11 @@ export async function runWithSessionInitConflictRetry<T>(
   options?: {
     maxAttempts?: number;
     signal?: AbortSignal;
-    sleep?: (ms: number) => Promise<void>;
+    sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<T> {
   const maxAttempts = options?.maxAttempts ?? SESSION_INIT_CONFLICT_MAX_ATTEMPTS;
-  const sleep =
-    options?.sleep ??
-    ((ms: number) =>
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, ms);
-      }));
+  const sleep = options?.sleep ?? sleepWithAbort;
   for (let attemptIndex = 0; ; attemptIndex += 1) {
     try {
       return await attempt();
@@ -388,15 +387,13 @@ export async function runWithSessionInitConflictRetry<T>(
       ) {
         throw error;
       }
-      const backoffMs =
-        Math.min(
-          SESSION_INIT_CONFLICT_MAX_BACKOFF_MS,
-          SESSION_INIT_CONFLICT_BASE_BACKOFF_MS * 2 ** attemptIndex,
-        ) + Math.floor(Math.random() * SESSION_INIT_CONFLICT_JITTER_MS);
+      const backoffMs = computeBackoff(SESSION_INIT_CONFLICT_BACKOFF_POLICY, attemptIndex + 1);
       log.debug(
         `reply session initialization conflicted; retrying in ${backoffMs}ms (attempt ${attemptIndex + 2}/${maxAttempts})`,
       );
-      await sleep(backoffMs);
+      // Cancellation must interrupt the wait itself; otherwise shutdown can
+      // sleep through the backoff and start one more session-init attempt.
+      await sleep(backoffMs, options?.signal);
     }
   }
 }

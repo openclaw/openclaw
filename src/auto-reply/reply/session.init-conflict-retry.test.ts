@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ReplySessionInitConflictError, runWithSessionInitConflictRetry } from "./session.js";
 
 const SESSION_KEY = "agent:main:dashboard:test";
@@ -79,21 +79,48 @@ describe("runWithSessionInitConflictRetry", () => {
     expect(calls).toBe(1);
   });
 
+  it("cancels an in-progress backoff without starting another attempt", async () => {
+    const controller = new AbortController();
+    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
+    const sleepStarted = Promise.withResolvers<void>();
+    const sleep = vi.fn(
+      async (_ms: number, signal?: AbortSignal) =>
+        await new Promise<void>((_resolve, reject) => {
+          expect(signal).toBe(controller.signal);
+          signal?.addEventListener(
+            "abort",
+            () => reject(new Error("aborted", { cause: signal.reason })),
+            { once: true },
+          );
+          sleepStarted.resolve();
+        }),
+    );
+
+    const retrying = runWithSessionInitConflictRetry(attempt, {
+      signal: controller.signal,
+      sleep,
+    });
+    await sleepStarted.promise;
+    controller.abort(new Error("stop retrying"));
+
+    await expect(retrying).rejects.toThrow("aborted");
+    expect(state.calls).toBe(1);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
   it("applies capped exponential backoff between attempts", async () => {
     const delays: number[] = [];
     const { attempt } = conflictingAttempt(Number.POSITIVE_INFINITY);
-    await runWithSessionInitConflictRetry(attempt, {
-      sleep: async (ms) => {
-        delays.push(ms);
-      },
-    }).catch(() => {});
-    expect(delays).toHaveLength(4);
-    const bases = [250, 500, 1000, 2000] as const;
-    for (const [index, base] of bases.entries()) {
-      const delay = delays[index] ?? Number.NaN;
-      expect(delay).toBeGreaterThanOrEqual(base);
-      expect(delay).toBeLessThan(base + 100);
-      expect(delay).toBeLessThanOrEqual(4000 + 100);
+    const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
+    try {
+      await runWithSessionInitConflictRetry(attempt, {
+        sleep: async (ms) => {
+          delays.push(ms);
+        },
+      }).catch(() => {});
+      expect(delays).toEqual([250, 500, 1_000, 2_000]);
+    } finally {
+      randomSpy.mockRestore();
     }
   });
 });
