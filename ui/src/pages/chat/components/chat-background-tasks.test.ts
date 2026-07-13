@@ -362,7 +362,9 @@ describe("running-tasks status row", () => {
     expect(activeBackgroundTasksStatus(undefined)).toBeNull();
     expect(activeBackgroundTasksStatus(makeProps({ tasks: null }))).toBeNull();
     expect(
-      activeBackgroundTasksStatus(makeProps({ tasks: [makeTask({ id: "t", status: "completed" })] })),
+      activeBackgroundTasksStatus(
+        makeProps({ tasks: [makeTask({ id: "t", status: "completed" })] }),
+      ),
     ).toBeNull();
 
     const status = activeBackgroundTasksStatus(
