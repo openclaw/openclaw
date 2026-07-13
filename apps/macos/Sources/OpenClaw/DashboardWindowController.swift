@@ -563,6 +563,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private static func installNativeChromeScript(into userContentController: WKUserContentController) {
+        // Deliberately no native fallback for pages that ignore this flag
+        // (older gateway bundles, failure pages): they keep their own in-page
+        // toggles plus back/forward gestures and the Cmd-[/] menu items.
         let capabilityScript = "window.__OPENCLAW_NATIVE_WEB_CHROME__ = true;"
         userContentController.addUserScript(
             WKUserScript(source: capabilityScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
