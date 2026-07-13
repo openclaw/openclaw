@@ -105,6 +105,7 @@ describe("ChatStateController render lifecycle", () => {
 
     for (const deltaText of ["A", "B", "C"]) {
       handlePageGatewayEvent(state, {
+        type: "event",
         event: "chat",
         payload: { state: "delta", runId: "run-1", sessionKey: "main", deltaText },
       });
