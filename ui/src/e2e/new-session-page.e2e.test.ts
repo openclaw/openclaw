@@ -346,6 +346,89 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     }
   });
 
+  it("resets agent-derived workspace state when retargeted to a catalog", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "Main" },
+              name: "Main",
+              workspace: WORKSPACE,
+              workspaceGit: true,
+            },
+            {
+              id: "research",
+              identity: { name: "Research" },
+              name: "Research",
+              workspace: "/home/peter/research",
+              workspaceGit: true,
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+        },
+        "sessions.catalog.list": {
+          catalogs: [
+            {
+              id: "claude",
+              label: "Claude Code",
+              capabilities: {
+                continueSession: true,
+                archive: false,
+                createSession: { model: "anthropic/claude-opus-4-8" },
+              },
+              hosts: [],
+            },
+          ],
+        },
+        "sessions.create": { key: "agent:main:claude-retarget" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new?agent=research`);
+      const folderLabel = page.locator(
+        ".new-session-page__select--folder .new-session-page__trigger-label",
+      );
+      await expect.poll(() => folderLabel.textContent()).toBe("research");
+
+      await page.evaluate(() => {
+        history.pushState(null, "", "new?agent=main&catalog=claude");
+        dispatchEvent(new PopStateEvent("popstate"));
+      });
+
+      await expect.poll(() => page.locator(".new-session-page__runtime").textContent()).toContain(
+        "Claude Code",
+      );
+      await expect.poll(() => folderLabel.textContent()).toBe("openclaw");
+      await page.locator(".new-session-page__message").fill("retarget this draft");
+      await page.getByRole("button", { name: "Start session" }).click();
+
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        message: "retarget this draft",
+        model: "anthropic/claude-opus-4-8",
+      });
+      expect(create.params).not.toHaveProperty("cwd");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("locks the submitted draft until creation settles and restores it after failure", async () => {
     const context = await browser.newContext({
       locale: "en-US",

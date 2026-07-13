@@ -217,7 +217,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     // anything the user already typed while the list was loading.
     if (!this.agentsHydrated && agentsReady) {
       this.agentsHydrated = true;
-      this.adoptAgentDefaults();
+      this.adoptAgentDefaults({ preserveTypedFolder: true });
     }
   }
 
@@ -247,11 +247,11 @@ class NewSessionPage extends OpenClawLightDomElement {
     return Boolean(folder) && folder !== this.workspacePath();
   }
 
-  private adoptAgentDefaults() {
+  private adoptAgentDefaults(options: { preserveTypedFolder?: boolean } = {}) {
     const agents = this.agents();
     const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
     this.agentId = catalog.resolveAgentId(this.data, agents, fallback);
-    if (!this.folder.trim()) {
+    if (!options.preserveTypedFolder || !this.folder.trim()) {
       this.folder = this.workspacePath();
     }
     void this.loadNodes();
