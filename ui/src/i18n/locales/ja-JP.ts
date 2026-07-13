@@ -31,6 +31,7 @@ export const ja_JP: TranslationMap = {
     copied: "コピーしました!",
     copyCode: "コードをコピー",
     delete: "削除",
+    remove: "削除",
     dismiss: "閉じる",
     unselect: "選択解除",
     enabled: "有効",

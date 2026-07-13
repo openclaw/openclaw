@@ -31,6 +31,7 @@ export const vi: TranslationMap = {
     copied: "Đã sao chép!",
     copyCode: "Sao chép mã",
     delete: "Xóa",
+    remove: "Xóa",
     dismiss: "Bỏ qua",
     unselect: "Bỏ chọn",
     enabled: "Đã bật",

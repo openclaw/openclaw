@@ -31,6 +31,7 @@ export const ar: TranslationMap = {
     copied: "تم النسخ!",
     copyCode: "نسخ الكود",
     delete: "حذف",
+    remove: "إزالة",
     dismiss: "تجاهل",
     unselect: "إلغاء التحديد",
     enabled: "مفعّل",

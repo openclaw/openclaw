@@ -31,6 +31,7 @@ export const uk: TranslationMap = {
     copied: "Скопійовано!",
     copyCode: "Копіювати код",
     delete: "Видалити",
+    remove: "Видалити",
     dismiss: "Закрити",
     unselect: "Зняти вибір",
     enabled: "Увімкнено",

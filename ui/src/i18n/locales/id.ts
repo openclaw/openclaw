@@ -31,6 +31,7 @@ export const id: TranslationMap = {
     copied: "Disalin!",
     copyCode: "Salin kode",
     delete: "Hapus",
+    remove: "Hapus",
     dismiss: "Tutup",
     unselect: "Batalkan pilihan",
     enabled: "Diaktifkan",

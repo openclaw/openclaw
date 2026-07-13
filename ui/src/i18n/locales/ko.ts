@@ -31,6 +31,7 @@ export const ko: TranslationMap = {
     copied: "복사됨!",
     copyCode: "코드 복사",
     delete: "삭제",
+    remove: "제거",
     dismiss: "닫기",
     unselect: "선택 해제",
     enabled: "사용",

@@ -31,6 +31,7 @@ export const fa: TranslationMap = {
     copied: "کپی شد!",
     copyCode: "کپی کد",
     delete: "حذف",
+    remove: "حذف",
     dismiss: "بستن",
     unselect: "لغو انتخاب",
     enabled: "فعال",

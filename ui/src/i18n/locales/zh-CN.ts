@@ -31,6 +31,7 @@ export const zh_CN: TranslationMap = {
     copied: "已复制！",
     copyCode: "复制代码",
     delete: "删除",
+    remove: "移除",
     dismiss: "关闭",
     unselect: "取消选择",
     enabled: "已启用",

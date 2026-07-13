@@ -31,6 +31,7 @@ export const hi: TranslationMap = {
     copied: "कॉपी किया गया!",
     copyCode: "कोड कॉपी करें",
     delete: "हटाएँ",
+    remove: "हटाएँ",
     dismiss: "खारिज करें",
     unselect: "चयन हटाएँ",
     enabled: "सक्षम",

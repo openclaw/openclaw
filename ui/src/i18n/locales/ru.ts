@@ -31,6 +31,7 @@ export const ru: TranslationMap = {
     copied: "Скопировано!",
     copyCode: "Копировать код",
     delete: "Удалить",
+    remove: "Удалить",
     dismiss: "Закрыть",
     unselect: "Снять выбор",
     enabled: "Включено",

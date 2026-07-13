@@ -224,6 +224,23 @@ describe("renderModelProviders", () => {
     ).toBe("Disabled");
   });
 
+  it("renders a translated fallback removal action", () => {
+    const container = mount(
+      props({
+        defaultModels: {
+          primary: "openai/gpt-5",
+          fallbacks: ["openai/gpt-5-mini"],
+          utilityModel: null,
+        },
+      }),
+    );
+    const fallback = container.querySelector(".model-providers__fallback-row");
+
+    expect(text(fallback)).toContain("openai/gpt-5-mini");
+    expect(button(fallback!, "Remove")).toBeDefined();
+    expect(text(fallback)).not.toContain("common.remove");
+  });
+
   it("disables probing when the gateway does not advertise the method", () => {
     const onProbe = vi.fn();
     const container = mount(props({ probeAvailable: false, onProbe }));

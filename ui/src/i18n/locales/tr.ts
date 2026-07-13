@@ -31,6 +31,7 @@ export const tr: TranslationMap = {
     copied: "Kopyalandı!",
     copyCode: "Kodu kopyala",
     delete: "Sil",
+    remove: "Kaldır",
     dismiss: "Kapat",
     unselect: "Seçimi kaldır",
     enabled: "Etkin",

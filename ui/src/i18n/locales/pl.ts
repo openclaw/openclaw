@@ -31,6 +31,7 @@ export const pl: TranslationMap = {
     copied: "Skopiowano!",
     copyCode: "Kopiuj kod",
     delete: "Usuń",
+    remove: "Usuń",
     dismiss: "Odrzuć",
     unselect: "Odznacz",
     enabled: "Włączone",
