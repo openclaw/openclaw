@@ -10,15 +10,15 @@ import {
   downgradeOpenAIReasoningBlocks,
   isMessagingToolDuplicate,
   normalizeTextForComparison,
-  sanitizeToolCallId,
-  sanitizeUserFacingText,
-  stripThoughtSignatures,
 } from "./embedded-agent-helpers.js";
+import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   formatAgentInternalEventsForPrompt,
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-events.js";
+import { sanitizeToolCallId } from "./tool-call-id.js";
 
 describe("sanitizeUserFacingText", () => {
   it("strips final tags", () => {

@@ -176,7 +176,7 @@ struct RootTabsSourceGuardTests {
         #expect(sidebarDetail.contains("headerTitle: \"Cron Jobs\""))
         #expect(!sidebarDetail.contains("headerTitle: \"OpenClaw\""))
         #expect(agentOverviewSource.contains("OpenClawAdaptiveHeaderRow("))
-        #expect(agentOverviewSource.contains("title: self.headerTitle"))
+        #expect(agentOverviewSource.contains("title: .localized(self.headerTitle)"))
         #expect(!agentOverviewSource.contains("Text(\"OpenClaw\")"))
         #expect(docsSource.contains("OpenClawAdaptiveHeaderRow("))
         #expect(docsSource.contains("title: \"Docs\""))
@@ -261,7 +261,7 @@ struct RootTabsSourceGuardTests {
             settingsSource,
             from: "private struct AppearanceSettingsScreen: View",
             to: "extension SettingsProTab")
-        #expect(gatewayStatus.contains("OpenClawStatusBadge(label: self.title, tone: self.tone)"))
+        #expect(gatewayStatus.contains("OpenClawStatusBadge(label: .verbatim(self.title), tone: self.tone)"))
         #expect(!gatewayStatus.contains("ProCapsule("))
         #expect(!gatewayStatus.contains("Capsule()"))
         #expect(agentDestinationsSource.contains("List {"))
@@ -311,9 +311,10 @@ struct RootTabsSourceGuardTests {
         #expect(aboutDestination.contains("detailListCard"))
         #expect(aboutDestination.contains("SettingsBuildMetadataStrip(metadata: DeviceInfoHelper.buildMetadata())"))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"OpenClaw app version\""))
-        #expect(aboutDestination.contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
-        #expect(aboutDestination
-            .contains("SettingsDetailRow(\"iOS\", value: DeviceInfoHelper.iOSVersionStringForDisplay())"))
+        #expect(aboutDestination.contains(
+            "SettingsDetailRow(\"Device\", value: .verbatim(DeviceInfoHelper.deviceFamily()))"))
+        #expect(aboutDestination.contains(
+            "value: .verbatim(DeviceInfoHelper.iOSVersionStringForDisplay()))"))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Version\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Platform\""))
         #expect(!aboutDestination.contains("SettingsDetailRow(\"Model\""))
@@ -323,12 +324,12 @@ struct RootTabsSourceGuardTests {
         #expect(supportSource.contains("ViewThatFits(in: .horizontal)"))
         #expect(supportSource.contains("Text(\"Unavailable\")"))
         #expect(supportSource.contains(".textCase(.uppercase)"))
-        #expect(diagnosticsDestination
-            .contains("SettingsDetailRow(\"Device\", value: DeviceInfoHelper.deviceFamily())"))
-        #expect(diagnosticsDestination
-            .contains("SettingsDetailRow(\"Platform\", value: DeviceInfoHelper.platformStringForDisplay())"))
-        #expect(diagnosticsDestination
-            .contains("SettingsDetailRow(\"Model\", value: DeviceInfoHelper.modelIdentifier())"))
+        #expect(diagnosticsDestination.contains(
+            "SettingsDetailRow(\"Device\", value: .verbatim(DeviceInfoHelper.deviceFamily()))"))
+        #expect(diagnosticsDestination.contains(
+            "value: .verbatim(DeviceInfoHelper.platformStringForDisplay()))"))
+        #expect(diagnosticsDestination.contains(
+            "SettingsDetailRow(\"Model\", value: .verbatim(DeviceInfoHelper.modelIdentifier()))"))
     }
 
     @Test func `routed headers use shared adaptive layout`() throws {
@@ -500,7 +501,8 @@ extension RootTabsSourceGuardTests {
         #expect(source.contains("self.newCardButton(expands: true)"))
         #expect(source.contains("Label(\"New Card\", systemImage: \"plus\")"))
         #expect(source.contains(".accessibilityHint(\"Opens card title and notes entry\")"))
-        #expect(source.contains(".accessibilityHint(self.createUnavailableMessage ?? \"Creates a workboard card\")"))
+        #expect(source.contains(
+            "self.createUnavailableMessage ?? String(localized: \"Creates a workboard card\"))"))
         #expect(source.contains("if await self.createCard()"))
         #expect(source.contains(".disabled(self.isCreatingCard)"))
         #expect(!source.contains("Button(\"Create\")"))

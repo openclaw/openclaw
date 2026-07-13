@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Routes iPhone and Apple Watch exec approvals through durable Gateway records, preserves safety warnings, shows the first recorded decision across surfaces, reconciles uncertain replies, and remains compatible with shipped Gateway v4 approval RPCs.
+- Improves Gateway onboarding diagnostics, permission registration refreshes, Talk session switching, agent overview refresh ordering, and Apple Watch acknowledgment, activation, and cold-start event handling.
 
 ## 2026.7.1 - 2026-07-08
 

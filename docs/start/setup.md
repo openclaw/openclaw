@@ -104,6 +104,11 @@ terminals. Non-interactive shells stay detached and print
 `tmux attach -t openclaw-gateway-watch-main`; use
 `OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch` to keep an interactive run
 detached, or `pnpm gateway:watch:raw` for foreground watch mode. The watcher
+stops the active profile's installed Gateway service before taking over its
+configured/default port, preventing the service supervisor from replacing the
+source process. The service stays installed; run `pnpm openclaw gateway start`
+when you finish watching. The tmux pane remains available after startup failure
+so another terminal or agent can attach or capture its logs. The watcher
 reloads on relevant source, config, and bundled-plugin metadata changes. If the
 watched Gateway exits during startup, `gateway:watch` runs
 `openclaw doctor --fix --non-interactive` once and retries; set
