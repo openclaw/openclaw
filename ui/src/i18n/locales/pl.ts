@@ -392,7 +392,6 @@ export const pl: TranslationMap = {
     confirmForceDelete: "Tworzenie migawki nie powiodło się: {error}\n\nUsunąć bez migawki?",
   },
   agentChip: {
-    openConversation: "Otwórz swoją rozmowę z {name}",
     menuLabel: "Menu agenta",
     agents: "Agenci",
     working: "Pracuje…",
