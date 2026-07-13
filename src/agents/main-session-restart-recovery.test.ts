@@ -1609,10 +1609,7 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     expect(callGateway).toHaveBeenCalledOnce();
-    expect(
-      (vi.mocked(callGateway).mock.calls[0]?.[0].params as { idempotencyKey?: unknown })
-        .idempotencyKey,
-    ).toBe("recovery-main");
+    expect(firstGatewayParams().idempotencyKey).toBe("recovery-main");
     expect(firstGatewayParams()).toMatchObject({
       expectedExistingSessionId: "main-session",
       internalRuntimeHandoffId: expect.any(String),
@@ -1828,7 +1825,6 @@ describe("main-session-restart-recovery", () => {
 
   it("does not dispatch an archived durable recovery claim", async () => {
     const sessionsDir = await makeSessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
     await writeStore(sessionsDir, {
       "agent:main:main": {
         sessionId: "archived-session",

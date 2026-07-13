@@ -86,7 +86,7 @@ import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-har
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { type UserTurnInput } from "../../sessions/user-turn-transcript.js";
+import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import {
   parseInlineDirectives,
   stripInlineDirectiveTagsForDelivery,
