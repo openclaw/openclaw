@@ -65,6 +65,9 @@ function runCiManifestFixture(options: {
   qaSmokePlan?: boolean;
   formatCheck?: boolean;
   releaseCandidateCompatibility?: boolean;
+  nodeFastOnly?: boolean;
+  nodeFastPluginContracts?: boolean;
+  nodeFastCiRouting?: boolean;
 }) {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-manifest-"));
   try {
@@ -184,9 +187,11 @@ function runCiManifestFixture(options: {
         OPENCLAW_CI_RUN_MACOS: "true",
         OPENCLAW_CI_RUN_NATIVE_I18N: "true",
         OPENCLAW_CI_RUN_NODE: "true",
-        OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: "false",
-        OPENCLAW_CI_RUN_NODE_FAST_ONLY: "false",
-        OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: "false",
+        OPENCLAW_CI_RUN_NODE_FAST_CI_ROUTING: String(options.nodeFastCiRouting ?? false),
+        OPENCLAW_CI_RUN_NODE_FAST_ONLY: String(options.nodeFastOnly ?? false),
+        OPENCLAW_CI_RUN_NODE_FAST_PLUGIN_CONTRACTS: String(
+          options.nodeFastPluginContracts ?? false,
+        ),
         OPENCLAW_CI_RUN_SKILLS_PYTHON: "true",
         OPENCLAW_CI_RUN_WINDOWS: "true",
         OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40),
@@ -1965,29 +1970,45 @@ describe("ci workflow guards", () => {
   });
 
   it("runs the changed-file TypeScript LOC ratchet against the exact CI base", () => {
-    const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
-      (step: WorkflowStep) => step.name === "Run check shard",
+    const workflow = readCiWorkflow();
+    const checksFastRun = workflow.jobs["checks-fast-core"].steps.find(
+      (step: WorkflowStep) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
 
-    expect(checkShardRun.env.LOC_BASE_SHA).toContain("github.event.before");
-    expect(checkShardRun.env.LOC_BASE_SHA).toContain("github.event.pull_request.base.sha");
-    expect(checkShardRun.env.LOC_BASE_SHA).toContain("needs.preflight.outputs.loc_base_sha");
-    expect(checkShardRun.env.LOC_BASE_SHA).not.toContain("github.event.repository.default_branch");
-    expect(checkShardRun.env.LOC_HEAD_SHA).toBe("${{ needs.preflight.outputs.loc_head_sha }}");
-    expect(checkShardRun.env.LOC_PR_NUMBER).toContain("inputs.pr_number");
-    expect(checkShardRun.run).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
-    expect(checkShardRun.run).toContain(
+    expect(checksFastRun.env.LOC_BASE_SHA).toContain("github.event.before");
+    expect(checksFastRun.env.LOC_BASE_SHA).toContain("github.event.pull_request.base.sha");
+    expect(checksFastRun.env.LOC_BASE_SHA).toContain("needs.preflight.outputs.loc_base_sha");
+    expect(checksFastRun.env.LOC_BASE_SHA).not.toContain("github.event.repository.default_branch");
+    expect(checksFastRun.env.LOC_HEAD_SHA).toBe("${{ needs.preflight.outputs.loc_head_sha }}");
+    expect(checksFastRun.env.LOC_PR_NUMBER).toContain("inputs.pr_number");
+    expect(checksFastRun.run).toContain('[[ "$HISTORICAL_TARGET" != "true" ]]');
+    expect(checksFastRun.run).toContain(
       'git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/ci-base"',
     );
-    expect(checkShardRun.run).toContain(
+    expect(checksFastRun.run).toContain(
       '"+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"',
     );
-    expect(checkShardRun.run).toContain(
+    expect(checksFastRun.run).toContain(
       "Pull request ${LOC_PR_NUMBER} merge ref moved before the LOC check.",
     );
-    expect(checkShardRun.run).toContain(
+    expect(checksFastRun.run).toContain(
       'pnpm check:loc --base refs/remotes/origin/ci-base --head "$loc_head_ref"',
     );
+
+    const fastOnly = runCiManifestFixture({
+      bundledPlanner: true,
+      eventName: "pull_request",
+      historicalCompatibility: false,
+      nodeFastOnly: true,
+      nodeFastPluginContracts: true,
+    });
+    expect(fastOnly.status, fastOnly.output).toBe(0);
+    expect(fastOnly.outputs.run_check).toBe("false");
+    expect(fastOnly.outputs.run_checks_fast_core).toBe("true");
+    expect(
+      JSON.parse(expectDefined(fastOnly.outputs.checks_fast_core_matrix, "fast-only checks matrix"))
+        .include,
+    ).toEqual([{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]);
   });
 
   it("uses target-owned CI plans and capabilities for older release checkouts", () => {

@@ -540,7 +540,9 @@ jobs:
           const supportsFormatCheck =
             targetWorkflow.split("pnpm format:check").length - 1 >= 2;
           const runFormatCheck = !frozenTarget || supportsFormatCheck;
-          const checksFastCoreTasks = [];
+          const checksFastCoreTasks = runNode
+            ? [{ check_name: "checks-fast-loc-ratchet", runtime: "node", task: "loc-ratchet" }]
+            : [];
           if (runNodeFull) {
             checksFastCoreTasks.push(
               { check_name: "checks-fast-bundled-protocol", runtime: "node", task: "bundled-protocol" },
@@ -1210,11 +1212,21 @@ jobs:
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
+          HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || needs.preflight.outputs.loc_base_sha || '' }}
+          LOC_HEAD_SHA: ${{ needs.preflight.outputs.loc_head_sha }}
+          LOC_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && inputs.pr_number || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
           TASK: ${{ matrix.task }}
         shell: bash
         run: |
           set -euo pipefail
+          has_package_script() {
+            node -e '
+              const scripts = require("./package.json").scripts ?? {};
+              process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
+            ' "$1"
+          }
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
@@ -1226,6 +1238,34 @@ jobs:
               ;;
             ci-routing)
               pnpm test src/commands/status.scan-result.test.ts src/scripts/ci-changed-scope.test.ts test/scripts/changed-lanes.test.ts test/scripts/ci-workflow-guards.test.ts test/scripts/run-vitest.test.ts test/scripts/test-projects.test.ts
+              ;;
+            loc-ratchet)
+              # Frozen compatibility targets were governed by their original CI. Comparing
+              # them with moving main would turn unrelated branch drift into release failures.
+              if [[ "$HISTORICAL_TARGET" != "true" ]] && [ -n "$LOC_BASE_SHA" ] && [[ ! "$LOC_BASE_SHA" =~ ^0+$ ]]; then
+                git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/ci-base"
+                loc_head_ref="HEAD"
+                if [ -n "$LOC_HEAD_SHA" ]; then
+                  if [[ ! "$LOC_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+                    echo "A release-gate LOC head requires a pull request number." >&2
+                    exit 1
+                  fi
+                  git fetch --no-tags --depth=2 origin \
+                    "+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"
+                  resolved_loc_head="$(git rev-parse refs/remotes/origin/ci-head)"
+                  if [[ "$resolved_loc_head" != "$LOC_HEAD_SHA" ]]; then
+                    echo "Pull request ${LOC_PR_NUMBER} merge ref moved before the LOC check." >&2
+                    exit 1
+                  fi
+                  loc_head_ref="refs/remotes/origin/ci-head"
+                fi
+                if has_package_script "check:loc"; then
+                  pnpm check:loc --base refs/remotes/origin/ci-base --head "$loc_head_ref"
+                else
+                  echo "Current CI targets must provide the check:loc package script." >&2
+                  exit 1
+                fi
+              fi
               ;;
             bun-launcher)
               OPENCLAW_TEST_BUN_LAUNCHER=1 pnpm test test/openclaw-launcher.e2e.test.ts
@@ -1658,9 +1698,6 @@ jobs:
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
-          LOC_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || needs.preflight.outputs.loc_base_sha || '' }}
-          LOC_HEAD_SHA: ${{ needs.preflight.outputs.loc_head_sha }}
-          LOC_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.release_gate && inputs.pr_number || '' }}
           PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
         shell: bash
         run: |
@@ -1677,33 +1714,8 @@ jobs:
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
-              # Frozen compatibility targets were governed by their original CI. Comparing
-              # them with moving main would turn unrelated branch drift into release failures.
-              if [[ "$HISTORICAL_TARGET" != "true" ]] && [ -n "$LOC_BASE_SHA" ] && [[ ! "$LOC_BASE_SHA" =~ ^0+$ ]]; then
-                git fetch --no-tags --depth=1 origin "+${LOC_BASE_SHA}:refs/remotes/origin/ci-base"
-                loc_head_ref="HEAD"
-                if [ -n "$LOC_HEAD_SHA" ]; then
-                  if [[ ! "$LOC_PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
-                    echo "A release-gate LOC head requires a pull request number." >&2
-                    exit 1
-                  fi
-                  git fetch --no-tags --depth=2 origin \
-                    "+refs/pull/${LOC_PR_NUMBER}/merge:refs/remotes/origin/ci-head"
-                  resolved_loc_head="$(git rev-parse refs/remotes/origin/ci-head)"
-                  if [[ "$resolved_loc_head" != "$LOC_HEAD_SHA" ]]; then
-                    echo "Pull request ${LOC_PR_NUMBER} merge ref moved before the LOC check." >&2
-                    exit 1
-                  fi
-                  loc_head_ref="refs/remotes/origin/ci-head"
-                fi
-                if has_package_script "check:loc"; then
-                  pnpm check:loc --base refs/remotes/origin/ci-base --head "$loc_head_ref"
-                else
-                  echo "Current CI targets must provide the check:loc package script." >&2
-                  exit 1
-                fi
-              fi
               if [ -n "$PR_BASE_SHA" ]; then
+                git fetch --no-tags --depth=1 origin "+${PR_BASE_SHA}:refs/remotes/origin/ci-base"
                 node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-base --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
