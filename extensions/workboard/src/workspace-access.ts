@@ -1,15 +1,15 @@
 // Workboard workspace access follows the caller's canonical filesystem boundary.
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
-  resolveEffectiveToolFsWorkspaceOnly,
-} from "openclaw/plugin-sdk/agent-workspace-runtime";
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   canonicalPathFromExistingAncestor,
   isPathInside,
-} from "openclaw/plugin-sdk/path-security-runtime";
-import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+} from "openclaw/plugin-sdk/security-runtime";
 import type { WorkboardWorkspace } from "./types.js";
 
 export type WorkboardWorkspaceAccess =
@@ -41,7 +41,10 @@ export function resolveAgentWorkboardWorkspaceAccess(params: {
   config: WorkboardConfig;
   agentId: string;
 }): WorkboardWorkspaceAccess {
-  if (!resolveEffectiveToolFsWorkspaceOnly({ cfg: params.config, agentId: params.agentId })) {
+  const agentWorkspaceOnly = resolveAgentConfig(params.config, params.agentId)?.tools?.fs
+    ?.workspaceOnly;
+  const workspaceOnly = agentWorkspaceOnly ?? params.config.tools?.fs?.workspaceOnly;
+  if (workspaceOnly !== true) {
     return { unrestricted: true };
   }
   return {
