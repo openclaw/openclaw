@@ -1,9 +1,6 @@
 /**
- * Central registry for every gateway protocol schema.
- *
- * The keys in this object are the public schema names used by validators,
- * generated static types, and protocol tooling. Add new entries here only after
- * the owning schema module exports the canonical TypeBox schema.
+ * Central public registry for canonical gateway schemas used by validators,
+ * generated static types, and protocol tooling.
  */
 import type { TSchema } from "typebox";
 import {
@@ -439,6 +436,7 @@ import {
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import { SystemInfoParamsSchema, SystemInfoResultSchema } from "./system-info.js";
+import { TalkSessionAcknowledgeMarkParamsSchema } from "./talk-marks.js";
 import {
   TaskSuggestionEventSchema,
   TaskSuggestionResolutionSchema,
@@ -746,6 +744,7 @@ export const ProtocolSchemas = {
   TalkConfigParams: TalkConfigParamsSchema,
   TalkConfigResult: TalkConfigResultSchema,
   TalkSessionAppendAudioParams: TalkSessionAppendAudioParamsSchema,
+  TalkSessionAcknowledgeMarkParams: TalkSessionAcknowledgeMarkParamsSchema,
   TalkSessionCancelOutputParams: TalkSessionCancelOutputParamsSchema,
   TalkSessionCancelTurnParams: TalkSessionCancelTurnParamsSchema,
   TalkSessionCreateParams: TalkSessionCreateParamsSchema,

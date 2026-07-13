@@ -6479,6 +6479,24 @@ public struct TalkSessionAppendAudioParams: Codable, Sendable {
     }
 }
 
+public struct TalkSessionAcknowledgeMarkParams: Codable, Sendable {
+    public let sessionid: String
+    public let markname: String
+
+    public init(
+        sessionid: String,
+        markname: String)
+    {
+        self.sessionid = sessionid
+        self.markname = markname
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case markname = "markName"
+    }
+}
+
 public struct TalkSessionCancelOutputParams: Codable, Sendable {
     public let sessionid: String
     public let turnid: String?

@@ -722,7 +722,7 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     }
   }
 
-  acknowledgeMark(): void {}
+  acknowledgeMark(_markName?: string): void {}
 
   close(): void {
     this.intentionallyClosed = true;
