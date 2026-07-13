@@ -63,6 +63,7 @@ import {
 import type {
   ExecEventPayload,
   ExecFinishedEventParams,
+  NodeInvokeRequestPayload,
   RunResult,
   SkillBinsProvider,
   SystemRunParams,
@@ -235,22 +236,13 @@ type ExecApprovalsSnapshot = {
   file: ExecApprovalsFile;
 };
 
-export type NodeInvokeRequestPayload = {
-  id: string;
-  nodeId: string;
-  command: string;
-  paramsJSON?: string | null;
-  timeoutMs?: number | null;
-  idempotencyKey?: string | null;
-};
-
 export type NodeHostInvokeRuntime = {
   claudePath?: string;
   handleSystemRun?: typeof handleSystemRunInvoke;
   signal?: AbortSignal;
 };
 
-export type { SkillBinsProvider } from "./invoke-types.js";
+export type { NodeInvokeRequestPayload, SkillBinsProvider } from "./invoke-types.js";
 
 function resolveExecSecurity(value?: string): ExecSecurity {
   return value === "deny" || value === "allowlist" || value === "full" ? value : "allowlist";
