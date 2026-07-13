@@ -97,7 +97,7 @@ describe("qa tool coverage report", () => {
   it("escapes freeform metadata in the markdown table", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [
-        makeScenario("tool-read", "read|file", {
+        makeScenario("tool-read", String.raw`read\|file`, {
           toolCoverage: {
             bucket: "codex-native-workspace",
             expectedLayer: "codex-native-workspace",
@@ -116,7 +116,7 @@ describe("qa tool coverage report", () => {
 
     const markdown = renderQaToolCoverageMarkdownReport(report);
 
-    expect(markdown).toContain("read\\|file");
+    expect(markdown).toContain(String.raw`read\\\|file`);
     expect(markdown).toContain("P2 \\| default");
     expect(markdown).toContain("P1 \\| confidence");
     expect(markdown).toContain("fix \\| backfill");

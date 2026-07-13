@@ -8,6 +8,7 @@ import {
   buildQaConfidenceSelfTestSummary,
   renderQaConfidenceMarkdownReport,
   writeQaConfidenceSelfTestArtifacts,
+  type QaConfidenceReport,
   type QaConfidenceManifest,
 } from "./confidence-report.js";
 
@@ -28,6 +29,33 @@ describe("qa confidence report", () => {
     await fs.writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
     return filePath;
   }
+
+  it("escapes backslashes and pipes in markdown table cells", () => {
+    const report: QaConfidenceReport = {
+      generatedAt: "2026-05-12T00:00:00.000Z",
+      profile: "codex-100",
+      strictZeroUnknowns: false,
+      strictGlobalPass: false,
+      pass: false,
+      zeroUnknowns: false,
+      globalPass: false,
+      counts: { total: 1, passed: 0, failed: 1, blocked: 0, missing: 0, unknown: 0 },
+      failures: [],
+      lanes: [
+        {
+          id: String.raw`lane\|one`,
+          required: true,
+          status: "failed",
+          verdict: "qa-harness-bug",
+          details: String.raw`path\to\artifact | mismatch`,
+        },
+      ],
+    };
+
+    expect(renderQaConfidenceMarkdownReport(report)).toContain(
+      String.raw`| lane\\\|one | failed | qa-harness-bug |  |  | path\\to\\artifact \| mismatch |`,
+    );
+  });
 
   it("passes strict zero-unknowns when every lane passes or has an allowed blocked verdict", async () => {
     await writeJson("tool-defaults/qa-suite-summary.json", {
