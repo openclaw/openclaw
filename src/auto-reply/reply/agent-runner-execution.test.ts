@@ -7085,13 +7085,17 @@ describe("runAgentTurnWithFallback", () => {
       "OpenClaw run: run-max-turns. OpenClaw session: session-1. Claude session: claude-session-1. " +
       "Tool actions may already have run; verify their effects before retrying. " +
       "Retry with a higher --max-turns value or a narrower task.";
+    const maxTurns = new FailoverError(recoveryText, {
+      reason: "unknown",
+      code: "cli_max_turns",
+      provider: "claude-cli",
+      model: "sonnet",
+    });
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new FailoverError(recoveryText, {
-        reason: "unknown",
-        code: "cli_max_turns",
-        provider: "claude-cli",
-        model: "sonnet",
-      }),
+      new AggregateError(
+        [maxTurns, new Error("fork successor persistence failed")],
+        "CLI turn failed and its fork successor could not be persisted",
+      ),
     );
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();

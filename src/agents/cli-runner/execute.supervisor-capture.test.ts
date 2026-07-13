@@ -17,6 +17,7 @@ import {
 } from "../../infra/diagnostic-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createManagedRun, supervisorSpawnMock } from "../cli-runner.test-support.js";
+import { findCliMaxTurnsError } from "../failover-error.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { executePreparedCliRun } from "./execute.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -450,6 +451,60 @@ describe("executePreparedCliRun supervisor output capture", () => {
       code: "cli_max_turns",
       rawError: "Reached maximum number of turns (1)",
     });
+  });
+
+  it("preserves max-turn failure through fork successor persistence errors", async () => {
+    const stdout = `${JSON.stringify({
+      type: "result",
+      subtype: "error_max_turns",
+      session_id: "fork-successor",
+      terminal_reason: "max_turns",
+      errors: ["Reached maximum number of turns (1)"],
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(stdout);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: input.captureOutput === false ? "" : stdout,
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const persistenceError = new Error("fork successor persistence failed");
+    const persistCliSessionForkSuccessor = vi.fn().mockRejectedValue(persistenceError);
+    const restoreCliSessionFork = vi.fn().mockResolvedValue(undefined);
+    const context = buildPreparedCliRunContext({
+      output: "jsonl",
+      provider: "claude-cli",
+      runId: "run-fork-max-turns",
+    });
+    context.preparedBackend.backend.resumeArgs = ["--resume", "{sessionId}"];
+    context.preparedBackend.backend.forkArg = "--fork-session";
+    context.params.forkCliSessionOnResume = true;
+    context.params.claimCliSessionFork = vi.fn().mockResolvedValue(true);
+    context.params.persistCliSessionForkSuccessor = persistCliSessionForkSuccessor;
+    context.params.restoreCliSessionFork = restoreCliSessionFork;
+
+    let failure: unknown;
+    try {
+      await executePreparedCliRun(context, "fork-source");
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      expect.objectContaining({ code: "cli_max_turns" }),
+      persistenceError,
+    ]);
+    expect(findCliMaxTurnsError(failure)).toMatchObject({ code: "cli_max_turns" });
+    expect(persistCliSessionForkSuccessor).toHaveBeenCalledWith("fork-successor");
+    expect(restoreCliSessionFork).toHaveBeenCalledTimes(1);
   });
 
   it("still streams every JSONL stdout chunk with supervisor capture disabled", async () => {

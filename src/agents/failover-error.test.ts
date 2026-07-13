@@ -10,6 +10,7 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
+  findCliMaxTurnsError,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -61,6 +62,19 @@ const OPENAI_SERVER_ERROR_PAYLOAD =
   'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
+  it("finds CLI max-turn failures through aggregate wrappers", () => {
+    const maxTurns = new FailoverError("max turns", {
+      reason: "unknown",
+      code: "cli_max_turns",
+    });
+    const aggregate = new AggregateError(
+      [new Error("fork successor persistence failed"), { error: maxTurns }],
+      "CLI turn and persistence failed",
+    );
+
+    expect(findCliMaxTurnsError(aggregate)).toBe(maxTurns);
+  });
+
   it("infers failover reason from HTTP status", () => {
     expect(resolveFailoverReasonFromError({ status: 402 })).toBe("billing");
     // Anthropic Claude Max plan surfaces rate limits as HTTP 402 (#30484)
