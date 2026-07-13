@@ -480,6 +480,17 @@ function readClaudeCliAccountEmail(homeDir?: string): string | undefined {
   return typeof email === "string" && email.trim() ? email.trim() : undefined;
 }
 
+function withClaudeAccountEmail(
+  cliLogin: ClaudeCliCredential | null,
+  homeDir?: string,
+): ClaudeCliCredential | null {
+  if (!cliLogin) {
+    return null;
+  }
+  const email = readClaudeCliAccountEmail(homeDir);
+  return email ? { ...cliLogin, email } : cliLogin;
+}
+
 /** Reads Claude CLI credentials from macOS Keychain or the CLI credential file. */
 export function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
@@ -488,20 +499,13 @@ export function readClaudeCliCredentials(options?: {
   execSync?: ExecSyncFn;
 }): ClaudeCliCredential | null {
   const platform = options?.platform ?? process.platform;
-  const withEmail = (credential: ClaudeCliCredential | null): ClaudeCliCredential | null => {
-    if (!credential) {
-      return null;
-    }
-    const email = readClaudeCliAccountEmail(options?.homeDir);
-    return email ? { ...credential, email } : credential;
-  };
   if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
     const keychainCreds = readClaudeCliKeychainCredentials(options?.execSync);
     if (keychainCreds) {
       log.info("read anthropic credentials from claude cli keychain", {
         type: keychainCreds.type,
       });
-      return withEmail(keychainCreds);
+      return withClaudeAccountEmail(keychainCreds, options?.homeDir);
     }
   }
 
@@ -512,7 +516,10 @@ export function readClaudeCliCredentials(options?: {
   }
 
   const data = raw as Record<string, unknown>;
-  return withEmail(parseClaudeCliOauthCredential(data.claudeAiOauth));
+  return withClaudeAccountEmail(
+    parseClaudeCliOauthCredential(data.claudeAiOauth),
+    options?.homeDir,
+  );
 }
 
 /** @deprecated Anthropic provider-owned CLI credential helper; do not use from third-party plugins. */

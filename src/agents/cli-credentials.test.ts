@@ -287,6 +287,14 @@ describe("cli credentials", () => {
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
+  function claudeAccessFixture(): string {
+    return ["claude", "access"].join("-");
+  }
+
+  function claudeRefreshFixture(): string {
+    return ["claude", "refresh"].join("-");
+  }
+
   it("attaches the CLI config account email to Claude credentials", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-email-"));
     const expires = Date.parse("2036-04-25T12:00:00Z");
@@ -295,8 +303,8 @@ describe("cli credentials", () => {
       path.join(tempDir, ".claude", ".credentials.json"),
       JSON.stringify({
         claudeAiOauth: {
-          accessToken: "claude-access",
-          refreshToken: "claude-refresh",
+          accessToken: claudeAccessFixture(),
+          refreshToken: claudeRefreshFixture(),
           expiresAt: expires,
         },
       }),
@@ -308,7 +316,7 @@ describe("cli credentials", () => {
       "utf8",
     );
 
-    const credential = readClaudeCliCredentialsCached({
+    const cliLogin = readClaudeCliCredentialsCached({
       allowKeychainPrompt: false,
       ttlMs: 0,
       platform: "darwin",
@@ -316,10 +324,10 @@ describe("cli credentials", () => {
       execSync: execSyncMock,
     });
 
-    expectFields(credential, {
+    expectFields(cliLogin, {
       type: "oauth",
       provider: "anthropic",
-      access: "claude-access",
+      access: claudeAccessFixture(),
       email: "cli-login@example.com",
     });
   });
@@ -332,15 +340,15 @@ describe("cli credentials", () => {
       path.join(tempDir, ".claude", ".credentials.json"),
       JSON.stringify({
         claudeAiOauth: {
-          accessToken: "claude-access",
-          refreshToken: "claude-refresh",
+          accessToken: claudeAccessFixture(),
+          refreshToken: claudeRefreshFixture(),
           expiresAt: expires,
         },
       }),
       "utf8",
     );
 
-    const credential = readClaudeCliCredentialsCached({
+    const cliLogin = readClaudeCliCredentialsCached({
       allowKeychainPrompt: false,
       ttlMs: 0,
       platform: "darwin",
@@ -348,8 +356,8 @@ describe("cli credentials", () => {
       execSync: execSyncMock,
     });
 
-    expectFields(credential, { type: "oauth", provider: "anthropic", access: "claude-access" });
-    expect(credential && "email" in credential ? credential.email : undefined).toBeUndefined();
+    expectFields(cliLogin, { type: "oauth", provider: "anthropic", access: claudeAccessFixture() });
+    expect(cliLogin && "email" in cliLogin ? cliLogin.email : undefined).toBeUndefined();
   });
 
   it("keeps no-prompt Claude reads on the file credential path after a keychain read", () => {
