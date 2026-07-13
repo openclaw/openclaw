@@ -27083,7 +27083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 705,
+      "line": 711,
       "path": "apps/macos/Sources/OpenClaw/DashboardWindowController.swift",
       "source": "[\\(host)]",
       "surface": "apple",
@@ -29587,7 +29587,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 687,
+      "line": 688,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Finish",
       "surface": "apple",
@@ -29595,7 +29595,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 687,
+      "line": 688,
       "path": "apps/macos/Sources/OpenClaw/Onboarding.swift",
       "source": "Next",
       "surface": "apple",
