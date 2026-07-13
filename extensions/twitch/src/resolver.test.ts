@@ -34,13 +34,12 @@ vi.mock("@twurple/auth", () => ({
 }));
 
 describe("resolveTwitchTargets", () => {
-  const tokenField = ["access", "Token"].join("");
   const account: TwitchAccountConfig = {
     username: "testbot",
-    [tokenField]: "unit-value",
+    accessToken: "unit-value",
     clientId: "test-client-id",
     channel: "testchannel",
-  } as TwitchAccountConfig;
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
