@@ -1,4 +1,5 @@
 // Codex plugin module implements plan behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   createMigrationItem,
@@ -13,6 +14,10 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/security-runtime";
 import { asBoolean, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexAuthItems } from "./auth.js";
@@ -22,6 +27,7 @@ import {
   discoverCodexSource,
   hasCodexSource,
   type CodexPluginSource,
+  type CodexMemorySource,
   type CodexSkillSource,
 } from "./source.js";
 import { resolveCodexMigrationTargets } from "./targets.js";
@@ -38,6 +44,70 @@ const CODEX_PLUGIN_NATIVE_CONFIG_PATH = [
 ] as const;
 const MIGRATION_REASON_PLUGIN_EXISTS = "plugin exists";
 const CODEX_PLUGIN_SOURCE_APP_VERIFICATION_UNVERIFIED = "not_run";
+
+async function assertSafeMemoryDestination(params: {
+  source: string;
+  workspaceDir: string;
+  target: string;
+}): Promise<void> {
+  const [canonicalSource, canonicalWorkspace, canonicalTarget] = await Promise.all([
+    fs.realpath(path.dirname(params.source)),
+    canonicalPathFromExistingAncestor(params.workspaceDir),
+    canonicalPathFromExistingAncestor(params.target),
+  ]);
+  if (!isPathInside(canonicalWorkspace, canonicalTarget)) {
+    throw new Error("Codex memory import destination must stay in the selected workspace.");
+  }
+  if (
+    isPathInside(canonicalSource, canonicalTarget) ||
+    isPathInside(canonicalTarget, canonicalSource)
+  ) {
+    throw new Error("Codex memory source and OpenClaw import destination must be separate paths.");
+  }
+}
+
+async function buildMemoryItems(params: {
+  memoryFiles: readonly CodexMemorySource[];
+  workspaceDir: string;
+  overwrite?: boolean;
+}): Promise<MigrationItem[]> {
+  const items: MigrationItem[] = [];
+  for (const memory of params.memoryFiles) {
+    const target = path.join(
+      params.workspaceDir,
+      "memory",
+      "imports",
+      "codex",
+      path.basename(memory.path),
+    );
+    await assertSafeMemoryDestination({
+      source: memory.path,
+      workspaceDir: params.workspaceDir,
+      target,
+    });
+    const targetExists = await exists(target);
+    items.push(
+      createMigrationItem({
+        id: memory.id,
+        kind: "memory",
+        action: "copy",
+        source: memory.path,
+        target,
+        status: targetExists && !params.overwrite ? "conflict" : "planned",
+        reason: targetExists && !params.overwrite ? MIGRATION_REASON_TARGET_EXISTS : undefined,
+        message: "Copy consolidated Codex memory into the OpenClaw memory index.",
+        details: {
+          sourceType: "codex-memory",
+          sourceLabel: memory.label,
+          collectionId: "codex",
+          collectionLabel: "Codex",
+          relativePath: path.basename(memory.path),
+        },
+      }),
+    );
+  }
+  return items;
+}
 
 export type CodexPluginMigrationConfigEntry = {
   configKey: string;
@@ -490,9 +560,14 @@ export async function buildCodexMigrationPlan(
   ctx: MigrationProviderContext,
 ): Promise<MigrationPlan> {
   const targets = resolveCodexMigrationTargets(ctx);
+  const memoryOnly =
+    ctx.itemKinds !== undefined &&
+    ctx.itemKinds.length > 0 &&
+    ctx.itemKinds.every((kind) => kind === "memory");
   const source = await discoverCodexSource({
     input: ctx.source,
-    evaluatePluginMigrationEligibility: true,
+    memoryOnly,
+    evaluatePluginMigrationEligibility: !memoryOnly,
     verifyPluginApps: shouldVerifyPluginApps(ctx),
   });
   if (!hasCodexSource(source)) {
@@ -501,33 +576,42 @@ export async function buildCodexMigrationPlan(
     );
   }
   const items: MigrationItem[] = [];
-  items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
   items.push(
-    ...(await buildSkillItems({
-      skills: source.skills,
+    ...(await buildMemoryItems({
+      memoryFiles: source.memoryFiles,
       workspaceDir: targets.workspaceDir,
       overwrite: ctx.overwrite,
     })),
   );
-  const pluginItems = buildPluginItems(ctx, source.plugins);
-  items.push(...pluginItems);
-  const pluginConfigItem = buildPluginConfigItem(ctx, pluginItems);
-  if (pluginConfigItem) {
-    items.push(pluginConfigItem);
-  }
-  for (const archivePath of source.archivePaths) {
+  if (!memoryOnly) {
+    items.push(...(await buildCodexAuthItems({ ctx, source, targets })));
     items.push(
-      createMigrationItem({
-        id: archivePath.id,
-        kind: "archive",
-        action: "archive",
-        source: archivePath.path,
-        message:
-          archivePath.message ??
-          "Archived in the migration report for manual review; not imported into live config.",
-        details: { archiveRelativePath: archivePath.relativePath },
-      }),
+      ...(await buildSkillItems({
+        skills: source.skills,
+        workspaceDir: targets.workspaceDir,
+        overwrite: ctx.overwrite,
+      })),
     );
+    const pluginItems = buildPluginItems(ctx, source.plugins);
+    items.push(...pluginItems);
+    const pluginConfigItem = buildPluginConfigItem(ctx, pluginItems);
+    if (pluginConfigItem) {
+      items.push(pluginConfigItem);
+    }
+    for (const archivePath of source.archivePaths) {
+      items.push(
+        createMigrationItem({
+          id: archivePath.id,
+          kind: "archive",
+          action: "archive",
+          source: archivePath.path,
+          message:
+            archivePath.message ??
+            "Archived in the migration report for manual review; not imported into live config.",
+          details: { archiveRelativePath: archivePath.relativePath },
+        }),
+      );
+    }
   }
   const warnings = [
     ...(!ctx.includeSecrets && items.some((item) => item.kind === "auth")
@@ -558,10 +642,12 @@ export async function buildCodexMigrationPlan(
     summary: summarizeMigrationItems(items),
     items,
     warnings,
-    nextSteps: [
-      "Run openclaw doctor after applying the migration.",
-      "Review skipped or auth-required Codex plugin/config/hook items before exposing them in OpenClaw sessions.",
-    ],
+    nextSteps: memoryOnly
+      ? []
+      : [
+          "Run openclaw doctor after applying the migration.",
+          "Review skipped or auth-required Codex plugin/config/hook items before exposing them in OpenClaw sessions.",
+        ],
     metadata: {
       agentDir: targets.agentDir,
       codexHome: source.codexHome,

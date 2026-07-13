@@ -5,7 +5,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { pathExists } from "../infra/fs-safe.js";
+import {
+  ensureAbsoluteDirectory,
+  pathExists,
+  readRegularFile,
+  root as openFsSafeRoot,
+} from "../infra/fs-safe.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import type {
   MigrationApplyResult,
@@ -21,6 +26,8 @@ import {
 } from "./migration.js";
 
 export type { MigrationApplyResult, MigrationItem } from "../plugins/types.js";
+
+const MAX_MEMORY_MIGRATION_FILE_BYTES = 64 * 1024 * 1024;
 
 /** Directories a migration provider writes imported agent data into. */
 export type PlannedMigrationTargets = {
@@ -39,7 +46,7 @@ export function resolvePlannedMigrationTargets(
   ctx: MigrationProviderContext,
 ): PlannedMigrationTargets {
   const cfg = ctx.config;
-  const agentId = resolveDefaultAgentId(cfg);
+  const agentId = ctx.targetAgentId ?? resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
   const configuredAgentDir = resolveAgentConfig(cfg, agentId)?.agentDir?.trim();
   const agentDir =
@@ -120,12 +127,58 @@ async function backupExistingMigrationTarget(
     .update(path.resolve(target))
     .digest("hex")
     .slice(0, 12);
-  const backupDir = await fs.mkdtemp(
-    path.join(backupRoot, `${Date.now()}-${targetHash}-${path.basename(target)}-`),
-  );
+  const backupDir = await fs.mkdtemp(path.join(backupRoot, `${Date.now()}-${targetHash}-`));
   const backupPath = path.join(backupDir, path.basename(target));
   await fs.cp(target, backupPath, { recursive: true, force: true });
   return backupPath;
+}
+
+async function backupMemoryMigrationTarget(
+  target: string,
+  contents: Buffer,
+  reportDir: string,
+): Promise<string> {
+  const backupRoot = path.join(reportDir, "item-backups");
+  await fs.mkdir(backupRoot, { recursive: true });
+  const targetHash = crypto
+    .createHash("sha256")
+    .update(path.resolve(target))
+    .digest("hex")
+    .slice(0, 12);
+  const backupDir = await fs.mkdtemp(path.join(backupRoot, `${Date.now()}-${targetHash}-`));
+  const backupPath = path.join(backupDir, path.basename(target));
+  await fs.writeFile(backupPath, contents, { flag: "wx", mode: 0o600 });
+  return backupPath;
+}
+
+function errorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+async function openMemoryMigrationRoot(workspaceDir: string) {
+  const options = {
+    hardlinks: "reject" as const,
+    maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
+    mkdir: true,
+    symlinks: "reject" as const,
+  };
+  try {
+    return await openFsSafeRoot(workspaceDir, options);
+  } catch (error) {
+    if (errorCode(error) !== "not-found" && errorCode(error) !== "ENOENT") {
+      throw error;
+    }
+  }
+  const ensured = await ensureAbsoluteDirectory(workspaceDir, {
+    scopeLabel: "memory import workspace",
+    mode: 0o700,
+  });
+  if (!ensured.ok) {
+    throw ensured.error;
+  }
+  return await openFsSafeRoot(ensured.path, options);
 }
 
 function isFileAlreadyExistsError(err: unknown): boolean {
@@ -235,6 +288,94 @@ export async function copyMigrationFileItem(
       return markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS);
     }
     return markMigrationItemError(item, err instanceof Error ? err.message : String(err));
+  }
+}
+
+/** Copy one regular memory file through an fs-safe workspace root. */
+export async function copyMemoryMigrationFileItem(
+  item: MigrationItem,
+  reportDir: string,
+  opts: { workspaceDir: string; overwrite?: boolean },
+): Promise<MigrationItem> {
+  if (!item.source || !item.target) {
+    return markMigrationItemError(item, MIGRATION_REASON_MISSING_SOURCE_OR_TARGET);
+  }
+  let backupPath: string | undefined;
+  let stagedRelative: string | undefined;
+  let stagingDir: string | undefined;
+  let recoveryPath: string | undefined;
+  let relativeTarget: string | undefined;
+  let targetCreated = false;
+  let safeRoot: Awaited<ReturnType<typeof openMemoryMigrationRoot>> | undefined;
+  try {
+    const workspaceDir = path.resolve(opts.workspaceDir);
+    relativeTarget = path.relative(workspaceDir, path.resolve(item.target));
+    safeRoot = await openMemoryMigrationRoot(workspaceDir);
+    const { buffer: sourceBuffer } = await readRegularFile({
+      filePath: item.source,
+      maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
+    });
+    if (opts.overwrite && (await safeRoot.exists(relativeTarget))) {
+      stagingDir = path.join(".openclaw-memory-import-staging", crypto.randomUUID());
+      stagedRelative = path.join(stagingDir, path.basename(relativeTarget));
+      recoveryPath = path.join(safeRoot.rootReal, stagedRelative);
+      await safeRoot.mkdir(stagingDir);
+      // Moving first preserves the exact destination identity that replacement
+      // reviewed; the final create remains no-clobber if another writer races in.
+      await safeRoot.move(relativeTarget, stagedRelative, { overwrite: false });
+      const existing = await safeRoot.read(stagedRelative, {
+        hardlinks: "reject",
+        maxBytes: MAX_MEMORY_MIGRATION_FILE_BYTES,
+        symlinks: "reject",
+      });
+      backupPath = await backupMemoryMigrationTarget(item.target, existing.buffer, reportDir);
+    }
+    await safeRoot.write(relativeTarget, sourceBuffer, {
+      mkdir: true,
+      overwrite: false,
+    });
+    targetCreated = true;
+    if (stagedRelative) {
+      await safeRoot.remove(stagedRelative);
+      stagedRelative = undefined;
+      recoveryPath = undefined;
+    }
+    if (stagingDir) {
+      await safeRoot.remove(stagingDir);
+      await safeRoot.remove(".openclaw-memory-import-staging").catch(() => undefined);
+    }
+    return {
+      ...item,
+      status: "migrated",
+      details: { ...item.details, ...(backupPath ? { backupPath } : {}) },
+    };
+  } catch (error) {
+    if (safeRoot && stagedRelative && relativeTarget && !targetCreated) {
+      try {
+        if (!(await safeRoot.exists(relativeTarget))) {
+          await safeRoot.move(stagedRelative, relativeTarget, { overwrite: false });
+          stagedRelative = undefined;
+          recoveryPath = undefined;
+        }
+      } catch {
+        // Leave the staged original in place and report its exact recovery path.
+      }
+    }
+    const details = {
+      ...item.details,
+      ...(backupPath ? { backupPath } : {}),
+      ...(recoveryPath ? { recoveryPath } : {}),
+    };
+    if (isFileAlreadyExistsError(error) || errorCode(error) === "already-exists") {
+      return {
+        ...markMigrationItemConflict(item, MIGRATION_REASON_TARGET_EXISTS),
+        details,
+      };
+    }
+    return {
+      ...markMigrationItemError(item, error instanceof Error ? error.message : String(error)),
+      details,
+    };
   }
 }
 

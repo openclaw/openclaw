@@ -198,6 +198,7 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). C
     - Sessions (a settings page under **Agents & Tools**, `/settings/sessions`): list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore inactive sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). Pinned sessions sort above recent unpinned sessions; archived sessions live in the Sessions page's archived view and keep their transcripts. Rows show an unread dot for sessions with activity since their last read, with mark-unread/mark-read actions (`sessions.patch { unread }`), and a Fork action that branches the transcript into a new session (`sessions.create { parentSessionKey, fork: true }`). Overview tiles above the table summarize the loaded roster (session count, live runs, unread sessions, total tokens), each row carries a kind glyph with a live-run dot, status renders as a plain dot plus label, and the Tokens column shows a context-window usage meter when the session reports token and context sizes. Row management actions live in a per-row menu (kebab button or right-click) mirroring the sidebar's session menu, and the row drawer carries the agent runtime and run duration alongside the other session details.
     - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Memory (a tab on the Agents page, scoped to the selected agent): dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
+    - Import Memory (a settings page under **Agents & Tools**, `/settings/memory-import`): preview and copy local Codex consolidated memory or Claude Code auto-memory into the selected agent workspace (`migrations.memory.plan`, `migrations.memory.apply`).
 
   </Accordion>
   <Accordion title="Cron, tasks, plugins, skills, devices, exec approvals">
@@ -252,6 +253,34 @@ A **Search** field at the top of the sidebar opens the command palette (⌘K). C
 
   </Accordion>
 </AccordionGroup>
+
+## Import assistant memory
+
+Open **Settings** → **Import Memory** to bring local Codex or Claude Code memory
+into an OpenClaw agent. The Gateway discovers supported local memory on its own
+host, so a remote Control UI imports from the Gateway computer rather than the
+browser computer.
+
+1. Choose the destination agent.
+2. Review the detected source collections and Markdown filenames. File contents
+   are not sent in the plan response or displayed in the page.
+3. Select the collections to import and confirm. Apply rebuilds the plan before
+   writing so stale selections fail safely.
+4. If files already exist, enable **Replace existing imports**, refresh the
+   preview, and confirm the replacement.
+
+Codex imports only its consolidated `MEMORY.md` and `memory_summary.md`. Claude
+Code imports Markdown from project auto-memory directories and a configured
+`autoMemoryDirectory`; it does not import sessions, settings, instructions, or
+credentials through this page. Files are copied below `memory/imports/` in the
+selected workspace, where the active memory plugin can index them. Sources are
+never changed.
+
+Planning and applying require `operator.admin`. Every apply creates a verified
+OpenClaw backup when state exists, writes a redacted migration report, and keeps
+item-level backups before replacing existing destination files. See
+[Memory overview](/concepts/memory#import-from-coding-assistants) for paths and
+recall behavior.
 
 ## MCP page
 

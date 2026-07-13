@@ -2641,6 +2641,10 @@ export type MigrationProviderContext = {
   runtime?: PluginRuntime;
   logger: PluginLogger;
   stateDir: string;
+  /** Explicit destination agent for embedded migration surfaces such as Control UI. */
+  targetAgentId?: string;
+  /** Optional item-kind scope used by embedded migration surfaces to avoid unrelated discovery. */
+  itemKinds?: readonly string[];
   source?: string;
   includeSecrets?: boolean;
   overwrite?: boolean;
@@ -2655,6 +2659,8 @@ export type MigrationProviderPlugin = {
   id: string;
   label: string;
   description?: string;
+  /** Item kinds this provider can expose without requiring a full plan. */
+  supportedItemKinds?: readonly string[];
   detect?: (ctx: MigrationProviderContext) => MigrationDetection | Promise<MigrationDetection>;
   prepareApply?: (
     ctx: MigrationProviderContext,

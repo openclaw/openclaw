@@ -48,6 +48,37 @@ export type CodexPluginSource = {
   message?: string;
 };
 
+export type CodexMemorySource = {
+  id: string;
+  label: string;
+  path: string;
+};
+
+async function discoverCodexMemoryFile(
+  candidate: CodexMemorySource,
+): Promise<CodexMemorySource | undefined> {
+  try {
+    const stat = await fs.lstat(candidate.path);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Codex memory source must not be a symbolic link: ${candidate.path}`);
+    }
+    if (!stat.isFile()) {
+      throw new Error(`Codex memory source must be a regular file: ${candidate.path}`);
+    }
+    return candidate;
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      (error as { code?: unknown }).code === "ENOENT"
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 type CodexPluginMigrationBlockCode =
   | "plugin_disabled"
   | "codex_subscription_required"
@@ -89,6 +120,8 @@ export type CodexSource = {
   authPath?: string;
   modelsCachePath?: string;
   hooksPath?: string;
+  memoriesDir?: string;
+  memoryFiles: CodexMemorySource[];
   skills: CodexSkillSource[];
   plugins: CodexPluginSource[];
   pluginDiscoveryError?: string;
@@ -97,6 +130,7 @@ export type CodexSource = {
 
 type CodexSourceDiscoveryOptions = {
   input?: string;
+  memoryOnly?: boolean;
   evaluatePluginMigrationEligibility?: boolean;
   verifyPluginApps?: boolean;
 };
@@ -582,30 +616,57 @@ export async function discoverCodexSource(
   const authPath = path.join(codexHome, "auth.json");
   const modelsCachePath = path.join(codexHome, "models_cache.json");
   const hooksPath = path.join(codexHome, "hooks", "hooks.json");
-  const codexSkills = await discoverSkillDirs({
-    root: codexSkillsDir,
-    sourceLabel: "Codex skill",
-    excludeSystem: true,
-  });
-  const personalAgentSkills = await discoverSkillDirs({
-    root: agentsSkillsDir,
-    sourceLabel: "personal AgentSkill",
-  });
-  const sourcePluginDiscovery = await discoverInstalledCuratedPlugins(codexHome, options);
+  const memoriesDir = path.join(codexHome, "memories");
+  const memoryFiles = (
+    await Promise.all(
+      [
+        { id: "memory:codex:MEMORY.md", label: "Codex consolidated memory", name: "MEMORY.md" },
+        {
+          id: "memory:codex:memory_summary.md",
+          label: "Codex memory summary",
+          name: "memory_summary.md",
+        },
+      ].map(async (candidate) => {
+        return await discoverCodexMemoryFile({
+          id: candidate.id,
+          label: candidate.label,
+          path: path.join(memoriesDir, candidate.name),
+        });
+      }),
+    )
+  ).filter((entry): entry is CodexMemorySource => entry !== undefined);
+  const codexSkills = options.memoryOnly
+    ? []
+    : await discoverSkillDirs({
+        root: codexSkillsDir,
+        sourceLabel: "Codex skill",
+        excludeSystem: true,
+      });
+  const personalAgentSkills = options.memoryOnly
+    ? []
+    : await discoverSkillDirs({
+        root: agentsSkillsDir,
+        sourceLabel: "personal AgentSkill",
+      });
+  const sourcePluginDiscovery: { plugins: CodexPluginSource[]; error?: string } = options.memoryOnly
+    ? { plugins: [] }
+    : await discoverInstalledCuratedPlugins(codexHome, options);
   const sourcePluginNames = new Set(
     sourcePluginDiscovery.plugins.flatMap((plugin) =>
       plugin.pluginName ? [plugin.pluginName] : [],
     ),
   );
-  const cachedPlugins = (await discoverPluginDirs(codexHome)).filter((plugin) => {
-    const normalizedName = sanitizePluginName(plugin.name);
-    return !sourcePluginNames.has(normalizedName);
-  });
+  const cachedPlugins = (options.memoryOnly ? [] : await discoverPluginDirs(codexHome)).filter(
+    (plugin) => {
+      const normalizedName = sanitizePluginName(plugin.name);
+      return !sourcePluginNames.has(normalizedName);
+    },
+  );
   const plugins = [...sourcePluginDiscovery.plugins, ...cachedPlugins].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
   const archivePaths: CodexArchiveSource[] = [];
-  if (await exists(configPath)) {
+  if (!options.memoryOnly && (await exists(configPath))) {
     archivePaths.push({
       id: "archive:config.toml",
       path: configPath,
@@ -613,7 +674,7 @@ export async function discoverCodexSource(
       message: "Codex config is archived for manual review; it is not activated automatically",
     });
   }
-  if (await exists(hooksPath)) {
+  if (!options.memoryOnly && (await exists(hooksPath))) {
     archivePaths.push({
       id: "archive:hooks/hooks.json",
       path: hooksPath,
@@ -625,8 +686,10 @@ export async function discoverCodexSource(
   const skills = [...codexSkills, ...personalAgentSkills].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
-  const hasAuth = await exists(authPath);
-  const high = Boolean(codexSkills.length || plugins.length || archivePaths.length || hasAuth);
+  const hasAuth = !options.memoryOnly && (await exists(authPath));
+  const high = Boolean(
+    memoryFiles.length || codexSkills.length || plugins.length || archivePaths.length || hasAuth,
+  );
   const medium = personalAgentSkills.length > 0;
   return {
     root: codexHome,
@@ -638,6 +701,8 @@ export async function discoverCodexSource(
     ...(hasAuth ? { authPath } : {}),
     ...((await exists(modelsCachePath)) ? { modelsCachePath } : {}),
     ...((await exists(hooksPath)) ? { hooksPath } : {}),
+    ...((await isDirectory(memoriesDir)) ? { memoriesDir } : {}),
+    memoryFiles,
     skills,
     plugins,
     ...(sourcePluginDiscovery.error ? { pluginDiscoveryError: sourcePluginDiscovery.error } : {}),
