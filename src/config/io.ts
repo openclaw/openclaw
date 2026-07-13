@@ -1494,6 +1494,43 @@ async function collectInvalidConfigLegacyIssues(
   return findDoctorLegacyConfigIssues(raw, sourceRaw);
 }
 
+/**
+ * Single-pass character scanner that detects `//` or `/*` tokens outside
+ * JSON5 string literals.  Skips complete double-quoted, single-quoted, and
+ * backtick strings while handling JSON5 escape sequences including line
+ * continuations (backslash + newline).
+ *
+ * A deterministic O(n) scanner avoids the pathological regex backtracking
+ * that CodeQL flags on crafted escape-heavy config payloads.
+ */
+export function hasJSON5Comments(raw: string): boolean {
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    // Enter a string literal — skip to the closing quote while honouring
+    // backslash-escaped characters (which includes the closing quote itself
+    // and JSON5 line continuations).
+    if (ch === '"' || ch === "'" || ch === "`") {
+      const quote = ch;
+      i++;
+      while (i < raw.length && raw[i] !== quote) {
+        if (raw[i] === "\\") {
+          i++; // skip the escaped character
+        }
+        i++;
+      }
+      // i now sits on the closing quote (or past end); the for-loop i++
+      // will advance past it.
+      continue;
+    }
+    // Comment start token outside any string literal.
+    if (ch === "/" && i + 1 < raw.length) {
+      const next = raw[i + 1];
+      if (next === "/" || next === "*") return true;
+    }
+  }
+  return false;
+}
+
 export function createConfigIO(
   overrides: ConfigIoDeps & {
     pluginValidation?: "full" | "skip";
@@ -2560,6 +2597,16 @@ export function createConfigIO(
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
+    // Detect JSON5 comments in the original config that will be lost through
+    // the parse-modify-stringify roundtrip. Strips string literals before
+    // checking so URLs (http://...) and string content do not cause false
+    // positives while still detecting // and /* outside of string values.
+    // The flag is computed early but the warning is emitted only after the
+    // write commits, so rejected writes do not falsely report data loss.
+    // This warning fires regardless of skipOutputLogs — comment stripping is a
+    // data-loss event, not routine output.
+    const shouldWarnCommentLoss =
+      typeof snapshot.raw === "string" && hasJSON5Comments(snapshot.raw);
     const changedPathCount = changedPaths?.size;
     const previousBytes =
       typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
@@ -2755,6 +2802,12 @@ export function createConfigIO(
       }
       logConfigOverwrite();
       logConfigWriteAnomalies();
+      if (shouldWarnCommentLoss) {
+        deps.logger?.warn?.(
+          `Config write will strip JSON5 comments from ${configPath}. ` +
+            "Use a separate tool to re-add documentation comments after modifications.",
+        );
+      }
       await appendWriteAudit(
         result.method,
         undefined,
