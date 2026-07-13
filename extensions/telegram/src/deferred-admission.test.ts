@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { combineTelegramDeferredAdmissionCallbacks } from "./deferred-admission.js";
+import {
+  combineTelegramDeferredAdmissionCallbacks,
+  settleTelegramDeferredAdmissionCallbacks,
+} from "./deferred-admission.js";
 
 describe("combineTelegramDeferredAdmissionCallbacks", () => {
   it("admits one combined turn and finalizes remaining source messages", async () => {
@@ -37,5 +40,25 @@ describe("combineTelegramDeferredAdmissionCallbacks", () => {
 
     await expect(combined?.(true)).resolves.toBe(false);
     expect(deferred).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("settleTelegramDeferredAdmissionCallbacks", () => {
+  it("settles every callback without retrying rejected cache work", async () => {
+    const failure = new Error("cache unavailable");
+    const failing = vi.fn(async () => {
+      throw failure;
+    });
+    const succeeding = vi.fn(async () => false);
+
+    await expect(
+      settleTelegramDeferredAdmissionCallbacks({
+        callbacks: [failing, succeeding],
+        admitted: false,
+        cacheMessage: false,
+      }),
+    ).resolves.toEqual([failure]);
+    expect(failing).toHaveBeenCalledWith(false, false);
+    expect(succeeding).toHaveBeenCalledWith(false, false);
   });
 });

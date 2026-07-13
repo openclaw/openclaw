@@ -3,6 +3,19 @@ export type TelegramDeferredAdmissionCallback = (
   cacheMessage?: boolean,
 ) => Promise<boolean>;
 
+export async function settleTelegramDeferredAdmissionCallbacks(params: {
+  callbacks: TelegramDeferredAdmissionCallback[];
+  admitted: boolean;
+  cacheMessage: boolean;
+}): Promise<unknown[]> {
+  const results = await Promise.allSettled(
+    params.callbacks.map((callback) =>
+      params.cacheMessage ? callback(params.admitted) : callback(params.admitted, false),
+    ),
+  );
+  return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
+}
+
 export function combineTelegramDeferredAdmissionCallbacks(
   callbacks: TelegramDeferredAdmissionCallback[],
   primaryCallback = callbacks.at(-1),

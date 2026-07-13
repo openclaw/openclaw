@@ -114,6 +114,7 @@ import {
 } from "./conversation-route.js";
 import {
   combineTelegramDeferredAdmissionCallbacks,
+  settleTelegramDeferredAdmissionCallbacks,
   type TelegramDeferredAdmissionCallback,
 } from "./deferred-admission.js";
 import { enforceTelegramDmAccess, isTelegramDmAccessAllowed } from "./dm-access.js";
@@ -407,6 +408,17 @@ export const registerTelegramHandlers = ({
   ) => {
     for (const participant of new Set(participants)) {
       participant.settle(result);
+    }
+  };
+  const settleDeferredAdmissions = async (params: {
+    callbacks: TelegramDeferredAdmissionCallback[];
+    admitted: boolean;
+    cacheMessage: boolean;
+    context: string;
+  }) => {
+    const errors = await settleTelegramDeferredAdmissionCallbacks(params);
+    for (const error of errors) {
+      runtime.error?.(danger(`${params.context} admission cleanup failed: ${String(error)}`));
     }
   };
   const createSpooledReplayParticipantForBufferedWork = (
@@ -1162,7 +1174,12 @@ export const registerTelegramHandlers = ({
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (err) {
-      await Promise.all(entry.afterAdmissionCallbacks.map(({ callback }) => callback(false)));
+      await settleDeferredAdmissions({
+        callbacks: entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+        admitted: false,
+        cacheMessage: false,
+        context: "media group",
+      });
       releaseDispatchDedupeKeys(entry.dispatchDedupeKeys, err);
       settleSpooledReplayParticipants(
         entry.spooledReplayParticipants,
@@ -1183,7 +1200,12 @@ export const registerTelegramHandlers = ({
 
   const dropMediaGroupEntry = async (key: string, entry: BufferedMediaGroupEntry) => {
     detachMediaGroupEntry(key, entry);
-    await Promise.all(entry.afterAdmissionCallbacks.map(({ callback }) => callback(false, false)));
+    await settleDeferredAdmissions({
+      callbacks: entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+      admitted: false,
+      cacheMessage: false,
+      context: "media group cancellation",
+    });
     completeCanceledBufferedEntry(entry);
     releasePeerBotAdmissionCancellation(entry);
   };
@@ -1277,7 +1299,12 @@ export const registerTelegramHandlers = ({
       });
       settleSpooledReplayParticipants(entry.spooledReplayParticipants, result);
     } catch (err) {
-      await Promise.all(entry.afterAdmissionCallbacks.map(({ callback }) => callback(false)));
+      await settleDeferredAdmissions({
+        callbacks: entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+        admitted: false,
+        cacheMessage: false,
+        context: "text fragment",
+      });
       releaseDispatchDedupeKeys(entry.dispatchDedupeKeys, err);
       settleSpooledReplayParticipants(
         entry.spooledReplayParticipants,
@@ -1298,7 +1325,12 @@ export const registerTelegramHandlers = ({
   const dropTextFragmentEntry = async (entry: TextFragmentEntry) => {
     clearTimeout(entry.timer);
     textFragmentBuffer.delete(entry.key);
-    await Promise.all(entry.afterAdmissionCallbacks.map(({ callback }) => callback(false, false)));
+    await settleDeferredAdmissions({
+      callbacks: entry.afterAdmissionCallbacks.map(({ callback }) => callback),
+      admitted: false,
+      cacheMessage: false,
+      context: "text fragment cancellation",
+    });
     completeCanceledBufferedEntry(entry);
     releasePeerBotAdmissionCancellation(entry);
   };
