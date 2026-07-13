@@ -143,6 +143,37 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
+  it("resolves creation capability for the requested agent", async () => {
+    const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
+      agentId === "research"
+        ? { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" }
+        : undefined,
+    );
+    activeRegistry.sessionCatalogs = [
+      {
+        pluginId: "anthropic",
+        provider: provider("claude", { resolveCreateSession }),
+      },
+    ];
+
+    const available = await call("sessions.catalog.list", {
+      agentId: "research",
+      catalogId: "claude",
+    });
+    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
+    expect(available).toHaveBeenCalledWith(true, {
+      catalogs: [
+        expect.objectContaining({
+          capabilities: {
+            continueSession: false,
+            archive: false,
+            createSession: { model: "anthropic/claude-opus-4-8" },
+          },
+        }),
+      ],
+    });
+  });
+
   it("resolves the private runtime target separately from the public capability", () => {
     activeRegistry.sessionCatalogs = [
       {

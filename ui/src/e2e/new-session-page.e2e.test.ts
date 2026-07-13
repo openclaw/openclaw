@@ -323,11 +323,14 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     try {
       const model = "anthropic/claude-opus-4-8";
       await page.goto(
-        `${server.baseUrl}new?agent=research&catalog=claude&model=${encodeURIComponent("openai/gpt-5")}&label=Spoofed`,
+        `${server.baseUrl}new?agent=Research&catalog=claude&model=${encodeURIComponent("openai/gpt-5")}&label=Spoofed`,
       );
 
       const catalogRequest = await gateway.waitForRequest("sessions.catalog.list");
-      expect(catalogRequest.params).toMatchObject({ catalogId: "claude" });
+      expect(catalogRequest.params).toMatchObject({
+        agentId: "research",
+        catalogId: "claude",
+      });
       const runtime = page.locator(".new-session-page__runtime");
       await expect.poll(() => runtime.textContent()).toContain("Claude Code");
       expect(await runtime.getAttribute("title")).toBe(model);
@@ -338,7 +341,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
-        agentId: "main",
+        agentId: "research",
         message: "use Claude Code",
         catalogId: "claude",
       });
@@ -519,12 +522,14 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         .poll(() => page.locator(".new-session-page__runtime").textContent())
         .toContain("Claude Code");
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
-      await expect.poll(() => page.getByRole("heading").first().textContent()).toContain("Main");
+      await expect
+        .poll(() => page.getByRole("heading").first().textContent())
+        .toContain("Research");
 
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
-        agentId: "main",
+        agentId: "research",
         message: "keep this reconnect draft",
         catalogId: "claude",
       });

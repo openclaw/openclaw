@@ -2,7 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveCreateTarget } from "./catalog-target.ts";
+import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
 async function loadNewSessionData(
@@ -18,8 +18,13 @@ async function loadNewSessionData(
   if (!gateway.connected || !gateway.client) {
     return plain;
   }
-  const target = await resolveCreateTarget(gateway.client, location.catalogId);
-  return target ? { ...location, ...target } : plain;
+  const agentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
+  const agents = agentsList?.agents ?? [];
+  const fallback = agentsList?.defaultId ?? agents[0]?.id ?? "main";
+  const agentId = resolveAgentId(location, agents, fallback);
+  const scoped = { ...plain, agentId };
+  const target = await resolveCreateTarget(gateway.client, location.catalogId, agentId);
+  return target ? { ...scoped, ...target } : scoped;
 }
 
 export const page = definePage({

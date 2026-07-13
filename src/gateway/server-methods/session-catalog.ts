@@ -145,7 +145,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
-        const createTarget = resolveProviderCreateTarget(provider);
+        const createTarget = resolveProviderCreateTarget(provider, request.agentId);
         const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
         try {
           const hosts = await provider.list({

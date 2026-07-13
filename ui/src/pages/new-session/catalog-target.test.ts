@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { allowsSelectedAgent, resolveCreateTarget, routeKey } from "./catalog-target.ts";
+import {
+  allowsSelectedAgent,
+  resolveAgentId,
+  resolveCreateTarget,
+  routeKey,
+} from "./catalog-target.ts";
 
 describe("new-session catalog target", () => {
   it("keeps the draft identity stable while target metadata resolves", () => {
@@ -29,7 +34,41 @@ describe("new-session catalog target", () => {
     }));
 
     await expect(
-      resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude"),
+      resolveCreateTarget({ request } as unknown as GatewayBrowserClient, "claude", "research"),
     ).resolves.toBeUndefined();
+    expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
+      agentId: "research",
+      catalogId: "claude",
+      limitPerHost: 1,
+    });
+  });
+
+  it("preserves a valid requested agent for catalog-targeted sessions", () => {
+    expect(
+      resolveAgentId(
+        {
+          agentId: "research",
+          catalogId: "claude",
+          model: "anthropic/claude-opus-4-8",
+          catalogLabel: "Claude Code",
+        },
+        [{ id: "main" }, { id: "research" }],
+        "main",
+      ),
+    ).toBe("research");
+  });
+
+  it("canonicalizes the requested agent or falls back before catalog resolution", () => {
+    const agents = [{ id: "main" }, { id: "research" }];
+    const target = {
+      agentId: "Research",
+      catalogId: "claude",
+      model: "",
+      catalogLabel: "",
+    };
+
+    expect(resolveAgentId(target, agents, "main")).toBe("research");
+    expect(resolveAgentId({ ...target, agentId: "retired" }, agents, "main")).toBe("main");
+    expect(resolveAgentId({ ...target, agentId: "" }, agents, "research")).toBe("research");
   });
 });

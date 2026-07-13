@@ -23,10 +23,11 @@ export function resolveAgentId(
   availableAgents: readonly { id: string }[],
   fallback: string,
 ): string {
-  if (isTarget(data)) {
+  const rawRequested = data?.agentId?.trim();
+  if (!rawRequested) {
     return normalizeAgentId(fallback);
   }
-  const requested = normalizeAgentId(data?.agentId ?? "");
+  const requested = normalizeAgentId(rawRequested);
   return availableAgents.some((candidate) => normalizeAgentId(candidate.id) === requested)
     ? requested
     : normalizeAgentId(fallback);
@@ -42,9 +43,11 @@ export function allowsSelectedAgent(
 export async function resolveCreateTarget(
   client: GatewayBrowserClient,
   catalogId: string,
+  agentId?: string,
 ): Promise<Pick<NewSessionRouteData, "model" | "catalogLabel"> | undefined> {
   try {
     const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
+      ...(agentId ? { agentId } : {}),
       catalogId,
       limitPerHost: 1,
     });
