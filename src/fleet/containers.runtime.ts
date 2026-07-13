@@ -58,7 +58,6 @@ type FleetContainerLogsOptions = {
   since?: string;
   redactValues: readonly string[];
 };
-
 export type FleetContainerInspectResult =
   | {
       kind: "ok";
@@ -283,7 +282,6 @@ function parseInspectOutput(stdout: string): Extract<FleetContainerInspectResult
   if (!Array.isArray(parsed) || parsed.length !== 1) {
     throw new InvalidInspectOutputError();
   }
-
   const inspected = requireRecord(parsed[0]);
   const state = requireRecord(inspected.State);
   const config = requireRecord(inspected.Config);
