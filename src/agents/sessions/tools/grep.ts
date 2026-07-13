@@ -42,11 +42,11 @@ const grepSchema = Type.Object({
     }),
   ),
   context: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Context lines each side; default 0.",
     }),
   ),
-  limit: Type.Optional(Type.Number({ description: "Max matches; default 100." })),
+  limit: Type.Optional(Type.Integer({ description: "Max matches; default 100." })),
 });
 export type { GrepToolDetails, GrepToolInput } from "./tool-contracts.js";
 const DEFAULT_LIMIT = 100;
