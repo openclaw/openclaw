@@ -152,7 +152,7 @@ Skills own workflows; root owns hard policy and routing.
 - Full suites, changed gates, builds, typechecks, lint fan-out, Docker/package/E2E/live/cross-OS proof, or anything computationally intensive: Crabbox/Testbox.
 - If an allowed local fallback fans out or becomes expensive, stop it and move the work to the pre-warmed remote box.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
-- Release-branch full validation: use `node scripts/full-release-validation-at-sha.mjs --sha <exact-sha> --target-ref release/<branch>`; no raw dispatch without `target_context_ref`.
+- Release-branch full validation: freeze the product-complete **Code SHA**, then use `node scripts/full-release-validation-at-sha.mjs --sha <code-sha> --target-ref release/YYYY.M.PATCH`; no raw dispatch without `target_context_ref`.
 - Pre-land/pre-commit code changes: mandatory fresh `$autoreview` until no accepted/actionable findings remain. Do not land code on CI, ClawSweeper, prior review comments, or your own manual review alone unless user explicitly opts out or scope is truly trivial/docs-only. If findings want refactor, refactor; no ugly fixes.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
@@ -301,7 +301,15 @@ Skills own workflows; root owns hard policy and routing.
 - Releases/publish/version bumps need explicit approval. Use `$release-openclaw-maintainer`.
 - Release versions use `YYYY.M.PATCH`, where `PATCH` is a sequential monthly release-train number, never the calendar day. Stable and beta tags determine the current train; alpha-only tags do not consume or advance the beta/stable patch number. After `2026.6.5`, the next beta train is `2026.6.6-beta.1` even if higher alpha-only tags exist.
 - Alpha/nightly versions use the next unreleased train plus an incrementing prerelease number. Repeated nightlies for the same train increment only `alpha.N`; they must not mint a new patch number from the date.
-- Backport means apply to newest open `release/` branch unless user names another target.
+- Backports are optional. Apply only the operator-selected set; when requested without a target, use the newest open `release/` branch.
+- Regular beta/stable flow has two immutable identities:
+  - **Code SHA**: version prep plus any optional backports/release fixes, with no release changelog mutation. Full product validation belongs here.
+  - **Release SHA**: a descendant of the green Code SHA whose complete diff is exactly `CHANGELOG.md`. Tag, npm preflight, package/install acceptance, and publish belong here.
+- Never generate the release changelog before the Code SHA has green Full Release Validation. A product/code failure changes the Code SHA and restarts product validation. A workflow/harness/infrastructure failure is fixed in trusted tooling and rerun against the same Code SHA; do not mutate the candidate to satisfy newer tooling.
+- After green Code SHA validation, generate and review `CHANGELOG.md` once. Dispatch Full Release Validation for the Release SHA with evidence reuse enabled; `changelog-only-release-v1` may reuse the Code SHA product evidence only when GitHub independently proves the entire descendant delta is `CHANGELOG.md`. Any other path change requires a new Code SHA and fresh full validation.
+- Release-SHA proof is intentionally narrow: release-note/provenance checks, npm preflight/package bytes, install/update acceptance, and publish readiness. Do not rerun the full product matrix merely because the changelog changed.
+- Pass the successful Release-SHA validation run and npm preflight run into `release:candidate`; do not let the candidate helper dispatch duplicate copies of evidence that already passed.
+- Keep one release operator and one watcher per release identity. Resume partial publish from successful immutable child artifacts/runs; never rebuild or republish an already-published package version.
 - GHSA/advisories: `$openclaw-ghsa-maintainer` / `$security-triage`. Secret scanning: `$openclaw-secret-scanning-maintainer`.
 - Beta tag/version match: `vYYYY.M.PATCH-beta.N` -> npm `YYYY.M.PATCH-beta.N --tag beta`.
 
