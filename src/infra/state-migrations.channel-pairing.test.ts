@@ -5,7 +5,7 @@ import { resolveOAuthDir } from "../config/paths.js";
 import {
   readChannelPairingStateSnapshot,
   writeChannelPairingStateSnapshot,
-} from "../pairing/pairing-store.js";
+} from "../pairing/pairing-store-sqlite.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {

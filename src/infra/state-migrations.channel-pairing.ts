@@ -10,10 +10,8 @@ import {
   resolveAllowFromAccountId,
   safeAccountKey,
 } from "../pairing/pairing-store-keys.js";
-import {
-  updateChannelPairingStateSnapshot,
-  type PairingRequest,
-} from "../pairing/pairing-store.js";
+import { updateChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.js";
+import type { PairingRequest } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 

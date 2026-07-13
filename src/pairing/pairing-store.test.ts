@@ -23,15 +23,17 @@ vi.mock("../channels/plugins/pairing.js", () => ({
 }));
 
 import {
+  readChannelPairingStateSnapshot,
+  writeChannelPairingStateSnapshot,
+} from "./pairing-store-sqlite.js";
+import {
   addChannelAllowFromStoreEntry,
   approveChannelPairingCode,
   listChannelPairingRequests,
   readChannelAllowFromStore,
   readChannelAllowFromStoreSync,
-  readChannelPairingStateSnapshot,
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
-  writeChannelPairingStateSnapshot,
 } from "./pairing-store.js";
 
 type PairingTestDatabase = Pick<
