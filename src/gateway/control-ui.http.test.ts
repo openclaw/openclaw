@@ -21,6 +21,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES } from "../shared/avatar-policy.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { buildAssistantMediaContentDisposition } from "./assistant-media-content-disposition.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
 import { resolveOpenedControlUiRepresentation } from "./control-ui-static.js";
@@ -577,7 +578,7 @@ describe("handleControlUiHttpRequest", () => {
           method: "GET",
           auth: { mode: "token", token: "t", allowTailscale: false },
         });
-        const capped = "a".repeat(200);
+        const capped = `${"a".repeat(196)}.pdf`;
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
@@ -587,6 +588,37 @@ describe("handleControlUiHttpRequest", () => {
         );
       },
     });
+  });
+
+  it("caps assistant media filenames without splitting surrogate pairs", async () => {
+    await withAllowedAssistantMediaRoot({
+      prefix: "ui-media-filename-surrogate-",
+      fn: async (tmpRoot) => {
+        const filename = `${"a".repeat(195)}😀${"b".repeat(20)}.pdf`;
+        const filePath = path.join(tmpRoot, filename);
+        await fs.writeFile(filePath, Buffer.from("fixture"));
+        const { res, handled } = await runAssistantMediaRequest({
+          url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}&token=t`,
+          method: "GET",
+          auth: { mode: "token", token: "t", allowTailscale: false },
+        });
+        const cappedFallback = `${"a".repeat(195)}__.pdf`;
+        const cappedExtended = `${"a".repeat(195)}%F0%9F%98%80.pdf`;
+
+        expect(handled).toBe(true);
+        expect(res.statusCode).toBe(200);
+        expect(res["setHeader"]).toHaveBeenCalledWith(
+          "Content-Disposition",
+          `attachment; filename="${cappedFallback}"; filename*=UTF-8''${cappedExtended}`,
+        );
+      },
+    });
+  });
+
+  it("replaces ill-formed assistant media filename surrogates before encoding", () => {
+    expect(buildAssistantMediaContentDisposition("draft\uD800.pdf", "application/pdf")).toBe(
+      `attachment; filename="draft_.pdf"; filename*=UTF-8''draft%EF%BF%BD.pdf`,
+    );
   });
 
   it("serves assistant media from canonical inbound media refs", async () => {

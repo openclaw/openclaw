@@ -47,13 +47,12 @@ function isValidRepo(value: string): boolean {
   if (value.length < 1 || value.length > 100) {
     return false;
   }
-  if (!/^[a-z\d](?:[a-z\d._-]*[a-z\d])?$/iu.test(value)) {
-    return false;
-  }
-  if (value.includes("..")) {
-    return false;
-  }
   const lower = value.toLowerCase();
+  // GitHub accepts dot/underscore/hyphen edge names, including consecutive
+  // periods; only reject standalone path-confusion segments before visibility.
+  if (!/^[a-z\d._-]+$/iu.test(value) || lower === "." || lower === "..") {
+    return false;
+  }
   return !lower.endsWith(".git") && !lower.endsWith(".atom");
 }
 

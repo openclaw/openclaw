@@ -53,6 +53,32 @@ describe("parseControlUiGitHubPreviewTarget", () => {
       repo: "openclaw",
     });
     expect(target).toEqual({ kind: "pull", number: 99816, owner: "openclaw", repo: "openclaw" });
+    expect(
+      parseControlUiGitHubPreviewTarget({
+        kind: "issue",
+        number: 1,
+        owner: "github",
+        repo: ".github",
+      }),
+    ).toEqual({ kind: "issue", number: 1, owner: "github", repo: ".github" });
+    for (const repo of [
+      ".whitesource",
+      ".emacs.d",
+      "-edge",
+      "_edge",
+      "repo-",
+      "repo.",
+      "foo..bar",
+    ]) {
+      expect(
+        parseControlUiGitHubPreviewTarget({
+          kind: "issue",
+          number: 1,
+          owner: "openclaw",
+          repo,
+        }),
+      ).toEqual({ kind: "issue", number: 1, owner: "openclaw", repo });
+    }
   });
 
   it("rejects invalid repository paths and item numbers", () => {
@@ -72,15 +98,7 @@ describe("parseControlUiGitHubPreviewTarget", () => {
         repo: "..",
       }),
     ).toBeNull();
-    for (const repo of [
-      "-evil",
-      ".hidden",
-      "repo-",
-      "repo.",
-      "foo..bar",
-      "repo.git",
-      "repo.atom",
-    ]) {
+    for (const repo of [".", "..", "repo.git", "repo.atom"]) {
       expect(
         parseControlUiGitHubPreviewTarget({
           kind: "issue",
