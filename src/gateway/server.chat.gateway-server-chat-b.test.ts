@@ -24,7 +24,10 @@ import { invalidateSessionStoreCache } from "../config/sessions/store-cache.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import {
+  interruptSessionWorkAdmissions,
+  runExclusiveSessionLifecycleMutation,
+} from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -32,6 +35,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -2094,6 +2098,155 @@ describe("gateway server chat", () => {
       dispatchReject.resolve();
       releaseLock.resolve();
       await lockPromise?.catch(() => undefined);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
+  test("chat.send signal-only dispatch rejection preserves an earlier agent terminal", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchEntered = createDeferred();
+    const allowDispatchReject = createDeferred();
+    const runId = "idem-signal-only-agent-terminal";
+    let interruptPromise: Promise<boolean> | undefined;
+    try {
+      const storePath = path.join(sessionDir, "sessions.json");
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            status: "running",
+            startedAt: 900,
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const broadcast = vi.fn();
+      const broadcastToConnIds = vi.fn();
+      const context = {
+        ...createDirectChatContext(),
+        broadcast,
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-session"]),
+      } as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        const signal = (args as { replyOptions?: GetReplyOptions }).replyOptions?.abortSignal;
+        expect(signal).toBeDefined();
+        dispatchEntered.resolve();
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) {
+            resolve();
+            return;
+          }
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+        await allowDispatchReject.promise;
+        throw signal?.reason instanceof Error ? signal.reason : new Error("lifecycle interrupted");
+      });
+
+      const params = {
+        sessionKey: "main",
+        message: "preserve an earlier agent terminal",
+        idempotencyKey: runId,
+      };
+      const responses: Array<{ ok: boolean; payload?: unknown }> = [];
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await expectDefined(
+        chatHandlers["chat.send"],
+        'chatHandlers["chat.send"] test invariant',
+      )({
+        req: { type: "req", id: "send", method: "chat.send", params },
+        params,
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload) => responses.push({ ok, payload })) as RespondFn,
+        context,
+      });
+      await vi.waitFor(() => {
+        expect(responses).toEqual([
+          {
+            ok: true,
+            payload: { runId, status: "started" },
+          },
+        ]);
+        expect(context.chatAbortControllers.has(runId)).toBe(true);
+      }, FAST_WAIT_OPTS);
+      await dispatchEntered.promise;
+
+      interruptPromise = interruptSessionWorkAdmissions({
+        scope: storePath,
+        identities: ["main", "agent:main:main", "sess-main"],
+        timeoutMs: 1_000,
+      });
+      const activeRun = context.chatAbortControllers.get(runId);
+      await vi.waitFor(() => {
+        expect(activeRun?.controller.signal.aborted).toBe(true);
+      }, FAST_WAIT_OPTS);
+      expect(context.chatAbortedRuns.has(runId)).toBe(false);
+
+      const agentEndedAt = Date.now();
+      const agentTerminalPersistence = persistGatewaySessionLifecycleEvent({
+        sessionKey: "agent:main:main",
+        event: {
+          runId,
+          sessionId: "sess-main",
+          ts: agentEndedAt,
+          data: {
+            phase: "end",
+            startedAt: 900,
+            endedAt: agentEndedAt,
+            aborted: true,
+            stopReason: "restart",
+          },
+        },
+      });
+      if (activeRun) {
+        activeRun.projectSessionActive = false;
+        activeRun.projectSessionTerminalPersistence = agentTerminalPersistence;
+      }
+      await agentTerminalPersistence;
+      if (activeRun) {
+        activeRun.projectSessionTerminalPersistence = undefined;
+        activeRun.projectSessionTerminalPersisted = true;
+      }
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        abortedLastRun: true,
+        sessionId: "sess-main",
+        status: "killed",
+      });
+
+      allowDispatchReject.resolve();
+      await expect(interruptPromise).resolves.toBe(true);
+      await vi.waitFor(() => {
+        expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+          expect.objectContaining({
+            runId,
+            status: "error",
+            summary: "AbortError: agent run aborted for restart",
+          }),
+        );
+        expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+          abortedLastRun: true,
+          sessionId: "sess-main",
+          status: "killed",
+        });
+      }, FAST_WAIT_OPTS);
+      expect(broadcast).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ runId, state: "error" }),
+      );
+      expect(broadcastToConnIds).not.toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({ reason: "chat.dispatch-error" }),
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      allowDispatchReject.resolve();
+      await interruptPromise?.catch(() => undefined);
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();
