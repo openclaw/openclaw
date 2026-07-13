@@ -36,7 +36,7 @@ export function allowsSelectedAgent(
   return !isTarget(data) || (isResolvedTarget(data) && Boolean(selectedAgent));
 }
 
-export function render(data?: NewSessionRouteData) {
+function render(data?: NewSessionRouteData) {
   if (!data?.catalogId) {
     return nothing;
   }
